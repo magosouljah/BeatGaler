@@ -1,0 +1,20 @@
+# Node / frontend
+node_modules/
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# VS Code / local IDE
+.vs/
+.vscode/
+
+# Tauri / Rust build outputs
+src-tauri/target/
+src-tauri/target_alt/
+beatvault/target/
+
+# OS files
+.DS_Store
+Thumbs.db
