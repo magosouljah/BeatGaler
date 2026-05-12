@@ -45,11 +45,45 @@ jobs:
       - name: Build Tauri app
         run: npx tauri build --target ${{ matrix.target }}
 
+      - name: Create macOS PKG installer
+        run: |
+          # Create temporary directories
+          mkdir -p /tmp/BeatVault-pkg/Applications
+          mkdir -p /tmp/BeatVault-pkg-scripts
+          
+          # Copy the built app
+          cp -r "src-tauri/target/${{ matrix.target }}/release/bundle/macos/BeatVault.app" /tmp/BeatVault-pkg/Applications/
+          
+          # Copy post-install script
+          cp scripts/macos-postinstall.sh /tmp/BeatVault-pkg-scripts/postinstall
+          chmod +x /tmp/BeatVault-pkg-scripts/postinstall
+          
+          # Create component package
+          pkgbuild \
+            --root /tmp/BeatVault-pkg \
+            --scripts /tmp/BeatVault-pkg-scripts \
+            --identifier com.prodbruho.beatvault \
+            --version "2.0.0" \
+            --install-location / \
+            /tmp/BeatVault-component.pkg
+          
+          # Create distribution package
+          sed "s|#PACKAGE_REF#|/tmp/BeatVault-component.pkg|g" scripts/distribution.xml > /tmp/distribution.xml
+          
+          productbuild \
+            --distribution /tmp/distribution.xml \
+            --package-path /tmp \
+            "BeatVault-${{ matrix.artifact_name }}.pkg"
+          
+          # Create bundle directory for upload
+          mkdir -p build-output
+          mv "BeatVault-${{ matrix.artifact_name }}.pkg" build-output/
+
       - name: Upload macOS installers
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            build-output/*.pkg
           if-no-files-found: error
