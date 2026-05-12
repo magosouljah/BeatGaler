@@ -3,22 +3,26 @@ import type {
   FolderScanResult, ResolveFilesPayload, AddFilePayload, AppSettings
 } from "../types";
 
+type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type OpenFn = (options?: Record<string, unknown>) => Promise<string | string[] | null>;
+type ConvertFileSrcFn = (filePath: string, protocol?: string) => string;
+
 // Check if we're in Tauri context (not in dev/web browser mode)
 const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
 
 // Lazy load Tauri modules only if available
-let invoke: any;
-let open: any;
-let convertFileSrc: any;
+let invoke: InvokeFn | undefined;
+let open: OpenFn | undefined;
+let convertFileSrc: ConvertFileSrcFn | undefined;
 
 async function initTauri() {
   if (!isTauri || invoke) return;
   try {
     const core = await import("@tauri-apps/api/core");
     const dialog = await import("@tauri-apps/plugin-dialog");
-    invoke = core.invoke;
-    open = dialog.open;
-    convertFileSrc = core.convertFileSrc;
+    invoke = core.invoke as InvokeFn;
+    open = dialog.open as OpenFn;
+    convertFileSrc = core.convertFileSrc as ConvertFileSrcFn;
   } catch (e) {
     console.warn("Tauri API not available (dev mode?)", e);
   }
@@ -101,7 +105,16 @@ export async function importSelectedBeats(folderPaths: string[]): Promise<Beat[]
 
 export async function scanBeatFolder(folderPath: string): Promise<FolderScanResult> {
   await initTauri();
-  if (!invoke) return { mp3s: [], wavs: [], stems: [], flps: [], alss: [], others: [] };
+  if (!invoke) {
+    return {
+      needs_resolution: false,
+      mp3_files: [],
+      wav_files: [],
+      stems_files: [],
+      flp_files: [],
+      beat: null,
+    };
+  }
   return invoke<FolderScanResult>("scan_beat_folder", { folderPath });
 }
 
@@ -119,13 +132,26 @@ export async function readBeatMeta(mp3Path: string): Promise<Beat> {
 
 export async function saveBeatMeta(payload: SaveMetaPayload): Promise<SaveMetaResult> {
   await initTauri();
-  if (!invoke) return { success: false, message: "Tauri not available" };
+  if (!invoke) {
+    return {
+      new_mp3_path: payload.mp3_path,
+      new_wav_path: payload.wav_path,
+    };
+  }
   return invoke<SaveMetaResult>("save_beat_meta", { payload });
 }
 
 export async function renameBeat(payload: RenamePayload): Promise<RenameResult> {
   await initTauri();
-  if (!invoke) return { success: false, message: "Tauri not available" };
+  if (!invoke) {
+    return {
+      new_folder_path: payload.folder_path,
+      new_mp3_path: payload.mp3_path,
+      new_wav_path: null,
+      new_stems_path: null,
+      new_flp_path: null,
+    };
+  }
   return invoke<RenameResult>("rename_beat", { payload });
 }
 
