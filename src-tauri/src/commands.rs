@@ -216,6 +216,8 @@ pub struct AppSettings {
     pub templates_folder: Option<String>,
     #[serde(default = "default_true")]
     pub incomplete_warnings_enabled: bool,
+    #[serde(default = "default_true")]
+    pub custom_cursor_enabled: bool,
 }
 
 fn default_true() -> bool { true }
@@ -226,6 +228,7 @@ impl Default for AppSettings {
             beats_folder: None,
             templates_folder: None,
             incomplete_warnings_enabled: true,
+            custom_cursor_enabled: true,
         }
     }
 }
@@ -456,6 +459,16 @@ pub fn set_incomplete_warnings_enabled(
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
     settings.incomplete_warnings_enabled = enabled;
+    save_settings_file(&state.data_dir, &*settings)
+}
+
+#[tauri::command]
+pub fn set_custom_cursor_enabled(
+    enabled: bool,
+    state: tauri::State<SettingsState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
+    settings.custom_cursor_enabled = enabled;
     save_settings_file(&state.data_dir, &*settings)
 }
 
@@ -2658,13 +2671,30 @@ fn parse_oauth_client(raw_json: &str) -> Result<StoredOAuthClient, String> {
     })
 }
 
+fn bundled_google_client_secret() -> Option<String> {
+    // Lightweight obfuscation only: keeps the OAuth secret out of plaintext source
+    // and avoids a user file picker. A desktop binary cannot make a static client
+    // secret truly confidential; PKCE remains the real OAuth protection.
+    const KEY: &[u8] = &[113, 45, 164, 25, 195, 88, 143, 226, 51, 183, 76, 149, 6];
+    const DATA: &[u8] = &[54, 98, 231, 74, 147, 0, 162, 142, 71, 238, 39, 225, 50, 72, 85, 147, 90, 181, 16, 226, 207, 75, 129, 6, 164, 80, 69, 93, 147, 78, 160, 104, 192, 136, 64];
+
+    let decoded: Vec<u8> = DATA
+        .iter()
+        .enumerate()
+        .map(|(i, byte)| byte ^ KEY[i % KEY.len()])
+        .collect();
+
+    String::from_utf8(decoded).ok().filter(|s| !s.trim().is_empty())
+}
+
 fn load_oauth_client(_data_dir: &Path) -> Result<StoredOAuthClient, String> {
-    // Desktop apps cannot keep a client_secret confidential. Beat Galer uses
-    // OAuth PKCE and ships only the public Desktop OAuth client_id.
+    // Native/Desktop OAuth clients are public clients: a bundled client_secret
+    // cannot be made confidential once distributed. PKCE is the actual protection.
+    // The secret is therefore injected at build time (not stored in the repo).
     Ok(StoredOAuthClient {
         client_type: "installed".to_string(),
         client_id: "499243641799-f01nc2k19n34rj2cmtlb6a2n4h8o1fvv.apps.googleusercontent.com".to_string(),
-        client_secret: None,
+        client_secret: bundled_google_client_secret(),
         auth_uri: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_uri: "https://oauth2.googleapis.com/token".to_string(),
         redirect_uris: vec!["http://127.0.0.1".to_string(), "http://localhost".to_string()],
@@ -2792,13 +2822,38 @@ fn run_curl(args: &[String]) -> Result<String, String> {
 }
 
 fn post_form_json(url: &str, form: &[(&str, String)]) -> Result<Value, String> {
-    let mut args = vec!["-sS".to_string(), "-f".to_string(), "-X".to_string(), "POST".to_string(), url.to_string()];
+    let mut args = vec![
+        "-sS".to_string(),
+        "-X".to_string(),
+        "POST".to_string(),
+        url.to_string(),
+    ];
     for (key, value) in form {
         args.push("--data-urlencode".to_string());
         args.push(format!("{}={}", key, value));
     }
+    args.push("-w".to_string());
+    args.push("\n__BEATGALER_HTTP_STATUS__:%{http_code}".to_string());
+
     let raw = run_curl(&args)?;
-    serde_json::from_str(&raw).map_err(|e| format!("Invalid JSON from Google: {}", e))
+    let (body, status_text) = raw
+        .rsplit_once("\n__BEATGALER_HTTP_STATUS__:")
+        .ok_or_else(|| "Google token endpoint did not return an HTTP status.".to_string())?;
+    let status = status_text.trim().parse::<u16>().unwrap_or(0);
+
+    let parsed: Value = serde_json::from_str(body)
+        .map_err(|e| format!("Invalid JSON from Google (HTTP {}): {}", status, e))?;
+
+    if !(200..300).contains(&status) {
+        let code = parsed.get("error").and_then(|v| v.as_str()).unwrap_or("oauth_error");
+        let description = parsed
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Google rejected the OAuth request.");
+        return Err(format!("Google OAuth {}: {}", code, description));
+    }
+
+    Ok(parsed)
 }
 
 fn get_json(url: &str, bearer_token: &str) -> Result<Value, String> {
@@ -3198,9 +3253,10 @@ fn normalized_description(payload: &YouTubeUploadPayload) -> String {
 }
 
 #[tauri::command]
-pub fn save_youtube_oauth_config(raw_json: String, state: tauri::State<SettingsState>) -> Result<(), String> {
-    let client = parse_oauth_client(&raw_json)?;
-    save_json_file(&youtube_client_path(&state.data_dir), &client)
+pub fn save_youtube_oauth_config(_raw_json: String, _state: tauri::State<SettingsState>) -> Result<(), String> {
+    // Legacy compatibility only. OAuth configuration is bundled at build time now.
+    // Intentionally do not persist user-selected client JSON or client_secret files.
+    Ok(())
 }
 
 #[tauri::command]

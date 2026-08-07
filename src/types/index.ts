@@ -91,6 +91,7 @@ export interface SaveMetaResult {
 export interface AppSettings {
   beats_folder: string | null;
   incomplete_warnings_enabled: boolean;
+  custom_cursor_enabled: boolean;
 }
 
 export type UploadMode = "single" | "bulk";

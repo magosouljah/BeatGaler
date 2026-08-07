@@ -4,25 +4,38 @@ import {
   setBeatsFolder, listTrash, restoreBeatFromTrash, purgeTrashNow,
   getLogDir, getTemplatesDir, revealInExplorer, type TrashItem,
   listTemplateTrash, restoreTemplateFromTrash, purgeTemplateTrashNow, type TemplateTrashItem,
-  setIncompleteWarningsEnabled,
+  setIncompleteWarningsEnabled, setCustomCursorEnabled,
 } from "../lib/tauri";
 import type { Beat } from "../types";
+import { appAlert, appConfirm } from "../lib/dialog";
 
 interface Props {
   currentFolder: string | null;
-  onClose: () => void;
-  onFolderChanged: (folder: string) => void;
   showIncompleteWarnings: boolean;
   onIncompleteWarningsChanged: (enabled: boolean) => void;
+  customCursorEnabled: boolean;
+  onCustomCursorChanged: (enabled: boolean) => void;
+  onClose: () => void;
+  onFolderChanged: (folder: string) => void;
   // Optional — if provided, a restored beat is added straight into the
   // library grid instead of only showing up after the next "Reload Library".
   onBeatRestored?: (beat: Beat) => void;
 }
 
-export default function SettingsPanel({ currentFolder, onClose, onFolderChanged, showIncompleteWarnings, onIncompleteWarningsChanged, onBeatRestored }: Props) {
+export default function SettingsPanel({
+  currentFolder,
+  showIncompleteWarnings,
+  onIncompleteWarningsChanged,
+  customCursorEnabled,
+  onCustomCursorChanged,
+  onClose,
+  onFolderChanged,
+  onBeatRestored,
+}: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savingPreference, setSavingPreference] = useState(false);
+  const [savingIncompleteWarnings, setSavingIncompleteWarnings] = useState(false);
+  const [savingCustomCursor, setSavingCustomCursor] = useState(false);
 
   const [trashItems, setTrashItems] = useState<TrashItem[]>([]);
   const [loadingTrash, setLoadingTrash] = useState(true);
@@ -57,7 +70,13 @@ export default function SettingsPanel({ currentFolder, onClose, onFolderChanged,
 
   const handleEmptyTrash = async () => {
     if (trashItems.length === 0) return;
-    if (!confirm(`Delete ${trashItems.length} item(s) from the trash permanently? This can't be undone.`)) return;
+    if (!(await appConfirm({
+      title: "Empty beat trash?",
+      message: `Permanently delete ${trashItems.length} item${trashItems.length === 1 ? "" : "s"} from the trash? This cannot be undone.`,
+      confirmLabel: "Delete permanently",
+      cancelLabel: "Cancel",
+      danger: true,
+    }))) return;
     setPurging(true);
     setTrashError(null);
     try {
@@ -85,7 +104,13 @@ export default function SettingsPanel({ currentFolder, onClose, onFolderChanged,
 
   const handleEmptyPresetTrash = async () => {
     if (presetTrashItems.length === 0) return;
-    if (!confirm(`Delete ${presetTrashItems.length} preset(s) from the trash permanently? This can't be undone.`)) return;
+    if (!(await appConfirm({
+      title: "Empty preset trash?",
+      message: `Permanently delete ${presetTrashItems.length} preset${presetTrashItems.length === 1 ? "" : "s"} from the trash? This cannot be undone.`,
+      confirmLabel: "Delete permanently",
+      cancelLabel: "Cancel",
+      danger: true,
+    }))) return;
     setPurgingPresets(true);
     setPresetTrashError(null);
     try {
@@ -124,6 +149,36 @@ export default function SettingsPanel({ currentFolder, onClose, onFolderChanged,
     return `${days} days ago`;
   };
 
+  const handleIncompleteWarningsToggle = async () => {
+    if (savingIncompleteWarnings) return;
+    const next = !showIncompleteWarnings;
+    setSavingIncompleteWarnings(true);
+    setError(null);
+    try {
+      await setIncompleteWarningsEnabled(next);
+      onIncompleteWarningsChanged(next);
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setSavingIncompleteWarnings(false);
+    }
+  };
+
+  const handleCustomCursorToggle = async () => {
+    if (savingCustomCursor) return;
+    const next = !customCursorEnabled;
+    setSavingCustomCursor(true);
+    setError(null);
+    try {
+      await setCustomCursorEnabled(next);
+      onCustomCursorChanged(next);
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setSavingCustomCursor(false);
+    }
+  };
+
   const pickFolder = async () => {
     const sel = await open({ directory: true, multiple: false, title: "Choose BeatVault folder" });
     if (!sel || typeof sel !== "string") return;
@@ -136,20 +191,6 @@ export default function SettingsPanel({ currentFolder, onClose, onFolderChanged,
       setError(String(e));
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleIncompleteWarningsToggle = async () => {
-    const next = !showIncompleteWarnings;
-    onIncompleteWarningsChanged(next); // optimistic UI
-    setSavingPreference(true);
-    try {
-      await setIncompleteWarningsEnabled(next);
-    } catch (e: any) {
-      onIncompleteWarningsChanged(!next);
-      setError(String(e));
-    } finally {
-      setSavingPreference(false);
     }
   };
 
@@ -180,37 +221,105 @@ export default function SettingsPanel({ currentFolder, onClose, onFolderChanged,
 
         <div style={{ flex: 1, padding: 22, overflowY: "auto" }}>
           {/* Preferences */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 11, color: "#555", letterSpacing: 0.8, marginBottom: 10, fontWeight: 600 }}>PREFERENCES</div>
+          <div style={{ marginBottom: 26 }}>
+            <div style={{ fontSize: 11, color: "#555", letterSpacing: 0.8, marginBottom: 8, fontWeight: 600 }}>PREFERENCES</div>
             <div style={{
-              padding: "12px 14px", background: "#131313", border: "1px solid #1e1e1e",
-              borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14,
+              padding: "13px 14px",
+              background: "#121212",
+              border: "1px solid #1f1f1f",
+              borderRadius: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
             }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: "#d0d0d0", fontWeight: 500 }}>Incomplete file warnings</div>
-                <div style={{ fontSize: 10.5, color: "#555", marginTop: 4, lineHeight: 1.55 }}>
-                  Show a yellow border and an info tooltip when a beat is missing a project file or stems / samples.
+                <div style={{ fontSize: 12, color: "#e1e1e1", fontWeight: 500 }}>Incomplete file warnings</div>
+                <div style={{ fontSize: 10, color: "#555", marginTop: 5, lineHeight: 1.55 }}>
+                  Show a yellow border and an info tooltip when a beat is missing a project file or Samples folder.
                 </div>
               </div>
               <button
                 type="button"
                 role="switch"
                 aria-checked={showIncompleteWarnings}
-                disabled={savingPreference}
+                aria-label="Toggle incomplete file warnings"
                 onClick={handleIncompleteWarningsToggle}
+                disabled={savingIncompleteWarnings}
                 style={{
-                  position: "relative", width: 42, height: 24, borderRadius: 999, flexShrink: 0,
-                  border: `1px solid ${showIncompleteWarnings ? "#8b651f" : "#303030"}`,
-                  background: showIncompleteWarnings ? "rgba(245,158,11,0.28)" : "#1b1b1b",
-                  cursor: savingPreference ? "default" : "pointer", padding: 0,
-                  opacity: savingPreference ? 0.65 : 1, transition: "all 0.16s ease",
+                  width: 42,
+                  height: 24,
+                  borderRadius: 999,
+                  padding: 2,
+                  border: `1px solid ${showIncompleteWarnings ? "#6b5a2b" : "#333"}`,
+                  background: showIncompleteWarnings ? "#3a3118" : "#191919",
+                  cursor: savingIncompleteWarnings ? "wait" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: showIncompleteWarnings ? "flex-end" : "flex-start",
+                  flexShrink: 0,
+                  transition: "background 140ms ease, border-color 140ms ease",
+                  opacity: savingIncompleteWarnings ? 0.65 : 1,
                 }}
               >
                 <span style={{
-                  position: "absolute", top: 3, left: showIncompleteWarnings ? 20 : 3,
-                  width: 16, height: 16, borderRadius: "50%",
-                  background: showIncompleteWarnings ? "#f5a623" : "#666",
-                  transition: "left 0.16s ease", boxShadow: "0 1px 4px rgba(0,0,0,0.45)",
+                  width: 18,
+                  height: 18,
+                  borderRadius: "50%",
+                  background: showIncompleteWarnings ? "#f5a623" : "#777",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+                  transition: "background 140ms ease",
+                }} />
+              </button>
+            </div>
+
+            <div style={{
+              marginTop: 8,
+              padding: "13px 14px",
+              background: "#121212",
+              border: "1px solid #1f1f1f",
+              borderRadius: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: "#e1e1e1", fontWeight: 500 }}>Custom cursor</div>
+                <div style={{ fontSize: 10, color: "#555", marginTop: 5, lineHeight: 1.55 }}>
+                  Use the custom Beat Galer pointer throughout the interface.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={customCursorEnabled}
+                aria-label="Toggle custom cursor"
+                onClick={handleCustomCursorToggle}
+                disabled={savingCustomCursor}
+                style={{
+                  width: 42,
+                  height: 24,
+                  borderRadius: 999,
+                  padding: 2,
+                  border: `1px solid ${customCursorEnabled ? "#4b4b4b" : "#333"}`,
+                  background: customCursorEnabled ? "#2a2a2a" : "#191919",
+                  cursor: savingCustomCursor ? "wait" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: customCursorEnabled ? "flex-end" : "flex-start",
+                  flexShrink: 0,
+                  transition: "background 140ms ease, border-color 140ms ease",
+                  opacity: savingCustomCursor ? 0.65 : 1,
+                }}
+              >
+                <span style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: "50%",
+                  background: customCursorEnabled ? "#e2e2e2" : "#777",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+                  transition: "background 140ms ease",
                 }} />
               </button>
             </div>

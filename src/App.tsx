@@ -17,6 +17,7 @@ import { isTauriAvailable } from "./lib/tauri";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import ReactDOM from "react-dom";
+import { appAlert, appConfirm } from "./lib/dialog";
 import { useTagColors, setTagColor, renameTagColor, TAG_COLOR_PALETTE } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
 
@@ -288,6 +289,7 @@ export default function App() {
 
   // Keep a ref to togglePause so the keydown handler never goes stale
   const togglePauseRef = useRef(togglePause);
+  const deleteInFlightRef = useRef(new Set<string>());
   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);
 
   useEffect(() => {
@@ -296,6 +298,33 @@ export default function App() {
       if (s.beats_folder) setSetupDone(true);
     }).catch(() => setSetupDone(true)); // on error, skip setup
   }, []);
+
+  useEffect(() => {
+    const styleId = "beatgaler-custom-cursor-style";
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+
+    if (settings?.custom_cursor_enabled ?? true) {
+      if (!style) {
+        style = document.createElement("style");
+        style.id = styleId;
+        style.textContent = `
+          html, body, body * {
+            cursor: url('/beatgaler-custom-cursor.cur'), url('/beatgaler-custom-cursor.png') 0 0, auto !important;
+          }
+          input, textarea, [contenteditable="true"] {
+            cursor: text !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    } else {
+      style?.remove();
+    }
+
+    return () => {
+      // Keep the current setting active across React re-renders.
+    };
+  }, [settings?.custom_cursor_enabled]);
 
   useEffect(() => {
     if (!setupDone && settings !== null && !settings.beats_folder) return; // wait for setup
@@ -357,19 +386,41 @@ export default function App() {
   const handleRemoveBulk = useCallback(async () => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    if (!confirm(`Â¿Seguro que quieres eliminar ${ids.length} beats?\n\nEsto borrarÃ¡ los beats seleccionados y sus archivos del disco de forma permanente.`)) return;
+
+    const approved = await appConfirm({
+      title: `Remove ${ids.length} beat${ids.length === 1 ? "" : "s"}?`,
+      message: "This will permanently delete the selected beats and their files from disk.",
+      confirmLabel: ids.length === 1 ? "Delete beat" : "Delete beats",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!approved) return;
 
     const deleted = new Set<string>();
     for (const id of ids) {
+      if (deleteInFlightRef.current.has(id)) continue;
+      deleteInFlightRef.current.add(id);
       try {
         await removeBeatFromLibrary(id);
         deleted.add(id);
       } catch (err) {
         console.error(err);
+      } finally {
+        deleteInFlightRef.current.delete(id);
       }
     }
-    if (deleted.size > 0) setBeats(bs => bs.filter(b => !deleted.has(b.id)));
-    if (deleted.size !== ids.length) alert("Algunos beats no se pudieron eliminar del disco.");
+
+    if (deleted.size > 0) {
+      setBeats(bs => bs.filter(b => !deleted.has(b.id)));
+      setQueueIds(q => q.filter(id => !deleted.has(id)));
+    }
+    if (deleted.size !== ids.length) {
+      await appAlert({
+        title: "Some beats were not removed",
+        message: "One or more selected beats could not be deleted from disk.",
+        danger: true,
+      });
+    }
     setSelectedIds(new Set());
     setSelectMode(false);
     setAnchorIdx(null);
@@ -429,10 +480,10 @@ export default function App() {
       }
       const imported = await resolveImportDecisions(preview.batch_id, []);
       addBeatsAndReview(imported);
-      if (imported.length === 0) alert("No se encontraron beats reproducibles en lo que soltaste.");
+      if (imported.length === 0) await appAlert({ title: "Nothing to import", message: "No playable beats were found in the dropped files." });
     } catch (error) {
       console.error(error);
-      alert(`No se pudieron importar los archivos: ${String(error)}`);
+      await appAlert({ title: "Import failed", message: `Could not import the dropped files: ${String(error)}`, danger: true });
     } finally {
       setDropImporting(false);
       setDropActive(false);
@@ -626,15 +677,33 @@ export default function App() {
   }, [selectedIds]);
 
   const deleteBeat = useCallback(async (beat: Beat) => {
-    if (!confirm(`Â¿Seguro que quieres eliminar "${beat.name}"?\n\nEsto borrarÃ¡ el beat y sus archivos del disco de forma permanente.`)) return;
-    if (audio.playingId === beat.id) releaseFile();
+    const approved = await appConfirm({
+      title: "Remove beat?",
+      message: `Are you sure you want to remove "${beat.name}"?\n\nThis will permanently delete the beat and its files from disk.`,
+      confirmLabel: "Delete beat",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+
+    // Nothing destructive happens before this exact resolved decision.
+    if (!approved) return;
+    if (deleteInFlightRef.current.has(beat.id)) return;
+
+    deleteInFlightRef.current.add(beat.id);
     try {
+      if (audio.playingId === beat.id) releaseFile();
       await removeBeatFromLibrary(beat.id);
       setBeats(bs => bs.filter(b => b.id !== beat.id));
       setQueueIds(ids => ids.filter(id => id !== beat.id));
     } catch (err) {
       console.error(err);
-      alert("No se pudo eliminar el beat del disco.");
+      await appAlert({
+        title: "Could not remove beat",
+        message: "The beat could not be deleted from disk.",
+        danger: true,
+      });
+    } finally {
+      deleteInFlightRef.current.delete(beat.id);
     }
   }, [audio.playingId, releaseFile]);
 
@@ -1210,7 +1279,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
 
       {!setupDone && settings !== null && !settings.beats_folder && (
         <SetupModal onDone={(folder, beats) => {
-          setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true });
+          setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true, custom_cursor_enabled: true });
           if (beats && beats.length > 0) {
             setBeats(beats);
           }
@@ -1222,9 +1291,15 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         <SettingsPanel
           currentFolder={settings?.beats_folder ?? null}
           showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
-          onIncompleteWarningsChanged={enabled => setSettings(current => current ? { ...current, incomplete_warnings_enabled: enabled } : { beats_folder: null, incomplete_warnings_enabled: enabled })}
+          onIncompleteWarningsChanged={(enabled: boolean) => setSettings(current => current
+            ? { ...current, incomplete_warnings_enabled: enabled }
+            : { beats_folder: null, incomplete_warnings_enabled: enabled, custom_cursor_enabled: true })}
+          customCursorEnabled={settings?.custom_cursor_enabled ?? true}
+          onCustomCursorChanged={(enabled: boolean) => setSettings(current => current
+            ? { ...current, custom_cursor_enabled: enabled }
+            : { beats_folder: null, incomplete_warnings_enabled: true, custom_cursor_enabled: enabled })}
           onClose={() => setShowSettings(false)}
-          onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true })}
+          onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true, custom_cursor_enabled: true })}
           onBeatRestored={beat => addBeats([beat])}
         />
       )}
