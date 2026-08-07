@@ -1,8 +1,22 @@
 import React, { useState } from "react";
 import type { Beat, FolderScanResult, ResolveFilesPayload } from "../types";
 import { Artwork, FolderIcon } from "./ui";
-import { pickAndScanFolder, readBeatMeta, scanBeatFolder, resolveAndAddBeat, importSelectedBeats } from "../lib/tauri";
-import { open } from "@tauri-apps/plugin-dialog";
+import {
+  pickAndScanFolder,
+  pickFile,
+  pickFiles,
+  pickFolder,
+  readBeatMeta,
+  scanBeatFolder,
+  resolveAndAddBeat,
+  importSelectedBeats,
+  parseId3FromFile,
+  isTauriAvailable,
+  previewImportBatch,
+  resolveImportDecisions,
+  type ImportBatchPreview,
+} from "../lib/tauri";
+import ImportDecisionsModal from "./ImportDecisionsModal";
 
 interface Props {
   onClose: () => void;
@@ -71,12 +85,39 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
   const [scanMsg, setScanMsg] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importBatch, setImportBatch] = useState<ImportBatchPreview | null>(null);
+
+  // Smart import: pick any folder, scan it recursively (any structure —
+  // separate mp3/flp/samples folders, or everything together), auto-group
+  // everything at 100% confidence, and ask about anything ambiguous.
+  const handleSmartImport = async () => {
+    setError(null);
+    const folder = await pickFolder("Select your beats folder");
+    if (!folder) return;
+    setScanMsg("Analizando tu biblioteca…");
+    setStep("scanning");
+    try {
+      const preview = await previewImportBatch([folder]);
+      if (preview.pending.length === 0) {
+        // Nada ambiguo — igual hay que materializar los grupos confirmados.
+        const beats = await resolveImportDecisions(preview.batch_id, []);
+        if (beats.length > 0) onAdd(beats);
+        onClose();
+        return;
+      }
+      setImportBatch(preview);
+      setStep("choose");
+    } catch (e: any) {
+      if (!String(e).includes("cancelled")) setError(String(e));
+      setStep("choose");
+    }
+  };
 
   const handleScanFolder = async () => {
     setError(null); setScanMsg("Scanning beats…"); setStep("scanning");
     try {
       const beats = await pickAndScanFolder();
-      if (beats.length === 0) { setError("No beats found. Make sure each beat has its own subfolder with an MP3."); setStep("choose"); return; }
+      if (beats.length === 0) { setError("No beats found. We scanned subfolders recursively and skipped auxiliary folders (samples/backup/audio/etc). Try selecting a different source folder."); setStep("choose"); return; }
       const duplicateIds = new Set(beats.filter(beat => isDuplicateCandidate(beat, existingBeats)).map(beat => beat.id));
       setScanned(beats);
       setSelected(new Set(beats.filter(beat => !duplicateIds.has(beat.id)).map(beat => beat.id)));
@@ -84,11 +125,149 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
     } catch (e: any) { if (!String(e).includes("cancelled")) setError(String(e)); setStep("choose"); }
   };
 
+  const handlePickFiles = async () => {
+    setError(null);
+    try {
+      const sels = await pickFiles([{ name: "Audio", extensions: ["mp3", "wav"] }]);
+      if (!sels || sels.length === 0) {
+        // fallback for browser
+        if (typeof (window as any).showOpenFilePicker === "function") {
+          try {
+            const handles = await (window as any).showOpenFilePicker({ types: [{ description: 'Audio', accept: { 'audio/*': ['.mp3', '.wav'] } }], multiple: true });
+            const beats: Beat[] = [];
+            for (const h of handles) {
+              const file = await h.getFile();
+              const url = URL.createObjectURL(file);
+              const meta = await parseId3FromFile(file);
+              const beat: Beat = {
+                id: `local_file_${file.name}`,
+                name: file.name.replace(/\.[^.]+$/, ""),
+                folder_path: file.name,
+                mp3_path: file.name,
+                wav_path: null,
+                playback_path: url,
+                bpm: meta.bpm,
+                key: meta.key,
+                needs_resolution: false,
+                tags: meta.tags,
+                rating: 0,
+                image_base64: meta.image_base64,
+                has_wav: false,
+                has_stems: false,
+                has_samples: false,
+                samples_path: null,
+                has_flp: false,
+                has_als: false,
+                stems_path: null,
+                flp_path: null,
+                als_path: null,
+                other_files: [],
+                color: "#7a7a7a",
+                color2: "#a0a0a0",
+                has_loop: false,
+                loop_path: null,
+              };
+              beats.push(beat);
+            }
+            if (beats.length > 0) { onAdd(beats); onClose(); }
+            return;
+          } catch (err: any) { setError(String(err)); return; }
+        }
+        setError("File picker is only available in the desktop app.");
+        return;
+      }
+
+      setScanMsg(`Importing ${sels.length} file${sels.length !== 1 ? "s" : ""}…`);
+      setImporting(true);
+      const beats: Beat[] = [];
+      for (const path of sels) {
+        try {
+          const beat = await readBeatMeta(path);
+          beats.push(beat);
+        } catch (err: any) { console.warn('readBeatMeta failed for', path, err); }
+      }
+      if (beats.length > 0) { onAdd(beats); onClose(); }
+    } catch (e: any) { if (!String(e).includes("cancelled")) setError(String(e)); }
+    finally { setImporting(false); }
+  };
+
   const handlePickSingleFolder = async () => {
     setError(null);
     try {
-      const sel = await open({ directory: true, multiple: false, title: "Select beat folder" });
-      if (!sel || typeof sel !== "string") return;
+      const sel = await pickFolder("Select beat folder");
+      if (!sel) {
+        // Fallback in browser: use the File System Access API if available
+        if (typeof (window as any).showDirectoryPicker === "function") {
+          try {
+            const folderHandle = await (window as any).showDirectoryPicker();
+            // Read files inside selected folder
+            const mp3s: string[] = [];
+            const wavs: string[] = [];
+            const stems: string[] = [];
+            const flps: string[] = [];
+            for await (const entry of folderHandle.values()) {
+              if (entry.kind === "file") {
+                const name = (entry.name || "").toLowerCase();
+                if (name.endsWith(".mp3")) mp3s.push(entry.name);
+                else if (name.endsWith(".wav")) wavs.push(entry.name);
+                else if (name.endsWith(".flp")) flps.push(entry.name);
+                else if (name.includes("stem")) stems.push(entry.name);
+              }
+            }
+            if (mp3s.length === 0 && wavs.length === 0) {
+              setError("No MP3 or WAV found in this folder");
+              return;
+            }
+            if (mp3s.length > 1 || wavs.length > 1 || stems.length > 1 || flps.length > 1) {
+              setConflict({ needs_resolution: true, mp3_files: mp3s, wav_files: wavs, stems_files: stems, flp_files: flps, beat: null, folder_path: folderHandle.name });
+              setResolving({ folder_path: folderHandle.name, mp3_path: mp3s[0] ?? "", wav_path: wavs[0] ?? null, stems_path: stems[0] ?? null, flp_path: flps[0] ?? null });
+              setStep("conflict");
+              return;
+            }
+            // Build a minimal Beat object using the first mp3/wav
+            const fileName = mp3s[0] ?? wavs[0];
+            const fileHandle = await folderHandle.getFileHandle(fileName);
+            const file = await fileHandle.getFile();
+            const url = URL.createObjectURL(file);
+            const meta = await parseId3FromFile(file);
+            const beat: Beat = {
+              id: `local_${folderHandle.name}`,
+              name: folderHandle.name,
+              folder_path: folderHandle.name,
+              mp3_path: fileName,
+              wav_path: wavs[0] ?? null,
+              playback_path: url,
+              bpm: meta.bpm,
+              key: meta.key,
+              needs_resolution: false,
+              tags: meta.tags,
+              rating: 0,
+              image_base64: meta.image_base64,
+              has_wav: wavs.length > 0,
+              has_stems: stems.length > 0,
+              has_samples: false,
+              samples_path: null,
+              has_flp: flps.length > 0,
+              has_als: false,
+              stems_path: stems[0] ?? null,
+              flp_path: flps[0] ?? null,
+              als_path: null,
+              other_files: [],
+              color: "#7a7a7a",
+              color2: "#a0a0a0",
+              has_loop: false,
+              loop_path: null,
+            };
+            onAdd([beat]); onClose();
+            return;
+          } catch (err: any) {
+            setError(String(err));
+            return;
+          }
+        }
+        setError("Folder picker is only available in the desktop app. In localhost, use 'Scan all beats folder'.");
+        return;
+      }
       setScanMsg("Reading beat folder…");
       setImporting(true);
       const result = await scanBeatFolder(sel);
@@ -113,8 +292,52 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
   const handlePickSingleMp3 = async () => {
     setError(null);
     try {
-      const sel = await open({ filters: [{ name: "MP3 Audio", extensions: ["mp3"] }], multiple: false, title: "Select beat MP3" });
-      if (!sel || typeof sel !== "string") return;
+      const sel = await pickFile([{ name: "MP3 Audio", extensions: ["mp3"] }]);
+      if (!sel) {
+        // Fallback in browser: use showOpenFilePicker
+        if (typeof (window as any).showOpenFilePicker === "function") {
+          try {
+            const handles = await (window as any).showOpenFilePicker({ types: [{ description: 'MP3', accept: { 'audio/mpeg': ['.mp3'] } }], multiple: false });
+            if (!handles || handles.length === 0) { setError('No file selected'); return; }
+            const fileHandle = handles[0];
+            const file = await fileHandle.getFile();
+            const url = URL.createObjectURL(file);
+            const meta = await parseId3FromFile(file);
+            const beat: Beat = {
+              id: `local_file_${file.name}`,
+              name: file.name.replace(/\.[^.]+$/, ""),
+              folder_path: file.name,
+              mp3_path: file.name,
+              wav_path: null,
+              playback_path: url,
+              bpm: meta.bpm,
+              key: meta.key,
+              needs_resolution: false,
+              tags: meta.tags,
+              rating: 0,
+              image_base64: meta.image_base64,
+              has_wav: false,
+              has_stems: false,
+              has_samples: false,
+              samples_path: null,
+              has_flp: false,
+              has_als: false,
+              stems_path: null,
+              flp_path: null,
+              als_path: null,
+              other_files: [],
+              color: "#7a7a7a",
+              color2: "#a0a0a0",
+              has_loop: false,
+              loop_path: null,
+            };
+            onAdd([beat]); onClose();
+            return;
+          } catch (err: any) { setError(String(err)); return; }
+        }
+        setError("File picker is only available in the desktop app. In localhost, use 'Scan all beats folder'.");
+        return;
+      }
       setScanMsg("Importing beat…");
       setImporting(true);
       const beat = await readBeatMeta(sel);
@@ -142,8 +365,13 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
     try {
       setScanMsg(`Importing ${selectedBeats.length} beat${selectedBeats.length !== 1 ? "s" : ""}…`);
       setImporting(true);
-      const imported = await importSelectedBeats(folderPaths);
-      onAdd(imported);
+      if (!isTauriAvailable) {
+        // Dev mode: use the already-scanned beat objects (they include blob URLs and metadata)
+        onAdd(selectedBeats);
+      } else {
+        const imported = await importSelectedBeats(folderPaths);
+        onAdd(imported);
+      }
     } catch (e: any) {
       setError(String(e));
       return;
@@ -182,24 +410,45 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
           {/* CHOOSE */}
           {step === "choose" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {[
-                { label: "Add single beat folder", sub: "Pick a beat's folder — auto-detects MP3, WAV, stems, FLP", fn: handlePickSingleFolder, icon: "📁" },
-                { label: "Add single MP3", sub: "Pick an MP3 file directly", fn: handlePickSingleMp3, icon: "🎵" },
-                { label: "Scan all beats folder", sub: "Pick ALL MY BEATS — imports everything at once", fn: handleScanFolder, icon: "📂" },
-              ].map(({ label, sub, fn, icon }) => (
-                <button key={label} onClick={fn}
-                  style={{ padding: "16px 18px", background: "#161616", border: "1px solid #222", borderRadius: 10, cursor: "pointer", textAlign: "left" }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{icon}</div>
-                    <div>
-                      <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>{label}</div>
-                      <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>{sub}</div>
-                    </div>
+              <button onClick={handlePickFiles}
+                style={{ padding: "16px 18px", background: "#161616", border: "1px solid #222", borderRadius: 10, cursor: "pointer", textAlign: "left" }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}> 
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🎵</div>
+                  <div>
+                    <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Add files</div>
+                    <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>Pick one or more MP3/WAV files</div>
                   </div>
-                </button>
-              ))}
+                </div>
+              </button>
+
+              <button onClick={handlePickSingleFolder}
+                style={{ padding: "16px 18px", background: "#161616", border: "1px solid #222", borderRadius: 10, cursor: "pointer", textAlign: "left" }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}> 
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📁</div>
+                  <div>
+                    <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Add folder</div>
+                    <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>Pick a beat folder — auto-detects MP3, WAV, stems, FLP</div>
+                  </div>
+                </div>
+              </button>
+
+              <button onClick={handleSmartImport}
+                style={{ padding: "16px 18px", background: "#161616", border: "1px solid #222", borderRadius: 10, cursor: "pointer", textAlign: "left" }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🧠</div>
+                  <div>
+                    <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Smart import (any structure)</div>
+                    <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>MP3s, FLPs and samples in separate folders? We'll match them by name.</div>
+                  </div>
+                </div>
+              </button>
+
               {error && <div style={{ padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5" }}>{error}</div>}
             </div>
           )}
@@ -285,6 +534,14 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
           )}
         </div>
       </div>
+
+      {importBatch && (
+        <ImportDecisionsModal
+          batch={importBatch}
+          onClose={() => setImportBatch(null)}
+          onImported={(beats) => { if (beats.length > 0) onAdd(beats); onClose(); }}
+        />
+      )}
     </>
   );
 }

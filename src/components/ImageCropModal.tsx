@@ -5,7 +5,8 @@ type Point = { x: number; y: number };
 interface Props {
   imageSrc: string;
   onCancel: () => void;
-  onConfirm: (croppedDataUrl: string) => void;
+  // onConfirm returns the cropped data URL plus normalized crop rect (ratios)
+  onConfirm: (croppedDataUrl: string, crop: { x: number; y: number; w: number; h: number; unit: 'ratio' }) => void;
 }
 
 const VIEWPORT = 340;
@@ -96,7 +97,13 @@ export default function ImageCropModal({ imageSrc, onCancel, onConfirm }: Props)
         OUTPUT
       );
 
-      onConfirm(canvas.toDataURL("image/jpeg", 0.94));
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.94);
+      // normalized crop rect
+      const nx = clampedSx / natural.w;
+      const ny = clampedSy / natural.h;
+      const nw = sWidth / natural.w;
+      const nh = sHeight / natural.h;
+      onConfirm(dataUrl, { x: nx, y: ny, w: nw, h: nh, unit: 'ratio' });
     } finally {
       setSaving(false);
     }

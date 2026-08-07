@@ -1,3 +1,4 @@
+mod matcher;
 mod commands;
 pub use commands::*;
 
@@ -16,6 +17,24 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir).ok();
             let db_path = data_dir.join("beatvault.db");
             let conn = init_db(&db_path).expect("Failed to open database");
+
+            match rollback_incomplete_tag_rename(&data_dir) {
+                Ok(restored) if restored > 0 => log_line(&data_dir, "WARN", &format!("Startup: rolled back interrupted tag rename in {} file(s)", restored)),
+                Ok(_) => {},
+                Err(err) => log_line(&data_dir, "ERROR", &format!("Startup: tag rename rollback failed: {}", err)),
+            }
+
+            // Auto-purge trash older than 14 days on every startup — keeps
+            // deleted beats recoverable for a while without accumulating forever.
+            let purged = purge_old_trash_internal(&conn, &data_dir, 14);
+            if purged > 0 {
+                log_line(&data_dir, "INFO", &format!("Startup: purged {} old trash item(s)", purged));
+            }
+            let purged_templates = purge_old_template_trash_internal(&conn, &data_dir, 14);
+            if purged_templates > 0 {
+                log_line(&data_dir, "INFO", &format!("Startup: purged {} old preset trash item(s)", purged_templates));
+            }
+
             app.manage(DbState(std::sync::Mutex::new(conn)));
             let app_settings = load_settings(&data_dir);
             if let Some(ref f) = app_settings.beats_folder {
@@ -25,8 +44,18 @@ pub fn run() {
             }
             app.manage(SettingsState {
                 settings: std::sync::Mutex::new(app_settings),
-                data_dir,
+                data_dir: data_dir.clone(),
             });
+            app.manage(ImportBatchState(std::sync::Mutex::new(std::collections::HashMap::new())));
+            app.manage(JobRegistry(std::sync::Mutex::new(std::collections::HashMap::new())));
+
+            // Uploads are processed one at a time by a single long-lived
+            // worker thread — start_youtube_upload only ever enqueues here.
+            let (tx, rx) = std::sync::mpsc::channel::<QueuedUploadJob>();
+            std::thread::spawn(move || run_upload_worker(rx));
+            app.manage(UploadQueueState(std::sync::Mutex::new(tx)));
+
+            log_line(&data_dir, "INFO", "Beat Galer started");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,16 +65,44 @@ pub fn run() {
             resolve_beat_files,
             read_beat_meta,
             save_beat_meta,
+            rename_tag_everywhere,
             rename_beat,
             reorder_beats,
             remove_beat_from_library,
+            list_trash,
+            restore_beat_from_trash,
+            purge_trash_now,
+            get_log_dir,
             reveal_in_explorer,
+            open_project_file,
             add_file_to_beat,
             get_settings,
+            set_incomplete_warnings_enabled,
             set_beats_folder,
             preview_beats_folder,
             import_selected_beats,
+            preview_import_batch,
+            resolve_import_decisions,
+            save_youtube_oauth_config,
+            get_youtube_channel,
+            connect_youtube_channel,
+            upload_to_youtube,
+            start_youtube_upload,
+            cancel_youtube_upload,
+			disconnect_youtube,
+			get_settings,
+			set_beats_folder,
+			set_templates_folder,
+			get_templates_dir,
+			list_template_files,
+			delete_template_file,
+			read_template_file,
+			write_template_file,
+			delete_template_to_trash,
+			list_template_trash,
+			restore_template_from_trash,
+			purge_template_trash_now,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running BeatVault");
+        .expect("error while running Beat Galer");
 }

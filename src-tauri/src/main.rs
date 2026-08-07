@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    beatvault_lib::run()
+    beat_galer_lib::run()
 }

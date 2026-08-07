@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTagColor } from "../lib/tagColors";
 
 // ── Icons ────────────────────────────────────────────────────
 export function PlayIcon({ size = 13, color = "#000" }: { size?: number; color?: string }) {
@@ -100,18 +101,20 @@ export function TagPill({
   label: string;
   onRemove?: () => void;
 }) {
+  const color = useTagColor(label);
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 4,
       fontSize: 11, padding: "2px 8px", borderRadius: 20,
-      background: "#1e1e1e", color: "#777",
-      border: "1px solid #272727",
+      background: color ? `${color}26` : "#1e1e1e",
+      color: color ?? "#777",
+      border: `1px solid ${color ? `${color}66` : "#272727"}`,
     }}>
       {label}
       {onRemove && (
         <span
           onClick={onRemove}
-          style={{ color: "#444", cursor: "pointer", fontSize: 10, lineHeight: 1 }}
+          style={{ color: color ?? "#444", opacity: color ? 0.75 : 1, cursor: "pointer", fontSize: 10, lineHeight: 1 }}
         >✕</span>
       )}
     </span>
@@ -127,12 +130,26 @@ export function TagEditor({
   suggestions?: string[];
 }) {
   const [input, setInput] = useState("");
-  const normalizeTag = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9#\-]/g, "");
+  const [tagError, setTagError] = useState<string | null>(null);
+  // Keep tags deliberately conservative for maximum ID3/Windows compatibility.
+  // TCON has legacy genre-code syntax such as "(9)" = Metal, so punctuation
+  // is rejected instead of silently transformed.
+  const normalizeTag = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+  const isSafeTag = (value: string) => /^[a-z0-9]+(?:[ _-][a-z0-9]+)*$/.test(value) && value.length <= 40;
   const pushUniqueTag = (nextTag: string) => {
     const normalized = normalizeTag(nextTag);
     if (!normalized) return;
+    if (!isSafeTag(normalized)) {
+      setTagError("Use only letters, numbers, spaces, - or _. No parentheses or separators.");
+      return;
+    }
+    setTagError(null);
     const existing = new Set(tags.map(normalizeTag));
     if (existing.has(normalized)) return;
+    if (tags.length >= 30) {
+      setTagError("Maximum 30 tags per beat.");
+      return;
+    }
     onChange([...tags.map(normalizeTag).filter(Boolean), normalized]);
   };
 
@@ -176,6 +193,7 @@ export function TagEditor({
           ))}
         </div>
       )}
+      {tagError && <div style={{ fontSize: 10, color: "#f87171", marginBottom: 6 }}>{tagError}</div>}
       <div style={{ display: "flex", gap: 7 }}>
         <input
           value={input}
@@ -215,7 +233,7 @@ export function TagEditor({
 export function Artwork({
   beat, size = 160, playing,
 }: {
-  beat: { name: string; image_base64: string | null; color: string; color2: string; id: string };
+  beat: { name: string; image_base64: string | null; image_preview_base64?: string | null; color: string; color2: string; id: string };
   size?: number;
   playing?: boolean;
 }) {
@@ -224,12 +242,12 @@ export function Artwork({
     <div style={{
       width: size, height: size, borderRadius: 10, flexShrink: 0,
       position: "relative", overflow: "hidden",
-      background: beat.image_base64 ? "#000" : `linear-gradient(135deg, ${beat.color}, ${beat.color2})`,
+      background: (beat.image_preview_base64 || beat.image_base64) ? "#000" : `linear-gradient(135deg, ${beat.color}, ${beat.color2})`,
       boxShadow: playing ? "0 0 0 2px rgba(255,255,255,0.15)" : "none",
       transition: "box-shadow 0.2s",
     }}>
-      {beat.image_base64 ? (
-        <img src={beat.image_base64} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={beat.name} />
+      { (beat.image_preview_base64 || beat.image_base64) ? (
+        <img src={beat.image_preview_base64 ?? beat.image_base64 ?? undefined} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={beat.name} />
       ) : (
         <>
           <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.07 }}>

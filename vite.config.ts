@@ -1,14 +1,19 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig(async () => ({
+export default defineConfig(async ({ command }) => ({
   plugins: [react()],
+  base: command === "serve" ? "/" : "./",
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: [
+        "**/src-tauri/**",
+        "**/.vs/**",           // ← Add this line
+        "**/node_modules/**"   // Good to have as well
+      ],
     },
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],

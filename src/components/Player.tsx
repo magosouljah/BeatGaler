@@ -58,10 +58,12 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
+    window.addEventListener("beatcard:close-menus", onClose);
     setTimeout(() => window.addEventListener("click", onAnyClick), 10);
     window.addEventListener("contextmenu", onAnyContext, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      window.removeEventListener("beatcard:close-menus", onClose);
       window.removeEventListener("click", onAnyClick);
       window.removeEventListener("contextmenu", onAnyContext, true);
       window.removeEventListener("keydown", onKeyDown);
@@ -334,6 +336,10 @@ export default function Player({
   const [showVolume, setShowVolume] = useState(false);
   const [showEmptyQueueHint, setShowEmptyQueueHint] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const scrubberRef = useRef<HTMLDivElement | null>(null);
+  const [isDraggingProgress, setIsDraggingProgress] = useState(false);
+  const [dragProgress, setDragProgress] = useState(0);
+  const [hoveringScrubber, setHoveringScrubber] = useState(false);
   const queueButtonRef = useRef<HTMLButtonElement | null>(null);
   const queuePopoverRef = useRef<HTMLDivElement | null>(null);
   const volumeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -378,6 +384,33 @@ export default function Player({
     const timer = window.setTimeout(() => setShowEmptyQueueHint(false), 1500);
     return () => window.clearTimeout(timer);
   }, [showEmptyQueueHint]);
+
+  const computeSeekRatio = (clientX: number) => {
+    const rect = scrubberRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  };
+
+  useEffect(() => {
+    if (!isDraggingProgress) return;
+    const onMove = (e: MouseEvent) => {
+      const ratio = computeSeekRatio(e.clientX);
+      setDragProgress(ratio);
+      onSeek(ratio);
+    };
+    const onUp = (e: MouseEvent) => {
+      const ratio = computeSeekRatio(e.clientX);
+      onSeek(ratio);
+      setIsDraggingProgress(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDraggingProgress]);
 
   const isCompact = viewportWidth < 1100;
   const isSmall = viewportWidth < 860;
@@ -481,6 +514,7 @@ export default function Player({
                 ref={moreButtonRef}
                 onClick={(e) => {
                   e.stopPropagation();
+                  window.dispatchEvent(new Event("beatcard:close-menus"));
                   const rect = moreButtonRef.current?.getBoundingClientRect();
                   if (!rect) return;
                   setShowVolume(false);
@@ -497,28 +531,49 @@ export default function Player({
           </div>
           {/* Scrubber bar */}
           <div
+            ref={scrubberRef}
+            onMouseEnter={() => setHoveringScrubber(true)}
+            onMouseLeave={() => setHoveringScrubber(false)}
             style={{
               marginTop: 6,
-              height: 4,
-              background: "rgba(255, 255, 255, 0.2)",
-              borderRadius: 2,
+              paddingTop: 6, paddingBottom: 6, marginBottom: -6, // wider invisible hit area, same visual position
               cursor: "pointer",
               position: "relative",
             }}
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              onSeek((e.clientX - rect.left) / rect.width);
+            onMouseDown={(e) => {
+              const ratio = computeSeekRatio(e.clientX);
+              setDragProgress(ratio);
+              setIsDraggingProgress(true);
+              onSeek(ratio);
             }}
           >
-            <div
-              style={{
-                height: "100%",
-                width: `${Math.max(0, Math.min(1, progress)) * 100}%`,
-                background: "#FFFFFF",
-                borderRadius: 2,
-                transition: "width 0.1s linear",
-              }}
-            />
+            <div style={{ height: 4, background: "rgba(255, 255, 255, 0.2)", borderRadius: 2, position: "relative" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.max(0, Math.min(1, isDraggingProgress ? dragProgress : progress)) * 100}%`,
+                  background: "#FFFFFF",
+                  borderRadius: 2,
+                  transition: isDraggingProgress ? "none" : "width 0.1s linear",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: `${Math.max(0, Math.min(1, isDraggingProgress ? dragProgress : progress)) * 100}%`,
+                  width: isDraggingProgress ? 12 : 10,
+                  height: isDraggingProgress ? 12 : 10,
+                  borderRadius: "50%",
+                  background: "#FFFFFF",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+                  transform: "translate(-50%, -50%)",
+                  opacity: isDraggingProgress || hoveringScrubber ? 1 : 0,
+                  transition: "opacity 0.15s, width 0.1s, height 0.1s",
+                  pointerEvents: "none",
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>

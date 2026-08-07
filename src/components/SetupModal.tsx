@@ -150,7 +150,7 @@ export default function SetupModal({ onDone }: Props) {
 
         {folder && isDevMode && (
           <div style={{ padding: "10px 14px", background: "#1a3a1a", border: "1px solid #2d5a2d", borderRadius: 8, fontSize: 12, color: "#a6e3a1", marginBottom: 14 }}>
-            ✓ Ready: {folder}
+            Ready: {folder}
           </div>
         )}
 

@@ -18,3 +18,15 @@ beatvault/target/
 # OS files
 .DS_Store
 Thumbs.db
+
+# OAuth credentials must never be committed
+client_secret*.json
+**/client_secret*.json
+youtube-client.json
+
+# Temporary / extracted websites
+temp/
+tmp/
+
+# Local Rust installer/helper files
+rustup

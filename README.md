@@ -1,4 +1,4 @@
-# BeatVault — Setup Guide
+# Beat Galer — Setup Guide
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ npm install -g @tauri-apps/cli
 ## Run in development
 
 ```bash
-cd beatvault
+cd beat-galer
 npm install
 npm run tauri dev
 ```
@@ -76,7 +76,7 @@ Output: `src-tauri/target/release/bundle/`
 ## Project Structure
 
 ```
-beatvault/
+beat-galer/
 ├── src/                     ← React frontend
 │   ├── App.tsx              ← Main app, state management
 │   ├── components/

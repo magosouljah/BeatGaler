@@ -12,6 +12,8 @@ export interface AudioState {
 
 export function useAudio() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const sourceUrlsRef = useRef<string[]>([]);
+  const sourceIndexRef = useRef(0);
   const [state, setState] = useState<AudioState>({
     playingId: null,
     isPlaying: false,
@@ -41,12 +43,25 @@ export function useAudio() {
     const onEnded = () => setState((s) => ({ ...s, isPlaying: false, progress: 0, endedSeq: s.endedSeq + 1 }));
     const onPlay = () => setState((s) => ({ ...s, isPlaying: true }));
     const onPause = () => setState((s) => ({ ...s, isPlaying: false }));
+    const onError = () => {
+      const nextIndex = sourceIndexRef.current + 1;
+      if (nextIndex >= sourceUrlsRef.current.length) {
+        console.error("Audio playback failed for all available sources.", sourceUrlsRef.current);
+        setState((s) => ({ ...s, isPlaying: false }));
+        return;
+      }
+      sourceIndexRef.current = nextIndex;
+      audio.src = sourceUrlsRef.current[nextIndex];
+      audio.load();
+      audio.play().catch(console.error);
+    };
 
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("loadedmetadata", onLoadedMeta);
     audio.addEventListener("ended", onEnded);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
+    audio.addEventListener("error", onError);
 
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
@@ -54,18 +69,27 @@ export function useAudio() {
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("error", onError);
     };
   }, []);
 
-  const play = useCallback((beatId: string, mp3Path: string) => {
+  const play = useCallback((beatId: string, paths: string[]) => {
     const audio = getAudio();
     if (state.playingId === beatId) {
       audio.paused ? audio.play().catch(console.error) : audio.pause();
       return;
     }
+    const sources = Array.from(new Set(paths.filter(Boolean).map(filePathToUrl)));
+    if (sources.length === 0) {
+      console.error("No audio sources available for beat", beatId);
+      return;
+    }
     audio.pause();
-    audio.src = filePathToUrl(mp3Path);
+    sourceUrlsRef.current = sources;
+    sourceIndexRef.current = 0;
+    audio.src = sources[0];
     audio.currentTime = 0;
+    audio.load();
     setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
     audio.play().catch(console.error);
   }, [state.playingId, getAudio]);
@@ -96,6 +120,8 @@ export function useAudio() {
     audio.pause();
     audio.removeAttribute("src");
     audio.load(); // this forces the browser to release the file handle
+    sourceUrlsRef.current = [];
+    sourceIndexRef.current = 0;
     setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
   }, [getAudio]);
 

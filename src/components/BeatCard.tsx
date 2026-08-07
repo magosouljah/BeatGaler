@@ -1,31 +1,43 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import type { Beat } from "../types";
 import { Artwork, TagPill, PulsingBars } from "./ui";
 import playFillPng from "../assets/player-icons/play.fill.png";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useTagColors } from "../lib/tagColors";
 
 interface Props {
   beat: Beat;
+  tagFrequency: ReadonlyMap<string, number>;
+  showIncompleteWarnings: boolean;
   playing: boolean;
   selected: boolean;
+  selectedCount: number;
   selectMode: boolean;
   onPlay: (beat: Beat) => void;
   onDetail: (beat: Beat) => void;
   onEdit: (beat: Beat) => void;
   onDelete: (beat: Beat) => void;
   onAddToQueue: (beat: Beat) => void;
+  onUpload: (beat: Beat) => void;
+  onBulkEdit: () => void;
+  onBulkUpload: () => void;
+  onBulkDelete: () => void;
   onToggleSelect: (beat: Beat, e: React.MouseEvent) => void;
+  onDropArtwork: (beat: Beat, imageBase64: string) => void;
   animDelay?: number;
   dragEnabled: boolean;
 }
 
-function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onClose }: {
+function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onOpenProject, onClose }: {
   x: number; y: number;
   onEdit: () => void; onDetail: () => void;
   onAddToQueue: () => void;
-  onDelete: () => void; onReveal: () => void; onClose: () => void;
+  onDelete: () => void; onReveal: () => void;
+  onUpload: () => void;
+  onOpenProject: (() => void) | null;
+  onClose: () => void;
 }) {
   React.useEffect(() => {
     const onAnyClick = () => onClose();
@@ -33,11 +45,17 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
+    // Fired by any card right before it opens ITS menu — guarantees only
+    // one context menu is ever open at a time, even though the opening
+    // click itself stops propagation (so it never reaches the window
+    // "click" listener above).
+    window.addEventListener("beatcard:close-menus", onClose);
     setTimeout(() => window.addEventListener("click", onAnyClick), 10);
     // Use capture so we close before the new card opens its menu
     window.addEventListener("contextmenu", onAnyContext, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      window.removeEventListener("beatcard:close-menus", onClose);
       window.removeEventListener("click", onAnyClick);
       window.removeEventListener("contextmenu", onAnyContext, true);
       window.removeEventListener("keydown", onKeyDown);
@@ -46,7 +64,59 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
 
   return ReactDOM.createPortal(
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
-      {([["Edit metadata", onEdit], ["View detail", onDetail], ["Add to queue", onAddToQueue], ["Reveal in Explorer", onReveal], ["Remove from library", onDelete, true]] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
+      {([
+        ["Upload to YouTube", onUpload],
+        ...(onOpenProject ? [["Open project", onOpenProject] as [string, () => void]] : []),
+        ["Edit metadata", onEdit],
+        ["View detail", onDetail],
+        ["Add to queue", onAddToQueue],
+        ["Reveal in Explorer", onReveal],
+        ["Remove from library", onDelete, true],
+      ] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
+        <div key={label} onClick={() => { fn(); onClose(); }}
+          style={{ padding: "9px 16px", fontSize: 13, color: danger ? "#f87171" : "#c0c0c0", cursor: "pointer" }}
+          onMouseEnter={e => (e.currentTarget.style.background = "#242424")}
+          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+          {label}
+        </div>
+      ))}
+    </div>,
+    document.body
+  );
+}
+
+function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }: {
+  x: number;
+  y: number;
+  onEditAll: () => void;
+  onUploadBulk: () => void;
+  onRemoveAll: () => void;
+  onClose: () => void;
+}) {
+  React.useEffect(() => {
+    const close = () => onClose();
+    const keydown = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("beatcard:close-menus", onClose);
+    setTimeout(() => window.addEventListener("click", close), 10);
+    window.addEventListener("contextmenu", close, true);
+    window.addEventListener("keydown", keydown);
+    return () => {
+      window.removeEventListener("beatcard:close-menus", onClose);
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close, true);
+      window.removeEventListener("keydown", keydown);
+    };
+  }, [onClose]);
+
+  const items: [string, () => void, boolean?][] = [
+    ["Edit all", onEditAll],
+    ["Upload to YouTube (bulk)", onUploadBulk],
+    ["Remove all", onRemoveAll, true],
+  ];
+
+  return ReactDOM.createPortal(
+    <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 205, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
+      {items.map(([label, fn, danger]) => (
         <div key={label} onClick={() => { fn(); onClose(); }}
           style={{ padding: "9px 16px", fontSize: 13, color: danger ? "#f87171" : "#c0c0c0", cursor: "pointer" }}
           onMouseEnter={e => (e.currentTarget.style.background = "#242424")}
@@ -60,13 +130,26 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
 }
 
 export default function BeatCard({
-  beat, playing, selected, selectMode,
-  onPlay, onDetail, onEdit, onDelete, onAddToQueue, onToggleSelect,
+  beat, tagFrequency, showIncompleteWarnings, playing, selected, selectedCount, selectMode,
+  onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload,
+  onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect, onDropArtwork,
   animDelay = 0, dragEnabled
 }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hovered, setHovered] = useState(false);
+  const [imageDragOver, setImageDragOver] = useState(false);
+  const [warningInfoOpen, setWarningInfoOpen] = useState(false);
   const dotsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleNativeArtworkDrag = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId: string | null; active: boolean }>).detail;
+      setImageDragOver(Boolean(detail?.active && detail?.beatId === beat.id));
+    };
+    window.addEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
+    return () => window.removeEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
+  }, [beat.id]);
+  const tagColors = useTagColors();
   const {
     attributes,
     listeners,
@@ -76,6 +159,31 @@ export default function BeatCard({
     transition,
     isDragging,
   } = useSortable({ id: beat.id, disabled: !dragEnabled });
+
+  const incompleteReasons = useMemo(() => {
+    const reasons: string[] = [];
+    if (!beat.has_flp && !beat.has_als) reasons.push("No project file was found (.flp or .als).");
+    if (!beat.has_samples) reasons.push("No Samples folder was found.");
+    return reasons;
+  }, [beat.has_flp, beat.has_als, beat.has_samples]);
+  const showIncompleteWarning = showIncompleteWarnings && incompleteReasons.length > 0;
+
+  // Ignore the tag order stored in ID3 metadata. Sort a display-only copy by
+  // global usage (most used first), then alphabetically for stable ties.
+  const sortedTags = useMemo(() => {
+    const uniqueByNormalized = new Map<string, string>();
+    for (const rawTag of beat.tags) {
+      const normalized = rawTag.trim().toLowerCase();
+      if (normalized && !uniqueByNormalized.has(normalized)) {
+        uniqueByNormalized.set(normalized, rawTag.trim());
+      }
+    }
+    return [...uniqueByNormalized.entries()]
+      .sort(([a], [b]) =>
+        (tagFrequency.get(b) ?? 0) - (tagFrequency.get(a) ?? 0) || a.localeCompare(b)
+      )
+      .map(([, display]) => display);
+  }, [beat.tags, tagFrequency]);
 
   const sortableTransform = CSS.Transform.toString(transform);
   const liftTransform = isDragging ? "scale(0.985)" : hovered && !selectMode ? "translateY(-2px)" : "translateY(0)";
@@ -93,15 +201,20 @@ export default function BeatCard({
 
   const openMenu = (e: React.MouseEvent) => {
     e.stopPropagation();
+    window.dispatchEvent(new Event("beatcard:close-menus"));
     const rect = dotsRef.current?.getBoundingClientRect();
     if (!rect) return;
     setMenu({ x: rect.right - 180, y: rect.bottom + 4 });
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
-    if (selectMode) return;
+    if (selectMode) {
+      // Only open the bulk menu when right-clicking one of multiple selected cards.
+      if (!selected || selectedCount <= 1) return;
+    }
     e.preventDefault();
     e.stopPropagation();
+    window.dispatchEvent(new Event("beatcard:close-menus"));
     setMenu({ x: e.clientX, y: e.clientY });
   };
 
@@ -122,7 +235,8 @@ export default function BeatCard({
         opacity: isDragging ? 0.72 : 1,
         transition: transition || "transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease",
         userSelect: "none",
-      }}
+          // Red border when beat needs resolution — applied to artwork instead. Outer container keeps compact layout.
+        }}
     >
       {/* Checkbox — only visible in select mode */}
       {selectMode && (
@@ -148,6 +262,7 @@ export default function BeatCard({
 
       {/* Artwork */}
       <div
+        data-beat-artwork-id={beat.id}
         ref={setActivatorNodeRef}
         {...(dragEnabled ? attributes : {})}
         {...(dragEnabled ? listeners : {})}
@@ -155,21 +270,109 @@ export default function BeatCard({
           position: "relative", cursor: dragEnabled ? "grab" : "pointer",
           touchAction: "none",
           opacity: selectMode && selected ? 0.7 : 1,
-          transition: "opacity 0.15s",
-          // Slight ring when selected
+          transition: "opacity 0.15s, box-shadow 0.15s",
+          // Slight ring when selected, dashed ring while dragging an image over it
           borderRadius: 10,
-          boxShadow: selected && selectMode ? "0 0 0 2.5px #fff" : "none",
+          boxShadow: imageDragOver
+            ? "0 0 0 2.5px #4ade80"
+            : selected && selectMode ? "0 0 0 2.5px #fff" : "none",
         }}
         onClick={e => {
           if (isDragging) { e.preventDefault(); return; }
           if (selectMode) { e.stopPropagation(); onToggleSelect(beat, e); return; }
           e.stopPropagation(); onPlay(beat);
         }}
+        onDragOver={e => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          const items = Array.from(e.dataTransfer.items);
+          // Some OS/browser combinations expose an empty MIME type during
+          // dragover. In that case we deliberately do not highlight: the
+          // actual drop handler will still accept a real image.
+          const hasImage = items.some(item => item.kind === "file" && item.type.startsWith("image/"));
+          if (!hasImage) {
+            setImageDragOver(false);
+            return;
+          }
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setImageDragOver(true);
+        }}
+        onDragLeave={() => setImageDragOver(false)}
+        onDrop={e => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setImageDragOver(false);
+          const file = Array.from(e.dataTransfer.files).find(f => f.type.startsWith("image/"));
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === "string") onDropArtwork(beat, reader.result);
+          };
+          reader.readAsDataURL(file);
+        }}
       >
-        <Artwork beat={beat} size={160} playing={playing} />
+        <div style={{ borderRadius: 10, overflow: "hidden", position: "relative", display: "inline-block",
+                      boxShadow: showIncompleteWarning ? "0 0 0 4px rgba(245,158,11,0.28)" : undefined }}>
+          <Artwork beat={beat} size={160} playing={playing} />
+        </div>
+        {showIncompleteWarning && hovered && !selectMode && (
+          <div
+            onClick={e => e.stopPropagation()}
+            onMouseEnter={() => setWarningInfoOpen(true)}
+            onMouseLeave={() => setWarningInfoOpen(false)}
+            aria-label="Why this beat is highlighted"
+            style={{
+              position: "absolute", top: 7, right: 7, zIndex: 30,
+              width: 21, height: 21, borderRadius: "50%",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "rgba(15,15,15,0.9)", border: "1px solid rgba(245,158,11,0.75)",
+              color: "#f5a623", fontSize: 12, fontWeight: 700,
+              cursor: "help", boxShadow: "0 2px 8px rgba(0,0,0,0.55)",
+            }}
+          >
+            i
+            {warningInfoOpen && (
+              <div style={{
+                position: "absolute", top: 27, right: 0, width: 245, zIndex: 50,
+                padding: "11px 12px", borderRadius: 9,
+                background: "#171717", border: "1px solid #34302a",
+                boxShadow: "0 12px 34px rgba(0,0,0,0.75)",
+                color: "#bbb", fontSize: 11, lineHeight: 1.55,
+                fontWeight: 400, textAlign: "left", pointerEvents: "none",
+              }}>
+                <div style={{ color: "#e8e8e8", fontWeight: 600, marginBottom: 6 }}>Incomplete beat files</div>
+                {incompleteReasons.map(reason => (
+                  <div key={reason} style={{ display: "flex", gap: 7, marginTop: 3 }}>
+                    <span style={{ color: "#f5a623" }}>•</span><span>{reason}</span>
+                  </div>
+                ))}
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #292929", color: "#777" }}>
+                  You can turn off these yellow warnings in Settings → Preferences.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {imageDragOver && (
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: 10, background: "rgba(74,222,128,0.18)",
+            border: "2px dashed #4ade80", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 11, fontWeight: 600, color: "#fff", textAlign: "center", padding: 8,
+          }}>
+            Drop image
+          </div>
+        )}
+        {beat.needs_resolution && (
+          <div onClick={(e) => { e.stopPropagation(); onEdit(beat); }}
+            title="Conflicto — editar metadata"
+            style={{ position: "absolute", left: 8, top: 8, zIndex: 20, width: 20, height: 20, borderRadius: 6, background: "#f87171", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.5)" }}>
+            <span style={{ lineHeight: 1 }}>?{/* simple question mark */}</span>
+          </div>
+        )}
         {beat.has_wav && !selectMode && (
           <div style={{
-            position: "absolute", top: 6, right: 6, zIndex: 5,
+            position: "absolute", top: showIncompleteWarning && hovered ? 34 : 6, right: 6, zIndex: 5,
             background: "rgba(0,0,0,0.72)", border: "1px solid rgba(255,255,255,0.18)",
             borderRadius: 4, padding: "2px 5px",
             fontSize: 9, fontWeight: 600, color: "#e0e0e0", letterSpacing: 0.8,
@@ -219,7 +422,22 @@ export default function BeatCard({
           </div>
         )}
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
-          {beat.tags.slice(0, 3).map(t => <TagPill key={t} label={t} />)}
+          {sortedTags.slice(0, 3).map(t => <TagPill key={t} label={t} />)}
+          {sortedTags.slice(3).map(t => {
+            const color = tagColors[t.trim().toLowerCase()];
+            if (!color) return null;
+            return (
+              <span
+                key={`tag-dot-${t}`}
+                title={t}
+                aria-label={t}
+                style={{
+                  width: 7, height: 7, borderRadius: "50%", background: color,
+                  display: "inline-block", alignSelf: "center", flexShrink: 0,
+                }}
+              />
+            );
+          })}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
           <span style={{ fontSize: 11, color: "#3a3a3a", fontWeight: 300 }}>
@@ -229,12 +447,27 @@ export default function BeatCard({
         </div>
       </div>
 
-      {menu && (
+      {menu && selectMode && selected && selectedCount > 1 ? (
+        <BulkContextMenu
+          x={menu.x}
+          y={menu.y}
+          onEditAll={onBulkEdit}
+          onUploadBulk={onBulkUpload}
+          onRemoveAll={onBulkDelete}
+          onClose={() => setMenu(null)}
+        />
+      ) : menu ? (
         <ContextMenu x={menu.x} y={menu.y}
           onEdit={() => onEdit(beat)} onDetail={() => onDetail(beat)} onAddToQueue={() => onAddToQueue(beat)} onDelete={() => onDelete(beat)}
           onReveal={() => import("../lib/tauri").then(t => t.revealInExplorer(beat.folder_path))}
+          onUpload={() => onUpload(beat)}
+          onOpenProject={
+            (beat.flp_path || beat.als_path)
+              ? () => import("../lib/tauri").then(t => t.openProjectFile((beat.flp_path || beat.als_path)!))
+              : null
+          }
           onClose={() => setMenu(null)} />
-      )}
+      ) : null}
     </div>
   );
 }

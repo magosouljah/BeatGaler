@@ -1,17 +1,24 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
+﻿import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { Beat, AppSettings } from "./types";
 import BeatCard from "./components/BeatCard";
 import Drawer from "./components/Drawer";
 import Player from "./components/Player";
 import AddBeatModal from "./components/AddBeatModal";
+import ImportDecisionsModal from "./components/ImportDecisionsModal";
 import SetupModal from "./components/SetupModal";
 import SettingsPanel from "./components/SettingsPanel";
+import UploadModal from "./components/UploadModal";
+import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings } from "./lib/tauri";
+import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, type ImportBatchPreview } from "./lib/tauri";
 import { listen } from "@tauri-apps/api/event";
+import { isTauriAvailable } from "./lib/tauri";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
+import ReactDOM from "react-dom";
+import { useTagColors, setTagColor, renameTagColor, TAG_COLOR_PALETTE } from "./lib/tagColors";
+import { registerJob, updateJob } from "./lib/jobStore";
 
 type SortKey = "name" | "bpm" | "rating" | "manual";
 
@@ -153,21 +160,123 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (v: SortKey) 
   );
 }
 
+function TagColorMenu({
+  x, y, current, onSelect, onRename, onClose,
+}: {
+  x: number; y: number; current: string | null;
+  onSelect: (hex: string | null) => void; onRename: () => void; onClose: () => void;
+}) {
+  React.useEffect(() => {
+    const onAnyClick = () => onClose();
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("beatcard:close-menus", onClose);
+    setTimeout(() => window.addEventListener("click", onAnyClick), 10);
+    window.addEventListener("contextmenu", onAnyClick, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("beatcard:close-menus", onClose);
+      window.removeEventListener("click", onAnyClick);
+      window.removeEventListener("contextmenu", onAnyClick, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  return ReactDOM.createPortal(
+    <div onClick={e => e.stopPropagation()} style={{
+      position: "fixed", top: y, left: x, zIndex: 9999,
+      background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 10,
+      padding: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.85)",
+    }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+        {TAG_COLOR_PALETTE.map(c => (
+          <button key={c.key} onClick={() => onSelect(c.hex)} title={c.label}
+            style={{
+              width: 24, height: 24, borderRadius: "50%", background: c.hex,
+              border: current === c.hex ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+              cursor: "pointer", padding: 0,
+            }} />
+        ))}
+      </div>
+      <button onClick={() => onSelect(null)}
+        style={{ marginTop: 8, width: "100%", padding: "5px 0", background: "transparent", border: "1px solid #333", borderRadius: 6, color: "#999", fontSize: 11, cursor: "pointer" }}>
+        Ninguno
+      </button>
+      <button onClick={onRename}
+        style={{ marginTop: 6, width: "100%", padding: "6px 0", background: "#222", border: "1px solid #383838", borderRadius: 6, color: "#ddd", fontSize: 11, cursor: "pointer" }}>
+        Renombrar…
+      </button>
+    </div>,
+    document.body
+  );
+}
+
+// Local cache so the library paints instantly on next launch instead of
+// showing a blank/loading screen while Rust re-scans disk. The real
+// loadLibrary() call still runs in the background and silently replaces
+// this once it resolves — this is purely a "show something now" cache,
+// never the source of truth.
+const LIBRARY_CACHE_KEY = "beatvault:library:v1";
+const SORT_CACHE_KEY = "beatvault:sort:v1";
+
+function loadCachedBeats(): Beat[] | null {
+  try {
+    const raw = localStorage.getItem(LIBRARY_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedBeats(beats: Beat[]) {
+  try { localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(beats)); } catch { /* quota or disabled — ignore */ }
+}
+
+function loadCachedSort(): SortKey {
+  try {
+    const raw = localStorage.getItem(SORT_CACHE_KEY);
+    return raw === "name" || raw === "bpm" || raw === "rating" || raw === "manual" ? raw : "name";
+  } catch {
+    return "name";
+  }
+}
+
+function saveCachedSort(sortBy: SortKey) {
+  try { localStorage.setItem(SORT_CACHE_KEY, sortBy); } catch { /* quota or disabled — ignore */ }
+}
+
+// Clear upload preview cache when library reload is requested via UI reload button
+// (This keeps reload button behavior explicit: refresh disk scan + clear derived previews)
+export function clearUploadPreviewCache() {
+  try { localStorage.removeItem('beatvault:upload-cache:v1'); } catch {}
+}
+
 export default function App() {
-  const [beats, setBeats] = useState<Beat[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [beats, setBeats] = useState<Beat[]>(() => loadCachedBeats() ?? []);
+  const [loading, setLoading] = useState(() => loadCachedBeats() === null);
   const [search, setSearch] = useState("");
-  const [filterTag, setFilterTag] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<SortKey>("name");
+  const [includedTags, setIncludedTags] = useState<Set<string>>(new Set());
+  const [excludedTags, setExcludedTags] = useState<Set<string>>(new Set());
+  const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
+  const [tagRename, setTagRename] = useState<{ oldTag: string; newTag: string; stage: "name" | "confirm" } | null>(null);
+  const [tagRenameBusy, setTagRenameBusy] = useState(false);
+  const [tagRenameError, setTagRenameError] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<SortKey>(() => loadCachedSort());
   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const [dropImporting, setDropImporting] = useState(false);
+  const [dropImportBatch, setDropImportBatch] = useState<ImportBatchPreview | null>(null);
+  const [reviewQueue, setReviewQueue] = useState<{ beats: Beat[]; index: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [setupDone, setSetupDone] = useState(false);
+  const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
-  const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
+  const [anchorIdx, setAnchorIdx] = useState<number | null>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [shuffleEnabled, setShuffleEnabled] = useState(false);
   const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off");
@@ -193,26 +302,16 @@ export default function App() {
     loadLibrary().then(setBeats).catch(console.error).finally(() => setLoading(false));
   }, [setupDone]);
 
-  // Tauri native file drag-drop
+  // Keep the instant-paint cache in sync with whatever's actually on screen —
+  // covers imports, edits, deletes, reorders, everything, from one place.
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
-      const paths: string[] = event.payload?.paths ?? [];
-      for (const filePath of paths) {
-        const lower = filePath.toLowerCase();
-        if (!lower.endsWith(".mp3") && !lower.endsWith(".wav")) continue;
-        try {
-          const beat = await readBeatMeta(filePath);
-          setBeats(bs => {
-            const existing = new Set(bs.map(b => b.folder_path));
-            if (existing.has(beat.folder_path)) return bs;
-            return [beat, ...bs];
-          });
-        } catch (err) { console.error("Drop import failed:", err); }
-      }
-    }).then(fn => { unlisten = fn; });
-    return () => { if (unlisten) unlisten(); };
-  }, []);
+    saveCachedBeats(beats);
+  }, [beats]);
+
+  useEffect(() => {
+    saveCachedSort(sortBy);
+  }, [sortBy]);
+
 
   // Global keyboard shortcuts — stable handler via ref
   useEffect(() => {
@@ -220,12 +319,17 @@ export default function App() {
       const tag = (e.target as HTMLElement).tagName;
       const isTyping = tag === "INPUT" || tag === "TEXTAREA";
       if (e.key === "Escape") {
+        // Prevent Escape from leaving a focus ring or text selection behind
+        // on whatever element/button was last interacted with.
+        (document.activeElement as HTMLElement | null)?.blur();
+        window.getSelection()?.removeAllRanges();
         setSelectedIds(new Set());
         setSelectMode(false);
         setDrawer(null);
         setShowAdd(false);
         setShowSettings(false);
         setShowQueue(false);
+        setShowUpload(null);
       }
       if (e.key === " " && !isTyping) { e.preventDefault(); togglePauseRef.current(); }
     };
@@ -233,7 +337,43 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, []); // empty deps — safe because we use ref
 
-  const handlePlay = useCallback((beat: Beat) => { play(beat.id, beat.playback_path || beat.mp3_path); }, [play]);
+  const handlePlay = useCallback((beat: Beat) => {
+    play(beat.id, [beat.mp3_path, beat.wav_path ?? "", beat.playback_path]);
+  }, [play]);
+
+  const handleUpload = useCallback((beat: Beat) => {
+    setShowUpload({ initialBeat: beat, selectedIds: undefined });
+  }, []);
+
+  const handleUploadBulk = useCallback(() => {
+    setShowUpload({ initialBeat: null, selectedIds: Array.from(selectedIds) });
+  }, [selectedIds]);
+
+  const handleEditBulk = useCallback(() => {
+    const firstSelected = beats.find(b => selectedIds.has(b.id));
+    if (firstSelected) setDrawer({ beat: firstSelected, mode: "edit" });
+  }, [beats, selectedIds]);
+
+  const handleRemoveBulk = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (!confirm(`Â¿Seguro que quieres eliminar ${ids.length} beats?\n\nEsto borrarÃ¡ los beats seleccionados y sus archivos del disco de forma permanente.`)) return;
+
+    const deleted = new Set<string>();
+    for (const id of ids) {
+      try {
+        await removeBeatFromLibrary(id);
+        deleted.add(id);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    if (deleted.size > 0) setBeats(bs => bs.filter(b => !deleted.has(b.id)));
+    if (deleted.size !== ids.length) alert("Algunos beats no se pudieron eliminar del disco.");
+    setSelectedIds(new Set());
+    setSelectMode(false);
+    setAnchorIdx(null);
+  }, [selectedIds]);
 
   const addToQueue = useCallback((beat: Beat) => {
     setQueueIds((ids) => (ids.includes(beat.id) ? ids : [...ids, beat.id]));
@@ -246,12 +386,205 @@ export default function App() {
     });
   }, []);
 
+  const addBeatsAndReview = useCallback((newBeats: Beat[]) => {
+    if (newBeats.length === 0) return;
+    setBeats(bs => {
+      const existing = new Set(bs.map(b => b.mp3_path));
+      return [...newBeats.filter(b => !existing.has(b.mp3_path)), ...bs];
+    });
+    setShowAdd(false);
+    setReviewQueue({ beats: newBeats, index: 0 });
+  }, []);
+
+  const advanceReviewQueue = useCallback(() => {
+    setReviewQueue(q => {
+      if (!q || q.index >= q.beats.length - 1) return null;
+      return { ...q, index: q.index + 1 };
+    });
+  }, []);
+
+  const skipAllReviewQueue = useCallback(() => {
+    setReviewQueue(null);
+  }, []);
+
+  const handleReviewedBeatSaved = useCallback((updated: Beat) => {
+    setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
+    setReviewQueue(q => {
+      if (!q) return null;
+      const nextBeats = q.beats.map(b => b.id === updated.id ? updated : b);
+      if (q.index >= nextBeats.length - 1) return null;
+      return { beats: nextBeats, index: q.index + 1 };
+    });
+  }, []);
+
+  const importDroppedPaths = useCallback(async (paths: string[]) => {
+    const normalized = Array.from(new Set(paths.map(p => p.trim()).filter(Boolean)));
+    if (normalized.length === 0 || dropImporting) return;
+    setDropImporting(true);
+    try {
+      const preview = await previewImportBatch(normalized);
+      if (preview.pending.length > 0) {
+        setDropImportBatch(preview);
+        return;
+      }
+      const imported = await resolveImportDecisions(preview.batch_id, []);
+      addBeatsAndReview(imported);
+      if (imported.length === 0) alert("No se encontraron beats reproducibles en lo que soltaste.");
+    } catch (error) {
+      console.error(error);
+      alert(`No se pudieron importar los archivos: ${String(error)}`);
+    } finally {
+      setDropImporting(false);
+      setDropActive(false);
+    }
+  }, [addBeatsAndReview, dropImporting]);
+
+  useEffect(() => {
+    if (!isTauriAvailable) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    const imageExtensions = /\.(png|jpe?g|webp|bmp|gif)$/i;
+
+    const artworkElementAt = (position: { x?: number; y?: number } | undefined) => {
+      if (!position || typeof position.x !== "number" || typeof position.y !== "number") return null;
+
+      // Tauri/WebView2 may report physical pixels while elementFromPoint expects
+      // CSS pixels. Try both forms so this keeps working across DPI settings.
+      const candidates: Array<[number, number]> = [[position.x, position.y]];
+      const scale = window.devicePixelRatio || 1;
+      if (scale !== 1) candidates.push([position.x / scale, position.y / scale]);
+
+      for (const [x, y] of candidates) {
+        const el = document.elementFromPoint(x, y) as HTMLElement | null;
+        const artwork = el?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+        if (artwork) return artwork;
+      }
+      return null;
+    };
+
+    (async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const stop = await getCurrentWebview().onDragDropEvent(event => {
+          const payload = event.payload as any;
+
+          if (payload.type === "enter") {
+            const paths: string[] = Array.isArray(payload.paths) ? payload.paths : [];
+            const singleImage = paths.length === 1 && imageExtensions.test(paths[0]);
+
+            // Artwork images are handled directly by the target beat. Do not show
+            // the global beat-import overlay for them.
+            setDropActive(!singleImage);
+
+            const artwork = singleImage ? artworkElementAt(payload.position) : null;
+            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+              detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork && singleImage }
+            }));
+            return;
+          }
+
+          if (payload.type === "over") {
+            // Native Tauri drag events bypass React's HTML dragover handlers.
+            // Mirror the old green artwork feedback with a small custom event.
+            const artwork = artworkElementAt(payload.position);
+            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+              detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork }
+            }));
+            return;
+          }
+
+          if (payload.type === "leave") {
+            setDropActive(false);
+            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+              detail: { beatId: null, active: false }
+            }));
+            return;
+          }
+
+          if (payload.type !== "drop") return;
+          setDropActive(false);
+          window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+            detail: { beatId: null, active: false }
+          }));
+
+          const paths: string[] = Array.isArray(payload.paths) ? payload.paths : [];
+          const artwork = artworkElementAt(payload.position);
+          const singleImage = paths.length === 1 && imageExtensions.test(paths[0]);
+
+          if (artwork && singleImage) {
+            const beatId = artwork.dataset.beatArtworkId;
+            const beat = beatId ? beats.find(b => b.id === beatId) : undefined;
+            if (!beat) return;
+
+            void (async () => {
+              try {
+                const imageBase64 = await readImagePathAsDataUrl(paths[0]);
+                await saveBeatMeta({
+                  mp3_path: beat.mp3_path,
+                  wav_path: beat.wav_path,
+                  bpm: beat.bpm,
+                  key: beat.key,
+                  tags: beat.tags,
+                  rating: beat.rating,
+                  image_base64: imageBase64,
+                  image_preview_base64: null,
+                  image_crop: null,
+                  update_filename: false,
+                });
+                setBeats(current => current.map(b =>
+                  b.id === beat.id
+                    ? { ...b, image_base64: imageBase64, image_preview_base64: null, image_crop: null }
+                    : b
+                ));
+              } catch (error) {
+                console.error("Failed to set artwork from native dropped image:", error);
+              }
+            })();
+            return;
+          }
+
+          // A standalone image dropped elsewhere is not a beat import.
+          if (singleImage) return;
+
+          void importDroppedPaths(paths);
+        });
+
+        if (cancelled) stop(); else unlisten = stop;
+      } catch (error) {
+        console.warn("Native drag and drop is unavailable", error);
+      }
+    })();
+
+    return () => { cancelled = true; unlisten?.(); };
+  }, [importDroppedPaths, beats]);
+
   const updateBeat = useCallback((updated: Beat) => {
     setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
     if (drawer?.beat.id === updated.id) setDrawer(d => d ? { ...d, beat: updated } : null);
   }, [drawer]);
 
+  const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {
+    try {
+      await saveBeatMeta({
+        mp3_path: beat.mp3_path,
+        wav_path: beat.wav_path,
+        bpm: beat.bpm,
+        key: beat.key,
+        tags: beat.tags,
+        rating: beat.rating,
+        image_base64: imageBase64,
+        update_filename: false,
+      });
+      updateBeat({ ...beat, image_base64: imageBase64 });
+    } catch (err) {
+      console.error("Failed to set artwork from dropped image:", err);
+    }
+  }, [updateBeat]);
+
   const reloadLibrary = useCallback(async () => {
+    // Clear the instant-paint cache so Reload Library forces a fresh scan
+    try { localStorage.removeItem(LIBRARY_CACHE_KEY); } catch {}
     setLoading(true);
     try {
       const loaded = await loadLibrary();
@@ -263,23 +596,37 @@ export default function App() {
     }
   }, []);
 
-  const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" }) => {
+  const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {
     setBeats(bs => bs.map(b => {
       if (!selectedIds.has(b.id)) return b;
       if (!updates.tags) return { ...b, ...updates };
+
+      const normalizedInput = Array.from(new Set(
+        updates.tags.map(t => t.trim().toLowerCase()).filter(Boolean)
+      ));
+
       if (options?.tagsMode === "replace") {
-        const replacedTags = Array.from(new Set(updates.tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
-        return { ...b, ...updates, tags: replacedTags };
+        return { ...b, ...updates, tags: normalizedInput };
       }
-      const mergedTags = Array.from(new Set([...b.tags, ...updates.tags].map(t => t.trim().toLowerCase()).filter(Boolean)));
+
+      if (options?.tagsMode === "remove") {
+        const removeSet = new Set(normalizedInput);
+        const remainingTags = b.tags.filter(tag => !removeSet.has(tag.trim().toLowerCase()));
+        return { ...b, ...updates, tags: remainingTags };
+      }
+
+      const mergedTags = Array.from(new Set(
+        [...b.tags, ...normalizedInput].map(t => t.trim().toLowerCase()).filter(Boolean)
+      ));
       return { ...b, ...updates, tags: mergedTags };
     }));
     setSelectedIds(new Set());
     setSelectMode(false);
+    setAnchorIdx(null);
   }, [selectedIds]);
 
   const deleteBeat = useCallback(async (beat: Beat) => {
-    if (!confirm(`¿Seguro que quieres eliminar "${beat.name}"?\n\nEsto borrará el beat y sus archivos del disco de forma permanente.`)) return;
+    if (!confirm(`Â¿Seguro que quieres eliminar "${beat.name}"?\n\nEsto borrarÃ¡ el beat y sus archivos del disco de forma permanente.`)) return;
     if (audio.playingId === beat.id) releaseFile();
     try {
       await removeBeatFromLibrary(beat.id);
@@ -293,20 +640,76 @@ export default function App() {
 
   const handleToggleSelect = useCallback((beat: Beat, e: React.MouseEvent, currentFiltered: Beat[]) => {
     const idx = currentFiltered.findIndex(b => b.id === beat.id);
-    if (e.shiftKey && lastSelectedIdx !== null) {
-      const lo = Math.min(idx, lastSelectedIdx);
-      const hi = Math.max(idx, lastSelectedIdx);
-      setSelectedIds(s => {
-        const n = new Set(s);
-        currentFiltered.slice(lo, hi + 1).forEach(b => n.add(b.id));
-        return n;
-      });
+    if (idx < 0) return;
+
+    if (e.shiftKey && anchorIdx !== null) {
+      const lo = Math.min(idx, anchorIdx);
+      const hi = Math.max(idx, anchorIdx);
+      // Windows-style range selection: replace the previous range instead of
+      // adding to it. The anchor stays fixed until a non-shift click.
+      setSelectedIds(new Set(currentFiltered.slice(lo, hi + 1).map(b => b.id)));
     } else {
-      setSelectedIds(s => { const n = new Set(s); n.has(beat.id) ? n.delete(beat.id) : n.add(beat.id); return n; });
-      setLastSelectedIdx(idx);
+      setSelectedIds(current => {
+        const next = new Set(current);
+        next.has(beat.id) ? next.delete(beat.id) : next.add(beat.id);
+        return next;
+      });
+      setAnchorIdx(idx);
     }
+
     if (!selectMode) setSelectMode(true);
-  }, [lastSelectedIdx, selectMode]);
+  }, [anchorIdx, selectMode]);
+  
+  const tagColors = useTagColors();
+
+const confirmTagRename = useCallback(async () => {
+  if (!tagRename) return;
+  const oldTag = tagRename.oldTag.trim().toLowerCase();
+  const newTag = tagRename.newTag.trim().toLowerCase();
+  if (!oldTag || !newTag || oldTag === newTag) return;
+  const jobId = `tag-rename-${Date.now()}`;
+  setTagRenameBusy(true);
+  setTagRenameError(null);
+  registerJob(jobId, `Rename “${oldTag}” → “${newTag}”`, "tag-rename");
+  updateJob(jobId, { status: "processing", progress: 0, message: "Preparing journal…" });
+  try {
+    await renameTagEverywhere(oldTag, newTag, jobId);
+    setBeats(current => current.map(beat => {
+      if (!beat.tags.some(t => t.trim().toLowerCase() === oldTag)) return beat;
+      const renamed = beat.tags.map(t => t.trim().toLowerCase() === oldTag ? newTag : t);
+      return { ...beat, tags: Array.from(new Set(renamed)) };
+    }));
+    setIncludedTags(s => new Set([...s].map(t => t.trim().toLowerCase() === oldTag ? newTag : t)));
+    setExcludedTags(s => new Set([...s].map(t => t.trim().toLowerCase() === oldTag ? newTag : t)));
+    renameTagColor(oldTag, newTag);
+    setTagRename(null);
+  } catch (e) {
+    setTagRenameError(String(e));
+    updateJob(jobId, { status: "error", message: String(e) });
+  } finally {
+    setTagRenameBusy(false);
+  }
+}, [tagRename]);
+
+const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
+  if (e.altKey) {
+    // Alt/Option + click -> excluir (o quitar si ya estaba excluido)
+    setExcludedTags(s => {
+      const n = new Set(s);
+      n.has(tag) ? n.delete(tag) : n.add(tag);
+      return n;
+    });
+    setIncludedTags(s => { const n = new Set(s); n.delete(tag); return n; });
+  } else {
+    // Click normal -> incluir (o quitar si ya estaba incluido)
+    setIncludedTags(s => {
+      const n = new Set(s);
+      n.has(tag) ? n.delete(tag) : n.add(tag);
+      return n;
+    });
+    setExcludedTags(s => { const n = new Set(s); n.delete(tag); return n; });
+  }
+}, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -347,7 +750,37 @@ export default function App() {
     setActiveDragId(null);
   }, []);
 
-  const allTags = [...new Set(beats.flatMap(b => b.tags))].sort();
+  // Global tag usage, normalized and counted once per beat. This is only a
+  // presentation ranking: the order stored in ID3 metadata is left untouched.
+  const tagFrequency = useMemo(() => {
+    const freq = new Map<string, number>();
+    for (const beat of beats) {
+      const uniqueTags = new Set(
+        beat.tags.map(tag => tag.trim().toLowerCase()).filter(Boolean)
+      );
+      for (const tag of uniqueTags) {
+        freq.set(tag, (freq.get(tag) ?? 0) + 1);
+      }
+    }
+    return freq;
+  }, [beats]);
+
+  const allTags = useMemo(() => {
+    const displayByNormalized = new Map<string, string>();
+    for (const beat of beats) {
+      for (const rawTag of beat.tags) {
+        const normalized = rawTag.trim().toLowerCase();
+        if (normalized && !displayByNormalized.has(normalized)) {
+          displayByNormalized.set(normalized, rawTag.trim());
+        }
+      }
+    }
+    return [...displayByNormalized.entries()]
+      .sort(([a], [b]) =>
+        (tagFrequency.get(b) ?? 0) - (tagFrequency.get(a) ?? 0) || a.localeCompare(b)
+      )
+      .map(([, display]) => display);
+  }, [beats, tagFrequency]);
 
   const tagSuggestions = useMemo(() => {
     const freq = new Map<string, number>();
@@ -373,7 +806,8 @@ export default function App() {
     .filter(b => {
       const q = search.trim().toLowerCase();
       return (!q || b.name.toLowerCase().includes(q) || b.tags.some(t => t.includes(q)) || b.key.toLowerCase().includes(q) || String(b.bpm).includes(q))
-        && (!filterTag || b.tags.includes(filterTag));
+        && (includedTags.size === 0 || [...includedTags].every(t => b.tags.includes(t)))
+        && (excludedTags.size === 0 || ![...excludedTags].some(t => b.tags.includes(t)));
     })
     .sort((a, b) => {
       if (sortBy === "manual") return 0;
@@ -483,11 +917,56 @@ export default function App() {
   const selectedBeats = beats.filter(b => selectedIds.has(b.id));
   const activeDragBeat = activeDragId ? beats.find(b => b.id === activeDragId) ?? null : null;
 
+  const handleHtmlDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    // Browser fallback. Tauri native drop remains the preferred path because it
+    // preserves folder paths, but preventing the default here avoids the WebView
+    // swallowing the drop when Windows exposes it as a normal HTML file drag.
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    setDropActive(true);
+  }, []);
+
+  const handleHtmlDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Ignore leave events fired when moving between children inside the app.
+    const nextTarget = e.relatedTarget as Node | null;
+    if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+    setDropActive(false);
+  }, []);
+
+  const handleHtmlDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropActive(false);
+
+    // In a Tauri desktop build, native onDragDropEvent should normally handle
+    // this drop and provide absolute paths. The HTML fallback is intentionally
+    // limited to files whose path is exposed by WebView2.
+    const paths = Array.from(e.dataTransfer.files)
+      .map(file => (file as File & { path?: string }).path ?? "")
+      .filter(Boolean);
+
+    if (paths.length > 0) {
+      void importDroppedPaths(paths);
+    } else {
+      console.warn("HTML drop received files but WebView did not expose filesystem paths; waiting for Tauri native drop event.");
+    }
+  }, [importDroppedPaths]);
+
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}>
+    <div
+      onDragEnter={handleHtmlDragOver}
+      onDragOver={handleHtmlDragOver}
+      onDragLeave={handleHtmlDragLeave}
+      onDrop={handleHtmlDrop}
+      style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}
+    >
       {/* Top bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 24px", height: 50, flexShrink: 0, borderBottom: "1px solid #111" }}>
-        <span style={{ fontWeight: 400, fontSize: 14, color: "#aaa", letterSpacing: 0.3 }}>beatvault</span>
+        <span style={{ fontWeight: 400, fontSize: 14, color: "#aaa", letterSpacing: 0.3 }}>beat galer</span>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           <SearchBar value={search} onChange={setSearch} />
           <SortMenu value={sortBy} onChange={setSortBy} />
@@ -500,7 +979,7 @@ export default function App() {
             onMouseLeave={e => (e.currentTarget.style.color = "#444")}
           >⚙</button>
           <button
-            onClick={reloadLibrary}
+            onClick={() => { clearUploadPreviewCache(); reloadLibrary(); }}
             title="Reload Library"
             disabled={loading}
             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: loading ? "#2a2a2a" : "#444", cursor: loading ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}
@@ -519,7 +998,7 @@ export default function App() {
                 {filteredBeats.every(b => selectedIds.has(b.id)) ? "Deselect All" : "Select All"}
               </button>
               <button
-                onClick={() => { setSelectMode(false); setSelectedIds(new Set()); }}
+                onClick={() => { setSelectMode(false); setSelectedIds(new Set()); setAnchorIdx(null); }}
                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#ccc", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
                 Done
               </button>
@@ -540,33 +1019,19 @@ export default function App() {
       {selectedIds.size > 0 && (
         <div style={{ padding: "0 24px", height: 40, display: "flex", alignItems: "center", gap: 12, background: "#111", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
           <span style={{ fontSize: 12, color: "#888" }}>{selectedIds.size} selected</span>
-          <button onClick={() => setDrawer({ beat: selectedBeats[0], mode: "edit" })}
+          <button onClick={handleEditBulk}
             style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>
             Edit all
           </button>
-          <button onClick={async () => {
-            if (!confirm(`¿Seguro que quieres eliminar ${selectedIds.size} beats?\n\nEsto borrará los beats seleccionados y sus archivos del disco de forma permanente.`)) return;
-            const deleted = new Set<string>();
-            for (const id of selectedIds) {
-              try {
-                await removeBeatFromLibrary(id);
-                deleted.add(id);
-              } catch (err) {
-                console.error(err);
-              }
-            }
-            if (deleted.size > 0) {
-              setBeats(bs => bs.filter(b => !deleted.has(b.id)));
-            }
-            if (deleted.size !== selectedIds.size) {
-              alert("Algunos beats no se pudieron eliminar del disco.");
-            }
-            setSelectedIds(new Set()); setSelectMode(false);
-          }}
+          <button onClick={handleUploadBulk}
+            style={{ padding: "5px 14px", background: "#202020", border: "1px solid #2e2e2e", borderRadius: 6, color: "#e0e0e0", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
+            Upload to YouTube
+          </button>
+          <button onClick={handleRemoveBulk}
             style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>
             Remove all
           </button>
-          <button onClick={() => { setSelectedIds(new Set()); setSelectMode(false); }}
+          <button onClick={() => { setSelectedIds(new Set()); setSelectMode(false); setAnchorIdx(null); }}
             style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", fontSize: 12, cursor: "pointer" }}>
             Cancel
           </button>
@@ -574,15 +1039,99 @@ export default function App() {
       )}
 
       {/* Tag filter */}
-      <div style={{ padding: "7px 24px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: "1px solid #111", flexShrink: 0 }}>
-        <button onClick={() => setFilterTag(null)} style={{ padding: "4px 12px", borderRadius: 20, background: !filterTag ? "#e5e5e5" : "transparent", border: `1px solid ${!filterTag ? "#e5e5e5" : "#1e1e1e"}`, color: !filterTag ? "#000" : "#444", fontSize: 12, cursor: "pointer" }}>All</button>
-        {allTags.map(t => (
-          <button key={t} onClick={() => setFilterTag(filterTag === t ? null : t)}
-            style={{ padding: "4px 12px", borderRadius: 20, background: filterTag === t ? "#1e1e1e" : "transparent", border: `1px solid ${filterTag === t ? "#333" : "#1e1e1e"}`, color: filterTag === t ? "#e0e0e0" : "#444", fontSize: 12, cursor: "pointer" }}>
-            {t}
-          </button>
-        ))}
+<div style={{ padding: "7px 24px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: "1px solid #111", flexShrink: 0 }}>
+  <button
+    onClick={() => { setIncludedTags(new Set()); setExcludedTags(new Set()); }}
+    style={{
+      padding: "4px 12px", borderRadius: 20,
+      background: (!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "transparent",
+      border: `1px solid ${(!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "#1e1e1e"}`,
+      color: (!includedTags.size && !excludedTags.size) ? "#000" : "#444", fontSize: 12, cursor: "pointer",
+    }}>All</button>
+  {allTags.map(t => {
+    const color = tagColors[t.trim().toLowerCase()];
+    const included = includedTags.has(t);
+    const excluded = excludedTags.has(t);
+    const bg = excluded ? "rgba(248,113,113,0.14)" : included ? (color ?? "#e5e5e5") : (color ? `${color}22` : "transparent");
+    const border = excluded ? "#7f1d1d" : included ? (color ?? "#e5e5e5") : (color ? `${color}55` : "#1e1e1e");
+    const text = excluded ? "#f87171" : included ? (color ? "#fff" : "#000") : (color ?? "#444");
+    return (
+      <button key={t}
+        onClick={(e) => handleTagClick(t, e)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          window.dispatchEvent(new Event("beatcard:close-menus"));
+          setTagColorMenu({ tag: t, x: e.clientX, y: e.clientY });
+        }}
+        style={{
+          padding: "4px 12px", borderRadius: 20, background: bg,
+          border: `1px solid ${border}`, color: text, fontSize: 12, cursor: "pointer",
+          textDecoration: excluded ? "line-through" : "none",
+          display: "inline-flex", alignItems: "center", gap: 5,
+        }}>
+        {t}
+      </button>
+    );
+  })}
+</div>
+
+{tagColorMenu && (
+  <TagColorMenu
+    x={tagColorMenu.x}
+    y={tagColorMenu.y}
+    current={tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}
+    onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }}
+    onRename={() => {
+      const oldTag = tagColorMenu.tag.trim().toLowerCase();
+      setTagColorMenu(null);
+      setTagRename({ oldTag, newTag: oldTag, stage: "name" });
+      setTagRenameError(null);
+    }}
+    onClose={() => setTagColorMenu(null)}
+  />
+)}
+
+
+{tagRename && (() => {
+  const normalizedOld = tagRename.oldTag.trim().toLowerCase();
+  const affected = beats.filter(b => b.tags.some(t => t.trim().toLowerCase() === normalizedOld));
+  const mp3Count = affected.filter(b => !!b.mp3_path).length;
+  const wavCount = affected.filter(b => !!b.wav_path).length;
+  return ReactDOM.createPortal(
+    <>
+      <div style={{ position: "fixed", inset: 0, zIndex: 10020, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(5px)" }} />
+      <div style={{ position: "fixed", zIndex: 10021, width: 430, maxWidth: "calc(100vw - 32px)", left: "50%", top: "50%", transform: "translate(-50%,-50%)", background: "#121212", border: "1px solid #292929", borderRadius: 14, padding: 22, boxShadow: "0 28px 90px rgba(0,0,0,.8)" }}>
+        <div style={{ fontSize: 16, color: "#eee", fontWeight: 600 }}>Rename tag globally</div>
+        {tagRename.stage === "name" ? (
+          <>
+            <div style={{ marginTop: 8, fontSize: 12, color: "#777" }}>The original metadata order will be preserved; only the matching tag name changes.</div>
+            <input autoFocus value={tagRename.newTag} onChange={e => setTagRename({ ...tagRename, newTag: e.target.value })}
+              onKeyDown={e => { if (e.key === "Enter" && tagRename.newTag.trim() && tagRename.newTag.trim().toLowerCase() !== normalizedOld) setTagRename({ ...tagRename, stage: "confirm" }); }}
+              style={{ width: "100%", marginTop: 16, padding: "10px 12px", borderRadius: 8, border: "1px solid #333", background: "#191919", color: "#fff", outline: "none" }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button onClick={() => setTagRename(null)} style={{ padding: "8px 13px", borderRadius: 7, border: "1px solid #333", background: "transparent", color: "#999", cursor: "pointer" }}>Cancel</button>
+              <button disabled={!tagRename.newTag.trim() || tagRename.newTag.trim().toLowerCase() === normalizedOld} onClick={() => setTagRename({ ...tagRename, stage: "confirm" })} style={{ padding: "8px 13px", borderRadius: 7, border: 0, background: "#eee", color: "#111", cursor: "pointer" }}>Continue</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ marginTop: 14, padding: 14, borderRadius: 9, background: "#191919", color: "#aaa", fontSize: 12, lineHeight: 1.7 }}>
+              <div><b style={{ color: "#ddd" }}>{normalizedOld}</b> → <b style={{ color: "#ddd" }}>{tagRename.newTag.trim().toLowerCase()}</b></div>
+              <div style={{ marginTop: 8 }}>This will rewrite metadata in:</div>
+              <div>✓ {affected.length} beats</div><div>✓ {mp3Count} MP3 files</div><div>✓ {wavCount} WAV files</div>
+              <div style={{ marginTop: 8, color: "#fbbf24" }}>Do not close Beat Galer while it is running. A recovery journal will roll back an interrupted operation on the next start.</div>
+            </div>
+            {tagRenameError && <div style={{ marginTop: 10, color: "#f87171", fontSize: 11 }}>{tagRenameError}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button disabled={tagRenameBusy} onClick={() => setTagRename({ ...tagRename, stage: "name" })} style={{ padding: "8px 13px", borderRadius: 7, border: "1px solid #333", background: "transparent", color: "#999", cursor: "pointer" }}>Back</button>
+              <button disabled={tagRenameBusy || affected.length === 0} onClick={confirmTagRename} style={{ padding: "8px 13px", borderRadius: 7, border: 0, background: "#ef4444", color: "#fff", cursor: "pointer" }}>{tagRenameBusy ? "Renaming…" : "Rename everywhere"}</button>
+            </div>
+          </>
+        )}
       </div>
+    </>, document.body
+  );
+})()}
 
       {/* Grid — OS file drag-drop */}
       <div
@@ -610,16 +1159,24 @@ export default function App() {
                   <BeatCard
                     key={beat.id}
                     beat={beat}
+                    tagFrequency={tagFrequency}
+                    showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
                     playing={audio.playingId === beat.id && audio.isPlaying}
                     selected={selectedIds.has(beat.id)}
+                    selectedCount={selectedIds.size}
                     selectMode={selectMode}
                     dragEnabled={!selectMode}
+                    onBulkEdit={handleEditBulk}
+                    onBulkUpload={handleUploadBulk}
+                    onBulkDelete={handleRemoveBulk}
                     onPlay={handlePlay}
                     onDetail={b => setDrawer({ beat: b, mode: "detail" })}
                     onEdit={b => setDrawer({ beat: b, mode: "edit" })}
                     onDelete={deleteBeat}
                     onAddToQueue={addToQueue}
+                    onUpload={handleUpload}
                     onToggleSelect={(b, e) => handleToggleSelect(b, e, filteredBeats)}
+                    onDropArtwork={handleDropArtwork}
                     animDelay={i * 0.02}
                   />
                 ))}
@@ -649,11 +1206,11 @@ export default function App() {
         </div>
       )}
 
-      {showAdd && <AddBeatModal onClose={() => setShowAdd(false)} onAdd={addBeats} existingBeats={beats} />}
+      {showAdd && <AddBeatModal onClose={() => setShowAdd(false)} onAdd={addBeatsAndReview} existingBeats={beats} />}
 
       {!setupDone && settings !== null && !settings.beats_folder && (
         <SetupModal onDone={(folder, beats) => {
-          setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder });
+          setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true });
           if (beats && beats.length > 0) {
             setBeats(beats);
           }
@@ -664,22 +1221,74 @@ export default function App() {
       {showSettings && (
         <SettingsPanel
           currentFolder={settings?.beats_folder ?? null}
+          showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
+          onIncompleteWarningsChanged={enabled => setSettings(current => current ? { ...current, incomplete_warnings_enabled: enabled } : { beats_folder: null, incomplete_warnings_enabled: enabled })}
           onClose={() => setShowSettings(false)}
-          onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder })}
+          onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true })}
+          onBeatRestored={beat => addBeats([beat])}
         />
       )}
 
-      {drawer && (
+      {drawer && !reviewQueue && (
         <Drawer
           beat={drawer.beat}
           mode={drawer.mode}
           tagSuggestions={tagSuggestions}
-          onClose={() => { setDrawer(null); setSelectedIds(new Set()); setSelectMode(false); }}
+          onClose={() => { setDrawer(null); setSelectedIds(new Set()); setSelectMode(false); setAnchorIdx(null); }}
           onSaved={updateBeat}
           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) releaseFile(); }}
           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}
           onBulkSaved={applyBulkUpdate}
         />
+      )}
+
+      {reviewQueue && reviewQueue.beats[reviewQueue.index] && (
+        <Drawer
+          beat={reviewQueue.beats[reviewQueue.index]}
+          mode="edit"
+          tagSuggestions={tagSuggestions}
+          reviewInfo={{ current: reviewQueue.index + 1, total: reviewQueue.beats.length }}
+          closeAfterSave={false}
+          onClose={advanceReviewQueue}
+          onSkipAll={skipAllReviewQueue}
+          onSaved={handleReviewedBeatSaved}
+          onReleaseAudio={() => {
+            if (audio.playingId === reviewQueue.beats[reviewQueue.index].id) releaseFile();
+          }}
+        />
+      )}
+
+      {dropImportBatch && (
+        <ImportDecisionsModal
+          batch={dropImportBatch}
+          onClose={() => { setDropImportBatch(null); setDropImporting(false); }}
+          onImported={(imported) => {
+            setDropImportBatch(null);
+            setDropImporting(false);
+            addBeatsAndReview(imported);
+          }}
+        />
+      )}
+
+      {(dropActive || dropImporting) && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 10000, pointerEvents: "none",
+          background: "rgba(8,8,8,0.82)", backdropFilter: "blur(8px)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{
+            width: "min(520px, 86vw)", padding: "42px 32px", borderRadius: 18,
+            border: "2px dashed #555", background: "#111", textAlign: "center",
+            boxShadow: "0 24px 80px rgba(0,0,0,0.65)",
+          }}>
+            <div style={{ fontSize: 18, color: "#eee", fontWeight: 600 }}>
+              {dropImporting ? "Importando beats…" : "Suelta beats, audio o carpetas"}
+            </div>
+            <div style={{ fontSize: 12, color: "#777", marginTop: 9, lineHeight: 1.6 }}>
+              MP3, WAV, proyectos, stems o carpetas completas. Al terminar podrás revisar la metadata beat por beat.
+            </div>
+          </div>
+        </div>
       )}
 
       {currentBeat && (
@@ -716,6 +1325,17 @@ export default function App() {
           onAddToQueue={addToQueue}
         />
       )}
+
+      {showUpload && (
+        <UploadModal
+          initialBeat={showUpload.initialBeat}
+          allBeats={beats}
+          initialSelectedIds={showUpload.selectedIds}
+          onClose={() => setShowUpload(null)}
+        />
+      )}
+
+      <JobStatusBar />
     </div>
   );
 }

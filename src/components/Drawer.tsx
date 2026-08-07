@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Beat } from "../types";
 import { Artwork, Stars, TagEditor, TagPill } from "./ui";
 import ImageCropModal from "./ImageCropModal";
-import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, revealInExplorer } from "../lib/tauri";
+import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable } from "../lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 
 interface Props {
@@ -13,13 +13,17 @@ interface Props {
   onSaved: (updated: Beat) => void;
   onReleaseAudio: () => void;
   selectedBeats?: Beat[];
-  onBulkSaved?: (updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" }) => void;
+  onBulkSaved?: (updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => void;
+  reviewInfo?: { current: number; total: number };
+  closeAfterSave?: boolean;
+  onSkipAll?: () => void;
 }
 
 // Pending file assignment — only committed on Save
 type PendingFiles = {
   mp3?: string;
   wav?: string;
+  samples?: string;
   stems?: string;
   flp?: string;
   als?: string;
@@ -27,20 +31,28 @@ type PendingFiles = {
 
 const LABEL: Record<string, string> = { mp3: "MP3", wav: "WAV", stems: "Stems", flp: "FLP", als: "ALS" };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipAll }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   // pending holds files chosen by the user but NOT yet written to disk
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bulkFields, setBulkFields] = useState<Set<string>>(new Set());
-  const [bulkTagsMode, setBulkTagsMode] = useState<"add" | "replace">("add");
+  const [bulkTagsMode, setBulkTagsMode] = useState<"add" | "replace" | "remove">("add");
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const isEdit = mode === "edit";
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
   const hasPending = Object.keys(pending).length > 0;
+
+  const commonTags = useMemo(() => {
+    if (!isBulk || !selectedBeats?.length) return [];
+    const first = Array.from(new Set(selectedBeats[0].tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
+    return first.filter(tag => selectedBeats.slice(1).every(b =>
+      b.tags.some(t => t.trim().toLowerCase() === tag)
+    ));
+  }, [isBulk, selectedBeats]);
 
   useEffect(() => {
     if (isBulk) {
@@ -68,9 +80,11 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         if (bulkFields.has("key")) updates.key = data.key;
         for (const b of selectedBeats!) {
           const nextTags = bulkFields.has("tags")
-            ? (bulkTagsMode === "replace"
-                ? tagsInput
-                : Array.from(new Set([...b.tags, ...tagsInput].map(t => t.trim().toLowerCase()).filter(Boolean))))
+            ? bulkTagsMode === "replace"
+              ? tagsInput
+              : bulkTagsMode === "remove"
+                ? b.tags.filter(tag => !new Set(tagsInput).has(tag.trim().toLowerCase()))
+                : Array.from(new Set([...b.tags, ...tagsInput].map(t => t.trim().toLowerCase()).filter(Boolean)))
             : b.tags;
           await saveBeatMeta({
             mp3_path: b.mp3_path, wav_path: b.wav_path,
@@ -101,6 +115,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         });
         if (role === "mp3") committed = { ...committed, mp3_path: newPath, playback_path: committed.wav_path ? committed.playback_path : newPath };
         if (role === "wav") committed = { ...committed, wav_path: newPath, has_wav: true, playback_path: newPath };
+        if (role === "samples") committed = { ...committed, samples_path: newPath, has_samples: true };
         if (role === "stems") committed = { ...committed, stems_path: newPath, has_stems: true };
         if (role === "flp") committed = { ...committed, flp_path: newPath, has_flp: true };
         if (role === "als") committed = { ...committed, als_path: newPath, has_als: true };
@@ -120,6 +135,8 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         tags: committed.tags,
         rating: committed.rating,
         image_base64: committed.image_base64,
+        image_preview_base64: committed.image_preview_base64 ?? null,
+        image_crop: committed.image_crop ?? null,
         update_filename: updateFilename,
       });
 
@@ -152,13 +169,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
       // Clear other_files — after rename old paths are gone; Rust re-scans on next load
       onSaved({ ...updated, other_files: [] });
-      onClose();
+      if (closeAfterSave) onClose();
     } catch (e: any) {
       setError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [beat, data, pending, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio]);
+  }, [beat, data, pending, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave]);
 
   // ── Enter to save ───────────────────────────────────────────
   useEffect(() => {
@@ -196,12 +213,19 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     setPending(p => ({ ...p, [role]: filePath }));
   };
 
+  const handlePickSamplesFolder = async () => {
+    const folderPath = await pickFolder("Select Samples folder");
+    if (!folderPath) return;
+    setPending(p => ({ ...p, samples: folderPath }));
+  };
+
   // ── Tauri drag-drop — queues into pending ───────────────────
   const dropTargetRef = useRef<string | null>(null);
   useEffect(() => { dropTargetRef.current = dropTarget; }, [dropTarget]);
 
   useEffect(() => {
     if (!isEdit) return;
+    if (!isTauriAvailable) return;
     const unlisteners: (() => void)[] = [];
 
     // Track drag position to know which row is hovered
@@ -233,6 +257,11 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     const reader = new FileReader();
     reader.onload = e => setCropSrc(e.target?.result as string);
     reader.readAsDataURL(file);
+  };
+
+  const changeBulkTagsMode = (mode: "add" | "replace" | "remove") => {
+    setBulkTagsMode(mode);
+    setData(d => ({ ...d, tags: [] }));
   };
 
   // ── Helpers ─────────────────────────────────────────────────
@@ -331,18 +360,18 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 300, backdropFilter: "blur(4px)" }} />
+      <div onClick={reviewInfo ? undefined : onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 300, backdropFilter: "blur(4px)" }} />
       <div style={{ position: "fixed", right: 0, top: 0, bottom: 0, width: 340, background: "#0f0f0f", borderLeft: "1px solid #1a1a1a", zIndex: 310, display: "flex", flexDirection: "column", animation: "drawerIn 0.22s ease" }}>
 
         {/* Header */}
         <div style={{ padding: "18px 22px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <span style={{ fontWeight: 500, fontSize: 14, color: "#e0e0e0" }}>
-              {isBulk ? `Edit ${selectedBeats!.length} beats` : isEdit ? "Edit metadata" : "Beat detail"}
+              {reviewInfo ? `Review beat ${reviewInfo.current} of ${reviewInfo.total}` : isBulk ? `Edit ${selectedBeats!.length} beats` : isEdit ? "Edit metadata" : "Beat detail"}
             </span>
             {isBulk && <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>Check fields to apply to all</div>}
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#555", fontSize: 18, cursor: "pointer" }}>✕</button>
+          <button onClick={reviewInfo ? (onSkipAll ?? onClose) : onClose} title={reviewInfo ? "Skip all remaining reviews" : "Close"} style={{ background: "none", border: "none", color: "#777", fontSize: reviewInfo ? 12 : 18, cursor: "pointer" }}>{reviewInfo ? "Skip all" : "✕"}</button>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: 22 }}>
@@ -358,8 +387,12 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                     {data.image_base64 ? "Change cover" : "Add cover"}
                   </button>
                   {data.image_base64 && (
-                    <button onClick={() => setData(d => ({ ...d, image_base64: null }))}
-                      style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a1a1a", borderRadius: 7, color: "#f87171", fontSize: 12, cursor: "pointer" }}>Remove</button>
+                    <>
+                      <button onClick={() => setCropSrc(data.image_base64 || null)}
+                        style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 7, color: "#ffd66b", fontSize: 12, cursor: "pointer" }}>Recortar</button>
+                      <button onClick={() => setData(d => ({ ...d, image_base64: null, image_preview_base64: null, image_crop: null }))}
+                        style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a1a1a", borderRadius: 7, color: "#f87171", fontSize: 12, cursor: "pointer" }}>Remove</button>
+                    </>
                   )}
                 </div>
               )}
@@ -388,11 +421,11 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
           {/* Tags */}
           <div style={{ marginTop: 14, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
-            <BulkCheck field="tags" label={isBulk ? "TAGS (ADD TO EXISTING)" : "TAGS"} />
+            <BulkCheck field="tags" label={isBulk ? `TAGS (${bulkTagsMode.toUpperCase()})` : "TAGS"} />
             {isBulk && bulkFields.has("tags") && (
               <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
                 <button
-                  onClick={() => setBulkTagsMode("add")}
+                  onClick={() => changeBulkTagsMode("add")}
                   style={{
                     padding: "4px 10px",
                     borderRadius: 999,
@@ -406,7 +439,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                   Add tags
                 </button>
                 <button
-                  onClick={() => setBulkTagsMode("replace")}
+                  onClick={() => changeBulkTagsMode("replace")}
                   style={{
                     padding: "4px 10px",
                     borderRadius: 999,
@@ -419,14 +452,73 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                 >
                   Replace tags
                 </button>
+                <button
+                  onClick={() => changeBulkTagsMode("remove")}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: `1px solid ${bulkTagsMode === "remove" ? "#5a2525" : "#242424"}`,
+                    background: bulkTagsMode === "remove" ? "#321717" : "transparent",
+                    color: bulkTagsMode === "remove" ? "#fca5a5" : "#666",
+                    fontSize: 10,
+                    cursor: "pointer",
+                  }}
+                >
+                  Remove tags
+                </button>
               </div>
             )}
-            {(isEdit || isBulk)
-              ? <TagEditor tags={data.tags} suggestions={tagSuggestions} onChange={tags => setData(d => ({ ...d, tags }))} />
-              : <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  {data.tags.length ? data.tags.map(t => <TagPill key={t} label={t} />) : <span style={{ fontSize: 12, color: "#444" }}>No tags</span>}
+            {isBulk && bulkFields.has("tags") && bulkTagsMode === "remove" ? (
+              <div data-prevent-enter-save="true">
+                <div style={{ fontSize: 10, color: commonTags.length ? "#888" : "#f59e0b", marginBottom: 9, lineHeight: 1.5 }}>
+                  {commonTags.length
+                    ? "Click the common tags you want to delete. Red and crossed-out tags will be removed from every selected beat."
+                    : "These beats do not have any tags in common."}
                 </div>
-            }
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {commonTags.map(tag => {
+                    const normalized = tag.trim().toLowerCase();
+                    const marked = data.tags.some(t => t.trim().toLowerCase() === normalized);
+                    return (
+                      <button
+                        key={normalized}
+                        type="button"
+                        aria-pressed={marked}
+                        onClick={() => setData(d => ({
+                          ...d,
+                          tags: marked
+                            ? d.tags.filter(t => t.trim().toLowerCase() !== normalized)
+                            : [...d.tags, normalized],
+                        }))}
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          border: `1px solid ${marked ? "#7f1d1d" : "#2a2a2a"}`,
+                          background: marked ? "rgba(248,113,113,0.14)" : "transparent",
+                          color: marked ? "#f87171" : "#aaa",
+                          textDecoration: marked ? "line-through" : "none",
+                          fontSize: 11,
+                          cursor: "pointer",
+                        }}
+                        title={marked ? `Will remove ${tag}` : `Keep ${tag}`}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (isEdit || isBulk) ? (
+              <TagEditor
+                tags={data.tags}
+                suggestions={tagSuggestions}
+                onChange={tags => setData(d => ({ ...d, tags }))}
+              />
+            ) : (
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {data.tags.length ? data.tags.map(t => <TagPill key={t} label={t} />) : <span style={{ fontSize: 12, color: "#444" }}>No tags</span>}
+              </div>
+            )}
           </div>
 
           {/* BPM + Key */}
@@ -458,6 +550,25 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
               <FileRow label="MP3" present={!!data.mp3_path} path={data.mp3_path} role="mp3" />
               <FileRow label="WAV" present={data.has_wav} path={data.wav_path ?? null} role="wav"
                 hint={!data.has_wav ? "adds HQ badge" : undefined} />
+              <div data-filerole="samples" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "7px 10px", borderRadius: 7 }}>
+                <div style={{ minWidth: 48, flexShrink: 0 }}>
+                  <div style={{ fontSize: 12, color: (pending.samples || data.has_samples) ? "#ddd" : "#555" }}>Samples</div>
+                  <div style={{ fontSize: 9, color: "#666", marginTop: 1 }}>Folder</div>
+                </div>
+                <div title={pending.samples ?? data.samples_path ?? "No Samples folder found"} style={{ flex: 1, minWidth: 0, fontSize: 11, color: (pending.samples || data.has_samples) ? "#777" : "#444", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {(pending.samples ?? data.samples_path)?.split(/[/\\]/).pop() ?? "Not found"}
+                </div>
+                {pending.samples ? (
+                  <button type="button" onClick={handlePickSamplesFolder} style={{ padding: "4px 9px", background: "#3a2600", border: "1px solid #6b4500", borderRadius: 5, color: "#f5a623", fontSize: 10, cursor: "pointer" }}>replace</button>
+                ) : data.samples_path ? (
+                  <>
+                    <button type="button" onClick={() => revealInExplorer(data.samples_path!)} style={{ padding: "4px 9px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 5, color: "#777", fontSize: 10, cursor: "pointer" }}>show</button>
+                    {isEdit && <button type="button" onClick={handlePickSamplesFolder} style={{ padding: "4px 9px", background: "#3a2600", border: "1px solid #6b4500", borderRadius: 5, color: "#f5a623", fontSize: 10, cursor: "pointer" }}>replace</button>}
+                  </>
+                ) : isEdit ? (
+                  <button type="button" onClick={handlePickSamplesFolder} style={{ padding: "4px 9px", background: "#063d16", border: "1px solid #0b6726", borderRadius: 5, color: "#4ade80", fontSize: 10, cursor: "pointer" }}>+ add</button>
+                ) : null}
+              </div>
               <FileRow label="Stems" present={data.has_stems} path={data.stems_path ?? null} role="stems" />
               <FileRow label="FLP" sublabel="FL Studio" present={data.has_flp} path={data.flp_path ?? null} role="flp" />
               <FileRow label="ALS" sublabel="Ableton" present={data.has_als} path={data.als_path ?? null} role="als" />
@@ -500,10 +611,27 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
         {(isEdit || isBulk) && (
           <div style={{ padding: "14px 22px", borderTop: "1px solid #1a1a1a" }}>
-            <button onClick={handleSave} disabled={saving || (isBulk && bulkFields.size === 0)}
-              style={{ width: "100%", padding: "10px", background: (saving || (isBulk && bulkFields.size === 0)) ? "#1e1e1e" : "#fff", border: "none", borderRadius: 8, color: (saving || (isBulk && bulkFields.size === 0)) ? "#3a3a3a" : "#000", fontWeight: 500, fontSize: 14, cursor: "pointer" }}>
-              {saving ? "Saving…" : isBulk ? `Apply to ${selectedBeats!.length} beats` : hasPending ? `Save changes (${Object.keys(pending).length} file${Object.keys(pending).length > 1 ? "s" : ""} pending)` : "Save changes"}
-            </button>
+            {(() => {
+              const removeNothingSelected = isBulk && bulkFields.has("tags") && bulkTagsMode === "remove" && data.tags.length === 0;
+              const disabled = saving || (isBulk && bulkFields.size === 0) || removeNothingSelected;
+              const label = saving
+                ? "Saving…"
+                : isBulk && bulkTagsMode === "remove" && bulkFields.has("tags")
+                  ? `Remove ${data.tags.length || "selected"} tag${data.tags.length === 1 ? "" : "s"} from ${selectedBeats!.length} beats`
+                  : isBulk
+                    ? `Apply to ${selectedBeats!.length} beats`
+                    : reviewInfo
+                      ? (reviewInfo.current === reviewInfo.total ? "Save and finish" : "Save and next")
+                      : hasPending
+                        ? `Save changes (${Object.keys(pending).length} file${Object.keys(pending).length > 1 ? "s" : ""} pending)`
+                        : "Save changes";
+              return (
+                <button onClick={handleSave} disabled={disabled}
+                  style={{ width: "100%", padding: "10px", background: disabled ? "#1e1e1e" : "#fff", border: "none", borderRadius: 8, color: disabled ? "#3a3a3a" : "#000", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
+                  {label}
+                </button>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -512,8 +640,9 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         <ImageCropModal
           imageSrc={cropSrc}
           onCancel={() => setCropSrc(null)}
-          onConfirm={(croppedDataUrl) => {
-            setData(d => ({ ...d, image_base64: croppedDataUrl }));
+          onConfirm={(croppedDataUrl, crop) => {
+            // keep original image_base64, save preview and crop metadata
+            setData(d => ({ ...d, image_preview_base64: croppedDataUrl, image_crop: crop }));
             setCropSrc(null);
           }}
         />
