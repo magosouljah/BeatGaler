@@ -18,12 +18,6 @@ pub fn run() {
             let db_path = data_dir.join("beatvault.db");
             let conn = init_db(&db_path).expect("Failed to open database");
 
-            match rollback_incomplete_tag_rename(&data_dir) {
-                Ok(restored) if restored > 0 => log_line(&data_dir, "WARN", &format!("Startup: rolled back interrupted tag rename in {} file(s)", restored)),
-                Ok(_) => {},
-                Err(err) => log_line(&data_dir, "ERROR", &format!("Startup: tag rename rollback failed: {}", err)),
-            }
-
             // Auto-purge trash older than 14 days on every startup — keeps
             // deleted beats recoverable for a while without accumulating forever.
             let purged = purge_old_trash_internal(&conn, &data_dir, 14);
@@ -55,7 +49,7 @@ pub fn run() {
             std::thread::spawn(move || run_upload_worker(rx));
             app.manage(UploadQueueState(std::sync::Mutex::new(tx)));
 
-            log_line(&data_dir, "INFO", "Beat Galer started");
+            log_line(&data_dir, "INFO", "BeatVault started");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -78,6 +72,7 @@ pub fn run() {
             add_file_to_beat,
             get_settings,
             set_incomplete_warnings_enabled,
+            set_custom_cursor_enabled,
             set_beats_folder,
             preview_beats_folder,
             import_selected_beats,
@@ -104,5 +99,5 @@ pub fn run() {
 			purge_template_trash_now,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Beat Galer");
+        .expect("error while running BeatVault");
 }

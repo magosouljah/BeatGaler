@@ -6,7 +6,7 @@ import {
   pickImageFile, pickVideoFile, applyTemplate,
   getTemplatesDir, listTemplateFiles, readTemplateFile, writeTemplateFile, deleteTemplateFile,
   deleteTemplateToTrash,
-  filePathToUrl, pickFile, saveYouTubeOAuthConfig, getYouTubeChannel,
+  filePathToUrl, pickFile, getYouTubeChannel,
   connectYouTubeChannel, uploadToYouTube, disconnectYouTube, startYoutubeUpload,
   pickFolder, saveTemplateDialog, setTemplatesFolder,
 } from "../lib/tauri";
@@ -14,6 +14,7 @@ import { listen } from '@tauri-apps/api/event';
 import { registerJob } from "../lib/jobStore";
 import { hashFilePath } from "../utils/hash";
 import { getCachedUpload, setCachedUpload } from "../utils/uploadCache";
+import { appAlert, appConfirm } from "../lib/dialog";
 
 interface Props {
   initialBeat: Beat | null;
@@ -103,7 +104,9 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
   });
   const [presets, setPresets] = useState<StoredPreset[]>([]);
   const [templatesDir, setTemplatesDir] = useState<string>("");
-  const initialTemplate = useMemo(() => loadLastUsedPreset() ?? EMPTY_TEMPLATE, []);
+  // Every upload must make an explicit preset decision.
+  // Do not silently prefill the previous preset into a new upload session.
+  const initialTemplate = useMemo(() => EMPTY_TEMPLATE, []);
   const [jobs, setJobs] = useState<BeatUploadJob[]>(() => (initialBeat ? [makeJob(initialBeat, initialTemplate)] : []));
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [template, setTemplate] = useState<UploadTemplate>(initialTemplate);
@@ -153,6 +156,10 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
   const [isConnecting, setIsConnecting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadNavigationLocked, setUploadNavigationLocked] = useState(false);
+  const [validationFlashStep, setValidationFlashStep] = useState<number | null>(null);
+  const validationTimerRef = useRef<number | null>(null);
+  const [acceptedStepSignatures, setAcceptedStepSignatures] = useState<Record<number, string>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -210,6 +217,70 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
     [jobs, activeJobId]
   );
 
+  const selectionSignature = useMemo(() => {
+    const ids = mode === "single"
+      ? (jobs[0] ? [jobs[0].beat.id] : Array.from(bulkBeatIds))
+      : Array.from(bulkBeatIds).sort();
+    return JSON.stringify({ mode, ids });
+  }, [mode, bulkBeatIds, jobs]);
+
+  const visualSignature = useMemo(() => JSON.stringify(jobs.map(j => ({
+    id: j.beat.id,
+    visual_type: j.visual_type,
+    image_path: j.image_path ?? null,
+    image_base64: j.image_base64 ?? null,
+    video_path: j.video_path ?? null,
+    video_loop: j.video_loop,
+  }))), [jobs]);
+
+  const metadataSignature = useMemo(() => JSON.stringify(jobs.map(j => ({
+    id: j.beat.id,
+    title: j.title.trim(),
+    description: j.description.trim(),
+    tags: j.tags,
+    collaborator: j.collaborator,
+    preset: jobPresetMap[j.beat.id] ?? null,
+  }))), [jobs, jobPresetMap]);
+
+  const scheduleSignature = useMemo(() => JSON.stringify(jobs.map(j => ({
+    id: j.beat.id,
+    visibility: j.visibility,
+    scheduled_at: j.scheduled_at ?? null,
+  }))), [jobs]);
+
+  const currentStepSignature = useCallback((whichStep: number): string => {
+    if (whichStep === 0) return selectionSignature;
+    if (whichStep === 1) return visualSignature;
+    if (whichStep === 2) return metadataSignature;
+    if (whichStep === 3) return scheduleSignature;
+    return "";
+  }, [selectionSignature, visualSignature, metadataSignature, scheduleSignature]);
+
+  const isStepClean = useCallback((whichStep: number): boolean => {
+    const accepted = acceptedStepSignatures[whichStep];
+    return !!accepted && accepted === currentStepSignature(whichStep);
+  }, [acceptedStepSignatures, currentStepSignature]);
+
+  const isStepEffectivelyClean = useCallback((whichStep: number): boolean => {
+    for (let i = 0; i <= whichStep; i++) {
+      if (!isStepClean(i)) return false;
+    }
+    return true;
+  }, [isStepClean]);
+
+  const flashInvalidStep = useCallback((whichStep: number) => {
+    setValidationFlashStep(whichStep);
+    if (validationTimerRef.current != null) window.clearTimeout(validationTimerRef.current);
+    validationTimerRef.current = window.setTimeout(() => {
+      setValidationFlashStep(null);
+      validationTimerRef.current = null;
+    }, 900);
+  }, []);
+
+  useEffect(() => () => {
+    if (validationTimerRef.current != null) window.clearTimeout(validationTimerRef.current);
+  }, []);
+
   const recomputeJobsFromTemplate = useCallback((nextTemplate: UploadTemplate, scope: "all" | "active", activeId: string | null) => {
     setJobs(js => js.map(j => {
       if (scope === "active" && j.beat.id !== activeId) return j;
@@ -261,10 +332,17 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
   };
 
   const finalizeSelection = () => {
-    const ids = Array.from(bulkBeatIds);
+    const ids = mode === "single" && jobs.length === 1
+      ? [jobs[0].beat.id]
+      : Array.from(bulkBeatIds);
     const beats = allBeats.filter(b => ids.includes(b.id));
-    setJobs(beats.map(b => makeJob(b, template)));
+    const nextJobs = beats.map(b => makeJob(b, template));
+    setJobs(nextJobs);
     selectJob(beats[0]?.id ?? null);
+    setAcceptedStepSignatures(prev => ({
+      ...prev,
+      0: JSON.stringify({ mode, ids: mode === "single" ? ids : [...ids].sort() }),
+    }));
     setStep(1);
   };
 
@@ -341,8 +419,25 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
   const updateTemplate = (patch: Partial<UploadTemplate>) => {
     const next = { ...template, ...patch };
     setTemplate(next);
-    // Editing title/description/tags applies to the selected beat only
+    // Editing stays local to the selected beat. Applying a preset to every beat
+    // is an explicit action via the "Apply to all" button.
     recomputeJobsFromTemplate(next, "active", activeJob?.beat.id ?? null);
+  };
+
+  const applyCurrentPresetToAll = () => {
+    const presetName = template.name.trim();
+    const preset = presets.find(p => p.name === presetName);
+    if (!preset) return;
+
+    const { path: _path, ...storedTemplate } = preset;
+    recomputeJobsFromTemplate(storedTemplate, "all", activeJob?.beat.id ?? null);
+
+    const nextMap: Record<string, string> = {};
+    for (const job of jobs) nextMap[job.beat.id] = preset.name;
+    setJobPresetMap(nextMap);
+
+    // Keep the current beat selected; this is a one-shot action, not a mode.
+    setApplyScope("active");
   };
 
   // Applies a saved preset by name — used from the dropdown, and marks it
@@ -353,18 +448,14 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
     const { path, ...rest } = preset;
     setTemplate(rest);
     saveLastUsedPreset(rest);
-    // Apply template to jobs (titles/descriptions/tags) according to current scope
-    recomputeJobsFromTemplate(rest, applyScope, activeJob?.beat.id ?? null);
-    // Track which presets were applied to jobs so per-beat UI reflects it
-    if (applyScope === "all") {
-      const map: Record<string, string> = {};
-      for (const j of jobs) map[j.beat.id] = name;
-      setJobPresetMap(map);
-    } else if (applyScope === "active" && activeJob) {
+    // Selecting a preset edits/assigns the currently selected beat only.
+    // Bulk assignment is always an explicit "Apply to all" action.
+    recomputeJobsFromTemplate(rest, "active", activeJob?.beat.id ?? null);
+    if (activeJob) {
       setJobPresetMap(prev => ({ ...prev, [activeJob.beat.id]: name }));
-      // Make the editor reflect the selected preset for the active job immediately
       try { selectJob(activeJob.beat.id, preset); } catch {}
     }
+    setApplyScope("active");
   };
 
   // Saves the current template as a .txt preset via a Save dialog (Save as...)
@@ -380,7 +471,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
       const withName: UploadTemplate = { ...template, name };
       const ok = await writeTemplateFile(target, withName);
       if (!ok) {
-        alert("Could not save preset — check that the location is writable.");
+        await appAlert({ title: "Could not save preset", message: "Check that the selected location is writable.", danger: true });
         return;
       }
       setPresets(prev => {
@@ -390,7 +481,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
       });
       saveLastUsedPreset(withName);
     } catch (e: any) {
-      alert(`Could not save preset: ${e}`);
+      await appAlert({ title: "Could not save preset", message: String(e), danger: true });
     }
   };
 
@@ -414,7 +505,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         return next;
       });
     } catch (e: any) {
-      alert(`No se pudo eliminar el preset: ${e}`);
+      await appAlert({ title: "Could not delete preset", message: String(e), danger: true });
     }
   };
 
@@ -439,7 +530,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
       await refreshPresets();
       setTemplatesDir(chosen);
     } catch (e: any) {
-      alert(`Could not change template directory: ${e}`);
+      await appAlert({ title: "Could not change template directory", message: String(e), danger: true });
     }
   };
 
@@ -453,17 +544,17 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         return existing;
       }
 
-      const jsonPath = await pickFile([{ name: "Google OAuth client", extensions: ["json"] }]);
-      if (jsonPath) {
-        const raw = await fetch(filePathToUrl(jsonPath)).then(r => r.text());
-        await saveYouTubeOAuthConfig(raw);
-      }
-
+      // OAuth client configuration is bundled at build time.
+      // Never ask the end user to select a client_secret JSON file.
       const connected = await connectYouTubeChannel();
       setChannel(connected);
       return connected;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not connect YouTube.";
+      const message = typeof error === "string"
+        ? error
+        : error instanceof Error
+          ? error.message
+          : String(error || "Could not connect YouTube.");
       setChannel({
         id: "",
         name: "",
@@ -499,6 +590,9 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         if (!connectedChannel.connected) return;
       }
 
+      // From this point the upload workflow is committed. Navigation to earlier
+      // configuration steps stays locked even after generation/upload finishes.
+      setUploadNavigationLocked(true);
       setIsUploading(true);
       setUploadError(null);
       for (const job of jobs) {
@@ -595,28 +689,113 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
   };
 
   const canNextStep0 = useMemo(() => {
-    if (mode === "single") return jobs.length === 1;
+    if (mode === "single") return jobs.length === 1 || bulkBeatIds.size === 1;
     return bulkBeatIds.size >= 1;
   }, [mode, jobs.length, bulkBeatIds.size]);
 
-  const canNextStep1 = useMemo(() => jobs.every(j => {
+  const canNextStep1 = useMemo(() => jobs.length > 0 && jobs.every(j => {
     if (j.visual_type === "image") return !!j.image_base64 || !!j.image_path;
     return !!j.video_path;
   }), [jobs]);
 
-  const canNextStep2 = useMemo(() => jobs.every(j => j.title.trim().length > 0), [jobs]);
+  // Metadata is only accepted when EVERY beat has an explicitly assigned saved preset.
+  // Manual title/description edits are allowed after choosing a preset, but a preset
+  // must always be the base decision for the beat.
+  const canNextStep2 = useMemo(
+    () => jobs.length > 0 && jobs.every(j => {
+      const presetName = jobPresetMap[j.beat.id];
+      return !!presetName
+        && presets.some(p => p.name === presetName)
+        && j.title.trim().length > 0
+        && j.description.trim().length > 0;
+    }),
+    [jobs, jobPresetMap, presets]
+  );
 
-  const canNextStep3 = true;
+  // Scheduling is deliberate in Beat Galer: every beat must have a date before
+  // YouTube & Upload becomes reachable.
+  const canNextStep3 = useMemo(
+    () => jobs.length > 0 && jobs.every(j => !!j.scheduled_at),
+    [jobs]
+  );
 
   const canUpload = channel.connected && jobs.length > 0 && !isUploading;
 
+  const stepIsValid = useCallback((whichStep: number) => {
+    if (whichStep === 0) return canNextStep0;
+    if (whichStep === 1) return canNextStep1;
+    if (whichStep === 2) return canNextStep2;
+    if (whichStep === 3) return canNextStep3;
+    return true;
+  }, [canNextStep0, canNextStep1, canNextStep2, canNextStep3]);
+
+  const acceptCurrentStepAndAdvance = useCallback(() => {
+    if (uploadNavigationLocked) return;
+
+    if (!stepIsValid(step)) {
+      flashInvalidStep(step);
+      return;
+    }
+
+    if (step === 0) {
+      finalizeSelection();
+      return;
+    }
+
+    if (step >= 1 && step <= 3) {
+      setAcceptedStepSignatures(prev => ({
+        ...prev,
+        [step]: currentStepSignature(step),
+      }));
+      setStep(step + 1);
+    }
+  }, [
+    uploadNavigationLocked, step, stepIsValid, flashInvalidStep,
+    finalizeSelection, currentStepSignature
+  ]);
+
+  const canNavigateToStep = useCallback((targetStep: number) => {
+    if (uploadNavigationLocked) return targetStep === step;
+    if (targetStep === step) return true;
+
+    // Backwards is allowed until Generate & Upload commits the workflow.
+    if (targetStep < step) return true;
+
+    // A future step is reachable only if EVERY prerequisite has previously
+    // been explicitly accepted and is still unchanged ("clean").
+    for (let prerequisite = 0; prerequisite < targetStep; prerequisite++) {
+      if (!isStepClean(prerequisite)) return false;
+    }
+    return true;
+  }, [uploadNavigationLocked, step, isStepClean]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+
+      if (e.key !== "Enter" || uploadNavigationLocked || step >= 4) return;
+
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const isTypingControl =
+        tag === "textarea" ||
+        tag === "input" ||
+        tag === "select" ||
+        target?.isContentEditable;
+
+      // Enter inside text/date/select controls keeps its normal editing behavior.
+      if (isTypingControl) return;
+
+      e.preventDefault();
+      acceptCurrentStepAndAdvance();
     };
+
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, uploadNavigationLocked, step, acceptCurrentStepAndAdvance]);
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", backdropFilter: "blur(4px)", zIndex: 500, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 24 }}>
@@ -644,14 +823,23 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         {/* Stepper */}
         <div style={{ padding: "12px 20px 0", display: "flex", gap: 4, flexShrink: 0, overflowX: "auto" }}>
           {STEP_LABELS.map((label, i) => {
-            const done = i < step;
+            const done = i < 4 && isStepEffectivelyClean(i);
             const active = i === step;
             return (
               <button key={label}
-                disabled={isUploading}
+                disabled={uploadNavigationLocked}
                 onClick={() => {
-                  // Prevent skipping ahead: allow going back only
-                  if (i < step) setStep(i);
+                  if (uploadNavigationLocked) return;
+
+                  // Clicking the immediate next tab is exactly the same action
+                  // as pressing Continue: validate + accept the current step.
+                  if (i === step + 1) {
+                    acceptCurrentStepAndAdvance();
+                    return;
+                  }
+
+                  if (!canNavigateToStep(i)) return;
+                  setStep(i);
                 }}
                 style={{
                   flexShrink: 0,
@@ -659,9 +847,11 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
                   borderRadius: 8,
                   border: `1px solid ${active ? "#3a3a3a" : "#1a1a1a"}`,
                   background: active ? "#1a1a1a" : done ? "#121212" : "transparent",
-                  color: active ? "#fff" : done ? "#999" : "#444",
+                  color: active ? "#fff" : done ? "#999" : canNavigateToStep(i) ? "#777" : "#3a3a3a",
                   fontSize: 12,
-                  cursor: isUploading ? "not-allowed" : "pointer",
+                  cursor: canNavigateToStep(i) && !uploadNavigationLocked
+                    ? "pointer"
+                    : "default",
                   display: "flex", alignItems: "center", gap: 8,
                 }}>
                 <span style={{
@@ -680,14 +870,14 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         {/* Content */}
         <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "20px", minHeight: 0 }}>
           {step === 0 && <Step0 mode={mode} setMode={setModeAndInit} initialBeat={initialBeat} allBeats={allBeats} bulkBeatIds={bulkBeatIds} toggleBulkBeat={toggleBulkBeat} jobs={jobs} />}
-          {step === 1 && activeJob && <Step1 jobs={jobs} activeJob={activeJob} setActiveJobId={setActiveJobId} applyScope={applyScope} setApplyScope={setApplyScope} updateJob={updateJob} updateActive={updateActive} removeJob={removeJob} onSelectJob={selectJob} />}
-          {step === 2 && activeJob && <Step2 jobs={jobs} activeJob={activeJob} setActiveJobId={setActiveJobId} applyScope={applyScope} setApplyScope={setApplyScope} updateJob={updateJob} updateActive={updateActive} template={template} updateTemplate={updateTemplate} presets={presets} onSelectPreset={onSelectPreset} onSavePreset={onSavePreset} onDeletePreset={onDeletePreset} onChooseTemplatesDir={onChooseTemplatesDir} onApplyPresetToBeat={(id, name) => {
+          {step === 1 && activeJob && <Step1 jobs={jobs} activeJob={activeJob} setActiveJobId={setActiveJobId} applyScope={applyScope} setApplyScope={setApplyScope} updateJob={updateJob} updateActive={updateActive} removeJob={removeJob} onSelectJob={selectJob} validationFlash={validationFlashStep === 1} />}
+          {step === 2 && activeJob && <Step2 jobs={jobs} activeJob={activeJob} setActiveJobId={setActiveJobId} applyScope={applyScope} setApplyScope={setApplyScope} updateJob={updateJob} updateActive={updateActive} template={template} updateTemplate={updateTemplate} presets={presets} onSelectPreset={onSelectPreset} onSavePreset={onSavePreset} onDeletePreset={onDeletePreset} onChooseTemplatesDir={onChooseTemplatesDir} onApplyCurrentPresetToAll={applyCurrentPresetToAll} validationFlash={validationFlashStep === 2} onApplyPresetToBeat={(id, name) => {
             setJobPresetMap(prev => ({ ...prev, [id]: name }));
             const p = presets.find(x => x.name === name);
             // apply template preview immediately and switch to active editing for that beat
             try { if (p) { setTemplate({ name: p.name, title_template: p.title_template, description_template: p.description_template, tags: p.tags }); selectJob(id, p); } else { selectJob(id); } } catch {}
           }} jobPresetMap={jobPresetMap} onRefreshPresets={refreshPresets} onSelectJob={selectJob} />}
-          {step === 3 && activeJob && <Step3 jobs={jobs} activeJob={activeJob} setActiveJobId={setActiveJobId} applyScope={applyScope} setApplyScope={setApplyScope} updateJob={updateJob} updateActive={updateActive} onSelectJob={selectJob} reorderJobs={reorderJobs} />}
+          {step === 3 && activeJob && <Step3 jobs={jobs} activeJob={activeJob} setActiveJobId={setActiveJobId} applyScope={applyScope} setApplyScope={setApplyScope} updateJob={updateJob} updateActive={updateActive} onSelectJob={selectJob} reorderJobs={reorderJobs} validationFlash={validationFlashStep === 3} />}
           {step === 4 && (
             <Step4
               jobs={jobs}
@@ -713,24 +903,24 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px", borderTop: "1px solid #181818", flexShrink: 0, background: "#0a0a0a" }}>
           <button
             onClick={() => setStep(s => Math.max(0, s - 1))}
-            disabled={step === 0 || isUploading}
-            style={{ padding: "8px 18px", borderRadius: 8, background: "#161616", border: "1px solid #222", color: step === 0 || isUploading ? "#444" : "#bbb", fontSize: 13, cursor: step === 0 || isUploading ? "not-allowed" : "pointer" }}
+            disabled={step === 0 || uploadNavigationLocked}
+            style={{ padding: "8px 18px", borderRadius: 8, background: "#161616", border: "1px solid #222", color: step === 0 || uploadNavigationLocked ? "#444" : "#bbb", fontSize: 13, cursor: step === 0 || uploadNavigationLocked ? "not-allowed" : "pointer" }}
           >Back</button>
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 8, background: "transparent", border: "1px solid #222", color: "#888", fontSize: 13, cursor: isUploading ? "not-allowed" : "pointer" }} disabled={isUploading}>Cancel</button>
             {step < 4 ? (
               <button
-                onClick={() => {
-                  if (step === 0) finalizeSelection();
-                  else setStep(s => s + 1);
-                }}
-                disabled={(step === 0 && !canNextStep0) || (step === 1 && !canNextStep1) || (step === 2 && !canNextStep2) || (step === 3 && !canNextStep3) || isUploading}
+                onClick={acceptCurrentStepAndAdvance}
+                disabled={uploadNavigationLocked}
                 style={{
                   padding: "8px 22px", borderRadius: 8,
-                  background: ((step === 0 && !canNextStep0) || (step === 1 && !canNextStep1) || (step === 2 && !canNextStep2) || (step === 3 && !canNextStep3) || isUploading) ? "#1a1a1a" : "#fff",
-                  border: "1px solid " + (((step === 0 && !canNextStep0) || (step === 1 && !canNextStep1) || (step === 2 && !canNextStep2) || (step === 3 && !canNextStep3) || isUploading) ? "#222" : "#fff"),
-                  color: ((step === 0 && !canNextStep0) || (step === 1 && !canNextStep1) || (step === 2 && !canNextStep2) || (step === 3 && !canNextStep3) || isUploading) ? "#333" : "#000",
-                  fontSize: 13, fontWeight: 500, cursor: ((step === 0 && !canNextStep0) || (step === 1 && !canNextStep1) || (step === 2 && !canNextStep2) || (step === 3 && !canNextStep3) || isUploading) ? "not-allowed" : "pointer",
+                  background: stepIsValid(step) ? "#fff" : "#1a1a1a",
+                  border: "1px solid " + (stepIsValid(step) ? "#fff" : "#2a2a2a"),
+                  color: stepIsValid(step) ? "#000" : "#777",
+                  fontSize: 13, fontWeight: 500,
+                  // Invalid means "do not advance", not "dead button": clicking
+                  // still triggers the short red validation hint.
+                  cursor: uploadNavigationLocked ? "not-allowed" : "pointer",
                 }}
               >Continue</button>
             ) : null}
@@ -890,7 +1080,7 @@ function BeatGridPicker({ allBeats, selectedIds, onToggle, singleMode }: { allBe
 /* ================= STEP 1 ================= */
 function Step1({
   jobs, activeJob, setActiveJobId, applyScope, setApplyScope, updateJob, updateActive, removeJob,
-  onSelectJob,
+  onSelectJob, validationFlash,
 }: {
   jobs: BeatUploadJob[];
   activeJob: BeatUploadJob;
@@ -901,6 +1091,7 @@ function Step1({
   updateActive: (patch: Partial<BeatUploadJob>) => void;
   removeJob: (id: string) => void;
   onSelectJob: (id: string) => void;
+  validationFlash: boolean;
 }) {
   const vt: VisualType = activeJob.visual_type;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -949,6 +1140,11 @@ function Step1({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {validationFlash && (
+        <div style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #7f1d1d", background: "#241010", color: "#fca5a5", fontSize: 11 }}>
+          Choose a valid image or video before continuing.
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div style={{ border: "1px solid #1c1c1c", borderRadius: 12, padding: 12, background: "#121212", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1058,8 +1254,8 @@ function Step1({
 function Step2({
   jobs, activeJob, setActiveJobId, applyScope, setApplyScope, updateJob, updateActive,
   template, updateTemplate, presets, onSelectPreset, onSavePreset, onDeletePreset, onChooseTemplatesDir,
-  onApplyPresetToBeat, jobPresetMap, onRefreshPresets,
-  onSelectJob,
+  onApplyCurrentPresetToAll, onApplyPresetToBeat, jobPresetMap, onRefreshPresets,
+  onSelectJob, validationFlash,
 }: {
   jobs: BeatUploadJob[];
   activeJob: BeatUploadJob;
@@ -1075,11 +1271,13 @@ function Step2({
   onSavePreset: () => void;
   onDeletePreset: (name: string) => void;
   onChooseTemplatesDir: () => void;
+  onApplyCurrentPresetToAll: () => void;
   onApplyPresetToBeat: (id: string, name: string) => void;
   // jobPresetBaseline removed: determined by comparing job values against stored presets
   jobPresetMap: Record<string, string>;
   onRefreshPresets: () => Promise<void>;
   onSelectJob: (id: string) => void;
+  validationFlash: boolean;
 }) {
   const tagsStr = template.tags.join(",");
   const isSavedPreset = presets.some(p => p.name === template.name.trim() && template.name.trim() !== "");
@@ -1113,12 +1311,25 @@ function Step2({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPresetsMenu]);
 
+  const missingPresetCount = jobs.filter(j => {
+    const presetName = jobPresetMap[j.beat.id];
+    return !presetName || !presets.some(p => p.name === presetName);
+  }).length;
+  const missingMetadataCount = jobs.filter(j => !j.title.trim() || !j.description.trim()).length;
+
   const presetBlock = (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#121212", border: "1px solid #1c1c1c", borderRadius: 10, padding: "10px 14px", flexWrap: "wrap", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: "#888" }}>Preset:</span>
         <div style={{ position: "relative" }} ref={presetsMenuRef}>
-          <button onClick={() => setShowPresetsMenu(s => !s)} style={{ background: "#0d0d0d", border: "1px solid #222", borderRadius: 6, padding: "6px 10px", color: "#ddd", fontSize: 12, cursor: "pointer", fontStyle: isGlobalPresetModified ? "italic" : "normal" }}>
+          <button onClick={() => setShowPresetsMenu(s => !s)} style={{
+            background: "#0d0d0d",
+            border: `1px solid ${validationFlash && !isSavedPreset ? "#ef4444" : "#222"}`,
+            boxShadow: validationFlash && !isSavedPreset ? "0 0 0 1px rgba(239,68,68,0.22)" : "none",
+            borderRadius: 6, padding: "6px 10px", color: "#ddd", fontSize: 12,
+            cursor: "pointer", fontStyle: isGlobalPresetModified ? "italic" : "normal",
+            transition: "border-color 160ms ease, box-shadow 160ms ease",
+          }}>
             {isSavedPreset ? template.name.trim() + (isGlobalPresetModified ? " *" : "") : (presets.length === 0 ? "No saved presets yet" : "Presets")}
           </button>
           {showPresetsMenu && (
@@ -1132,15 +1343,40 @@ function Step2({
           )}
         </div>
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {jobs.length > 1 && (
+          <button
+            onClick={onApplyCurrentPresetToAll}
+            disabled={!isSavedPreset}
+            title={isSavedPreset ? "Apply this preset to every selected beat" : "Select a saved preset first"}
+            style={{
+              padding: "6px 12px",
+              fontSize: 11,
+              background: isSavedPreset ? "#1b1b1b" : "#141414",
+              border: `1px solid ${isSavedPreset ? "#303030" : "#202020"}`,
+              borderRadius: 6,
+              color: isSavedPreset ? "#d0d0d0" : "#555",
+              cursor: isSavedPreset ? "pointer" : "not-allowed",
+              fontWeight: 500,
+            }}
+          >
+            Apply to all
+          </button>
+        )}
         <button onClick={onChooseTemplatesDir} style={{ padding: "6px 10px", fontSize: 11, background: "#161616", border: "1px solid #222", borderRadius: 6, color: "#ccc", cursor: "pointer" }}>Template directory</button>
         <button onClick={onSavePreset} style={{ padding: "6px 12px", fontSize: 11, background: "#222", border: "1px solid #2e2e2e", borderRadius: 6, color: "#ddd", cursor: "pointer" }}>Save</button>
         {isSavedPreset && (
           <button
-            onClick={() => {
-              if (window.confirm(`¿Seguro que querés eliminar el preset "${template.name.trim()}"?`)) {
-                onDeletePreset(template.name.trim());
-              }
+            onClick={async () => {
+              const name = template.name.trim();
+              const approved = await appConfirm({
+                title: "Delete preset?",
+                message: `Are you sure you want to delete the preset "${name}"?`,
+                confirmLabel: "Delete preset",
+                cancelLabel: "Cancel",
+                danger: true,
+              });
+              if (approved) await onDeletePreset(name);
             }}
             style={{ padding: "6px 12px", fontSize: 11, background: "#2a1414", border: "1px solid #4a1f1f", borderRadius: 6, color: "#f87171", cursor: "pointer" }}
           >Eliminar</button>
@@ -1151,6 +1387,13 @@ function Step2({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {validationFlash && (missingPresetCount > 0 || missingMetadataCount > 0) && (
+        <div style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #7f1d1d", background: "#241010", color: "#fca5a5", fontSize: 11 }}>
+          {missingPresetCount > 0
+            ? `Choose a saved preset for every beat before continuing. Missing on ${missingPresetCount} beat${missingPresetCount !== 1 ? "s" : ""}.`
+            : `Every beat needs a title and description before continuing. Missing on ${missingMetadataCount} beat${missingMetadataCount !== 1 ? "s" : ""}.`}
+        </div>
+      )}
 
       {/* preset control block - shown at top in single mode, below assign block in bulk mode */}
       {jobs.length <= 1 && presetBlock}
@@ -1192,8 +1435,12 @@ function Step2({
                             try { onApplyPresetToBeat(j.beat.id, presetName); } catch {}
                           }}
                           style={{
-                            background: "#0d0d0d", border: "1px solid #222", borderRadius: 6, fontSize: 11, padding: "4px 6px",
+                            background: "#0d0d0d",
+                            border: `1px solid ${validationFlash && !assignedName ? "#ef4444" : "#222"}`,
+                            boxShadow: validationFlash && !assignedName ? "0 0 0 1px rgba(239,68,68,0.22)" : "none",
+                            borderRadius: 6, fontSize: 11, padding: "4px 6px",
                             color: isBeatModified ? "transparent" : "#aaa",
+                            transition: "border-color 160ms ease, box-shadow 160ms ease",
                           }}
                         >
                           {/* hidden placeholders — just keep the value domain valid, never shown in the open list */}
@@ -1231,7 +1478,7 @@ function Step2({
         <div style={{ border: "1px solid #1c1c1c", borderRadius: 12, padding: 16, background: "#121212", display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <div style={{ fontSize: 12, color: "#aaa", fontWeight: 500 }}>
-              Editing {applyScope === "all" ? `all ${jobs.length} beat${jobs.length !== 1 ? "s" : ""}` : `"${displayName}" only`}
+              Editing "{displayName}" only
             </div>
             <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>
               Changes apply instantly — the preview on the right always matches what you type here.
@@ -1244,7 +1491,12 @@ function Step2({
               rows={2}
               value={template.title_template}
               onChange={e => updateTemplate({ title_template: e.target.value })}
-              style={taStyle}
+              style={{
+                ...taStyle,
+                borderColor: validationFlash && !activeJob.title.trim() ? "#ef4444" : "#202020",
+                boxShadow: validationFlash && !activeJob.title.trim() ? "0 0 0 1px rgba(239,68,68,0.25)" : "none",
+                transition: "border-color 160ms ease, box-shadow 160ms ease",
+              }}
             />
           </Field>
 
@@ -1253,7 +1505,14 @@ function Step2({
               rows={10}
               value={template.description_template}
               onChange={e => updateTemplate({ description_template: e.target.value })}
-              style={{ ...taStyle, fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 11 }}
+              style={{
+                ...taStyle,
+                fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+                fontSize: 11,
+                borderColor: validationFlash && !activeJob.description.trim() ? "#ef4444" : "#202020",
+                boxShadow: validationFlash && !activeJob.description.trim() ? "0 0 0 1px rgba(239,68,68,0.25)" : "none",
+                transition: "border-color 160ms ease, box-shadow 160ms ease",
+              }}
             />
           </Field>
 
@@ -1342,7 +1601,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /* ================= STEP 3 ================= */
 function Step3({
   jobs, activeJob, setActiveJobId, applyScope, setApplyScope, updateJob, updateActive,
-  onSelectJob, reorderJobs,
+  onSelectJob, reorderJobs, validationFlash,
 }: {
   jobs: BeatUploadJob[];
   activeJob: BeatUploadJob;
@@ -1353,6 +1612,7 @@ function Step3({
   updateActive: (patch: Partial<BeatUploadJob>) => void;
   onSelectJob: (id: string) => void;
   reorderJobs: (fromIndex: number, toIndex: number) => void;
+  validationFlash: boolean;
 }) {
   const vis: Visibility = activeJob.visibility;
 
@@ -1364,7 +1624,7 @@ function Step3({
   const [bulkIntervalDays, setBulkIntervalDays] = useState(1);
   const dragFrom = useRef<number | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const dragCloneEl = useRef<HTMLDivElement | null>(null);
+  const didPointerDrag = useRef(false);
 
   // FLIP animation: whenever the row order changes, measure where each row
   // just moved FROM, then animate it sliding into its new spot instead of
@@ -1446,7 +1706,12 @@ function Step3({
           </div>
         </div>
 
-        <div style={{ border: "1px solid #1c1c1c", borderRadius: 12, padding: 18, background: "#121212", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{
+          border: `1px solid ${validationFlash && jobs.some(j => !j.scheduled_at) ? "#7f1d1d" : "#1c1c1c"}`,
+          boxShadow: validationFlash && jobs.some(j => !j.scheduled_at) ? "0 0 0 1px rgba(239,68,68,0.18)" : "none",
+          borderRadius: 12, padding: 18, background: "#121212", display: "flex", flexDirection: "column", gap: 12,
+          transition: "border-color 160ms ease, box-shadow 160ms ease",
+        }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <h3 style={{ fontSize: 14, fontWeight: 500, color: "#ddd", margin: 0 }}>Schedule</h3>
             <div>
@@ -1472,7 +1737,7 @@ function Step3({
           <div style={{ fontSize: 11, color: activeJob.scheduled_at ? "#22c55e" : "#555", minHeight: 16 }}>
             {activeJob.scheduled_at
               ? `Scheduled: ${new Date(activeJob.scheduled_at).toLocaleString()}`
-              : "Not scheduled — will upload immediately"}
+              : validationFlash ? "Schedule required before continuing" : "Not scheduled yet"}
           </div>
 
           {jobs.length > 1 && (
@@ -1514,74 +1779,61 @@ function Step3({
                       if (el) rowRefs.current.set(j.beat.id, el);
                       else rowRefs.current.delete(j.beat.id);
                     }}
-                    draggable={true}
-                    onDragStart={e => {
+                    data-schedule-index={idx}
+                    onPointerDown={e => {
+                      if (e.button !== 0) return;
                       dragFrom.current = idx;
+                      didPointerDrag.current = false;
                       setDraggingId(j.beat.id);
-                      if (e.dataTransfer) {
-                        e.dataTransfer.effectAllowed = 'move';
-                        e.dataTransfer.setData('text/plain', String(idx));
-
-                        // Build our own drag preview instead of relying on the
-                        // browser's default snapshot — inside Tauri's webview
-                        // that default often renders cropped/washed-out. This
-                        // clones the full styled row, offscreen, just for the
-                        // OS to grab a clean image of, then discards it.
-                        const node = e.currentTarget as HTMLDivElement;
-                        const rect = node.getBoundingClientRect();
-                        const clone = node.cloneNode(true) as HTMLDivElement;
-                        clone.style.position = "fixed";
-                        clone.style.top = "-9999px";
-                        clone.style.left = "-9999px";
-                        clone.style.width = `${rect.width}px`;
-                        clone.style.background = "#1a1a1a";
-                        clone.style.border = "1px solid #3a3a3a";
-                        clone.style.boxShadow = "0 16px 40px rgba(0,0,0,0.55)";
-                        clone.style.opacity = "1";
-                        clone.style.pointerEvents = "none";
-                        document.body.appendChild(clone);
-                        dragCloneEl.current = clone;
-                        e.dataTransfer.setDragImage(clone, rect.width / 2, rect.height / 2);
-                      }
+                      e.currentTarget.setPointerCapture(e.pointerId);
                     }}
-                    onDragEnter={e => {
-                      // WebKit-based webviews (what Tauri uses on Linux/macOS)
-                      // require preventDefault on dragenter too, not just
-                      // dragover, or the drop is rejected with a 🚫 cursor.
-                      e.preventDefault();
-                      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-                    }}
-                    onDragOver={e => {
-                      e.preventDefault();
-                      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-                      // Live reorder: swap positions the moment the dragged
-                      // row crosses another one, instead of waiting for drop —
-                      // this is what feeds the FLIP effect above every frame.
+                    onPointerMove={e => {
+                      if (dragFrom.current == null || draggingId == null) return;
+                      const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+                      const row = target?.closest?.("[data-schedule-index]") as HTMLElement | null;
+                      if (!row) return;
+                      const overIndex = Number(row.dataset.scheduleIndex);
+                      if (!Number.isInteger(overIndex)) return;
                       const from = dragFrom.current;
-                      if (from != null && from !== idx) {
-                        reorderJobs(from, idx);
-                        dragFrom.current = idx;
+                      if (from !== overIndex) {
+                        didPointerDrag.current = true;
+                        reorderJobs(from, overIndex);
+                        dragFrom.current = overIndex;
                       }
                     }}
-                    onDrop={e => {
-                      e.preventDefault();
-                      dragFrom.current = null;
-                    }}
-                    onDragEnd={() => {
+                    onPointerUp={e => {
                       dragFrom.current = null;
                       setDraggingId(null);
-                      if (dragCloneEl.current) {
-                        document.body.removeChild(dragCloneEl.current);
-                        dragCloneEl.current = null;
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
                       }
                     }}
-                    onClick={() => { onSelectJob(j.beat.id); }}
+                    onPointerCancel={e => {
+                      dragFrom.current = null;
+                      setDraggingId(null);
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      }
+                    }}
+                    onClick={() => {
+                      if (didPointerDrag.current) {
+                        didPointerDrag.current = false;
+                        return;
+                      }
+                      onSelectJob(j.beat.id);
+                    }}
                     style={{
                       display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
                       borderRadius: 6, background: j.beat.id === activeJob.beat.id ? "#1a1a1a" : "#0d0d0d",
-                      border: `1px solid ${j.beat.id === activeJob.beat.id ? "#333" : "#181818"}`,
-                      cursor: "grab",
-                      opacity: draggingId === j.beat.id ? 0.35 : 1,
+                      border: `1px solid ${
+                        validationFlash && !j.scheduled_at
+                          ? "#7f1d1d"
+                          : j.beat.id === activeJob.beat.id ? "#333" : "#181818"
+                      }`,
+                      cursor: draggingId === j.beat.id ? "grabbing" : "grab",
+                      touchAction: "none",
+                      userSelect: "none",
+                      opacity: draggingId === j.beat.id ? 0.48 : 1,
                       transition: "opacity 120ms ease, background 120ms ease, border-color 120ms ease",
                     }}>
                     <span style={{ color: "#3a3a3a", fontSize: 12, flexShrink: 0, letterSpacing: -2 }}>⋮⋮</span>

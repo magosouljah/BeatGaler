@@ -316,7 +316,7 @@ export default function BeatCard({
                       boxShadow: showIncompleteWarning ? "0 0 0 4px rgba(245,158,11,0.28)" : undefined }}>
           <Artwork beat={beat} size={160} playing={playing} />
         </div>
-        {showIncompleteWarning && hovered && !selectMode && (
+        {showIncompleteWarning && !selectMode && (
           <div
             onClick={e => e.stopPropagation()}
             onMouseEnter={() => setWarningInfoOpen(true)}

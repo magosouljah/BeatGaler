@@ -418,7 +418,7 @@ export async function pickFolder(title = "Select folder"): Promise<string | null
 
 export async function getSettings(): Promise<AppSettings> {
   await initTauri();
-  if (!invoke) return { beats_folder: null, incomplete_warnings_enabled: true };
+  if (!invoke) return { beats_folder: null, incomplete_warnings_enabled: true, custom_cursor_enabled: true };
   return invoke<AppSettings>("get_settings");
 }
 
@@ -432,6 +432,12 @@ export async function setIncompleteWarningsEnabled(enabled: boolean): Promise<vo
   await initTauri();
   if (!invoke) return;
   return invoke<void>("set_incomplete_warnings_enabled", { enabled });
+}
+
+export async function setCustomCursorEnabled(enabled: boolean): Promise<void> {
+  await initTauri();
+  if (!invoke) return;
+  return invoke<void>("set_custom_cursor_enabled", { enabled });
 }
 
 export interface RenameTagResult {
