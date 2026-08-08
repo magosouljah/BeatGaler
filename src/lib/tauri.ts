@@ -1,7 +1,8 @@
 import type {
   Beat, SaveMetaPayload, SaveMetaResult, RenamePayload, RenameResult,
   FolderScanResult, ResolveFilesPayload, AddFilePayload, AppSettings,
-  UploadTemplate, YouTubeChannel, YouTubeUploadPayload, YouTubeUploadResult
+  UploadTemplate, YouTubeChannel, YouTubeUploadPayload, YouTubeUploadResult,
+  TelegramCloudStatus
 } from "../types";
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -15,6 +16,16 @@ export const isTauriAvailable = isTauri;
 
 // Lazy load Tauri modules only if available
 let invoke: InvokeFn | undefined;
+
+const CLOUD_CLIENT_ID =
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? `beatgaler-${crypto.randomUUID()}`
+    : `beatgaler-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+export function getCloudClientId(): string {
+  return CLOUD_CLIENT_ID;
+}
+
 let open: OpenFn | undefined;
 let save: SaveFn | undefined;
 let convertFileSrc: ConvertFileSrcFn | undefined;
@@ -521,6 +532,7 @@ export interface TrashItem {
   id: string;
   beat_name: string;
   trashed_at: number;
+  is_cloud: boolean;
 }
 
 export async function listTrash(): Promise<TrashItem[]> {
@@ -553,6 +565,158 @@ export async function disconnectYouTube(): Promise<void> {
   await initTauri();
   if (!invoke) return;
   return invoke<void>("disconnect_youtube");
+}
+
+// ── Telegram Cloud ──
+// Opens the Telegram deep link via the system browser/app. The caller is
+// responsible for polling pollTelegramCloudStatus() afterward until
+// connected becomes true (or the user gives up).
+export async function connectTelegramCloud(): Promise<void> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<void>("connect_telegram_cloud");
+}
+
+// Ask the local/remote BeatGaler Cloud server whether the pending
+// connection has been completed yet. Also persists to settings.json on the
+// Rust side once connected — no need to call any "save" function after.
+export async function pollTelegramCloudStatus(): Promise<TelegramCloudStatus> {
+  await initTauri();
+  if (!invoke) return { connected: false, username: null };
+  return invoke<TelegramCloudStatus>("poll_telegram_cloud_status");
+}
+
+// Reads the last known status from settings.json without hitting the
+// network — used on app startup / Settings panel open.
+export async function getTelegramCloudStatus(): Promise<TelegramCloudStatus> {
+  await initTauri();
+  if (!invoke) return { connected: false, username: null };
+  return invoke<TelegramCloudStatus>("get_telegram_cloud_status");
+}
+
+export async function disconnectTelegramCloud(): Promise<void> {
+  await initTauri();
+  if (!invoke) return;
+  return invoke<void>("disconnect_telegram_cloud");
+}
+
+// Fase 17: uploads the beat's main MP3/WAV to Telegram Cloud. Returns the
+// updated Beat (with cloud_status/telegram_file_id set) so callers can just
+// replace it in their local state — no separate "refresh" needed.
+export async function uploadBeatToTelegram(beat: Beat): Promise<Beat> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<Beat>("upload_beat_to_telegram", { beat });
+}
+
+export type CloudFileType = "MASTER" | "WAV" | "LOOP" | "PROJECT" | "STEMS" | "OTHER";
+
+export interface CloudFileUploadResult {
+  cloud_file_id: string;
+  beat_id: string;
+  file_type: CloudFileType;
+  filename: string;
+  original_size: number;
+  part_count: number;
+  telegram_file_id: string | null;
+  telegram_message_id: number | null;
+}
+
+export interface CloudFileRecord {
+  cloud_file_id: string;
+  beat_id: string;
+  file_type: CloudFileType;
+  filename: string;
+  original_size: number;
+  part_count: number;
+  status: string;
+}
+
+export async function listCloudFilesForBeat(beatId: string): Promise<CloudFileRecord[]> {
+  await initTauri();
+  if (!invoke) return [];
+  return invoke<CloudFileRecord[]>("list_cloud_files_for_beat", { beatId });
+}
+
+export async function downloadCloudFileToCache(cloudFileId: string): Promise<string> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<string>("download_cloud_file_to_cache", { cloudFileId });
+}
+
+// Dragging a file onto a beat uploads that exact source directly to Telegram.
+// No permanent copy is made inside the beat's local folder.
+export async function uploadDroppedFileToTelegram(
+  beat: Beat,
+  filePath: string,
+  fileType: CloudFileType,
+): Promise<CloudFileUploadResult> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<CloudFileUploadResult>("upload_dropped_file_to_telegram", {
+    beat,
+    filePath,
+    fileType,
+  });
+}
+
+// Fase 18: restores the main MP3/WAV from Telegram to its original local path.
+export async function downloadBeatFromTelegram(beat: Beat): Promise<Beat> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<Beat>("download_beat_from_telegram", { beat });
+}
+
+// Cloud-first playback: if the main audio is missing locally, Rust downloads it
+// into BeatGaler's private cache. The original library folder is left untouched.
+export async function prepareBeatForPlayback(beat: Beat): Promise<Beat> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<Beat>("prepare_beat_for_playback", { beat });
+}
+
+export interface ProjectCloudStatus {
+  synced: boolean;
+  valid: boolean;
+  state: "LOCAL" | "SYNCED" | "CLOUD_ONLY" | "NEEDS_SYNC";
+  local_zip_path: string | null;
+  local_exists: boolean;
+  needs_sync: boolean;
+  part_count: number;
+}
+
+export async function getProjectCloudStatus(beat: Beat): Promise<ProjectCloudStatus> {
+  await initTauri();
+  if (!invoke) return { synced: false, valid: false, state: "LOCAL", local_zip_path: null, local_exists: false, needs_sync: false, part_count: 0 };
+  return invoke<ProjectCloudStatus>("get_project_cloud_status", { beat });
+}
+
+export async function uploadProjectToTelegram(beat: Beat): Promise<ProjectCloudStatus> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
+}
+
+export async function openBeatProject(beat: Beat): Promise<void> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<void>("open_beat_project", { beat });
+}
+
+export type ProjectAssetKind = "flp" | "samples" | "audio";
+
+export async function updateProjectArchiveFromSource(
+  beat: Beat,
+  sourcePath: string,
+  assetKind: ProjectAssetKind,
+): Promise<ProjectCloudStatus> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<ProjectCloudStatus>("update_project_archive_from_source", {
+    beat,
+    sourcePath,
+    assetKind,
+  });
 }
 
 // ── Smart multi-root import (fuzzy matcher) ──
@@ -738,4 +902,52 @@ export async function purgeTemplateTrashNow(): Promise<number> {
   await initTauri();
   if (!invoke) return 0;
   return invoke<number>("purge_template_trash_now");
+}
+
+export interface CloudMetadataSyncResult {
+  beat_id: string;
+  telegram_metadata_message_id: number;
+  artwork_telegram_file_id: string | null;
+  artwork_telegram_message_id: number | null;
+}
+
+export async function syncBeatMetadataToTelegram(beat: Beat): Promise<CloudMetadataSyncResult> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<CloudMetadataSyncResult>("sync_beat_metadata_to_telegram", { beat });
+}
+
+
+export interface CloudLibrarySyncResult {
+  telegram_file_id: string;
+  telegram_message_id: number;
+  updated: boolean;
+  beat_count: number;
+}
+
+export async function syncCloudLibraryIndex(beats: Beat[]): Promise<CloudLibrarySyncResult> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<CloudLibrarySyncResult>("sync_cloud_library_index", {
+    beats,
+    sourceId: CLOUD_CLIENT_ID,
+  });
+}
+
+export async function restoreLibraryFromTelegram(): Promise<Beat[]> {
+  await initTauri();
+  if (!invoke) return [];
+  return invoke<Beat[]>("restore_library_from_telegram");
+}
+
+export async function clearLocalCloudVault(): Promise<void> {
+  await initTauri();
+  if (!invoke) return;
+  return invoke<void>("clear_local_cloud_vault");
+}
+
+export async function detachLocalSourcesAfterCloudUpload(beatId: string): Promise<Beat> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<Beat>("detach_local_sources_after_cloud_upload", { beatId });
 }

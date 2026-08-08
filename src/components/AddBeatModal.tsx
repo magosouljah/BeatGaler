@@ -92,9 +92,9 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
   // everything at 100% confidence, and ask about anything ambiguous.
   const handleSmartImport = async () => {
     setError(null);
-    const folder = await pickFolder("Select your beats folder");
+    const folder = await pickFolder("Select files/folders to upload");
     if (!folder) return;
-    setScanMsg("Analizando tu biblioteca…");
+    setScanMsg("Analyzing files for Telegram…");
     setStep("scanning");
     try {
       const preview = await previewImportBatch([folder]);
@@ -148,10 +148,10 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 playback_path: url,
                 bpm: meta.bpm,
                 key: meta.key,
-                needs_resolution: false,
                 tags: meta.tags,
                 rating: 0,
                 image_base64: meta.image_base64,
+                needs_resolution: false,
                 has_wav: false,
                 has_stems: false,
                 has_samples: false,
@@ -161,11 +161,11 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 stems_path: null,
                 flp_path: null,
                 als_path: null,
+                has_loop: false,
+                loop_path: null,
                 other_files: [],
                 color: "#7a7a7a",
                 color2: "#a0a0a0",
-                has_loop: false,
-                loop_path: null,
               };
               beats.push(beat);
             }
@@ -239,10 +239,10 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
               playback_path: url,
               bpm: meta.bpm,
               key: meta.key,
-              needs_resolution: false,
               tags: meta.tags,
               rating: 0,
               image_base64: meta.image_base64,
+              needs_resolution: false,
               has_wav: wavs.length > 0,
               has_stems: stems.length > 0,
               has_samples: false,
@@ -252,11 +252,11 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
               stems_path: stems[0] ?? null,
               flp_path: flps[0] ?? null,
               als_path: null,
+              has_loop: false,
+              loop_path: null,
               other_files: [],
               color: "#7a7a7a",
               color2: "#a0a0a0",
-              has_loop: false,
-              loop_path: null,
             };
             onAdd([beat]); onClose();
             return;
@@ -312,10 +312,10 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
               playback_path: url,
               bpm: meta.bpm,
               key: meta.key,
-              needs_resolution: false,
               tags: meta.tags,
               rating: 0,
               image_base64: meta.image_base64,
+              needs_resolution: false,
               has_wav: false,
               has_stems: false,
               has_samples: false,
@@ -325,11 +325,11 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
               stems_path: null,
               flp_path: null,
               als_path: null,
+              has_loop: false,
+              loop_path: null,
               other_files: [],
               color: "#7a7a7a",
               color2: "#a0a0a0",
-              has_loop: false,
-              loop_path: null,
             };
             onAdd([beat]); onClose();
             return;

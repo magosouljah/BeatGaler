@@ -28,6 +28,10 @@ export interface Beat {
   color2: string;
   has_loop: boolean;
   loop_path: string | null;
+  // Telegram Cloud (Fase 12/17)
+  cloud_status?: string | null; // undefined/null == LOCAL, "SYNCED" once uploaded
+  telegram_file_id?: string | null;
+  telegram_message_id?: number | null;
 }
 
 export interface SaveMetaPayload {
@@ -77,7 +81,7 @@ export interface ResolveFilesPayload {
 export interface AddFilePayload {
   beat_folder: string;
   file_path: string;
-  file_role: "mp3" | "wav" | "samples" | "stems" | "flp" | "als";
+  file_role: "mp3" | "wav" | "samples" | "stems" | "flp" | "als" | "loop" | "project" | "other";
   beat_name: string;
   bpm: string;
   key: string;
@@ -92,6 +96,14 @@ export interface AppSettings {
   beats_folder: string | null;
   incomplete_warnings_enabled: boolean;
   custom_cursor_enabled: boolean;
+  beatgaler_user_id?: string | null;
+  telegram_cloud_connected?: boolean;
+  telegram_cloud_username?: string | null;
+}
+
+export interface TelegramCloudStatus {
+  connected: boolean;
+  username: string | null;
 }
 
 export type UploadMode = "single" | "bulk";

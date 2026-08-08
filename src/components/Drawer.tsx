@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Beat } from "../types";
 import { Artwork, Stars, TagEditor, TagPill } from "./ui";
 import ImageCropModal from "./ImageCropModal";
-import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable } from "../lib/tauri";
+import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 
 interface Props {
@@ -31,6 +31,24 @@ type PendingFiles = {
 
 const LABEL: Record<string, string> = { mp3: "MP3", wav: "WAV", stems: "Stems", flp: "FLP", als: "ALS" };
 
+function formatCloudSize(bytes: number) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] }> = {
+  MASTER: { name: "Main playback audio", extensions: ["mp3"] },
+  WAV: { name: "HQ WAV", extensions: ["wav"] },
+  PROJECT: { name: "Project archive", extensions: ["zip", "flp", "als"] },
+  STEMS: { name: "Stems", extensions: ["zip", "wav"] },
+  LOOP: { name: "Loop", extensions: ["mp3", "wav", "zip"] },
+  OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
+};
+
 export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipAll }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   // pending holds files chosen by the user but NOT yet written to disk
@@ -45,6 +63,108 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
   const hasPending = Object.keys(pending).length > 0;
+  const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
+  const [cloudBusy, setCloudBusy] = useState<string | null>(null);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+
+  const refreshCloudFiles = useCallback(async () => {
+    if (!beat.telegram_file_id) {
+      setCloudFiles([]);
+      return;
+    }
+    try {
+      setCloudFiles(await listCloudFilesForBeat(beat.id));
+      setCloudError(null);
+    } catch (e) {
+      setCloudError(String(e));
+    }
+  }, [beat.id, beat.telegram_file_id]);
+
+  useEffect(() => {
+    void refreshCloudFiles();
+  }, [refreshCloudFiles]);
+
+  const handleCloudDownload = useCallback(async (file: CloudFileRecord) => {
+    if (cloudBusy) return;
+    setCloudBusy(file.cloud_file_id);
+    setCloudError(null);
+    try {
+      const path = await downloadCloudFileToCache(file.cloud_file_id);
+      await revealInExplorer(path);
+    } catch (e) {
+      setCloudError(String(e));
+    } finally {
+      setCloudBusy(null);
+    }
+  }, [cloudBusy]);
+
+  const handleCloudReplace = useCallback(async (type: CloudFileType) => {
+    if (cloudBusy) return;
+    const picker = CLOUD_PICKERS[type];
+    const source = await pickFile([picker], beat.folder_path || undefined);
+    if (!source) return;
+
+    setCloudBusy(type);
+    setCloudError(null);
+    try {
+      const uploaded = await uploadDroppedFileToTelegram(data, source, type);
+      if (type === "MASTER") {
+        const next = {
+          ...data,
+          cloud_status: "SYNCED",
+          telegram_file_id: uploaded.telegram_file_id ?? data.telegram_file_id,
+          telegram_message_id: uploaded.telegram_message_id ?? data.telegram_message_id,
+        };
+        setData(next);
+        onSaved(next);
+      }
+      await refreshCloudFiles();
+      window.dispatchEvent(new CustomEvent("beatgaler:cloud-files-updated", { detail: { beatId: beat.id } }));
+    } catch (e) {
+      setCloudError(String(e));
+    } finally {
+      setCloudBusy(null);
+    }
+  }, [cloudBusy, beat.folder_path, beat.id, data, onSaved, refreshCloudFiles]);
+
+  const handleProjectAsset = useCallback(async (kind: ProjectAssetKind) => {
+    if (cloudBusy) return;
+    let source: string | null = null;
+    if (kind === "flp") {
+      source = await pickFile([{ name: "FL Studio project", extensions: ["flp"] }], beat.folder_path || undefined);
+    } else {
+      source = await pickFolder(kind === "samples" ? "Select Samples folder" : "Select Audio folder");
+    }
+    if (!source) return;
+
+    setCloudBusy(`PROJECT-${kind}`);
+    setCloudError(null);
+    try {
+      await updateProjectArchiveFromSource(data, source, kind);
+      await uploadProjectToTelegram(data);
+      await refreshCloudFiles();
+      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+    } catch (e) {
+      setCloudError(String(e));
+    } finally {
+      setCloudBusy(null);
+    }
+  }, [cloudBusy, beat.folder_path, beat.id, data, refreshCloudFiles]);
+
+  const handleManualProjectUpdate = useCallback(async () => {
+    if (cloudBusy) return;
+    setCloudBusy("PROJECT-UPDATE");
+    setCloudError(null);
+    try {
+      await uploadProjectToTelegram(data);
+      await refreshCloudFiles();
+      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+    } catch (e) {
+      setCloudError(String(e));
+    } finally {
+      setCloudBusy(null);
+    }
+  }, [cloudBusy, beat.id, data, refreshCloudFiles]);
 
   const commonTags = useMemo(() => {
     if (!isBulk || !selectedBeats?.length) return [];
@@ -147,7 +267,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         playback_path: result.new_wav_path || result.new_mp3_path || committed.playback_path,
       };
 
-      if (nameChanged) {
+      if (nameChanged && !beat.telegram_file_id) {
         onReleaseAudio();
         await new Promise(r => setTimeout(r, 400));
         const renamed = await renameBeat({
@@ -539,66 +659,72 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             })}
           </div>
 
-          {/* Files section */}
+          {/* Telegram is the only persistent beat storage in V1. */}
           {!isBulk && (
             <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
-              <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, marginBottom: 10, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>FILES</span>
-                {isEdit && <span style={{ fontSize: 10, color: "#555", letterSpacing: 0, fontWeight: 400 }}>drop a file onto a row · changes apply on save</span>}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div>
+                <span style={{ fontSize: 10, color: "#4ade80" }}>TELEGRAM</span>
               </div>
-
-              <FileRow label="MP3" present={!!data.mp3_path} path={data.mp3_path} role="mp3" />
-              <FileRow label="WAV" present={data.has_wav} path={data.wav_path ?? null} role="wav"
-                hint={!data.has_wav ? "adds HQ badge" : undefined} />
-              <div data-filerole="samples" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "7px 10px", borderRadius: 7 }}>
-                <div style={{ minWidth: 48, flexShrink: 0 }}>
-                  <div style={{ fontSize: 12, color: (pending.samples || data.has_samples) ? "#ddd" : "#555" }}>Samples</div>
-                  <div style={{ fontSize: 9, color: "#666", marginTop: 1 }}>Folder</div>
-                </div>
-                <div title={pending.samples ?? data.samples_path ?? "No Samples folder found"} style={{ flex: 1, minWidth: 0, fontSize: 11, color: (pending.samples || data.has_samples) ? "#777" : "#444", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {(pending.samples ?? data.samples_path)?.split(/[/\\]/).pop() ?? "Not found"}
-                </div>
-                {pending.samples ? (
-                  <button type="button" onClick={handlePickSamplesFolder} style={{ padding: "4px 9px", background: "#3a2600", border: "1px solid #6b4500", borderRadius: 5, color: "#f5a623", fontSize: 10, cursor: "pointer" }}>replace</button>
-                ) : data.samples_path ? (
-                  <>
-                    <button type="button" onClick={() => revealInExplorer(data.samples_path!)} style={{ padding: "4px 9px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 5, color: "#777", fontSize: 10, cursor: "pointer" }}>show</button>
-                    {isEdit && <button type="button" onClick={handlePickSamplesFolder} style={{ padding: "4px 9px", background: "#3a2600", border: "1px solid #6b4500", borderRadius: 5, color: "#f5a623", fontSize: 10, cursor: "pointer" }}>replace</button>}
-                  </>
-                ) : isEdit ? (
-                  <button type="button" onClick={handlePickSamplesFolder} style={{ padding: "4px 9px", background: "#063d16", border: "1px solid #0b6726", borderRadius: 5, color: "#4ade80", fontSize: 10, cursor: "pointer" }}>+ add</button>
-                ) : null}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {(["WAV", "STEMS", "LOOP", "OTHER"] as CloudFileType[]).map(type => (
+                  <button key={type} disabled={cloudBusy !== null} onClick={() => void handleCloudReplace(type)}
+                    style={{ padding: "5px 8px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 6, color: cloudBusy === type ? "#777" : "#bbb", fontSize: 10, cursor: cloudBusy ? "default" : "pointer" }}>
+                    {cloudBusy === type ? "Uploading…" : `+ ${type}`}
+                  </button>
+                ))}
               </div>
-              <FileRow label="Stems" present={data.has_stems} path={data.stems_path ?? null} role="stems" />
-              <FileRow label="FLP" sublabel="FL Studio" present={data.has_flp} path={data.flp_path ?? null} role="flp" />
-              <FileRow label="ALS" sublabel="Ableton" present={data.has_als} path={data.als_path ?? null} role="als" />
-
-              {/* Other files */}
-              {data.other_files.length > 0 && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1e1e1e" }}>
-                  <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, marginBottom: 6, fontWeight: 600 }}>OTHER FILES</div>
-                  {data.other_files.map(f => (
-                    <div key={f} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, color: "#777", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 210 }}>
-                        {f.split(/[/\\]/).pop()}
-                      </span>
-                      <button onClick={() => revealInExplorer(f)}
-                        style={{ padding: "2px 8px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 4, color: "#555", fontSize: 10, cursor: "pointer", flexShrink: 0 }}
-                        onMouseEnter={e => (e.currentTarget.style.color = "#bbb")}
-                        onMouseLeave={e => (e.currentTarget.style.color = "#555")}
-                      >show</button>
+              <div style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", gap: 8 }}>
+                <span style={{ width: 58, fontSize: 10, color: "#60a5fa", fontWeight: 700 }}>MASTER</span>
+                <span style={{ flex: 1, color: data.telegram_file_id ? "#888" : "#555", fontSize: 10 }}>
+                  {data.telegram_file_id ? "Stored in Telegram" : "Uploading / not stored yet"}
+                </span>
+              </div>
+              <div style={{ padding: "9px 0", borderTop: "1px solid #222" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                  <span style={{ width: 58, fontSize: 10, color: "#c084fc", fontWeight: 700 }}>PROJECT</span>
+                  <span style={{ flex: 1, color: cloudFiles.some(f => f.file_type === "PROJECT") ? "#888" : "#555", fontSize: 10 }}>
+                    {cloudFiles.some(f => f.file_type === "PROJECT") ? `${data.name}.zip` : "No valid project stored"}
+                  </span>
+                </div>
+                {isEdit && (
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    <button disabled={cloudBusy !== null} onClick={() => void handleProjectAsset("flp")}
+                      style={{ padding: "4px 7px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
+                      + FLP
+                    </button>
+                    <button disabled={cloudBusy !== null} onClick={() => void handleProjectAsset("samples")}
+                      style={{ padding: "4px 7px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
+                      + Samples
+                    </button>
+                    <button disabled={cloudBusy !== null} onClick={() => void handleProjectAsset("audio")}
+                      style={{ padding: "4px 7px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
+                      + Audio
+                    </button>
+                    {cloudFiles.some(f => f.file_type === "PROJECT") && (
+                      <button disabled={cloudBusy !== null} onClick={() => void handleManualProjectUpdate()}
+                        style={{ padding: "4px 7px", background: "#171f17", border: "1px solid #294029", borderRadius: 5, color: "#86efac", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
+                        {cloudBusy === "PROJECT-UPDATE" ? "Updating…" : "Update Project"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              {cloudFiles.filter(file => file.file_type !== "PROJECT").map(file => (
+                <div key={file.cloud_file_id} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 58, fontSize: 10, color: "#8b8b8b", fontWeight: 700 }}>{file.file_type}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div title={file.filename} style={{ color: "#bbb", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.filename}</div>
+                    <div style={{ color: "#555", fontSize: 9, marginTop: 2 }}>
+                      {formatCloudSize(file.original_size)}{file.part_count > 1 ? ` · ${file.part_count} parts` : ""}
                     </div>
-                  ))}
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* Location */}
-          {!isEdit && !isBulk && (
-            <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
-              <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, marginBottom: 6, fontWeight: 600 }}>LOCATION</div>
-              <div style={{ fontSize: 11, color: "#777", wordBreak: "break-all", lineHeight: 1.6 }}>{data.folder_path}</div>
+              ))}
+              <div style={{ marginTop: 9, color: "#555", fontSize: 9, lineHeight: 1.5 }}>
+                Play and Open Project use temporary files automatically. No permanent beats folder exists.
+              </div>
+              {cloudError && <div style={{ marginTop: 8, color: "#f87171", fontSize: 10 }}>{cloudError}</div>}
             </div>
           )}
 

@@ -1,17 +1,17 @@
-﻿import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import uploadCompleteWav from "./assets/upload-status/upload-complete.wav";
 import type { Beat, AppSettings } from "./types";
 import BeatCard from "./components/BeatCard";
 import Drawer from "./components/Drawer";
 import Player from "./components/Player";
 import AddBeatModal from "./components/AddBeatModal";
 import ImportDecisionsModal from "./components/ImportDecisionsModal";
-import SetupModal from "./components/SetupModal";
 import SettingsPanel from "./components/SettingsPanel";
 import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, type ImportBatchPreview } from "./lib/tauri";
+import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, revealInExplorer, syncBeatMetadataToTelegram, syncCloudLibraryIndex, restoreLibraryFromTelegram, clearLocalCloudVault, connectTelegramCloud, pollTelegramCloudStatus, disconnectTelegramCloud, detachLocalSourcesAfterCloudUpload, getCloudClientId, type CloudFileType, type CloudFileRecord, type ImportBatchPreview } from "./lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { isTauriAvailable } from "./lib/tauri";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
@@ -20,6 +20,171 @@ import ReactDOM from "react-dom";
 import { appAlert, appConfirm } from "./lib/dialog";
 import { useTagColors, setTagColor, renameTagColor, TAG_COLOR_PALETTE } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
+
+type DroppedBeatFileRole = "main" | "loop" | "project" | "projectFlp" | "projectSamples" | "projectAudio" | "stems" | "other";
+
+function fileNameFromPath(path: string) {
+  return path.replace(/\\/g, "/").split("/").pop() || path;
+}
+
+function extensionFromPath(path: string) {
+  const name = fileNameFromPath(path);
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+function formatCloudBytes(bytes: number) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let n = bytes; let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function CloudFilesModal({
+  beat, files, busyId, onDownload, onClose,
+}: {
+  beat: Beat;
+  files: CloudFileRecord[];
+  busyId: string | null;
+  onDownload: (file: CloudFileRecord) => void;
+  onClose: () => void;
+}) {
+  return ReactDOM.createPortal(
+    <div onMouseDown={e => { if (e.target === e.currentTarget && !busyId) onClose(); }} style={{
+      position: "fixed", inset: 0, zIndex: 20060, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(0,0,0,.72)", backdropFilter: "blur(7px)", fontFamily: "'DM Sans',sans-serif"
+    }}>
+      <div style={{ width: 520, maxWidth: "calc(100vw - 32px)", maxHeight: "75vh", overflowY: "auto", borderRadius: 14, background: "#151515", border: "1px solid #2c2c2c", padding: 18 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#eee" }}>Cloud files</div>
+        <div style={{ color: "#777", fontSize: 12, margin: "4px 0 14px" }}>{beat.name}</div>
+        {files.length === 0 ? <div style={{ color: "#666", fontSize: 12, padding: "14px 0" }}>No cloud attachments yet.</div> : files.map(file => (
+          <div key={file.cloud_file_id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: "1px solid #252525" }}>
+            <div style={{ width: 62, color: "#8a8a8a", fontSize: 11, fontWeight: 700 }}>{file.file_type}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div title={file.filename} style={{ color: "#ddd", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.filename}</div>
+              <div style={{ color: "#666", fontSize: 10, marginTop: 3 }}>{formatCloudBytes(file.original_size)}{file.part_count > 1 ? ` · ${file.part_count} Telegram parts` : ""}</div>
+            </div>
+            <button disabled={busyId !== null} onClick={() => onDownload(file)} style={{ border: "1px solid #343434", borderRadius: 8, padding: "7px 10px", background: "#202020", color: "#bbb", cursor: busyId ? "default" : "pointer", fontSize: 11 }}>
+              {busyId === file.cloud_file_id ? "Downloading…" : "Get file"}
+            </button>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button disabled={busyId !== null} onClick={onClose} style={{ border: 0, background: "transparent", color: "#777", padding: "7px 10px", cursor: "pointer" }}>Close</button></div>
+      </div>
+    </div>, document.body
+  );
+}
+
+function BeatFileDropModal({
+  beat,
+  filePath,
+  busy,
+  onChoose,
+  onClose,
+}: {
+  beat: Beat;
+  filePath: string;
+  busy: boolean;
+  onChoose: (role: DroppedBeatFileRole) => void;
+  onClose: () => void;
+}) {
+  const ext = extensionFromPath(filePath);
+  const audio = ["mp3", "wav", "flac", "aiff", "aif", "m4a"].includes(ext);
+  const project = ext === "zip";
+  const flp = ext === "flp";
+  const maybeFolder = ext === "";
+  const choices: Array<{ role: DroppedBeatFileRole; icon: string; title: string; sub: string; disabled?: boolean }> = [
+    { role: "main", icon: "♪", title: "Main audio", sub: "Upload this MP3/WAV as the beat's cloud master", disabled: !["mp3", "wav"].includes(ext) },
+    { role: "loop", icon: "↻", title: "Loop", sub: "Upload this audio directly to Telegram as Loop", disabled: !audio },
+    { role: "project", icon: "📦", title: "Project ZIP", sub: "Replace the whole PROJECT.zip", disabled: !project },
+    { role: "projectFlp", icon: "◈", title: "Add FLP to Project", sub: "Add/replace the root FLP inside PROJECT.zip", disabled: !flp },
+    { role: "projectSamples", icon: "▦", title: "Add Samples folder", sub: "Replace Samples/ inside PROJECT.zip", disabled: !maybeFolder },
+    { role: "projectAudio", icon: "♫", title: "Add Audio folder", sub: "Replace Audio/ inside PROJECT.zip", disabled: !maybeFolder },
+    { role: "stems", icon: "▤", title: "Stems", sub: "Upload this directly to Telegram as Stems" },
+    { role: "other", icon: "＋", title: "Other", sub: "Upload this directly to Telegram as Other" },
+  ];
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  return ReactDOM.createPortal(
+    <div
+      onMouseDown={e => { if (e.target === e.currentTarget && !busy) onClose(); }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 20050, display: "flex",
+        alignItems: "center", justifyContent: "center",
+        background: "rgba(0,0,0,0.72)", backdropFilter: "blur(7px)",
+        fontFamily: "'DM Sans',sans-serif",
+      }}
+    >
+      <div style={{
+        width: 430, maxWidth: "calc(100vw - 32px)", borderRadius: 14,
+        background: "#151515", border: "1px solid #2c2c2c",
+        boxShadow: "0 24px 80px rgba(0,0,0,0.75)", padding: 18,
+      }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#eee", marginBottom: 5 }}>
+          What are you adding?
+        </div>
+        <div style={{ color: "#777", fontSize: 12, marginBottom: 4 }}>
+          {beat.name}
+        </div>
+        <div title={filePath} style={{
+          color: "#aaa", fontSize: 12, marginBottom: 16, overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {fileNameFromPath(filePath)}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {choices.map(choice => (
+            <button
+              key={choice.role}
+              disabled={busy || choice.disabled}
+              onClick={() => onChoose(choice.role)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 12,
+                borderRadius: 10, border: "1px solid #292929",
+                padding: "11px 12px", textAlign: "left",
+                background: "#1b1b1b",
+                color: choice.disabled ? "#444" : "#ddd",
+                cursor: busy || choice.disabled ? "default" : "pointer",
+                opacity: choice.disabled ? 0.55 : 1,
+              }}
+              onMouseEnter={e => { if (!choice.disabled && !busy) e.currentTarget.style.background = "#232323"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "#1b1b1b"; }}
+            >
+              <span style={{ width: 26, textAlign: "center", fontSize: 17 }}>{choice.icon}</span>
+              <span>
+                <span style={{ display: "block", fontSize: 13, fontWeight: 650 }}>{choice.title}</span>
+                <span style={{ display: "block", marginTop: 2, color: choice.disabled ? "#3d3d3d" : "#777", fontSize: 11 }}>
+                  {choice.sub}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <button
+            disabled={busy}
+            onClick={onClose}
+            style={{
+              border: 0, background: "transparent", color: "#777",
+              padding: "7px 10px", cursor: busy ? "default" : "pointer", fontSize: 12,
+            }}
+          >
+            {busy ? "Adding…" : "Cancel"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 type SortKey = "name" | "bpm" | "rating" | "manual";
 
@@ -231,7 +396,54 @@ function loadCachedBeats(): Beat[] | null {
 }
 
 function saveCachedBeats(beats: Beat[]) {
-  try { localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(beats)); } catch { /* quota or disabled — ignore */ }
+  try {
+    // Never serialize full-resolution artwork into localStorage on every edit.
+    // The cache only exists for instant paint; SQLite/Telegram remain source of truth.
+    const lightweight = beats.map(beat => ({
+      ...beat,
+      image_base64: null,
+      // Keep the small preview when available so cards can still paint quickly.
+      image_preview_base64: beat.image_preview_base64 ?? null,
+      other_files: [],
+    }));
+    localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(lightweight));
+  } catch {
+    // quota or disabled — ignore
+  }
+}
+
+function cloudBeatFingerprint(beat: Beat): string {
+  const image = beat.image_base64 ?? "";
+  const imageMark = image
+    ? `${image.length}:${image.slice(0, 24)}:${image.slice(-24)}`
+    : "";
+  return [
+    beat.id,
+    beat.name,
+    String(beat.bpm ?? ""),
+    beat.key ?? "",
+    beat.tags.join("\u001f"),
+    String(beat.rating ?? 0),
+    beat.color ?? "",
+    beat.color2 ?? "",
+    beat.telegram_file_id ?? "",
+    String(beat.telegram_message_id ?? ""),
+    imageMark,
+  ].join("\u001e");
+}
+
+function libraryViewFingerprint(beats: Beat[]): string {
+  return beats.map(beat => [
+    beat.id,
+    beat.name,
+    beat.cloud_status ?? "",
+    beat.telegram_file_id ?? "",
+    String(beat.telegram_message_id ?? ""),
+    String(beat.bpm ?? ""),
+    beat.key ?? "",
+    beat.tags.join("\u001f"),
+    String(beat.rating ?? 0),
+  ].join("\u001d")).join("\u001c");
 }
 
 function loadCachedSort(): SortKey {
@@ -255,6 +467,18 @@ export function clearUploadPreviewCache() {
 
 export default function App() {
   const [beats, setBeats] = useState<Beat[]>(() => loadCachedBeats() ?? []);
+  const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
+  const cloudMetaTimersRef = useRef<Map<string, number>>(new Map());
+  const cloudLibraryTimerRef = useRef<number | null>(null);
+  const cloudLibrarySnapshotRef = useRef<string | null>(null);
+  const cacheSaveTimerRef = useRef<number | null>(null);
+  const visibleLibraryFingerprintRef = useRef<string>("");
+  const autoCloudUploadRef = useRef<Set<string>>(new Set());
+  const backgroundUploadQueueRef = useRef<Beat[]>([]);
+  const backgroundUploadRunningRef = useRef(false);
+  const uploadCompleteTimersRef = useRef<Map<string, number>>(new Map());
+  const cloudPullInFlightRef = useRef(false);
+
   const [loading, setLoading] = useState(() => loadCachedBeats() === null);
   const [search, setSearch] = useState("");
   const [includedTags, setIncludedTags] = useState<Set<string>>(new Set());
@@ -269,6 +493,11 @@ export default function App() {
   const [dropActive, setDropActive] = useState(false);
   const [dropImporting, setDropImporting] = useState(false);
   const [dropImportBatch, setDropImportBatch] = useState<ImportBatchPreview | null>(null);
+  const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string } | null>(null);
+  const [cloudFilesBeat, setCloudFilesBeat] = useState<Beat | null>(null);
+  const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
+  const [cloudFilesBusyId, setCloudFilesBusyId] = useState<string | null>(null);
+  const [beatFileDropBusy, setBeatFileDropBusy] = useState(false);
   const [reviewQueue, setReviewQueue] = useState<{ beats: Beat[]; index: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -293,10 +522,34 @@ export default function App() {
   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);
 
   useEffect(() => {
-    getSettings().then(s => {
-      setSettings(s);
-      if (s.beats_folder) setSetupDone(true);
-    }).catch(() => setSetupDone(true)); // on error, skip setup
+    let cancelled = false;
+    void (async () => {
+      try {
+        const local = await getSettings();
+        if (cancelled) return;
+        setSettings(local);
+        const status = await pollTelegramCloudStatus().catch(() => ({ connected: false, username: null }));
+        if (cancelled) return;
+        await clearLocalCloudVault().catch(() => {});
+        if (!status.connected) {
+          setBeats([]);
+          setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : local);
+        } else {
+          await restoreLibraryFromTelegram();
+          const restored = await loadLibrary();
+          if (!cancelled) {
+            setBeats(restored);
+            setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : local);
+          }
+        }
+      } catch (error) {
+        console.warn("Telegram vault startup check failed:", error);
+        if (!cancelled) setBeats([]);
+      } finally {
+        if (!cancelled) { setSetupDone(true); setLoading(false); }
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -326,15 +579,90 @@ export default function App() {
     };
   }, [settings?.custom_cursor_enabled]);
 
-  useEffect(() => {
-    if (!setupDone && settings !== null && !settings.beats_folder) return; // wait for setup
-    loadLibrary().then(setBeats).catch(console.error).finally(() => setLoading(false));
-  }, [setupDone]);
 
-  // Keep the instant-paint cache in sync with whatever's actually on screen —
-  // covers imports, edits, deletes, reorders, everything, from one place.
+  // Telegram/BeatGaler synchronization is push-based.
+  // There is no timer and no focus-triggered full library scan.
   useEffect(() => {
-    saveCachedBeats(beats);
+    const userId = settings?.beatgaler_user_id;
+    if (!setupDone || !userId) return;
+
+    const sourceId = getCloudClientId();
+    const url =
+      `http://127.0.0.1:4000/events?beatgalerUserId=${encodeURIComponent(userId)}` +
+      `&sourceId=${encodeURIComponent(sourceId)}`;
+    const events = new EventSource(url);
+    let cancelled = false;
+
+    const applyRemoteLibraryChange = async () => {
+      if (cancelled || cloudPullInFlightRef.current) return;
+      cloudPullInFlightRef.current = true;
+      try {
+        await restoreLibraryFromTelegram();
+        const merged = await loadLibrary();
+        if (!cancelled) {
+          const nextFingerprint = libraryViewFingerprint(merged);
+          if (nextFingerprint !== visibleLibraryFingerprintRef.current) {
+            visibleLibraryFingerprintRef.current = nextFingerprint;
+            setBeats(merged);
+          }
+        }
+      } catch (error) {
+        console.warn("Telegram event sync failed:", error);
+      } finally {
+        cloudPullInFlightRef.current = false;
+      }
+    };
+
+    const onLibraryChanged = () => { void applyRemoteLibraryChange(); };
+    const onTelegramConnected = () => {
+      void (async () => {
+        try {
+          const status = await pollTelegramCloudStatus();
+          if (cancelled || !status.connected) return;
+          await clearLocalCloudVault();
+          setBeats([]);
+          setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : current);
+          await applyRemoteLibraryChange();
+        } catch (error) {
+          console.warn("Could not activate Telegram vault:", error);
+        }
+      })();
+    };
+
+    events.addEventListener("library_changed", onLibraryChanged);
+    events.addEventListener("telegram_connected", onTelegramConnected);
+    events.onerror = () => {
+      // EventSource reconnects automatically. No polling fallback.
+    };
+
+    return () => {
+      cancelled = true;
+      events.removeEventListener("library_changed", onLibraryChanged);
+      events.removeEventListener("telegram_connected", onTelegramConnected);
+      events.close();
+    };
+  }, [setupDone, settings?.beatgaler_user_id]);
+
+  // localStorage is synchronous and blocks the UI thread. Debounce it and store
+  // a lightweight version without full artwork instead of serializing megabytes
+  // of base64 on every small metadata change.
+  useEffect(() => {
+    if (cacheSaveTimerRef.current) window.clearTimeout(cacheSaveTimerRef.current);
+    cacheSaveTimerRef.current = window.setTimeout(() => {
+      cacheSaveTimerRef.current = null;
+      saveCachedBeats(beats);
+    }, 1500);
+
+    return () => {
+      if (cacheSaveTimerRef.current) {
+        window.clearTimeout(cacheSaveTimerRef.current);
+        cacheSaveTimerRef.current = null;
+      }
+    };
+  }, [beats]);
+
+  useEffect(() => {
+    visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);
   }, [beats]);
 
   useEffect(() => {
@@ -366,13 +694,100 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, []); // empty deps — safe because we use ref
 
-  const handlePlay = useCallback((beat: Beat) => {
-    play(beat.id, [beat.mp3_path, beat.wav_path ?? "", beat.playback_path]);
+  const handlePlay = useCallback(async (beat: Beat) => {
+    try {
+      const ready = await prepareBeatForPlayback(beat);
+      // `ready.playback_path` may point at BeatGaler's private cloud cache. Do
+      // not copy that transient path into the library state/localStorage.
+      if (ready.cloud_status !== beat.cloud_status) {
+        setBeats(bs => bs.map(b => b.id === ready.id ? { ...b, cloud_status: ready.cloud_status } : b));
+      }
+      play(ready.id, [ready.playback_path, ready.mp3_path, ready.wav_path ?? ""]);
+    } catch (e: any) {
+      await appAlert({
+        title: "Beat unavailable",
+        message: String(e?.message || e),
+        danger: true,
+      });
+    }
   }, [play]);
 
   const handleUpload = useCallback((beat: Beat) => {
     setShowUpload({ initialBeat: beat, selectedIds: undefined });
   }, []);
+
+  const handleUploadTelegram = useCallback(async (beat: Beat) => {
+    try {
+      const updated = await uploadBeatToTelegram(beat);
+      setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
+      // Create/update the lightweight live metadata record immediately; the
+      // normal debounced effect will keep it current after later edits.
+      void syncBeatMetadataToTelegram(updated).catch(error => {
+        console.warn("Initial Telegram metadata sync failed:", error);
+      });
+    } catch (e: any) {
+      await appAlert({
+        title: "Telegram upload failed",
+        message: String(e?.message || e),
+        danger: true,
+      });
+    }
+  }, []);
+
+  const handleDownloadTelegram = useCallback(async (_beat: Beat) => {
+    await appAlert({
+      title: "Cloud-only library",
+      message: "Files are fetched into temporary storage automatically when needed.",
+    });
+  }, []);
+
+  const handleUploadProjectTelegram = useCallback(async (beat: Beat) => {
+    try {
+      await uploadProjectToTelegram(beat);
+      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+      void syncCloudLibraryIndex(beats).catch(error => {
+        console.warn("Telegram library index refresh after project upload failed:", error);
+      });
+      await appAlert({
+        title: "Project synced to Telegram",
+        message: `${beat.name}.zip is stored in Telegram as one PROJECT file.`,
+      });
+    } catch (e: any) {
+      await appAlert({ title: "Project upload failed", message: String(e?.message || e), danger: true });
+    }
+  }, [beats]);
+
+  const handleOpenProject = useCallback(async (beat: Beat) => {
+    try {
+      await openBeatProject(beat);
+      await appAlert({
+        title: "Project opened",
+        message: "Save normally in FL Studio. When you want those changes stored in Telegram, return to BeatGaler and choose “Update Project”.",
+      });
+    } catch (e: any) {
+      await appAlert({ title: "Project unavailable", message: String(e?.message || e), danger: true });
+    }
+  }, []);
+
+  const handleUpdateProject = useCallback(async (beat: Beat) => {
+    try {
+      const status = await uploadProjectToTelegram(beat);
+      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+      void syncCloudLibraryIndex(beats).catch(error => {
+        console.warn("Telegram library index refresh after project update failed:", error);
+      });
+      await appAlert({
+        title: "Project updated",
+        message: "The current PROJECT.zip has been synced to Telegram.",
+      });
+    } catch (e: any) {
+      await appAlert({
+        title: "Project update failed",
+        message: String(e?.message || e),
+        danger: true,
+      });
+    }
+  }, [beats]);
 
   const handleUploadBulk = useCallback(() => {
     setShowUpload({ initialBeat: null, selectedIds: Array.from(selectedIds) });
@@ -389,8 +804,8 @@ export default function App() {
 
     const approved = await appConfirm({
       title: `Remove ${ids.length} beat${ids.length === 1 ? "" : "s"}?`,
-      message: "This will permanently delete the selected beats and their files from disk.",
-      confirmLabel: ids.length === 1 ? "Delete beat" : "Delete beats",
+      message: "Remove the selected beats from BeatGaler? Telegram-backed files remain stored; local-only files are moved to BeatGaler trash.",
+      confirmLabel: ids.length === 1 ? "Remove beat" : "Remove beats",
       cancelLabel: "Cancel",
       danger: true,
     });
@@ -417,7 +832,7 @@ export default function App() {
     if (deleted.size !== ids.length) {
       await appAlert({
         title: "Some beats were not removed",
-        message: "One or more selected beats could not be deleted from disk.",
+        message: "One or more selected beats could not be removed from the library.",
         danger: true,
       });
     }
@@ -437,6 +852,108 @@ export default function App() {
     });
   }, []);
 
+  const cloudifyImportedBeats = useCallback((newBeats: Beat[]) => {
+    if (!settings?.telegram_cloud_connected || newBeats.length === 0) return;
+
+    // Queue work immediately but never await it from the review/save UI.
+    // One beat at a time keeps CPU/disk/network pressure predictable.
+    for (const beat of newBeats) {
+      const alreadyQueued = backgroundUploadQueueRef.current.some(item => item.id === beat.id);
+      if (alreadyQueued || autoCloudUploadRef.current.has(beat.id)) continue;
+      backgroundUploadQueueRef.current.push(beat);
+      setBeats(current => current.map(b =>
+        b.id === beat.id ? { ...b, cloud_status: "UPLOADING" } : b
+      ));
+    }
+
+    if (backgroundUploadRunningRef.current) return;
+    backgroundUploadRunningRef.current = true;
+
+    window.setTimeout(() => {
+      void (async () => {
+        try {
+          while (backgroundUploadQueueRef.current.length > 0) {
+            const original = backgroundUploadQueueRef.current.shift()!;
+            if (autoCloudUploadRef.current.has(original.id)) continue;
+            autoCloudUploadRef.current.add(original.id);
+
+            try {
+              let uploaded = original;
+
+              // MASTER: only upload when the beat does not already own one.
+              if (!uploaded.telegram_file_id) {
+                uploaded = await uploadBeatToTelegram(uploaded);
+                setBeats(current => current.map(b =>
+                  b.id === uploaded.id ? { ...uploaded, cloud_status: "UPLOADING" } : b
+                ));
+              }
+
+              const existingFiles = await listCloudFilesForBeat(uploaded.id).catch(() => []);
+              const hasCloudWav = existingFiles.some(file => file.file_type === "WAV");
+
+              if (uploaded.wav_path && !hasCloudWav) {
+                await uploadDroppedFileToTelegram(uploaded, uploaded.wav_path, "WAV");
+              }
+
+              const hasProjectSource =
+                !!uploaded.flp_path || !!uploaded.als_path || uploaded.has_flp || uploaded.has_als;
+
+              if (hasProjectSource) {
+                const currentProject = await getProjectCloudStatus(uploaded).catch(() => null);
+                if (!currentProject?.synced) {
+                  await uploadProjectToTelegram(uploaded);
+                }
+              }
+
+              // Only detach local import sources after every required cloud slot succeeds.
+              const detached = await detachLocalSourcesAfterCloudUpload(uploaded.id);
+
+              // Green completion state is intentionally transient and UI-only.
+              setBeats(current => current.map(b =>
+                b.id === detached.id ? { ...detached, cloud_status: "UPLOAD_COMPLETE" } : b
+              ));
+
+              try {
+                const audio = new Audio(uploadCompleteWav);
+                audio.volume = 0.22;
+                void audio.play().catch(() => {});
+              } catch {}
+
+              const oldTimer = uploadCompleteTimersRef.current.get(detached.id);
+              if (oldTimer) window.clearTimeout(oldTimer);
+              const timer = window.setTimeout(() => {
+                setBeats(current => current.map(b =>
+                  b.id === detached.id && b.cloud_status === "UPLOAD_COMPLETE"
+                    ? { ...b, cloud_status: "CLOUD_ONLY" }
+                    : b
+                ));
+                uploadCompleteTimersRef.current.delete(detached.id);
+              }, 1050);
+              uploadCompleteTimersRef.current.set(detached.id, timer);
+
+              void syncBeatMetadataToTelegram(detached).catch(error => {
+                console.warn("Telegram metadata sync after background upload failed:", error);
+              });
+            } catch (error) {
+              console.warn(`Background Telegram upload failed for ${original.name}:`, error);
+              setBeats(current => current.map(b =>
+                b.id === original.id ? { ...b, cloud_status: "ERROR" } : b
+              ));
+              // Hidden/background by design: do not interrupt the user's review flow with a modal.
+            } finally {
+              autoCloudUploadRef.current.delete(original.id);
+            }
+
+            // Yield between beats so React/WebView always gets a render opportunity.
+            await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+          }
+        } finally {
+          backgroundUploadRunningRef.current = false;
+        }
+      })();
+    }, 0);
+  }, [settings?.telegram_cloud_connected]);
+
   const addBeatsAndReview = useCallback((newBeats: Beat[]) => {
     if (newBeats.length === 0) return;
     setBeats(bs => {
@@ -445,6 +962,7 @@ export default function App() {
     });
     setShowAdd(false);
     setReviewQueue({ beats: newBeats, index: 0 });
+    // IMPORTANT: nothing is uploaded yet. Upload begins only after Review → Save.
   }, []);
 
   const advanceReviewQueue = useCallback(() => {
@@ -466,7 +984,10 @@ export default function App() {
       if (q.index >= nextBeats.length - 1) return null;
       return { beats: nextBeats, index: q.index + 1 };
     });
-  }, []);
+
+    // Fire-and-forget. Save/next closes immediately; Telegram work is secondary.
+    cloudifyImportedBeats([updated]);
+  }, [cloudifyImportedBeats]);
 
   const importDroppedPaths = useCallback(async (paths: string[]) => {
     const normalized = Array.from(new Set(paths.map(p => p.trim()).filter(Boolean)));
@@ -521,24 +1042,20 @@ export default function App() {
           const payload = event.payload as any;
 
           if (payload.type === "enter") {
-            const paths: string[] = Array.isArray(payload.paths) ? payload.paths : [];
-            const singleImage = paths.length === 1 && imageExtensions.test(paths[0]);
-
-            // Artwork images are handled directly by the target beat. Do not show
-            // the global beat-import overlay for them.
-            setDropActive(!singleImage);
-
-            const artwork = singleImage ? artworkElementAt(payload.position) : null;
+            const artwork = artworkElementAt(payload.position);
+            // When the pointer is over a beat artwork, that card owns the drop.
+            // Elsewhere the existing global beat-import flow stays unchanged.
+            setDropActive(!artwork);
             window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
-              detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork && singleImage }
+              detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork }
             }));
             return;
           }
 
           if (payload.type === "over") {
             // Native Tauri drag events bypass React's HTML dragover handlers.
-            // Mirror the old green artwork feedback with a small custom event.
             const artwork = artworkElementAt(payload.position);
+            setDropActive(!artwork);
             window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
               detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork }
             }));
@@ -563,35 +1080,48 @@ export default function App() {
           const artwork = artworkElementAt(payload.position);
           const singleImage = paths.length === 1 && imageExtensions.test(paths[0]);
 
-          if (artwork && singleImage) {
+          if (artwork && paths.length > 0) {
             const beatId = artwork.dataset.beatArtworkId;
             const beat = beatId ? beats.find(b => b.id === beatId) : undefined;
             if (!beat) return;
 
-            void (async () => {
-              try {
-                const imageBase64 = await readImagePathAsDataUrl(paths[0]);
-                await saveBeatMeta({
-                  mp3_path: beat.mp3_path,
-                  wav_path: beat.wav_path,
-                  bpm: beat.bpm,
-                  key: beat.key,
-                  tags: beat.tags,
-                  rating: beat.rating,
-                  image_base64: imageBase64,
-                  image_preview_base64: null,
-                  image_crop: null,
-                  update_filename: false,
-                });
-                setBeats(current => current.map(b =>
-                  b.id === beat.id
-                    ? { ...b, image_base64: imageBase64, image_preview_base64: null, image_crop: null }
-                    : b
-                ));
-              } catch (error) {
-                console.error("Failed to set artwork from native dropped image:", error);
-              }
-            })();
+            if (singleImage) {
+              void (async () => {
+                try {
+                  const imageBase64 = await readImagePathAsDataUrl(paths[0]);
+                  await saveBeatMeta({
+                    mp3_path: beat.mp3_path,
+                    wav_path: beat.wav_path,
+                    bpm: beat.bpm,
+                    key: beat.key,
+                    tags: beat.tags,
+                    rating: beat.rating,
+                    image_base64: imageBase64,
+                    image_preview_base64: null,
+                    image_crop: null,
+                    update_filename: false,
+                  });
+                  setBeats(current => current.map(b =>
+                    b.id === beat.id
+                      ? { ...b, image_base64: imageBase64, image_preview_base64: null, image_crop: null }
+                      : b
+                  ));
+                } catch (error) {
+                  console.error("Failed to set artwork from native dropped image:", error);
+                }
+              })();
+              return;
+            }
+
+            if (paths.length > 1) {
+              void appAlert({
+                title: "Drop one file at a time",
+                message: "Drop a single file on the beat artwork so BeatGaler can ask what that file is.",
+              });
+              return;
+            }
+
+            setBeatFileDrop({ beat, filePath: paths[0] });
             return;
           }
 
@@ -609,6 +1139,95 @@ export default function App() {
 
     return () => { cancelled = true; unlisten?.(); };
   }, [importDroppedPaths, beats]);
+
+  useEffect(() => {
+    const next = new Map<string, string>();
+    for (const beat of beats) {
+      if (!beat.telegram_file_id) continue;
+      next.set(beat.id, cloudBeatFingerprint(beat));
+    }
+
+    const previous = cloudMetaSnapshotRef.current;
+    cloudMetaSnapshotRef.current = next;
+    if (previous === null) return;
+
+    for (const beat of beats) {
+      if (!beat.telegram_file_id) continue;
+      const currentSnapshot = next.get(beat.id)!;
+      if (previous.get(beat.id) === currentSnapshot) continue;
+
+      const oldTimer = cloudMetaTimersRef.current.get(beat.id);
+      if (oldTimer) window.clearTimeout(oldTimer);
+
+      const timer = window.setTimeout(() => {
+        cloudMetaTimersRef.current.delete(beat.id);
+        void syncBeatMetadataToTelegram(beat).catch(error => {
+          console.warn("Telegram metadata sync failed:", error);
+        });
+      }, 700);
+      cloudMetaTimersRef.current.set(beat.id, timer);
+    }
+  }, [beats]);
+
+  useEffect(() => () => {
+    for (const timer of cloudMetaTimersRef.current.values()) window.clearTimeout(timer);
+    cloudMetaTimersRef.current.clear();
+  }, []);
+
+  // Keep one self-contained library index pinned in Telegram. IMPORTANT:
+  // purely-local beats are NOT part of that index yet, so editing one must not
+  // rewrite the pinned Telegram document.
+  useEffect(() => {
+    if (loading) return;
+    const cloudBacked = beats.filter(beat => !!beat.telegram_file_id);
+    if (cloudBacked.length === 0) return;
+
+    const fingerprint = cloudBacked.map(cloudBeatFingerprint).join("\u001c");
+
+    if (cloudLibrarySnapshotRef.current === fingerprint) return;
+    cloudLibrarySnapshotRef.current = fingerprint;
+
+    if (cloudLibraryTimerRef.current) window.clearTimeout(cloudLibraryTimerRef.current);
+    cloudLibraryTimerRef.current = window.setTimeout(() => {
+      cloudLibraryTimerRef.current = null;
+      // Pass the full list; Rust still performs the authoritative cloud-record
+      // filtering (MASTER/PROJECT/STEMS/etc). The fingerprint above only decides
+      // whether a metadata edit should schedule an index rewrite.
+      void syncCloudLibraryIndex(beats).catch(error => {
+        console.warn("Telegram library index sync failed:", error);
+      });
+    }, 1800);
+
+    return () => {
+      if (cloudLibraryTimerRef.current) {
+        window.clearTimeout(cloudLibraryTimerRef.current);
+        cloudLibraryTimerRef.current = null;
+      }
+    };
+  }, [beats, loading]);
+
+  useEffect(() => {
+    const handler = () => {
+      void syncCloudLibraryIndex(beats).catch(error => {
+        console.warn("Telegram library index refresh after Edit metadata cloud-file change failed:", error);
+      });
+    };
+    window.addEventListener("beatgaler:cloud-files-updated", handler);
+    return () => window.removeEventListener("beatgaler:cloud-files-updated", handler);
+  }, [beats]);
+
+  const handleConnectTelegramAccount = useCallback(async () => {
+    await connectTelegramCloud();
+  }, []);
+
+  const handleDisconnectTelegramAccount = useCallback(async () => {
+    await disconnectTelegramCloud().catch(() => {});
+    await clearLocalCloudVault().catch(() => {});
+    releaseFile();
+    setBeats([]);
+    setSelectedIds(new Set());
+    setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : current);
+  }, [releaseFile]);
 
   const updateBeat = useCallback((updated: Beat) => {
     setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
@@ -633,19 +1252,141 @@ export default function App() {
     }
   }, [updateBeat]);
 
+  const handleCloudFiles = useCallback(async (beat: Beat) => {
+    try {
+      const files = await listCloudFilesForBeat(beat.id);
+      setCloudFiles(files);
+      setCloudFilesBeat(beat);
+    } catch (error) {
+      await appAlert({ title: "Cloud files", message: String(error), danger: true });
+    }
+  }, []);
+
+  const handleGetCloudFile = useCallback(async (file: CloudFileRecord) => {
+    if (cloudFilesBusyId) return;
+    setCloudFilesBusyId(file.cloud_file_id);
+    try {
+      const cachedPath = await downloadCloudFileToCache(file.cloud_file_id);
+      await revealInExplorer(cachedPath);
+    } catch (error) {
+      await appAlert({ title: "Cloud download failed", message: String(error), danger: true });
+    } finally {
+      setCloudFilesBusyId(null);
+    }
+  }, [cloudFilesBusyId]);
+
   const reloadLibrary = useCallback(async () => {
     // Clear the instant-paint cache so Reload Library forces a fresh scan
     try { localStorage.removeItem(LIBRARY_CACHE_KEY); } catch {}
     setLoading(true);
     try {
       const loaded = await loadLibrary();
-      setBeats(loaded);
+      if (loaded.length === 0) {
+        try {
+          const restored = await restoreLibraryFromTelegram();
+          setBeats(restored.length > 0 ? restored : loaded);
+        } catch {
+          setBeats(loaded);
+        }
+      } else {
+        setBeats(loaded);
+      }
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleDroppedBeatFileRole = useCallback(async (role: DroppedBeatFileRole) => {
+    if (!beatFileDrop || beatFileDropBusy) return;
+    const { beat, filePath } = beatFileDrop;
+    const ext = extensionFromPath(filePath);
+
+    if (role === "main" && ext !== "mp3" && ext !== "wav") {
+      await appAlert({ title: "Unsupported main audio", message: "Main audio must be an MP3 or WAV file." });
+      return;
+    }
+    if (role === "project" && ext !== "zip") {
+      await appAlert({
+        title: "Project ZIP required",
+        message: "Choose a .zip when replacing the whole project.",
+      });
+      return;
+    }
+    if (role === "projectFlp" && ext !== "flp") {
+      await appAlert({ title: "FLP required", message: "Choose a .flp file." });
+      return;
+    }
+
+    if (role === "projectFlp" || role === "projectSamples" || role === "projectAudio") {
+      setBeatFileDropBusy(true);
+      try {
+        const kind = role === "projectFlp" ? "flp" : role === "projectSamples" ? "samples" : "audio";
+        await updateProjectArchiveFromSource(beat, filePath, kind);
+        await uploadProjectToTelegram(beat);
+        setBeatFileDrop(null);
+        window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+        void syncCloudLibraryIndex(beats).catch(error => {
+          console.warn("Library index refresh after PROJECT edit failed:", error);
+        });
+        await appAlert({
+          title: "Project updated",
+          message: `${kind === "flp" ? "FLP" : kind === "samples" ? "Samples/" : "Audio/"} was added to ${beat.name}.zip and synced to Telegram.`,
+        });
+      } catch (error) {
+        await appAlert({ title: "Project update failed", message: String(error), danger: true });
+      } finally {
+        setBeatFileDropBusy(false);
+      }
+      return;
+    }
+
+    const cloudType: CloudFileType =
+      role === "main" ? "MASTER" :
+      role === "loop" ? "LOOP" :
+      role === "project" ? "PROJECT" :
+      role === "stems" ? "STEMS" : "OTHER";
+
+    setBeatFileDropBusy(true);
+    try {
+      const uploaded = await uploadDroppedFileToTelegram(beat, filePath, cloudType);
+
+      // Nothing is copied into beat.folder_path. The source file is only read
+      // long enough to upload it; Telegram + SQLite become the durable record.
+      setBeatFileDrop(null);
+
+      if (cloudType === "MASTER") {
+        // The Rust command updated BeatMeta's legacy master Telegram IDs.
+        // Reload once so the cloud icon / cloud-only playback sees them.
+        await reloadLibrary();
+      } else if (cloudType === "PROJECT") {
+        window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", {
+          detail: { beatId: beat.id }
+        }));
+      }
+
+      // Attachment-only DB changes may not modify the Beat object itself, so
+      // explicitly refresh the pinned cloud index after every successful drop.
+      void syncCloudLibraryIndex(beats).catch(error => {
+        console.warn("Telegram library index refresh after cloud drop failed:", error);
+      });
+
+      await appAlert({
+        title: "Uploaded to Telegram",
+        message: `${uploaded.filename} is now stored as ${cloudType}${uploaded.part_count > 1 ? ` (${uploaded.part_count} cloud parts)` : ""}.`,
+      });
+    } catch (error) {
+      console.error(error);
+      await appAlert({
+        title: "Cloud upload failed",
+        message: String(error),
+        danger: true,
+      });
+    } finally {
+      setBeatFileDropBusy(false);
+    }
+  }, [beatFileDrop, beatFileDropBusy, reloadLibrary, beats]);
 
   const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {
     setBeats(bs => bs.map(b => {
@@ -679,8 +1420,10 @@ export default function App() {
   const deleteBeat = useCallback(async (beat: Beat) => {
     const approved = await appConfirm({
       title: "Remove beat?",
-      message: `Are you sure you want to remove "${beat.name}"?\n\nThis will permanently delete the beat and its files from disk.`,
-      confirmLabel: "Delete beat",
+      message: beat.telegram_file_id
+        ? `Remove "${beat.name}" from BeatGaler?\n\nIts Telegram files will stay stored. The active cloud-library index will stop listing this beat after the next sync.`
+        : `Are you sure you want to remove "${beat.name}"?\n\nThis will move its local files to BeatGaler trash.`,
+      confirmLabel: beat.telegram_file_id ? "Remove beat" : "Move to trash",
       cancelLabel: "Cancel",
       danger: true,
     });
@@ -699,7 +1442,7 @@ export default function App() {
       console.error(err);
       await appAlert({
         title: "Could not remove beat",
-        message: "The beat could not be deleted from disk.",
+        message: "The beat could not be removed from the library.",
         danger: true,
       });
     } finally {
@@ -1211,7 +1954,21 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           <div style={{ textAlign: "center", paddingTop: 80, color: "#333", fontSize: 13 }}>Loading library…</div>
         ) : filteredBeats.length === 0 ? (
           <div style={{ textAlign: "center", paddingTop: 80, color: "#252525", fontSize: 13 }}>
-            {beats.length === 0 ? 'No beats yet — click "+ Add beat" to get started' : "No beats match your search"}
+            {beats.length === 0 ? (
+              <div>
+                <div>{settings?.telegram_cloud_connected
+                  ? "Telegram connected — your cloud library will restore automatically when an index is available."
+                  : "Connect Telegram to open your BeatGaler vault."}</div>
+                {!settings?.telegram_cloud_connected && (
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    style={{ marginTop: 14, padding: "8px 12px", borderRadius: 8, border: "1px solid #333", background: "#171717", color: "#aaa", cursor: "pointer" }}
+                  >
+                    Open Settings
+                  </button>
+                )}
+              </div>
+            ) : "No beats match your search"}
           </div>
         ) : (
           <DndContext
@@ -1244,6 +2001,12 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     onDelete={deleteBeat}
                     onAddToQueue={addToQueue}
                     onUpload={handleUpload}
+                    onUploadTelegram={handleUploadTelegram}
+                    onDownloadTelegram={handleDownloadTelegram}
+                    onUploadProjectTelegram={handleUploadProjectTelegram}
+                    onOpenProject={handleOpenProject}
+                    onUpdateProject={handleUpdateProject}
+                    onCloudFiles={handleCloudFiles}
                     onToggleSelect={(b, e) => handleToggleSelect(b, e, filteredBeats)}
                     onDropArtwork={handleDropArtwork}
                     animDelay={i * 0.02}
@@ -1264,7 +2027,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
       </div>
 
       {/* + Add beat */}
-      {!currentBeat && (
+      {!currentBeat && settings?.telegram_cloud_connected && (
         <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 45 }}>
           <button onClick={() => setShowAdd(true)}
             style={{ padding: "9px 20px", borderRadius: 40, background: "#161616", border: "1px solid #242424", color: "#777", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 4px 24px rgba(0,0,0,0.6)" }}
@@ -1275,17 +2038,17 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         </div>
       )}
 
-      {showAdd && <AddBeatModal onClose={() => setShowAdd(false)} onAdd={addBeatsAndReview} existingBeats={beats} />}
-
-      {!setupDone && settings !== null && !settings.beats_folder && (
-        <SetupModal onDone={(folder, beats) => {
-          setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true, custom_cursor_enabled: true });
-          if (beats && beats.length > 0) {
-            setBeats(beats);
-          }
-          setSetupDone(true);
-        }} />
+      {cloudFilesBeat && (
+        <CloudFilesModal
+          beat={cloudFilesBeat}
+          files={cloudFiles}
+          busyId={cloudFilesBusyId}
+          onDownload={handleGetCloudFile}
+          onClose={() => { if (!cloudFilesBusyId) setCloudFilesBeat(null); }}
+        />
       )}
+
+      {showAdd && settings?.telegram_cloud_connected && <AddBeatModal onClose={() => setShowAdd(false)} onAdd={addBeatsAndReview} existingBeats={beats} />}
 
       {showSettings && (
         <SettingsPanel
@@ -1298,9 +2061,23 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           onCustomCursorChanged={(enabled: boolean) => setSettings(current => current
             ? { ...current, custom_cursor_enabled: enabled }
             : { beats_folder: null, incomplete_warnings_enabled: true, custom_cursor_enabled: enabled })}
+          telegramConnected={settings?.telegram_cloud_connected ?? false}
+          telegramUsername={settings?.telegram_cloud_username ?? null}
+          onConnectTelegram={handleConnectTelegramAccount}
+          onDisconnectTelegram={handleDisconnectTelegramAccount}
           onClose={() => setShowSettings(false)}
           onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true, custom_cursor_enabled: true })}
-          onBeatRestored={beat => addBeats([beat])}
+          onBeatRestored={beat => {
+            addBeats([beat]);
+            if (beat.telegram_file_id) {
+              const next = beats.some(b => b.id === beat.id)
+                ? beats.map(b => b.id === beat.id ? beat : b)
+                : [...beats, beat];
+              void syncCloudLibraryIndex(next).catch(error => {
+                console.warn("Telegram library index refresh after trash restore failed:", error);
+              });
+            }
+          }}
         />
       )}
 
@@ -1330,6 +2107,16 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           onReleaseAudio={() => {
             if (audio.playingId === reviewQueue.beats[reviewQueue.index].id) releaseFile();
           }}
+        />
+      )}
+
+      {beatFileDrop && (
+        <BeatFileDropModal
+          beat={beatFileDrop.beat}
+          filePath={beatFileDrop.filePath}
+          busy={beatFileDropBusy}
+          onChoose={handleDroppedBeatFileRole}
+          onClose={() => { if (!beatFileDropBusy) setBeatFileDrop(null); }}
         />
       )}
 

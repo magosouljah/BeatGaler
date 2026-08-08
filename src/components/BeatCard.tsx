@@ -3,9 +3,28 @@ import ReactDOM from "react-dom";
 import type { Beat } from "../types";
 import { Artwork, TagPill, PulsingBars } from "./ui";
 import playFillPng from "../assets/player-icons/play.fill.png";
+import uploadStatusSymbolPng from "../assets/upload-status/upload-symbol.png";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTagColors } from "../lib/tagColors";
+import { getProjectCloudStatus, type ProjectCloudStatus } from "../lib/tauri";
+
+const uploadAnimationStyles = `
+  @keyframes beatgaler-upload-spin {
+    from { transform: rotate(0deg) scale(1); }
+    to { transform: rotate(360deg) scale(1); }
+  }
+  @keyframes beatgaler-upload-success {
+    0% { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; }
+    28% { transform: translateY(-3px) scale(1.08) rotate(8deg); opacity: 1; }
+    100% { transform: translateY(34px) scale(0.82) rotate(20deg); opacity: 0; }
+  }
+  @keyframes beatgaler-upload-glow {
+    0% { opacity: 0; }
+    25% { opacity: .52; }
+    100% { opacity: 0; }
+  }
+`;
 
 interface Props {
   beat: Beat;
@@ -21,6 +40,12 @@ interface Props {
   onDelete: (beat: Beat) => void;
   onAddToQueue: (beat: Beat) => void;
   onUpload: (beat: Beat) => void;
+  onUploadTelegram: (beat: Beat) => void;
+  onDownloadTelegram: (beat: Beat) => void;
+  onUploadProjectTelegram: (beat: Beat) => void;
+  onOpenProject: (beat: Beat) => void;
+  onUpdateProject: (beat: Beat) => void;
+  onCloudFiles: (beat: Beat) => void;
   onBulkEdit: () => void;
   onBulkUpload: () => void;
   onBulkDelete: () => void;
@@ -30,13 +55,21 @@ interface Props {
   dragEnabled: boolean;
 }
 
-function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onOpenProject, onClose }: {
+function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, telegramSynced, projectCloudState, canOpenProject, onOpenProject, onUpdateProject, onCloudFiles, onClose }: {
   x: number; y: number;
   onEdit: () => void; onDetail: () => void;
   onAddToQueue: () => void;
   onDelete: () => void; onReveal: () => void;
   onUpload: () => void;
-  onOpenProject: (() => void) | null;
+  onUploadTelegram: () => void;
+  onDownloadTelegram: () => void;
+  onUploadProjectTelegram: () => void;
+  telegramSynced: boolean;
+  projectCloudState: ProjectCloudStatus["state"] | null;
+  canOpenProject: boolean;
+  onOpenProject: () => void;
+  onUpdateProject: () => void;
+  onCloudFiles: () => void;
   onClose: () => void;
 }) {
   React.useEffect(() => {
@@ -66,11 +99,11 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
       {([
         ["Upload to YouTube", onUpload],
-        ...(onOpenProject ? [["Open project", onOpenProject] as [string, () => void]] : []),
+        ...(canOpenProject || telegramSynced ? [["Open project", onOpenProject] as [string, () => void]] : []),
+        ...(projectCloudState && projectCloudState !== "LOCAL" ? [["Update project", onUpdateProject] as [string, () => void]] : []),
         ["Edit metadata", onEdit],
         ["View detail", onDetail],
         ["Add to queue", onAddToQueue],
-        ["Reveal in Explorer", onReveal],
         ["Remove from library", onDelete, true],
       ] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
         <div key={label} onClick={() => { fn(); onClose(); }}
@@ -131,7 +164,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 
 export default function BeatCard({
   beat, tagFrequency, showIncompleteWarnings, playing, selected, selectedCount, selectMode,
-  onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload,
+  onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect, onDropArtwork,
   animDelay = 0, dragEnabled
 }: Props) {
@@ -139,6 +172,7 @@ export default function BeatCard({
   const [hovered, setHovered] = useState(false);
   const [imageDragOver, setImageDragOver] = useState(false);
   const [warningInfoOpen, setWarningInfoOpen] = useState(false);
+  const [projectCloud, setProjectCloud] = useState<ProjectCloudStatus | null>(null);
   const dotsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -147,9 +181,33 @@ export default function BeatCard({
       setImageDragOver(Boolean(detail?.active && detail?.beatId === beat.id));
     };
     window.addEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
-    return () => window.removeEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
+
+  return () => window.removeEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
   }, [beat.id]);
   const tagColors = useTagColors();
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      if (!(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY" || beat.flp_path)) {
+        if (!cancelled) setProjectCloud(null);
+        return;
+      }
+      getProjectCloudStatus(beat)
+        .then(status => { if (!cancelled) setProjectCloud(status); })
+        .catch(() => { if (!cancelled) setProjectCloud(null); });
+    };
+    const onCloudUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId?: string }>).detail;
+      if (!detail?.beatId || detail.beatId === beat.id) refresh();
+    };
+    refresh();
+    window.addEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
+    };
+  }, [beat.id, beat.flp_path, beat.folder_path, beat.cloud_status]);
   const {
     attributes,
     listeners,
@@ -161,12 +219,15 @@ export default function BeatCard({
   } = useSortable({ id: beat.id, disabled: !dragEnabled });
 
   const incompleteReasons = useMemo(() => {
-    const reasons: string[] = [];
-    if (!beat.has_flp && !beat.has_als) reasons.push("No project file was found (.flp or .als).");
-    if (!beat.has_samples) reasons.push("No Samples folder was found.");
-    return reasons;
-  }, [beat.has_flp, beat.has_als, beat.has_samples]);
+    if (projectCloud === null) return [];
+    return projectCloud.valid
+      ? []
+      : ["No valid PROJECT.zip was found. A valid project ZIP must contain a root-level .flp file."];
+  }, [projectCloud]);
   const showIncompleteWarning = showIncompleteWarnings && incompleteReasons.length > 0;
+  const cloudUploading = beat.cloud_status === "UPLOADING";
+  const cloudUploadComplete = beat.cloud_status === "UPLOAD_COMPLETE";
+  const cloudUploadError = beat.cloud_status === "ERROR";
 
   // Ignore the tag order stored in ID3 metadata. Sort a display-only copy by
   // global usage (most used first), then alphabetically for stable ties.
@@ -238,6 +299,7 @@ export default function BeatCard({
           // Red border when beat needs resolution — applied to artwork instead. Outer container keeps compact layout.
         }}
     >
+      <style>{uploadAnimationStyles}</style>
       {/* Checkbox — only visible in select mode */}
       {selectMode && (
         <div
@@ -315,8 +377,59 @@ export default function BeatCard({
         <div style={{ borderRadius: 10, overflow: "hidden", position: "relative", display: "inline-block",
                       boxShadow: showIncompleteWarning ? "0 0 0 4px rgba(245,158,11,0.28)" : undefined }}>
           <Artwork beat={beat} size={160} playing={playing} />
+          {(cloudUploading || cloudUploadComplete) && (
+            <div
+              aria-label={cloudUploading ? "Uploading beat to Telegram" : "Upload complete"}
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 24,
+                borderRadius: 10,
+                overflow: "hidden",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: cloudUploading ? "rgba(0,0,0,0.66)" : "rgba(4,35,18,0.26)",
+                backdropFilter: cloudUploading ? "blur(1.5px)" : "none",
+                WebkitBackdropFilter: cloudUploading ? "blur(1.5px)" : "none",
+                transition: "background 220ms ease",
+                pointerEvents: "none",
+              }}
+            >
+              {cloudUploadComplete && (
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: "rgba(34,197,94,0.26)",
+                  animation: "beatgaler-upload-glow 900ms cubic-bezier(.22,.8,.2,1) forwards",
+                }} />
+              )}
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  backgroundColor: cloudUploadComplete ? "#40d86c" : "rgba(255,255,255,0.94)",
+                  WebkitMaskImage: `url(${uploadStatusSymbolPng})`,
+                  maskImage: `url(${uploadStatusSymbolPng})`,
+                  WebkitMaskRepeat: "no-repeat",
+                  maskRepeat: "no-repeat",
+                  WebkitMaskPosition: "center",
+                  maskPosition: "center",
+                  WebkitMaskSize: "contain",
+                  maskSize: "contain",
+                  filter: cloudUploadComplete
+                    ? "drop-shadow(0 5px 16px rgba(64,216,108,.35))"
+                    : "drop-shadow(0 4px 14px rgba(0,0,0,.42))",
+                  animation: cloudUploadComplete
+                    ? "beatgaler-upload-success 900ms cubic-bezier(.2,.78,.22,1) forwards"
+                    : "beatgaler-upload-spin 1.15s linear infinite",
+                  willChange: "transform, opacity",
+                }}
+              />
+            </div>
+          )}
         </div>
-        {showIncompleteWarning && !selectMode && (
+        {showIncompleteWarning && !selectMode && !cloudUploading && !cloudUploadComplete && (
           <div
             onClick={e => e.stopPropagation()}
             onMouseEnter={() => setWarningInfoOpen(true)}
@@ -341,7 +454,7 @@ export default function BeatCard({
                 color: "#bbb", fontSize: 11, lineHeight: 1.55,
                 fontWeight: 400, textAlign: "left", pointerEvents: "none",
               }}>
-                <div style={{ color: "#e8e8e8", fontWeight: 600, marginBottom: 6 }}>Incomplete beat files</div>
+                <div style={{ color: "#e8e8e8", fontWeight: 600, marginBottom: 6 }}>Project warning</div>
                 {incompleteReasons.map(reason => (
                   <div key={reason} style={{ display: "flex", gap: 7, marginTop: 3 }}>
                     <span style={{ color: "#f5a623" }}>•</span><span>{reason}</span>
@@ -370,6 +483,20 @@ export default function BeatCard({
             <span style={{ lineHeight: 1 }}>?{/* simple question mark */}</span>
           </div>
         )}
+        {cloudUploadError && !selectMode && (
+          <div
+            title="Background upload failed. You can retry the Telegram upload from the beat menu."
+            aria-label="Background upload failed"
+            style={{
+              position: "absolute", left: 8, bottom: 8, zIndex: 25,
+              width: 20, height: 20, borderRadius: "50%",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "rgba(20,20,20,.9)", border: "1px solid rgba(248,113,113,.65)",
+              color: "#f87171", fontSize: 12, fontWeight: 700,
+              boxShadow: "0 4px 12px rgba(0,0,0,.45)",
+            }}
+          >!</div>
+        )}
         {beat.has_wav && !selectMode && (
           <div style={{
             position: "absolute", top: showIncompleteWarning && hovered ? 34 : 6, right: 6, zIndex: 5,
@@ -380,7 +507,7 @@ export default function BeatCard({
           }}>HQ</div>
         )}
         {!selectMode && (
-          <div style={{ position: "absolute", inset: 0, borderRadius: 10, background: "rgba(0,0,0,0.42)", display: "flex", alignItems: "center", justifyContent: "center", opacity: hovered && !playing ? 1 : 0, transition: "opacity 0.15s" }}>
+          <div style={{ position: "absolute", inset: 0, borderRadius: 10, background: "rgba(0,0,0,0.42)", display: "flex", alignItems: "center", justifyContent: "center", opacity: hovered && !playing && !cloudUploading && !cloudUploadComplete ? 1 : 0, transition: "opacity 0.15s" }}>
             <img
               aria-hidden
               src={playFillPng}
@@ -407,6 +534,24 @@ export default function BeatCard({
           >
             {beat.name}
           </div>
+          {(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY") && (
+            <span
+              title={beat.cloud_status === "CLOUD_ONLY" ? "Stored in Telegram Cloud · not local" : "Synced to Telegram Cloud"}
+              aria-label={beat.cloud_status === "CLOUD_ONLY" ? "Cloud only" : "Synced to Telegram Cloud"}
+              style={{ marginLeft: 5, marginRight: 3, flexShrink: 0, fontSize: 11, lineHeight: "18px", color: "#7fa98a", opacity: 0.95 }}
+            >
+              ☁
+            </span>
+          )}
+          {projectCloud && projectCloud.state !== "LOCAL" && (
+            <span
+              title={projectCloud.state === "NEEDS_SYNC" ? "Project changed locally · sync needed" : projectCloud.state === "CLOUD_ONLY" ? "Project stored in Telegram Cloud" : "Project synced to Telegram Cloud"}
+              aria-label={`Project ${projectCloud.state.toLowerCase()}`}
+              style={{ marginRight: 3, flexShrink: 0, fontSize: 10, lineHeight: "18px", opacity: 0.9 }}
+            >
+              {projectCloud.state === "NEEDS_SYNC" ? "↻" : "📦"}
+            </span>
+          )}
           {!selectMode && (
             <div ref={dotsRef} onClick={openMenu}
               style={{ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 4, cursor: "pointer", color: "#555", fontSize: 15, letterSpacing: 2, opacity: hovered || menu ? 1 : 0, transition: "opacity 0.15s", background: menu ? "#2a2a2a" : "transparent", flexShrink: 0 }}>
@@ -461,11 +606,15 @@ export default function BeatCard({
           onEdit={() => onEdit(beat)} onDetail={() => onDetail(beat)} onAddToQueue={() => onAddToQueue(beat)} onDelete={() => onDelete(beat)}
           onReveal={() => import("../lib/tauri").then(t => t.revealInExplorer(beat.folder_path))}
           onUpload={() => onUpload(beat)}
-          onOpenProject={
-            (beat.flp_path || beat.als_path)
-              ? () => import("../lib/tauri").then(t => t.openProjectFile((beat.flp_path || beat.als_path)!))
-              : null
-          }
+          onUploadTelegram={() => onUploadTelegram(beat)}
+          onDownloadTelegram={() => onDownloadTelegram(beat)}
+          onUploadProjectTelegram={() => onUploadProjectTelegram(beat)}
+          telegramSynced={beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY"}
+          projectCloudState={projectCloud?.state ?? null}
+          canOpenProject={Boolean(projectCloud?.valid)}
+          onOpenProject={() => onOpenProject(beat)}
+          onUpdateProject={() => onUpdateProject(beat)}
+          onCloudFiles={() => onCloudFiles(beat)}
           onClose={() => setMenu(null)} />
       ) : null}
     </div>
