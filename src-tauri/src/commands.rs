@@ -247,7 +247,7 @@ pub fn disconnect_youtube(state: tauri::State<SettingsState>) -> Result<(), Stri
 //
 // BeatGaler nunca habla directo con Telegram ni conoce el bot token.
 // Solo habla con nuestro propio backend (por ahora local, en desarrollo:
-// http://192.168.86.98:4000 en esta beta LAN). El backend es quien conoce el bot token y quien
+// https://desktop-7l93a0j.tailabe8ff.ts.net mediante Tailscale Funnel). El backend es quien conoce el bot token y quien
 // coordina la vinculación con Telegram.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -261,7 +261,7 @@ pub struct TelegramCloudStatus {
 // servidor local (cloud-server/). Cuando exista api.beatgaler.com, este es
 // el único lugar que hay que cambiar.
 fn telegram_cloud_api_base() -> String {
-    std::env::var("BEATGALER_CLOUD_API").unwrap_or_else(|_| "http://192.168.86.98:4000".to_string())
+    std::env::var("BEATGALER_CLOUD_API").unwrap_or_else(|_| "https://desktop-7l93a0j.tailabe8ff.ts.net".to_string())
 }
 
 fn beatgaler_temp_dir() -> PathBuf {
@@ -289,6 +289,10 @@ fn ensure_beatgaler_user_id(state: &tauri::State<SettingsState>) -> Result<Strin
 fn post_json_simple(url: &str, body: &Value) -> Result<Value, String> {
     let args = vec![
         "-sS".to_string(),
+        "--connect-timeout".to_string(),
+        "2".to_string(),
+        "--max-time".to_string(),
+        "5".to_string(),
         "-X".to_string(),
         "POST".to_string(),
         "-H".to_string(),
@@ -302,7 +306,14 @@ fn post_json_simple(url: &str, body: &Value) -> Result<Value, String> {
 }
 
 fn get_json_simple(url: &str) -> Result<Value, String> {
-    let args = vec!["-sS".to_string(), url.to_string()];
+    let args = vec![
+        "-sS".to_string(),
+        "--connect-timeout".to_string(),
+        "2".to_string(),
+        "--max-time".to_string(),
+        "5".to_string(),
+        url.to_string(),
+    ];
     let raw = run_curl(&args)?;
     serde_json::from_str(&raw).map_err(|e| format!("Invalid JSON from BeatGaler Cloud: {} ({})", e, raw))
 }
@@ -310,7 +321,7 @@ fn get_json_simple(url: &str) -> Result<Value, String> {
 /// Fase 6/7: pide al backend un connect_token + deep link, y abre Telegram
 /// con el navegador/app del sistema. El frontend debe llamar luego a
 /// `poll_telegram_cloud_status` periódicamente hasta que `connected: true`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn connect_telegram_cloud(
     app: tauri::AppHandle,
     state: tauri::State<SettingsState>,
@@ -340,7 +351,7 @@ pub fn connect_telegram_cloud(
 /// Fase 9: BeatGaler llama esto cada pocos segundos mientras espera a que
 /// el usuario presione Start en Telegram. Cuando `connected: true`, el
 /// resultado también se persiste en settings.json (Fase 10 — persistencia).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn poll_telegram_cloud_status(
     state: tauri::State<SettingsState>,
 ) -> Result<TelegramCloudStatus, String> {
@@ -370,7 +381,7 @@ pub fn poll_telegram_cloud_status(
 /// Fase 10: al abrir la app, verifica el estado REAL con el backend.
 /// El valor persistido en settings.json sirve como caché, pero nunca debe
 /// hacer que la UI diga "Connected" si el backend ya no conoce la cuenta.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_telegram_cloud_status(
     state: tauri::State<SettingsState>,
 ) -> Result<TelegramCloudStatus, String> {
@@ -399,7 +410,7 @@ pub fn get_telegram_cloud_status(
 /// Fase 11 (paso 12/13): desconectar. Avisa al backend y limpia el estado
 /// local. No borra ningún archivo ya subido a Telegram — eso corresponde
 /// a "Delete permanently" en la papelera (Fase 16), no a esto.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn disconnect_telegram_cloud(
     state: tauri::State<SettingsState>,
 ) -> Result<(), String> {

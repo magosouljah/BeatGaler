@@ -523,32 +523,56 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+
     void (async () => {
       try {
+        // Load local settings first and render the app immediately.
+        // Network/cloud verification is secondary and must never hold the UI on a black screen.
         const local = await getSettings();
         if (cancelled) return;
+
         setSettings(local);
-        const status = await pollTelegramCloudStatus().catch(() => ({ connected: false, username: null }));
+        setSetupDone(true);
+        setLoading(false);
+
+        // Cloud verification/restoration continues in the background.
+        const status = await pollTelegramCloudStatus().catch(error => {
+          console.warn("Telegram startup status check failed:", error);
+          return { connected: false, username: null };
+        });
         if (cancelled) return;
+
         await clearLocalCloudVault().catch(() => {});
         if (!status.connected) {
           setBeats([]);
-          setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : local);
-        } else {
-          await restoreLibraryFromTelegram();
-          const restored = await loadLibrary();
-          if (!cancelled) {
-            setBeats(restored);
-            setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : local);
-          }
+          setSettings(current =>
+            current
+              ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null }
+              : local
+          );
+          return;
         }
+
+        await restoreLibraryFromTelegram();
+        const restored = await loadLibrary();
+        if (cancelled) return;
+
+        setBeats(restored);
+        setSettings(current =>
+          current
+            ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username }
+            : local
+        );
       } catch (error) {
         console.warn("Telegram vault startup check failed:", error);
-        if (!cancelled) setBeats([]);
-      } finally {
-        if (!cancelled) { setSetupDone(true); setLoading(false); }
+        if (!cancelled) {
+          // Never regress into a startup blocker.
+          setSetupDone(true);
+          setLoading(false);
+        }
       }
     })();
+
     return () => { cancelled = true; };
   }, []);
 
@@ -588,7 +612,7 @@ export default function App() {
 
     const sourceId = getCloudClientId();
     const url =
-      `http://192.168.86.98:4000/events?beatgalerUserId=${encodeURIComponent(userId)}` +
+      `https://desktop-7l93a0j.tailabe8ff.ts.net/events?beatgalerUserId=${encodeURIComponent(userId)}` +
       `&sourceId=${encodeURIComponent(sourceId)}`;
     const events = new EventSource(url);
     let cancelled = false;
@@ -1217,6 +1241,8 @@ export default function App() {
   }, [beats]);
 
   const handleConnectTelegramAccount = useCallback(async () => {
+    // This command has a short network timeout on the Rust side.
+    // SettingsPanel already catches and displays any thrown error.
     await connectTelegramCloud();
   }, []);
 
