@@ -247,7 +247,7 @@ pub fn disconnect_youtube(state: tauri::State<SettingsState>) -> Result<(), Stri
 //
 // BeatGaler nunca habla directo con Telegram ni conoce el bot token.
 // Solo habla con nuestro propio backend (por ahora local, en desarrollo:
-// http://127.0.0.1:4000). El backend es quien conoce el bot token y quien
+// http://192.168.86.98:4000 en esta beta LAN). El backend es quien conoce el bot token y quien
 // coordina la vinculación con Telegram.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -261,7 +261,7 @@ pub struct TelegramCloudStatus {
 // servidor local (cloud-server/). Cuando exista api.beatgaler.com, este es
 // el único lugar que hay que cambiar.
 fn telegram_cloud_api_base() -> String {
-    std::env::var("BEATGALER_CLOUD_API").unwrap_or_else(|_| "http://127.0.0.1:4000".to_string())
+    std::env::var("BEATGALER_CLOUD_API").unwrap_or_else(|_| "http://192.168.86.98:4000".to_string())
 }
 
 fn beatgaler_temp_dir() -> PathBuf {

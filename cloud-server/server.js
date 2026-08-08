@@ -558,8 +558,9 @@ app.post("/metadata/upsert", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`BeatGaler Cloud API escuchando en http://127.0.0.1:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`BeatGaler Cloud API escuchando en http://0.0.0.0:${PORT}`);
+  console.log(`LAN para Mac: http://192.168.86.98:${PORT}`);
   console.log(`Telegram Bot API: ${TELEGRAM_BOT_API_BASE}${TELEGRAM_BOT_API_LOCAL ? " (LOCAL MODE expected)" : ""}`);
 });
 

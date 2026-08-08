@@ -588,7 +588,7 @@ export default function App() {
 
     const sourceId = getCloudClientId();
     const url =
-      `http://127.0.0.1:4000/events?beatgalerUserId=${encodeURIComponent(userId)}` +
+      `http://192.168.86.98:4000/events?beatgalerUserId=${encodeURIComponent(userId)}` +
       `&sourceId=${encodeURIComponent(sourceId)}`;
     const events = new EventSource(url);
     let cancelled = false;
