@@ -877,8 +877,11 @@ export default function App() {
   }, []);
 
   const cloudifyImportedBeats = useCallback((newBeats: Beat[]) => {
-    if (!settings?.telegram_cloud_connected || newBeats.length === 0) return;
+    if (newBeats.length === 0) return;
 
+    // Do not trust the React settings snapshot here. On macOS the Telegram
+    // callback/SSE can complete before this closure receives the updated
+    // settings value. The worker verifies the REAL backend session once.
     // Queue work immediately but never await it from the review/save UI.
     // One beat at a time keeps CPU/disk/network pressure predictable.
     for (const beat of newBeats) {
@@ -896,6 +899,34 @@ export default function App() {
     window.setTimeout(() => {
       void (async () => {
         try {
+          // One explicit status check per background batch. This is NOT polling.
+          // pollTelegramCloudStatus also reconciles the Rust-side settings cache,
+          // which upload_beat_to_telegram validates before reading the local file.
+          const cloudSession = await pollTelegramCloudStatus().catch(error => {
+            console.warn("Background upload could not verify Telegram session:", error);
+            return { connected: false, username: null };
+          });
+
+          if (!cloudSession.connected) {
+            const failed = backgroundUploadQueueRef.current.splice(0);
+            setBeats(current => current.map(b =>
+              failed.some(item => item.id === b.id)
+                ? { ...b, cloud_status: "ERROR" }
+                : b
+            ));
+            return;
+          }
+
+          setSettings(current =>
+            current
+              ? {
+                  ...current,
+                  telegram_cloud_connected: true,
+                  telegram_cloud_username: cloudSession.username,
+                }
+              : current
+          );
+
           while (backgroundUploadQueueRef.current.length > 0) {
             const original = backgroundUploadQueueRef.current.shift()!;
             if (autoCloudUploadRef.current.has(original.id)) continue;
@@ -976,7 +1007,7 @@ export default function App() {
         }
       })();
     }, 0);
-  }, [settings?.telegram_cloud_connected]);
+  }, []);
 
   const addBeatsAndReview = useCallback((newBeats: Beat[]) => {
     if (newBeats.length === 0) return;

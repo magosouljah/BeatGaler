@@ -1497,15 +1497,37 @@ pub fn download_beat_from_telegram(
 ///   app_data/cloud-cache/audio and return THAT path only for playback.
 /// - The original beat folder stays untouched and the cached path is NOT
 ///   persisted to SQLite, so Telegram remains the source of truth.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn prepare_beat_for_playback(
     beat: BeatMeta,
     state: tauri::State<SettingsState>,
     _db: tauri::State<DbState>,
 ) -> Result<BeatMeta, String> {
-    // Cloud-only V1: MASTER always comes from Telegram into OS temp.
+    // A newly imported beat must remain playable while its background Telegram
+    // upload is pending. Prefer any real local audio file that still exists.
+    let local_candidates = [
+        (!beat.playback_path.is_empty()).then(|| PathBuf::from(&beat.playback_path)),
+        (!beat.mp3_path.is_empty()).then(|| PathBuf::from(&beat.mp3_path)),
+        beat.wav_path.as_ref().map(PathBuf::from),
+    ];
+
+    if let Some(local_path) = local_candidates
+        .into_iter()
+        .flatten()
+        .find(|path| {
+            std::fs::metadata(path)
+                .map(|m| m.is_file() && m.len() > 0)
+                .unwrap_or(false)
+        })
+    {
+        let mut ready = beat;
+        ready.playback_path = local_path.to_string_lossy().to_string();
+        return Ok(ready);
+    }
+
+    // Once local sources have been detached, playback falls back to Telegram.
     let telegram_file_id = beat.telegram_file_id.clone()
-        .ok_or_else(|| "This beat is not available locally and has no Telegram Cloud copy.".to_string())?;
+        .ok_or_else(|| "This beat is still local/pending upload, but its source audio could not be found.".to_string())?;
 
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
