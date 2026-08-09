@@ -1,0 +1,162 @@
+name: Build BeatGaler Cloud Beta for macOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout BeatGaler Cloud Beta
+        uses: actions/checkout@v4
+        with:
+          ref: beatgaler-cloud-beta
+
+      - name: Verify branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Building branch:"
+          git branch --show-current
+          git log -1 --oneline
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust with both macOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download and build universal FFmpeg
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          FFMPEG_TAG="b6.1.1"
+          REPO="eugeneware/ffmpeg-static"
+          BASE_URL="https://github.com/${REPO}/releases/download/${FFMPEG_TAG}"
+
+          mkdir -p src-tauri/resources
+          mkdir -p /tmp/beatgaler-ffmpeg
+
+          echo "Downloading FFmpeg Apple Silicon..."
+          curl --fail --location --retry 3 \
+            "${BASE_URL}/ffmpeg-darwin-arm64" \
+            -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
+
+          echo "Downloading FFmpeg Intel..."
+          curl --fail --location --retry 3 \
+            "${BASE_URL}/ffmpeg-darwin-x64" \
+            -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
+
+          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64
+          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-x64
+
+          echo "Verifying release SHA-256 digests using GitHub release metadata..."
+          RELEASE_JSON="$(gh api "repos/${REPO}/releases/tags/${FFMPEG_TAG}")"
+
+          ARM_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-arm64") | .digest // empty' | sed 's/^sha256://')"
+          X64_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-x64") | .digest // empty' | sed 's/^sha256://')"
+
+          ARM_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-arm64 | awk '{print $1}')"
+          X64_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-x64 | awk '{print $1}')"
+
+          if [ -z "$ARM_EXPECTED" ] || [ -z "$X64_EXPECTED" ]; then
+            echo "::error::GitHub release metadata did not provide SHA-256 digests."
+            exit 1
+          fi
+
+          if [ "$ARM_EXPECTED" != "$ARM_ACTUAL" ]; then
+            echo "::error::FFmpeg arm64 SHA-256 mismatch."
+            exit 1
+          fi
+
+          if [ "$X64_EXPECTED" != "$X64_ACTUAL" ]; then
+            echo "::error::FFmpeg x64 SHA-256 mismatch."
+            exit 1
+          fi
+
+          echo "Creating universal FFmpeg binary..."
+          lipo -create \
+            /tmp/beatgaler-ffmpeg/ffmpeg-arm64 \
+            /tmp/beatgaler-ffmpeg/ffmpeg-x64 \
+            -output src-tauri/resources/ffmpeg
+
+          chmod +x src-tauri/resources/ffmpeg
+
+          echo "Universal FFmpeg architectures:"
+          lipo -archs src-tauri/resources/ffmpeg
+
+          echo "Testing bundled FFmpeg before Tauri build:"
+          src-tauri/resources/ffmpeg -version | head -n 3
+
+      - name: Build universal macOS DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          npx tauri build --bundles dmg --target universal-apple-darwin
+
+      - name: Verify FFmpeg is inside Beat Galer.app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(find src-tauri/target/universal-apple-darwin/release/bundle -type d -name '*.app' -maxdepth 4 | head -n 1)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Could not find the generated .app bundle."
+            exit 1
+          fi
+
+          FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
+
+          echo "App bundle:"
+          echo "$APP_PATH"
+
+          if [ ! -f "$FFMPEG_PATH" ]; then
+            echo "::error::Bundled FFmpeg is missing from Contents/Resources."
+            find "$APP_PATH/Contents" -maxdepth 3 -print
+            exit 1
+          fi
+
+          chmod +x "$FFMPEG_PATH"
+
+          echo "Bundled FFmpeg architectures:"
+          lipo -archs "$FFMPEG_PATH"
+
+          ARCHS="$(lipo -archs "$FFMPEG_PATH")"
+          echo "$ARCHS" | grep -q "arm64" || {
+            echo "::error::Bundled FFmpeg is missing arm64."
+            exit 1
+          }
+          echo "$ARCHS" | grep -q "x86_64" || {
+            echo "::error::Bundled FFmpeg is missing x86_64."
+            exit 1
+          }
+
+          echo "Bundled FFmpeg test:"
+          "$FFMPEG_PATH" -version | head -n 3
+
+          echo "SUCCESS: Beat Galer contains a working universal FFmpeg."
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeatGaler-Cloud-Beta-macOS-Universal
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
