@@ -100,7 +100,7 @@ jobs:
           echo "Universal FFmpeg architectures:"
           lipo -archs src-tauri/resources/ffmpeg
 
-          echo "Testing bundled FFmpeg before Tauri build:"
+          echo "Testing FFmpeg before Tauri build:"
           src-tauri/resources/ffmpeg -version | head -n 3
 
       - name: Build universal macOS DMG
@@ -111,48 +111,75 @@ jobs:
           set -euo pipefail
           npx tauri build --bundles dmg --target universal-apple-darwin
 
-      - name: Verify FFmpeg is inside Beat Galer.app
+      - name: Verify FFmpeg inside final DMG
         shell: bash
         run: |
           set -euo pipefail
 
-          APP_PATH="$(find src-tauri/target/universal-apple-darwin/release/bundle -type d -name '*.app' -maxdepth 4 | head -n 1)"
+          DMG_PATH="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
 
-          if [ -z "$APP_PATH" ]; then
-            echo "::error::Could not find the generated .app bundle."
+          if [ -z "$DMG_PATH" ] || [ ! -f "$DMG_PATH" ]; then
+            echo "::error::Could not find the generated DMG."
+            exit 1
+          fi
+
+          echo "Final DMG:"
+          echo "$DMG_PATH"
+
+          ATTACH_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
+          printf '%s\n' "$ATTACH_OUTPUT"
+
+          MOUNT_POINT="$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's#^.*\(/Volumes/.*\)$#\1#p' | head -n 1)"
+
+          if [ -z "$MOUNT_POINT" ] || [ ! -d "$MOUNT_POINT" ]; then
+            echo "::error::Could not determine the mounted DMG path."
+            exit 1
+          fi
+
+          cleanup() {
+            hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          APP_PATH="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name '*.app' | head -n 1)"
+
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "::error::Could not find Beat Galer.app inside the final DMG."
+            find "$MOUNT_POINT" -maxdepth 3 -print
             exit 1
           fi
 
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
 
-          echo "App bundle:"
+          echo "App inside DMG:"
           echo "$APP_PATH"
 
           if [ ! -f "$FFMPEG_PATH" ]; then
-            echo "::error::Bundled FFmpeg is missing from Contents/Resources."
-            find "$APP_PATH/Contents" -maxdepth 3 -print
+            echo "::error::FFmpeg is NOT inside Beat Galer.app/Contents/Resources."
+            find "$APP_PATH/Contents" -maxdepth 4 -print
             exit 1
           fi
 
-          chmod +x "$FFMPEG_PATH"
-
-          echo "Bundled FFmpeg architectures:"
-          lipo -archs "$FFMPEG_PATH"
+          echo "Bundled FFmpeg file:"
+          ls -lh "$FFMPEG_PATH"
 
           ARCHS="$(lipo -archs "$FFMPEG_PATH")"
+          echo "Bundled FFmpeg architectures: $ARCHS"
+
           echo "$ARCHS" | grep -q "arm64" || {
             echo "::error::Bundled FFmpeg is missing arm64."
             exit 1
           }
+
           echo "$ARCHS" | grep -q "x86_64" || {
             echo "::error::Bundled FFmpeg is missing x86_64."
             exit 1
           }
 
-          echo "Bundled FFmpeg test:"
+          echo "Testing the exact FFmpeg shipped inside the DMG:"
           "$FFMPEG_PATH" -version | head -n 3
 
-          echo "SUCCESS: Beat Galer contains a working universal FFmpeg."
+          echo "SUCCESS: final DMG contains a working universal FFmpeg."
 
       - name: Upload macOS DMG
         uses: actions/upload-artifact@v4
