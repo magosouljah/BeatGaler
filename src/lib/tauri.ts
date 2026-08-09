@@ -325,6 +325,21 @@ export async function saveBeatMeta(payload: SaveMetaPayload): Promise<SaveMetaRe
   return invoke<SaveMetaResult>("save_beat_meta", { payload });
 }
 
+export interface AudioMetadataPreview {
+  bpm: string;
+  key: string;
+  tags: string[];
+  rating: number;
+  image_base64: string | null;
+  has_metadata: boolean;
+}
+
+export async function inspectAudioMetadata(filePath: string): Promise<AudioMetadataPreview> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<AudioMetadataPreview>("inspect_audio_metadata", { filePath });
+}
+
 export async function renameBeat(payload: RenamePayload): Promise<RenameResult> {
   await initTauri();
   if (!invoke) {
@@ -642,6 +657,46 @@ export async function downloadCloudFileToCache(cloudFileId: string): Promise<str
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
   return invoke<string>("download_cloud_file_to_cache", { cloudFileId });
+}
+
+
+export async function chooseExportFilePath(
+  defaultName: string,
+  extension: string,
+): Promise<string | null> {
+  await initTauri();
+  if (!save) throw new Error("Tauri save dialog is not available");
+  const cleanExt = extension.replace(/^\./, "").toLowerCase();
+  return save({
+    defaultPath: defaultName,
+    filters: [{ name: cleanExt.toUpperCase(), extensions: [cleanExt] }],
+  });
+}
+
+export async function chooseExportFolder(): Promise<string | null> {
+  await initTauri();
+  if (!open) throw new Error("Tauri folder dialog is not available");
+  const result = await open({ directory: true, multiple: false });
+  if (!result || Array.isArray(result)) return null;
+  return result;
+}
+
+export async function copyExportFile(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<string> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<string>("copy_export_file", { sourcePath, destinationPath });
+}
+
+export async function prepareUniqueExportFolder(
+  basePath: string,
+  beatName: string,
+): Promise<string> {
+  await initTauri();
+  if (!invoke) throw new Error("Tauri not available");
+  return invoke<string>("prepare_unique_export_folder", { basePath, beatName });
 }
 
 // Dragging a file onto a beat uploads that exact source directly to Telegram.

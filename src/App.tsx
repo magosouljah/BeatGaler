@@ -11,7 +11,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, revealInExplorer, syncBeatMetadataToTelegram, syncCloudLibraryIndex, restoreLibraryFromTelegram, clearLocalCloudVault, connectTelegramCloud, pollTelegramCloudStatus, disconnectTelegramCloud, detachLocalSourcesAfterCloudUpload, getCloudClientId, type CloudFileType, type CloudFileRecord, type ImportBatchPreview } from "./lib/tauri";
+import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, revealInExplorer, syncBeatMetadataToTelegram, syncCloudLibraryIndex, restoreLibraryFromTelegram, clearLocalCloudVault, connectTelegramCloud, pollTelegramCloudStatus, disconnectTelegramCloud, detachLocalSourcesAfterCloudUpload, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, prepareUniqueExportFolder, type CloudFileType, type CloudFileRecord, type ImportBatchPreview } from "./lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { isTauriAvailable } from "./lib/tauri";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
@@ -41,36 +41,76 @@ function formatCloudBytes(bytes: number) {
   return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+type BeatDownloadKind = "MP3" | "WAV" | "PROJECT" | "ALL";
+
 function CloudFilesModal({
   beat, files, busyId, onDownload, onClose,
 }: {
   beat: Beat;
   files: CloudFileRecord[];
   busyId: string | null;
-  onDownload: (file: CloudFileRecord) => void;
+  onDownload: (kind: BeatDownloadKind) => void;
   onClose: () => void;
 }) {
+  const hasMp3 = Boolean(beat.telegram_file_id);
+  const hasWav = files.some(file => file.file_type === "WAV");
+  const hasProject = files.some(file => file.file_type === "PROJECT");
+  const availableCount = Number(hasMp3) + Number(hasWav) + Number(hasProject);
+
+  const option = (
+    kind: BeatDownloadKind,
+    title: string,
+    sub: string,
+    available: boolean,
+  ) => (
+    <button
+      key={kind}
+      disabled={!available || busyId !== null}
+      onClick={() => onDownload(kind)}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 12,
+        textAlign: "left", border: "1px solid #2b2b2b", borderRadius: 10,
+        padding: "11px 12px", marginTop: 8,
+        background: available ? "#1d1d1d" : "#171717",
+        color: available ? "#ddd" : "#575757",
+        cursor: available && !busyId ? "pointer" : "default",
+        opacity: available ? 1 : .7,
+      }}
+    >
+      <div style={{ width: 28, fontSize: 16, textAlign: "center" }}>
+        {kind === "MP3" ? "♪" : kind === "WAV" ? "HQ" : kind === "PROJECT" ? "📦" : "⇩"}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, fontWeight: 700 }}>{title}</div>
+        <div style={{ fontSize: 10, color: available ? "#777" : "#4d4d4d", marginTop: 2 }}>{sub}</div>
+      </div>
+      <div style={{ fontSize: 10, color: "#777" }}>
+        {busyId === kind ? "Downloading…" : available ? "Download" : "Not available"}
+      </div>
+    </button>
+  );
+
   return ReactDOM.createPortal(
     <div onMouseDown={e => { if (e.target === e.currentTarget && !busyId) onClose(); }} style={{
       position: "fixed", inset: 0, zIndex: 20060, display: "flex", alignItems: "center", justifyContent: "center",
       background: "rgba(0,0,0,.72)", backdropFilter: "blur(7px)", fontFamily: "'DM Sans',sans-serif"
     }}>
-      <div style={{ width: 520, maxWidth: "calc(100vw - 32px)", maxHeight: "75vh", overflowY: "auto", borderRadius: 14, background: "#151515", border: "1px solid #2c2c2c", padding: 18 }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "#eee" }}>Cloud files</div>
-        <div style={{ color: "#777", fontSize: 12, margin: "4px 0 14px" }}>{beat.name}</div>
-        {files.length === 0 ? <div style={{ color: "#666", fontSize: 12, padding: "14px 0" }}>No cloud attachments yet.</div> : files.map(file => (
-          <div key={file.cloud_file_id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: "1px solid #252525" }}>
-            <div style={{ width: 62, color: "#8a8a8a", fontSize: 11, fontWeight: 700 }}>{file.file_type}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div title={file.filename} style={{ color: "#ddd", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.filename}</div>
-              <div style={{ color: "#666", fontSize: 10, marginTop: 3 }}>{formatCloudBytes(file.original_size)}{file.part_count > 1 ? ` · ${file.part_count} Telegram parts` : ""}</div>
-            </div>
-            <button disabled={busyId !== null} onClick={() => onDownload(file)} style={{ border: "1px solid #343434", borderRadius: 8, padding: "7px 10px", background: "#202020", color: "#bbb", cursor: busyId ? "default" : "pointer", fontSize: 11 }}>
-              {busyId === file.cloud_file_id ? "Downloading…" : "Get file"}
-            </button>
-          </div>
-        ))}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button disabled={busyId !== null} onClick={onClose} style={{ border: 0, background: "transparent", color: "#777", padding: "7px 10px", cursor: "pointer" }}>Close</button></div>
+      <div style={{ width: 470, maxWidth: "calc(100vw - 32px)", borderRadius: 14, background: "#151515", border: "1px solid #2c2c2c", padding: 18 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#eee" }}>Download</div>
+        <div style={{ color: "#777", fontSize: 12, margin: "4px 0 12px" }}>{beat.name}</div>
+
+        {option("MP3", "MP3", "MASTER playback copy", hasMp3)}
+        {option("WAV", "WAV", "Original HQ audio", hasWav)}
+        {option("PROJECT", "Full Project", "BeatName.zip · FLP + Audio/ + Samples/", hasProject)}
+        {option("ALL", "Download Everything", "Creates a new folder with every available asset", availableCount > 0)}
+
+        <div style={{ color: "#5f5f5f", fontSize: 10, lineHeight: 1.45, marginTop: 12 }}>
+          Exported files are independent copies. BeatGaler will not monitor, re-import, upload, or use them for playback.
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+          <button disabled={busyId !== null} onClick={onClose} style={{ border: 0, background: "transparent", color: "#777", padding: "7px 10px", cursor: busyId ? "default" : "pointer" }}>Close</button>
+        </div>
       </div>
     </div>, document.body
   );
@@ -1049,8 +1089,12 @@ export default function App() {
 
               const lower = raw.toLowerCase();
               let hint = "Unexpected failure. The exact raw error is included below.";
-              if (lower.includes("file not found") || lower.includes("no mp3 master") || lower.includes("no longer exists")) {
-                hint = "The local source file could not be read. On macOS this usually means the original file moved, was removed, or the app lost access to that path.";
+              if (lower.includes("encoder unavailable") || lower.includes("bundled ffmpeg") || lower.includes("could not start wav -> mp3")) {
+                hint = "This WAV needs a MASTER MP3, but BeatGaler could not start its bundled MP3 encoder. The installer/build must include ffmpeg; the user should not need to install it manually.";
+              } else if (lower.includes("wav -> mp3") || lower.includes("master generation") || lower.includes("conversion failed")) {
+                hint = "BeatGaler found the WAV but could not create the temporary 320 kbps MASTER MP3. The raw converter error is shown below.";
+              } else if (lower.includes("file not found") || lower.includes("no usable audio source") || lower.includes("no longer exists")) {
+                hint = "The local source audio could not be read. On macOS this usually means the original file moved, was removed, or the app lost access to that path.";
               } else if (lower.includes("temp") || lower.includes("prepare cloud audio copy") || lower.includes("metadata") || lower.includes("id3")) {
                 hint = "BeatGaler failed while creating its temporary upload copy or embedding metadata. Check file permissions, free disk space, and whether the source audio is a valid MP3/WAV.";
               } else if (lower.includes("failed to start curl")) {
@@ -1411,18 +1455,107 @@ export default function App() {
     }
   }, []);
 
-  const handleGetCloudFile = useCallback(async (file: CloudFileRecord) => {
-    if (cloudFilesBusyId) return;
-    setCloudFilesBusyId(file.cloud_file_id);
+  const handleGetCloudFile = useCallback(async (kind: BeatDownloadKind) => {
+    const beat = cloudFilesBeat;
+    if (!beat || cloudFilesBusyId) return;
+
+    const safeBase = (beat.name || "Beat")
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+      .replace(/[. ]+$/g, "")
+      .trim() || "Beat";
+
+    const wav = cloudFiles.find(file => file.file_type === "WAV");
+    const project = cloudFiles.find(file => file.file_type === "PROJECT");
+
+    const getMp3Source = async () => {
+      if (!beat.telegram_file_id) throw new Error("MP3 MASTER is not available in Telegram Cloud.");
+      const ready = await prepareBeatForPlayback({
+        ...beat,
+        // Force cloud playback/export if local virtual paths are stale.
+        playback_path: beat.cloud_status === "CLOUD_ONLY" ? "" : beat.playback_path,
+      });
+      if (!ready.playback_path) throw new Error("MP3 MASTER download completed without a cache path.");
+      return ready.playback_path;
+    };
+
+    const getCloudSource = async (file: CloudFileRecord | undefined, label: string) => {
+      if (!file) throw new Error(`${label} is not available for this beat.`);
+      return downloadCloudFileToCache(file.cloud_file_id);
+    };
+
+    const joinPath = (base: string, child: string) => {
+      const sep = base.includes("\\") ? "\\" : "/";
+      return `${base.replace(/[\\/]+$/g, "")}${sep}${child}`;
+    };
+
+    setCloudFilesBusyId(kind);
     try {
-      const cachedPath = await downloadCloudFileToCache(file.cloud_file_id);
-      await revealInExplorer(cachedPath);
+      if (kind === "MP3") {
+        const destination = await chooseExportFilePath(`${safeBase}.mp3`, "mp3");
+        if (!destination) return;
+        const source = await getMp3Source();
+        await copyExportFile(source, destination);
+        await appAlert({ title: "Download complete", message: destination });
+        return;
+      }
+
+      if (kind === "WAV") {
+        const destination = await chooseExportFilePath(`${safeBase}.wav`, "wav");
+        if (!destination) return;
+        const source = await getCloudSource(wav, "WAV HQ");
+        await copyExportFile(source, destination);
+        await appAlert({ title: "Download complete", message: destination });
+        return;
+      }
+
+      if (kind === "PROJECT") {
+        const destination = await chooseExportFilePath(`${safeBase}.zip`, "zip");
+        if (!destination) return;
+        const source = await getCloudSource(project, "Full Project");
+        await copyExportFile(source, destination);
+        await appAlert({ title: "Download complete", message: destination });
+        return;
+      }
+
+      const chosenBase = await chooseExportFolder();
+      if (!chosenBase) return;
+      const exportFolder = await prepareUniqueExportFolder(chosenBase, safeBase);
+      const exported: string[] = [];
+
+      if (beat.telegram_file_id) {
+        const source = await getMp3Source();
+        const destination = joinPath(exportFolder, `${safeBase}.mp3`);
+        await copyExportFile(source, destination);
+        exported.push("MP3");
+      }
+      if (wav) {
+        const source = await getCloudSource(wav, "WAV HQ");
+        const destination = joinPath(exportFolder, `${safeBase}.wav`);
+        await copyExportFile(source, destination);
+        exported.push("WAV");
+      }
+      if (project) {
+        const source = await getCloudSource(project, "Full Project");
+        const destination = joinPath(exportFolder, `${safeBase}.zip`);
+        await copyExportFile(source, destination);
+        exported.push("Full Project");
+      }
+
+      if (exported.length === 0) throw new Error("This beat has no downloadable cloud assets.");
+      await appAlert({
+        title: "Download complete",
+        message: `${exported.join(", ")}\n\n${exportFolder}`,
+      });
     } catch (error) {
-      await appAlert({ title: "Cloud download failed", message: String(error), danger: true });
+      await appAlert({
+        title: "Download failed",
+        message: String(error instanceof Error ? error.message : error),
+        danger: true,
+      });
     } finally {
       setCloudFilesBusyId(null);
     }
-  }, [cloudFilesBusyId]);
+  }, [cloudFilesBeat, cloudFiles, cloudFilesBusyId]);
 
   const reloadLibrary = useCallback(async () => {
     // Clear the instant-paint cache so Reload Library forces a fresh scan

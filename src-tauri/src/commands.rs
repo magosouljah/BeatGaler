@@ -65,7 +65,7 @@ pub struct BeatMeta {
     pub folder_path: String,
     pub mp3_path: String,       // main mp3 (may be empty string if wav-only)
     pub wav_path: Option<String>,
-    pub playback_path: String,  // what we actually play: wav preferred over mp3
+    pub playback_path: String,  // what we actually play: MASTER MP3 only
     pub bpm: String,
     pub key: String,
     pub needs_resolution: bool,
@@ -499,6 +499,131 @@ pub fn disconnect_telegram_cloud(
     Ok(())
 }
 
+/// Locate an ffmpeg executable for WAV -> MP3 MASTER conversion.
+///
+/// Search order:
+/// 1. BEATGALER_FFMPEG explicit override (development/support)
+/// 2. ffmpeg shipped next to the executable / inside macOS Resources
+/// 3. system ffmpeg as a final development fallback
+///
+/// Production installers should ship ffmpeg with BeatGaler so users never
+/// need to install an encoder themselves.
+fn beatgaler_ffmpeg_program() -> Result<PathBuf, String> {
+    let exe_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(custom) = std::env::var("BEATGALER_FFMPEG") {
+        if !custom.trim().is_empty() {
+            candidates.push(PathBuf::from(custom));
+        }
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            candidates.push(exe_dir.join(exe_name));
+            candidates.push(exe_dir.join("bin").join(exe_name));
+            candidates.push(exe_dir.join("resources").join(exe_name));
+
+            // macOS: MyApp.app/Contents/MacOS/app -> Contents/Resources/ffmpeg
+            if cfg!(target_os = "macos") {
+                if let Some(contents) = exe_dir.parent() {
+                    candidates.push(contents.join("Resources").join(exe_name));
+                    candidates.push(contents.join("Resources").join("bin").join(exe_name));
+                }
+            }
+        }
+    }
+
+    // Development fallback. This is intentionally LAST.
+    candidates.push(PathBuf::from(exe_name));
+
+    let mut attempted = Vec::new();
+    for candidate in candidates {
+        let label = candidate.to_string_lossy().to_string();
+        if attempted.iter().any(|v: &String| v == &label) {
+            continue;
+        }
+        attempted.push(label.clone());
+
+        match Command::new(&candidate).arg("-version").output() {
+            Ok(out) if out.status.success() => return Ok(candidate),
+            _ => {}
+        }
+    }
+
+    Err(format!(
+        "MP3 encoder unavailable. BeatGaler could not find its bundled ffmpeg. Attempted: {}. \
+The production app must ship ffmpeg; users should not have to install it manually.",
+        attempted.join(", ")
+    ))
+}
+
+fn convert_wav_to_cloud_master_mp3(
+    beat: &BeatMeta,
+    wav_path: &Path,
+) -> Result<PathBuf, String> {
+    let meta = std::fs::metadata(wav_path)
+        .map_err(|e| format!("WAV source could not be read '{}': {}", wav_path.display(), e))?;
+    if !meta.is_file() || meta.len() == 0 {
+        return Err(format!(
+            "WAV source is not a readable non-empty file: {}",
+            wav_path.display()
+        ));
+    }
+
+    let ffmpeg = beatgaler_ffmpeg_program()?;
+    let dir = beatgaler_temp_dir().join("master-conversion");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create MASTER conversion TEMP folder: {}", e))?;
+
+    let output = dir.join(format!(
+        "{}-{}.mp3",
+        beat.id,
+        random_urlsafe(8)
+    ));
+    let _ = std::fs::remove_file(&output);
+
+    let result = Command::new(&ffmpeg)
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-i",
+        ])
+        .arg(wav_path)
+        .args([
+            "-vn",
+            "-map_metadata", "-1",
+            "-codec:a", "libmp3lame",
+            "-b:a", "320k",
+        ])
+        .arg(&output)
+        .output()
+        .map_err(|e| format!(
+            "Could not start WAV -> MP3 converter '{}': {}",
+            ffmpeg.display(), e
+        ))?;
+
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+        let _ = std::fs::remove_file(&output);
+        return Err(format!(
+            "WAV -> MP3 conversion failed (exit {}): {}",
+            result.status.code().map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
+            if stderr.is_empty() { "ffmpeg returned no error text".to_string() } else { stderr }
+        ));
+    }
+
+    let out_meta = std::fs::metadata(&output)
+        .map_err(|e| format!("Converted MASTER MP3 was not created: {}", e))?;
+    if out_meta.len() == 0 {
+        let _ = std::fs::remove_file(&output);
+        return Err("WAV -> MP3 conversion produced an empty MASTER file.".to_string());
+    }
+
+    Ok(output)
+}
+
 /// Fase 17: sube el MP3/WAV principal de un beat a Telegram Cloud. Solo el
 /// archivo principal por ahora — stems y project.zip vienen en fases
 /// posteriores. Guarda telegram_file_id/message_id en el propio beat
@@ -518,19 +643,30 @@ pub fn upload_beat_to_telegram(
     }
     let user_id = ensure_beatgaler_user_id(&state)?;
 
-    let file_path = if !beat.mp3_path.is_empty() {
-        beat.mp3_path.clone()
+    // MASTER is ALWAYS MP3 in BeatGaler Cloud.
+    // - Existing MP3: use it.
+    // - WAV-only import: create a temporary 320 kbps MP3 MASTER.
+    // The original WAV remains a separate HQ cloud slot.
+    let mut generated_master: Option<PathBuf> = None;
+    let source_path = if !beat.mp3_path.trim().is_empty() && Path::new(&beat.mp3_path).is_file() {
+        PathBuf::from(&beat.mp3_path)
+    } else if let Some(wav) = beat.wav_path.as_ref().filter(|p| !p.trim().is_empty()) {
+        let wav_path = PathBuf::from(wav);
+        let converted = convert_wav_to_cloud_master_mp3(&beat, &wav_path)
+            .map_err(|e| format!("WAV-only MASTER generation failed: {}", e))?;
+        generated_master = Some(converted.clone());
+        converted
     } else {
-        return Err("This beat has no MP3 MASTER to upload.".to_string());
+        return Err(
+            "This beat has no usable audio source. BeatGaler needs an MP3, or a WAV that can be converted to the MASTER MP3."
+                .to_string()
+        );
     };
-    if !Path::new(&file_path).exists() {
-        return Err(format!("File not found on disk: {}", file_path));
-    }
 
-    let source_path = PathBuf::from(&file_path);
     let source_meta = std::fs::metadata(&source_path)
         .map_err(|e| format!("MASTER source exists check failed for '{}': {}", source_path.display(), e))?;
     if !source_meta.is_file() || source_meta.len() == 0 {
+        if let Some(path) = generated_master.as_ref() { let _ = std::fs::remove_file(path); }
         return Err(format!(
             "MASTER source is not a readable non-empty file: {} ({} bytes)",
             source_path.display(),
@@ -538,8 +674,13 @@ pub fn upload_beat_to_telegram(
         ));
     }
 
-    let upload_copy = make_cloud_master_upload_copy(&beat, &source_path, &state.data_dir)
-        .map_err(|e| format!("MASTER temp/metadata preparation failed: {}", e))?;
+    let upload_copy = match make_cloud_master_upload_copy(&beat, &source_path, &state.data_dir) {
+        Ok(path) => path,
+        Err(e) => {
+            if let Some(path) = generated_master.as_ref() { let _ = std::fs::remove_file(path); }
+            return Err(format!("MASTER temp/metadata preparation failed: {}", e));
+        }
+    };
 
     let base = telegram_cloud_api_base();
     let url = format!("{}/beats/upload", base);
@@ -556,6 +697,9 @@ pub fn upload_beat_to_telegram(
     // server. The remote server never sees or resolves the desktop local path.
     let upload_result = post_multipart_file_json(&url, &fields, "file", &upload_copy);
     let _ = std::fs::remove_file(&upload_copy);
+    if let Some(path) = generated_master.as_ref() {
+        let _ = std::fs::remove_file(path);
+    }
     let response = upload_result
         .map_err(|e| format!("MASTER upload transport failed: {}", e))?;
 
@@ -1242,28 +1386,17 @@ pub fn upload_dropped_file_to_telegram(
         let upload_copy = make_cloud_master_upload_copy(&beat, &source, &state.data_dir)?;
         let base = telegram_cloud_api_base();
         let url = format!("{}/beats/upload", base);
-        let mut args = vec![
-            "-sS".to_string(),
-            "-X".to_string(), "POST".to_string(),
-            "-F".to_string(), format!("beatgalerUserId={}", user_id),
-            "-F".to_string(), format!("beatName={}", beat.name),
+        let mut fields = vec![
+            ("beatgalerUserId", user_id.clone()),
+            ("beatName", beat.name.clone()),
         ];
         if let Some(existing_message_id) = beat.telegram_message_id {
-            args.push("-F".to_string());
-            args.push(format!("existingMessageId={}", existing_message_id));
+            fields.push(("existingMessageId", existing_message_id.to_string()));
         }
-        args.push("-F".to_string());
-        args.push(format!("file=@{}", upload_copy.to_string_lossy()));
-        args.push(url);
-        let raw_result = run_curl(&args);
+        let upload_result = post_multipart_file_json(&url, &fields, "file", &upload_copy);
         let _ = std::fs::remove_file(&upload_copy);
-        let raw = raw_result
-            .map_err(|e| format!("Could not upload dropped main audio: {}", e))?;
-        let response: Value = serde_json::from_str(&raw)
-            .map_err(|e| format!("Invalid JSON from BeatGaler Cloud: {} ({})", e, raw))?;
-        if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
-        }
+        let response = upload_result
+            .map_err(|e| format!("Could not replace MASTER MP3: {}", e))?;
 
         let telegram_file_id = response.get("telegram_file_id")
             .and_then(|v| v.as_str()).map(|v| v.to_string())
@@ -1341,33 +1474,23 @@ pub fn upload_dropped_file_to_telegram(
 
     let base = telegram_cloud_api_base();
     let url = format!("{}/cloud-files/upload", base);
-    let mut args = vec![
-        "-sS".to_string(),
-        "-X".to_string(), "POST".to_string(),
-        "-F".to_string(), format!("beatgalerUserId={}", user_id),
-        "-F".to_string(), format!("beatId={}", beat.id),
-        "-F".to_string(), format!("beatName={}", beat.name),
-        "-F".to_string(), format!("fileType={}", cloud_type),
+    let mut fields = vec![
+        ("beatgalerUserId", user_id.clone()),
+        ("beatId", beat.id.clone()),
+        ("beatName", beat.name.clone()),
+        ("fileType", cloud_type.clone()),
     ];
     if let Some(message_id) = beat.telegram_message_id {
-        args.push("-F".to_string());
-        args.push(format!("parentMessageId={}", message_id));
+        fields.push(("parentMessageId", message_id.to_string()));
     }
     if let Some((_, Some(existing_message_id))) = existing_slot.as_ref() {
-        args.push("-F".to_string());
-        args.push(format!("existingMessageId={}", existing_message_id));
+        fields.push(("existingMessageId", existing_message_id.to_string()));
     }
-    args.push("-F".to_string());
-    args.push(format!("file=@{}", source.to_string_lossy()));
-    args.push(url);
 
-    let raw = run_curl(&args)
-        .map_err(|e| format!("Could not upload dropped file to BeatGaler Cloud: {}", e))?;
-    let response: Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("Invalid JSON from BeatGaler Cloud: {} ({})", e, raw))?;
-    if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
+    // Remote-safe replacement: the desktop that owns the selected file sends
+    // its bytes. Windows cloud-server never attempts to open a Mac /Users path.
+    let response = post_multipart_file_json(&url, &fields, "file", &source)
+        .map_err(|e| format!("Could not replace {} cloud slot: {}", cloud_type, e))?;
 
     let parts = response.get("parts").and_then(|v| v.as_array())
         .ok_or_else(|| "BeatGaler Cloud did not return uploaded file parts.".to_string())?;
@@ -1573,76 +1696,65 @@ pub fn prepare_beat_for_playback(
     state: tauri::State<SettingsState>,
     _db: tauri::State<DbState>,
 ) -> Result<BeatMeta, String> {
-    // A newly imported beat must remain playable while its background Telegram
-    // upload is pending. Prefer any real local audio file that still exists.
-    let local_candidates = [
-        (!beat.playback_path.is_empty()).then(|| PathBuf::from(&beat.playback_path)),
-        (!beat.mp3_path.is_empty()).then(|| PathBuf::from(&beat.mp3_path)),
-        beat.wav_path.as_ref().map(PathBuf::from),
-    ];
+    // BeatGaler playback invariant: PLAY always means MASTER MP3.
+    // WAV is an HQ/archive slot only and is never returned as playback_path.
 
-    if let Some(local_path) = local_candidates
-        .into_iter()
-        .flatten()
-        .find(|path| {
-            std::fs::metadata(path)
-                .map(|m| m.is_file() && m.len() > 0)
-                .unwrap_or(false)
-        })
-    {
+    // Once a Cloud MASTER exists, it is authoritative even if a local WAV is
+    // still present. Replacing MASTER changes telegram_file_id, which naturally
+    // gives the cache a new key and prevents stale playback.
+    if let Some(telegram_file_id) = beat.telegram_file_id.clone() {
+        {
+            let settings = state.settings.lock().map_err(|e| e.to_string())?;
+            if !settings.telegram_cloud_connected {
+                return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            }
+        }
+        let user_id = ensure_beatgaler_user_id(&state)?;
+        let mut hasher = Sha256::new();
+        hasher.update(telegram_file_id.as_bytes());
+        let cache_key = format!("{:x}", hasher.finalize());
+        let cache_path = beatgaler_temp_dir().join("cloud-cache")
+            .join("audio")
+            .join(format!("{}.mp3", cache_key));
+        let cache_ok = std::fs::metadata(&cache_path)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false);
+        if !cache_ok {
+            download_telegram_file_to_path(&telegram_file_id, &user_id, &cache_path)?;
+        }
         let mut ready = beat;
-        ready.playback_path = local_path.to_string_lossy().to_string();
+        ready.playback_path = cache_path.to_string_lossy().to_string();
+        ready.cloud_status = Some("CLOUD_ONLY".to_string());
         return Ok(ready);
     }
 
-    // Once local sources have been detached, playback falls back to Telegram.
-    let telegram_file_id = beat.telegram_file_id.clone()
-        .ok_or_else(|| "This beat is still local/pending upload, but its source audio could not be found.".to_string())?;
-
-    {
-        let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+    // Before the first Cloud upload finishes, an existing MP3 may be played
+    // locally. Do not fall back to WAV.
+    if !beat.mp3_path.trim().is_empty() {
+        let mp3 = PathBuf::from(&beat.mp3_path);
+        if std::fs::metadata(&mp3).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
+            let mut ready = beat;
+            ready.playback_path = mp3.to_string_lossy().to_string();
+            return Ok(ready);
         }
     }
 
-    let user_id = ensure_beatgaler_user_id(&state)?;
-
-    // Cache identity follows Telegram's immutable file_id. Re-uploading the beat
-    // produces a different key, so stale cached audio is not accidentally reused.
-    let mut hasher = Sha256::new();
-    hasher.update(telegram_file_id.as_bytes());
-    let cache_key = format!("{:x}", hasher.finalize());
-
-    let extension = [
-        (!beat.playback_path.is_empty()).then(|| PathBuf::from(&beat.playback_path)),
-        (!beat.mp3_path.is_empty()).then(|| PathBuf::from(&beat.mp3_path)),
-        beat.wav_path.as_ref().map(PathBuf::from),
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(|p| p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()))
-    .filter(|e| !e.is_empty() && e.len() <= 8)
-    .unwrap_or_else(|| "mp3".to_string());
-
-    let cache_path = beatgaler_temp_dir().join("cloud-cache")
-        .join("audio")
-        .join(format!("{}.{}", cache_key, extension));
-
-    let cache_ok = std::fs::metadata(&cache_path)
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false);
-
-    if !cache_ok {
-        download_telegram_file_to_path(&telegram_file_id, &user_id, &cache_path)?;
+    // WAV-only import that is still pending Cloud: create a private TEMP MP3
+    // using the same encoder as the upload path. The original WAV is never used
+    // as the audio element source.
+    if let Some(wav_raw) = beat.wav_path.as_ref().filter(|p| !p.trim().is_empty()) {
+        let wav = PathBuf::from(wav_raw);
+        if std::fs::metadata(&wav).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
+            let temp_mp3 = convert_wav_to_cloud_master_mp3(&beat, &wav)
+                .map_err(|e| format!("Could not prepare MASTER MP3 for playback: {}", e))?;
+            let mut ready = beat;
+            ready.playback_path = temp_mp3.to_string_lossy().to_string();
+            return Ok(ready);
+        }
     }
 
-    let mut ready = beat;
-    ready.playback_path = cache_path.to_string_lossy().to_string();
-    ready.cloud_status = Some("CLOUD_ONLY".to_string());
-    Ok(ready)
+    Err("This beat has no playable MASTER MP3 and no readable WAV from which BeatGaler can create one.".to_string())
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProjectCloudStatus {
@@ -2596,6 +2708,98 @@ pub fn detach_local_sources_after_cloud_upload(
 
     db_save(&conn, &beat).map_err(|e| e.to_string())?;
     Ok(beat)
+}
+
+
+/// Copies an already-downloaded/cache file to an explicit user-selected path.
+/// This is an EXPORT only: it does not mutate BeatGaler metadata, playback_path,
+/// cloud state, or the library.
+#[tauri::command]
+pub fn copy_export_file(
+    source_path: String,
+    destination_path: String,
+) -> Result<String, String> {
+    let source = PathBuf::from(&source_path);
+    let destination = PathBuf::from(&destination_path);
+
+    let source_meta = std::fs::metadata(&source)
+        .map_err(|e| format!("Export source could not be read '{}': {}", source.display(), e))?;
+    if !source_meta.is_file() || source_meta.len() == 0 {
+        return Err(format!("Export source is not a readable non-empty file: {}", source.display()));
+    }
+
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not create export folder '{}': {}", parent.display(), e))?;
+    }
+
+    let name = destination.file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("export.bin");
+    let tmp = destination.with_file_name(format!(".{}.beatgaler-export", name));
+    let _ = std::fs::remove_file(&tmp);
+
+    std::fs::copy(&source, &tmp)
+        .map_err(|e| format!(
+            "Could not export '{}' to '{}': {}",
+            source.display(), destination.display(), e
+        ))?;
+
+    let copied = std::fs::metadata(&tmp)
+        .map_err(|e| format!("Export TEMP copy vanished: {}", e))?
+        .len();
+    if copied == 0 {
+        let _ = std::fs::remove_file(&tmp);
+        return Err("Export produced an empty file.".to_string());
+    }
+
+    // The native Save dialog handles replace confirmation for individual files.
+    let _ = std::fs::remove_file(&destination);
+    if std::fs::rename(&tmp, &destination).is_err() {
+        std::fs::copy(&tmp, &destination)
+            .map_err(|e| format!("Could not finalize export '{}': {}", destination.display(), e))?;
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    Ok(destination.to_string_lossy().to_string())
+}
+
+fn safe_export_component(raw: &str) -> String {
+    let cleaned: String = raw.chars()
+        .map(|c| if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches(['.', ' ']).trim();
+    if trimmed.is_empty() { "BeatGaler Export".to_string() } else { trimmed.chars().take(120).collect() }
+}
+
+/// Download Everything never overwrites an older export folder. If "Beat Name"
+/// exists, BeatGaler creates "Beat Name (1)", "(2)", etc.
+#[tauri::command]
+pub fn prepare_unique_export_folder(
+    base_path: String,
+    beat_name: String,
+) -> Result<String, String> {
+    let base = PathBuf::from(base_path);
+    if !base.is_dir() {
+        return Err(format!("Selected export location is not a folder: {}", base.display()));
+    }
+
+    let safe_name = safe_export_component(&beat_name);
+    for index in 0..10_000usize {
+        let folder_name = if index == 0 {
+            safe_name.clone()
+        } else {
+            format!("{} ({})", safe_name, index)
+        };
+        let candidate = base.join(folder_name);
+        if !candidate.exists() {
+            std::fs::create_dir_all(&candidate)
+                .map_err(|e| format!("Could not create export folder '{}': {}", candidate.display(), e))?;
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    Err("Could not find an available export folder name.".to_string())
 }
 
 fn sanitize_tags(tags: &[String]) -> Vec<String> {
@@ -4763,6 +4967,36 @@ pub fn read_beat_meta(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db_save(&conn, &beat).map_err(|e| e.to_string())?;
     Ok(beat)
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AudioMetadataPreview {
+    pub bpm: String,
+    pub key: String,
+    pub tags: Vec<String>,
+    pub rating: u8,
+    pub image_base64: Option<String>,
+    pub has_metadata: bool,
+}
+
+/// Read metadata from a candidate replacement audio file WITHOUT importing,
+/// copying, renaming, writing tags, touching SQLite, or uploading anything.
+#[tauri::command]
+pub fn inspect_audio_metadata(file_path: String) -> Result<AudioMetadataPreview, String> {
+    let path = PathBuf::from(&file_path);
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("Could not inspect audio '{}': {}", path.display(), e))?;
+    if !meta.is_file() || meta.len() == 0 {
+        return Err(format!("Selected audio is not a readable non-empty file: {}", path.display()));
+    }
+    let (bpm, key, tags, rating, image_base64) = read_id3(&path);
+    let has_metadata = !bpm.trim().is_empty()
+        || !key.trim().is_empty()
+        || !tags.is_empty()
+        || rating > 0
+        || image_base64.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
+    Ok(AudioMetadataPreview { bpm, key, tags, rating, image_base64, has_metadata })
 }
 
 /// Save metadata — writes to both MP3 and WAV, updates filenames if needed

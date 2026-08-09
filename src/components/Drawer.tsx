@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Beat } from "../types";
 import { Artwork, Stars, TagEditor, TagPill } from "./ui";
 import ImageCropModal from "./ImageCropModal";
-import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
+import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
+import { appConfirm } from "../lib/dialog";
 import { listen } from "@tauri-apps/api/event";
 
 interface Props {
@@ -28,6 +29,9 @@ type PendingFiles = {
   flp?: string;
   als?: string;
 };
+
+type PendingCloudKey = CloudFileType | "PROJECT_FLP" | "PROJECT_SAMPLES" | "PROJECT_AUDIO";
+type PendingCloudFiles = Partial<Record<PendingCloudKey, string>>;
 
 const LABEL: Record<string, string> = { mp3: "MP3", wav: "WAV", stems: "Stems", flp: "FLP", als: "ALS" };
 
@@ -62,10 +66,11 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isEdit = mode === "edit";
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
-  const hasPending = Object.keys(pending).length > 0;
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
+  const [pendingCloud, setPendingCloud] = useState<PendingCloudFiles>({});
+  const hasPending = Object.keys(pending).length > 0 || Object.keys(pendingCloud).length > 0;
 
   const refreshCloudFiles = useCallback(async () => {
     if (!beat.telegram_file_id) {
@@ -99,36 +104,45 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   }, [cloudBusy]);
 
   const handleCloudReplace = useCallback(async (type: CloudFileType) => {
-    if (cloudBusy) return;
+    if (saving) return;
     const picker = CLOUD_PICKERS[type];
     const source = await pickFile([picker], beat.folder_path || undefined);
     if (!source) return;
 
-    setCloudBusy(type);
-    setCloudError(null);
-    try {
-      const uploaded = await uploadDroppedFileToTelegram(data, source, type);
-      if (type === "MASTER") {
-        const next = {
-          ...data,
-          cloud_status: "SYNCED",
-          telegram_file_id: uploaded.telegram_file_id ?? data.telegram_file_id,
-          telegram_message_id: uploaded.telegram_message_id ?? data.telegram_message_id,
-        };
-        setData(next);
-        onSaved(next);
+    // Picking a file is NEVER a Telegram mutation. It stays pending until Save.
+    if (type === "MASTER") {
+      try {
+        const preview = await inspectAudioMetadata(source);
+        if (preview.has_metadata) {
+          const useIncoming = await appConfirm({
+            title: "MP3 metadata",
+            message: "This MP3 contains metadata. Use its BPM, key, tags, rating and artwork?\n\nChoose Cancel to keep the current BeatGaler metadata. The MP3 will still be queued for replacement.",
+            confirmLabel: "Use MP3 metadata",
+            cancelLabel: "Keep current metadata",
+          });
+          if (useIncoming) {
+            setData(current => ({
+              ...current,
+              bpm: preview.bpm || current.bpm,
+              key: preview.key || current.key,
+              tags: preview.tags.length > 0 ? preview.tags : current.tags,
+              rating: preview.rating > 0 ? preview.rating : current.rating,
+              image_base64: preview.image_base64 || current.image_base64,
+            }));
+          }
+        }
+      } catch (error) {
+        setCloudError(`Could not inspect MP3 metadata: ${String(error)}`);
+        return;
       }
-      await refreshCloudFiles();
-      window.dispatchEvent(new CustomEvent("beatgaler:cloud-files-updated", { detail: { beatId: beat.id } }));
-    } catch (e) {
-      setCloudError(String(e));
-    } finally {
-      setCloudBusy(null);
     }
-  }, [cloudBusy, beat.folder_path, beat.id, data, onSaved, refreshCloudFiles]);
+
+    setPendingCloud(current => ({ ...current, [type]: source }));
+    setCloudError(null);
+  }, [saving, beat.folder_path]);
 
   const handleProjectAsset = useCallback(async (kind: ProjectAssetKind) => {
-    if (cloudBusy) return;
+    if (saving) return;
     let source: string | null = null;
     if (kind === "flp") {
       source = await pickFile([{ name: "FL Studio project", extensions: ["flp"] }], beat.folder_path || undefined);
@@ -136,20 +150,10 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       source = await pickFolder(kind === "samples" ? "Select Samples folder" : "Select Audio folder");
     }
     if (!source) return;
-
-    setCloudBusy(`PROJECT-${kind}`);
+    const key: PendingCloudKey = kind === "flp" ? "PROJECT_FLP" : kind === "samples" ? "PROJECT_SAMPLES" : "PROJECT_AUDIO";
+    setPendingCloud(current => ({ ...current, [key]: source! }));
     setCloudError(null);
-    try {
-      await updateProjectArchiveFromSource(data, source, kind);
-      await uploadProjectToTelegram(data);
-      await refreshCloudFiles();
-      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
-    } catch (e) {
-      setCloudError(String(e));
-    } finally {
-      setCloudBusy(null);
-    }
-  }, [cloudBusy, beat.folder_path, beat.id, data, refreshCloudFiles]);
+  }, [saving, beat.folder_path]);
 
   const handleManualProjectUpdate = useCallback(async () => {
     if (cloudBusy) return;
@@ -181,6 +185,8 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       return;
     }
     setData({ ...beat });
+    setPending({});
+    setPendingCloud({});
   }, [beat, isBulk]);
 
   const toggleBulkField = (f: string) =>
@@ -233,15 +239,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           bpm: data.bpm,
           key: data.key,
         });
-        if (role === "mp3") committed = { ...committed, mp3_path: newPath, playback_path: committed.wav_path ? committed.playback_path : newPath };
-        if (role === "wav") committed = { ...committed, wav_path: newPath, has_wav: true, playback_path: newPath };
+        if (role === "mp3") committed = { ...committed, mp3_path: newPath, playback_path: newPath };
+        if (role === "wav") committed = { ...committed, wav_path: newPath, has_wav: true };
         if (role === "samples") committed = { ...committed, samples_path: newPath, has_samples: true };
         if (role === "stems") committed = { ...committed, stems_path: newPath, has_stems: true };
         if (role === "flp") committed = { ...committed, flp_path: newPath, has_flp: true };
         if (role === "als") committed = { ...committed, als_path: newPath, has_als: true };
       }
-      setPending({});
-
       const nameChanged = committed.name.trim() !== beat.name;
       const bpmOrKeyChanged = committed.bpm !== beat.bpm || committed.key !== beat.key;
       const hasBpmKey = committed.bpm.length > 0 || committed.key.length > 0;
@@ -264,7 +268,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         ...committed,
         mp3_path: result.new_mp3_path || committed.mp3_path,
         wav_path: result.new_wav_path ?? committed.wav_path,
-        playback_path: result.new_wav_path || result.new_mp3_path || committed.playback_path,
+        playback_path: result.new_mp3_path || committed.mp3_path || committed.playback_path,
       };
 
       if (nameChanged && !beat.telegram_file_id) {
@@ -283,19 +287,73 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           wav_path: renamed.new_wav_path ?? updated.wav_path,
           stems_path: renamed.new_stems_path ?? updated.stems_path,
           flp_path: renamed.new_flp_path ?? updated.flp_path,
-          playback_path: renamed.new_wav_path || renamed.new_mp3_path || updated.playback_path,
+          playback_path: renamed.new_mp3_path || updated.mp3_path || updated.playback_path,
         };
       }
 
+      // Apply cloud file transaction ONLY AFTER Save Changes was pressed and
+      // local metadata validation succeeded. Until this point Telegram has not
+      // been modified by anything selected in FILES.
+      let cloudUpdated = { ...updated };
+
+      if (pendingCloud.MASTER) {
+        const uploaded = await uploadDroppedFileToTelegram(cloudUpdated, pendingCloud.MASTER, "MASTER");
+        cloudUpdated = {
+          ...cloudUpdated,
+          telegram_file_id: uploaded.telegram_file_id ?? cloudUpdated.telegram_file_id,
+          telegram_message_id: uploaded.telegram_message_id ?? cloudUpdated.telegram_message_id,
+          cloud_status: "SYNCED",
+          // Force the next Play through prepareBeatForPlayback so the new
+          // Telegram MASTER MP3 wins over every old local/cache path.
+          playback_path: "",
+        };
+      }
+
+      if (pendingCloud.WAV) {
+        await uploadDroppedFileToTelegram(cloudUpdated, pendingCloud.WAV, "WAV");
+      }
+      for (const type of ["STEMS", "LOOP", "OTHER"] as CloudFileType[]) {
+        const source = pendingCloud[type];
+        if (source) await uploadDroppedFileToTelegram(cloudUpdated, source, type);
+      }
+      if (pendingCloud.PROJECT) {
+        await uploadDroppedFileToTelegram(cloudUpdated, pendingCloud.PROJECT, "PROJECT");
+      }
+
+      const projectChanges: [ProjectAssetKind, string | undefined][] = [
+        ["flp", pendingCloud.PROJECT_FLP],
+        ["samples", pendingCloud.PROJECT_SAMPLES],
+        ["audio", pendingCloud.PROJECT_AUDIO],
+      ];
+      let projectChanged = false;
+      for (const [kind, source] of projectChanges) {
+        if (!source) continue;
+        await updateProjectArchiveFromSource(cloudUpdated, source, kind);
+        projectChanged = true;
+      }
+      if (projectChanged) {
+        await uploadProjectToTelegram(cloudUpdated);
+      }
+
+      setPending({});
+      setPendingCloud({});
+      if (Object.keys(pendingCloud).length > 0) {
+        await refreshCloudFiles();
+        window.dispatchEvent(new CustomEvent("beatgaler:cloud-files-updated", { detail: { beatId: beat.id } }));
+        if (pendingCloud.PROJECT || projectChanged) {
+          window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+        }
+      }
+
       // Clear other_files — after rename old paths are gone; Rust re-scans on next load
-      onSaved({ ...updated, other_files: [] });
+      onSaved({ ...cloudUpdated, other_files: [] });
       if (closeAfterSave) onClose();
     } catch (e: any) {
       setError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [beat, data, pending, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave]);
+  }, [beat, data, pending, pendingCloud, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles]);
 
   // ── Enter to save ───────────────────────────────────────────
   useEffect(() => {
@@ -667,12 +725,16 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                 <span style={{ fontSize: 10, color: "#4ade80" }}>TELEGRAM</span>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                {(["WAV", "STEMS", "LOOP", "OTHER"] as CloudFileType[]).map(type => (
-                  <button key={type} disabled={cloudBusy !== null} onClick={() => void handleCloudReplace(type)}
-                    style={{ padding: "5px 8px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 6, color: cloudBusy === type ? "#777" : "#bbb", fontSize: 10, cursor: cloudBusy ? "default" : "pointer" }}>
-                    {cloudBusy === type ? "Uploading…" : `+ ${type}`}
-                  </button>
-                ))}
+                {(["MASTER", "WAV", "STEMS", "LOOP", "OTHER"] as CloudFileType[]).map(type => {
+                  const queued = pendingCloud[type];
+                  return (
+                    <button key={type} disabled={saving} onClick={() => void handleCloudReplace(type)}
+                      title={queued ? queued : `Choose ${type}; Telegram will not change until Save Changes`}
+                      style={{ padding: "5px 8px", background: queued ? "#2a1a00" : "#1a1a1a", border: `1px solid ${queued ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 6, color: queued ? "#fb923c" : "#bbb", fontSize: 10, cursor: saving ? "default" : "pointer" }}>
+                      {queued ? `PENDING ${type}` : `+ ${type}`}
+                    </button>
+                  );
+                })}
               </div>
               <div style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", gap: 8 }}>
                 <span style={{ width: 58, fontSize: 10, color: "#60a5fa", fontWeight: 700 }}>MASTER</span>
@@ -689,17 +751,20 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                 </div>
                 {isEdit && (
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    <button disabled={cloudBusy !== null} onClick={() => void handleProjectAsset("flp")}
-                      style={{ padding: "4px 7px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
-                      + FLP
+                    <button disabled={saving} onClick={() => void handleProjectAsset("flp")}
+                      title={pendingCloud.PROJECT_FLP ? pendingCloud.PROJECT_FLP : "Queued until Save Changes"}
+                      style={{ padding: "4px 7px", background: pendingCloud.PROJECT_FLP ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_FLP ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_FLP ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
+                      {pendingCloud.PROJECT_FLP ? "PENDING FLP" : "+ FLP"}
                     </button>
-                    <button disabled={cloudBusy !== null} onClick={() => void handleProjectAsset("samples")}
-                      style={{ padding: "4px 7px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
-                      + Samples
+                    <button disabled={saving} onClick={() => void handleProjectAsset("samples")}
+                      title={pendingCloud.PROJECT_SAMPLES ? pendingCloud.PROJECT_SAMPLES : "Queued until Save Changes"}
+                      style={{ padding: "4px 7px", background: pendingCloud.PROJECT_SAMPLES ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_SAMPLES ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_SAMPLES ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
+                      {pendingCloud.PROJECT_SAMPLES ? "PENDING Samples" : "+ Samples"}
                     </button>
-                    <button disabled={cloudBusy !== null} onClick={() => void handleProjectAsset("audio")}
-                      style={{ padding: "4px 7px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
-                      + Audio
+                    <button disabled={saving} onClick={() => void handleProjectAsset("audio")}
+                      title={pendingCloud.PROJECT_AUDIO ? pendingCloud.PROJECT_AUDIO : "Queued until Save Changes"}
+                      style={{ padding: "4px 7px", background: pendingCloud.PROJECT_AUDIO ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_AUDIO ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_AUDIO ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
+                      {pendingCloud.PROJECT_AUDIO ? "PENDING Audio" : "+ Audio"}
                     </button>
                     {cloudFiles.some(f => f.file_type === "PROJECT") && (
                       <button disabled={cloudBusy !== null} onClick={() => void handleManualProjectUpdate()}
@@ -721,8 +786,9 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                   </div>
                 </div>
               ))}
-              <div style={{ marginTop: 9, color: "#555", fontSize: 9, lineHeight: 1.5 }}>
-                Play and Open Project use temporary files automatically. No permanent beats folder exists.
+              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>
+                Files marked PENDING are local selections only. Telegram is not changed until you click Save Changes. Cancel closes the editor without uploading those selections.
+                <br />PLAY always uses the MASTER MP3; WAV is HQ/download only.
               </div>
               {cloudError && <div style={{ marginTop: 8, color: "#f87171", fontSize: 10 }}>{cloudError}</div>}
             </div>
@@ -749,7 +815,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                     : reviewInfo
                       ? (reviewInfo.current === reviewInfo.total ? "Save and finish" : "Save and next")
                       : hasPending
-                        ? `Save changes (${Object.keys(pending).length} file${Object.keys(pending).length > 1 ? "s" : ""} pending)`
+                        ? `Save changes (${Object.keys(pending).length + Object.keys(pendingCloud).length} file${Object.keys(pending).length + Object.keys(pendingCloud).length > 1 ? "s" : ""} pending)`
                         : "Save changes";
               return (
                 <button onClick={handleSave} disabled={disabled}
