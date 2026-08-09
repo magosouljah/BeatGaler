@@ -318,6 +318,74 @@ fn get_json_simple(url: &str) -> Result<Value, String> {
     serde_json::from_str(&raw).map_err(|e| format!("Invalid JSON from BeatGaler Cloud: {} ({})", e, raw))
 }
 
+
+/// Sends the ACTUAL file bytes as multipart/form-data.
+/// `file_path` is read on the desktop running BeatGaler (Mac/Windows); the
+/// remote cloud-server never receives or tries to open that local filesystem path.
+fn post_multipart_file_json(
+    url: &str,
+    fields: &[(&str, String)],
+    file_field: &str,
+    file_path: &Path,
+) -> Result<Value, String> {
+    let meta = std::fs::metadata(file_path)
+        .map_err(|e| format!("Could not read upload source '{}': {}", file_path.display(), e))?;
+    if !meta.is_file() {
+        return Err(format!("Upload source is not a file: {}", file_path.display()));
+    }
+    if meta.len() == 0 {
+        return Err(format!("Upload source is empty: {}", file_path.display()));
+    }
+
+    let mut args = vec![
+        "-sS".to_string(),
+        "--connect-timeout".to_string(),
+        "5".to_string(),
+        "--max-time".to_string(),
+        "3600".to_string(),
+        "-X".to_string(),
+        "POST".to_string(),
+    ];
+
+    // --form-string prevents user-controlled text (beat names, IDs) from being
+    // interpreted as curl form directives.
+    for (key, value) in fields {
+        args.push("--form-string".to_string());
+        args.push(format!("{}={}", key, value));
+    }
+
+    // This @ is intentional: curl opens the LOCAL file and streams its bytes
+    // into the HTTP request body. Only the bytes cross the network.
+    args.push("-F".to_string());
+    args.push(format!("{}=@{}", file_field, file_path.to_string_lossy()));
+    args.push("-w".to_string());
+    args.push("\n__BEATGALER_HTTP_STATUS__:%{http_code}".to_string());
+    args.push(url.to_string());
+
+    let raw = run_curl(&args)?;
+    let (body, status_text) = raw
+        .rsplit_once("\n__BEATGALER_HTTP_STATUS__:")
+        .ok_or_else(|| format!("BeatGaler Cloud response had no HTTP status marker. Raw response: {}", raw))?;
+    let status = status_text.trim().parse::<u16>().unwrap_or(0);
+
+    let parsed: Value = serde_json::from_str(body).map_err(|e| {
+        let preview: String = body.chars().take(1200).collect();
+        format!(
+            "Invalid JSON from BeatGaler Cloud (HTTP {}): {}. Response: {}",
+            status, e, preview
+        )
+    })?;
+
+    if !(200..300).contains(&status) {
+        let server_error = parsed.get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Server returned an error without an 'error' message.");
+        return Err(format!("BeatGaler Cloud HTTP {}: {}", status, server_error));
+    }
+
+    Ok(parsed)
+}
+
 /// Fase 6/7: pide al backend un connect_token + deep link, y abre Telegram
 /// con el navegador/app del sistema. El frontend debe llamar luego a
 /// `poll_telegram_cloud_status` periódicamente hasta que `connected: true`.
@@ -460,34 +528,36 @@ pub fn upload_beat_to_telegram(
     }
 
     let source_path = PathBuf::from(&file_path);
-    let upload_copy = make_cloud_master_upload_copy(&beat, &source_path, &state.data_dir)?;
+    let source_meta = std::fs::metadata(&source_path)
+        .map_err(|e| format!("MASTER source exists check failed for '{}': {}", source_path.display(), e))?;
+    if !source_meta.is_file() || source_meta.len() == 0 {
+        return Err(format!(
+            "MASTER source is not a readable non-empty file: {} ({} bytes)",
+            source_path.display(),
+            source_meta.len()
+        ));
+    }
+
+    let upload_copy = make_cloud_master_upload_copy(&beat, &source_path, &state.data_dir)
+        .map_err(|e| format!("MASTER temp/metadata preparation failed: {}", e))?;
 
     let base = telegram_cloud_api_base();
     let url = format!("{}/beats/upload", base);
 
-    let mut args = vec![
-        "-sS".to_string(),
-        "-X".to_string(), "POST".to_string(),
-        "-F".to_string(), format!("beatgalerUserId={}", user_id),
-        "-F".to_string(), format!("beatName={}", beat.name),
+    let mut fields = vec![
+        ("beatgalerUserId", user_id.clone()),
+        ("beatName", beat.name.clone()),
     ];
     if let Some(existing_message_id) = beat.telegram_message_id {
-        args.push("-F".to_string());
-        args.push(format!("existingMessageId={}", existing_message_id));
+        fields.push(("existingMessageId", existing_message_id.to_string()));
     }
-    args.push("-F".to_string());
-    args.push(format!("file=@{}", upload_copy.to_string_lossy()));
-    args.push(url);
-    let raw_result = run_curl(&args);
-    let _ = std::fs::remove_file(&upload_copy);
-    let raw = raw_result
-        .map_err(|e| format!("Could not reach BeatGaler Cloud server. Is it running? ({})", e))?;
-    let response: Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("Invalid JSON from BeatGaler Cloud: {} ({})", e, raw))?;
 
-    if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
+    // The Mac/Windows desktop streams the actual TEMP copy bytes to the remote
+    // server. The remote server never sees or resolves the desktop local path.
+    let upload_result = post_multipart_file_json(&url, &fields, "file", &upload_copy);
+    let _ = std::fs::remove_file(&upload_copy);
+    let response = upload_result
+        .map_err(|e| format!("MASTER upload transport failed: {}", e))?;
 
     let telegram_file_id = response.get("telegram_file_id").and_then(|v| v.as_str()).map(|s| s.to_string());
     let telegram_message_id = response.get("telegram_message_id").and_then(|v| v.as_i64());
@@ -5316,15 +5386,28 @@ fn receive_oauth_code(redirect_uri: &str, expected_state: &str) -> Result<String
 }
 
 fn run_curl(args: &[String]) -> Result<String, String> {
-    let output = Command::new("curl")
+    #[cfg(target_os = "macos")]
+    let curl_program = "/usr/bin/curl";
+    #[cfg(target_os = "windows")]
+    let curl_program = "curl.exe";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let curl_program = "curl";
+
+    let output = Command::new(curl_program)
         .args(args)
         .output()
-        .map_err(|e| format!("Failed to start curl: {}", e))?;
+        .map_err(|e| format!("Failed to start curl at '{}': {}", curl_program, e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Err(if !stderr.is_empty() { stderr } else { stdout });
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!(
+            "curl failed (program={}, exit={}): {}",
+            curl_program,
+            output.status.code().map(|v| v.to_string()).unwrap_or_else(|| "signal".to_string()),
+            if detail.is_empty() { "no error text returned".to_string() } else { detail }
+        ));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

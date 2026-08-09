@@ -478,6 +478,7 @@ export default function App() {
   const backgroundUploadRunningRef = useRef(false);
   const uploadCompleteTimersRef = useRef<Map<string, number>>(new Map());
   const cloudPullInFlightRef = useRef(false);
+  const [backgroundUploadErrors, setBackgroundUploadErrors] = useState<Record<string, string>>({});
 
   const [loading, setLoading] = useState(() => loadCachedBeats() === null);
   const [search, setSearch] = useState("");
@@ -888,6 +889,12 @@ export default function App() {
       const alreadyQueued = backgroundUploadQueueRef.current.some(item => item.id === beat.id);
       if (alreadyQueued || autoCloudUploadRef.current.has(beat.id)) continue;
       backgroundUploadQueueRef.current.push(beat);
+      setBackgroundUploadErrors(current => {
+        if (!(beat.id in current)) return current;
+        const next = { ...current };
+        delete next[beat.id];
+        return next;
+      });
       setBeats(current => current.map(b =>
         b.id === beat.id ? { ...b, cloud_status: "UPLOADING" } : b
       ));
@@ -902,13 +909,38 @@ export default function App() {
           // One explicit status check per background batch. This is NOT polling.
           // pollTelegramCloudStatus also reconciles the Rust-side settings cache,
           // which upload_beat_to_telegram validates before reading the local file.
+          let sessionCheckError: unknown = null;
           const cloudSession = await pollTelegramCloudStatus().catch(error => {
+            sessionCheckError = error;
             console.warn("Background upload could not verify Telegram session:", error);
             return { connected: false, username: null };
           });
 
           if (!cloudSession.connected) {
             const failed = backgroundUploadQueueRef.current.splice(0);
+            const raw = sessionCheckError instanceof Error
+              ? sessionCheckError.message
+              : sessionCheckError != null
+                ? String(sessionCheckError)
+                : "The BeatGaler Cloud server reports that this installation is not linked to Telegram.";
+
+            const detail = [
+              "UPLOAD FAILED",
+              "Stage: Verify Telegram session",
+              "",
+              raw,
+              "",
+              "Checks:",
+              "• Confirm the Windows cloud-server and Tailscale Funnel are running.",
+              "• Confirm this BeatGaler installation is connected to the intended Telegram account.",
+              "• If another Telegram account is used, it must be linked to THIS BeatGaler installation/session.",
+            ].join("\n");
+
+            setBackgroundUploadErrors(current => {
+              const next = { ...current };
+              for (const item of failed) next[item.id] = detail;
+              return next;
+            });
             setBeats(current => current.map(b =>
               failed.some(item => item.id === b.id)
                 ? { ...b, cloud_status: "ERROR" }
@@ -932,21 +964,25 @@ export default function App() {
             if (autoCloudUploadRef.current.has(original.id)) continue;
             autoCloudUploadRef.current.add(original.id);
 
+            let uploadStage = "Prepare upload";
             try {
               let uploaded = original;
 
               // MASTER: only upload when the beat does not already own one.
               if (!uploaded.telegram_file_id) {
+                uploadStage = "Upload MASTER audio";
                 uploaded = await uploadBeatToTelegram(uploaded);
                 setBeats(current => current.map(b =>
                   b.id === uploaded.id ? { ...uploaded, cloud_status: "UPLOADING" } : b
                 ));
               }
 
-              const existingFiles = await listCloudFilesForBeat(uploaded.id).catch(() => []);
+              uploadStage = "Read existing Telegram file slots";
+              const existingFiles = await listCloudFilesForBeat(uploaded.id);
               const hasCloudWav = existingFiles.some(file => file.file_type === "WAV");
 
               if (uploaded.wav_path && !hasCloudWav) {
+                uploadStage = "Upload WAV HQ";
                 await uploadDroppedFileToTelegram(uploaded, uploaded.wav_path, "WAV");
               }
 
@@ -954,14 +990,24 @@ export default function App() {
                 !!uploaded.flp_path || !!uploaded.als_path || uploaded.has_flp || uploaded.has_als;
 
               if (hasProjectSource) {
-                const currentProject = await getProjectCloudStatus(uploaded).catch(() => null);
+                uploadStage = "Check PROJECT cloud state";
+                const currentProject = await getProjectCloudStatus(uploaded);
                 if (!currentProject?.synced) {
+                  uploadStage = "Build and upload PROJECT.zip";
                   await uploadProjectToTelegram(uploaded);
                 }
               }
 
               // Only detach local import sources after every required cloud slot succeeds.
+              uploadStage = "Finalize cloud copy and detach local sources";
               const detached = await detachLocalSourcesAfterCloudUpload(uploaded.id);
+
+              setBackgroundUploadErrors(current => {
+                if (!(detached.id in current)) return current;
+                const next = { ...current };
+                delete next[detached.id];
+                return next;
+              });
 
               // Green completion state is intentionally transient and UI-only.
               setBeats(current => current.map(b =>
@@ -990,11 +1036,52 @@ export default function App() {
                 console.warn("Telegram metadata sync after background upload failed:", error);
               });
             } catch (error) {
-              console.warn(`Background Telegram upload failed for ${original.name}:`, error);
+              console.warn(`Background Telegram upload failed for ${original.name} at ${uploadStage}:`, error);
+
+              const raw = error instanceof Error
+                ? error.message
+                : typeof error === "string"
+                  ? error
+                  : (() => {
+                      try { return JSON.stringify(error); }
+                      catch { return String(error); }
+                    })();
+
+              const lower = raw.toLowerCase();
+              let hint = "Unexpected failure. The exact raw error is included below.";
+              if (lower.includes("file not found") || lower.includes("no mp3 master") || lower.includes("no longer exists")) {
+                hint = "The local source file could not be read. On macOS this usually means the original file moved, was removed, or the app lost access to that path.";
+              } else if (lower.includes("temp") || lower.includes("prepare cloud audio copy") || lower.includes("metadata") || lower.includes("id3")) {
+                hint = "BeatGaler failed while creating its temporary upload copy or embedding metadata. Check file permissions, free disk space, and whether the source audio is a valid MP3/WAV.";
+              } else if (lower.includes("failed to start curl")) {
+                hint = "BeatGaler could not start the system HTTP client. On macOS the app now explicitly uses /usr/bin/curl; if this still appears, the system curl executable is unavailable.";
+              } else if (lower.includes("could not reach") || lower.includes("timed out") || lower.includes("couldn't connect") || lower.includes("connection")) {
+                hint = "The Mac could not complete the request to the BeatGaler Cloud server. Check Tailscale Funnel, Internet connectivity, and that node server.js is still running on Windows.";
+              } else if (lower.includes("http 400") || lower.includes("not connected for this beatgaler installation")) {
+                hint = "The server received the request but this BeatGaler installation is not linked to a Telegram account on the server. A different Telegram account is allowed, but it must be linked to this installation ID.";
+              } else if (lower.includes("413") || lower.includes("too large")) {
+                hint = "The server rejected the file because it exceeded the configured upload limit.";
+              } else if (lower.includes("invalid json") || lower.includes("<!doctype") || lower.includes("<html")) {
+                hint = "The endpoint returned something other than BeatGaler JSON. This can indicate a tunnel/proxy error page or an unexpected server response.";
+              } else if (lower.includes("telegram")) {
+                hint = "The request reached the cloud/Telegram portion of the flow. Read the raw Telegram/server error below for the exact rejection.";
+              }
+
+              const detail = [
+                "UPLOAD FAILED",
+                `Beat: ${original.name}`,
+                `Stage: ${uploadStage}`,
+                `Platform: ${navigator.platform || "unknown"}`,
+                "",
+                hint,
+                "",
+                `Raw error: ${raw || "Unknown error"}`,
+              ].join("\n");
+
+              setBackgroundUploadErrors(current => ({ ...current, [original.id]: detail }));
               setBeats(current => current.map(b =>
                 b.id === original.id ? { ...b, cloud_status: "ERROR" } : b
               ));
-              // Hidden/background by design: do not interrupt the user's review flow with a modal.
             } finally {
               autoCloudUploadRef.current.delete(original.id);
             }
@@ -1189,6 +1276,11 @@ export default function App() {
         if (cancelled) stop(); else unlisten = stop;
       } catch (error) {
         console.warn("Native drag and drop is unavailable", error);
+        void appAlert({
+          title: "Drag & drop unavailable",
+          message: `BeatGaler could not start Tauri's native file drop listener: ${String(error)}`,
+          danger: true,
+        });
       }
     })();
 
@@ -1827,10 +1919,10 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
 
   return (
     <div
-      onDragEnter={handleHtmlDragOver}
-      onDragOver={handleHtmlDragOver}
-      onDragLeave={handleHtmlDragLeave}
-      onDrop={handleHtmlDrop}
+      onDragEnter={isTauriAvailable ? undefined : handleHtmlDragOver}
+      onDragOver={isTauriAvailable ? undefined : handleHtmlDragOver}
+      onDragLeave={isTauriAvailable ? undefined : handleHtmlDragLeave}
+      onDrop={isTauriAvailable ? undefined : handleHtmlDrop}
       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}
     >
       {/* Top bar */}
@@ -2042,6 +2134,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                   <BeatCard
                     key={beat.id}
                     beat={beat}
+                    cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}
                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
                     playing={audio.playingId === beat.id && audio.isPlaying}

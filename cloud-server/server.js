@@ -44,6 +44,36 @@ if (!BOT_USERNAME) {
 }
 
 const app = express();
+
+// Diagnostic request IDs. Never logs bot tokens or file contents.
+app.use((req, res, next) => {
+  const requestId = crypto.randomBytes(4).toString("hex");
+  req.beatgalerRequestId = requestId;
+  const started = Date.now();
+  const isUpload = req.method === "POST" && (
+    req.path === "/beats/upload" ||
+    req.path === "/projects/upload" ||
+    req.path === "/cloud-files/upload"
+  );
+
+  if (isUpload) {
+    console.log(
+      `[upload ${requestId}] incoming ${req.method} ${req.path} ` +
+      `content-length=${req.headers["content-length"] || "unknown"}`
+    );
+  }
+
+  res.on("finish", () => {
+    if (isUpload || res.statusCode >= 400) {
+      console.log(
+        `[http ${requestId}] ${req.method} ${req.path} -> ${res.statusCode} ` +
+        `${Date.now() - started}ms`
+      );
+    }
+  });
+  next();
+});
+
 app.use(express.json());
 const upload = multer({ dest: "uploads-tmp/" });
 const DATA_FILE = path.join(__dirname, "cloud-data.json");
@@ -568,8 +598,17 @@ app.listen(PORT, "0.0.0.0", () => {
 // El archivo se envía como documento (no audio comprimido) al chat privado
 // del usuario con el bot, para no perder calidad ni metadata.
 app.post("/beats/upload", upload.single("file"), async (req, res) => {
+  const requestId = req.beatgalerRequestId || "unknown";
   const { beatgalerUserId, beatName, existingMessageId } = req.body || {};
   const cleanup = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+
+  console.log(
+    `[upload ${requestId}] MASTER parsed ` +
+    `beat=${JSON.stringify(beatName || "")} ` +
+    `file=${req.file ? JSON.stringify(req.file.originalname) : "NONE"} ` +
+    `bytes=${req.file?.size ?? 0} ` +
+    `client=${String(beatgalerUserId || "").slice(0, 10) || "missing"}`
+  );
   if (!beatgalerUserId) { cleanup(); return res.status(400).json({ error: "beatgalerUserId is required" }); }
   const account = linkedAccounts.get(beatgalerUserId);
   if (!account) { cleanup(); return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." }); }
@@ -587,9 +626,12 @@ app.post("/beats/upload", upload.single("file"), async (req, res) => {
     }
     uploadedFiles.set(media.file_id, { beatgalerUserId, telegramUserId: account.telegramUserId, telegramMessageId: messageId, filename: telegramFilename, kind: "master", createdAt: Date.now() });
     savePersistentData();
+    console.log(`[upload ${requestId}] MASTER Telegram success message=${messageId} updated=${!!updated}`);
     res.json({ telegram_file_id: media.file_id, telegram_message_id: messageId, updated });
-  } catch (err) { res.status(500).json({ error: `Telegram MASTER upload failed: ${err.message || err}` }); }
-  finally { cleanup(); }
+  } catch (err) {
+    console.error(`[upload ${requestId}] MASTER Telegram failure:`, err?.message || err);
+    res.status(500).json({ error: `Telegram MASTER upload failed: ${err.message || err}` });
+  } finally { cleanup(); }
 });
 
 
@@ -910,4 +952,24 @@ bot.on("callback_query", async (query) => {
 
 bot.on("polling_error", (err) => {
   console.error("Telegram polling error:", err.message);
+});
+
+
+// Final diagnostic error handler. Keeps unexpected upload/middleware failures
+// machine-readable so the desktop can show the real cause in its red ! panel.
+app.use((err, req, res, next) => {
+  const requestId = req.beatgalerRequestId || "unknown";
+  const message = err?.message || String(err || "Unknown server error");
+  console.error(`[http ${requestId}] unhandled middleware/server error:`, message);
+  if (res.headersSent) return next(err);
+
+  const status =
+    err?.code === "LIMIT_FILE_SIZE" ? 413 :
+    Number(err?.status || err?.statusCode) >= 400 ? Number(err.status || err.statusCode) :
+    500;
+
+  res.status(status).json({
+    error: `BeatGaler Cloud server error [${requestId}]: ${message}`,
+    request_id: requestId,
+  });
 });

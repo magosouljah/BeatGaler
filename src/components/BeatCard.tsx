@@ -28,6 +28,7 @@ const uploadAnimationStyles = `
 
 interface Props {
   beat: Beat;
+  cloudUploadErrorDetail?: string;
   tagFrequency: ReadonlyMap<string, number>;
   showIncompleteWarnings: boolean;
   playing: boolean;
@@ -163,7 +164,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 }
 
 export default function BeatCard({
-  beat, tagFrequency, showIncompleteWarnings, playing, selected, selectedCount, selectMode,
+  beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, playing, selected, selectedCount, selectMode,
   onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect, onDropArtwork,
   animDelay = 0, dragEnabled
@@ -172,6 +173,7 @@ export default function BeatCard({
   const [hovered, setHovered] = useState(false);
   const [imageDragOver, setImageDragOver] = useState(false);
   const [warningInfoOpen, setWarningInfoOpen] = useState(false);
+  const [uploadErrorOpen, setUploadErrorOpen] = useState(false);
   const [projectCloud, setProjectCloud] = useState<ProjectCloudStatus | null>(null);
   const dotsRef = useRef<HTMLDivElement>(null);
 
@@ -485,17 +487,41 @@ export default function BeatCard({
         )}
         {cloudUploadError && !selectMode && (
           <div
-            title="Background upload failed. You can retry the Telegram upload from the beat menu."
+            onMouseEnter={() => setUploadErrorOpen(true)}
+            onMouseLeave={() => setUploadErrorOpen(false)}
             aria-label="Background upload failed"
             style={{
-              position: "absolute", left: 8, bottom: 8, zIndex: 25,
+              position: "absolute", left: 8, bottom: 8, zIndex: 35,
               width: 20, height: 20, borderRadius: "50%",
               display: "flex", alignItems: "center", justifyContent: "center",
-              background: "rgba(20,20,20,.9)", border: "1px solid rgba(248,113,113,.65)",
-              color: "#f87171", fontSize: 12, fontWeight: 700,
+              background: "rgba(20,20,20,.94)", border: "1px solid rgba(248,113,113,.8)",
+              color: "#f87171", fontSize: 12, fontWeight: 800,
               boxShadow: "0 4px 12px rgba(0,0,0,.45)",
+              cursor: "help",
             }}
-          >!</div>
+          >
+            !
+            {uploadErrorOpen && (
+              <div style={{
+                position: "absolute", left: 26, bottom: 0, zIndex: 80,
+                width: 380, maxWidth: "min(380px, calc(100vw - 70px))",
+                padding: "12px 13px", borderRadius: 9,
+                background: "#171717", border: "1px solid rgba(248,113,113,.45)",
+                boxShadow: "0 14px 38px rgba(0,0,0,.78)",
+                color: "#d8d8d8", fontSize: 11, lineHeight: 1.5,
+                fontWeight: 400, textAlign: "left",
+                whiteSpace: "pre-wrap", overflowWrap: "anywhere",
+                pointerEvents: "none",
+              }}>
+                {cloudUploadErrorDetail || [
+                  "UPLOAD FAILED",
+                  "",
+                  "No detailed diagnostic was recorded for this failure.",
+                  "Retry the Telegram upload from the beat menu. If it fails again, the next error should include the exact stage and raw error.",
+                ].join("\n")}
+              </div>
+            )}
+          </div>
         )}
         {beat.has_wav && !selectMode && (
           <div style={{
