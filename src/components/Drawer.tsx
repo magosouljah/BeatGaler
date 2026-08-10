@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Beat } from "../types";
 import { Artwork, Stars, TagEditor, TagPill } from "./ui";
 import ImageCropModal from "./ImageCropModal";
-import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
+import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { appConfirm } from "../lib/dialog";
 import { listen } from "@tauri-apps/api/event";
 
@@ -406,22 +406,52 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     if (!isTauriAvailable) return;
     const unlisteners: (() => void)[] = [];
 
-    // Track drag position to know which row is hovered
+    const targetAtPosition = (pos: { x: number; y: number }): string | null => {
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      const points: [number, number][] = [[pos.x, pos.y]];
+      if (ratio !== 1) points.push([pos.x / ratio, pos.y / ratio]);
+
+      for (const [x, y] of points) {
+        const el = document.elementFromPoint(x, y);
+        if (!el) continue;
+        if (el.closest("[data-artwork-drop]")) return "artwork";
+        const row = el.closest("[data-filerole]");
+        const role = row?.getAttribute("data-filerole");
+        if (role) return role;
+      }
+      return null;
+    };
+
+    // Track drag position to know which row/artwork is hovered. Tauri can report
+    // physical pixels on a scaled display, so test both raw and DPR-adjusted points.
     listen<{ position?: { x: number; y: number } }>("tauri://drag-over", (event) => {
       const pos = (event.payload as any)?.position;
       if (!pos) return;
-      const el = document.elementFromPoint(pos.x, pos.y);
-      const row = el?.closest("[data-filerole]");
-      const role = row?.getAttribute("data-filerole") ?? null;
-      setDropTarget(role);
+      setDropTarget(targetAtPosition(pos));
     }).then(fn => unlisteners.push(fn));
 
-    // On drop, assign the file to whatever row is currently targeted
-    listen<{ paths?: string[] }>("tauri://drag-drop", (event) => {
+    // On drop, queue a file role or load artwork into the crop editor.
+    listen<{ paths?: string[] }>("tauri://drag-drop", async (event) => {
       const paths: string[] = (event.payload as any)?.paths ?? [];
-      const role = dropTargetRef.current as "mp3" | "wav" | "stems" | "flp" | "als" | null;
+      const role = dropTargetRef.current as "artwork" | "mp3" | "wav" | "stems" | "flp" | "als" | null;
       setDropTarget(null);
       if (!role || paths.length === 0) return;
+
+      if (role === "artwork") {
+        const imagePath = paths[0];
+        if (!/\.(png|jpe?g|webp|bmp|gif)$/i.test(imagePath)) {
+          setError("Artwork must be an image file.");
+          return;
+        }
+        try {
+          setCropSrc(await readImagePathAsDataUrl(imagePath));
+          setError(null);
+        } catch (error) {
+          setError(`Could not read artwork: ${String(error)}`);
+        }
+        return;
+      }
+
       setPending(p => ({ ...p, [role]: paths[0] }));
     }).then(fn => unlisteners.push(fn));
 
@@ -432,8 +462,16 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   }, [isEdit]);
 
   const handleImageFile = (file: File) => {
+    if (file.type && !file.type.startsWith("image/")) {
+      setError("Artwork must be an image file.");
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = e => setCropSrc(e.target?.result as string);
+    reader.onload = e => {
+      setCropSrc(e.target?.result as string);
+      setError(null);
+    };
+    reader.onerror = () => setError("Could not read artwork.");
     reader.readAsDataURL(file);
   };
 
@@ -557,7 +595,25 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           {/* Artwork */}
           {!isBulk && (
             <>
-              <Artwork beat={data} size={296} playing={false} />
+              <div
+                data-artwork-drop
+                onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDropTarget("artwork"); }}
+                onDragLeave={e => { e.preventDefault(); setDropTarget(null); }}
+                onDrop={e => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDropTarget(null);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleImageFile(file);
+                }}
+                style={{
+                  borderRadius: 10,
+                  outline: dropTarget === "artwork" ? "1px solid #666" : "1px solid transparent",
+                  outlineOffset: 3,
+                }}
+              >
+                <Artwork beat={data} size={296} playing={false} />
+              </div>
               {isEdit && (
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                   <button onClick={() => imgRef.current?.click()}
@@ -574,7 +630,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                   )}
                 </div>
               )}
-              <input ref={imgRef} type="file" accept="image/jpeg,image/png" style={{ display: "none" }}
+              <input ref={imgRef} type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif" style={{ display: "none" }}
                 onChange={e => e.target.files?.[0] && handleImageFile(e.target.files[0])} />
             </>
           )}
@@ -833,8 +889,14 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           imageSrc={cropSrc}
           onCancel={() => setCropSrc(null)}
           onConfirm={(croppedDataUrl, crop) => {
-            // keep original image_base64, save preview and crop metadata
-            setData(d => ({ ...d, image_preview_base64: croppedDataUrl, image_crop: crop }));
+            // The confirmed crop is the actual artwork that Save changes persists
+            // and later syncs to Telegram. Do not keep the previous image_base64.
+            setData(d => ({
+              ...d,
+              image_base64: croppedDataUrl,
+              image_preview_base64: croppedDataUrl,
+              image_crop: crop,
+            }));
             setCropSrc(null);
           }}
         />

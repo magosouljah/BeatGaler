@@ -21,8 +21,11 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const http = require("http");
+const net = require("net");
+const dns = require("dns").promises;
 const multer = require("multer");
 const TelegramBot = require("node-telegram-bot-api");
+const { createPrivateUserStorageGroup, masterStorageReady } = require("./master-storage");
 
 const PORT = process.env.PORT || 4000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -74,9 +77,19 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-BeatGaler-Installation-Id");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  if (req.method === "OPTIONS") return res.status(204).end();
+  next();
+});
 app.use(express.json());
 const upload = multer({ dest: "uploads-tmp/" });
 const DATA_FILE = path.join(__dirname, "cloud-data.json");
+const AUTH_DATA_FILE = path.join(__dirname, "accounts-data.json");
+const MASTER_STORAGE_GROUP_LIMIT = Math.max(1, Math.min(450, Number(process.env.BEATGALER_MASTER_GROUP_LIMIT || 450)));
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 
 function telegramJsonMethod(method, payload) {
@@ -124,6 +137,16 @@ function topicName(value) {
   return (String(value || "Untitled Beat").trim().replace(/\s+/g, " ") || "Untitled Beat").slice(0, 128);
 }
 
+function isMissingTopicError(error) {
+  const message = String(error?.message || error || "");
+  return /message thread not found|topic.*not found|MESSAGE_THREAD_INVALID|message_thread_id_invalid/i.test(message);
+}
+
+function forgetBeatTopic(userId, beatId) {
+  beatTopics.delete(topicKey(userId, beatId));
+  savePersistentData();
+}
+
 async function ensureBeatTopic(account, userId, beatId, beatName) {
   if (!beatId) throw new Error("beatId is required for Telegram Topic storage.");
   const chatId = storageChatId(account);
@@ -132,22 +155,29 @@ async function ensureBeatTopic(account, userId, beatId, beatName) {
   const current = beatTopics.get(key);
 
   if (current && Number(current.chatId) === chatId && Number(current.messageThreadId) > 0) {
-    if (String(current.beatName || "") !== name) {
-      try {
-        await telegramJsonMethod("editForumTopic", {
-          chat_id: chatId,
-          message_thread_id: Number(current.messageThreadId),
-          name,
-        });
-        current.beatName = name;
-        current.updatedAt = Date.now();
-        beatTopics.set(key, current);
-        savePersistentData();
-      } catch (error) {
-        console.warn("[topics] rename failed:", error?.message || error);
-      }
+    if (String(current.beatName || "") === name) {
+      return Number(current.messageThreadId);
     }
-    return Number(current.messageThreadId);
+
+    try {
+      await telegramJsonMethod("editForumTopic", {
+        chat_id: chatId,
+        message_thread_id: Number(current.messageThreadId),
+        name,
+      });
+      current.beatName = name;
+      current.updatedAt = Date.now();
+      beatTopics.set(key, current);
+      savePersistentData();
+      return Number(current.messageThreadId);
+    } catch (error) {
+      if (!isMissingTopicError(error)) {
+        console.warn("[topics] rename failed:", error?.message || error);
+        return Number(current.messageThreadId);
+      }
+      console.warn("[topics] stored topic no longer exists; recreating:", error?.message || error);
+      forgetBeatTopic(userId, beatId);
+    }
   }
 
   const result = await telegramJsonMethod("createForumTopic", { chat_id: chatId, name });
@@ -458,6 +488,12 @@ const pendingConnections = new Map();
 // beatgalerUserId -> { telegramUserId, telegramUsername, connectedAt }
 const linkedAccounts = new Map();
 
+// BeatGaler accounts are independent from Telegram. End users never join or
+// control the private Telegram storage group assigned to their BeatGaler account.
+const beatGalerUsers = new Map();       // normalized username -> user record
+const beatGalerUsersById = new Map();   // account id -> same record
+const authSessions = new Map();         // sha256(session token) -> session record
+
 // telegram_file_id -> { beatgalerUserId, telegramMessageId, filename, createdAt }
 // Esto evita que un usuario descargue un file_id que no le pertenece.
 const uploadedFiles = new Map();
@@ -521,6 +557,199 @@ app.get("/events", (req, res) => {
 });
 
 
+
+function normalizeBeatGalerUsername(raw) {
+  return String(raw || "").trim().replace(/^@+/, "").toLowerCase();
+}
+
+function validBeatGalerUsername(username) {
+  return /^[a-z0-9._]{3,30}$/.test(username);
+}
+
+function hashPassword(password, saltHex) {
+  return crypto.scryptSync(String(password), Buffer.from(saltHex, "hex"), 64).toString("hex");
+}
+
+function verifyPassword(password, user) {
+  try {
+    const actual = Buffer.from(hashPassword(password, user.passwordSalt), "hex");
+    const expected = Buffer.from(user.passwordHash, "hex");
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+function sessionKey(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function loadAuthData() {
+  try {
+    if (!fs.existsSync(AUTH_DATA_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(AUTH_DATA_FILE, "utf8"));
+    for (const user of parsed.users || []) {
+      if (!user?.id || !user?.username) continue;
+      beatGalerUsers.set(user.username, user);
+      beatGalerUsersById.set(user.id, user);
+    }
+    const now = Date.now();
+    for (const [key, value] of Object.entries(parsed.sessions || {})) {
+      if (Number(value?.expiresAt || 0) > now) authSessions.set(key, value);
+    }
+  } catch (error) {
+    console.error("Could not read accounts-data.json:", error?.message || error);
+  }
+}
+
+function saveAuthData() {
+  const tmp = `${AUTH_DATA_FILE}.tmp`;
+  const payload = JSON.stringify({
+    users: [...beatGalerUsers.values()],
+    sessions: Object.fromEntries(authSessions),
+  }, null, 2);
+  fs.writeFileSync(tmp, payload, "utf8");
+  fs.renameSync(tmp, AUTH_DATA_FILE);
+}
+
+function createAuthSession(userId) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  authSessions.set(sessionKey(token), {
+    userId,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+  });
+  saveAuthData();
+  return token;
+}
+
+function getAuthUserFromToken(token) {
+  const key = sessionKey(token);
+  const session = authSessions.get(key);
+  if (!session) return null;
+  if (Number(session.expiresAt || 0) <= Date.now()) {
+    authSessions.delete(key);
+    saveAuthData();
+    return null;
+  }
+  return beatGalerUsersById.get(session.userId) || null;
+}
+
+function bearerToken(req) {
+  const raw = String(req.headers.authorization || "");
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+function botApiChatIdFromStored(value) {
+  const text = String(value || "").trim();
+  if (!/^-100\d+$/.test(text)) throw new Error("Invalid Telegram storage chat id.");
+  const numeric = Number(text);
+  if (!Number.isSafeInteger(numeric)) throw new Error("Telegram storage chat id is outside JavaScript safe integer range.");
+  return numeric;
+}
+
+function bindInstallationToBeatGalerUser(user, beatgalerUserId) {
+  if (!beatgalerUserId || !user?.storageChatId) {
+    throw new Error("BeatGaler account storage is not ready.");
+  }
+  const storageChatId = botApiChatIdFromStored(user.storageChatId);
+  linkedAccounts.set(String(beatgalerUserId), {
+    beatgalerAccountId: user.id,
+    beatgalerUsername: user.username,
+    // Compatibility with the existing desktop/cloud code: this field used to
+    // mean the end user's Telegram chat. It now points at that user's private
+    // storage supergroup. The end user never receives Telegram access.
+    telegramUserId: storageChatId,
+    telegramUsername: user.username,
+    connectedAt: Date.now(),
+    storageChatId,
+    storageChatTitle: user.storageChatTitle || user.username,
+    storageLinkedAt: user.storageCreatedAt || Date.now(),
+  });
+  savePersistentData();
+}
+
+async function ensureEmptyIndexForStorage(account) {
+  const existing = await getPinnedLibraryIndex(account);
+  if (existing) return existing;
+
+  const manifest = {
+    schema: "beatgaler.telegram.library",
+    version: 2,
+    updated_at: new Date().toISOString(),
+    beats: [],
+    trash: [],
+  };
+  const tempDir = path.join(__dirname, "uploads-tmp");
+  fs.mkdirSync(tempDir, { recursive: true });
+  const tempPath = path.join(tempDir, `beatgaler-library-empty-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.json`);
+  fs.writeFileSync(tempPath, JSON.stringify(manifest, null, 2), "utf8");
+  try {
+    const sent = await bot.sendDocument(
+      storageChatId(account),
+      tempPath,
+      { caption: LIBRARY_INDEX_CAPTION },
+      { filename: "beatgaler-library.json", contentType: "application/json" }
+    );
+    await bot.pinChatMessage(storageChatId(account), sent.message_id, { disable_notification: true });
+    return sent;
+  } finally {
+    fs.unlink(tempPath, () => {});
+  }
+}
+
+async function ensureUserStorage(user) {
+  if (user.storageChatId) {
+    const account = {
+      telegramUserId: botApiChatIdFromStored(user.storageChatId),
+      storageChatId: botApiChatIdFromStored(user.storageChatId),
+      storageChatTitle: user.storageChatTitle,
+    };
+    await ensureEmptyIndexForStorage(account);
+    return user;
+  }
+
+  const used = [...beatGalerUsers.values()].filter(entry => entry.storageChatId).length;
+  if (used >= MASTER_STORAGE_GROUP_LIMIT) {
+    throw new Error(`Master Telegram storage account is full (${MASTER_STORAGE_GROUP_LIMIT} user groups). Add master account #2 before registering more users.`);
+  }
+  if (!masterStorageReady()) {
+    throw new Error("Master Telegram storage account is not configured. Run: node setup-master-account.js");
+  }
+
+  const created = await createPrivateUserStorageGroup({
+    username: user.username,
+    accountId: user.id,
+    botUsername: BOT_USERNAME,
+  });
+
+  user.storageChatId = String(created.botApiChatId);
+  user.storageChatTitle = created.title;
+  user.storageCreatedAt = Date.now();
+  saveAuthData();
+
+  const account = {
+    telegramUserId: botApiChatIdFromStored(user.storageChatId),
+    storageChatId: botApiChatIdFromStored(user.storageChatId),
+    storageChatTitle: user.storageChatTitle,
+  };
+  await ensureEmptyIndexForStorage(account);
+  return user;
+}
+
+function accountPublicPayload(user, token) {
+  return {
+    ok: true,
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      storage_ready: !!user.storageChatId,
+    },
+  };
+}
+
 function loadPersistentData() {
   try {
     if (!fs.existsSync(DATA_FILE)) return;
@@ -553,6 +782,7 @@ function savePersistentData() {
 }
 
 loadPersistentData();
+loadAuthData();
 
 const TOKEN_TTL_MS = 10 * 60 * 1000; // 10 minutos (Fase 6)
 
@@ -566,6 +796,223 @@ function cleanupExpired() {
     if (entry.expiresAt < now) pendingConnections.delete(token);
   }
 }
+
+// ── BeatGaler account authentication ─────────────────────────────────────
+app.get("/auth/health", (_req, res) => {
+  res.json({
+    ok: true,
+    account_auth: true,
+    storage_mode: "private-group-per-user",
+    master_group_limit: MASTER_STORAGE_GROUP_LIMIT,
+    master_storage_ready: masterStorageReady(),
+  });
+});
+
+function privateOrLocalIp(address) {
+  const value = String(address || "").toLowerCase();
+  if (net.isIPv4(value)) {
+    const [a, b] = value.split(".").map(Number);
+    return a === 10 || a === 127 || a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      a >= 224;
+  }
+  if (net.isIPv6(value)) {
+    return value === "::1" || value === "::" || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("fe8") || value.startsWith("fe9") || value.startsWith("fea") || value.startsWith("feb");
+  }
+  return true;
+}
+
+async function assertPublicImageUrl(rawUrl) {
+  let url;
+  try { url = new URL(String(rawUrl || "")); }
+  catch { throw new Error("Invalid image URL."); }
+  if (!/^https?:$/.test(url.protocol)) throw new Error("Only http/https image URLs are supported.");
+  if (!url.hostname || url.username || url.password) throw new Error("Invalid image URL.");
+  if (/^(localhost|.*\.localhost)$/i.test(url.hostname)) throw new Error("Local image URLs are not allowed.");
+
+  const records = await dns.lookup(url.hostname, { all: true, verbatim: true });
+  if (!records.length || records.some(record => privateOrLocalIp(record.address))) {
+    throw new Error("Private or local image URLs are not allowed.");
+  }
+  return url;
+}
+
+async function fetchRemoteImageDataUrl(rawUrl, redirectsLeft = 3) {
+  const url = await assertPublicImageUrl(rawUrl);
+  const transport = url.protocol === "https:" ? https : http;
+  const maxBytes = 15 * 1024 * 1024;
+
+  return await new Promise((resolve, reject) => {
+    const request = transport.get(url, {
+      headers: {
+        "User-Agent": "BeatGaler/0.2 image-fetch",
+        "Accept": "image/avif,image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8,*/*;q=0.1",
+      },
+      timeout: 10000,
+    }, response => {
+      const status = Number(response.statusCode || 0);
+      if (status >= 300 && status < 400 && response.headers.location) {
+        response.resume();
+        if (redirectsLeft <= 0) return reject(new Error("Too many image redirects."));
+        const next = new URL(response.headers.location, url).toString();
+        fetchRemoteImageDataUrl(next, redirectsLeft - 1).then(resolve, reject);
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        response.resume();
+        return reject(new Error(`Image server returned HTTP ${status}.`));
+      }
+
+      const contentType = String(response.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      if (!contentType.startsWith("image/")) {
+        response.resume();
+        return reject(new Error("The dragged URL did not return an image."));
+      }
+
+      const contentLength = Number(response.headers["content-length"] || 0);
+      if (contentLength > maxBytes) {
+        response.resume();
+        return reject(new Error("Internet image is larger than 15 MB."));
+      }
+
+      const chunks = [];
+      let total = 0;
+      response.on("data", chunk => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          response.destroy(new Error("Internet image is larger than 15 MB."));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        const data = Buffer.concat(chunks);
+        if (!data.length) return reject(new Error("Internet image was empty."));
+        resolve(`data:${contentType};base64,${data.toString("base64")}`);
+      });
+      response.on("error", reject);
+    });
+    request.on("timeout", () => request.destroy(new Error("Internet image download timed out.")));
+    request.on("error", reject);
+  });
+}
+
+app.post("/image/fetch", async (req, res) => {
+  const user = getAuthUserFromToken(bearerToken(req));
+  if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
+  const url = String(req.body?.url || "").trim();
+  if (!url) return res.status(400).json({ error: "Image URL is required." });
+
+  try {
+    const dataUrl = await fetchRemoteImageDataUrl(url);
+    res.json({ ok: true, data_url: dataUrl });
+  } catch (error) {
+    res.status(400).json({ error: `Could not import internet image: ${error?.message || error}` });
+  }
+});
+
+app.post("/auth/register", async (req, res) => {
+  const username = normalizeBeatGalerUsername(req.body?.username);
+  const password = String(req.body?.password || "");
+  const beatgalerUserId = String(req.body?.beatgalerUserId || "");
+
+  if (!validBeatGalerUsername(username)) {
+    return res.status(400).json({ error: "Username must be 3-30 characters using only letters, numbers, dot or underscore." });
+  }
+  if (password.length < 8 || password.length > 200) {
+    return res.status(400).json({ error: "Password must be at least 8 characters." });
+  }
+  if (!beatgalerUserId) {
+    return res.status(400).json({ error: "beatgalerUserId is required." });
+  }
+  if (beatGalerUsers.has(username)) {
+    return res.status(409).json({ error: "That BeatGaler username is already taken." });
+  }
+
+  const salt = crypto.randomBytes(16).toString("hex");
+  const user = {
+    id: `usr_${crypto.randomBytes(12).toString("hex")}`,
+    username,
+    passwordSalt: salt,
+    passwordHash: hashPassword(password, salt),
+    createdAt: Date.now(),
+    storageChatId: null,
+    storageChatTitle: null,
+    storageCreatedAt: null,
+  };
+
+  beatGalerUsers.set(username, user);
+  beatGalerUsersById.set(user.id, user);
+  saveAuthData();
+
+  try {
+    await ensureUserStorage(user);
+    bindInstallationToBeatGalerUser(user, beatgalerUserId);
+    const token = createAuthSession(user.id);
+    return res.status(201).json(accountPublicPayload(user, token));
+  } catch (error) {
+    // Keep the account so login can retry provisioning after the master account
+    // is configured. Never silently fall back to a local cache or shared group.
+    console.error("[auth] storage provisioning failed:", error?.message || error);
+    return res.status(503).json({
+      error: `BeatGaler account created, but private cloud storage could not be provisioned: ${error?.message || error}`,
+      account_created: true,
+      username,
+    });
+  }
+});
+
+app.post("/auth/login", async (req, res) => {
+  const username = normalizeBeatGalerUsername(req.body?.username);
+  const password = String(req.body?.password || "");
+  const beatgalerUserId = String(req.body?.beatgalerUserId || "");
+  const user = beatGalerUsers.get(username);
+
+  if (!user || !verifyPassword(password, user)) {
+    return res.status(401).json({ error: "Invalid username or password." });
+  }
+  if (!beatgalerUserId) {
+    return res.status(400).json({ error: "beatgalerUserId is required." });
+  }
+
+  try {
+    await ensureUserStorage(user);
+    bindInstallationToBeatGalerUser(user, beatgalerUserId);
+    const token = createAuthSession(user.id);
+    res.json(accountPublicPayload(user, token));
+  } catch (error) {
+    res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
+  }
+});
+
+app.post("/auth/session", async (req, res) => {
+  const token = bearerToken(req);
+  const beatgalerUserId = String(req.body?.beatgalerUserId || req.headers["x-beatgaler-installation-id"] || "");
+  const user = getAuthUserFromToken(token);
+  if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
+  if (!beatgalerUserId) return res.status(400).json({ error: "beatgalerUserId is required." });
+
+  try {
+    await ensureUserStorage(user);
+    bindInstallationToBeatGalerUser(user, beatgalerUserId);
+    res.json(accountPublicPayload(user, token));
+  } catch (error) {
+    res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
+  }
+});
+
+app.post("/auth/logout", (req, res) => {
+  const token = bearerToken(req);
+  const beatgalerUserId = String(req.body?.beatgalerUserId || "");
+  if (token) authSessions.delete(sessionKey(token));
+  if (beatgalerUserId) linkedAccounts.delete(beatgalerUserId);
+  saveAuthData();
+  savePersistentData();
+  res.json({ ok: true });
+});
 
 // ── Fase 6/7: BeatGaler pide iniciar la conexión ──
 app.post("/telegram/connect/start", (req, res) => {
@@ -605,8 +1052,10 @@ app.get("/telegram/connect/status", (req, res) => {
   if (account) {
     return res.json({
       connected: true,
-      telegram_username: account.telegramUsername,
-      telegram_user_id: String(account.telegramUserId),
+      telegram_username: account.beatgalerUsername || account.telegramUsername,
+      telegram_user_id: account.telegramUserId ? String(account.telegramUserId) : null,
+      beatgaler_account_id: account.beatgalerAccountId || null,
+      beatgaler_username: account.beatgalerUsername || account.telegramUsername || null,
       connected_at: account.connectedAt,
       storage_ready: !!account.storageChatId,
       storage_chat_id: account.storageChatId ? String(account.storageChatId) : null,
@@ -706,13 +1155,33 @@ function editTelegramDocumentInPlace({ chatId, messageId, filePath, filename, ca
   });
 }
 
+function existingMessageMatchesSlot(beatgalerUserId, beatId, messageId, expectedKind) {
+  const id = Number(messageId);
+  if (!Number.isFinite(id) || id <= 0 || !expectedKind) return false;
+  const kind = String(expectedKind).toLowerCase();
+  for (const entry of uploadedFiles.values()) {
+    if (String(entry.beatgalerUserId || "") !== String(beatgalerUserId || "")) continue;
+    if (String(entry.beatId || "") !== String(beatId || "")) continue;
+    if (Number(entry.telegramMessageId) !== id) continue;
+    return String(entry.kind || "").toLowerCase() === kind;
+  }
+  return false;
+}
+
 async function sendOrReplaceTelegramDocument({
   account, beatgalerUserId, beatId, beatName,
-  existingMessageId, filePath, filename, caption, replyToMessageId
+  existingMessageId, filePath, filename, caption, replyToMessageId, expectedKind
 }) {
   const chatId = storageChatId(account);
-  const messageThreadId = await ensureBeatTopic(account, beatgalerUserId, beatId, beatName);
-  const existing = redirectMessageId(beatgalerUserId, existingMessageId);
+  let messageThreadId = await ensureBeatTopic(account, beatgalerUserId, beatId, beatName);
+  const redirectedExisting = redirectMessageId(beatgalerUserId, existingMessageId);
+  // Never trust a client-provided Telegram message id across logical slots.
+  // A WAV must never edit the MASTER message, PROJECT must never edit WAV, etc.
+  // If local SQLite is stale/corrupt, create the correct slot instead of
+  // mutating a different Telegram document.
+  const existing = existingMessageMatchesSlot(beatgalerUserId, beatId, redirectedExisting, expectedKind)
+    ? redirectedExisting
+    : null;
 
   if (Number.isFinite(existing) && existing > 0) {
     try {
@@ -727,13 +1196,30 @@ async function sendOrReplaceTelegramDocument({
     }
   }
 
-  const options = { caption, message_thread_id: messageThreadId };
-  const reply = Number(replyToMessageId);
-  if (Number.isFinite(reply) && reply > 0) options.reply_to_message_id = reply;
-  const sent = await bot.sendDocument(chatId, filePath, options, {
-    filename, contentType: "application/octet-stream"
-  });
-  return { message: sent, updated: false, messageThreadId };
+  const sendNewDocument = async (threadId) => {
+    const options = { caption, message_thread_id: threadId };
+    const reply = Number(replyToMessageId);
+    if (Number.isFinite(reply) && reply > 0) options.reply_to_message_id = reply;
+    return bot.sendDocument(chatId, filePath, options, {
+      filename, contentType: "application/octet-stream"
+    });
+  };
+
+  try {
+    const sent = await sendNewDocument(messageThreadId);
+    return { message: sent, updated: false, messageThreadId };
+  } catch (error) {
+    if (!isMissingTopicError(error)) throw error;
+
+    // The user may have manually deleted the Topic while cloud-data.json still
+    // remembers its old message_thread_id. Invalidate that cache, create a new
+    // Topic for the SAME permanent beatId, and retry the upload once.
+    console.warn(`[topics] recreating deleted topic for beat ${beatId}:`, error?.message || error);
+    forgetBeatTopic(beatgalerUserId, beatId);
+    messageThreadId = await ensureBeatTopic(account, beatgalerUserId, beatId, beatName);
+    const sent = await sendNewDocument(messageThreadId);
+    return { message: sent, updated: false, messageThreadId };
+  }
 }
 
 
@@ -857,7 +1343,18 @@ app.get("/library/get", async (req, res) => {
 
   try {
     const pinned = await getPinnedLibraryIndex(account);
-    if (!pinned) return res.status(404).json({ error: "No BeatGaler Telegram library index is pinned yet." });
+    if (!pinned) {
+      // Missing pinned index means the Telegram source of truth is empty.
+      // Return a valid empty manifest so desktops can reconcile stale SQLite/cache
+      // instead of treating this as a transient error and resurrecting old beats.
+      return res.json({
+        schema: "beatgaler.telegram.library",
+        version: 2,
+        updated_at: Math.floor(Date.now() / 1000),
+        beats: [],
+        trash: [],
+      });
+    }
     const raw = await downloadTelegramFileBuffer(pinned.document.file_id);
     const parsed = JSON.parse(raw.toString("utf8"));
     rebuildTopicMap(beatgalerUserId, account, parsed);
@@ -1033,7 +1530,7 @@ app.post("/beats/upload", upload.single("file"), async (req, res) => {
   const extension = path.extname(originalName) || ".mp3";
   const telegramFilename = `${beatName || path.basename(originalName, extension)}${extension}`;
   try {
-    const { message: sentMessage, updated, messageThreadId } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: telegramFilename, caption: beatName ? ` ${beatName}` : undefined });
+    const { message: sentMessage, updated, messageThreadId } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: telegramFilename, caption: beatName ? ` ${beatName}` : undefined, expectedKind: "master" });
     const media = sentMessage?.document || sentMessage?.audio || null;
     if (!media?.file_id) throw new Error("Telegram returned no file_id for MASTER.");
     const messageId = sentMessage.message_id || Number(existingMessageId) || null;
@@ -1086,7 +1583,7 @@ app.post("/projects/upload", upload.single("file"), async (req, res) => {
   }
 
   try {
-    const { message: sent, updated } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: originalName, caption: ` ${beatName || "Project"}`, replyToMessageId: parentMessageId });
+    const { message: sent, updated } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: originalName, caption: ` ${beatName || "Project"}`, replyToMessageId: parentMessageId, expectedKind: "project" });
     const media = sent?.document || null;
     if (!media?.file_id) throw new Error("Telegram returned no file_id for PROJECT.");
     const messageId = sent.message_id || Number(existingMessageId) || null;
@@ -1147,7 +1644,7 @@ app.post("/cloud-files/upload", upload.single("file"), async (req, res) => {
     });
   }
   try {
-    const { message: sent, updated } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: originalName, caption: `${roleMeta.icon} ${beatName || "Beat"} — ${roleMeta.label}`, replyToMessageId: parentMessageId });
+    const { message: sent, updated } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: originalName, caption: `${roleMeta.icon} ${beatName || "Beat"} — ${roleMeta.label}`, replyToMessageId: parentMessageId, expectedKind: normalizedType.toLowerCase() });
     const media = sent?.document || sent?.audio || null;
     if (!media?.file_id) throw new Error(`Telegram returned no file_id for ${normalizedType}.`);
     const messageId = sent.message_id || Number(existingMessageId) || null;
@@ -1166,11 +1663,97 @@ app.post("/beats/delete-topic", async (req, res) => {
   const account = linkedAccounts.get(beatgalerUserId);
   if (!account || !beatId) return res.status(400).json({ error: "Invalid delete request." });
   try {
-    res.json({ ok: true, ...(await deleteBeatTopic(account, beatgalerUserId, beatId, telegramTopicId)) });
+    const deleteResult = await deleteBeatTopic(account, beatgalerUserId, beatId, telegramTopicId);
+
+    // Permanent delete means permanent removal from the Telegram source of truth.
+    // Do this server-side so it also works for automatic trash purges and does
+    // not depend on the desktop cache/UI being open.
+    const manifest = await readLibraryManifestFromChat(storageChatId(account));
+    let indexUpdated = false;
+    if (manifest) {
+      const wanted = String(beatId);
+      const beforeBeats = Array.isArray(manifest.beats) ? manifest.beats.length : 0;
+      const beforeTrash = Array.isArray(manifest.trash) ? manifest.trash.length : 0;
+
+      manifest.beats = (Array.isArray(manifest.beats) ? manifest.beats : [])
+        .filter(beat => String(beat?.id || "") !== wanted);
+      manifest.trash = (Array.isArray(manifest.trash) ? manifest.trash : [])
+        .filter(item => String(item?.beat?.id || "") !== wanted);
+
+      indexUpdated =
+        manifest.beats.length !== beforeBeats ||
+        manifest.trash.length !== beforeTrash;
+
+      if (indexUpdated) {
+        manifest.updated_at = new Date().toISOString();
+        await writeMigratedLibraryIndex(account, manifest);
+        broadcastCloudEvent(beatgalerUserId, "library_changed", {
+          permanent_delete: true,
+          beat_id: wanted,
+        });
+      }
+    }
+
+    res.json({ ok: true, ...deleteResult, index_updated: indexUpdated });
   } catch (error) {
-    res.status(500).json({ error: `Could not delete Telegram beat topic: ${error?.message || error}` });
+    res.status(500).json({ error: `Could not permanently delete Telegram beat: ${error?.message || error}` });
   }
 });
+
+function findTelegramFileInManifest(manifest, telegramFileId) {
+  const wanted = String(telegramFileId || "");
+  if (!manifest || !wanted) return null;
+
+  const inspectBeat = (beat) => {
+    if (!beat || typeof beat !== "object") return null;
+    if (String(beat.master?.telegram_file_id || "") === wanted) {
+      return { beatId: beat.id || null, kind: "master", filename: beat.master?.filename || `${beat.name || "beat"}.mp3` };
+    }
+    const artworkId = String(beat.artwork?.telegram_file_id || "");
+    if (artworkId === wanted) {
+      return { beatId: beat.id || null, kind: "artwork", filename: `artwork-${beat.id || "beat"}` };
+    }
+    for (const file of Array.isArray(beat.files) ? beat.files : []) {
+      const parts = Array.isArray(file?.manifest?.parts) ? file.manifest.parts : [];
+      if (parts.some(part => String(part?.telegram_file_id || "") === wanted)) {
+        return { beatId: beat.id || null, kind: String(file.type || "other").toLowerCase(), filename: file.filename || "file" };
+      }
+    }
+    const projectParts = Array.isArray(beat.project?.manifest?.parts) ? beat.project.manifest.parts : [];
+    if (projectParts.some(part => String(part?.telegram_file_id || "") === wanted)) {
+      return { beatId: beat.id || null, kind: "project", filename: `${beat.name || "project"}.zip` };
+    }
+    return null;
+  };
+
+  for (const beat of Array.isArray(manifest.beats) ? manifest.beats : []) {
+    const found = inspectBeat(beat);
+    if (found) return found;
+  }
+  for (const item of Array.isArray(manifest.trash) ? manifest.trash : []) {
+    const found = inspectBeat(item?.beat);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function verifyTelegramFileOwnershipFromIndex(account, beatgalerUserId, telegramFileId) {
+  const manifest = await readLibraryManifestFromChat(storageChatId(account));
+  const found = findTelegramFileInManifest(manifest, telegramFileId);
+  if (!found) return null;
+  const recovered = {
+    beatgalerUserId,
+    telegramUserId: account.telegramUserId,
+    telegramMessageId: null,
+    filename: found.filename,
+    kind: found.kind,
+    beatId: found.beatId,
+    createdAt: Date.now(),
+  };
+  uploadedFiles.set(telegramFileId, recovered);
+  savePersistentData();
+  return recovered;
+}
 
 // ── Fase 18: download del MP3/WAV principal ──
 // BeatGaler manda su user id + el file_id guardado en SQLite. El backend
@@ -1191,9 +1774,18 @@ app.post("/beats/download", async (req, res) => {
     return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." });
   }
 
-  const stored = uploadedFiles.get(telegramFileId);
-  if (!stored || String(stored.telegramUserId || "") !== String(account.telegramUserId)) {
-    return res.status(403).json({ error: "This Telegram file does not belong to the connected Telegram vault." });
+  let stored = uploadedFiles.get(telegramFileId);
+  const storedMatches = stored
+    && String(stored.beatgalerUserId || "") === String(beatgalerUserId)
+    && String(stored.telegramUserId || "") === String(account.telegramUserId);
+  if (!storedMatches) {
+    // cloud-data.json is only a server-side lookup cache. The pinned Telegram
+    // index is authoritative, so rebuild THIS ownership record from Telegram
+    // when needed. This never uses desktop/local cache to resurrect a beat.
+    stored = await verifyTelegramFileOwnershipFromIndex(account, beatgalerUserId, telegramFileId);
+    if (!stored) {
+      return res.status(403).json({ error: "This Telegram file is not present in the connected Telegram library index." });
+    }
   }
 
   try {

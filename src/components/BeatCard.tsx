@@ -3,36 +3,113 @@ import ReactDOM from "react-dom";
 import type { Beat } from "../types";
 import { Artwork, TagPill, PulsingBars } from "./ui";
 import playFillPng from "../assets/player-icons/play.fill.png";
-import uploadStatusSymbolPng from "../assets/upload-status/upload-symbol.png";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTagColors } from "../lib/tagColors";
-import { getProjectCloudStatus, type ProjectCloudStatus } from "../lib/tauri";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "./AccountGate";
 
-import BeatGalerIcon from "./BeatGalerIcon";
-const uploadAnimationStyles = `
-  @keyframes beatgaler-upload-spin {
-    from { transform: rotate(0deg) scale(1); }
-    to { transform: rotate(360deg) scale(1); }
+function remoteImageUrlFromDrop(dataTransfer: DataTransfer): string | null {
+  const normalizeCandidate = (raw: string | null | undefined): string | null => {
+    const value = String(raw || "").trim().replace(/^["']|["']$/g, "");
+    if (!value) return null;
+    if (/^data:image\//i.test(value)) return value;
+    if (!/^https?:\/\//i.test(value)) return null;
+
+    // Search engines often drag a result-page URL that contains the real image
+    // in imgurl/mediaurl/url. Prefer that embedded URL when present.
+    try {
+      const parsed = new URL(value);
+      for (const key of ["imgurl", "mediaurl", "image_url", "imageurl"]) {
+        const nested = parsed.searchParams.get(key);
+        if (nested && /^https?:\/\//i.test(nested)) return nested;
+      }
+    } catch {}
+    return value;
+  };
+
+  const html = dataTransfer.getData("text/html");
+  if (html) {
+    try {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const img = doc.querySelector("img");
+      if (img) {
+        const attrs = [
+          img.getAttribute("src"),
+          img.getAttribute("data-src"),
+          img.getAttribute("data-original"),
+          img.getAttribute("data-lazy-src"),
+        ];
+        const srcset = img.getAttribute("srcset");
+        if (srcset) {
+          for (const entry of srcset.split(",")) {
+            attrs.push(entry.trim().split(/\s+/)[0] || null);
+          }
+        }
+        for (const raw of attrs) {
+          const candidate = normalizeCandidate(raw);
+          if (candidate) return candidate;
+        }
+      }
+
+      // Some image-search pages put the original image URL on the wrapping link.
+      for (const anchor of Array.from(doc.querySelectorAll("a[href]"))) {
+        const candidate = normalizeCandidate(anchor.getAttribute("href"));
+        if (candidate) return candidate;
+      }
+    } catch {}
   }
-  @keyframes beatgaler-upload-success {
-    0% { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; }
-    28% { transform: translateY(-3px) scale(1.08) rotate(8deg); opacity: 1; }
-    100% { transform: translateY(34px) scale(0.82) rotate(20deg); opacity: 0; }
+
+  const downloadUrl = dataTransfer.getData("DownloadURL");
+  if (downloadUrl) {
+    // Chrome format: mime:type:URL. URLs themselves contain ":" so only strip
+    // the first two fields.
+    const first = downloadUrl.indexOf(":");
+    const second = first >= 0 ? downloadUrl.indexOf(":", first + 1) : -1;
+    const raw = second >= 0 ? downloadUrl.slice(second + 1) : downloadUrl;
+    const candidate = normalizeCandidate(raw);
+    if (candidate) return candidate;
   }
-  @keyframes beatgaler-upload-glow {
-    0% { opacity: 0; }
-    25% { opacity: .52; }
-    100% { opacity: 0; }
+
+  for (const type of ["text/uri-list", "text/plain"]) {
+    const raw = dataTransfer.getData(type);
+    if (!raw) continue;
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim() || line.trim().startsWith("#")) continue;
+      const candidate = normalizeCandidate(line);
+      if (candidate) return candidate;
+    }
   }
-`;
+  return null;
+}
+
+function dragLooksLikeInternetImage(dataTransfer: DataTransfer): boolean {
+  const types = Array.from(dataTransfer.types || []);
+  return types.includes("DownloadURL") || types.includes("text/html") || types.includes("text/uri-list");
+}
+
+async function downloadInternetArtwork(url: string): Promise<string> {
+  const base = getResolvedCloudApiBase();
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("BeatGaler session expired. Sign in again.");
+  const response = await fetch(`${base}/image/fetch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+    body: JSON.stringify({ url }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body?.data_url) {
+    throw new Error(body?.error || `Could not download internet image (HTTP ${response.status}).`);
+  }
+  return String(body.data_url);
+}
 
 interface Props {
   beat: Beat;
-  cloudUploadErrorDetail?: string;
   tagFrequency: ReadonlyMap<string, number>;
   showIncompleteWarnings: boolean;
-  openableProject: boolean;
   playing: boolean;
   selected: boolean;
   selectedCount: number;
@@ -43,12 +120,6 @@ interface Props {
   onDelete: (beat: Beat) => void;
   onAddToQueue: (beat: Beat) => void;
   onUpload: (beat: Beat) => void;
-  onUploadTelegram: (beat: Beat) => void;
-  onDownloadTelegram: (beat: Beat) => void;
-  onUploadProjectTelegram: (beat: Beat) => void;
-  onOpenProject: (beat: Beat) => void;
-  onUpdateProject: (beat: Beat) => void;
-  onCloudFiles: (beat: Beat) => void;
   onBulkEdit: () => void;
   onBulkUpload: () => void;
   onBulkDelete: () => void;
@@ -58,21 +129,13 @@ interface Props {
   dragEnabled: boolean;
 }
 
-function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, telegramSynced, projectCloudState, canOpenProject, onOpenProject, onUpdateProject, onCloudFiles, onClose }: {
+function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onOpenProject, onClose }: {
   x: number; y: number;
   onEdit: () => void; onDetail: () => void;
   onAddToQueue: () => void;
   onDelete: () => void; onReveal: () => void;
   onUpload: () => void;
-  onUploadTelegram: () => void;
-  onDownloadTelegram: () => void;
-  onUploadProjectTelegram: () => void;
-  telegramSynced: boolean;
-  projectCloudState: ProjectCloudStatus["state"] | null;
-  canOpenProject: boolean;
-  onOpenProject: () => void;
-  onUpdateProject: () => void;
-  onCloudFiles: () => void;
+  onOpenProject: (() => void) | null;
   onClose: () => void;
 }) {
   React.useEffect(() => {
@@ -102,12 +165,11 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
       {([
         ["Upload to YouTube", onUpload],
-        ...(canOpenProject || telegramSynced ? [["Open project", onOpenProject] as [string, () => void]] : []),
-        ...(projectCloudState && projectCloudState !== "LOCAL" ? [["Update project", onUpdateProject] as [string, () => void]] : []),
-        ["Download", onCloudFiles],
+        ...(onOpenProject ? [["Open project", onOpenProject] as [string, () => void]] : []),
         ["Edit metadata", onEdit],
         ["View detail", onDetail],
         ["Add to queue", onAddToQueue],
+        ["Reveal in Explorer", onReveal],
         ["Remove from library", onDelete, true],
       ] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
         <div key={label} onClick={() => { fn(); onClose(); }}
@@ -167,62 +229,39 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 }
 
 export default function BeatCard({
-  beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
-  onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
+  beat, tagFrequency, showIncompleteWarnings, playing, selected, selectedCount, selectMode,
+  onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect, onDropArtwork,
   animDelay = 0, dragEnabled
 }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hovered, setHovered] = useState(false);
   const [imageDragOver, setImageDragOver] = useState(false);
-  const [folderUpdateDragOver, setFolderUpdateDragOver] = useState(false);
+  const [fileDragOver, setFileDragOver] = useState(false);
   const [warningInfoOpen, setWarningInfoOpen] = useState(false);
-  const [uploadErrorOpen, setUploadErrorOpen] = useState(false);
-  const [projectCloud, setProjectCloud] = useState<ProjectCloudStatus | null>(null);
   const dotsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onBeatUpdateDrag = (event: Event) => {
-      const detail = (event as CustomEvent<{ beatId: string | null; active: boolean }>).detail;
-      setFolderUpdateDragOver(Boolean(detail?.active && detail?.beatId === beat.id));
-    };
-    window.addEventListener("beatgaler:beat-update-drag", onBeatUpdateDrag);
-    return () => window.removeEventListener("beatgaler:beat-update-drag", onBeatUpdateDrag);
-  }, [beat.id]);
-
-  useEffect(() => {
-    const handleNativeArtworkDrag = (event: Event) => {
-      const detail = (event as CustomEvent<{ beatId: string | null; active: boolean }>).detail;
-      setImageDragOver(Boolean(detail?.active && detail?.beatId === beat.id));
-    };
-    window.addEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
-
-  return () => window.removeEventListener("beatgaler:artwork-drag", handleNativeArtworkDrag);
-  }, [beat.id]);
   const tagColors = useTagColors();
 
   useEffect(() => {
-    let cancelled = false;
-    const refresh = () => {
-      if (!(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY" || beat.flp_path)) {
-        if (!cancelled) setProjectCloud(null);
-        return;
-      }
-      getProjectCloudStatus(beat)
-        .then(status => { if (!cancelled) setProjectCloud(status); })
-        .catch(() => { if (!cancelled) setProjectCloud(null); });
+    const onArtworkDrag = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId: string | null; active: boolean }>).detail;
+      const active = Boolean(detail?.active && detail?.beatId === beat.id);
+      setImageDragOver(active);
+      if (active) setFileDragOver(false);
     };
-    const onCloudUpdate = (event: Event) => {
-      const detail = (event as CustomEvent<{ beatId?: string }>).detail;
-      if (!detail?.beatId || detail.beatId === beat.id) refresh();
+    const onFileDrag = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId: string | null; active: boolean }>).detail;
+      const active = Boolean(detail?.active && detail?.beatId === beat.id);
+      setFileDragOver(active);
+      if (active) setImageDragOver(false);
     };
-    refresh();
-    window.addEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
+    window.addEventListener("beatgaler:artwork-drag", onArtworkDrag);
+    window.addEventListener("beatgaler:beat-update-drag", onFileDrag);
     return () => {
-      cancelled = true;
-      window.removeEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
+      window.removeEventListener("beatgaler:artwork-drag", onArtworkDrag);
+      window.removeEventListener("beatgaler:beat-update-drag", onFileDrag);
     };
-  }, [beat.id, beat.flp_path, beat.folder_path, beat.cloud_status]);
+  }, [beat.id]);
   const {
     attributes,
     listeners,
@@ -234,15 +273,12 @@ export default function BeatCard({
   } = useSortable({ id: beat.id, disabled: !dragEnabled });
 
   const incompleteReasons = useMemo(() => {
-    if (projectCloud === null) return [];
-    return projectCloud.valid
-      ? []
-      : ["No valid PROJECT.zip was found. A valid project ZIP must contain a root-level .flp file."];
-  }, [projectCloud]);
+    const reasons: string[] = [];
+    if (!beat.has_flp && !beat.has_als) reasons.push("No project file was found (.flp or .als).");
+    if (!beat.has_samples) reasons.push("No Samples folder was found.");
+    return reasons;
+  }, [beat.has_flp, beat.has_als, beat.has_samples]);
   const showIncompleteWarning = showIncompleteWarnings && incompleteReasons.length > 0;
-  const cloudUploading = beat.cloud_status === "UPLOADING";
-  const cloudUploadComplete = beat.cloud_status === "UPLOAD_COMPLETE";
-  const cloudUploadError = beat.cloud_status === "ERROR";
 
   // Ignore the tag order stored in ID3 metadata. Sort a display-only copy by
   // global usage (most used first), then alphabetically for stable ties.
@@ -310,14 +346,13 @@ export default function BeatCard({
         borderRadius: 12,
         transform: composedTransform,
         opacity: isDragging ? 0.72 : 1,
-        outline: folderUpdateDragOver ? "2px solid #6f8f68" : "none",
-        outlineOffset: folderUpdateDragOver ? "4px" : "0px",
+        outline: fileDragOver ? "2px solid #f5b942" : "none",
+        outlineOffset: fileDragOver ? "4px" : "0px",
         transition: transition || "transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease",
         userSelect: "none",
           // Red border when beat needs resolution — applied to artwork instead. Outer container keeps compact layout.
         }}
     >
-      <style>{uploadAnimationStyles}</style>
       {/* Checkbox — only visible in select mode */}
       {selectMode && (
         <div
@@ -342,8 +377,8 @@ export default function BeatCard({
 
       {/* Artwork */}
       <div
-        data-beat-artwork-id={beat.id}
         ref={setActivatorNodeRef}
+        data-beat-artwork-id={beat.id}
         {...(dragEnabled ? attributes : {})}
         {...(dragEnabled ? listeners : {})}
         style={{
@@ -363,91 +398,64 @@ export default function BeatCard({
           e.stopPropagation(); onPlay(beat);
         }}
         onDragOver={e => {
-          if (!e.dataTransfer.types.includes("Files")) return;
-          const items = Array.from(e.dataTransfer.items);
-          // Some OS/browser combinations expose an empty MIME type during
-          // dragover. In that case we deliberately do not highlight: the
-          // actual drop handler will still accept a real image.
-          const hasImage = items.some(item => item.kind === "file" && item.type.startsWith("image/"));
-          if (!hasImage) {
-            setImageDragOver(false);
+          const files = Array.from(e.dataTransfer.files || []);
+          const items = Array.from(e.dataTransfer.items || []);
+          const hasImageFile = files.some(file => file.type.startsWith("image/")) ||
+            items.some(item => item.kind === "file" && item.type.startsWith("image/"));
+          const internetImage = dragLooksLikeInternetImage(e.dataTransfer);
+          const hasFiles = e.dataTransfer.types.includes("Files") || items.some(item => item.kind === "file");
+
+          if (hasImageFile || internetImage) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            setImageDragOver(true);
+            setFileDragOver(false);
             return;
           }
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-          setImageDragOver(true);
+
+          if (hasFiles) {
+            // Non-image files are beat-file updates, not artwork. Keep them
+            // yellow so they cannot be confused with the green cover target.
+            setImageDragOver(false);
+            setFileDragOver(true);
+          }
         }}
-        onDragLeave={() => setImageDragOver(false)}
+        onDragLeave={() => { setImageDragOver(false); setFileDragOver(false); }}
         onDrop={e => {
-          if (!e.dataTransfer.types.includes("Files")) return;
+          const file = Array.from(e.dataTransfer.files || []).find(f => f.type.startsWith("image/"));
+          const remoteUrl = remoteImageUrlFromDrop(e.dataTransfer);
+          if (!file && !remoteUrl) return;
+
           e.preventDefault();
           e.stopPropagation();
           setImageDragOver(false);
-          const file = Array.from(e.dataTransfer.files).find(f => f.type.startsWith("image/"));
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onload = () => {
-            if (typeof reader.result === "string") onDropArtwork(beat, reader.result);
-          };
-          reader.readAsDataURL(file);
+          setFileDragOver(false);
+
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              if (typeof reader.result === "string") onDropArtwork(beat, reader.result);
+            };
+            reader.readAsDataURL(file);
+            return;
+          }
+
+          if (remoteUrl) {
+            if (/^data:image\//i.test(remoteUrl)) {
+              onDropArtwork(beat, remoteUrl);
+              return;
+            }
+            void downloadInternetArtwork(remoteUrl)
+              .then(imageData => onDropArtwork(beat, imageData))
+              .catch(error => console.error("Failed to set artwork from internet image:", error));
+          }
         }}
       >
         <div style={{ borderRadius: 10, overflow: "hidden", position: "relative", display: "inline-block",
                       boxShadow: showIncompleteWarning ? "0 0 0 4px rgba(245,158,11,0.28)" : undefined }}>
           <Artwork beat={beat} size={160} playing={playing} />
-          {(cloudUploading || cloudUploadComplete) && (
-            <div
-              aria-label={cloudUploading ? "Uploading beat to Telegram" : "Upload complete"}
-              style={{
-                position: "absolute",
-                inset: 0,
-                zIndex: 24,
-                borderRadius: 10,
-                overflow: "hidden",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: cloudUploading ? "rgba(0,0,0,0.66)" : "rgba(4,35,18,0.26)",
-                backdropFilter: cloudUploading ? "blur(1.5px)" : "none",
-                WebkitBackdropFilter: cloudUploading ? "blur(1.5px)" : "none",
-                transition: "background 220ms ease",
-                pointerEvents: "none",
-              }}
-            >
-              {cloudUploadComplete && (
-                <div style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: "rgba(34,197,94,0.26)",
-                  animation: "beatgaler-upload-glow 900ms cubic-bezier(.22,.8,.2,1) forwards",
-                }} />
-              )}
-              <div
-                style={{
-                  width: 44,
-                  height: 44,
-                  backgroundColor: cloudUploadComplete ? "#40d86c" : "rgba(255,255,255,0.94)",
-                  WebkitMaskImage: `url(${uploadStatusSymbolPng})`,
-                  maskImage: `url(${uploadStatusSymbolPng})`,
-                  WebkitMaskRepeat: "no-repeat",
-                  maskRepeat: "no-repeat",
-                  WebkitMaskPosition: "center",
-                  maskPosition: "center",
-                  WebkitMaskSize: "contain",
-                  maskSize: "contain",
-                  filter: cloudUploadComplete
-                    ? "drop-shadow(0 5px 16px rgba(64,216,108,.35))"
-                    : "drop-shadow(0 4px 14px rgba(0,0,0,.42))",
-                  animation: cloudUploadComplete
-                    ? "beatgaler-upload-success 900ms cubic-bezier(.2,.78,.22,1) forwards"
-                    : "beatgaler-upload-spin 1.15s linear infinite",
-                  willChange: "transform, opacity",
-                }}
-              />
-            </div>
-          )}
         </div>
-        {showIncompleteWarning && !selectMode && !cloudUploading && !cloudUploadComplete && (
+        {showIncompleteWarning && hovered && !selectMode && (
           <div
             onClick={e => e.stopPropagation()}
             onMouseEnter={() => setWarningInfoOpen(true)}
@@ -472,7 +480,7 @@ export default function BeatCard({
                 color: "#bbb", fontSize: 11, lineHeight: 1.55,
                 fontWeight: 400, textAlign: "left", pointerEvents: "none",
               }}>
-                <div style={{ color: "#e8e8e8", fontWeight: 600, marginBottom: 6 }}>Project warning</div>
+                <div style={{ color: "#e8e8e8", fontWeight: 600, marginBottom: 6 }}>Incomplete beat files</div>
                 {incompleteReasons.map(reason => (
                   <div key={reason} style={{ display: "flex", gap: 7, marginTop: 3 }}>
                     <span style={{ color: "#f5a623" }}>•</span><span>{reason}</span>
@@ -485,11 +493,22 @@ export default function BeatCard({
             )}
           </div>
         )}
+        {fileDragOver && !imageDragOver && (
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: 10, background: "rgba(245,185,66,0.16)",
+            border: "2px dashed #f5b942", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 11, fontWeight: 600, color: "#fff", textAlign: "center", padding: 8,
+            pointerEvents: "none", zIndex: 40,
+          }}>
+            Drop file
+          </div>
+        )}
         {imageDragOver && (
           <div style={{
             position: "absolute", inset: 0, borderRadius: 10, background: "rgba(74,222,128,0.18)",
             border: "2px dashed #4ade80", display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 11, fontWeight: 600, color: "#fff", textAlign: "center", padding: 8,
+            pointerEvents: "none", zIndex: 41,
           }}>
             Drop image
           </div>
@@ -499,44 +518,6 @@ export default function BeatCard({
             title="Conflicto — editar metadata"
             style={{ position: "absolute", left: 8, top: 8, zIndex: 20, width: 20, height: 20, borderRadius: 6, background: "#f87171", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.5)" }}>
             <span style={{ lineHeight: 1 }}>?{/* simple question mark */}</span>
-          </div>
-        )}
-        {cloudUploadError && !selectMode && (
-          <div
-            onMouseEnter={() => setUploadErrorOpen(true)}
-            onMouseLeave={() => setUploadErrorOpen(false)}
-            aria-label="Background upload failed"
-            style={{
-              position: "absolute", left: 8, bottom: 8, zIndex: 35,
-              width: 20, height: 20, borderRadius: "50%",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              background: "rgba(20,20,20,.94)", border: "1px solid rgba(248,113,113,.8)",
-              color: "#f87171", fontSize: 12, fontWeight: 800,
-              boxShadow: "0 4px 12px rgba(0,0,0,.45)",
-              cursor: "help",
-            }}
-          >
-            !
-            {uploadErrorOpen && (
-              <div style={{
-                position: "absolute", left: 26, bottom: 0, zIndex: 80,
-                width: 380, maxWidth: "min(380px, calc(100vw - 70px))",
-                padding: "12px 13px", borderRadius: 9,
-                background: "#171717", border: "1px solid rgba(248,113,113,.45)",
-                boxShadow: "0 14px 38px rgba(0,0,0,.78)",
-                color: "#d8d8d8", fontSize: 11, lineHeight: 1.5,
-                fontWeight: 400, textAlign: "left",
-                whiteSpace: "pre-wrap", overflowWrap: "anywhere",
-                pointerEvents: "none",
-              }}>
-                {cloudUploadErrorDetail || [
-                  "UPLOAD FAILED",
-                  "",
-                  "No detailed diagnostic was recorded for this failure.",
-                  "Retry the Telegram upload from the beat menu. If it fails again, the next error should include the exact stage and raw error.",
-                ].join("\n")}
-              </div>
-            )}
           </div>
         )}
         {beat.has_wav && !selectMode && (
@@ -549,7 +530,7 @@ export default function BeatCard({
           }}>HQ</div>
         )}
         {!selectMode && (
-          <div style={{ position: "absolute", inset: 0, borderRadius: 10, background: "rgba(0,0,0,0.42)", display: "flex", alignItems: "center", justifyContent: "center", opacity: hovered && !playing && !cloudUploading && !cloudUploadComplete ? 1 : 0, transition: "opacity 0.15s" }}>
+          <div style={{ position: "absolute", inset: 0, borderRadius: 10, background: "rgba(0,0,0,0.42)", display: "flex", alignItems: "center", justifyContent: "center", opacity: hovered && !playing ? 1 : 0, transition: "opacity 0.15s" }}>
             <img
               aria-hidden
               src={playFillPng}
@@ -576,15 +557,6 @@ export default function BeatCard({
           >
             {beat.name}
           </div>
-          {projectCloud && projectCloud.state !== "LOCAL" && (
-            <span
-              title={projectCloud.state === "NEEDS_SYNC" ? "Project changed locally · sync needed" : projectCloud.state === "CLOUD_ONLY" ? "Project stored in Telegram Cloud" : "Project synced to Telegram Cloud"}
-              aria-label={`Project ${projectCloud.state.toLowerCase()}`}
-              style={{ marginRight: 3, flexShrink: 0, fontSize: 10, lineHeight: "18px", opacity: 0.9 }}
-            >
-              {projectCloud.state === "NEEDS_SYNC" ? "↻" : ""}
-            </span>
-          )}
           {!selectMode && (
             <div ref={dotsRef} onClick={openMenu}
               style={{ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 4, cursor: "pointer", color: "#555", fontSize: 15, letterSpacing: 2, opacity: hovered || menu ? 1 : 0, transition: "opacity 0.15s", background: menu ? "#2a2a2a" : "transparent", flexShrink: 0 }}>
@@ -592,18 +564,11 @@ export default function BeatCard({
             </div>
           )}
         </div>
-        {(beat.rating > 0 || Boolean(beat.telegram_file_id) || openableProject) && (
-          <div data-beatgaler-status-row style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, minHeight: 12 }}>
-            {beat.rating > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <span key={i} style={{ fontSize: 8, lineHeight: 1, color: i <= beat.rating ? "#7a7a7a" : "#2b2b2b" }}>★</span>
-                ))}
-              </div>
-            )}
-            {openableProject && (
-              <img src="/beatgaler-icons/box.png" alt="" aria-hidden="true" title="Open Project available" style={{ width: 13, height: 13, objectFit: "contain", display: "block", flexShrink: 0 }} />
-            )}
+        {beat.rating > 0 && (
+          <div style={{ display: "flex", gap: 2, marginTop: 4 }}>
+            {[1, 2, 3, 4, 5].map((i) => (
+              <span key={i} style={{ fontSize: 8, lineHeight: 1, color: i <= beat.rating ? "#7a7a7a" : "#2b2b2b" }}>★</span>
+            ))}
           </div>
         )}
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
@@ -646,15 +611,11 @@ export default function BeatCard({
           onEdit={() => onEdit(beat)} onDetail={() => onDetail(beat)} onAddToQueue={() => onAddToQueue(beat)} onDelete={() => onDelete(beat)}
           onReveal={() => import("../lib/tauri").then(t => t.revealInExplorer(beat.folder_path))}
           onUpload={() => onUpload(beat)}
-          onUploadTelegram={() => onUploadTelegram(beat)}
-          onDownloadTelegram={() => onDownloadTelegram(beat)}
-          onUploadProjectTelegram={() => onUploadProjectTelegram(beat)}
-          telegramSynced={beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY"}
-          projectCloudState={projectCloud?.state ?? null}
-          canOpenProject={Boolean(projectCloud?.valid)}
-          onOpenProject={() => onOpenProject(beat)}
-          onUpdateProject={() => onUpdateProject(beat)}
-          onCloudFiles={() => onCloudFiles(beat)}
+          onOpenProject={
+            (beat.flp_path || beat.als_path)
+              ? () => import("../lib/tauri").then(t => t.openProjectFile((beat.flp_path || beat.als_path)!))
+              : null
+          }
           onClose={() => setMenu(null)} />
       ) : null}
     </div>

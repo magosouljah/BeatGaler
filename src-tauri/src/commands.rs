@@ -1353,19 +1353,16 @@ pub fn restore_library_from_telegram(
                 .map_err(|e| e.to_string())?;
             continue;
         }
-        let Some(mut meta) = db_meta(&row) else { continue; };
+        let Some(meta) = db_meta(&row) else { continue; };
         let had_cloud = meta.telegram_file_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false)
             || matches!(meta.cloud_status.as_deref(), Some("SYNCED") | Some("CLOUD_ONLY"));
         if !had_cloud { continue; }
-        if beat_local_master_exists(&meta) {
-            meta.telegram_file_id = None;
-            meta.telegram_message_id = None;
-            meta.cloud_status = None;
-            db_save(&conn, &meta).map_err(|e| e.to_string())?;
-        } else {
-            conn.execute("DELETE FROM beats WHERE id=?1", params![row.id.clone()])
-                .map_err(|e| e.to_string())?;
-        }
+
+        // Telegram's pinned library index is authoritative for cloud-backed beats.
+        // A local source/cache copy is only a cache; it must never resurrect a beat
+        // that is absent from both the active list and Telegram trash.
+        conn.execute("DELETE FROM beats WHERE id=?1", params![row.id.clone()])
+            .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM cloud_files WHERE beat_id=?1", params![row.id.clone()])
             .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM cloud_projects WHERE beat_id=?1", params![row.id.clone()])

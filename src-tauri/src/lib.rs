@@ -1,5 +1,7 @@
 mod matcher;
 mod commands;
+#[cfg(target_os = "windows")]
+mod native_drop;
 pub use commands::*;
 
 use std::path::PathBuf;
@@ -12,116 +14,53 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let data_dir: PathBuf = app.path().app_data_dir()
-                .expect("Failed to get app data dir");
+            let data_dir: PathBuf = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&data_dir).ok();
             let db_path = data_dir.join("beatvault.db");
             let conn = init_db(&db_path).expect("Failed to open database");
 
-            // Auto-purge trash older than 14 days on every startup — keeps
-            // deleted beats recoverable for a while without accumulating forever.
             let purged = purge_old_trash_internal(&conn, &data_dir, 14);
-            if purged > 0 {
-                log_line(&data_dir, "INFO", &format!("Startup: purged {} old trash item(s)", purged));
-            }
+            if purged > 0 { log_line(&data_dir, "INFO", &format!("Startup: purged {} old trash item(s)", purged)); }
             let purged_templates = purge_old_template_trash_internal(&conn, &data_dir, 14);
-            if purged_templates > 0 {
-                log_line(&data_dir, "INFO", &format!("Startup: purged {} old preset trash item(s)", purged_templates));
-            }
+            if purged_templates > 0 { log_line(&data_dir, "INFO", &format!("Startup: purged {} old preset trash item(s)", purged_templates)); }
 
             app.manage(DbState(std::sync::Mutex::new(conn)));
             let app_settings = load_settings(&data_dir);
-            if let Some(ref f) = app_settings.beats_folder {
-                std::fs::create_dir_all(f).ok();
-            } else {
-                std::fs::create_dir_all(data_dir.join("beats")).ok();
-            }
-            app.manage(SettingsState {
-                settings: std::sync::Mutex::new(app_settings),
-                data_dir: data_dir.clone(),
-            });
+            if let Some(ref f) = app_settings.beats_folder { std::fs::create_dir_all(f).ok(); }
+            else { std::fs::create_dir_all(data_dir.join("beats")).ok(); }
+            app.manage(SettingsState { settings: std::sync::Mutex::new(app_settings), data_dir: data_dir.clone() });
             app.manage(ImportBatchState(std::sync::Mutex::new(std::collections::HashMap::new())));
             app.manage(JobRegistry(std::sync::Mutex::new(std::collections::HashMap::new())));
 
-            // Uploads are processed one at a time by a single long-lived
-            // worker thread — start_youtube_upload only ever enqueues here.
             let (tx, rx) = std::sync::mpsc::channel::<QueuedUploadJob>();
             std::thread::spawn(move || run_upload_worker(rx));
             app.manage(UploadQueueState(std::sync::Mutex::new(tx)));
+
+            #[cfg(target_os = "windows")]
+            native_drop::install(app).expect("Failed to install BeatGaler native drag/drop bridge");
 
             log_line(&data_dir, "INFO", "BeatVault started");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            load_library,
-            scan_beats_folder,
-            scan_beat_folder,
-            resolve_beat_files,
-            read_beat_meta,
-            save_beat_meta,
-            inspect_audio_metadata,
-            rename_tag_everywhere,
-            rename_beat,
-            reorder_beats,
-            remove_beat_from_library,
-            list_trash,
-            restore_beat_from_trash,
-            purge_trash_now,
-            get_log_dir,
-            reveal_in_explorer,
-            open_project_file,
-            add_file_to_beat,
-            get_settings,
-            set_incomplete_warnings_enabled,
-            set_custom_cursor_enabled,
-            set_beats_folder,
-            preview_beats_folder,
-            import_selected_beats,
-            preview_import_batch,
-            list_openable_cloud_project_beat_ids,
-            merge_folder_into_existing_beat,
-            inspect_beat_update_folder,
-            resolve_import_decisions,
-            save_youtube_oauth_config,
-            get_youtube_channel,
-            connect_youtube_channel,
-            upload_to_youtube,
-            start_youtube_upload,
-            cancel_youtube_upload,
-			disconnect_youtube,
-			connect_telegram_cloud,
-			poll_telegram_cloud_status,
-			get_telegram_cloud_status,
-			disconnect_telegram_cloud,
-			upload_beat_to_telegram,
-			upload_dropped_file_to_telegram,
-			sync_beat_metadata_to_telegram,
-			sync_cloud_library_index,
-			restore_library_from_telegram,
-			clear_local_cloud_vault,
-			detach_local_sources_after_cloud_upload,
-			list_cloud_files_for_beat,
-			download_cloud_file_to_cache,
-			copy_export_file,
-			prepare_unique_export_folder,
-			download_beat_from_telegram,
-			prepare_beat_for_playback,
-			upload_project_to_telegram,
-			get_project_cloud_status,
-			open_beat_project,
-			update_project_archive_from_source,
-			get_settings,
-			set_beats_folder,
-			set_templates_folder,
-			get_templates_dir,
-			list_template_files,
-			delete_template_file,
-			read_template_file,
-			write_template_file,
-			delete_template_to_trash,
-			list_template_trash,
-			restore_template_from_trash,
-			purge_template_trash_now,
+            load_library, scan_beats_folder, scan_beat_folder, resolve_beat_files, read_beat_meta,
+            save_beat_meta, inspect_audio_metadata, rename_tag_everywhere, rename_beat, reorder_beats,
+            remove_beat_from_library, list_trash, restore_beat_from_trash, purge_trash_now, get_log_dir,
+            reveal_in_explorer, open_project_file, add_file_to_beat, get_settings, set_incomplete_warnings_enabled,
+            set_custom_cursor_enabled, set_beats_folder, preview_beats_folder, import_selected_beats,
+            preview_import_batch, list_openable_cloud_project_beat_ids, merge_folder_into_existing_beat,
+            inspect_beat_update_folder, resolve_import_decisions, save_youtube_oauth_config, get_youtube_channel,
+            connect_youtube_channel, upload_to_youtube, start_youtube_upload, cancel_youtube_upload,
+            disconnect_youtube, connect_telegram_cloud, poll_telegram_cloud_status, get_telegram_cloud_status,
+            disconnect_telegram_cloud, upload_beat_to_telegram, upload_dropped_file_to_telegram,
+            sync_beat_metadata_to_telegram, sync_cloud_library_index, restore_library_from_telegram,
+            clear_local_cloud_vault, detach_local_sources_after_cloud_upload, list_cloud_files_for_beat,
+            download_cloud_file_to_cache, copy_export_file, prepare_unique_export_folder,
+            download_beat_from_telegram, prepare_beat_for_playback, upload_project_to_telegram,
+            get_project_cloud_status, open_beat_project, update_project_archive_from_source,
+            get_settings, set_beats_folder, set_templates_folder, get_templates_dir, list_template_files,
+            delete_template_file, read_template_file, write_template_file, delete_template_to_trash,
+            list_template_trash, restore_template_from_trash, purge_template_trash_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BeatVault");

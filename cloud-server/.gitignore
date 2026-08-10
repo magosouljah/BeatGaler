@@ -1,5 +1,4 @@
-node_modules/
-.env
+master-session.txt
+accounts-data.json
+accounts-data.json.tmp
 uploads-tmp/
-cloud-data.json
-cloud-data.json.tmp

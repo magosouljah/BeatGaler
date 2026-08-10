@@ -7,11 +7,12 @@ import Player from "./components/Player";
 import AddBeatModal from "./components/AddBeatModal";
 import ImportDecisionsModal from "./components/ImportDecisionsModal";
 import SettingsPanel from "./components/SettingsPanel";
+import AccountGate, { getBeatGalerAuthToken, getResolvedCloudApiBase, logoutBeatGalerAccount } from "./components/AccountGate";
 import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, revealInExplorer, syncBeatMetadataToTelegram, syncCloudLibraryIndex, restoreLibraryFromTelegram, clearLocalCloudVault, connectTelegramCloud, pollTelegramCloudStatus, disconnectTelegramCloud, detachLocalSourcesAfterCloudUpload, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, prepareUniqueExportFolder, type CloudFileType, type CloudFileRecord, type ImportBatchPreview } from "./lib/tauri";
+import { loadLibrary, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, previewImportBatch, resolveImportDecisions, readImagePathAsDataUrl, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, revealInExplorer, syncBeatMetadataToTelegram, syncCloudLibraryIndex, restoreLibraryFromTelegram, connectTelegramCloud, pollTelegramCloudStatus, disconnectTelegramCloud, detachLocalSourcesAfterCloudUpload, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, prepareUniqueExportFolder, type CloudFileType, type CloudFileRecord, type ImportBatchPreview } from "./lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { isTauriAvailable } from "./lib/tauri";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
@@ -31,6 +32,21 @@ function extensionFromPath(path: string) {
   const name = fileNameFromPath(path);
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+async function fetchInternetArtworkDataUrl(url: string): Promise<string> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("BeatGaler account session is missing.");
+  const response = await fetch(`${getResolvedCloudApiBase()}/image/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ url }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || typeof payload?.data_url !== "string") {
+    throw new Error(payload?.error || `Image fetch failed (${response.status}).`);
+  }
+  return payload.data_url;
 }
 
 function formatCloudBytes(bytes: number) {
@@ -505,7 +521,7 @@ export function clearUploadPreviewCache() {
   try { localStorage.removeItem('beatvault:upload-cache:v1'); } catch {}
 }
 
-export default function App() {
+function BeatGalerApp() {
   const [beats, setBeats] = useState<Beat[]>(() => loadCachedBeats() ?? []);
   const [openableCloudProjectIds, setOpenableCloudProjectIds] = useState<Set<string>>(new Set());
   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
@@ -543,6 +559,9 @@ export default function App() {
   const [reviewQueue, setReviewQueue] = useState<{ beats: Beat[]; index: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  // Prevent cached/local state from being pushed back to Telegram before this
+  // app session has first verified and pulled the authoritative pinned index.
+  const [cloudSessionVerified, setCloudSessionVerified] = useState(false);
   const [setupDone, setSetupDone] = useState(false);
   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);
 
@@ -584,8 +603,10 @@ export default function App() {
         });
         if (cancelled) return;
 
-        await clearLocalCloudVault().catch(() => {});
         if (!status.connected) {
+          // Hide cloud data while offline/disconnected, but do NOT erase SQLite
+          // or the instant-paint cache. They remain available for the next verified pull.
+          setCloudSessionVerified(false);
           setBeats([]);
           setSettings(current =>
             current
@@ -600,6 +621,7 @@ export default function App() {
         if (cancelled) return;
 
         setBeats(restored);
+        setCloudSessionVerified(true);
         setSettings(current =>
           current
             ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username }
@@ -653,8 +675,9 @@ export default function App() {
     if (!setupDone || !userId) return;
 
     const sourceId = getCloudClientId();
+    const cloudBase = getResolvedCloudApiBase();
     const url =
-      `https://desktop-7l93a0j.tailabe8ff.ts.net/events?beatgalerUserId=${encodeURIComponent(userId)}` +
+      `${cloudBase}/events?beatgalerUserId=${encodeURIComponent(userId)}` +
       `&sourceId=${encodeURIComponent(sourceId)}`;
     const events = new EventSource(url);
     let cancelled = false;
@@ -685,10 +708,11 @@ export default function App() {
         try {
           const status = await pollTelegramCloudStatus();
           if (cancelled || !status.connected) return;
-          await clearLocalCloudVault();
+          setCloudSessionVerified(false);
           setBeats([]);
           setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : current);
           await applyRemoteLibraryChange();
+          if (!cancelled) setCloudSessionVerified(true);
         } catch (error) {
           console.warn("Could not activate Telegram vault:", error);
         }
@@ -714,6 +738,11 @@ export default function App() {
   // of base64 on every small metadata change.
   useEffect(() => {
     if (cacheSaveTimerRef.current) window.clearTimeout(cacheSaveTimerRef.current);
+
+    // Hiding the cloud library while disconnected is a view decision, not a
+    // destructive cache mutation. Preserve the last verified instant-paint cache.
+    if (settings && !settings.telegram_cloud_connected) return;
+
     cacheSaveTimerRef.current = window.setTimeout(() => {
       cacheSaveTimerRef.current = null;
       saveCachedBeats(beats);
@@ -725,7 +754,7 @@ export default function App() {
         cacheSaveTimerRef.current = null;
       }
     };
-  }, [beats]);
+  }, [beats, settings?.telegram_cloud_connected]);
 
   useEffect(() => {
     visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);
@@ -937,8 +966,19 @@ export default function App() {
     }
 
     if (deleted.size > 0) {
-      setBeats(bs => bs.filter(b => !deleted.has(b.id)));
+      const next = beats.filter(b => !deleted.has(b.id));
+      setBeats(next);
       setQueueIds(q => q.filter(id => !deleted.has(id)));
+
+      // removeBeatFromLibrary already moved each cloud beat into SQLite trash.
+      // Publish the active-list + trash transition exactly once, immediately.
+      const cloudBacked = next.filter(beat => !!beat.telegram_file_id);
+      cloudLibrarySnapshotRef.current = cloudBacked.map(cloudBeatFingerprint).join("\u001c");
+      try {
+        await syncCloudLibraryIndex(next);
+      } catch (error) {
+        console.warn("Telegram library index refresh after Remove all failed:", error);
+      }
     }
     if (deleted.size !== ids.length) {
       await appAlert({
@@ -950,7 +990,7 @@ export default function App() {
     setSelectedIds(new Set());
     setSelectMode(false);
     setAnchorIdx(null);
-  }, [selectedIds]);
+  }, [selectedIds, beats]);
 
   const addToQueue = useCallback((beat: Beat) => {
     setQueueIds((ids) => (ids.includes(beat.id) ? ids : [...ids, beat.id]));
@@ -1051,6 +1091,7 @@ export default function App() {
             autoCloudUploadRef.current.add(original.id);
 
             let uploadStage = "Prepare upload";
+            let remoteUploadCompleted = false;
             try {
               let uploaded = original;
 
@@ -1083,6 +1124,11 @@ export default function App() {
                   await uploadProjectToTelegram(uploaded);
                 }
               }
+
+              // Every required Telegram slot is now durable. Anything that fails
+              // below this point is local finalization and must not make the UI imply
+              // that the remote upload itself is still pending.
+              remoteUploadCompleted = true;
 
               // Only detach local import sources after every required cloud slot succeeds.
               uploadStage = "Finalize cloud copy and detach local sources";
@@ -1170,7 +1216,14 @@ export default function App() {
 
               setBackgroundUploadErrors(current => ({ ...current, [original.id]: detail }));
               setBeats(current => current.map(b =>
-                b.id === original.id ? { ...b, cloud_status: "ERROR" } : b
+                b.id === original.id
+                  ? {
+                      ...b,
+                      // If Telegram already has every required slot, expose the
+                      // durable cloud state even when local cleanup/finalization failed.
+                      cloud_status: remoteUploadCompleted ? "CLOUD_ONLY" : "ERROR",
+                    }
+                  : b
               ));
             } finally {
               autoCloudUploadRef.current.delete(original.id);
@@ -1323,148 +1376,223 @@ export default function App() {
   }, [refreshOpenableCloudProjects]);
 
   useEffect(() => {
+    // Browser-origin drags (especially images dragged from Chrome/Google Images)
+    // do not always become Tauri filesystem drag events. Classify them in the
+    // DOM capture phase and drive the same per-card highlight events.
+    const imageExt = /\.(png|jpe?g|webp|bmp|gif|avif)(?:[?#].*)?$/i;
+
+    const elementTargets = (x: number, y: number) => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null;
+      return {
+        artwork: el?.closest?.("[data-beat-artwork-id]") as HTMLElement | null,
+        card: el?.closest?.("[data-beat-card-id]") as HTMLElement | null,
+      };
+    };
+
+    const looksLikeImage = (dt: DataTransfer) => {
+      const files = Array.from(dt.files || []);
+      const items = Array.from(dt.items || []);
+      if (files.some(file => file.type.startsWith("image/"))) return true;
+      if (items.some(item => item.kind === "file" && item.type.startsWith("image/"))) return true;
+
+      try {
+        const downloadUrl = dt.getData("DownloadURL");
+        if (/^image\//i.test(downloadUrl.split(":")[0] || "")) return true;
+      } catch {}
+
+      try {
+        const html = dt.getData("text/html");
+        if (/<img\b/i.test(html)) return true;
+      } catch {}
+
+      try {
+        const uri = (dt.getData("text/uri-list") || "").split(/\r?\n/).find(line => line && !line.startsWith("#")) || "";
+        if (imageExt.test(uri)) return true;
+      } catch {}
+
+      // During dragover Chromium/WebView2 may keep drag data in protected mode:
+      // getData() returns "", while the MIME type names are still visible.
+      // Web images commonly advertise one of these types. Treat that as artwork
+      // intent; the actual URL is validated when the user drops it.
+      const types = Array.from(dt.types || []);
+      if (
+        types.includes("DownloadURL") ||
+        types.includes("text/html") ||
+        (!types.includes("Files") && types.includes("text/uri-list"))
+      ) return true;
+
+      return false;
+    };
+
+    const clear = () => {
+      window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+        detail: { beatId: null, active: false }
+      }));
+      window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", {
+        detail: { beatId: null, active: false }
+      }));
+    };
+
+    const onDragOver = (event: DragEvent) => {
+      const dt = event.dataTransfer;
+      if (!dt) return;
+      const { artwork, card } = elementTargets(event.clientX, event.clientY);
+      const image = looksLikeImage(dt);
+      const hasFile = dt.types.includes("Files") || Array.from(dt.items || []).some(item => item.kind === "file");
+
+      if (image) {
+        setDropActive(false);
+      }
+
+      if (image && artwork?.dataset.beatArtworkId) {
+        window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+          detail: { beatId: artwork.dataset.beatArtworkId, active: true }
+        }));
+        window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", {
+          detail: { beatId: null, active: false }
+        }));
+        return;
+      }
+
+      if (!image && hasFile && card?.dataset.beatCardId) {
+        window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
+          detail: { beatId: null, active: false }
+        }));
+        window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", {
+          detail: { beatId: card.dataset.beatCardId, active: true }
+        }));
+        return;
+      }
+
+      clear();
+    };
+
+    document.addEventListener("dragover", onDragOver, true);
+    document.addEventListener("drop", clear, true);
+    document.addEventListener("dragleave", (event: DragEvent) => {
+      if (event.relatedTarget == null) clear();
+    }, true);
+
+    return () => {
+      document.removeEventListener("dragover", onDragOver, true);
+      document.removeEventListener("drop", clear, true);
+      // dragleave is intentionally harmless if it survives one unmount in dev;
+      // the app root itself is not repeatedly mounted in production.
+      clear();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isTauriAvailable) return;
-    let unlisten: (() => void) | undefined;
+    let stop: (() => void) | undefined;
     let cancelled = false;
 
-    const imageExtensions = /\.(png|jpe?g|webp|bmp|gif)$/i;
+    type NativeBridgePayload = {
+      phase: "enter" | "over" | "leave" | "drop";
+      kind: "image" | "file" | "unknown";
+      paths?: string[];
+      url?: string | null;
+      position?: { x: number; y: number };
+    };
 
-    const artworkElementAt = (position: { x?: number; y?: number } | undefined) => {
-      if (!position || typeof position.x !== "number" || typeof position.y !== "number") return null;
-
-      // Tauri/WebView2 may report physical pixels while elementFromPoint expects
-      // CSS pixels. Try both forms so this keeps working across DPI settings.
-      const candidates: Array<[number, number]> = [[position.x, position.y]];
+    const elementAt = (position?: { x: number; y: number }) => {
+      if (!position) return { artwork: null as HTMLElement | null, card: null as HTMLElement | null };
       const scale = window.devicePixelRatio || 1;
+      const candidates: Array<[number, number]> = [[position.x, position.y]];
       if (scale !== 1) candidates.push([position.x / scale, position.y / scale]);
-
       for (const [x, y] of candidates) {
         const el = document.elementFromPoint(x, y) as HTMLElement | null;
-        const artwork = el?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
-        if (artwork) return artwork;
+        if (!el) continue;
+        const artwork = el.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+        const card = el.closest?.("[data-beat-card-id]") as HTMLElement | null;
+        if (artwork || card) return { artwork, card };
       }
-      return null;
+      return { artwork: null as HTMLElement | null, card: null as HTMLElement | null };
+    };
+
+    const clearHighlights = () => {
+      setDropActive(false);
+      window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", { detail: { beatId: null, active: false } }));
+      window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
     };
 
     (async () => {
       try {
-        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-        const stop = await getCurrentWebview().onDragDropEvent(event => {
-          const payload = event.payload as any;
+        const off = await listen<NativeBridgePayload>("beatgaler-native-drag", event => {
+          const payload = event.payload;
+          if (payload.phase === "leave") { clearHighlights(); return; }
 
-          const beatCardElementAt = (position: { x: number; y: number }) => {
-            const scale = window.devicePixelRatio || 1;
-            const direct = document.elementFromPoint(position.x, position.y) as HTMLElement | null;
-            const directCard = direct?.closest?.("[data-beat-card-id]") as HTMLElement | null;
-            if (directCard) return directCard;
+          const { artwork, card } = elementAt(payload.position);
+          const targetBeatId = artwork?.dataset.beatArtworkId || card?.dataset.beatCardId || null;
 
-            const scaled = document.elementFromPoint(position.x / scale, position.y / scale) as HTMLElement | null;
-            return scaled?.closest?.("[data-beat-card-id]") as HTMLElement | null;
-          };
-
-          if (payload.type === "enter") {
-            const artwork = artworkElementAt(payload.position);
-            // When the pointer is over a beat artwork, that card owns the drop.
-            // Elsewhere the existing global beat-import flow stays unchanged.
-            setDropActive(!artwork);
-            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
-              detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork }
-            }));
+          if (payload.phase === "enter" || payload.phase === "over") {
+            const imageOverBeat = payload.kind === "image" && Boolean(targetBeatId);
+            const fileOverBeat = payload.kind === "file" && Boolean(targetBeatId);
+            setDropActive(payload.kind === "file" && !fileOverBeat);
+            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", { detail: { beatId: imageOverBeat ? targetBeatId : null, active: imageOverBeat } }));
+            window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: fileOverBeat ? targetBeatId : null, active: fileOverBeat } }));
             return;
           }
 
-          if (payload.type === "over") {
-            // Native Tauri drag events bypass React's HTML dragover handlers.
-            const artwork = artworkElementAt(payload.position);
-            setDropActive(!artwork);
-            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
-              detail: { beatId: artwork?.dataset.beatArtworkId ?? null, active: !!artwork }
-            }));
+          if (payload.phase !== "drop") return;
+          clearHighlights();
+          const paths = Array.isArray(payload.paths) ? payload.paths.filter(Boolean) : [];
+          const targetBeat = targetBeatId ? beats.find(beat => beat.id === targetBeatId) : undefined;
+
+          if (payload.kind === "image") {
+            if (!targetBeat) return;
+            void (async () => {
+              try {
+                const imageBase64 = payload.url
+                  ? await fetchInternetArtworkDataUrl(payload.url)
+                  : paths.length === 1 ? await readImagePathAsDataUrl(paths[0]) : null;
+                if (!imageBase64) throw new Error("The dropped image did not contain readable image data.");
+                await saveBeatMeta({
+                  mp3_path: targetBeat.mp3_path,
+                  wav_path: targetBeat.wav_path,
+                  bpm: targetBeat.bpm,
+                  key: targetBeat.key,
+                  tags: targetBeat.tags,
+                  rating: targetBeat.rating,
+                  image_base64: imageBase64,
+                  image_preview_base64: null,
+                  image_crop: null,
+                  update_filename: false,
+                });
+                setBeats(current => current.map(beat => beat.id === targetBeat.id
+                  ? { ...beat, image_base64: imageBase64, image_preview_base64: null, image_crop: null }
+                  : beat));
+              } catch (error) {
+                console.error("Failed to set artwork from native web-image drop:", error);
+                void appAlert({ title: "Artwork drop failed", message: String(error), danger: true });
+              }
+            })();
             return;
           }
 
-          if (payload.type === "leave") {
-            setDropActive(false);
-            window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
-              detail: { beatId: null, active: false }
-            }));
-            return;
-          }
-
-          if (payload.type !== "drop") return;
-          setDropActive(false);
-          window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
-            detail: { beatId: null, active: false }
-          }));
-
-          const paths: string[] = Array.isArray(payload.paths) ? payload.paths : [];
-          const artwork = artworkElementAt(payload.position);
-          const singleImage = paths.length === 1 && imageExtensions.test(paths[0]);
-
-          if (artwork && paths.length > 0) {
-            const beatId = artwork.dataset.beatArtworkId;
-            const beat = beatId ? beats.find(b => b.id === beatId) : undefined;
-            if (!beat) return;
-
-            if (singleImage) {
-              void (async () => {
-                try {
-                  const imageBase64 = await readImagePathAsDataUrl(paths[0]);
-                  await saveBeatMeta({
-                    mp3_path: beat.mp3_path,
-                    wav_path: beat.wav_path,
-                    bpm: beat.bpm,
-                    key: beat.key,
-                    tags: beat.tags,
-                    rating: beat.rating,
-                    image_base64: imageBase64,
-                    image_preview_base64: null,
-                    image_crop: null,
-                    update_filename: false,
-                  });
-                  setBeats(current => current.map(b =>
-                    b.id === beat.id
-                      ? { ...b, image_base64: imageBase64, image_preview_base64: null, image_crop: null }
-                      : b
-                  ));
-                } catch (error) {
-                  console.error("Failed to set artwork from native dropped image:", error);
-                }
-              })();
+          if (payload.kind !== "file" || paths.length === 0) return;
+          if (targetBeat) {
+            if (paths.length !== 1) {
+              void appAlert({ title: "Drop one item at a time", message: "Drop one file or one folder on a beat so BeatGaler can decide how to add it." });
               return;
             }
-
-            if (paths.length > 1) {
-              void appAlert({
-                title: "Drop one file at a time",
-                message: "Drop a single file on the beat artwork so BeatGaler can ask what that file is.",
-              });
-              return;
-            }
-
-            setBeatFileDrop({ beat, filePath: paths[0] });
+            void (async () => {
+              const handledAsFolder = await updateExistingBeatFromFolder(targetBeat, paths[0]);
+              if (!handledAsFolder) setBeatFileDrop({ beat: targetBeat, filePath: paths[0] });
+            })();
             return;
           }
-
-          // A standalone image dropped elsewhere is not a beat import.
-          if (singleImage) return;
-
           void importDroppedPaths(paths);
         });
-
-        if (cancelled) stop(); else unlisten = stop;
+        if (cancelled) off(); else stop = off;
       } catch (error) {
-        console.warn("Native drag and drop is unavailable", error);
-        void appAlert({
-          title: "Drag & drop unavailable",
-          message: `BeatGaler could not start Tauri's native file drop listener: ${String(error)}`,
-          danger: true,
-        });
+        console.warn("BeatGaler native Windows drop bridge is unavailable", error);
+        void appAlert({ title: "Drag & drop unavailable", message: `BeatGaler could not start the native Windows drop bridge: ${String(error)}`, danger: true });
       }
     })();
 
-    return () => { cancelled = true; unlisten?.(); };
-  }, [importDroppedPaths, beats]);
+    return () => { cancelled = true; stop?.(); clearHighlights(); };
+  }, [importDroppedPaths, updateExistingBeatFromFolder, beats]);
 
   useEffect(() => {
     const next = new Map<string, string>();
@@ -1504,10 +1632,11 @@ export default function App() {
   // purely-local beats are NOT part of that index yet, so editing one must not
   // rewrite the pinned Telegram document.
   useEffect(() => {
-    if (loading) return;
+    if (loading || !settings?.telegram_cloud_connected || !cloudSessionVerified) return;
     const cloudBacked = beats.filter(beat => !!beat.telegram_file_id);
-    if (cloudBacked.length === 0) return;
 
+    // Empty is a real state. In particular, Remove all must replace the Telegram
+    // index with beats:[] instead of leaving the previous index pinned forever.
     const fingerprint = cloudBacked.map(cloudBeatFingerprint).join("\u001c");
 
     if (cloudLibrarySnapshotRef.current === fingerprint) return;
@@ -1530,7 +1659,7 @@ export default function App() {
         cloudLibraryTimerRef.current = null;
       }
     };
-  }, [beats, loading]);
+  }, [beats, loading, settings?.telegram_cloud_connected, cloudSessionVerified]);
 
   useEffect(() => {
     const handler = () => {
@@ -1549,9 +1678,10 @@ export default function App() {
   }, []);
 
   const handleDisconnectTelegramAccount = useCallback(async () => {
+    await logoutBeatGalerAccount().catch(() => {});
     await disconnectTelegramCloud().catch(() => {});
-    await clearLocalCloudVault().catch(() => {});
     releaseFile();
+    setCloudSessionVerified(false);
     setBeats([]);
     setSelectedIds(new Set());
     setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : current);
@@ -1693,27 +1823,40 @@ export default function App() {
   }, [cloudFilesBeat, cloudFiles, cloudFilesBusyId]);
 
   const reloadLibrary = useCallback(async () => {
-    // Clear the instant-paint cache so Reload Library forces a fresh scan
+    // Reload is an explicit cloud consistency check. Telegram is authoritative
+    // for a connected cloud library; local SQLite/cache must never repopulate
+    // beats that are absent from Telegram.
     try { localStorage.removeItem(LIBRARY_CACHE_KEY); } catch {}
     setLoading(true);
     try {
-      const loaded = await loadLibrary();
-      if (loaded.length === 0) {
+      const status = await pollTelegramCloudStatus().catch(() => null);
+      const cloudExpected = Boolean(settings?.telegram_cloud_connected);
+
+      if (status?.connected || cloudExpected) {
         try {
           const restored = await restoreLibraryFromTelegram();
-          setBeats(restored.length > 0 ? restored : loaded);
-        } catch {
-          setBeats(loaded);
+          setBeats(restored);
+          setCloudSessionVerified(true);
+          return;
+        } catch (error) {
+          // A failed verification is not permission to resurrect local cloud
+          // rows. Keep the currently verified view and wait for a later retry.
+          console.warn("Telegram library verification failed; keeping verified view:", error);
+          setCloudSessionVerified(false);
+          return;
         }
-      } else {
-        setBeats(loaded);
       }
+
+      // Confirmed disconnected/offline cloud session: hide the cloud library,
+      // but keep SQLite/cache on disk for the next successful verification.
+      setCloudSessionVerified(false);
+      setBeats([]);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [settings?.telegram_cloud_connected]);
 
   const handleDroppedBeatFileRole = useCallback(async (role: DroppedBeatFileRole) => {
     if (!beatFileDrop || beatFileDropBusy) return;
@@ -2147,13 +2290,32 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   const activeDragBeat = activeDragId ? beats.find(b => b.id === activeDragId) ?? null : null;
 
   const handleHtmlDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    // Browser fallback. Tauri native drop remains the preferred path because it
-    // preserves folder paths, but preventing the default here avoids the WebView
-    // swallowing the drop when Windows exposes it as a normal HTML file drag.
-    if (!e.dataTransfer.types.includes("Files")) return;
+    // Browser fallback. Do not show the generic "new beat" target for artwork.
+    // Images dragged from the web frequently arrive as text/html, text/uri-list
+    // or DownloadURL instead of a normal filesystem File.
+    const dt = e.dataTransfer;
+    const types = Array.from(dt.types || []);
+    const items = Array.from(dt.items || []);
+    const imageFile =
+      Array.from(dt.files || []).some(file => file.type.startsWith("image/")) ||
+      items.some(item => item.kind === "file" && item.type.startsWith("image/"));
+    const internetImageHint =
+      types.includes("DownloadURL") ||
+      types.includes("text/html") ||
+      types.includes("text/uri-list");
+
+    if (imageFile || internetImageHint) {
+      e.preventDefault();
+      e.stopPropagation();
+      dt.dropEffect = "copy";
+      setDropActive(false);
+      return;
+    }
+
+    if (!types.includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = "copy";
+    dt.dropEffect = "copy";
     setDropActive(true);
   }, []);
 
@@ -2558,21 +2720,30 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
 
       {(dropActive || dropImporting) && (
         <div style={{
-          position: "fixed", inset: 0, zIndex: 10000, pointerEvents: "none",
-          background: "rgba(8,8,8,0.82)", backdropFilter: "blur(8px)",
-          display: "flex", alignItems: "center", justifyContent: "center",
+          position: "fixed",
+          left: "50%",
+          bottom: currentBeat ? 86 : 24,
+          transform: "translateX(-50%)",
+          zIndex: 10000,
+          pointerEvents: "none",
+          width: "min(620px, calc(100vw - 48px))",
         }}>
           <div style={{
-            width: "min(520px, 86vw)", padding: "42px 32px", borderRadius: 18,
-            border: "2px dashed #555", background: "#111", textAlign: "center",
-            boxShadow: "0 24px 80px rgba(0,0,0,0.65)",
+            padding: "13px 18px",
+            borderRadius: 12,
+            border: "2px dashed #f5a623",
+            background: "rgba(17,17,17,0.94)",
+            textAlign: "center",
+            boxShadow: "0 10px 32px rgba(0,0,0,0.42)",
           }}>
-            <div style={{ fontSize: 18, color: "#eee", fontWeight: 600 }}>
-              {dropImporting ? "Importando beats…" : "Suelta beats, audio o carpetas"}
+            <div style={{ fontSize: 13, color: "#eee", fontWeight: 600 }}>
+              {dropImporting ? "Importando…" : "Suelta aquí para agregar como beat aparte"}
             </div>
-            <div style={{ fontSize: 12, color: "#777", marginTop: 9, lineHeight: 1.6 }}>
-              MP3, WAV, proyectos, stems o carpetas completas. Al terminar podrás revisar la metadata beat por beat.
-            </div>
+            {!dropImporting && (
+              <div style={{ fontSize: 10, color: "#777", marginTop: 4, lineHeight: 1.45 }}>
+                O arrástralo encima de un beat para agregarlo a ese beat.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2624,4 +2795,9 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
       <JobStatusBar />
     </div>
   );
+}
+
+
+export default function App() {
+  return <AccountGate><BeatGalerApp /></AccountGate>;
 }
