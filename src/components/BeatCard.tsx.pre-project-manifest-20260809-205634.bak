@@ -576,6 +576,13 @@ export default function BeatCard({
           >
             {beat.name}
           </div>
+          {(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY") && (
+            <span
+              title={beat.cloud_status === "CLOUD_ONLY" ? "Stored in Telegram Cloud · not local" : "Synced to Telegram Cloud"}
+              aria-label={beat.cloud_status === "CLOUD_ONLY" ? "Cloud only" : "Synced to Telegram Cloud"}
+              style={{ marginLeft: 5, marginRight: 3, flexShrink: 0, fontSize: 11, lineHeight: "18px", color: "#7fa98a", opacity: 0.95 }}
+            ></span>
+          )}
           {projectCloud && projectCloud.state !== "LOCAL" && (
             <span
               title={projectCloud.state === "NEEDS_SYNC" ? "Project changed locally · sync needed" : projectCloud.state === "CLOUD_ONLY" ? "Project stored in Telegram Cloud" : "Project synced to Telegram Cloud"}
@@ -600,6 +607,9 @@ export default function BeatCard({
                   <span key={i} style={{ fontSize: 8, lineHeight: 1, color: i <= beat.rating ? "#7a7a7a" : "#2b2b2b" }}>★</span>
                 ))}
               </div>
+            )}
+            {Boolean(beat.telegram_file_id) && (
+              <img src="/beatgaler-icons/cloud.png" alt="" aria-hidden="true" title="MASTER in Telegram" style={{ width: 13, height: 13, objectFit: "contain", display: "block", flexShrink: 0 }} />
             )}
             {openableProject && (
               <img src="/beatgaler-icons/box.png" alt="" aria-hidden="true" title="Open Project available" style={{ width: 13, height: 13, objectFit: "contain", display: "block", flexShrink: 0 }} />

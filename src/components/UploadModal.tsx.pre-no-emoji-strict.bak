@@ -817,7 +817,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
             <span style={{ fontSize: 15, fontWeight: 500, color: "#e5e5e5" }}>Upload to YouTube</span>
             <span style={{ fontSize: 11, color: "#555" }}>{jobs.length} beat{jobs.length !== 1 ? "s" : ""}</span>
           </div>
-          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: "none", color: "#666", cursor: "pointer", fontSize: 16 }}></button>
+          <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: "none", color: "#666", cursor: "pointer", fontSize: 16 }}>✕</button>
         </div>
 
         {/* Stepper */}
@@ -860,7 +860,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
                   fontSize: 10, fontWeight: 600,
                   background: active ? "#fff" : done ? "#2a2a2a" : "#1a1a1a",
                   color: active ? "#000" : done ? "#aaa" : "#444",
-                }}>{done ? "" : i + 1}</span>
+                }}>{done ? "✓" : i + 1}</span>
                 {label}
               </button>
             );
@@ -1155,7 +1155,7 @@ function Step1({
             {jobs.map(j => (
               <div key={j.beat.id} onMouseEnter={() => setHoveredId(j.beat.id)} onMouseLeave={() => setHoveredId(null)} style={{ position: "relative", display: "flex", gap: 10, alignItems: "center", padding: 8, borderRadius: 8, background: j.beat.id === activeJob.beat.id ? "#1a1a1a" : "transparent", border: `1px solid ${j.beat.id === activeJob.beat.id ? "#333" : "#181818"}` }}>
                 <div style={{ position: "absolute", right: 8, top: 8, opacity: hoveredId === j.beat.id ? 1 : 0, transition: "opacity 120ms" }}>
-                  <button onClick={() => removeJob(j.beat.id)} style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}></button>
+                  <button onClick={() => removeJob(j.beat.id)} style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}>✕</button>
                 </div>
                 <div onClick={() => { onSelectJob(j.beat.id); }} style={{ display: "flex", gap: 12, alignItems: "center", width: "100%", cursor: "pointer" }}>
                   <Artwork beat={j.beat} size={64} playing={false} />
@@ -1223,7 +1223,7 @@ function Step1({
                 <button onClick={onPickImage} style={{ padding: "7px 12px", background: "#fff", border: "1px solid #fff", borderRadius: 7, color: "#000", fontSize: 11, cursor: "pointer", fontWeight: 500 }}>Upload image</button>
               </div>
               {!activeJob.image_base64 && !activeJob.image_path && (
-                <div style={{ fontSize: 11, color: "#b45309", textAlign: "center" }}> No image. The MP3 has no embedded artwork — upload one above.</div>
+                <div style={{ fontSize: 11, color: "#b45309", textAlign: "center" }}>⚠ No image. The MP3 has no embedded artwork — upload one above.</div>
               )}
             </>
           ) : (
@@ -1889,7 +1889,7 @@ function Step4({
       <div style={{ border: "1px solid #1c1c1c", borderRadius: 12, padding: 18, background: "#121212", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, border: "1px solid #222" }}>
-            {channel.connected ? "" : ""}
+            {channel.connected ? "▶" : "○"}
           </div>
           <div>
             <div style={{ fontSize: 13, color: "#ddd", fontWeight: 500 }}>

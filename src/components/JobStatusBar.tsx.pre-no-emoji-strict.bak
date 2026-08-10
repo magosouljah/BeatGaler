@@ -109,8 +109,8 @@ export default function JobStatusBar() {
                 animation: "spin 0.8s linear infinite",
               }} />
             )}
-            {job.status === "done" && <span style={{ color: "#4ade80", fontSize: 16 }}></span>}
-            {job.status === "error" && <span style={{ color: "#f87171", fontSize: 16 }}></span>}
+            {job.status === "done" && <span style={{ color: "#4ade80", fontSize: 16 }}>✓</span>}
+            {job.status === "error" && <span style={{ color: "#f87171", fontSize: 16 }}>✕</span>}
             {job.status === "cancelled" && <span style={{ color: "#777", fontSize: 16 }}>–</span>}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -145,7 +145,7 @@ export default function JobStatusBar() {
               cursor: job.status === "cancelling" ? "default" : "pointer",
               opacity: job.status === "cancelling" ? 0.4 : 1,
             }}>
-            
+            ✕
           </button>
         </div>
       ))}

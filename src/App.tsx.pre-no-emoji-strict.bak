@@ -78,7 +78,7 @@ function CloudFilesModal({
       }}
     >
       <div style={{ width: 28, fontSize: 16, textAlign: "center" }}>
-        {kind === "MP3" ? "" : kind === "WAV" ? "HQ" : kind === "PROJECT" ? "" : "⇩"}
+        {kind === "MP3" ? "♪" : kind === "WAV" ? "HQ" : kind === "PROJECT" ? "📦" : "⇩"}
       </div>
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 12, fontWeight: 700 }}>{title}</div>
@@ -135,13 +135,13 @@ function BeatFileDropModal({
   const flp = ext === "flp";
   const maybeFolder = ext === "";
   const choices: Array<{ role: DroppedBeatFileRole; icon: string; title: string; sub: string; disabled?: boolean }> = [
-    { role: "main", icon: "", title: "Main audio", sub: "Upload this MP3/WAV as the beat's cloud master", disabled: !["mp3", "wav"].includes(ext) },
+    { role: "main", icon: "♪", title: "Main audio", sub: "Upload this MP3/WAV as the beat's cloud master", disabled: !["mp3", "wav"].includes(ext) },
     { role: "loop", icon: "↻", title: "Loop", sub: "Upload this audio directly to Telegram as Loop", disabled: !audio },
-    { role: "project", icon: "", title: "Project ZIP", sub: "Replace the whole PROJECT.zip", disabled: !project },
-    { role: "projectFlp", icon: "", title: "Add FLP to Project", sub: "Add/replace the root FLP inside PROJECT.zip", disabled: !flp },
-    { role: "projectSamples", icon: "", title: "Add Samples folder", sub: "Replace Samples/ inside PROJECT.zip", disabled: !maybeFolder },
-    { role: "projectAudio", icon: "", title: "Add Audio folder", sub: "Replace Audio/ inside PROJECT.zip", disabled: !maybeFolder },
-    { role: "stems", icon: "", title: "Stems", sub: "Upload this directly to Telegram as Stems" },
+    { role: "project", icon: "📦", title: "Project ZIP", sub: "Replace the whole PROJECT.zip", disabled: !project },
+    { role: "projectFlp", icon: "◈", title: "Add FLP to Project", sub: "Add/replace the root FLP inside PROJECT.zip", disabled: !flp },
+    { role: "projectSamples", icon: "▦", title: "Add Samples folder", sub: "Replace Samples/ inside PROJECT.zip", disabled: !maybeFolder },
+    { role: "projectAudio", icon: "♫", title: "Add Audio folder", sub: "Replace Audio/ inside PROJECT.zip", disabled: !maybeFolder },
+    { role: "stems", icon: "▤", title: "Stems", sub: "Upload this directly to Telegram as Stems" },
     { role: "other", icon: "＋", title: "Other", sub: "Upload this directly to Telegram as Other" },
   ];
 
@@ -245,7 +245,7 @@ function SearchBar({ value, onChange }: { value: string; onChange: (v: string) =
               style={{ position: "absolute", right: 6, background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
               onMouseEnter={e => (e.currentTarget.style.color = "#aaa")}
               onMouseLeave={e => (e.currentTarget.style.color = "#555")}
-            ></button>
+            >✕</button>
           )}
         </div>
       )}
@@ -312,7 +312,7 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (v: SortKey) 
         }}
       >
         <span>{activeLabel}</span>
-        <span style={{ fontSize: 9, opacity: 0.75, position: "absolute", right: 6 }}></span>
+        <span style={{ fontSize: 9, opacity: 0.75, position: "absolute", right: 6 }}>▼</span>
       </button>
 
       {open && (
@@ -507,7 +507,6 @@ export function clearUploadPreviewCache() {
 
 export default function App() {
   const [beats, setBeats] = useState<Beat[]>(() => loadCachedBeats() ?? []);
-  const [openableCloudProjectIds, setOpenableCloudProjectIds] = useState<Set<string>>(new Set());
   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
   const cloudMetaTimersRef = useRef<Map<string, number>>(new Map());
   const cloudLibraryTimerRef = useRef<number | null>(null);
@@ -735,51 +734,6 @@ export default function App() {
     saveCachedSort(sortBy);
   }, [sortBy]);
 
-
-
-  // One-time recovery for a cloud-only library after Telegram login/startup.
-  // No timer, no permanent synchronization.
-  const beatGalerCloudRecoveryAttemptedRef = useRef(false);
-
-  const recoverTelegramLibraryOnceIfEmpty = useCallback(async () => {
-    if (beatGalerCloudRecoveryAttemptedRef.current) return;
-    if (beats.length !== 0) return;
-
-    beatGalerCloudRecoveryAttemptedRef.current = true;
-    try {
-      const cloud = await import("./lib/tauri");
-      const restored = await cloud.restoreLibraryFromTelegram();
-      if (restored.length > 0) {
-        setBeats(current => current.length === 0 ? restored : current);
-      }
-    } catch (error) {
-      console.warn("Telegram library one-time recovery skipped:", error);
-    }
-  }, [beats.length]);
-
-  useEffect(() => {
-    if (!settings?.telegram_cloud_connected) return;
-    if (beats.length !== 0) return;
-    void recoverTelegramLibraryOnceIfEmpty();
-  }, [settings?.telegram_cloud_connected, beats.length, recoverTelegramLibraryOnceIfEmpty]);
-
-  useEffect(() => {
-    const onTelegramConnected = (event: Event) => {
-      const detail = (event as CustomEvent<{ connected?: boolean; username?: string | null }>).detail;
-      if (!detail?.connected) return;
-
-      setSettings(current => current ? {
-        ...current,
-        telegram_cloud_connected: true,
-        telegram_cloud_username: detail.username ?? current.telegram_cloud_username ?? null,
-      } : current);
-
-      void recoverTelegramLibraryOnceIfEmpty();
-    };
-
-    window.addEventListener("beatgaler:telegram-connected", onTelegramConnected);
-    return () => window.removeEventListener("beatgaler:telegram-connected", onTelegramConnected);
-  }, [recoverTelegramLibraryOnceIfEmpty]);
 
   // Global keyboard shortcuts — stable handler via ref
   useEffect(() => {
@@ -1243,85 +1197,6 @@ export default function App() {
     }
   }, [addBeatsAndReview, dropImporting]);
 
-  const refreshOpenableCloudProjects = useCallback(async () => {
-    try {
-      const t = await import("./lib/tauri");
-      const ids = await t.listOpenableCloudProjectBeatIds();
-      setOpenableCloudProjectIds(new Set(ids));
-    } catch (error) {
-      console.warn("Could not refresh Open Project indicators", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshOpenableCloudProjects();
-  }, [beats, refreshOpenableCloudProjects]);
-
-
-  useEffect(() => {
-    const refresh = () => { void refreshOpenableCloudProjects(); };
-    window.addEventListener("beatgaler:project-cloud-changed", refresh);
-    return () => window.removeEventListener("beatgaler:project-cloud-changed", refresh);
-  }, [refreshOpenableCloudProjects]);
-
-
-  const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
-    const t = await import("./lib/tauri");
-
-    let preview;
-    try {
-      preview = await t.inspectBeatUpdateFolder(folderPath);
-    } catch {
-      return false;
-    }
-
-    let replaceMaster = false;
-    if (preview.has_mp3) {
-      const alreadyHasMaster = Boolean(beat.telegram_file_id) || Boolean(beat.mp3_path?.trim());
-      if (alreadyHasMaster) {
-        const incoming = preview.mp3_filename || "the incoming MP3";
-        const confirmed = window.confirm(
-          `Replace current MASTER for "${beat.name}"?\n\n` +
-          `${incoming} will become the new MASTER.\n` +
-          `Its BPM, key, tags, rating and artwork will replace the current metadata.\n\n` +
-          `WAV and project files from this folder will also be added or updated.`
-        );
-        if (!confirmed) return true;
-      }
-      replaceMaster = true;
-    }
-
-    try {
-      let updated = await t.mergeFolderIntoExistingBeat(beat, folderPath, replaceMaster);
-      setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
-
-      if (replaceMaster) {
-        updated = await t.uploadBeatToTelegram(updated);
-        setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
-      }
-
-      if (preview.has_wav && updated.wav_path) {
-        await t.uploadDroppedFileToTelegram(updated, updated.wav_path, "WAV");
-      }
-
-      if (preview.has_project_assets) {
-        await t.uploadProjectToTelegram(updated);
-      }
-
-      if (replaceMaster && updated.telegram_file_id) {
-        await t.syncBeatMetadataToTelegram(updated);
-      }
-
-      await refreshOpenableCloudProjects();
-      setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
-      return true;
-    } catch (error) {
-      console.error(error);
-      alert(`Could not update "${beat.name}" from the dropped folder: ${String(error)}`);
-      return true;
-    }
-  }, [refreshOpenableCloudProjects]);
-
   useEffect(() => {
     if (!isTauriAvailable) return;
     let unlisten: (() => void) | undefined;
@@ -1351,16 +1226,6 @@ export default function App() {
         const { getCurrentWebview } = await import("@tauri-apps/api/webview");
         const stop = await getCurrentWebview().onDragDropEvent(event => {
           const payload = event.payload as any;
-
-          const beatCardElementAt = (position: { x: number; y: number }) => {
-            const scale = window.devicePixelRatio || 1;
-            const direct = document.elementFromPoint(position.x, position.y) as HTMLElement | null;
-            const directCard = direct?.closest?.("[data-beat-card-id]") as HTMLElement | null;
-            if (directCard) return directCard;
-
-            const scaled = document.elementFromPoint(position.x / scale, position.y / scale) as HTMLElement | null;
-            return scaled?.closest?.("[data-beat-card-id]") as HTMLElement | null;
-          };
 
           if (payload.type === "enter") {
             const artwork = artworkElementAt(payload.position);
@@ -2183,7 +2048,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     } else {
       console.warn("HTML drop received files but WebView did not expose filesystem paths; waiting for Tauri native drop event.");
     }
-  }, [beats, importDroppedPaths, updateExistingBeatFromFolder]);
+  }, [importDroppedPaths]);
 
   return (
     <div
@@ -2206,12 +2071,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: "#444", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}
             onMouseEnter={e => (e.currentTarget.style.color = "#aaa")}
             onMouseLeave={e => (e.currentTarget.style.color = "#444")}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.3.72.6 1 .3.27.68.4 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7.6Z"
-                stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg></button>
+          >⚙</button>
           <button
             onClick={() => { clearUploadPreviewCache(); reloadLibrary(); }}
             title="Reload Library"
@@ -2352,7 +2212,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             <div style={{ marginTop: 14, padding: 14, borderRadius: 9, background: "#191919", color: "#aaa", fontSize: 12, lineHeight: 1.7 }}>
               <div><b style={{ color: "#ddd" }}>{normalizedOld}</b> → <b style={{ color: "#ddd" }}>{tagRename.newTag.trim().toLowerCase()}</b></div>
               <div style={{ marginTop: 8 }}>This will rewrite metadata in:</div>
-              <div> {affected.length} beats</div><div> {mp3Count} MP3 files</div><div> {wavCount} WAV files</div>
+              <div>✓ {affected.length} beats</div><div>✓ {mp3Count} MP3 files</div><div>✓ {wavCount} WAV files</div>
               <div style={{ marginTop: 8, color: "#fbbf24" }}>Do not close Beat Galer while it is running. A recovery journal will roll back an interrupted operation on the next start.</div>
             </div>
             {tagRenameError && <div style={{ marginTop: 10, color: "#f87171", fontSize: 11 }}>{tagRenameError}</div>}
@@ -2407,7 +2267,6 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                   <BeatCard
                     key={beat.id}
                     beat={beat}
-                    openableProject={openableCloudProjectIds.has(beat.id)}
                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}
                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}

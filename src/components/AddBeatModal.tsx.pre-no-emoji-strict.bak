@@ -61,7 +61,7 @@ function FilePicker({ label, options, value, onChange }: {
       {options.length > 1 && value && (
         <div onClick={() => onChange(null)}
           style={{ fontSize: 11, color: "#444", cursor: "pointer", marginTop: 2, paddingLeft: 2 }}>
-           skip {label.toLowerCase()}
+          ✕ skip {label.toLowerCase()}
         </div>
       )}
     </div>
@@ -403,7 +403,7 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
               {step === "choose" ? "Add beat" : step === "scanning" ? "Scanning…" : step === "conflict" ? "Multiple files found" : "Select beats to import"}
             </span>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#555", fontSize: 18, cursor: "pointer" }}></button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#555", fontSize: 18, cursor: "pointer" }}>✕</button>
         </div>
 
         <div style={{ padding: 22 }}>
@@ -415,7 +415,7 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
                 onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}> 
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}></div>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🎵</div>
                   <div>
                     <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Add files</div>
                     <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>Pick one or more MP3/WAV files</div>
@@ -428,7 +428,7 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
                 onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}> 
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}></div>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📁</div>
                   <div>
                     <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Add folder</div>
                     <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>Pick a beat folder — auto-detects MP3, WAV, stems, FLP</div>
@@ -441,7 +441,7 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 onMouseEnter={e => (e.currentTarget.style.borderColor = "#333")}
                 onMouseLeave={e => (e.currentTarget.style.borderColor = "#222")}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}></div>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1e1e1e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🧠</div>
                   <div>
                     <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Smart import (any structure)</div>
                     <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>MP3s, FLPs and samples in separate folders? We'll match them by name.</div>

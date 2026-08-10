@@ -32,7 +32,6 @@ interface Props {
   cloudUploadErrorDetail?: string;
   tagFrequency: ReadonlyMap<string, number>;
   showIncompleteWarnings: boolean;
-  openableProject: boolean;
   playing: boolean;
   selected: boolean;
   selectedCount: number;
@@ -167,7 +166,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 }
 
 export default function BeatCard({
-  beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
+  beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, playing, selected, selectedCount, selectMode,
   onPlay, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect, onDropArtwork,
   animDelay = 0, dragEnabled
@@ -175,20 +174,10 @@ export default function BeatCard({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hovered, setHovered] = useState(false);
   const [imageDragOver, setImageDragOver] = useState(false);
-  const [folderUpdateDragOver, setFolderUpdateDragOver] = useState(false);
   const [warningInfoOpen, setWarningInfoOpen] = useState(false);
   const [uploadErrorOpen, setUploadErrorOpen] = useState(false);
   const [projectCloud, setProjectCloud] = useState<ProjectCloudStatus | null>(null);
   const dotsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onBeatUpdateDrag = (event: Event) => {
-      const detail = (event as CustomEvent<{ beatId: string | null; active: boolean }>).detail;
-      setFolderUpdateDragOver(Boolean(detail?.active && detail?.beatId === beat.id));
-    };
-    window.addEventListener("beatgaler:beat-update-drag", onBeatUpdateDrag);
-    return () => window.removeEventListener("beatgaler:beat-update-drag", onBeatUpdateDrag);
-  }, [beat.id]);
 
   useEffect(() => {
     const handleNativeArtworkDrag = (event: Event) => {
@@ -297,7 +286,6 @@ export default function BeatCard({
   return (
     <div
       ref={setNodeRef}
-      data-beat-card-id={beat.id}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={e => { if (selectMode) onToggleSelect(beat, e); }}
@@ -310,8 +298,6 @@ export default function BeatCard({
         borderRadius: 12,
         transform: composedTransform,
         opacity: isDragging ? 0.72 : 1,
-        outline: folderUpdateDragOver ? "2px solid #6f8f68" : "none",
-        outlineOffset: folderUpdateDragOver ? "4px" : "0px",
         transition: transition || "transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease",
         userSelect: "none",
           // Red border when beat needs resolution — applied to artwork instead. Outer container keeps compact layout.
@@ -576,6 +562,13 @@ export default function BeatCard({
           >
             {beat.name}
           </div>
+          {(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY") && (
+            <span
+              title={beat.cloud_status === "CLOUD_ONLY" ? "Stored in Telegram Cloud · not local" : "Synced to Telegram Cloud"}
+              aria-label={beat.cloud_status === "CLOUD_ONLY" ? "Cloud only" : "Synced to Telegram Cloud"}
+              style={{ marginLeft: 5, marginRight: 3, flexShrink: 0, fontSize: 11, lineHeight: "18px", color: "#7fa98a", opacity: 0.95 }}
+            ><BeatGalerIcon name="cloud" /></span>
+          )}
           {projectCloud && projectCloud.state !== "LOCAL" && (
             <span
               title={projectCloud.state === "NEEDS_SYNC" ? "Project changed locally · sync needed" : projectCloud.state === "CLOUD_ONLY" ? "Project stored in Telegram Cloud" : "Project synced to Telegram Cloud"}
@@ -592,18 +585,11 @@ export default function BeatCard({
             </div>
           )}
         </div>
-        {(beat.rating > 0 || Boolean(beat.telegram_file_id) || openableProject) && (
-          <div data-beatgaler-status-row style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, minHeight: 12 }}>
-            {beat.rating > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <span key={i} style={{ fontSize: 8, lineHeight: 1, color: i <= beat.rating ? "#7a7a7a" : "#2b2b2b" }}>★</span>
-                ))}
-              </div>
-            )}
-            {openableProject && (
-              <img src="/beatgaler-icons/box.png" alt="" aria-hidden="true" title="Open Project available" style={{ width: 13, height: 13, objectFit: "contain", display: "block", flexShrink: 0 }} />
-            )}
+        {beat.rating > 0 && (
+          <div style={{ display: "flex", gap: 2, marginTop: 4 }}>
+            {[1, 2, 3, 4, 5].map((i) => (
+              <span key={i} style={{ fontSize: 8, lineHeight: 1, color: i <= beat.rating ? "#7a7a7a" : "#2b2b2b" }}>★</span>
+            ))}
           </div>
         )}
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>

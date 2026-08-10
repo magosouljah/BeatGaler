@@ -1,5 +1,4 @@
 use base64::{engine::general_purpose, Engine};
-// BeatGaler storage rules v2: canonical MASTER/WAV/PROJECT/METADATA/ARTWORK/TRASH slots.
 use id3::{Tag, TagLike, Version, frame};
 use rand::{rngs::OsRng, RngCore};
 use rusqlite::{Connection, params};
@@ -191,16 +190,12 @@ pub fn list_cloud_files_for_beat(
     db: tauri::State<DbState>,
 ) -> Result<Vec<CloudFileRecord>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-
     let mut stmt = conn.prepare(
         "SELECT cloud_file_id, beat_id, file_type, filename, COALESCE(source_size,0), manifest_json, status
-         FROM cloud_files
-         WHERE beat_id=?1 AND file_type NOT IN ('MASTER','PROJECT')
-         ORDER BY created_at ASC"
+         FROM cloud_files WHERE beat_id=?1 ORDER BY created_at ASC"
     ).map_err(|e| e.to_string())?;
 
-    let rows = stmt.query_map(params![beat_id.clone()], |r| {
+    let rows = stmt.query_map(params![beat_id], |r| {
         let manifest_raw: String = r.get(5)?;
         let manifest: Value = serde_json::from_str(&manifest_raw).unwrap_or(Value::Null);
         let part_count = manifest.get("parts")
@@ -219,38 +214,7 @@ pub fn list_cloud_files_for_beat(
         })
     }).map_err(|e| e.to_string())?;
 
-    out.extend(rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?);
-
-    // PROJECT has one canonical logical slot in cloud_projects. Expose a
-    // synthetic CloudFileRecord for the existing UI/download API instead of
-    // storing a second independent PROJECT record in cloud_files.
-    let project = conn.query_row(
-        "SELECT manifest_json, COALESCE(source_size,0) FROM cloud_projects WHERE beat_id=?1",
-        params![beat_id.clone()],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-    );
-    match project {
-        Ok((manifest_raw, size_i64)) => {
-            let manifest: Value = serde_json::from_str(&manifest_raw).unwrap_or(Value::Null);
-            let part_count = manifest.get("parts")
-                .and_then(|v| v.as_array())
-                .map(|v| v.len())
-                .unwrap_or(0);
-            out.push(CloudFileRecord {
-                cloud_file_id: format!("PROJECT:{}", beat_id),
-                beat_id: beat_id.clone(),
-                file_type: "PROJECT".to_string(),
-                filename: "project.zip".to_string(),
-                original_size: size_i64.max(0) as u64,
-                part_count,
-                status: "SYNCED".to_string(),
-            });
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => {}
-        Err(e) => return Err(e.to_string()),
-    }
-
-    Ok(out)
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
 
@@ -723,7 +687,6 @@ pub fn upload_beat_to_telegram(
 
     let mut fields = vec![
         ("beatgalerUserId", user_id.clone()),
-        ("beatId", beat.id.clone()),
         ("beatName", beat.name.clone()),
     ];
     if let Some(existing_message_id) = beat.telegram_message_id {
@@ -811,130 +774,6 @@ pub fn clear_local_cloud_vault(db: tauri::State<DbState>) -> Result<(), String> 
     Ok(())
 }
 
-fn build_cloud_manifest_entry(
-    conn: &Connection,
-    beat: &BeatMeta,
-    sort_order: Option<usize>,
-) -> Result<Option<Value>, String> {
-    let mut cloud_files = Vec::new();
-    let mut stmt = conn.prepare(
-        "SELECT cloud_file_id, file_type, filename, source_size, manifest_json, status
-         FROM cloud_files
-         WHERE beat_id=?1 AND file_type NOT IN ('MASTER','PROJECT')
-         ORDER BY created_at ASC"
-    ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![beat.id.clone()], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<i64>>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
-        ))
-    }).map_err(|e| e.to_string())?;
-
-    for row in rows {
-        let (cloud_file_id, file_type, filename, source_size, raw, status) =
-            row.map_err(|e| e.to_string())?;
-        let file_manifest: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-        cloud_files.push(json!({
-            "cloud_file_id": cloud_file_id,
-            "type": file_type,
-            "filename": filename,
-            "size": source_size.unwrap_or(0),
-            "status": status,
-            "manifest": file_manifest,
-        }));
-    }
-    drop(stmt);
-
-    let metadata_row = conn.query_row(
-        "SELECT telegram_metadata_message_id, artwork_hash, artwork_telegram_file_id, artwork_telegram_message_id
-         FROM cloud_metadata WHERE beat_id=?1",
-        params![beat.id.clone()],
-        |row| Ok((
-            row.get::<_, Option<i64>>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<i64>>(3)?,
-        )),
-    );
-    let (metadata_message_id, artwork_hash, artwork_file_id, artwork_message_id) = match metadata_row {
-        Ok(v) => v,
-        Err(rusqlite::Error::QueryReturnedNoRows) => (None, None, None, None),
-        Err(e) => return Err(e.to_string()),
-    };
-
-    let project_row = conn.query_row(
-        "SELECT manifest_json, source_size FROM cloud_projects WHERE beat_id=?1",
-        params![beat.id.clone()],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
-    );
-    let project = match project_row {
-        Ok((raw, source_size)) => {
-            let mut project_manifest = serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
-
-            // Telegram's library index is the source of truth for PROJECT
-            // capabilities. A PROJECT may contain only Audio/Samples, so the
-            // existence of a PROJECT ZIP must never imply that it is openable.
-            if let Some(obj) = project_manifest.as_object_mut() {
-                obj.insert("openable".to_string(), Value::Bool(beat.has_flp));
-                obj.insert("has_flp".to_string(), Value::Bool(beat.has_flp));
-                obj.insert("has_als".to_string(), Value::Bool(beat.has_als));
-                obj.insert("has_samples".to_string(), Value::Bool(beat.has_samples));
-            }
-
-            Some(json!({
-                "manifest": project_manifest,
-                "size": source_size.unwrap_or(0),
-                "openable": beat.has_flp,
-                "has_flp": beat.has_flp,
-                "has_als": beat.has_als,
-                "has_samples": beat.has_samples,
-            }))
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => None,
-        Err(e) => return Err(e.to_string()),
-    };
-
-    let has_master = beat.telegram_file_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false);
-    let has_any_cloud = has_master
-        || !cloud_files.is_empty()
-        || project.is_some()
-        || metadata_message_id.is_some()
-        || artwork_file_id.is_some();
-    if !has_any_cloud {
-        return Ok(None);
-    }
-
-    Ok(Some(json!({
-        "id": beat.id,
-        "sort_order": sort_order,
-        "name": beat.name,
-        "bpm": beat.bpm,
-        "key": beat.key,
-        "tags": beat.tags,
-        "rating": beat.rating,
-        "color": beat.color,
-        "color2": beat.color2,
-        "master": {
-            "telegram_file_id": beat.telegram_file_id,
-            "telegram_message_id": beat.telegram_message_id,
-            "filename": cloud_master_filename(beat),
-        },
-        "artwork": {
-            "telegram_file_id": artwork_file_id,
-            "telegram_message_id": artwork_message_id,
-            "hash": artwork_hash,
-            "mime": artwork_mime_from_data_url(beat.image_base64.as_deref()),
-        },
-        "metadata_message_id": metadata_message_id,
-        "files": cloud_files,
-        "project": project,
-    })))
-}
-
 #[tauri::command(async)]
 pub fn sync_cloud_library_index(
     beats: Vec<BeatMeta>,
@@ -948,98 +787,140 @@ pub fn sync_cloud_library_index(
             return Err("Telegram is not connected.".to_string());
         }
     }
-
     let user_id = ensure_beatgaler_user_id(&state)?;
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut manifest_beats = Vec::new();
 
     for (sort_order, beat) in beats.iter().enumerate() {
-        if let Some(entry) = build_cloud_manifest_entry(&conn, beat, Some(sort_order))? {
-            manifest_beats.push(entry);
-        }
-    }
-
-    // Trash is part of the Telegram source of truth. Files stay in their
-    // original Telegram messages while trashed; only membership changes.
-    let mut manifest_trash = Vec::new();
-    let mut stmt = conn.prepare(
-        "SELECT id, beat_meta_json, trashed_at
-         FROM trash
-         WHERE is_cloud=1 AND beat_meta_json IS NOT NULL
-         ORDER BY trashed_at DESC"
-    ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-        ))
-    }).map_err(|e| e.to_string())?;
-
-    for row in rows {
-        let (trash_id, raw, trashed_at) = row.map_err(|e| e.to_string())?;
-        let Ok(beat) = serde_json::from_str::<BeatMeta>(&raw) else { continue; };
-        if let Some(entry) = build_cloud_manifest_entry(&conn, &beat, None)? {
-            manifest_trash.push(json!({
-                "trash_id": trash_id,
-                "trashed_at": trashed_at,
-                "purge_after": trashed_at.saturating_add(14 * 86400),
-                "beat": entry,
+        let mut cloud_files = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT cloud_file_id, file_type, filename, source_size, manifest_json, status
+             FROM cloud_files WHERE beat_id=?1 ORDER BY created_at ASC"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![beat.id.clone()], |row| {
+            let cloud_file_id: String = row.get(0)?;
+            let file_type: String = row.get(1)?;
+            let filename: String = row.get(2)?;
+            let source_size: Option<i64> = row.get(3)?;
+            let manifest_raw: String = row.get(4)?;
+            let status: String = row.get(5)?;
+            Ok((cloud_file_id, file_type, filename, source_size, manifest_raw, status))
+        }).map_err(|e| e.to_string())?;
+        for row in rows {
+            let (cloud_file_id, file_type, filename, source_size, raw, status) = row.map_err(|e| e.to_string())?;
+            let file_manifest: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            cloud_files.push(json!({
+                "cloud_file_id": cloud_file_id,
+                "type": file_type,
+                "filename": filename,
+                "size": source_size.unwrap_or(0),
+                "status": status,
+                "manifest": file_manifest,
             }));
         }
+
+        let metadata_row = conn.query_row(
+            "SELECT telegram_metadata_message_id, artwork_hash, artwork_telegram_file_id, artwork_telegram_message_id
+             FROM cloud_metadata WHERE beat_id=?1",
+            params![beat.id.clone()],
+            |row| Ok((
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            )),
+        );
+        let (metadata_message_id, artwork_hash, artwork_file_id, artwork_message_id) = match metadata_row {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => (None, None, None, None),
+            Err(e) => return Err(e.to_string()),
+        };
+
+        let project_row = conn.query_row(
+            "SELECT manifest_json, source_size FROM cloud_projects WHERE beat_id=?1",
+            params![beat.id.clone()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+        );
+        let project = match project_row {
+            Ok((raw, source_size)) => Some(json!({
+                "manifest": serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null),
+                "size": source_size.unwrap_or(0),
+            })),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.to_string()),
+        };
+
+        let has_any_cloud = beat.telegram_file_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false)
+            || !cloud_files.is_empty()
+            || project.is_some();
+        if !has_any_cloud { continue; }
+
+        manifest_beats.push(json!({
+            "id": beat.id,
+            "sort_order": sort_order,
+            "name": beat.name,
+            "bpm": beat.bpm,
+            "key": beat.key,
+            "tags": beat.tags,
+            "rating": beat.rating,
+            "color": beat.color,
+            "color2": beat.color2,
+            "master": {
+                "telegram_file_id": beat.telegram_file_id,
+                "telegram_message_id": beat.telegram_message_id,
+                "filename": cloud_master_filename(beat),
+            },
+            "artwork": {
+                "telegram_file_id": artwork_file_id,
+                "telegram_message_id": artwork_message_id,
+                "hash": artwork_hash,
+                "mime": artwork_mime_from_data_url(beat.image_base64.as_deref()),
+            },
+            "metadata_message_id": metadata_message_id,
+            "files": cloud_files,
+            "project": project,
+        }));
     }
-    drop(stmt);
     drop(conn);
+
+    if manifest_beats.is_empty() {
+        return Err("There are no Telegram-backed beats to put in the cloud library index.".to_string());
+    }
 
     let manifest = json!({
         "schema": "beatgaler.telegram.library",
-        "version": 2,
+        "version": 1,
         "updated_at": now_epoch(),
         "beats": manifest_beats,
-        "trash": manifest_trash,
     });
-
     let temp_dir = beatgaler_temp_dir().join("cloud-upload-tmp");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let temp_path = temp_dir.join("beatgaler-library.json");
-    std::fs::write(
-        &temp_path,
-        serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
-    ).map_err(|e| e.to_string())?;
+    std::fs::write(&temp_path, serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
 
     let url = format!("{}/library/upsert", telegram_cloud_api_base());
     let mut args = vec![
-        "-sS".to_string(),
-        "-X".to_string(),
-        "POST".to_string(),
-        "-F".to_string(),
-        format!("beatgalerUserId={}", user_id),
-        "-F".to_string(),
-        format!("file=@{}", temp_path.to_string_lossy()),
+        "-sS".to_string(), "-X".to_string(), "POST".to_string(),
+        "-F".to_string(), format!("beatgalerUserId={}", user_id),
+        "-F".to_string(), format!("file=@{}", temp_path.to_string_lossy()),
     ];
     if let Some(source_id) = source_id.as_deref().filter(|v| !v.trim().is_empty()) {
         args.push("-F".to_string());
         args.push(format!("sourceId={}", source_id));
     }
     args.push(url);
-
     let raw_result = run_curl(&args);
     let _ = std::fs::remove_file(&temp_path);
     let raw = raw_result.map_err(|e| format!("Could not sync Telegram library index: {}", e))?;
     let response: Value = serde_json::from_str(&raw)
         .map_err(|e| format!("Invalid library index response: {} ({})", e, raw))?;
-    if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
-
+    if let Some(err) = response.get("error").and_then(|v| v.as_str()) { return Err(err.to_string()); }
     Ok(CloudLibrarySyncResult {
-        telegram_file_id: response.get("telegram_file_id")
-            .and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        telegram_message_id: response.get("telegram_message_id")
-            .and_then(|v| v.as_i64()).unwrap_or(0),
+        telegram_file_id: response.get("telegram_file_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        telegram_message_id: response.get("telegram_message_id").and_then(|v| v.as_i64()).unwrap_or(0),
         updated: response.get("updated").and_then(|v| v.as_bool()).unwrap_or(false),
-        beat_count: manifest.get("beats")
-            .and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+        beat_count: manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
     })
 }
 
@@ -1098,174 +979,6 @@ fn existing_beat_meta(conn: &Connection, beat_id: &str) -> Option<BeatMeta> {
 /// No original beat folder is required. All restored source paths deliberately
 /// point at NON-CREATED app-data placeholders, so filesystem scans cannot own
 /// or delete these cloud-only beats.
-fn restore_cloud_records_from_manifest_entry(
-    conn: &Connection,
-    id: &str,
-    entry: &Value,
-) -> Result<(), String> {
-    let files = entry.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    for file in files {
-        let cloud_file_id = file.get("cloud_file_id").and_then(|v| v.as_str()).unwrap_or("");
-        let file_type = file.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if cloud_file_id.is_empty() || file_type.is_empty() || matches!(file_type, "MASTER" | "PROJECT") {
-            continue;
-        }
-        let filename = file.get("filename").and_then(|v| v.as_str()).unwrap_or("file");
-        let source_size = file.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
-        let status = file.get("status").and_then(|v| v.as_str()).unwrap_or("SYNCED");
-        let file_manifest = file.get("manifest").cloned().unwrap_or(Value::Null).to_string();
-        conn.execute(
-            "INSERT INTO cloud_files
-             (cloud_file_id, beat_id, file_type, filename, source_path, source_size, source_modified_ms, manifest_json, status, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,NULL,?5,NULL,?6,?7,strftime('%s','now'),strftime('%s','now'))
-             ON CONFLICT(cloud_file_id) DO UPDATE SET
-               beat_id=excluded.beat_id, file_type=excluded.file_type, filename=excluded.filename,
-               source_path=NULL, source_size=excluded.source_size, manifest_json=excluded.manifest_json,
-               status=excluded.status, updated_at=excluded.updated_at",
-            params![cloud_file_id, id, file_type, filename, source_size, file_manifest, status],
-        ).map_err(|e| e.to_string())?;
-    }
-
-    conn.execute(
-        "DELETE FROM cloud_files WHERE beat_id=?1 AND file_type IN ('MASTER','PROJECT')",
-        params![id],
-    ).map_err(|e| e.to_string())?;
-
-    if let Some(project) = entry.get("project").filter(|v| !v.is_null()) {
-        let mut project_manifest_value = project.get("manifest").cloned().unwrap_or(Value::Null);
-        if let Some(obj) = project_manifest_value.as_object_mut() {
-            for key in ["openable", "has_flp", "has_als", "has_samples"] {
-                if let Some(value) = project.get(key).cloned() {
-                    obj.insert(key.to_string(), value);
-                }
-            }
-        }
-        let project_manifest = project_manifest_value.to_string();
-        let project_size = project.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
-        conn.execute(
-            "INSERT INTO cloud_projects
-             (beat_id, local_zip_path, manifest_json, source_size, source_modified_ms, uploaded_at)
-             VALUES (?1,NULL,?2,?3,NULL,strftime('%s','now'))
-             ON CONFLICT(beat_id) DO UPDATE SET
-               local_zip_path=NULL, manifest_json=excluded.manifest_json,
-               source_size=excluded.source_size, source_modified_ms=NULL, uploaded_at=excluded.uploaded_at",
-            params![id, project_manifest, project_size],
-        ).map_err(|e| e.to_string())?;
-    } else {
-        conn.execute("DELETE FROM cloud_projects WHERE beat_id=?1", params![id])
-            .map_err(|e| e.to_string())?;
-    }
-
-    let artwork = entry.get("artwork").cloned().unwrap_or(Value::Null);
-    let metadata_message_id = entry.get("metadata_message_id").and_then(|v| v.as_i64());
-    let artwork_hash = artwork.get("hash").and_then(|v| v.as_str()).map(|v| v.to_string());
-    let artwork_file_id = artwork.get("telegram_file_id").and_then(|v| v.as_str()).map(|v| v.to_string());
-    let artwork_message_id = artwork.get("telegram_message_id").and_then(|v| v.as_i64());
-    conn.execute(
-        "INSERT INTO cloud_metadata
-         (beat_id, telegram_metadata_message_id, artwork_hash, artwork_telegram_file_id, artwork_telegram_message_id, updated_at)
-         VALUES (?1,?2,?3,?4,?5,strftime('%s','now'))
-         ON CONFLICT(beat_id) DO UPDATE SET
-           telegram_metadata_message_id=excluded.telegram_metadata_message_id,
-           artwork_hash=excluded.artwork_hash,
-           artwork_telegram_file_id=excluded.artwork_telegram_file_id,
-           artwork_telegram_message_id=excluded.artwork_telegram_message_id,
-           updated_at=excluded.updated_at",
-        params![id, metadata_message_id, artwork_hash, artwork_file_id, artwork_message_id],
-    ).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn beat_from_cloud_manifest_entry(
-    entry: &Value,
-    user_id: &str,
-    state: &SettingsState,
-    conn: &Connection,
-) -> Result<BeatMeta, String> {
-    let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if id.is_empty() { return Err("Telegram library entry has no beat id.".to_string()); }
-    let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
-    let master = entry.get("master").cloned().unwrap_or(Value::Null);
-    let telegram_file_id = master.get("telegram_file_id").and_then(|v| v.as_str()).map(|v| v.to_string());
-    let telegram_message_id = master.get("telegram_message_id").and_then(|v| v.as_i64());
-    let master_filename = master.get("filename").and_then(|v| v.as_str()).unwrap_or("master.mp3");
-
-    let placeholder_folder = state.data_dir.join("cloud-library").join(&id);
-    let placeholder_master_name = if Path::new(master_filename).extension()
-        .and_then(|v| v.to_str()).map(|v| v.eq_ignore_ascii_case("mp3")).unwrap_or(false)
-    {
-        master_filename.to_string()
-    } else {
-        format!("{}.mp3", safe_cloud_filename(&name))
-    };
-    let placeholder_master = placeholder_folder.join(placeholder_master_name);
-    let existing_local = existing_beat_meta(conn, &id).filter(beat_local_master_exists);
-
-    let artwork = entry.get("artwork").cloned().unwrap_or(Value::Null);
-    let artwork_file_id = artwork.get("telegram_file_id").and_then(|v| v.as_str()).map(|v| v.to_string());
-    let artwork_mime = artwork.get("mime").and_then(|v| v.as_str());
-    let image_base64 = artwork_file_id.as_deref()
-        .and_then(|file_id| fetch_restored_artwork(user_id, file_id, artwork_mime, &state.data_dir));
-
-    let files = entry.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let has_wav_cloud = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("WAV"));
-    let has_stems = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("STEMS"));
-    let has_loop = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("LOOP"));
-    let project = entry.get("project").cloned().unwrap_or(Value::Null);
-    let project_manifest = project.get("manifest").cloned().unwrap_or(Value::Null);
-    let project_has_flp = project.get("has_flp").and_then(|v| v.as_bool())
-        .or_else(|| project_manifest.get("has_flp").and_then(|v| v.as_bool()))
-        .or_else(|| project.get("openable").and_then(|v| v.as_bool()))
-        .or_else(|| project_manifest.get("openable").and_then(|v| v.as_bool()))
-        .unwrap_or(false);
-    let project_has_als = project.get("has_als").and_then(|v| v.as_bool())
-        .or_else(|| project_manifest.get("has_als").and_then(|v| v.as_bool()))
-        .unwrap_or(false);
-    let project_has_samples = project.get("has_samples").and_then(|v| v.as_bool())
-        .or_else(|| project_manifest.get("has_samples").and_then(|v| v.as_bool()))
-        .unwrap_or(false);
-    let tags = entry.get("tags").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
-    }).unwrap_or_default();
-    let rating = entry.get("rating").and_then(|v| v.as_u64()).unwrap_or(0).min(255) as u8;
-
-    Ok(BeatMeta {
-        id: id.clone(),
-        name,
-        folder_path: existing_local.as_ref().map(|b| b.folder_path.clone())
-            .unwrap_or_else(|| placeholder_folder.to_string_lossy().to_string()),
-        mp3_path: existing_local.as_ref().map(|b| b.mp3_path.clone())
-            .unwrap_or_else(|| placeholder_master.to_string_lossy().to_string()),
-        wav_path: existing_local.as_ref().and_then(|b| b.wav_path.clone()),
-        playback_path: existing_local.as_ref().map(|b| b.playback_path.clone())
-            .unwrap_or_else(|| placeholder_master.to_string_lossy().to_string()),
-        bpm: entry.get("bpm").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        key: entry.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        needs_resolution: false,
-        tags,
-        rating,
-        image_base64,
-        has_wav: existing_local.as_ref().map(|b| b.has_wav).unwrap_or(false) || has_wav_cloud,
-        has_stems: existing_local.as_ref().map(|b| b.has_stems).unwrap_or(false) || has_stems,
-        has_samples: existing_local.as_ref().map(|b| b.has_samples).unwrap_or(false) || project_has_samples,
-        samples_path: existing_local.as_ref().and_then(|b| b.samples_path.clone()),
-        has_flp: existing_local.as_ref().map(|b| b.has_flp).unwrap_or(false) || project_has_flp,
-        has_als: existing_local.as_ref().map(|b| b.has_als).unwrap_or(false) || project_has_als,
-        stems_path: existing_local.as_ref().and_then(|b| b.stems_path.clone()),
-        flp_path: existing_local.as_ref().and_then(|b| b.flp_path.clone()),
-        als_path: existing_local.as_ref().and_then(|b| b.als_path.clone()),
-        other_files: existing_local.as_ref().map(|b| b.other_files.clone()).unwrap_or_default(),
-        color: entry.get("color").and_then(|v| v.as_str()).unwrap_or("#666666").to_string(),
-        color2: entry.get("color2").and_then(|v| v.as_str()).unwrap_or("#999999").to_string(),
-        has_loop: existing_local.as_ref().map(|b| b.has_loop).unwrap_or(false) || has_loop,
-        loop_path: existing_local.as_ref().and_then(|b| b.loop_path.clone()),
-        cloud_status: telegram_file_id.as_ref()
-            .map(|_| if existing_local.is_some() { "SYNCED" } else { "CLOUD_ONLY" }.to_string()),
-        telegram_file_id,
-        telegram_message_id,
-    })
-}
-
 #[tauri::command]
 pub fn restore_library_from_telegram(
     state: tauri::State<SettingsState>,
@@ -1284,95 +997,163 @@ pub fn restore_library_from_telegram(
     if manifest.get("schema").and_then(|v| v.as_str()) != Some("beatgaler.telegram.library") {
         return Err("Pinned Telegram document is not a BeatGaler library index.".to_string());
     }
-
     let entries = manifest.get("beats").and_then(|v| v.as_array())
         .ok_or_else(|| "Telegram library index has no beats array.".to_string())?;
-    let trash_entries = manifest.get("trash").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let manifest_ids: std::collections::HashSet<String> = entries.iter()
         .filter_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(|v| v.to_string()))
-        .filter(|id| !id.is_empty()).collect();
-    let trash_beat_ids: std::collections::HashSet<String> = trash_entries.iter()
-        .filter_map(|item| item.get("beat"))
-        .filter_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(|v| v.to_string()))
-        .filter(|id| !id.is_empty()).collect();
-    let manifest_trash_ids: std::collections::HashSet<String> = trash_entries.iter()
-        .filter_map(|item| item.get("trash_id").and_then(|v| v.as_str()).map(|v| v.to_string()))
+        .filter(|id| !id.is_empty())
         .collect();
 
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut restored = Vec::new();
     for entry in entries {
-        let beat = beat_from_cloud_manifest_entry(entry, &user_id, &state, &conn)?;
+        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() { continue; }
+        let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+        let master = entry.get("master").cloned().unwrap_or(Value::Null);
+        let telegram_file_id = master.get("telegram_file_id").and_then(|v| v.as_str()).map(|v| v.to_string());
+        let telegram_message_id = master.get("telegram_message_id").and_then(|v| v.as_i64());
+        let master_filename = master.get("filename").and_then(|v| v.as_str()).unwrap_or("master.mp3");
+        let ext = Path::new(master_filename).extension().and_then(|v| v.to_str()).unwrap_or("mp3").to_ascii_lowercase();
+
+        let placeholder_folder = state.data_dir.join("cloud-library").join(&id);
+        let placeholder_master = placeholder_folder.join(master_filename);
+        let is_wav = ext == "wav";
+        // Do not destroy a valid local/offline copy just because Telegram is
+        // authoritative for metadata. Keep usable local paths on this PC; only
+        // cloud-only installs use non-created app-data placeholders.
+        let existing_local = existing_beat_meta(&conn, &id).filter(beat_local_master_exists);
+        let artwork = entry.get("artwork").cloned().unwrap_or(Value::Null);
+        let artwork_file_id = artwork.get("telegram_file_id").and_then(|v| v.as_str()).map(|v| v.to_string());
+        let artwork_message_id = artwork.get("telegram_message_id").and_then(|v| v.as_i64());
+        let artwork_hash = artwork.get("hash").and_then(|v| v.as_str()).map(|v| v.to_string());
+        let artwork_mime = artwork.get("mime").and_then(|v| v.as_str());
+        let image_base64 = artwork_file_id.as_deref()
+            .and_then(|file_id| fetch_restored_artwork(&user_id, file_id, artwork_mime, &state.data_dir));
+
+        let files = entry.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let has_wav_cloud = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("WAV"));
+        let has_stems = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("STEMS"));
+        let has_loop = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("LOOP"));
+        let has_project = files.iter().any(|v| v.get("type").and_then(|x| x.as_str()) == Some("PROJECT")) || entry.get("project").map(|v| !v.is_null()).unwrap_or(false);
+
+        let tags = entry.get("tags").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
+        }).unwrap_or_default();
+        let rating = entry.get("rating").and_then(|v| v.as_u64()).unwrap_or(0).min(255) as u8;
+        let beat = BeatMeta {
+            id: id.clone(),
+            name,
+            folder_path: existing_local.as_ref().map(|b| b.folder_path.clone())
+                .unwrap_or_else(|| placeholder_folder.to_string_lossy().to_string()),
+            mp3_path: existing_local.as_ref().map(|b| b.mp3_path.clone())
+                .unwrap_or_else(|| if is_wav { String::new() } else { placeholder_master.to_string_lossy().to_string() }),
+            wav_path: existing_local.as_ref().map(|b| b.wav_path.clone())
+                .unwrap_or_else(|| if is_wav { Some(placeholder_master.to_string_lossy().to_string()) } else { None }),
+            playback_path: existing_local.as_ref().map(|b| b.playback_path.clone())
+                .unwrap_or_else(|| placeholder_master.to_string_lossy().to_string()),
+            bpm: entry.get("bpm").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            key: entry.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            needs_resolution: false,
+            tags,
+            rating,
+            image_base64,
+            has_wav: existing_local.as_ref().map(|b| b.has_wav).unwrap_or(has_wav_cloud) || has_wav_cloud,
+            has_stems: existing_local.as_ref().map(|b| b.has_stems).unwrap_or(has_stems) || has_stems,
+            has_samples: existing_local.as_ref().map(|b| b.has_samples).unwrap_or(false),
+            samples_path: existing_local.as_ref().and_then(|b| b.samples_path.clone()),
+            has_flp: existing_local.as_ref().map(|b| b.has_flp).unwrap_or(has_project) || has_project,
+            has_als: existing_local.as_ref().map(|b| b.has_als).unwrap_or(false),
+            stems_path: existing_local.as_ref().and_then(|b| b.stems_path.clone()),
+            flp_path: existing_local.as_ref().and_then(|b| b.flp_path.clone()),
+            als_path: existing_local.as_ref().and_then(|b| b.als_path.clone()),
+            other_files: existing_local.as_ref().map(|b| b.other_files.clone()).unwrap_or_default(),
+            color: entry.get("color").and_then(|v| v.as_str()).unwrap_or("#666666").to_string(),
+            color2: entry.get("color2").and_then(|v| v.as_str()).unwrap_or("#999999").to_string(),
+            has_loop: existing_local.as_ref().map(|b| b.has_loop).unwrap_or(has_loop) || has_loop,
+            loop_path: existing_local.as_ref().and_then(|b| b.loop_path.clone()),
+            cloud_status: if telegram_file_id.is_some() {
+                Some(if existing_local.is_some() { "SYNCED" } else { "CLOUD_ONLY" }.to_string())
+            } else {
+                existing_local.as_ref().and_then(|b| b.cloud_status.clone())
+            },
+            telegram_file_id,
+            telegram_message_id,
+        };
         let sort_order = entry.get("sort_order").and_then(|v| v.as_i64());
         db_upsert_with_order(&conn, &beat, sort_order).map_err(|e| e.to_string())?;
-        restore_cloud_records_from_manifest_entry(&conn, &beat.id, entry)?;
+
+        // Restore file-level cloud records so PROJECT/STEMS/LOOP/OTHER keep working.
+        for file in files {
+            let cloud_file_id = file.get("cloud_file_id").and_then(|v| v.as_str()).unwrap_or("");
+            let file_type = file.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let filename = file.get("filename").and_then(|v| v.as_str()).unwrap_or("file");
+            if cloud_file_id.is_empty() || file_type.is_empty() { continue; }
+            let source_size = file.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+            let status = file.get("status").and_then(|v| v.as_str()).unwrap_or("SYNCED");
+            let file_manifest = file.get("manifest").cloned().unwrap_or(Value::Null).to_string();
+            conn.execute(
+                "INSERT INTO cloud_files (cloud_file_id, beat_id, file_type, filename, source_path, source_size, source_modified_ms, manifest_json, status, created_at, updated_at)
+                 VALUES (?1,?2,?3,?4,NULL,?5,NULL,?6,?7,strftime('%s','now'),strftime('%s','now'))
+                 ON CONFLICT(cloud_file_id) DO UPDATE SET beat_id=excluded.beat_id, file_type=excluded.file_type, filename=excluded.filename, source_path=NULL, source_size=excluded.source_size, manifest_json=excluded.manifest_json, status=excluded.status, updated_at=excluded.updated_at",
+                params![cloud_file_id, id, file_type, filename, source_size, file_manifest, status],
+            ).map_err(|e| e.to_string())?;
+            if file_type == "PROJECT" {
+                conn.execute(
+                    "INSERT INTO cloud_projects (beat_id, local_zip_path, manifest_json, source_size, source_modified_ms, uploaded_at)
+                     VALUES (?1,NULL,?2,?3,NULL,strftime('%s','now'))
+                     ON CONFLICT(beat_id) DO UPDATE SET local_zip_path=NULL, manifest_json=excluded.manifest_json, source_size=excluded.source_size, source_modified_ms=NULL, uploaded_at=excluded.uploaded_at",
+                    params![id, file_manifest, source_size],
+                ).map_err(|e| e.to_string())?;
+            }
+        }
+
+        if let Some(project) = entry.get("project").filter(|v| !v.is_null()) {
+            let project_manifest = project.get("manifest").cloned().unwrap_or(Value::Null).to_string();
+            let project_size = project.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+            conn.execute(
+                "INSERT INTO cloud_projects (beat_id, local_zip_path, manifest_json, source_size, source_modified_ms, uploaded_at)
+                 VALUES (?1,NULL,?2,?3,NULL,strftime('%s','now'))
+                 ON CONFLICT(beat_id) DO UPDATE SET local_zip_path=NULL, manifest_json=excluded.manifest_json, source_size=excluded.source_size, source_modified_ms=NULL, uploaded_at=excluded.uploaded_at",
+                params![id, project_manifest, project_size],
+            ).map_err(|e| e.to_string())?;
+        }
+
+        let metadata_message_id = entry.get("metadata_message_id").and_then(|v| v.as_i64());
+        conn.execute(
+            "INSERT INTO cloud_metadata (beat_id, telegram_metadata_message_id, artwork_hash, artwork_telegram_file_id, artwork_telegram_message_id, updated_at)
+             VALUES (?1,?2,?3,?4,?5,strftime('%s','now'))
+             ON CONFLICT(beat_id) DO UPDATE SET telegram_metadata_message_id=excluded.telegram_metadata_message_id, artwork_hash=excluded.artwork_hash, artwork_telegram_file_id=excluded.artwork_telegram_file_id, artwork_telegram_message_id=excluded.artwork_telegram_message_id, updated_at=excluded.updated_at",
+            params![id, metadata_message_id, artwork_hash, artwork_file_id, artwork_message_id],
+        ).map_err(|e| e.to_string())?;
         restored.push(beat);
     }
 
-    for item in &trash_entries {
-        let Some(entry) = item.get("beat") else { continue; };
-        let beat = beat_from_cloud_manifest_entry(entry, &user_id, &state, &conn)?;
-        let trash_id = item.get("trash_id").and_then(|v| v.as_str())
-            .map(|v| v.to_string()).unwrap_or_else(|| format!("cloud-trash:{}", beat.id));
-        let trashed_at = item.get("trashed_at").and_then(|v| v.as_i64())
-            .unwrap_or_else(|| now_epoch() as i64);
-        let raw_beat = serde_json::to_string(&beat).map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO trash
-             (id, original_folder_path, trashed_path, beat_name, beat_meta_json, is_cloud, trashed_at)
-             VALUES (?1,?2,'',?3,?4,1,?5)
-             ON CONFLICT(id) DO UPDATE SET
-               original_folder_path=excluded.original_folder_path,
-               beat_name=excluded.beat_name, beat_meta_json=excluded.beat_meta_json,
-               is_cloud=1, trashed_at=excluded.trashed_at",
-            params![trash_id, beat.folder_path, beat.name, raw_beat, trashed_at],
-        ).map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM beats WHERE id=?1", params![beat.id.clone()])
-            .map_err(|e| e.to_string())?;
-        restore_cloud_records_from_manifest_entry(&conn, &beat.id, entry)?;
-    }
-
-    let mut trash_stmt = conn.prepare("SELECT id FROM trash WHERE is_cloud=1")
-        .map_err(|e| e.to_string())?;
-    let local_trash_ids = trash_stmt.query_map([], |r| r.get::<_, String>(0))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok()).collect::<Vec<_>>();
-    drop(trash_stmt);
-    for trash_id in local_trash_ids {
-        if !manifest_trash_ids.contains(&trash_id) {
-            conn.execute("DELETE FROM trash WHERE id=?1", params![trash_id])
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
+    // Telegram's pinned index is authoritative for CLOUD membership. If this PC
+    // still has an old cloud-only beat that no longer exists in the index, drop
+    // the stale local record. If a real local copy still exists, keep it but
+    // detach the obsolete Telegram identity so local work is never destroyed.
     let existing_rows = db_load_all(&conn).map_err(|e| e.to_string())?;
     for row in existing_rows {
         if manifest_ids.contains(&row.id) { continue; }
-        if trash_beat_ids.contains(&row.id) {
-            conn.execute("DELETE FROM beats WHERE id=?1", params![row.id.clone()])
-                .map_err(|e| e.to_string())?;
-            continue;
-        }
         let Some(mut meta) = db_meta(&row) else { continue; };
         let had_cloud = meta.telegram_file_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false)
             || matches!(meta.cloud_status.as_deref(), Some("SYNCED") | Some("CLOUD_ONLY"));
         if !had_cloud { continue; }
+
         if beat_local_master_exists(&meta) {
             meta.telegram_file_id = None;
             meta.telegram_message_id = None;
             meta.cloud_status = None;
             db_save(&conn, &meta).map_err(|e| e.to_string())?;
         } else {
-            conn.execute("DELETE FROM beats WHERE id=?1", params![row.id.clone()])
-                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM beats WHERE id=?1", params![row.id.clone()]).map_err(|e| e.to_string())?;
         }
-        conn.execute("DELETE FROM cloud_files WHERE beat_id=?1", params![row.id.clone()])
-            .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM cloud_projects WHERE beat_id=?1", params![row.id.clone()])
-            .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM cloud_metadata WHERE beat_id=?1", params![row.id.clone()])
-            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM cloud_files WHERE beat_id=?1", params![row.id.clone()]).map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM cloud_projects WHERE beat_id=?1", params![row.id.clone()]).map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM cloud_metadata WHERE beat_id=?1", params![row.id.clone()]).map_err(|e| e.to_string())?;
     }
+
     Ok(restored)
 }
 
@@ -1587,8 +1368,8 @@ pub fn upload_dropped_file_to_telegram(
     if meta.len() == 0 {
         return Err("The dropped file is empty.".to_string());
     }
-    if cloud_type == "PROJECT" && !project_zip_is_valid(&source) {
-        return Err("PROJECT zip is invalid. It must contain FLP/ALS or Audio/Sample/Samples and no Backup/Backups.".to_string());
+    if cloud_type == "PROJECT" && !project_zip_has_root_flp(&source) {
+        return Err("PROJECT zip is invalid: it must contain a root-level .flp file.".to_string());
     }
 
     let filename = source.file_name()
@@ -1602,13 +1383,11 @@ pub fn upload_dropped_file_to_telegram(
 
     // MASTER remains compatible with the existing cloud-only playback path.
     if cloud_type == "MASTER" {
-        let effective_beat = adopt_mp3_metadata_if_empty(&beat, &source);
-        let upload_copy = make_cloud_master_upload_copy(&effective_beat, &source, &state.data_dir)?;
+        let upload_copy = make_cloud_master_upload_copy(&beat, &source, &state.data_dir)?;
         let base = telegram_cloud_api_base();
         let url = format!("{}/beats/upload", base);
         let mut fields = vec![
             ("beatgalerUserId", user_id.clone()),
-            ("beatId", beat.id.clone()),
             ("beatName", beat.name.clone()),
         ];
         if let Some(existing_message_id) = beat.telegram_message_id {
@@ -1624,20 +1403,41 @@ pub fn upload_dropped_file_to_telegram(
             .ok_or_else(|| "Telegram did not return a file_id.".to_string())?;
         let telegram_message_id = response.get("telegram_message_id").and_then(|v| v.as_i64());
 
-        let cloud_file_id = format!("MASTER:{}", beat.id);
+        let cloud_file_id = new_cloud_file_id();
+        let manifest = json!({
+            "ok": true,
+            "original_name": filename,
+            "original_size": meta.len(),
+            "parts": [{
+                "telegram_file_id": telegram_file_id,
+                "telegram_message_id": telegram_message_id,
+                "index": 0,
+                "size": meta.len(),
+                "filename": filename
+            }]
+        });
 
-        let mut updated = effective_beat;
+        let mut updated = beat.clone();
         updated.cloud_status = Some("SYNCED".to_string());
         updated.telegram_file_id = Some(telegram_file_id.clone());
         updated.telegram_message_id = telegram_message_id;
 
         let conn = db.0.lock().map_err(|e| e.to_string())?;
         db_save(&conn, &updated).map_err(|e| e.to_string())?;
-        // MASTER has exactly one logical home: BeatMeta.telegram_*.
-        // Remove legacy duplicate rows left by older builds.
         conn.execute(
-            "DELETE FROM cloud_files WHERE beat_id=?1 AND file_type='MASTER'",
-            params![beat.id.clone()],
+            "INSERT INTO cloud_files
+             (cloud_file_id, beat_id, file_type, filename, source_path, source_size, source_modified_ms, manifest_json, status, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'SYNCED',strftime('%s','now'),strftime('%s','now'))",
+            params![
+                cloud_file_id,
+                beat.id,
+                cloud_type,
+                filename,
+                source.to_string_lossy().to_string(),
+                meta.len() as i64,
+                modified_ms,
+                manifest.to_string()
+            ],
         ).map_err(|e| e.to_string())?;
 
         return Ok(CloudFileUploadResult {
@@ -1654,40 +1454,21 @@ pub fn upload_dropped_file_to_telegram(
 
     let existing_slot: Option<(String, Option<i64>)> = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        if cloud_type == "PROJECT" {
-            let row = conn.query_row(
-                "SELECT manifest_json FROM cloud_projects WHERE beat_id=?1",
-                params![beat.id.clone()],
-                |r| r.get::<_, String>(0),
-            );
-            match row {
-                Ok(manifest_raw) => {
-                    let message_id = serde_json::from_str::<Value>(&manifest_raw).ok()
-                        .and_then(|v| v.get("parts").and_then(|p| p.as_array()).cloned())
-                        .and_then(|parts| parts.first().cloned())
-                        .and_then(|p| p.get("telegram_message_id").and_then(|m| m.as_i64()));
-                    Some((format!("PROJECT:{}", beat.id), message_id))
-                }
-                Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                Err(e) => return Err(e.to_string()),
+        let row = conn.query_row(
+            "SELECT cloud_file_id, manifest_json FROM cloud_files WHERE beat_id=?1 AND file_type=?2 AND status='SYNCED' ORDER BY updated_at DESC LIMIT 1",
+            params![beat.id.clone(), cloud_type.clone()],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        );
+        match row {
+            Ok((cloud_file_id, manifest_raw)) => {
+                let message_id = serde_json::from_str::<Value>(&manifest_raw).ok()
+                    .and_then(|v| v.get("parts").and_then(|p| p.as_array()).cloned())
+                    .and_then(|parts| parts.first().cloned())
+                    .and_then(|p| p.get("telegram_message_id").and_then(|m| m.as_i64()));
+                Some((cloud_file_id, message_id))
             }
-        } else {
-            let row = conn.query_row(
-                "SELECT cloud_file_id, manifest_json FROM cloud_files WHERE beat_id=?1 AND file_type=?2 AND status='SYNCED' ORDER BY updated_at DESC LIMIT 1",
-                params![beat.id.clone(), cloud_type.clone()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            );
-            match row {
-                Ok((cloud_file_id, manifest_raw)) => {
-                    let message_id = serde_json::from_str::<Value>(&manifest_raw).ok()
-                        .and_then(|v| v.get("parts").and_then(|p| p.as_array()).cloned())
-                        .and_then(|parts| parts.first().cloned())
-                        .and_then(|p| p.get("telegram_message_id").and_then(|m| m.as_i64()));
-                    Some((cloud_file_id, message_id))
-                }
-                Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                Err(e) => return Err(e.to_string()),
-            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.to_string()),
         }
     };
 
@@ -1766,20 +1547,10 @@ pub fn upload_dropped_file_to_telegram(
                 modified_ms
             ],
         ).map_err(|e| e.to_string())?;
-        conn.execute(
-            "DELETE FROM cloud_files WHERE beat_id=?1 AND file_type='PROJECT'",
-            params![beat.id.clone()],
-        ).map_err(|e| e.to_string())?;
     }
 
-    let returned_cloud_file_id = if cloud_type == "PROJECT" {
-        format!("PROJECT:{}", beat.id)
-    } else {
-        cloud_file_id
-    };
-
     Ok(CloudFileUploadResult {
-        cloud_file_id: returned_cloud_file_id,
+        cloud_file_id,
         beat_id: beat.id,
         file_type: cloud_type,
         filename,
@@ -2042,9 +1813,8 @@ fn safe_cloud_filename(value: &str) -> String {
 }
 
 /// Returns (archive_path, generated_temporarily).
-/// If no project ZIP exists, BeatGaler packages the work assets that belong
-/// to PROJECT: FLP/ALS plus Audio/Sample/Samples. Backup/Backups is forbidden.
-/// MASTER audio is deliberately excluded.
+/// If no project ZIP exists, BeatGaler packages FLP/ALS + Audio/Samples/Backup
+/// into app-data temp storage. MASTER audio is deliberately excluded.
 fn find_root_project_for_beat(folder: &Path, beat_name: &str) -> Option<PathBuf> {
     let clean_target = clean_name_from_filename(beat_name);
     let (target_core, _) = matcher::normalize_core_name(&clean_target);
@@ -2082,8 +1852,11 @@ fn build_project_archive_if_needed(
         return Err("No local project folder is available to package.".to_string());
     }
 
-    if !folder_has_project_assets(&folder) {
-        return Err("No PROJECT assets were found. Add an FLP/ALS, Audio/, Sample/, or Samples/ folder.".to_string());
+    let root_project = find_root_project_for_beat(&folder, &beat.name)
+        .or_else(|| beat.flp_path.as_deref().map(PathBuf::from).filter(|p| p.is_file() && p.parent() == Some(folder.as_path())))
+        .or_else(|| beat.als_path.as_deref().map(PathBuf::from).filter(|p| p.is_file() && p.parent() == Some(folder.as_path())));
+    if root_project.is_none() {
+        return Err("No matching root-level FLP/ALS project file was found for this beat.".to_string());
     }
 
     let root = beatgaler_temp_dir().join("cloud-upload-tmp").join("generated-projects");
@@ -2113,17 +1886,28 @@ fn build_project_archive_if_needed(
         if !path.is_dir() { continue; }
         let name = entry.file_name().to_string_lossy().to_string();
         let lower = name.to_ascii_lowercase();
-        if matches!(lower.as_str(), "backup" | "backups") {
+        if lower == "backup" {
+            // Backup is intentionally ignored in V1. FL Studio may prefer FLPs
+            // from Backup over the real root project when opening a ZIP.
             continue;
         }
-        if matches!(lower.as_str(), "audio" | "sample" | "samples") {
-            copy_project_dir_filtered(&path, &staging.join(&name))?;
+        if matches!(lower.as_str(), "audio" | "samples") {
+            copy_dir_recursive(&path, &staging.join(&name))?;
         }
     }
 
-    if !folder_has_project_assets(&staging) {
+    let staged_has_project = std::fs::read_dir(&staging)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .any(|e| {
+            let p = e.path();
+            p.is_file() && p.extension().and_then(|v| v.to_str())
+                .map(|v| matches!(v.to_ascii_lowercase().as_str(), "flp" | "als"))
+                .unwrap_or(false)
+        });
+    if !staged_has_project {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err("PROJECT staging contains no FLP/ALS, Audio/, Sample/, or Samples/ assets.".to_string());
+        return Err("BeatGaler could not stage the FLP/ALS project file.".to_string());
     }
 
     #[cfg(target_os = "windows")]
@@ -2169,53 +1953,8 @@ fn build_project_archive_if_needed(
 }
 
 
-fn is_forbidden_project_component(name: &str) -> bool {
-    matches!(name.trim().to_ascii_lowercase().as_str(), "backup" | "backups")
-}
-
-fn copy_project_dir_filtered(src: &Path, dest: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
-        let src_path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if src_path.is_dir() && matches!(name.trim().to_ascii_lowercase().as_str(), "backup" | "backups") {
-            continue;
-        }
-        let dest_path = dest.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_project_dir_filtered(&src_path, &dest_path)?;
-        } else if src_path.is_file() {
-            std::fs::copy(&src_path, &dest_path).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
-fn folder_has_project_assets(folder: &Path) -> bool {
-    if !folder.is_dir() { return false; }
-    let Ok(rd) = std::fs::read_dir(folder) else { return false; };
-    for entry in rd.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() {
-            if is_forbidden_project_component(&name) { continue; }
-            if matches!(name.to_ascii_lowercase().as_str(), "audio" | "sample" | "samples") {
-                return true;
-            }
-            continue;
-        }
-        let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
-        if matches!(ext.as_str(), "flp" | "als") {
-            return true;
-        }
-    }
-    false
-}
-
-fn project_zip_is_valid(path: &Path) -> bool {
-    if !path.is_file()
-        || path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase() != "zip"
-    {
+fn project_zip_has_root_flp(path: &Path) -> bool {
+    if !path.is_file() || path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase() != "zip" {
         return false;
     }
 
@@ -2226,30 +1965,15 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $z = [System.IO.Compression.ZipFile]::OpenRead($env:BEATGALER_PROJECT_ZIP)
 try {
-  $hasProjectAsset = $false
-  $hasForbiddenBackup = $false
+  $ok = $false
   foreach ($e in $z.Entries) {
-    $name = $e.FullName.Replace('\','/').TrimStart('/')
-    if ([string]::IsNullOrWhiteSpace($name)) { continue }
-    $parts = $name.Split('/')
-    foreach ($part in $parts) {
-      $lowerPart = $part.ToLowerInvariant()
-      if ($lowerPart -eq 'backup' -or $lowerPart -eq 'backups') {
-        $hasForbiddenBackup = $true
-        break
-      }
-    }
-    if ($hasForbiddenBackup) { break }
-
-    $rootName = $parts[0].ToLowerInvariant()
-    if ($parts.Count -eq 1) {
-      $ext = [System.IO.Path]::GetExtension($rootName).ToLowerInvariant()
-      if ($ext -eq '.flp' -or $ext -eq '.als') { $hasProjectAsset = $true }
-    } elseif ($rootName -eq 'audio' -or $rootName -eq 'sample' -or $rootName -eq 'samples') {
-      $hasProjectAsset = $true
+    $name = $e.FullName.Replace('\','/')
+    if ($name -notmatch '/' -and [System.IO.Path]::GetExtension($name).ToLowerInvariant() -eq '.flp') {
+      $ok = $true
+      break
     }
   }
-  if ($hasProjectAsset -and -not $hasForbiddenBackup) { Write-Output '1' } else { Write-Output '0' }
+  if ($ok) { Write-Output '1' } else { Write-Output '0' }
 } finally {
   $z.Dispose()
 }
@@ -2270,27 +1994,10 @@ try {
             .output()
             .ok()
             .map(|out| {
-                let mut has_asset = false;
-                for raw in String::from_utf8_lossy(&out.stdout).lines() {
-                    let normalized = raw.replace('\\', "/").trim_start_matches('/').to_string();
-                    if normalized.is_empty() { continue; }
-                    let parts = normalized.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>();
-                    if parts.iter().any(|p| is_forbidden_project_component(p)) {
-                        return false;
-                    }
-                    if parts.len() == 1 {
-                        let lower = parts[0].to_ascii_lowercase();
-                        if lower.ends_with(".flp") || lower.ends_with(".als") {
-                            has_asset = true;
-                        }
-                    } else {
-                        let root = parts[0].to_ascii_lowercase();
-                        if matches!(root.as_str(), "audio" | "sample" | "samples") {
-                            has_asset = true;
-                        }
-                    }
-                }
-                has_asset
+                String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+                    let normalized = line.replace('\\', "/");
+                    !normalized.contains('/') && normalized.to_ascii_lowercase().ends_with(".flp")
+                })
             })
             .unwrap_or(false);
     }
@@ -2325,9 +2032,9 @@ fn ensure_project_working_copy(
         let user_id = ensure_beatgaler_user_id_from_settings(state)?;
         download_project_parts_parallel(parts, &user_id, &workspace)?;
 
-        if !project_zip_is_valid(&workspace) {
+        if !project_zip_has_root_flp(&workspace) {
             let _ = std::fs::remove_file(&workspace);
-            return Err("The PROJECT zip is invalid. It must contain FLP/ALS or Audio/Sample/Samples and no Backup/Backups.".to_string());
+            return Err("The PROJECT zip is invalid: no root-level .flp was found.".to_string());
         }
 
         let (size, modified_ms) = project_file_stamp(&workspace)
@@ -2467,7 +2174,7 @@ pub fn get_project_cloud_status(
         };
         let state = if !cloud_exists { "LOCAL" } else if !local_exists { "CLOUD_ONLY" } else if needs_sync { "NEEDS_SYNC" } else { "SYNCED" }.to_string();
         let valid = if let Some(ref local) = local_path {
-            project_zip_is_valid(local)
+            project_zip_has_root_flp(local)
         } else {
             cloud_exists
         };
@@ -2475,7 +2182,7 @@ pub fn get_project_cloud_status(
     }
     let local_path = detected_local;
     let local_exists = local_path.is_some();
-    let valid = local_path.as_deref().map(project_zip_is_valid).unwrap_or(false);
+    let valid = local_path.as_deref().map(project_zip_has_root_flp).unwrap_or(false);
     Ok(ProjectCloudStatus { synced: false, valid, state: "LOCAL".to_string(), local_zip_path: local_path.map(|p| p.to_string_lossy().to_string()), local_exists, needs_sync: false, part_count: 0 })
 }
 
@@ -2504,9 +2211,9 @@ pub fn upload_project_to_telegram(
     } else {
         build_project_archive_if_needed(&beat, &state.data_dir)?
     };
-    if !project_zip_is_valid(&zip_path) {
+    if !project_zip_has_root_flp(&zip_path) {
         if generated_archive { let _ = std::fs::remove_file(&zip_path); }
-        return Err("PROJECT zip is invalid. It must contain FLP/ALS or Audio/Sample/Samples and no Backup/Backups.".to_string());
+        return Err("PROJECT zip is invalid: it must contain a root-level .flp file.".to_string());
     }
     let size = std::fs::metadata(&zip_path).map_err(|e| e.to_string())?.len();
     if size == 0 { return Err("Project ZIP is empty.".to_string()); }
@@ -2550,7 +2257,7 @@ pub fn upload_project_to_telegram(
             return Err(format!("Could not upload project to BeatGaler Cloud: {}", e));
         }
     };
-    let mut response: Value = serde_json::from_str(&raw)
+    let response: Value = serde_json::from_str(&raw)
         .map_err(|e| format!("Invalid JSON from BeatGaler Cloud: {} ({})", e, raw))?;
     if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
         if generated_archive { let _ = std::fs::remove_file(&zip_path); }
@@ -2564,12 +2271,6 @@ pub fn upload_project_to_telegram(
         }
     };
     let part_count = parts.len();
-    if let Some(obj) = response.as_object_mut() {
-        obj.insert("openable".to_string(), Value::Bool(beat.has_flp));
-        obj.insert("has_flp".to_string(), Value::Bool(beat.has_flp));
-        obj.insert("has_als".to_string(), Value::Bool(beat.has_als));
-        obj.insert("has_samples".to_string(), Value::Bool(beat.has_samples));
-    }
 
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let stored_local_path: Option<String> =
@@ -2691,26 +2392,14 @@ pub fn download_cloud_file_to_cache(
 
     let (filename, manifest_raw) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        if let Some(beat_id) = cloud_file_id.strip_prefix("PROJECT:") {
-            conn.query_row(
-                "SELECT manifest_json FROM cloud_projects WHERE beat_id=?1",
-                params![beat_id],
-                |r| r.get::<_, String>(0),
-            ).map(|manifest| ("project.zip".to_string(), manifest))
-             .map_err(|e| match e {
-                 rusqlite::Error::QueryReturnedNoRows => "PROJECT cloud slot not found.".to_string(),
-                 _ => e.to_string(),
-             })?
-        } else {
-            conn.query_row(
-                "SELECT filename, manifest_json FROM cloud_files WHERE cloud_file_id=?1",
-                params![cloud_file_id.clone()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            ).map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => "Cloud file not found.".to_string(),
-                _ => e.to_string(),
-            })?
-        }
+        conn.query_row(
+            "SELECT filename, manifest_json FROM cloud_files WHERE cloud_file_id=?1",
+            params![cloud_file_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => "Cloud file not found.".to_string(),
+            _ => e.to_string(),
+        })?
     };
 
     let manifest: Value = serde_json::from_str(&manifest_raw)
@@ -2944,7 +2633,7 @@ pub fn update_project_archive_from_source(
     };
 
     mutate_project_zip(&workspace, &source, &kind)?;
-    if !project_zip_is_valid(&workspace) {
+    if !project_zip_has_root_flp(&workspace) {
         return Err("PROJECT zip is invalid: no root-level .flp was found after the update.".to_string());
     }
     let (size, modified_ms) = project_file_stamp(&workspace)
@@ -3851,90 +3540,6 @@ pub fn canonical_filename(clean_name: &str, bpm: &str, key: &str, ext: &str) -> 
     else { format!("{} {}.{}", clean_name, suffix, ext) }
 }
 
-fn normalized_beat_name_key(name: &str) -> String {
-    name.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_lowercase()
-}
-
-fn ensure_unique_beat_name(conn: &Connection, beat: &BeatMeta) -> rusqlite::Result<()> {
-    let wanted = normalized_beat_name_key(&beat.name);
-    if wanted.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "Beat name cannot be empty.".to_string(),
-        ));
-    }
-
-    let mut stmt = conn.prepare("SELECT id, meta_json FROM beats WHERE id<>?1")?;
-    let rows = stmt.query_map(params![beat.id.clone()], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-    })?;
-
-    for row in rows {
-        let (_id, raw) = row?;
-        let Some(raw) = raw else { continue; };
-        let Ok(existing) = serde_json::from_str::<BeatMeta>(&raw) else { continue; };
-        if normalized_beat_name_key(&existing.name) == wanted {
-            return Err(rusqlite::Error::InvalidParameterName(format!(
-                "A beat named '{}' already exists. Beat names must be unique.",
-                beat.name
-            )));
-        }
-    }
-
-    // Trash reserves the name too. Otherwise a new active beat could take the
-    // same name and make the original impossible to restore without conflict.
-    let mut trash_stmt = conn.prepare("SELECT beat_name FROM trash")?;
-    let trash_names = trash_stmt.query_map([], |row| row.get::<_, String>(0))?;
-    for name in trash_names {
-        if normalized_beat_name_key(&name?) == wanted {
-            return Err(rusqlite::Error::InvalidParameterName(format!(
-                "A beat named '{}' already exists in Trash. Restore or permanently remove it before reusing the name.",
-                beat.name
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn beat_metadata_is_empty(beat: &BeatMeta) -> bool {
-    beat.bpm.trim().is_empty()
-        && beat.key.trim().is_empty()
-        && beat.tags.is_empty()
-        && beat.rating == 0
-        && beat.image_base64.as_deref().map(|v| v.trim().is_empty()).unwrap_or(true)
-}
-
-fn adopt_mp3_metadata_if_empty(beat: &BeatMeta, source: &Path) -> BeatMeta {
-    let is_mp3 = source.extension()
-        .and_then(|v| v.to_str())
-        .map(|v| v.eq_ignore_ascii_case("mp3"))
-        .unwrap_or(false);
-    if !is_mp3 || !beat_metadata_is_empty(beat) {
-        return beat.clone();
-    }
-
-    let (bpm, key, tags, rating, image_base64) = read_id3(source);
-    let has_source_metadata = !bpm.trim().is_empty()
-        || !key.trim().is_empty()
-        || !tags.is_empty()
-        || rating > 0
-        || image_base64.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false);
-    if !has_source_metadata {
-        return beat.clone();
-    }
-
-    let mut adopted = beat.clone();
-    adopted.bpm = bpm;
-    adopted.key = key;
-    adopted.tags = tags;
-    adopted.rating = rating;
-    adopted.image_base64 = image_base64;
-    adopted
-}
-
 // ─────────────────────────────────────────────────────────────
 //  DB
 // ─────────────────────────────────────────────────────────────
@@ -4109,7 +3714,6 @@ fn mark_cloud_only(conn: &Connection, existing: &DbBeat) -> Result<bool, String>
 }
 
 fn db_save(conn: &Connection, b: &BeatMeta) -> rusqlite::Result<()> {
-    ensure_unique_beat_name(conn, b)?;
     let signature = folder_signature(Path::new(&b.folder_path)).ok();
     let meta_json = serde_json::to_string(b).ok();
     conn.execute(
@@ -4120,7 +3724,6 @@ fn db_save(conn: &Connection, b: &BeatMeta) -> rusqlite::Result<()> {
 }
 
 fn db_upsert_with_order(conn: &Connection, b: &BeatMeta, sort_order: Option<i64>) -> rusqlite::Result<()> {
-    ensure_unique_beat_name(conn, b)?;
     let signature = folder_signature(Path::new(&b.folder_path)).ok();
     let meta_json = serde_json::to_string(b).ok();
     conn.execute(
@@ -5750,44 +5353,17 @@ pub fn purge_old_trash_internal(conn: &Connection, data_dir: &Path, max_age_days
     };
     drop(stmt);
 
-    // For Cloud trash, Telegram deletion is authoritative. Never erase the
-    // local Trash row first, otherwise a temporary network failure creates an
-    // orphaned Topic in Telegram.
-    let settings_snapshot = load_settings(data_dir);
-    let cloud_user_id = settings_snapshot.beatgaler_user_id.clone();
-
     let mut purged = 0;
     for (trash_id, path, beat_meta_json, is_cloud) in rows {
         if is_cloud {
-            let Some(raw) = beat_meta_json.as_deref() else { continue; };
-            let Ok(meta) = serde_json::from_str::<BeatMeta>(raw) else { continue; };
-            let Some(user_id) = cloud_user_id.as_deref() else {
-                log_warn(data_dir, &format!(
-                    "Skipped permanent Cloud trash delete for '{}' because BeatGaler user id is unavailable",
-                    meta.name
-                ));
-                continue;
-            };
-
-            let base = telegram_cloud_api_base();
-            let url = format!("{}/beats/delete-topic", base);
-            let body = serde_json::json!({
-                "beatgalerUserId": user_id,
-                "beatId": meta.id,
-            });
-
-            if let Err(err) = post_json_simple(&url, &body) {
-                log_warn(data_dir, &format!(
-                    "Skipped local purge for Cloud beat '{}' because Telegram topic delete failed: {}",
-                    meta.name, err
-                ));
-                continue;
+            if let Some(raw) = beat_meta_json.as_deref() {
+                if let Ok(meta) = serde_json::from_str::<BeatMeta>(raw) {
+                    let beat_id = meta.id;
+                    let _ = conn.execute("DELETE FROM cloud_files WHERE beat_id=?1", params![beat_id.clone()]);
+                    let _ = conn.execute("DELETE FROM cloud_projects WHERE beat_id=?1", params![beat_id.clone()]);
+                    let _ = conn.execute("DELETE FROM cloud_metadata WHERE beat_id=?1", params![beat_id]);
+                }
             }
-
-            let beat_id = meta.id;
-            let _ = conn.execute("DELETE FROM cloud_files WHERE beat_id=?1", params![beat_id.clone()]);
-            let _ = conn.execute("DELETE FROM cloud_projects WHERE beat_id=?1", params![beat_id.clone()]);
-            let _ = conn.execute("DELETE FROM cloud_metadata WHERE beat_id=?1", params![beat_id]);
         } else {
             let p = PathBuf::from(&path);
             if p.exists() { remove_path_best_effort(&p); }
@@ -5797,13 +5373,7 @@ pub fn purge_old_trash_internal(conn: &Connection, data_dir: &Path, max_age_days
             purged += 1;
         }
     }
-
-    if purged > 0 {
-        log_info(data_dir, &format!(
-            "Purged {} trash item(s) older than {} days; Cloud Topics were deleted first",
-            purged, max_age_days
-        ));
-    }
+    if purged > 0 { log_info(data_dir, &format!("Auto-purged {} trash item(s) older than {} days", purged, max_age_days)); }
     purged
 }
 
@@ -6844,99 +6414,6 @@ fn upload_to_youtube_internal(
 /// In-memory state holding batches that are waiting on user decisions.
 /// Keyed by batch_id so the frontend can resolve a batch without the
 /// backend re-scanning the disk.
-
-fn next_import_display_name(conn: &Connection, base: &str) -> Result<String, String> {
-    let mut used = std::collections::HashSet::<String>::new();
-
-    for row in db_load_all(conn).map_err(|e| e.to_string())? {
-        if let Some(meta) = db_meta(&row) {
-            used.insert(normalized_beat_name_key(&meta.name));
-        }
-    }
-
-    let mut stmt = conn.prepare("SELECT beat_name FROM trash").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
-    for row in rows {
-        if let Ok(name) = row {
-            used.insert(normalized_beat_name_key(&name));
-        }
-    }
-    drop(stmt);
-
-    if !used.contains(&normalized_beat_name_key(base)) {
-        return Ok(base.to_string());
-    }
-
-    for n in 2..10000 {
-        let candidate = format!("{}_{}", base, n);
-        if !used.contains(&normalized_beat_name_key(&candidate)) {
-            return Ok(candidate);
-        }
-    }
-
-    Err(format!("Could not create a unique name for '{}'.", base))
-}
-
-fn copy_import_tree_without_backups(src: &Path, dst: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-
-    for entry in WalkDir::new(src).min_depth(1).into_iter().filter_map(Result::ok) {
-        let path = entry.path();
-        let rel = path.strip_prefix(src).map_err(|e| e.to_string())?;
-
-        if rel.components().any(|c| {
-            matches!(
-                c.as_os_str().to_string_lossy().trim().to_ascii_lowercase().as_str(),
-                "backup" | "backups"
-            )
-        }) {
-            continue;
-        }
-
-        let out = dst.join(rel);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            std::fs::copy(path, &out).map_err(|e| {
-                format!("Could not copy '{}' to '{}': {}", path.display(), out.display(), e)
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn materialize_duplicate_import_folder(
-    source: &Path,
-    beat_name: &str,
-    library_root: &Path,
-) -> Result<MaterializedBeat, String> {
-    std::fs::create_dir_all(library_root).map_err(|e| e.to_string())?;
-    let dest = unique_folder_path(library_root, beat_name);
-    copy_import_tree_without_backups(source, &dest)?;
-    normalize_folder_artwork(&dest);
-
-    let files = scan_folder_structured(&dest);
-    let flp = files.flps.iter().find(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .eq_ignore_ascii_case("flp")
-    }).cloned();
-
-    Ok(MaterializedBeat {
-        folder: dest,
-        mp3: files.mp3s.first().cloned(),
-        wav: files.wavs.first().cloned(),
-        loop_path: None,
-        stems: files.stems.first().cloned(),
-        flp,
-        als: files.alss.first().cloned(),
-    })
-}
-
 pub struct ImportBatchState(pub Mutex<std::collections::HashMap<String, PendingImportBatch>>);
 
 pub struct PendingImportBatch {
@@ -6966,224 +6443,6 @@ pub struct ImportDecisionInput {
 /// groups everything it finds by 100%-confidence name matching, and returns
 /// whatever couldn't be grouped automatically for the user to resolve.
 /// Nothing is copied to the vault yet — that happens in resolve_import_decisions.
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BeatFolderUpdatePreview {
-    pub has_mp3: bool,
-    pub mp3_filename: Option<String>,
-    pub has_wav: bool,
-    pub has_project_file: bool,
-    pub has_project_assets: bool,
-}
-
-#[tauri::command]
-pub fn inspect_beat_update_folder(folder_path: String) -> Result<BeatFolderUpdatePreview, String> {
-    let folder = PathBuf::from(folder_path);
-    if !folder.is_dir() {
-        return Err("Dropped path is not a folder.".to_string());
-    }
-
-    let files = scan_folder_structured(&folder);
-    let has_flp = files.flps.iter().any(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .eq_ignore_ascii_case("flp")
-    });
-
-    Ok(BeatFolderUpdatePreview {
-        has_mp3: !files.mp3s.is_empty(),
-        mp3_filename: files.mp3s.first()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string()),
-        has_wav: !files.wavs.is_empty(),
-        has_project_file: has_flp,
-        has_project_assets: folder_has_project_assets(&folder),
-    })
-}
-
-fn merge_tree_into_existing_beat(src: &Path, dst: &Path) -> Result<(), String> {
-    if src == dst {
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-
-    for entry in WalkDir::new(src).min_depth(1).into_iter().filter_map(Result::ok) {
-        let path = entry.path();
-        let rel = path.strip_prefix(src).map_err(|e| e.to_string())?;
-
-        if rel.components().any(|c| {
-            matches!(
-                c.as_os_str().to_string_lossy().trim().to_ascii_lowercase().as_str(),
-                "backup" | "backups"
-            )
-        }) {
-            continue;
-        }
-
-        if entry.file_type().is_file() && rel.components().count() == 1 {
-            let ext = path.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if ext == "mp3" || ext == "wav" {
-                continue;
-            }
-        }
-
-        let out = dst.join(rel);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            std::fs::copy(path, &out).map_err(|e| {
-                format!("Could not merge '{}' into beat: {}", path.display(), e)
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn merge_folder_into_existing_beat(
-    mut beat: BeatMeta,
-    folder_path: String,
-    replace_master: bool,
-    settings: tauri::State<SettingsState>,
-    db: tauri::State<DbState>,
-) -> Result<BeatMeta, String> {
-    let source = PathBuf::from(folder_path);
-    if !source.is_dir() {
-        return Err("Dropped path is not a folder.".to_string());
-    }
-
-    let incoming = scan_folder_structured(&source);
-
-    let target = {
-        let current = PathBuf::from(&beat.folder_path);
-        if current.is_dir() {
-            current
-        } else {
-            let candidate = settings.beats_dir().join(&beat.name);
-            std::fs::create_dir_all(&candidate).map_err(|e| e.to_string())?;
-            candidate
-        }
-    };
-
-    merge_tree_into_existing_beat(&source, &target)?;
-
-    if replace_master {
-        if let Some(src_mp3) = incoming.mp3s.first() {
-            let dest = if !beat.mp3_path.trim().is_empty() {
-                let current = PathBuf::from(&beat.mp3_path);
-                current.file_name()
-                    .map(|n| target.join(n))
-                    .unwrap_or_else(|| target.join(src_mp3.file_name().unwrap_or_default()))
-            } else {
-                target.join(src_mp3.file_name().unwrap_or_default())
-            };
-
-            if src_mp3 != &dest {
-                std::fs::copy(src_mp3, &dest)
-                    .map_err(|e| format!("Could not replace MASTER MP3: {}", e))?;
-            }
-
-            beat.mp3_path = dest.to_string_lossy().to_string();
-            beat.playback_path = beat.mp3_path.clone();
-
-            let (bpm, key, tags, rating, artwork) = read_id3(&dest);
-            beat.bpm = bpm;
-            beat.key = key;
-            beat.tags = tags;
-            beat.rating = rating;
-            beat.image_base64 = artwork;
-        }
-    }
-
-    if let Some(src_wav) = incoming.wavs.first() {
-        let dest = beat.wav_path.as_ref()
-            .filter(|p| !p.trim().is_empty())
-            .and_then(|p| {
-                PathBuf::from(p).file_name().map(|n| target.join(n))
-            })
-            .unwrap_or_else(|| target.join(src_wav.file_name().unwrap_or_default()));
-
-        if src_wav != &dest {
-            std::fs::copy(src_wav, &dest)
-                .map_err(|e| format!("Could not update WAV: {}", e))?;
-        }
-
-        beat.wav_path = Some(dest.to_string_lossy().to_string());
-        beat.has_wav = true;
-    }
-
-    normalize_folder_artwork(&target);
-    let refreshed = scan_folder_structured(&target);
-
-    beat.folder_path = target.to_string_lossy().to_string();
-    beat.has_stems = !refreshed.stems.is_empty();
-    beat.stems_path = refreshed.stems.first().map(|p| p.to_string_lossy().to_string());
-
-    beat.has_flp = refreshed.flps.iter().any(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .eq_ignore_ascii_case("flp")
-    });
-    beat.flp_path = refreshed.flps.iter().find(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .eq_ignore_ascii_case("flp")
-    }).map(|p| p.to_string_lossy().to_string());
-
-    beat.has_als = !refreshed.alss.is_empty();
-    beat.als_path = refreshed.alss.first().map(|p| p.to_string_lossy().to_string());
-    beat.has_samples = has_samples_folder(&target);
-    beat.samples_path = find_samples_folder(&target).map(|p| p.to_string_lossy().to_string());
-    beat.other_files = refreshed.others.iter().map(|p| p.to_string_lossy().to_string()).collect();
-
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    db_save(&conn, &beat).map_err(|e| e.to_string())?;
-
-    if folder_has_project_assets(&source) {
-        conn.execute(
-            "UPDATE cloud_projects SET local_zip_path=NULL WHERE beat_id=?1",
-            params![beat.id.clone()],
-        ).map_err(|e| e.to_string())?;
-    }
-
-    Ok(beat)
-}
-
-#[tauri::command]
-pub fn list_openable_cloud_project_beat_ids(
-    db: tauri::State<DbState>,
-) -> Result<Vec<String>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare(
-        "SELECT beat_id, manifest_json FROM cloud_projects ORDER BY beat_id"
-    ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| e.to_string())?;
-
-    let mut out = Vec::new();
-    for row in rows {
-        let (beat_id, raw) = row.map_err(|e| e.to_string())?;
-        let manifest: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-        let openable = manifest.get("openable").and_then(|v| v.as_bool())
-            .or_else(|| manifest.get("has_flp").and_then(|v| v.as_bool()))
-            .unwrap_or(false);
-        if openable { out.push(beat_id); }
-    }
-    Ok(out)
-}
-
 #[tauri::command]
 pub fn preview_import_batch(
     root_paths: Vec<String>,
@@ -7200,7 +6459,7 @@ pub fn preview_import_batch(
             name.trim().to_ascii_lowercase().as_str(),
             "sample" | "samples" | "stem" | "stems" |
             "backup" | "backups" | "render" | "renders" |
-            "recording" | "recordings" | "audio" | "audio files" |
+            "recording" | "recordings" | "audio files" |
             "sliced audio" | "freeze" | "consolidated"
         )
     }
@@ -7554,32 +6813,31 @@ pub fn resolve_import_decisions(
         if group.mp3.is_none() && group.wav.is_none() {
             continue; // nothing playable — don't create an empty beat
         }
-        let base_display_name = titleize(&core_name);
-        let display_name = next_import_display_name(&conn, &base_display_name)?;
+        let display_name = titleize(&core_name);
         let source_folder = source_folders.get(&core_name).map(PathBuf::as_path);
-
-        let materialized = if display_name != base_display_name {
-            if let Some(source) = source_folder {
-                materialize_duplicate_import_folder(source, &display_name, &settings.beats_dir())?
-            } else {
-                materialize_confirmed_group(
-                    &group,
-                    &display_name,
-                    &settings.beats_dir(),
-                    source_folder,
-                )?
-            }
-        } else {
-            materialize_confirmed_group(
-                &group,
-                &display_name,
-                &settings.beats_dir(),
-                source_folder,
-            )?
-        };
+        let materialized = materialize_confirmed_group(
+            &group,
+            &display_name,
+            &settings.beats_dir(),
+            source_folder,
+        )?;
 		normalize_folder_artwork(&materialized.folder);
         let id = make_id(&display_name, &materialized.folder.to_string_lossy());
         let mut beat = build_beat_from_confirmed(id.clone(), display_name, &materialized, group.others.clone());
+
+        // Same folder = same beat. Preserve existing MASTER identity so a repair
+        // import fills missing WAV/PROJECT slots without creating duplicate MP3s.
+        if let Ok(Some(existing_raw)) = conn.query_row(
+            "SELECT meta_json FROM beats WHERE id=?1",
+            params![id.clone()],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            if let Ok(existing) = serde_json::from_str::<BeatMeta>(&existing_raw) {
+                beat.telegram_file_id = existing.telegram_file_id;
+                beat.telegram_message_id = existing.telegram_message_id;
+                if beat.telegram_file_id.is_some() { beat.cloud_status = Some("SYNCED".to_string()); }
+            }
+        }
 
         db_upsert_with_order(&conn, &beat, None).map_err(|e| e.to_string())?;
         imported.push(beat);

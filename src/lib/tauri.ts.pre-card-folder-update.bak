@@ -589,38 +589,12 @@ export async function disconnectYouTube(): Promise<void> {
 export async function connectTelegramCloud(): Promise<void> {
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
-
-  // Open Telegram. Only while this login attempt is pending, check the small
-  // connection-status endpoint. This is NOT library synchronization and is not
-  // a permanent timer.
-  await invoke<void>("connect_telegram_cloud");
-
-  const invokeNow = invoke;
-  void (async () => {
-    const deadline = Date.now() + 10 * 60 * 1000;
-
-    while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      try {
-        const status = await invokeNow<TelegramCloudStatus>("poll_telegram_cloud_status");
-        if (!status.connected) continue;
-
-        // Do NOT reload the WebView. Reloading destroys the live React library
-        // state and was the regression introduced by the previous hotfix.
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("beatgaler:telegram-connected", {
-            detail: status,
-          }));
-        }
-        return;
-      } catch {
-        // Temporary handoff/network miss: retry only while this login is pending.
-      }
-    }
-  })();
+  return invoke<void>("connect_telegram_cloud");
 }
 
+// Ask the local/remote BeatGaler Cloud server whether the pending
+// connection has been completed yet. Also persists to settings.json on the
+// Rust side once connected — no need to call any "save" function after.
 export async function pollTelegramCloudStatus(): Promise<TelegramCloudStatus> {
   await initTauri();
   if (!invoke) return { connected: false, username: null };
@@ -775,9 +749,7 @@ export async function getProjectCloudStatus(beat: Beat): Promise<ProjectCloudSta
 export async function uploadProjectToTelegram(beat: Beat): Promise<ProjectCloudStatus> {
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
-  const result = await invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
-  if (typeof window !== "undefined") window.dispatchEvent(new Event("beatgaler:project-cloud-changed"));
-  return result;
+  return invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
 }
 
 export async function openBeatProject(beat: Beat): Promise<void> {
@@ -810,36 +782,6 @@ export interface PendingDecision {
   suggested_beat_name: string;
   suggested_role: string;
   score: number;
-}
-
-export interface BeatFolderUpdatePreview {
-  has_mp3: boolean;
-  mp3_filename: string | null;
-  has_wav: boolean;
-  has_project_file: boolean;
-  has_project_assets: boolean;
-}
-
-export async function inspectBeatUpdateFolder(folderPath: string): Promise<BeatFolderUpdatePreview> {
-  await initTauri();
-  if (!invoke) throw new Error("Tauri not available");
-  return invoke<BeatFolderUpdatePreview>("inspect_beat_update_folder", { folderPath });
-}
-
-export async function mergeFolderIntoExistingBeat(
-  beat: Beat,
-  folderPath: string,
-  replaceMaster: boolean,
-): Promise<Beat> {
-  await initTauri();
-  if (!invoke) throw new Error("Tauri not available");
-  return invoke<Beat>("merge_folder_into_existing_beat", { beat, folderPath, replaceMaster });
-}
-
-export async function listOpenableCloudProjectBeatIds(): Promise<string[]> {
-  await initTauri();
-  if (!invoke) return [];
-  return invoke<string[]>("list_openable_cloud_project_beat_ids");
 }
 
 export interface ImportBatchPreview {

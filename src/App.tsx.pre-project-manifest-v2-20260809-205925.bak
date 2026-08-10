@@ -1258,13 +1258,6 @@ export default function App() {
   }, [beats, refreshOpenableCloudProjects]);
 
 
-  useEffect(() => {
-    const refresh = () => { void refreshOpenableCloudProjects(); };
-    window.addEventListener("beatgaler:project-cloud-changed", refresh);
-    return () => window.removeEventListener("beatgaler:project-cloud-changed", refresh);
-  }, [refreshOpenableCloudProjects]);
-
-
   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
     const t = await import("./lib/tauri");
 

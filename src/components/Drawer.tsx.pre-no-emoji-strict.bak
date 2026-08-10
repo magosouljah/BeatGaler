@@ -549,7 +549,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             </span>
             {isBulk && <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>Check fields to apply to all</div>}
           </div>
-          <button onClick={reviewInfo ? (onSkipAll ?? onClose) : onClose} title={reviewInfo ? "Skip all remaining reviews" : "Close"} style={{ background: "none", border: "none", color: "#777", fontSize: reviewInfo ? 12 : 18, cursor: "pointer" }}>{reviewInfo ? "Skip all" : ""}</button>
+          <button onClick={reviewInfo ? (onSkipAll ?? onClose) : onClose} title={reviewInfo ? "Skip all remaining reviews" : "Close"} style={{ background: "none", border: "none", color: "#777", fontSize: reviewInfo ? 12 : 18, cursor: "pointer" }}>{reviewInfo ? "Skip all" : "✕"}</button>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: 22 }}>

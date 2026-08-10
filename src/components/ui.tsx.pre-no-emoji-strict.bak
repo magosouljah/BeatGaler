@@ -115,7 +115,7 @@ export function TagPill({
         <span
           onClick={onRemove}
           style={{ color: color ?? "#444", opacity: color ? 0.75 : 1, cursor: "pointer", fontSize: 10, lineHeight: 1 }}
-        ></span>
+        >✕</span>
       )}
     </span>
   );

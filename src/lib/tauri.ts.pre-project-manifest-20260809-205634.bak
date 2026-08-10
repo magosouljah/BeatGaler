@@ -775,9 +775,7 @@ export async function getProjectCloudStatus(beat: Beat): Promise<ProjectCloudSta
 export async function uploadProjectToTelegram(beat: Beat): Promise<ProjectCloudStatus> {
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
-  const result = await invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
-  if (typeof window !== "undefined") window.dispatchEvent(new Event("beatgaler:project-cloud-changed"));
-  return result;
+  return invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
 }
 
 export async function openBeatProject(beat: Beat): Promise<void> {

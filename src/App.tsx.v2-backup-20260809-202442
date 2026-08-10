@@ -736,51 +736,6 @@ export default function App() {
   }, [sortBy]);
 
 
-
-  // One-time recovery for a cloud-only library after Telegram login/startup.
-  // No timer, no permanent synchronization.
-  const beatGalerCloudRecoveryAttemptedRef = useRef(false);
-
-  const recoverTelegramLibraryOnceIfEmpty = useCallback(async () => {
-    if (beatGalerCloudRecoveryAttemptedRef.current) return;
-    if (beats.length !== 0) return;
-
-    beatGalerCloudRecoveryAttemptedRef.current = true;
-    try {
-      const cloud = await import("./lib/tauri");
-      const restored = await cloud.restoreLibraryFromTelegram();
-      if (restored.length > 0) {
-        setBeats(current => current.length === 0 ? restored : current);
-      }
-    } catch (error) {
-      console.warn("Telegram library one-time recovery skipped:", error);
-    }
-  }, [beats.length]);
-
-  useEffect(() => {
-    if (!settings?.telegram_cloud_connected) return;
-    if (beats.length !== 0) return;
-    void recoverTelegramLibraryOnceIfEmpty();
-  }, [settings?.telegram_cloud_connected, beats.length, recoverTelegramLibraryOnceIfEmpty]);
-
-  useEffect(() => {
-    const onTelegramConnected = (event: Event) => {
-      const detail = (event as CustomEvent<{ connected?: boolean; username?: string | null }>).detail;
-      if (!detail?.connected) return;
-
-      setSettings(current => current ? {
-        ...current,
-        telegram_cloud_connected: true,
-        telegram_cloud_username: detail.username ?? current.telegram_cloud_username ?? null,
-      } : current);
-
-      void recoverTelegramLibraryOnceIfEmpty();
-    };
-
-    window.addEventListener("beatgaler:telegram-connected", onTelegramConnected);
-    return () => window.removeEventListener("beatgaler:telegram-connected", onTelegramConnected);
-  }, [recoverTelegramLibraryOnceIfEmpty]);
-
   // Global keyboard shortcuts — stable handler via ref
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1256,13 +1211,6 @@ export default function App() {
   useEffect(() => {
     void refreshOpenableCloudProjects();
   }, [beats, refreshOpenableCloudProjects]);
-
-
-  useEffect(() => {
-    const refresh = () => { void refreshOpenableCloudProjects(); };
-    window.addEventListener("beatgaler:project-cloud-changed", refresh);
-    return () => window.removeEventListener("beatgaler:project-cloud-changed", refresh);
-  }, [refreshOpenableCloudProjects]);
 
 
   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
@@ -2206,12 +2154,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: "#444", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}
             onMouseEnter={e => (e.currentTarget.style.color = "#aaa")}
             onMouseLeave={e => (e.currentTarget.style.color = "#444")}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.3.72.6 1 .3.27.68.4 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7.6Z"
-                stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg></button>
+          ></button>
           <button
             onClick={() => { clearUploadPreviewCache(); reloadLibrary(); }}
             title="Reload Library"

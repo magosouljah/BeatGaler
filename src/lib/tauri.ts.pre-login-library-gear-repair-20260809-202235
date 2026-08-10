@@ -590,11 +590,14 @@ export async function connectTelegramCloud(): Promise<void> {
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
 
-  // Open Telegram. Only while this login attempt is pending, check the small
-  // connection-status endpoint. This is NOT library synchronization and is not
-  // a permanent timer.
+  // Open Telegram first. The cloud server completes the account link when the
+  // user taps "Log in to BeatGaler" in Telegram.
   await invoke<void>("connect_telegram_cloud");
 
+  // Login-handshake only: briefly check the dedicated connection-status
+  // endpoint while this login attempt is pending. This is NOT library sync and
+  // it is NOT a permanent background poll. It stops immediately on success and
+  // expires after the same 10-minute window as the Telegram login token.
   const invokeNow = invoke;
   void (async () => {
     const deadline = Date.now() + 10 * 60 * 1000;
@@ -606,21 +609,24 @@ export async function connectTelegramCloud(): Promise<void> {
         const status = await invokeNow<TelegramCloudStatus>("poll_telegram_cloud_status");
         if (!status.connected) continue;
 
-        // Do NOT reload the WebView. Reloading destroys the live React library
-        // state and was the regression introduced by the previous hotfix.
+        // poll_telegram_cloud_status already persists the connected state in
+        // settings.json. Reload once so every existing Settings/App state reads
+        // the newly persisted value without adding another long-lived listener.
         if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("beatgaler:telegram-connected", {
-            detail: status,
-          }));
+          window.location.reload();
         }
         return;
       } catch {
-        // Temporary handoff/network miss: retry only while this login is pending.
+        // A temporary network miss during the Telegram handoff should not turn
+        // the login into a permanent error. The next handshake tick retries.
       }
     }
   })();
 }
 
+// Ask the local/remote BeatGaler Cloud server whether the pending
+// connection has been completed yet. Also persists to settings.json on the
+// Rust side once connected — no need to call any "save" function after.
 export async function pollTelegramCloudStatus(): Promise<TelegramCloudStatus> {
   await initTauri();
   if (!invoke) return { connected: false, username: null };
@@ -775,9 +781,7 @@ export async function getProjectCloudStatus(beat: Beat): Promise<ProjectCloudSta
 export async function uploadProjectToTelegram(beat: Beat): Promise<ProjectCloudStatus> {
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
-  const result = await invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
-  if (typeof window !== "undefined") window.dispatchEvent(new Event("beatgaler:project-cloud-changed"));
-  return result;
+  return invoke<ProjectCloudStatus>("upload_project_to_telegram", { beat });
 }
 
 export async function openBeatProject(beat: Beat): Promise<void> {

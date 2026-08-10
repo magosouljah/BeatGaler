@@ -249,195 +249,6 @@ async function flushPendingTopicDeletes(account, userId) {
   }
 }
 
-function redirectMessageId(userId, messageId) {
-  const id = Number(messageId);
-  if (!Number.isFinite(id) || id <= 0) return id;
-  const redirected = Number(messageRedirects.get(`${String(userId)}:${id}`));
-  return Number.isFinite(redirected) && redirected > 0 ? redirected : id;
-}
-
-function rememberMessageRedirect(userId, oldMessageId, newMessageId) {
-  const oldId = Number(oldMessageId);
-  const newId = Number(newMessageId);
-  if (!Number.isFinite(oldId) || oldId <= 0 || !Number.isFinite(newId) || newId <= 0) return;
-  if (oldId === newId) return;
-  messageRedirects.set(`${String(userId)}:${oldId}`, newId);
-}
-
-async function readLibraryManifestFromChat(chatId) {
-  try {
-    const chat = await bot.getChat(Number(chatId));
-    const pinned = chat?.pinned_message;
-    if (!pinned?.document?.file_id) return null;
-    const caption = String(pinned.caption || pinned.text || "");
-    if (!caption.startsWith(LIBRARY_INDEX_CAPTION)) return null;
-    const raw = await downloadTelegramFileBuffer(pinned.document.file_id);
-    return JSON.parse(raw.toString("utf8"));
-  } catch (error) {
-    console.warn(`[migration] could not read library index from chat ${chatId}:`, error?.message || error);
-    return null;
-  }
-}
-
-async function resendStoredDocument(chatId, topicId, telegramFileId, filename, caption) {
-  if (!telegramFileId) return null;
-  const sent = await bot.sendDocument(
-    chatId,
-    telegramFileId,
-    { caption, message_thread_id: topicId },
-    filename ? { filename, contentType: "application/octet-stream" } : {}
-  );
-  return sent;
-}
-
-async function migrateManifestBeatToTopic(account, userId, beat) {
-  if (!beat?.id) return false;
-  const key = topicKey(userId, beat.id);
-  if (beatTopics.has(key)) return false; // already migrated/created
-
-  const chatId = storageChatId(account);
-  const topicId = await ensureBeatTopic(account, userId, beat.id, beat.name);
-  beat.telegram_topic_id = topicId;
-
-  const migratePart = async (part, caption) => {
-    if (!part?.telegram_file_id) return;
-    const oldId = Number(part.telegram_message_id);
-    const sent = await resendStoredDocument(
-      chatId,
-      topicId,
-      part.telegram_file_id,
-      part.filename || undefined,
-      caption
-    );
-    if (!sent) return;
-    rememberMessageRedirect(userId, oldId, sent.message_id);
-    part.telegram_file_id = sent?.document?.file_id || part.telegram_file_id;
-    part.telegram_message_id = sent.message_id;
-  };
-
-  if (beat.master?.telegram_file_id) {
-    const oldId = Number(beat.master.telegram_message_id);
-    const sent = await resendStoredDocument(
-      chatId,
-      topicId,
-      beat.master.telegram_file_id,
-      beat.master.filename || `${beat.name || beat.id}.mp3`,
-      ` ${beat.name || beat.id}`
-    );
-    if (sent) {
-      rememberMessageRedirect(userId, oldId, sent.message_id);
-      beat.master.telegram_file_id = sent?.document?.file_id || beat.master.telegram_file_id;
-      beat.master.telegram_message_id = sent.message_id;
-    }
-  }
-
-  for (const file of beat.files || []) {
-    const parts = file?.manifest?.parts || [];
-    for (const part of parts) {
-      await migratePart(part, `${String(file.type || "FILE")} • ${beat.name || beat.id}`);
-    }
-  }
-
-  if (beat.project?.manifest?.parts) {
-    for (const part of beat.project.manifest.parts) {
-      await migratePart(part, ` ${beat.name || beat.id}`);
-    }
-  }
-
-  if (beat.artwork?.telegram_file_id) {
-    const oldId = Number(beat.artwork.telegram_message_id);
-    const sent = await resendStoredDocument(
-      chatId,
-      topicId,
-      beat.artwork.telegram_file_id,
-      `beatgaler-artwork-${beat.id}`,
-      ` Artwork • ${beat.name || beat.id}`
-    );
-    if (sent) {
-      rememberMessageRedirect(userId, oldId, sent.message_id);
-      beat.artwork.telegram_file_id = sent?.document?.file_id || beat.artwork.telegram_file_id;
-      beat.artwork.telegram_message_id = sent.message_id;
-    }
-  }
-
-  if (beat.metadata_message_id) {
-    const oldId = Number(beat.metadata_message_id);
-    const metadata = {
-      name: beat.name || "",
-      bpm: beat.bpm || "",
-      key: beat.key || "",
-      tags: Array.isArray(beat.tags) ? beat.tags : [],
-      rating: Number(beat.rating || 0),
-      color: beat.color || "",
-      color2: beat.color2 || "",
-    };
-    const sent = await bot.sendMessage(
-      chatId,
-      `BEATGALER_METADATA_V1\n${JSON.stringify(metadata)}`,
-      { message_thread_id: topicId }
-    );
-    rememberMessageRedirect(userId, oldId, sent.message_id);
-    beat.metadata_message_id = sent.message_id;
-  }
-
-  savePersistentData();
-  return true;
-}
-
-async function writeMigratedLibraryIndex(account, manifest) {
-  if (!manifest || !Array.isArray(manifest.beats)) return;
-  const chatId = storageChatId(account);
-  const tempDir = path.join(__dirname, "uploads-tmp");
-  fs.mkdirSync(tempDir, { recursive: true });
-  const tempPath = path.join(tempDir, `beatgaler-library-migrated-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.json`);
-  fs.writeFileSync(tempPath, JSON.stringify(manifest, null, 2), "utf8");
-  try {
-    const existing = await getPinnedLibraryIndex(account);
-    let sent;
-    if (existing) {
-      sent = await editTelegramDocumentInPlace({
-        chatId,
-        messageId: existing.message_id,
-        filePath: tempPath,
-        filename: "beatgaler-library.json",
-        caption: LIBRARY_INDEX_CAPTION,
-      });
-    } else {
-      sent = await bot.sendDocument(
-        chatId,
-        tempPath,
-        { caption: LIBRARY_INDEX_CAPTION },
-        { filename: "beatgaler-library.json", contentType: "application/json" }
-      );
-      await bot.pinChatMessage(chatId, sent.message_id, { disable_notification: true });
-    }
-  } finally {
-    fs.unlink(tempPath, () => {});
-  }
-}
-
-async function migrateCurrentLibraryToTopics(account, userId, previousPrivateChatId) {
-  // Prefer an already-existing storage-group index (current source of truth).
-  let manifest = await readLibraryManifestFromChat(account.storageChatId);
-  if (!manifest && previousPrivateChatId) {
-    manifest = await readLibraryManifestFromChat(previousPrivateChatId);
-  }
-  if (!manifest) return { migrated: 0 };
-
-  let migrated = 0;
-  for (const beat of manifest.beats || []) {
-    if (await migrateManifestBeatToTopic(account, userId, beat)) migrated += 1;
-  }
-  for (const item of manifest.trash || []) {
-    if (await migrateManifestBeatToTopic(account, userId, item?.beat)) migrated += 1;
-  }
-
-  injectTopicIds(userId, manifest);
-  await writeMigratedLibraryIndex(account, manifest);
-  savePersistentData();
-  return { migrated };
-}
-
 function telegramMethodUrl(method) {
   return `${TELEGRAM_BOT_API_BASE}/bot${BOT_TOKEN}/${method}`;
 }
@@ -463,7 +274,6 @@ const linkedAccounts = new Map();
 const uploadedFiles = new Map();
 const beatTopics = new Map();
 const pendingTopicDeletes = new Map();
-const messageRedirects = new Map(); // `${beatgalerUserId}:${oldMessageId}` -> newMessageId
 
 // Event-driven desktop updates. BeatGaler holds one lightweight SSE connection;
 // it does NOT poll the whole Telegram library on a timer.
@@ -533,7 +343,6 @@ function loadPersistentData() {
     }
     for (const [key, value] of Object.entries(parsed.beatTopics || {})) beatTopics.set(key, value);
     for (const [key, value] of Object.entries(parsed.pendingTopicDeletes || {})) pendingTopicDeletes.set(key, value);
-    for (const [key, value] of Object.entries(parsed.messageRedirects || {})) messageRedirects.set(key, value);
   } catch (err) {
     console.error("No se pudo leer cloud-data.json:", err.message || err);
   }
@@ -546,7 +355,6 @@ function savePersistentData() {
     uploadedFiles: Object.fromEntries(uploadedFiles),
     beatTopics: Object.fromEntries(beatTopics),
     pendingTopicDeletes: Object.fromEntries(pendingTopicDeletes),
-    messageRedirects: Object.fromEntries(messageRedirects),
   }, null, 2);
   fs.writeFileSync(tmp, payload, "utf8");
   fs.renameSync(tmp, DATA_FILE);
@@ -712,14 +520,13 @@ async function sendOrReplaceTelegramDocument({
 }) {
   const chatId = storageChatId(account);
   const messageThreadId = await ensureBeatTopic(account, beatgalerUserId, beatId, beatName);
-  const existing = redirectMessageId(beatgalerUserId, existingMessageId);
+  const existing = Number(existingMessageId);
 
   if (Number.isFinite(existing) && existing > 0) {
     try {
       const sent = await editTelegramDocumentInPlace({
         chatId, messageId: existing, filePath, filename, caption
       });
-      rememberMessageRedirect(beatgalerUserId, existingMessageId, sent.message_id);
       return { message: sent, updated: true, messageThreadId };
     } catch (error) {
       const message = String(error?.message || error);
@@ -897,8 +704,8 @@ app.post("/metadata/artwork", upload.single("file"), async (req, res) => {
 
   const ext = path.extname(req.file.originalname || "") || ".png";
   const filename = `beatgaler-artwork-${beatId}${ext}`;
-  const caption = ` Artwork • ${beatName || beatId}`;
-  const existing = redirectMessageId(beatgalerUserId, artworkMessageId);
+  const caption = `🖼 Artwork • ${beatName || beatId}`;
+  const existing = Number(artworkMessageId);
 
   try {
     const artworkTopicId = await ensureBeatTopic(account, beatgalerUserId, beatId, beatName);
@@ -978,7 +785,7 @@ app.post("/metadata/upsert", async (req, res) => {
     return res.status(400).json({ error: "Beat metadata is too large for a Telegram metadata message." });
   }
 
-  const existing = redirectMessageId(beatgalerUserId, metadataMessageId);
+  const existing = Number(metadataMessageId);
   try {
     const metadataTopicId = await ensureBeatTopic(
       account, beatgalerUserId, beatId, metadata?.name || metadata?.beat_name || beatId
@@ -1033,7 +840,7 @@ app.post("/beats/upload", upload.single("file"), async (req, res) => {
   const extension = path.extname(originalName) || ".mp3";
   const telegramFilename = `${beatName || path.basename(originalName, extension)}${extension}`;
   try {
-    const { message: sentMessage, updated, messageThreadId } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: telegramFilename, caption: beatName ? ` ${beatName}` : undefined });
+    const { message: sentMessage, updated, messageThreadId } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: telegramFilename, caption: beatName ? `🎵 ${beatName}` : undefined });
     const media = sentMessage?.document || sentMessage?.audio || null;
     if (!media?.file_id) throw new Error("Telegram returned no file_id for MASTER.");
     const messageId = sentMessage.message_id || Number(existingMessageId) || null;
@@ -1086,7 +893,7 @@ app.post("/projects/upload", upload.single("file"), async (req, res) => {
   }
 
   try {
-    const { message: sent, updated } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: originalName, caption: ` ${beatName || "Project"}`, replyToMessageId: parentMessageId });
+    const { message: sent, updated } = await sendOrReplaceTelegramDocument({ account, beatgalerUserId, beatId, beatName, existingMessageId, filePath: req.file.path, filename: originalName, caption: `📦 ${beatName || "Project"}`, replyToMessageId: parentMessageId });
     const media = sent?.document || null;
     if (!media?.file_id) throw new Error("Telegram returned no file_id for PROJECT.");
     const messageId = sent.message_id || Number(existingMessageId) || null;
@@ -1103,11 +910,11 @@ app.post("/projects/upload", upload.single("file"), async (req, res) => {
 
 // ── Generic beat cloud file upload — one Telegram document per slot ─────
 const CLOUD_ROLE_META = {
-  WAV:     { icon: "", label: "WAV HQ" },
-  LOOP:    { icon: "", label: "Loop" },
-  PROJECT: { icon: "", label: "Project" },
-  STEMS:   { icon: "", label: "Stems" },
-  OTHER:   { icon: "", label: "Other" },
+  WAV:     { icon: "💿", label: "WAV HQ" },
+  LOOP:    { icon: "🔁", label: "Loop" },
+  PROJECT: { icon: "📦", label: "Project" },
+  STEMS:   { icon: "🎚", label: "Stems" },
+  OTHER:   { icon: "📎", label: "Other" },
 };
 
 async function sendCloudPart(account, sourcePath, telegramFilename, caption, replyToMessageId) {
@@ -1267,12 +1074,12 @@ bot.onText(/\/beatgaler_storage(?:@\w+)?/, async (msg) => {
   try {
     const chat = await bot.getChat(chatId);
     if (chat?.type !== "supergroup" || !chat?.is_forum) {
-      await bot.sendMessage(chatId, " This must be a supergroup with Topics enabled.");
+      await bot.sendMessage(chatId, "❌ This must be a supergroup with Topics enabled.");
       return;
     }
     const owner = [...linkedAccounts.entries()].find(([, account]) => Number(account.telegramUserId) === fromId);
     if (!owner) {
-      await bot.sendMessage(chatId, " Connect this Telegram account to BeatGaler first.");
+      await bot.sendMessage(chatId, "❌ Connect this Telegram account to BeatGaler first.");
       return;
     }
     const me = await bot.getMe();
@@ -1280,30 +1087,20 @@ bot.onText(/\/beatgaler_storage(?:@\w+)?/, async (msg) => {
     const creator = member?.status === "creator";
     const admin = member?.status === "administrator";
     if (!(creator || (admin && member?.can_manage_topics === true && member?.can_delete_messages === true))) {
-      await bot.sendMessage(chatId, " Give the BeatGaler bot Manage Topics and Delete Messages permissions.");
+      await bot.sendMessage(chatId, "❌ Give the BeatGaler bot Manage Topics and Delete Messages permissions.");
       return;
     }
     const [userId, account] = owner;
-    const previousPrivateChatId = account.telegramUserId;
-
     account.storageChatId = chatId;
     account.storageChatTitle = chat.title || "BeatGaler Storage";
     account.storageLinkedAt = Date.now();
     linkedAccounts.set(userId, account);
     savePersistentData();
-
-    const migration = await migrateCurrentLibraryToTopics(account, userId, previousPrivateChatId);
-
     broadcastCloudEvent(userId, "telegram_storage_connected", {
       storage_chat_id: String(chatId),
       storage_chat_title: account.storageChatTitle,
-      migrated_topics: migration.migrated,
     });
-
-    await bot.sendMessage(
-      chatId,
-      ` BeatGaler Storage connected.\n\n${migration.migrated} missing beat Topic(s) migrated.`
-    );
+    await bot.sendMessage(chatId, "✅ BeatGaler Storage connected.\n\nEach beat will use its own Topic.");
   } catch (error) {
     console.error("[storage] registration failed:", error?.message || error);
   }
@@ -1414,14 +1211,14 @@ bot.on("callback_query", async (query) => {
 
   try {
     await bot.editMessageText(
-      ` Connected to BeatGaler\n\nTelegram vault: @${query.from.username || username}`,
+      `✅ Connected to BeatGaler\n\nTelegram vault: @${query.from.username || username}`,
       {
         chat_id: query.message.chat.id,
         message_id: query.message.message_id,
       }
     );
   } catch {
-    await bot.sendMessage(query.message.chat.id, " Connected to BeatGaler.");
+    await bot.sendMessage(query.message.chat.id, "✅ Connected to BeatGaler.");
   }
 });
 
