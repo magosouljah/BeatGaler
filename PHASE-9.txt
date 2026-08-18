@@ -1,0 +1,29 @@
+BeatGaler Phase 9 — Critical Import Flows
+
+9A Import Core
+- Rust filesystem tests: standalone MP3/WAV, MASTER+HQ pairing, ambiguous folders,
+  auxiliary directory exclusion, deterministic multi-folder discovery.
+
+9B Native Drop Contracts
+- Windows Tauri paths remain zero-copy.
+- No HTML staging / arrayBuffer path for local Windows files.
+- Artwork/card/library targets remain isolated.
+
+9C Existing Beat Slot Updates
+- MASTER and WAV routes protected.
+- PROJECT file/ZIP/folder routes protected.
+- replacement confirmation, readiness, authoritative commits, Backup filtering protected.
+
+9D Pinterest / External Artwork
+- Pinterest custom MIME/CDN/native markers protected.
+- Browser/external artwork stays artwork-only and never becomes a beat import.
+
+9E Desktop Import E2E
+- Controlled E2E harness added for MP3, WAV-only -> generated MASTER, full folder,
+  multiple folders, existing WAV/PROJECT/Samples updates, replacement de-duplication,
+  Backup skip, and Pinterest artwork isolation.
+- Run: npm run test:e2e:import
+
+Release validation:
+1) npm run check
+2) npm run test:e2e:import

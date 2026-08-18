@@ -8362,8 +8362,9 @@ fn has_samples_folder(folder: &Path) -> bool { find_samples_folder(folder).is_so
 fn is_auxiliary_dir_name(name: &str) -> bool {
     let n = name.to_lowercase();
     let aux = [
-        "samples", "sample", "backup", "audio", "recorded", "rendered", "processed",
-        "imported", "waveforms", "recopiladas", "presets",
+        "samples", "sample", "stems", "stem", "backup", "backups", "audio", "audio files",
+        "recorded", "recording", "recordings", "rendered", "render", "renders", "processed",
+        "imported", "waveforms", "recopiladas", "presets", "sliced audio", "freeze", "consolidated",
     ];
     aux.contains(&n.as_str())
 }
@@ -12520,6 +12521,168 @@ pub fn rename_tag_everywhere(
     let result = RenameTagResult { beats_updated: affected.len(), files_updated: total };
     let _ = app.emit("tag-rename:done", json!({"job_id": job_id, "beats_updated": result.beats_updated, "files_updated": result.files_updated}));
     Ok(result)
+}
+
+#[cfg(test)]
+mod import_core_unit_tests {
+    use super::{
+        build_loose_candidate_from_audio,
+        discover_import_sources,
+        scan_folder_structured,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempTree {
+        root: PathBuf,
+    }
+
+    impl TempTree {
+        fn new(label: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "beatgaler-import-core-{}-{}-{}",
+                label,
+                std::process::id(),
+                nonce
+            ));
+            fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+
+        fn dir(&self, relative: &str) -> PathBuf {
+            let path = self.root.join(relative);
+            fs::create_dir_all(&path).unwrap();
+            path
+        }
+
+        fn file(&self, relative: &str) -> PathBuf {
+            let path = self.root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&path, b"").unwrap();
+            path
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn normalized(paths: Vec<PathBuf>, root: &Path) -> Vec<String> {
+        paths
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn standalone_mp3_is_exactly_one_slot_and_never_absorbs_neighbors() {
+        let tree = TempTree::new("loose-mp3");
+        let mp3 = tree.file("Loose Beat.mp3");
+        let neighbor_wav = tree.file("Loose Beat.wav");
+        let _neighbor_flp = tree.file("Loose Beat.flp");
+        let _sample = tree.file("Samples/kick.wav");
+
+        let candidate = build_loose_candidate_from_audio(&mp3).unwrap();
+        assert_eq!(candidate.mp3.as_deref(), Some(mp3.as_path()));
+        assert!(candidate.wav.is_none(), "a loose MP3 must not auto-attach a neighboring WAV");
+        assert_ne!(candidate.wav.as_deref(), Some(neighbor_wav.as_path()));
+        assert_eq!(candidate.source_anchor, mp3);
+    }
+
+    #[test]
+    fn standalone_wav_is_hq_only_until_master_generation() {
+        let tree = TempTree::new("loose-wav");
+        let wav = tree.file("WAV Only [140 Cm].wav");
+        let _neighbor_mp3 = tree.file("WAV Only [140 Cm].mp3");
+
+        let candidate = build_loose_candidate_from_audio(&wav).unwrap();
+        assert!(candidate.mp3.is_none(), "WAV-only discovery must not steal a neighboring MP3");
+        assert_eq!(candidate.wav.as_deref(), Some(wav.as_path()));
+        assert_eq!(candidate.bpm, "140");
+        assert_eq!(candidate.key, "cm");
+    }
+
+    #[test]
+    fn structured_folder_pairs_matching_master_and_hq_without_promoting_other_audio() {
+        let tree = TempTree::new("structured-pair");
+        let beat = tree.dir("Purple Beat");
+        let master = tree.file("Purple Beat/Purple Beat.mp3");
+        let hq = tree.file("Purple Beat/Purple Beat.wav");
+        let other = tree.file("Purple Beat/reference.wav");
+
+        let files = scan_folder_structured(&beat);
+        assert_eq!(files.mp3s, vec![master]);
+        assert_eq!(files.wavs, vec![hq]);
+        assert_eq!(files.others, vec![other]);
+    }
+
+    #[test]
+    fn ambiguous_folder_keeps_all_main_audio_candidates_for_conflict_resolution() {
+        let tree = TempTree::new("ambiguous");
+        let beat = tree.dir("Inbox");
+        let a = tree.file("Inbox/Beat A.mp3");
+        let b = tree.file("Inbox/Beat B.mp3");
+        let c = tree.file("Inbox/Beat C.wav");
+
+        let files = scan_folder_structured(&beat);
+        assert_eq!(files.mp3s, vec![a, b]);
+        assert_eq!(files.wavs, vec![c]);
+    }
+
+    #[test]
+    fn recursive_discovery_never_turns_asset_directories_into_beats() {
+        let tree = TempTree::new("aux-skip");
+        let beat = tree.dir("Beat A");
+        let _master = tree.file("Beat A/Beat A.mp3");
+        let _samples = tree.file("Samples/sample-one.wav");
+        let _stems = tree.file("Stems/stem-one.wav");
+        let _backup = tree.file("Backup/old-version.mp3");
+        let _audio = tree.file("Audio/render.wav");
+
+        let found = normalized(discover_import_sources(&tree.root), &tree.root);
+        assert_eq!(found, vec!["Beat A"], "asset directories must never produce independent Review beats");
+        assert!(beat.is_dir());
+    }
+
+    #[test]
+    fn multiple_beat_folders_are_discovered_independently_and_deterministically() {
+        let tree = TempTree::new("multi-folder");
+        tree.file("Zulu/Zulu.mp3");
+        tree.file("Alpha/Alpha.mp3");
+        tree.file("Middle/Middle.mp3");
+
+        let first = normalized(discover_import_sources(&tree.root), &tree.root);
+        let second = normalized(discover_import_sources(&tree.root), &tree.root);
+        assert_eq!(first, vec!["Alpha", "Middle", "Zulu"]);
+        assert_eq!(first, second, "Review discovery order must be stable across identical scans");
+    }
+
+    #[test]
+    fn loose_audio_groups_choose_one_anchor_per_clean_name() {
+        let tree = TempTree::new("loose-grouping");
+        tree.file("Loose A.mp3");
+        tree.file("Loose A.wav");
+        tree.file("Loose B.wav");
+
+        let found = normalized(discover_import_sources(&tree.root), &tree.root);
+        assert_eq!(found.len(), 2, "same-name MP3+WAV must discover as one logical beat anchor");
+        assert!(found.iter().any(|value| value == "Loose A.mp3"));
+        assert!(found.iter().any(|value| value == "Loose B.wav"));
+    }
 }
 
 #[cfg(test)]
