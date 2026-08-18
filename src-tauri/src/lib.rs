@@ -1,7 +1,9 @@
 mod matcher;
 mod commands;
 mod versioning;
+mod updater;
 pub use commands::*;
+pub use updater::*;
 
 use std::path::PathBuf;
 use tauri::Manager;
@@ -12,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir: PathBuf = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&data_dir).ok();
@@ -64,6 +67,7 @@ pub fn run() {
             get_settings, set_beats_folder, set_templates_folder, get_templates_dir, list_template_files,
             delete_template_file, read_template_file, write_template_file, delete_template_to_trash,
             list_template_trash, restore_template_from_trash, purge_template_trash_now,
+            check_app_update, install_app_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building BeatVault")

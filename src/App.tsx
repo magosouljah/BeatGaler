@@ -5161,24 +5161,33 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
               return;
             }
 
-            // Never build a Telegram INDEX from the render-time `beats` closure.
-            // Trash restore can happen while Refresh/hydration is replacing the
-            // visible array, so that closure may be empty/stale. Use the latest
-            // verified library ref and atomically add the restored beat.
+            // Rust already committed the Cloud Trash -> active transition before
+            // returning this beat. Do NOT publish a second renderer-built INDEX.
+            // Also seed the observer snapshots before rendering the restored card:
+            // otherwise the metadata observer interprets "absent -> present" as an
+            // edit and re-uploads metadata/artwork, creating temporary duplicates.
             const current = beatsLatestRef.current;
             const next = current.some(b => b.id === beat.id)
               ? current.map(b => b.id === beat.id ? beat : b)
               : [...current, beat];
-            setBeats(next);
-            beatsLatestRef.current = next;
 
             if (beat.telegram_file_id) {
-              void libraryStateManager.commitSnapshot(next, "trash-restore").catch(error => {
-                // The native safety barrier preserves the previous INDEX if this
-                // snapshot is ever stale. Keep the visible restored card too.
-                console.warn("Telegram library index refresh after trash restore failed safely:", error);
-              });
+              if (cloudMetaSnapshotRef.current === null) cloudMetaSnapshotRef.current = new Map();
+              cloudMetaSnapshotRef.current.set(beat.id, cloudBeatFingerprint(beat));
+              cloudLibrarySnapshotRef.current = next
+                .filter(item => !!item.telegram_file_id)
+                .map(cloudBeatFingerprint)
+                .join("\u001c");
             }
+
+            beatsLatestRef.current = next;
+            setBeats(next);
+
+            // Trash stores the Cloud artwork reference, not decoded image bytes.
+            // Force a fresh hydration even if this beat had a memoized artwork
+            // promise earlier in the same app session before it was trashed.
+            artworkLoadPromisesRef.current.delete(beat.id);
+            void ensureArtworkReady(beat);
           }}
         />
       )}

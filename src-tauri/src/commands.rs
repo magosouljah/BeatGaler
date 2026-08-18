@@ -21,8 +21,20 @@ use tauri::Emitter;
 use crate::matcher;
 use crate::versioning::{
     GALER_T_LIBRARY_SCHEMA, GALER_T_LIBRARY_SCHEMA_VERSION,
-    normalize_galer_t_library_manifest, finalize_sqlite_schema_version,
+    normalize_galer_t_library_manifest, migrate_sqlite_schema,
 };
+
+fn background_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: child CLI helpers must never flash a console window
+        // in the installed GUI app. stdout/stderr behavior remains unchanged.
+        command.creation_flags(0x08000000);
+    }
+    command
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Logging — plain-text rotating log file, no extra crates needed.
@@ -1116,6 +1128,74 @@ fn direct_replace_library_manifest(
     source_id: Option<&str>,
 ) -> Result<Value, String> {
     direct_replace_library_manifest_with_options(user_id, manifest, source_id, false)
+}
+
+fn apply_restore_from_trash_to_manifest(manifest: &mut Value, beat_id: &str) -> Result<bool, String> {
+    if beat_id.trim().is_empty() { return Err("Cannot restore an empty beat id.".to_string()); }
+    let root = manifest.as_object_mut().ok_or_else(|| "Telegram library index root is invalid.".to_string())?;
+
+    let existing_active = root.get("beats")
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.iter().find(|row| row.get("id").and_then(|v| v.as_str()) == Some(beat_id)))
+        .cloned();
+
+    let restored_entry = root.get("trash")
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.iter().find_map(|item| {
+            let beat = item.get("beat").unwrap_or(item);
+            (beat.get("id").and_then(|v| v.as_str()) == Some(beat_id)).then(|| beat.clone())
+        }));
+    let had_trash_entry = restored_entry.is_some();
+
+    if restored_entry.is_none() && existing_active.is_none() {
+        return Err("The beat is no longer present in Cloud Trash.".to_string());
+    }
+
+    // Remove every stale Trash copy for this identity. A previous interrupted
+    // restore may have left both active + trash entries; healing that state is
+    // intentionally idempotent and never creates a second active beat.
+    let removed_trash = {
+        let trash = root.entry("trash").or_insert_with(|| Value::Array(Vec::new()));
+        let rows = trash.as_array_mut().ok_or_else(|| "Telegram library trash field is invalid.".to_string())?;
+        let before = rows.len();
+        rows.retain(|item| {
+            let beat = item.get("beat").unwrap_or(item);
+            beat.get("id").and_then(|v| v.as_str()) != Some(beat_id)
+        });
+        before != rows.len()
+    };
+
+    let beats = root.entry("beats").or_insert_with(|| Value::Array(Vec::new()));
+    let rows = beats.as_array_mut().ok_or_else(|| "Telegram library beats field is invalid.".to_string())?;
+    if existing_active.is_none() {
+        let entry = restored_entry.ok_or_else(|| "Cloud Trash record has no beat payload.".to_string())?;
+        // Defensive dedupe in case a malformed INDEX already contains repeated ids.
+        rows.retain(|row| row.get("id").and_then(|v| v.as_str()) != Some(beat_id));
+        rows.push(entry);
+    } else {
+        // Heal malformed duplicate active rows while preserving the first
+        // authoritative active copy.
+        let mut kept = false;
+        rows.retain(|row| {
+            if row.get("id").and_then(|v| v.as_str()) != Some(beat_id) { return true; }
+            if kept { false } else { kept = true; true }
+        });
+    }
+
+    if removed_trash || had_trash_entry {
+        root.insert("updated_at".to_string(), json!(now_epoch()));
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn direct_restore_beat_from_trash(user_id: &str, beat_id: &str) -> Result<(), String> {
+    let mut manifest = direct_get_library_manifest(user_id)?;
+    let changed = apply_restore_from_trash_to_manifest(&mut manifest, beat_id)?;
+    if changed {
+        direct_replace_library_manifest(user_id, &manifest, Some("trash-restore"))?;
+    }
+    Ok(())
 }
 
 fn direct_move_beats_to_trash(user_id: &str, beat_ids: &[String]) -> Result<usize, String> {
@@ -2601,6 +2681,11 @@ pub fn load_cloud_artwork_for_beat(
 // a new Telegram document before either one updates SQLite.
 static CLOUD_METADATA_SYNC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+// Restore requests may be launched rapidly from the UI. Each command runs in the
+// background, but the read-modify-write of the single authoritative library INDEX
+// must stay serialized so two restores cannot overwrite each other.
+static TRASH_RESTORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Syncs lightweight LIVE BeatGaler metadata to Telegram without re-uploading
 /// the master audio. Artwork is uploaded separately only when it changed.
 #[tauri::command(async)]
@@ -3921,7 +4006,7 @@ fn build_project_archive_if_needed(
             staging.to_string_lossy().replace('\'', "''"),
             archive.to_string_lossy().replace('\'', "''")
         );
-        let status = std::process::Command::new("powershell")
+        let status = background_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .status()
             .map_err(|e| format!("Could not start PowerShell to package project: {}", e))?;
@@ -4030,7 +4115,7 @@ try {
   $z.Dispose()
 }
 "#;
-        let out = Command::new("powershell")
+        let out = background_command("powershell")
             .env("BEATGALER_PROJECT_ZIP", path)
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .output()
@@ -4287,7 +4372,7 @@ try {
   $src.Dispose()
 }
 "#;
-        let out = Command::new("powershell")
+        let out = background_command("powershell")
             .env("BEATGALER_SOURCE_ZIP", source)
             .env("BEATGALER_FILTERED_ZIP", &dest)
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
@@ -4516,7 +4601,7 @@ try {
 }
 "#;
         std::fs::write(&script_path, script).map_err(|e| format!("Could not prepare project ZIP updater: {}", e))?;
-        let status = Command::new("powershell")
+        let status = background_command("powershell")
             .args([
                 "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-File", script_path.to_string_lossy().as_ref(),
@@ -7552,7 +7637,7 @@ fn adopt_mp3_metadata_if_empty(beat: &BeatMeta, source: &Path) -> BeatMeta {
 // ─────────────────────────────────────────────────────────────
 
 pub fn init_db(db_path: &Path) -> rusqlite::Result<Connection> {
-    let conn = Connection::open(db_path)?;
+    let mut conn = Connection::open(db_path)?;
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS beats (
             id          TEXT PRIMARY KEY,
@@ -7664,7 +7749,7 @@ pub fn init_db(db_path: &Path) -> rusqlite::Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_offline_trash_intents_user
         ON offline_trash_intents(user_id);
     ")?;
-    finalize_sqlite_schema_version(&conn)?;
+    migrate_sqlite_schema(&mut conn)?;
     Ok(conn)
 }
 
@@ -8761,7 +8846,7 @@ fn rename_folder_windows(old: &Path, new: &Path) -> Result<(), String> {
             old.to_string_lossy().replace('\'', "''"),
             new_name.replace('\'', "''"),
         );
-        let ok = std::process::Command::new("powershell")
+        let ok = background_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .status().map(|s| s.success()).unwrap_or(false);
         if ok { return Ok(()); }
@@ -9390,7 +9475,9 @@ pub fn list_trash(state: tauri::State<DbState>) -> Result<Vec<TrashItem>, String
 }
 
 /// Restores a trashed beat back into the active library.
-#[tauri::command]
+/// Runs off the UI thread; cloud INDEX mutations are serialized below so users
+/// can queue several restores quickly without freezing the Settings panel.
+#[tauri::command(async)]
 pub fn restore_beat_from_trash(
     trash_id: String,
     state: tauri::State<DbState>,
@@ -9412,26 +9499,34 @@ pub fn restore_beat_from_trash(
     };
 
     if is_cloud {
+        let _restore_guard = TRASH_RESTORE_LOCK
+            .lock()
+            .map_err(|_| "Cloud Trash restore queue was interrupted.".to_string())?;
+
         let raw = beat_meta_json
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "Cloud trash record is missing beat metadata.".to_string())?;
         let beat: BeatMeta = serde_json::from_str(&raw)
             .map_err(|e| format!("Invalid cloud trash metadata: {}", e))?;
-        // Keep lock ordering consistent: never acquire Settings while SQLite is held.
-        let beatgaler_user_id = settings.settings.lock().map_err(|e| e.to_string())?
-            .beatgaler_user_id.clone();
+        // Cloud is the source of truth. Restore there FIRST and as one direct
+        // INDEX transaction. The old renderer path restored SQLite first and
+        // published a second snapshot later, leaving a race window where
+        // observers/uploads could see active+trash at the same time.
+        let user_id = ensure_beatgaler_user_id(&settings)?;
+        direct_restore_beat_from_trash(&user_id, &beat.id)
+            .map_err(|e| format!("Could not restore beat from Galer Cloud Trash: {}", e))?;
 
+        // Only mirror the already-committed Cloud state into SQLite afterwards.
+        // If the app crashes here, the next authoritative reload repairs SQLite.
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         db_upsert_with_order(&conn, &beat, None).map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM trash WHERE id=?1", params![trash_id])
             .map_err(|e| e.to_string())?;
-        if let Some(user_id) = beatgaler_user_id {
-            let _ = conn.execute(
-                "DELETE FROM offline_trash_intents WHERE user_id=?1 AND beat_id=?2",
-                params![user_id, beat.id.clone()],
-            );
-        }
-        log_info(&settings.data_dir, &format!("Cloud beat restored from trash: {}", beat.name));
+        let _ = conn.execute(
+            "DELETE FROM offline_trash_intents WHERE user_id=?1 AND beat_id=?2",
+            params![user_id, beat.id.clone()],
+        );
+        log_info(&settings.data_dir, &format!("Cloud beat restored atomically from trash: {}", beat.name));
         return Ok(beat);
     }
 
@@ -12800,6 +12895,7 @@ mod project_zip_unit_tests {
 mod index_and_cache_unit_tests {
     use super::{
         apply_permanent_delete_to_manifest,
+        apply_restore_from_trash_to_manifest,
         enforce_playback_cache_limit_in_dir,
         playback_cache_access_path,
         select_playback_cache_evictions,
@@ -12811,6 +12907,41 @@ mod index_and_cache_unit_tests {
 
     fn wanted(ids: &[&str]) -> HashSet<String> {
         ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
+    #[test]
+    fn trash_restore_moves_identity_back_to_active_without_duplicate() {
+        let mut manifest = json!({
+            "beats":[{"id":"keep"}],
+            "trash":[{"trash_id":"t-a","beat":{"id":"a","name":"A","artwork":{"telegram_message_id":7}}}],
+            "deleted":[]
+        });
+        assert!(apply_restore_from_trash_to_manifest(&mut manifest, "a").unwrap());
+        let beats = manifest["beats"].as_array().unwrap();
+        assert_eq!(beats.iter().filter(|row| row["id"] == "a").count(), 1);
+        assert!(manifest["trash"].as_array().unwrap().is_empty());
+        assert_eq!(beats.iter().find(|row| row["id"] == "a").unwrap()["artwork"]["telegram_message_id"], 7);
+    }
+
+    #[test]
+    fn trash_restore_heals_interrupted_active_plus_trash_duplicate() {
+        let mut manifest = json!({
+            "beats":[{"id":"a","name":"already active"},{"id":"a","name":"duplicate"}],
+            "trash":[{"trash_id":"t-a","beat":{"id":"a","name":"trashed"}}],
+            "deleted":[]
+        });
+        assert!(apply_restore_from_trash_to_manifest(&mut manifest, "a").unwrap());
+        let beats = manifest["beats"].as_array().unwrap();
+        assert_eq!(beats.iter().filter(|row| row["id"] == "a").count(), 1);
+        assert_eq!(beats[0]["name"], "already active");
+        assert!(manifest["trash"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn trash_restore_is_idempotent_when_remote_is_already_active() {
+        let mut manifest = json!({"beats":[{"id":"a"}],"trash":[],"deleted":[]});
+        assert!(!apply_restore_from_trash_to_manifest(&mut manifest, "a").unwrap());
+        assert_eq!(manifest["beats"].as_array().unwrap().len(), 1);
     }
 
     #[test]
