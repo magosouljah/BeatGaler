@@ -12,6 +12,7 @@ const files = {
   tauriConf: p("src-tauri", "tauri.conf.json"),
   capability: p("src-tauri", "capabilities", "default.json"),
   frontend: p("src", "main.tsx"),
+  html: p("index.html"),
 };
 
 for (const [name, file] of Object.entries(files)) {
@@ -25,6 +26,7 @@ const touched = [
   files.tauriConf,
   files.capability,
   files.frontend,
+  files.html,
 ];
 if (fs.existsSync(files.cargoLock)) touched.push(files.cargoLock);
 
@@ -90,7 +92,8 @@ function cleanPermanentE2EImports(text) {
     .replace(/^\s*import\s+E2EFlowHarness\s+from\s+["'][^"']*E2EFlowHarness["'];?\s*\r?\n/gm, "")
     .replace(/^\s*import\s+E2EPlaybackHarness\s+from\s+["'][^"']*E2EPlaybackHarness["'];?\s*\r?\n/gm, "")
     .replace(/^\s*import\s+E2EOfflineReconnectHarness\s+from\s+["'][^"']*E2EOfflineReconnectHarness["'];?\s*\r?\n/gm, "")
-    .replace(/^\s*import\s+E2ETrashHarness\s+from\s+["'][^"']*E2ETrashHarness["'];?\s*\r?\n/gm, "");
+    .replace(/^\s*import\s+E2ETrashHarness\s+from\s+["'][^"']*E2ETrashHarness["'];?\s*\r?\n/gm, "")
+    .replace(/^\s*import\s+E2EImportHarness\s+from\s+["'][^"']*E2EImportHarness["'];?\s*\r?\n/gm, "");
 }
 
 function patchFrontend() {
@@ -103,8 +106,9 @@ function patchFrontend() {
   const playbackFlowEnabled = process.env.BEATGALER_E2E_PLAYBACK === "1";
   const offlineFlowEnabled = process.env.BEATGALER_E2E_OFFLINE === "1";
   const trashFlowEnabled = process.env.BEATGALER_E2E_TRASH === "1";
+  const importFlowEnabled = process.env.BEATGALER_E2E_IMPORT === "1";
 
-  const enabledFlowCount = [editFlowEnabled, playbackFlowEnabled, offlineFlowEnabled, trashFlowEnabled]
+  const enabledFlowCount = [editFlowEnabled, playbackFlowEnabled, offlineFlowEnabled, trashFlowEnabled, importFlowEnabled]
     .filter(Boolean).length;
 
   if (enabledFlowCount > 1) {
@@ -124,6 +128,9 @@ function patchFrontend() {
   }
   if (trashFlowEnabled) {
     imports.push('import E2ETrashHarness from "../tests/e2e-harness/E2ETrashHarness";');
+  }
+  if (importFlowEnabled) {
+    imports.push('import E2EImportHarness from "../tests/e2e-harness/E2EImportHarness";');
   }
 
   text = `${imports.join("\n")}\n${text}`;
@@ -156,11 +163,42 @@ function patchFrontend() {
       throw new Error("[e2e] BEATGALER_E2E_TRASH=1 but <App /> was not replaced in src/main.tsx.");
     }
     console.log("[e2e] TRASH HARNESS MOUNTED: <App /> -> <E2ETrashHarness />");
+  } else if (importFlowEnabled) {
+    const before = text;
+    text = text.replace(/<App\s*\/>/g, "<E2EImportHarness />");
+    if (text === before || !text.includes("<E2EImportHarness />")) {
+      throw new Error("[e2e] BEATGALER_E2E_IMPORT=1 but <App /> was not replaced in src/main.tsx.");
+    }
+    console.log("[e2e] IMPORT HARNESS MOUNTED: <App /> -> <E2EImportHarness />");
   } else {
     console.log("[e2e] Normal E2E app mounted (no flow harness).");
   }
 
   write(files.frontend, text);
+}
+
+function patchImportIndexHtml() {
+  if (process.env.BEATGALER_E2E_IMPORT !== "1") return;
+
+  let text = fs.readFileSync(files.html, "utf8");
+  const before = text;
+
+  // Import E2E mounts a dedicated deterministic harness. The production startup
+  // overlay lives outside #root and is irrelevant to this harness, so remove the
+  // element from the E2E-only HTML before Vite builds dist/. This is stronger
+  // than trying to remove it later from React: it cannot intercept WDIO clicks
+  // because it never exists in the E2E document.
+  text = text.replace(
+    /\s*<div\s+id=["']beatgaler-startup-loader["'][^>]*>[^<]*<\/div>\s*/i,
+    "\n",
+  );
+
+  if (text === before || text.includes('id="beatgaler-startup-loader"')) {
+    throw new Error("[e2e] IMPORT mode could not remove #beatgaler-startup-loader from index.html.");
+  }
+
+  write(files.html, text);
+  console.log("[e2e] IMPORT startup loader removed from E2E-only index.html.");
 }
 
 function restoreSources() {
@@ -190,6 +228,7 @@ try {
   patchCapability();
   patchTauriConf();
   patchFrontend();
+  patchImportIndexHtml();
 
   run("npm", ["run", "build"], { VITE_E2E: "1" });
 
@@ -213,6 +252,7 @@ try {
   const playbackFlowEnabled = process.env.BEATGALER_E2E_PLAYBACK === "1";
   const offlineFlowEnabled = process.env.BEATGALER_E2E_OFFLINE === "1";
   const trashFlowEnabled = process.env.BEATGALER_E2E_TRASH === "1";
+  const importFlowEnabled = process.env.BEATGALER_E2E_IMPORT === "1";
 
   const wdioArgs = editFlowEnabled
     ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/edit-metadata-flow.e2e.mjs"]
@@ -222,7 +262,9 @@ try {
         ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/offline-reconnect-flow.e2e.mjs"]
         : trashFlowEnabled
           ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/trash-flow.e2e.mjs"]
-          : ["wdio", "run", "wdio.e2e.conf.mjs"];
+          : importFlowEnabled
+            ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/import-flow.e2e.mjs"]
+            : ["wdio", "run", "wdio.e2e.conf.mjs"];
 
   console.log(
     editFlowEnabled
@@ -233,7 +275,9 @@ try {
           ? "[e2e] OFFLINE FLOW MODE: running only tests/e2e/offline-reconnect-flow.e2e.mjs"
           : trashFlowEnabled
             ? "[e2e] TRASH FLOW MODE: running only tests/e2e/trash-flow.e2e.mjs"
-            : "[e2e] NORMAL MODE: running the full desktop E2E suite"
+            : importFlowEnabled
+              ? "[e2e] IMPORT FLOW MODE: running only tests/e2e/import-flow.e2e.mjs"
+              : "[e2e] NORMAL MODE: running the full desktop E2E suite"
   );
 
   const result = spawnSync(

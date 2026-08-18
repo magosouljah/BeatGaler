@@ -28,7 +28,8 @@
     "test:component:dom": "vitest run tests/component-dom --environment jsdom",
     "test:integration": "vitest run tests/integration --environment jsdom",
     "test:e2e:desktop:build": "npm run build && cargo build --manifest-path src-tauri/Cargo.toml --release",
-    "test:e2e:desktop": "npm run test:e2e:desktop:build && wdio run wdio.e2e.conf.mjs"
+    "test:e2e:desktop": "npm run test:e2e:desktop:build && wdio run wdio.e2e.conf.mjs",
+    "test:e2e:import": "node scripts/run-import-e2e.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

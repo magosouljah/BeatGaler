@@ -29,6 +29,14 @@ try {
     cwd: root,
     stdio: "inherit",
   });
+  execFileSync(process.execPath, [path.join(root, "scripts", "regression-import-native.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  execFileSync(process.execPath, [path.join(root, "scripts", "regression-phase9cd.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
   execFileSync(process.execPath, [path.join(buildDir, "scripts", "regression-playback-readiness.js")], {
     cwd: root,
     stdio: "inherit",
