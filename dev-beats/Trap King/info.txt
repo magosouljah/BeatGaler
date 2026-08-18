@@ -1,0 +1,4 @@
+Name: Trap King
+BPM: 140
+Key: C Minor
+Created: 05/11/2026 15:17:26

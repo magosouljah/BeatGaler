@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "types": [],
+    "skipLibCheck": true,
+    "rootDir": "..",
+    "outDir": "../.regression-build"
+  },
+  "include": [
+    "regression-dragdrop.ts",
+    "regression-playback-readiness.ts",
+    "regression-beat-runtime-state.ts",
+    "../src/features/playback/playbackReadiness.ts",
+    "../src/features/state/beatRuntimeState.ts",
+    "../src/types/index.ts",
+    "../src/features/dragdrop/browserArtwork.ts",
+    "../src/features/dragdrop/externalDropEffect.ts",
+    "../src/features/dragdrop/nativeExternalImage.ts"
+  ]
+}

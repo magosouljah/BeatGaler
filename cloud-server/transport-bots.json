@@ -1,0 +1,7 @@
+{
+  "bots": [
+    { "id": "Bot01", "label": "AlessiaGaler", "username": "Alessiagaler01bot", "telegram_user_id": "8618989421", "managed": true, "manager_token_env": "MANAGER_BOT_TOKEN_1" },
+    { "id": "Bot02", "label": "BrunoGaler", "username": "Brunogaler02bot", "telegram_user_id": "8821683467", "managed": true, "manager_token_env": "MANAGER_BOT_TOKEN_1" },
+    { "id": "Bot03", "label": "ChiaraGaler", "username": "Chiaragaler03bot", "telegram_user_id": "8941030773", "managed": true, "manager_token_env": "MANAGER_BOT_TOKEN_1" }
+  ]
+}

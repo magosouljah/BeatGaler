@@ -1,0 +1,25 @@
+{
+  "bots": [
+    {
+      "id": "Bot01",
+      "label": "Transport 01",
+      "managed": true,
+      "telegram_user_id": "8820805033",
+      "manager_token_env": "MANAGER_BOT_TOKEN_1"
+    },
+    {
+      "id": "Bot02",
+      "label": "Transport 02",
+      "managed": true,
+      "telegram_user_id": "8939378077",
+      "manager_token_env": "MANAGER_BOT_TOKEN_1"
+    },
+    {
+      "id": "Bot03",
+      "label": "Transport 03",
+      "managed": true,
+      "telegram_user_id": "REPLACE_WITH_MANAGED_BOT_USER_ID",
+      "manager_token_env": "MANAGER_BOT_TOKEN_1"
+    }
+  ]
+}

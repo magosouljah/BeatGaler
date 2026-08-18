@@ -1,0 +1,4 @@
+Name: Hardtrap
+BPM: 175
+Key: G Minor
+Created: 05/11/2026 15:17:26
