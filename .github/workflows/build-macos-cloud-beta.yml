@@ -1,19 +1,37 @@
-name: Build BeatGaler Cloud Beta for macOS
+name: Release BeatGaler macOS
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, e.g. v0.8.0"
+        required: true
+        type: string
+      release_notes:
+        description: "Short release notes"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PUBLIC_RELEASE_REPO: magosouljah/galer
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
 
 jobs:
-  build-macos:
+  release-macos:
     runs-on: macos-latest
 
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout selected ref
+      - name: Checkout exact release source
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
           fetch-depth: 0
 
       - name: Verify selected source
@@ -21,11 +39,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "GitHub ref: $GITHUB_REF"
-          echo "Building branch/tag:"
-          git branch --show-current || true
-          echo "Building commit:"
+          echo "Release tag: $RELEASE_TAG"
           git log -1 --oneline
-          echo "Commit SHA:"
           git rev-parse HEAD
 
       - name: Setup Node
@@ -42,11 +57,26 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Verify BeatGaler version
-        run: npm run version:check
+      - name: Verify BeatGaler version and release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run version:check
+          npm run test:regressions
+          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
+          if [ "v${VERSION_VALUE}" != "$RELEASE_TAG" ]; then
+            echo "::error::VERSION (${VERSION_VALUE}) does not match release tag (${RELEASE_TAG})."
+            exit 1
+          fi
 
-      - name: Run regression shield
-        run: npm run test:regressions
+      - name: Require public release token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${PUBLIC_RELEASE_TOKEN:-}" ]; then
+            echo "::error::PUBLIC_RELEASE_TOKEN GitHub secret is missing."
+            exit 1
+          fi
 
       - name: Download and build universal FFmpeg
         shell: bash
@@ -54,63 +84,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
           FFMPEG_TAG="b6.1.1"
           REPO="eugeneware/ffmpeg-static"
           BASE_URL="https://github.com/${REPO}/releases/download/${FFMPEG_TAG}"
+          mkdir -p src-tauri/resources /tmp/beatgaler-ffmpeg
+          curl --fail --location --retry 3 "${BASE_URL}/ffmpeg-darwin-arm64" -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
+          curl --fail --location --retry 3 "${BASE_URL}/ffmpeg-darwin-x64" -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
+          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64
 
-          mkdir -p src-tauri/resources
-          mkdir -p /tmp/beatgaler-ffmpeg
-
-          echo "Downloading FFmpeg Apple Silicon..."
-          curl --fail --location --retry 3 \
-            "${BASE_URL}/ffmpeg-darwin-arm64" \
-            -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
-
-          echo "Downloading FFmpeg Intel..."
-          curl --fail --location --retry 3 \
-            "${BASE_URL}/ffmpeg-darwin-x64" \
-            -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
-
-          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64
-          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-x64
-
-          echo "Verifying release SHA-256 digests using GitHub release metadata..."
           RELEASE_JSON="$(gh api "repos/${REPO}/releases/tags/${FFMPEG_TAG}")"
-
           ARM_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-arm64") | .digest // empty' | sed 's/^sha256://')"
           X64_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-x64") | .digest // empty' | sed 's/^sha256://')"
-
           ARM_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-arm64 | awk '{print $1}')"
           X64_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-x64 | awk '{print $1}')"
+          test -n "$ARM_EXPECTED" && test -n "$X64_EXPECTED"
+          test "$ARM_EXPECTED" = "$ARM_ACTUAL"
+          test "$X64_EXPECTED" = "$X64_ACTUAL"
 
-          if [ -z "$ARM_EXPECTED" ] || [ -z "$X64_EXPECTED" ]; then
-            echo "::error::GitHub release metadata did not provide SHA-256 digests."
-            exit 1
-          fi
-
-          if [ "$ARM_EXPECTED" != "$ARM_ACTUAL" ]; then
-            echo "::error::FFmpeg arm64 SHA-256 mismatch."
-            exit 1
-          fi
-
-          if [ "$X64_EXPECTED" != "$X64_ACTUAL" ]; then
-            echo "::error::FFmpeg x64 SHA-256 mismatch."
-            exit 1
-          fi
-
-          echo "Creating universal FFmpeg binary..."
-          lipo -create \
-            /tmp/beatgaler-ffmpeg/ffmpeg-arm64 \
-            /tmp/beatgaler-ffmpeg/ffmpeg-x64 \
-            -output src-tauri/resources/ffmpeg
-
+          lipo -create /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64 -output src-tauri/resources/ffmpeg
           chmod +x src-tauri/resources/ffmpeg
-
-          echo "Universal FFmpeg architectures:"
           lipo -archs src-tauri/resources/ffmpeg
-
-          echo "Testing FFmpeg before Tauri build:"
           src-tauri/resources/ffmpeg -version | head -n 3
 
       - name: Build universal macOS DMG
@@ -125,75 +118,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           DMG_PATH="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
-
-          if [ -z "$DMG_PATH" ] || [ ! -f "$DMG_PATH" ]; then
-            echo "::error::Could not find the generated DMG."
-            exit 1
-          fi
-
-          echo "Final DMG:"
-          echo "$DMG_PATH"
-
+          test -n "$DMG_PATH" && test -f "$DMG_PATH"
           ATTACH_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
-          printf '%s\n' "$ATTACH_OUTPUT"
-
           MOUNT_POINT="$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's#^.*\(/Volumes/.*\)$#\1#p' | head -n 1)"
-
-          if [ -z "$MOUNT_POINT" ] || [ ! -d "$MOUNT_POINT" ]; then
-            echo "::error::Could not determine the mounted DMG path."
-            exit 1
-          fi
-
-          cleanup() {
-            hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
-          }
+          test -n "$MOUNT_POINT" && test -d "$MOUNT_POINT"
+          cleanup() { hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true; }
           trap cleanup EXIT
-
           APP_PATH="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name '*.app' | head -n 1)"
-
-          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "::error::Could not find Beat Galer.app inside the final DMG."
-            find "$MOUNT_POINT" -maxdepth 3 -print
-            exit 1
-          fi
-
+          test -n "$APP_PATH" && test -d "$APP_PATH"
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
-
-          echo "App inside DMG:"
-          echo "$APP_PATH"
-
-          if [ ! -f "$FFMPEG_PATH" ]; then
-            echo "::error::FFmpeg is NOT inside Beat Galer.app/Contents/Resources."
-            find "$APP_PATH/Contents" -maxdepth 4 -print
-            exit 1
-          fi
-
-          echo "Bundled FFmpeg file:"
-          ls -lh "$FFMPEG_PATH"
-
+          test -f "$FFMPEG_PATH"
           ARCHS="$(lipo -archs "$FFMPEG_PATH")"
-          echo "Bundled FFmpeg architectures: $ARCHS"
-
-          echo "$ARCHS" | grep -q "arm64" || {
-            echo "::error::Bundled FFmpeg is missing arm64."
-            exit 1
-          }
-
-          echo "$ARCHS" | grep -q "x86_64" || {
-            echo "::error::Bundled FFmpeg is missing x86_64."
-            exit 1
-          }
-
-          echo "Testing the exact FFmpeg shipped inside the DMG:"
+          echo "$ARCHS" | grep -q "arm64"
+          echo "$ARCHS" | grep -q "x86_64"
           "$FFMPEG_PATH" -version | head -n 3
 
-          echo "SUCCESS: final DMG contains a working universal FFmpeg."
+      - name: Prepare public DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
+          SOURCE_DMG="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          mkdir -p release-assets
+          cp "$SOURCE_DMG" "release-assets/Beat.Galer_${VERSION_VALUE}_universal.dmg"
 
-      - name: Upload macOS DMG
+      - name: Create or update public GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          NOTES="${{ inputs.release_notes }}"
+          if [ -z "$NOTES" ]; then NOTES="Beat Galer ${RELEASE_TAG}"; fi
+          if ! gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" --target main --title "Beat Galer $RELEASE_TAG" --notes "$NOTES" || true
+          fi
+          gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null
+          DMG_PATH="$(find release-assets -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          gh release upload "$RELEASE_TAG" "$DMG_PATH" --repo "$PUBLIC_RELEASE_REPO" --clobber
+
+      - name: Upload macOS DMG as private workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: BeatGaler-macOS-Universal
-          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          path: release-assets/*.dmg
           if-no-files-found: error
