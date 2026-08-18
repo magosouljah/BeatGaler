@@ -59,7 +59,7 @@ try {
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
   const rustLib = readFileSync(path.join(root, "src-tauri", "src", "lib.rs"), "utf8");
   const nativeExternalImage = readFileSync(path.join(root, "src", "features", "dragdrop", "nativeExternalImage.ts"), "utf8");
-  const wryPatch = readFileSync(path.join(root, "scripts", "wry-patches", "wry-0.54.2-drag_drop.rs"), "utf8");
+  const wryPatch = readFileSync(path.join(root, "scripts", "wry-patches", "wry-0.54.2-drag_drop.rs"), "utf8").replace(/\r\n/g, "\n");
   const wryPatchInstaller = readFileSync(path.join(root, "scripts", "patch-wry-pinterest.mjs"), "utf8");
   const runTauriScript = readFileSync(path.join(root, "scripts", "run-tauri.ps1"), "utf8");
   const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
