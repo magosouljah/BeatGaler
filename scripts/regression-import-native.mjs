@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const read = relative => readFileSync(path.join(root, relative), "utf8");
+const read = relative => readFileSync(path.join(root, relative), "utf8").replace(/\r\n/g, "\n");
 const fail = message => { throw new Error(`Import/native-drop regression: ${message}`); };
 
 const app = read("src/App.tsx");
