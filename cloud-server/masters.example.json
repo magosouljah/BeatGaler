@@ -1,0 +1,16 @@
+{
+  "masters": [
+    {
+      "id": "Master01",
+      "label": "Vault MASTER 01",
+      "session_file": "C:\\BeatGaler\\secrets\\master-01-session.txt",
+      "soft_limit": 400
+    },
+    {
+      "id": "Master02",
+      "label": "Vault MASTER 02",
+      "session_file": "C:\\BeatGaler\\secrets\\master-02-session.txt",
+      "soft_limit": 400
+    }
+  ]
+}

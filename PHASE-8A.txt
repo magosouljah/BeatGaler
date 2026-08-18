@@ -1,0 +1,12 @@
+BeatGaler Phase 8A Desktop E2E
+
+Files:
+- package.json
+- wdio.e2e.conf.mjs
+- tests/e2e/desktop-smoke.e2e.mjs
+
+Install once:
+npm install --save-dev @wdio/cli @wdio/local-runner @wdio/mocha-framework @wdio/spec-reporter @wdio/tauri-service
+
+Run:
+npm run test:e2e:desktop

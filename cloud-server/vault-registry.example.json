@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "vaults": {
+    "-1001234567890": {
+      "master_id": "Master01",
+      "assigned_at": "2026-08-16T00:00:00.000Z",
+      "label": "Example user vault"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+Name: Jazz Hop
+BPM: 110
+Key: Bb Major
+Created: 05/11/2026 15:17:26

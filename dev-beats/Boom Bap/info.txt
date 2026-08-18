@@ -1,0 +1,4 @@
+Name: Boom Bap
+BPM: 100
+Key: E Minor
+Created: 05/11/2026 15:17:26

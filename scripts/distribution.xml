@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>BeatVault Installer</title>
+    <organization id="com.prodbruho.beatvault"/>
+    <options customize="never" require-scripts="false"/>
+    <background file=""/>
+    <license file=""/>
+    <readme file=""/>
+    <options hostArchitectures="arm64,x86_64"/>
+    <installation-check script="installCheck();"/>
+    <volume-check script="volumeCheck();"/>
+    <script>
+        function installCheck() {
+            return true;
+        }
+        function volumeCheck() {
+            return true;
+        }
+    </script>
+    <choices-outline>
+        <line choice="install"/>
+    </choices-outline>
+    <choice id="install" title="Install BeatVault">
+        <pkg-ref id="com.prodbruho.beatvault.pkg"/>
+    </choice>
+    <pkg-ref id="com.prodbruho.beatvault.pkg" installKBytes="0" version="0" auth="Root">
+        #PACKAGE_REF#
+    </pkg-ref>
+</installer-gui-script>
