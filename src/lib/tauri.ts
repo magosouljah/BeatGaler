@@ -10,6 +10,8 @@ type OpenFn = (options?: Record<string, unknown>) => Promise<string | string[] |
 type SaveFn = (options?: Record<string, unknown>) => Promise<string | null>;
 type ConvertFileSrcFn = (filePath: string, protocol?: string) => string;
 
+
+
 // Check if we're in Tauri context (not in dev/web browser mode)
 const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
 export const isTauriAvailable = isTauri;
@@ -1311,4 +1313,25 @@ export async function detachLocalSourcesAfterCloudUpload(beatId: string): Promis
   await initTauri();
   if (!invoke) throw new Error("Tauri not available");
   return invoke<Beat>("detach_local_sources_after_cloud_upload", { beatId });
+}
+
+
+export interface AppUpdateInfo {
+  available: boolean;
+  current_version: string;
+  version: string | null;
+  notes: string | null;
+  date: string | null;
+}
+
+export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
+  await initTauri();
+  if (!invoke) throw new Error("Updates are only available in the desktop app.");
+  return invoke<AppUpdateInfo>("check_app_update");
+}
+
+export async function installAppUpdate(): Promise<void> {
+  await initTauri();
+  if (!invoke) throw new Error("Updates are only available in the desktop app.");
+  return invoke<void>("install_app_update");
 }

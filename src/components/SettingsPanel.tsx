@@ -5,6 +5,7 @@ import {
   listTemplateTrash, restoreTemplateFromTrash, purgeTemplateTrashNow, type TemplateTrashItem,
   setIncompleteWarningsEnabled, setCustomCursorEnabled,
   getPlaybackCacheStatus, setPlaybackCacheLimitMb, clearPlaybackCache, type PlaybackCacheStatus,
+  checkForAppUpdate, installAppUpdate,
 } from "../lib/tauri";
 import type { Beat } from "../types";
 import {
@@ -76,7 +77,7 @@ export default function SettingsPanel(props: Props) {
   const [preferenceBusy, setPreferenceBusy] = useState(false);
   const [trashItems, setTrashItems] = useState<TrashItem[]>([]);
   const [loadingTrash, setLoadingTrash] = useState(true);
-  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [restoringIds, setRestoringIds] = useState<Set<string>>(() => new Set());
   const [trashError, setTrashError] = useState<string | null>(null);
   const [trashMessage, setTrashMessage] = useState<string | null>(null);
   const [purging, setPurging] = useState(false);
@@ -101,6 +102,8 @@ export default function SettingsPanel(props: Props) {
   const [cacheStatus, setCacheStatus] = useState<PlaybackCacheStatus | null>(null);
   const [cacheBusy, setCacheBusy] = useState(false);
   const [customCacheMb, setCustomCacheMb] = useState("2048");
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 
   const refreshAccount = async () => {
     try { const value = await getBeatGalerAccountInfo(); setAccount(value); }
@@ -147,11 +150,33 @@ export default function SettingsPanel(props: Props) {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
-  const restore = async (item: TrashItem) => {
-    setRestoringId(item.id); setTrashError(null);
-    try { const beat = await restoreBeatFromTrash(item.id); setTrashItems(items => items.filter(x => x.id !== item.id)); onBeatRestored?.(beat); }
-    catch (e: any) { setTrashError(String(e?.message || e)); }
-    finally { setRestoringId(null); }
+  const restore = (item: TrashItem) => {
+    // Optimistically mark only this row busy and immediately return control to
+    // React. Other Trash rows remain clickable while native work runs in the
+    // background. Duplicate clicks on the same row are ignored.
+    if (restoringIds.has(item.id)) return;
+    setRestoringIds(current => {
+      const next = new Set(current);
+      next.add(item.id);
+      return next;
+    });
+    setTrashError(null);
+
+    void restoreBeatFromTrash(item.id)
+      .then(beat => {
+        setTrashItems(items => items.filter(x => x.id !== item.id));
+        onBeatRestored?.(beat);
+      })
+      .catch((e: any) => {
+        setTrashError(String(e?.message || e));
+      })
+      .finally(() => {
+        setRestoringIds(current => {
+          const next = new Set(current);
+          next.delete(item.id);
+          return next;
+        });
+      });
   };
 
   const emptyTrash = () => {
@@ -281,7 +306,7 @@ export default function SettingsPanel(props: Props) {
         <button onClick={() => setActive("privacy")} style={{ width: "100%", textAlign: "left", border: 0, background: "transparent", color: active === "privacy" ? "#bbb" : "#555", padding: "7px 12px", cursor: "pointer", fontSize: 10 }}>Privacy Policy</button>
         <button onClick={() => setActive("terms")} style={{ width: "100%", textAlign: "left", border: 0, background: "transparent", color: active === "terms" ? "#bbb" : "#555", padding: "7px 12px", cursor: "pointer", fontSize: 10 }}>Terms of Service</button>
       </div>
-      <div style={{ padding: "8px 12px 0", color: "#3f3f3f", fontSize: 10 }}>Beat Galer 0.6.0</div>
+      <div style={{ padding: "8px 12px 0", color: "#3f3f3f", fontSize: 10 }}>Beat Galer 0.7.0</div>
     </aside>
 
     <main style={{ flex: 1, overflowY: "auto" }}>
@@ -388,7 +413,7 @@ export default function SettingsPanel(props: Props) {
 
         {active === "preferences" && <>{title("Preferences", "Control how BeatGaler behaves on this device.")}{card(<><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Incomplete file warnings</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Warn when Samples or a project file is missing.</div></div>{switchButton(showIncompleteWarnings, toggleIncomplete)}</div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0 8px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Custom cursor</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Use the BeatGaler custom pointer.</div></div>{switchButton(customCursorEnabled, toggleCursor)}</div><div style={{ padding: "14px 0 4px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Playback cache</div><div style={{ fontSize: 10, color: "#555", marginTop: 3, maxWidth: 380 }}>Keeps recently played MASTER MP3s on this device so repeat playback starts instantly. BeatGaler removes older cached audio automatically when the limit is reached.</div></div><select disabled={cacheBusy || !cacheStatus} value={[0,500,1024,2048,5120,10240].includes(cacheStatus?.limit_mb ?? -1) ? String(cacheStatus?.limit_mb ?? 2048) : "custom"} onChange={(e) => { if (e.target.value !== "custom") void updateCacheLimit(Number(e.target.value)); }} style={{ background: "#151515", color: "#bbb", border: "1px solid #2a2a2a", borderRadius: 7, padding: "7px 9px", minWidth: 110 }}><option value="0">Off</option><option value="500">500 MB</option><option value="1024">1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option><option value="10240">10 GB</option><option value="custom">Custom…</option></select></div><div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}><span style={{ fontSize: 10, color: "#666" }}>Used: {cacheStatus ? formatBytes(cacheStatus.used_bytes) : "…"}{cacheStatus && cacheStatus.limit_mb > 0 ? ` of ${cacheStatus.limit_mb >= 1024 ? `${(cacheStatus.limit_mb / 1024).toFixed(cacheStatus.limit_mb % 1024 === 0 ? 0 : 1)} GB` : `${cacheStatus.limit_mb} MB`}` : ""}</span><input type="number" min={0} max={51200} step={100} value={customCacheMb} onChange={(e) => setCustomCacheMb(e.target.value)} style={{ width: 90, background: "#111", color: "#aaa", border: "1px solid #272727", borderRadius: 6, padding: "6px 7px", fontSize: 10 }} /><span style={{ fontSize: 10, color: "#555" }}>MB</span><button disabled={cacheBusy || !customCacheMb} onClick={() => void updateCacheLimit(Number(customCacheMb))} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Set</button><button disabled={cacheBusy || !cacheStatus || cacheStatus.used_bytes === 0} onClick={() => void clearCache()} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Clear cache</button></div></div></>)}</>}
 
-        {active === "trash" && <>{title("Trash", "Restore deleted beats and presets or remove them permanently.")}{card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Beats</div>{loadingTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : trashItems.length === 0 ? <div style={{ color: "#444", fontSize: 11 }}>Trash is empty</div> : <>{trashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}><span style={{ color: "#aaa", fontSize: 11 }}>{item.beat_name || "Untitled beat"}</span><button disabled={restoringId === item.id} onClick={() => void restore(item)} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>{restoringId === item.id ? "Restoring…" : "Restore"}</button></div>)}<button disabled={purging || !props.networkOnline} title={!props.networkOnline ? "Internet connection required" : undefined} onClick={() => void emptyTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777", opacity: props.networkOnline ? 1 : 0.45, cursor: props.networkOnline ? "pointer" : "default" }}>{purging ? "Emptying…" : "Empty beat trash"}</button></>}{trashMessage && <div style={{ marginTop: 8, color: "#777", fontSize: 10 }}>{trashMessage}</div>}{trashError && <div style={{ marginTop: 8, color: "#c77777", fontSize: 10 }}>{trashError}</div>}</>)}{card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Presets</div>{loadingPresetTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : presetTrashItems.length === 0 ? <div style={{ color: "#444", fontSize: 11 }}>Preset trash is empty</div> : <>{presetTrashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}><span style={{ color: "#aaa", fontSize: 11 }}>{item.preset_name}</span><button disabled={restoringPresetId === item.id} onClick={async () => { setRestoringPresetId(item.id); try { await restoreTemplateFromTrash(item.id); setPresetTrashItems(x => x.filter(y => y.id !== item.id)); } finally { setRestoringPresetId(null); } }} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Restore</button></div>)}<button disabled={purgingPresets} onClick={() => void emptyPresetTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777" }}>{purgingPresets ? "Emptying…" : "Empty preset trash"}</button></>}</>)}</>}
+        {active === "trash" && <>{title("Trash", "Restore deleted beats and presets or remove them permanently.")}{card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Beats</div>{loadingTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : trashItems.length === 0 ? <div style={{ color: "#444", fontSize: 11 }}>Trash is empty</div> : <>{trashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}><span style={{ color: "#aaa", fontSize: 11 }}>{item.beat_name || "Untitled beat"}</span><button disabled={restoringIds.has(item.id)} onClick={() => restore(item)} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>{restoringIds.has(item.id) ? "Restoring…" : "Restore"}</button></div>)}<button disabled={purging || !props.networkOnline} title={!props.networkOnline ? "Internet connection required" : undefined} onClick={() => void emptyTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777", opacity: props.networkOnline ? 1 : 0.45, cursor: props.networkOnline ? "pointer" : "default" }}>{purging ? "Emptying…" : "Empty beat trash"}</button></>}{trashMessage && <div style={{ marginTop: 8, color: "#777", fontSize: 10 }}>{trashMessage}</div>}{trashError && <div style={{ marginTop: 8, color: "#c77777", fontSize: 10 }}>{trashError}</div>}</>)}{card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Presets</div>{loadingPresetTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : presetTrashItems.length === 0 ? <div style={{ color: "#444", fontSize: 11 }}>Preset trash is empty</div> : <>{presetTrashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}><span style={{ color: "#aaa", fontSize: 11 }}>{item.preset_name}</span><button disabled={restoringPresetId === item.id} onClick={async () => { setRestoringPresetId(item.id); try { await restoreTemplateFromTrash(item.id); setPresetTrashItems(x => x.filter(y => y.id !== item.id)); } finally { setRestoringPresetId(null); } }} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Restore</button></div>)}<button disabled={purgingPresets} onClick={() => void emptyPresetTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777" }}>{purgingPresets ? "Emptying…" : "Empty preset trash"}</button></>}</>)}</>}
 
         {active === "privacy" && <>
           {title("Beat Galer Privacy Policy", `Last updated: ${LEGAL_UPDATED}`)}
@@ -402,7 +427,90 @@ export default function SettingsPanel(props: Props) {
           {renderLegalSections(TERMS_SECTIONS)}
         </>}
 
-        {active === "tools" && <>{title("Tools", "Development and diagnostics. This section is intended to be removed from the public release.")}{card(<><div style={{ color: "#9b7f54", fontSize: 10, marginBottom: 12 }}>DEVELOPMENT ONLY</div><button onClick={async () => { const dir = await getLogDir(); if (dir) await revealInExplorer(dir); }} style={{ ...buttonStyle, width: "100%" }}>Open log folder</button><button onClick={async () => { const dir = await getTemplatesDir(); if (dir) await revealInExplorer(dir); }} style={{ ...buttonStyle, width: "100%", marginTop: 8 }}>Open templates folder</button></>)}</>}
+        {active === "tools" && <>
+          {title("Tools", "Development, diagnostics, and application updates.")}
+
+          {card(<>
+            <div style={{ color: "#9b7f54", fontSize: 10, marginBottom: 12 }}>DEVELOPMENT ONLY</div>
+            <button
+              onClick={async () => {
+                const dir = await getLogDir();
+                if (dir) await revealInExplorer(dir);
+              }}
+              style={{ ...buttonStyle, width: "100%" }}
+            >
+              Open log folder
+            </button>
+            <button
+              onClick={async () => {
+                const dir = await getTemplatesDir();
+                if (dir) await revealInExplorer(dir);
+              }}
+              style={{ ...buttonStyle, width: "100%", marginTop: 8 }}
+            >
+              Open templates folder
+            </button>
+          </>)}
+
+          {card(<>
+            <div style={{ fontSize: 13, color: "#eee", marginBottom: 6 }}>App updates</div>
+            <div style={{ fontSize: 11, color: "#888", lineHeight: 1.5, marginBottom: 12 }}>
+              Updates are verified before installation.
+            </div>
+
+            <button
+              disabled={updateBusy}
+              onClick={async () => {
+                setUpdateBusy(true);
+                setUpdateMessage(null);
+                try {
+                  const result: any = await checkForAppUpdate();
+                  if (!result?.available) {
+                    setUpdateMessage("Beat Galer is up to date.");
+                    return;
+                  }
+                  setUpdateMessage(
+                    result.version
+                      ? `Beat Galer ${result.version} is available.`
+                      : "An update is available."
+                  );
+                } catch (error: any) {
+                  setUpdateMessage(String(error?.message || error));
+                } finally {
+                  setUpdateBusy(false);
+                }
+              }}
+              style={{ ...buttonStyle, width: "100%", opacity: updateBusy ? 0.6 : 1 }}
+            >
+              {updateBusy ? "Checking…" : "Check for updates"}
+            </button>
+
+            <button
+              disabled={updateBusy}
+              onClick={async () => {
+                setUpdateBusy(true);
+                setUpdateMessage("Installing update…");
+                try {
+                  await installAppUpdate();
+                  setUpdateMessage("Update installed. Restart Beat Galer to finish.");
+                } catch (error: any) {
+                  setUpdateMessage(String(error?.message || error));
+                } finally {
+                  setUpdateBusy(false);
+                }
+              }}
+              style={{ ...buttonStyle, width: "100%", marginTop: 8, opacity: updateBusy ? 0.6 : 1 }}
+            >
+              Install update
+            </button>
+
+            {updateMessage && (
+              <div style={{ marginTop: 10, fontSize: 11, color: "#aaa", lineHeight: 1.4 }}>
+                {updateMessage}
+              </div>
+            )}
+          </>)}
+        </>}
       </div>
     </main>
   </div>;

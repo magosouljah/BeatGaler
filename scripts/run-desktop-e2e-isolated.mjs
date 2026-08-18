@@ -93,7 +93,9 @@ function cleanPermanentE2EImports(text) {
     .replace(/^\s*import\s+E2EPlaybackHarness\s+from\s+["'][^"']*E2EPlaybackHarness["'];?\s*\r?\n/gm, "")
     .replace(/^\s*import\s+E2EOfflineReconnectHarness\s+from\s+["'][^"']*E2EOfflineReconnectHarness["'];?\s*\r?\n/gm, "")
     .replace(/^\s*import\s+E2ETrashHarness\s+from\s+["'][^"']*E2ETrashHarness["'];?\s*\r?\n/gm, "")
-    .replace(/^\s*import\s+E2EImportHarness\s+from\s+["'][^"']*E2EImportHarness["'];?\s*\r?\n/gm, "");
+    .replace(/^\s*import\s+E2EImportHarness\s+from\s+["'][^"']*E2EImportHarness["'];?\s*\r?\n/gm, "")
+    .replace(/^\s*import\s+E2EDownloadsHarness\s+from\s+["'][^"']*E2EDownloadsHarness["'];?\s*\r?\n/gm, "")
+    .replace(/^\s*import\s+E2ERecoveryHarness\s+from\s+["'][^"']*E2ERecoveryHarness["'];?\s*\r?\n/gm, "");
 }
 
 function patchFrontend() {
@@ -107,8 +109,10 @@ function patchFrontend() {
   const offlineFlowEnabled = process.env.BEATGALER_E2E_OFFLINE === "1";
   const trashFlowEnabled = process.env.BEATGALER_E2E_TRASH === "1";
   const importFlowEnabled = process.env.BEATGALER_E2E_IMPORT === "1";
+  const downloadsFlowEnabled = process.env.BEATGALER_E2E_DOWNLOADS === "1";
+  const recoveryFlowEnabled = process.env.BEATGALER_E2E_RECOVERY === "1";
 
-  const enabledFlowCount = [editFlowEnabled, playbackFlowEnabled, offlineFlowEnabled, trashFlowEnabled, importFlowEnabled]
+  const enabledFlowCount = [editFlowEnabled, playbackFlowEnabled, offlineFlowEnabled, trashFlowEnabled, importFlowEnabled, downloadsFlowEnabled, recoveryFlowEnabled]
     .filter(Boolean).length;
 
   if (enabledFlowCount > 1) {
@@ -131,6 +135,12 @@ function patchFrontend() {
   }
   if (importFlowEnabled) {
     imports.push('import E2EImportHarness from "../tests/e2e-harness/E2EImportHarness";');
+  }
+  if (downloadsFlowEnabled) {
+    imports.push('import E2EDownloadsHarness from "../tests/e2e-harness/E2EDownloadsHarness";');
+  }
+  if (recoveryFlowEnabled) {
+    imports.push('import E2ERecoveryHarness from "../tests/e2e-harness/E2ERecoveryHarness";');
   }
 
   text = `${imports.join("\n")}\n${text}`;
@@ -170,6 +180,20 @@ function patchFrontend() {
       throw new Error("[e2e] BEATGALER_E2E_IMPORT=1 but <App /> was not replaced in src/main.tsx.");
     }
     console.log("[e2e] IMPORT HARNESS MOUNTED: <App /> -> <E2EImportHarness />");
+  } else if (downloadsFlowEnabled) {
+    const before = text;
+    text = text.replace(/<App\s*\/>/g, "<E2EDownloadsHarness />");
+    if (text === before || !text.includes("<E2EDownloadsHarness />")) {
+      throw new Error("[e2e] BEATGALER_E2E_DOWNLOADS=1 but <App /> was not replaced in src/main.tsx.");
+    }
+    console.log("[e2e] DOWNLOADS HARNESS MOUNTED: <App /> -> <E2EDownloadsHarness />");
+  } else if (recoveryFlowEnabled) {
+    const before = text;
+    text = text.replace(/<App\s*\/>/g, "<E2ERecoveryHarness />");
+    if (text === before || !text.includes("<E2ERecoveryHarness />")) {
+      throw new Error("[e2e] BEATGALER_E2E_RECOVERY=1 but <App /> was not replaced in src/main.tsx.");
+    }
+    console.log("[e2e] RECOVERY HARNESS MOUNTED: <App /> -> <E2ERecoveryHarness />");
   } else {
     console.log("[e2e] Normal E2E app mounted (no flow harness).");
   }
@@ -177,8 +201,8 @@ function patchFrontend() {
   write(files.frontend, text);
 }
 
-function patchImportIndexHtml() {
-  if (process.env.BEATGALER_E2E_IMPORT !== "1") return;
+function patchFlowIndexHtml() {
+  if (process.env.BEATGALER_E2E_IMPORT !== "1" && process.env.BEATGALER_E2E_DOWNLOADS !== "1" && process.env.BEATGALER_E2E_RECOVERY !== "1") return;
 
   let text = fs.readFileSync(files.html, "utf8");
   const before = text;
@@ -194,11 +218,11 @@ function patchImportIndexHtml() {
   );
 
   if (text === before || text.includes('id="beatgaler-startup-loader"')) {
-    throw new Error("[e2e] IMPORT mode could not remove #beatgaler-startup-loader from index.html.");
+    throw new Error("[e2e] Flow mode could not remove #beatgaler-startup-loader from index.html.");
   }
 
   write(files.html, text);
-  console.log("[e2e] IMPORT startup loader removed from E2E-only index.html.");
+  console.log("[e2e] Flow startup loader removed from E2E-only index.html.");
 }
 
 function restoreSources() {
@@ -228,7 +252,7 @@ try {
   patchCapability();
   patchTauriConf();
   patchFrontend();
-  patchImportIndexHtml();
+  patchFlowIndexHtml();
 
   run("npm", ["run", "build"], { VITE_E2E: "1" });
 
@@ -253,6 +277,8 @@ try {
   const offlineFlowEnabled = process.env.BEATGALER_E2E_OFFLINE === "1";
   const trashFlowEnabled = process.env.BEATGALER_E2E_TRASH === "1";
   const importFlowEnabled = process.env.BEATGALER_E2E_IMPORT === "1";
+  const downloadsFlowEnabled = process.env.BEATGALER_E2E_DOWNLOADS === "1";
+  const recoveryFlowEnabled = process.env.BEATGALER_E2E_RECOVERY === "1";
 
   const wdioArgs = editFlowEnabled
     ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/edit-metadata-flow.e2e.mjs"]
@@ -264,7 +290,11 @@ try {
           ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/trash-flow.e2e.mjs"]
           : importFlowEnabled
             ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/import-flow.e2e.mjs"]
-            : ["wdio", "run", "wdio.e2e.conf.mjs"];
+            : downloadsFlowEnabled
+              ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/downloads-project-flow.e2e.mjs"]
+              : recoveryFlowEnabled
+                ? ["wdio", "run", "wdio.e2e.conf.mjs", "--spec", "tests/e2e/recovery-stress-flow.e2e.mjs"]
+                : ["wdio", "run", "wdio.e2e.conf.mjs"];
 
   console.log(
     editFlowEnabled
@@ -277,7 +307,11 @@ try {
             ? "[e2e] TRASH FLOW MODE: running only tests/e2e/trash-flow.e2e.mjs"
             : importFlowEnabled
               ? "[e2e] IMPORT FLOW MODE: running only tests/e2e/import-flow.e2e.mjs"
-              : "[e2e] NORMAL MODE: running the full desktop E2E suite"
+              : downloadsFlowEnabled
+                ? "[e2e] DOWNLOADS FLOW MODE: running only tests/e2e/downloads-project-flow.e2e.mjs"
+                : recoveryFlowEnabled
+                  ? "[e2e] RECOVERY FLOW MODE: running only tests/e2e/recovery-stress-flow.e2e.mjs"
+                  : "[e2e] NORMAL MODE: running the full desktop E2E suite"
   );
 
   const result = spawnSync(

@@ -310,7 +310,8 @@ try {
   if (!beatCard.includes('Make available offline') || !beatCard.includes('offlineAvailablePng')) fail("Beat cards lost Offline pin controls or the supplied Offline artwork symbol.");
   if (beatCard.includes('>✓</span>') || beatCard.includes('>↧</span>')) fail("Legacy Offline text glyphs (green check/orange arrow) were reintroduced.");
   if (!settingsPanel.includes('Connect to the internet before permanently emptying beat Trash.')) fail("Beat Trash can be permanently emptied offline again.");
-  if (!rustCommands.includes('CREATE TABLE IF NOT EXISTS offline_beats')) fail("SQLite lost durable per-user Offline records.");
+  const rustVersioning = readFileSync(path.join(root, "src-tauri", "src", "versioning.rs"), "utf8");
+  if (!rustCommands.includes('CREATE TABLE IF NOT EXISTS offline_beats') && !rustVersioning.includes('CREATE TABLE IF NOT EXISTS offline_beats')) fail("SQLite lost durable per-user Offline records.");
   if (!rustCommands.includes('FROM offline_beats WHERE user_id=?1 ORDER BY created_at, beat_id')) fail("Cold Offline library depends on ordinary beats cache again instead of durable Offline records.");
   if (!rustCommands.includes('Offline packages live under app_data/offline')) fail("Clear cache lost the explicit Offline-storage separation invariant.");
   if (!rustCommands.includes('The Rust cooker survives a WebView refresh')) fail("Clear cache no longer resets stale in-memory Download Cooking state.");
@@ -360,6 +361,79 @@ try {
   if (!removeOfflineBlock.includes('std::fs::remove_dir_all(root_path)')) fail("Remove from Available Offline no longer deletes the durable package.");
   if (removeOfflineBlock.indexOf('clear_offline_record(') < removeOfflineBlock.indexOf('std::fs::remove_dir_all(root_path)')) fail("Offline SQLite state is cleared before durable-file deletion succeeds, which can leave removal half-applied.");
   console.log("PASS offline/reconnect guard: durable Offline pins, verified cold-start filtering, cache-safe pins, local MP3/WAV/PROJECT exports, Open Project, safe Offline removal, reconnect playback recovery, supplied icon/sounds, and safe Trash reconciliation");
+
+
+  // Phase 10: Downloads + PROJECT lifecycle. Protect the worker-thread boundary,
+  // local-first Offline behavior, atomic exports, unique Everything folders,
+  // PROJECT validation/download/open lifecycle, and user-visible completion/error state.
+  const phase10Start = rustCommands.indexOf('pub fn start_background_download(');
+  const phase10End = rustCommands.indexOf('pub fn copy_audio_metadata(', phase10Start);
+  if (phase10Start < 0 || phase10End < 0) fail("Phase 10 download worker could not be located.");
+  const phase10Worker = rustCommands.slice(phase10Start, phase10End);
+  if (!phase10Worker.includes('std::thread::spawn(move ||')) fail("Phase 10 downloads can block the Tauri UI thread again.");
+  for (const kind of ['"MP3"', '"WAV"', '"PROJECT"', '"ALL"']) {
+    if (!phase10Worker.includes(kind)) fail(`Phase 10 download worker lost ${kind}.`);
+  }
+  if (!phase10Worker.includes('ensure_master_export_cache')) fail("MP3 export lost durable/cache source resolution.");
+  if (!phase10Worker.includes('cloud_file_id_for_beat(&conn, &beat.id, "WAV")')) fail("WAV export lost its exact HQ cloud slot lookup.");
+  if (!phase10Worker.includes('ensure_project_working_copy')) fail("PROJECT export lost local/download working-copy resolution.");
+  if (!phase10Worker.includes('prepare_unique_export_folder')) fail("Download Everything can overwrite an older export folder again.");
+  if (!phase10Worker.includes('write_beat_metadata_to_exported_audio')) fail("Audio exports lost current BeatGaler metadata overlay.");
+  if (!phase10Worker.includes('background_download_emit') || !phase10Worker.includes('"completed"') || !phase10Worker.includes('"error"')) fail("Background download completion/error events disappeared.");
+  const atomicExportStart = rustCommands.indexOf('pub fn copy_export_file(');
+  const atomicExportEnd = rustCommands.indexOf('fn safe_export_component', atomicExportStart);
+  const atomicExport = rustCommands.slice(atomicExportStart, atomicExportEnd);
+  if (!atomicExport.includes('.beatgaler-export')) fail("Exports no longer stage through a temporary file before finalization.");
+  if (!atomicExport.includes('source_meta.len() == 0')) fail("Empty/corrupt export sources are no longer rejected before replacing the destination.");
+  const openProjectStart10 = rustCommands.indexOf('pub fn open_beat_project(');
+  const openProjectEnd10 = rustCommands.indexOf('pub fn download_project_to_cache', openProjectStart10);
+  const openProject10 = rustCommands.slice(openProjectStart10, openProjectEnd10);
+  if (!openProject10.includes('ensure_project_working_copy')) fail("Open Project no longer downloads/reuses the canonical PROJECT working copy.");
+  if (!rustCommands.includes('if !project_zip_is_valid(&workspace)')) fail("Downloaded PROJECT ZIP is no longer validated before use.");
+  if (!rustCommands.includes('project-workspaces')) fail("PROJECT working copies lost their isolated temporary workspace.");
+  if (!app.includes('startBackgroundDownload(kind, beat, destination)')) fail("Downloads UI no longer starts the native background worker.");
+  if (!app.includes('listen<BackgroundDownloadEvent>("beatgaler-download-event"')) fail("Downloads UI lost native completion/error event handling.");
+  if (!app.includes('next.add(kind)')) fail("Download completion status no longer marks only the action the user actually requested.");
+  console.log("PASS Phase 10 downloads/project guard: background worker, atomic exports, unique Everything folders, local-first slots, PROJECT validation/open, and completion/error UI are protected");
+
+  // Phase 11: recovery/corruption guard. A crash marker is never authority,
+  // canonical INDEX wins, incomplete downloads/exports stay sidecar-only,
+  // corrupt payloads fail closed, and durable control-plane state is atomic.
+  if (!app.includes("const INTERRUPTED_UPLOADS_KEY")) fail("Interrupted upload recovery marker disappeared.");
+  if (!app.includes("authoritativeBeatIds?.has(item.beatId)")) fail("Upload recovery can no longer preserve a beat already committed to the authoritative INDEX.");
+  if (!app.includes("authoritativeBeatIds === null")) fail("Upload recovery no longer fails closed when the authoritative INDEX cannot be verified.");
+  if (!app.includes("remaining.push(item)")) fail("Failed upload rollback no longer keeps its recovery marker for a later launch.");
+  const directDownloadStart11 = rustCommands.indexOf("fn download_telegram_file_to_path(");
+  const directDownloadEnd11 = rustCommands.indexOf("fn download_beat_from_telegram_inner", directDownloadStart11);
+  const directDownload11 = rustCommands.slice(directDownloadStart11, directDownloadEnd11);
+  if (!directDownload11.includes("beatgaler-download")) fail("Native downloads lost their crash-safe sidecar file.");
+  if (directDownload11.indexOf("downloaded_size == 0") > directDownload11.indexOf("remove_file(destination)")) fail("Download destination can be removed before corruption/empty-file validation.");
+  if (!directDownload11.includes("remove_file(&tmp_path)")) fail("Failed native downloads can leave stale sidecars behind.");
+  const exportStart11 = rustCommands.indexOf("pub fn copy_export_file(");
+  const exportEnd11 = rustCommands.indexOf("fn safe_export_component", exportStart11);
+  const export11 = rustCommands.slice(exportStart11, exportEnd11);
+  if (export11.indexOf("source_meta.len() == 0") > export11.indexOf("remove_file(&destination)")) fail("Export destination can be removed before source integrity validation.");
+  if (!export11.includes("beatgaler-export")) fail("Exports lost their temporary sidecar boundary.");
+  if (!rustCommands.includes("Reconstructed project ZIP is empty.")) fail("PROJECT reconstruction no longer rejects empty/corrupt output.");
+  if (!rustCommands.includes("Project download worker") || !rustCommands.includes("remove_dir_all(&part_dir)")) fail("PROJECT worker crash cleanup disappeared.");
+  if (!rustCommands.includes(".tag-rename-journal") || !rustCommands.includes("rollback_incomplete_tag_rename")) fail("Crash-safe tag mutation journal/recovery disappeared.");
+  const transportPool = readFileSync(path.join(root, "cloud-server", "transport-pool.js"), "utf8");
+  if (!transportPool.includes("const tmp = `${file}.tmp`") || !transportPool.includes("fs.renameSync(tmp, file)")) fail("Transport pool durable state is no longer written temp+rename atomically.");
+  console.log("PASS Phase 11 recovery/corruption guard: authoritative INDEX wins recovery, sidecar writes fail closed, corrupt outputs are rejected, journals roll back, and pool state stays atomic");
+
+  execFileSync(process.execPath, [path.join(root, "scripts", "regression-phase12.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
+
+  execFileSync(process.execPath, [path.join(root, "scripts", "regression-phase12b.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  execFileSync(process.execPath, [path.join(root, "scripts", "regression-phase12c.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
 
   execFileSync(process.execPath, [path.join(root, "scripts", "version.mjs"), "check"], {
     cwd: root,

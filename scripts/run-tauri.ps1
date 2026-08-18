@@ -1,7 +1,8 @@
-param(
-  [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$TauriArgs
-)
+# Intentionally use PowerShell's automatic $args collection instead of a
+# advanced remaining-arguments parameter declaration. The latter turns
+# this script into an advanced script and makes CLI flags such as `-w`
+# collide with PowerShell common parameters like -WarningAction.
+$TauriArgs = @($args)
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) {
