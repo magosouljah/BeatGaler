@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fail = message => { throw new Error(`Phase 12B regression failed: ${message}`); };
-const read = rel => fs.readFileSync(path.join(root, rel), "utf8");
+const read = rel => fs.readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
 
 const config = JSON.parse(read("src-tauri/tauri.conf.json"));
 if (config.bundle?.createUpdaterArtifacts !== true) fail("bundle.createUpdaterArtifacts must be true.");
@@ -26,6 +26,9 @@ if (!workflow.includes("TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRI
 if (workflow.includes("BEGIN PRIVATE KEY") || workflow.includes("untrusted comment: minisign secret key")) fail("Private signing key material was embedded in workflow source.");
 if (!workflow.includes("npm run updater:verify-artifacts")) fail("Release workflow does not verify .sig output.");
 if (!workflow.includes("latest.json")) fail("Release workflow does not publish a static updater manifest.");
-if (!workflow.includes("permissions:\n  contents: write")) fail("Release workflow cannot publish GitHub release assets.");
+if (!workflow.includes("PUBLIC_RELEASE_REPO: magosouljah/galer")) fail("Release workflow is no longer bound to the public release repository.");
+if (!workflow.includes("PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}")) fail("Release workflow no longer authenticates cross-repository publishing through the dedicated secret.");
+if (!workflow.includes("GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}")) fail("Public GitHub Release publishing no longer uses the dedicated cross-repository token.");
+if (!workflow.includes("permissions:\n  contents: read")) fail("Private source workflow must keep its own repository permissions read-only.");
 
-console.log("PASS Phase 12B updater signing pipeline: updater artifacts are enabled, keys stay outside repo, CI uses secrets, signatures are verified, and latest.json is published");
+console.log("PASS Phase 12B updater signing pipeline: updater artifacts are enabled, keys stay outside repo, CI uses secrets, signatures are verified, and latest.json is published to the dedicated public release repository");

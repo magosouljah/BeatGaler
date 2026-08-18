@@ -24,7 +24,7 @@ if (!conf.plugins?.updater?.pubkey?.startsWith("dW50cnVzdGVk")) fail("real publi
 if (JSON.stringify(conf.plugins.updater).includes("PRIVATE")) fail("private signing material leaked into config");
 if (!bridge.includes("checkForAppUpdate") || !bridge.includes("installAppUpdate")) fail("frontend updater bridge missing");
 if (!ui.includes("Check for updates") || !ui.includes("Updates are verified before installation")) fail("user-facing updater controls missing");
-if (!workflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json")) fail("release build endpoint is not bound to the actual GitHub repository");
+if (!workflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json")) fail("release build endpoint is not bound to the dedicated public release repository");
 if (!baseline.includes("git remote get-url origin") || !baseline.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) fail("real 0.6.1 baseline test builder is incomplete");
 
 console.log("PASS Phase 12C real updater client: signed HTTPS checks/install are wired, public key is embedded, endpoint follows the release repo, and a real 0.6.1 baseline build is available");
