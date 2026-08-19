@@ -18,6 +18,7 @@ const sessionFileIds = new Map();
 function emit(value) { process.stdout.write(`${OUT}${JSON.stringify(value)}\n`); }
 function fail(message, extra = {}) { emit({ ok: false, error: String(message || 'Direct transport failed.'), ...extra }); }
 function nowIso() { return new Date().toISOString(); }
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function safeUrl(value) {
   try {

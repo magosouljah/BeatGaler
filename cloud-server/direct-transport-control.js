@@ -24,7 +24,9 @@ const PROCESS_INSTANCE_ID = crypto.randomBytes(8).toString('hex');
 const HEARTBEAT_INTERVAL_MS = Math.max(30_000, Number(process.env.DIRECT_HEARTBEAT_INTERVAL_MS || 60_000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.DIRECT_HEARTBEAT_TIMEOUT_MS || 5 * 60_000));
 const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(process.env.DIRECT_TOKEN_ROTATION_ENABLED || 'false').trim().toLowerCase());
-const LOCAL_BOT_API_BASE = String(process.env.DIRECT_LOCAL_BOT_API_BASE || 'http://127.0.0.1:8081').replace(/\/$/, '');
+const CLIENT_LOCAL_BOT_API_BASE = 'http://127.0.0.1:8081';
+const INDEX_OPERATION_TTL_MS = Math.max(60_000, Number(process.env.DIRECT_INDEX_OPERATION_TTL_MS || 5 * 60_000));
+const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DATA_OPERATION_TTL_MS || 4 * 60 * 60_000));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
@@ -236,7 +238,14 @@ function normalizeState(pool) {
   }
   for (const opId of Object.keys(state.operations)) {
     const op = state.operations[opId];
-    if (!op || !state.leases[String(op.session_id || '')]) delete state.operations[opId];
+    const startedAt = parseTime(op?.started_at);
+    const isIndexOp = op?.kind === 'get_index' || op?.kind === 'replace_index';
+    const operationTtlMs = isIndexOp ? INDEX_OPERATION_TTL_MS : DATA_OPERATION_TTL_MS;
+    const stale = !startedAt || Date.now() - startedAt >= operationTtlMs;
+    if (!op || !state.leases[String(op.session_id || '')] || stale) {
+      if (op && stale) diag('STALE_OPERATION_REAPED', { operation_id: opId, session_id: op.session_id || null, kind: op.kind || null });
+      delete state.operations[opId];
+    }
   }
   return state;
 }
@@ -703,7 +712,11 @@ function sessionPublic(runtime) {
     transport_username: runtime.bot.telegram_username || null,
     chat_id: String(runtime.chatId),
     bot_token: runtime.token,
-    bot_api_base: LOCAL_BOT_API_BASE,
+    // The Bot API server is part of the Desktop data plane. Every client talks
+    // to its OWN loopback server; BeatGaler Cloud never proxies media bytes.
+    bot_api_base: CLIENT_LOCAL_BOT_API_BASE,
+    telegram_api_id: apiCredentials().apiId,
+    telegram_api_hash: apiCredentials().apiHash,
     resolver_chat_id: runtime.resolverChatId || String(process.env.DIRECT_BOTAPI_RESOLVER_CHAT_ID || '').trim() || null,
     generation: runtime.generation,
     credential_version: runtime.credentialVersion,
@@ -1279,7 +1292,7 @@ function getIndexPointer(chatId) {
 }
 module.exports = {
   TOKEN_ROTATION_ENABLED,
-  LOCAL_BOT_API_BASE,
+  LOCAL_BOT_API_BASE: CLIENT_LOCAL_BOT_API_BASE,
   recordIndexPointer,
   getIndexPointer,
   enabled,

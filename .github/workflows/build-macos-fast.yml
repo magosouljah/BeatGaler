@@ -51,7 +51,7 @@ jobs:
         with:
           path: |
             /tmp/beatgaler-fast-runtimes
-          key: macos-arm64-runtimes-ffmpeg-b6.1.1-node-22.18.0
+          key: macos-arm64-runtimes-ffmpeg-b6.1.1-node-22.18.0-botapi-v2
 
       - name: Install npm dependencies
         run: npm ci
@@ -98,6 +98,41 @@ jobs:
           src-tauri/resources/node --version
           src-tauri/resources/ffmpeg -version | head -n 3
 
+      - name: Build embedded Telegram Bot API arm64 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          CACHE_DIR="/tmp/beatgaler-fast-runtimes"
+          BIN="$CACHE_DIR/telegram-bot-api"
+          mkdir -p "$CACHE_DIR" src-tauri/resources
+
+          if [ ! -x "$BIN" ]; then
+            brew install cmake gperf openssl@3
+            rm -rf /tmp/beatgaler-telegram-bot-api
+            git clone --recursive --depth 1 https://github.com/tdlib/telegram-bot-api.git /tmp/beatgaler-telegram-bot-api
+            cmake -S /tmp/beatgaler-telegram-bot-api -B /tmp/beatgaler-telegram-bot-api/build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+              -DOPENSSL_USE_STATIC_LIBS=TRUE
+            cmake --build /tmp/beatgaler-telegram-bot-api/build --target telegram-bot-api --parallel 3
+            cp /tmp/beatgaler-telegram-bot-api/build/telegram-bot-api "$BIN"
+            chmod +x "$BIN"
+          fi
+
+          cp "$BIN" src-tauri/resources/telegram-bot-api
+          chmod +x src-tauri/resources/telegram-bot-api
+          test "$(lipo -archs src-tauri/resources/telegram-bot-api)" = "arm64"
+          src-tauri/resources/telegram-bot-api --version
+
+          # The installed app must not depend on Homebrew libraries that won't
+          # exist on an end-user Mac. Only Apple/system dylibs are allowed.
+          if otool -L src-tauri/resources/telegram-bot-api | tail -n +2 | grep -E '/opt/homebrew|/usr/local'; then
+            echo "::error::telegram-bot-api has a non-portable Homebrew dylib dependency"
+            otool -L src-tauri/resources/telegram-bot-api
+            exit 1
+          fi
+
       - name: Build Apple Silicon DMG
         shell: bash
         env:
@@ -125,10 +160,18 @@ jobs:
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
           NODE_PATH="$APP_PATH/Contents/Resources/node"
           HELPER_PATH="$APP_PATH/Contents/Resources/direct-transport/transport-helper.cjs"
+          BOT_API_PATH="$APP_PATH/Contents/Resources/telegram-bot-api"
 
           test -x "$FFMPEG_PATH"
           test -x "$NODE_PATH"
           test -f "$HELPER_PATH"
+          test -x "$BOT_API_PATH"
+          test "$(lipo -archs "$BOT_API_PATH")" = "arm64"
+          "$BOT_API_PATH" --version
+          if otool -L "$BOT_API_PATH" | tail -n +2 | grep -E '/opt/homebrew|/usr/local'; then
+            echo "::error::DMG contains a telegram-bot-api binary with Homebrew dylib dependencies"
+            exit 1
+          fi
           test "$(lipo -archs "$FFMPEG_PATH")" = "arm64"
           test "$(lipo -archs "$NODE_PATH")" = "arm64"
           "$NODE_PATH" --version

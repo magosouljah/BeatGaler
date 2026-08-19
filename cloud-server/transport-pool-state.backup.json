@@ -1,0 +1,98 @@
+{
+  "version": 4,
+  "queue": [
+    "Bot02",
+    "Bot03",
+    "Bot01"
+  ],
+  "bots": {
+    "Bot01": {
+      "generation": 14,
+      "credential_version": 1,
+      "rotation_pending": false,
+      "quarantined": false,
+      "quarantine_reason": null,
+      "last_assigned_at": "2026-08-19T01:18:04.088Z"
+    },
+    "Bot02": {
+      "generation": 13,
+      "credential_version": 1,
+      "rotation_pending": false,
+      "quarantined": false,
+      "quarantine_reason": null,
+      "last_assigned_at": "2026-08-18T23:07:31.238Z"
+    },
+    "Bot03": {
+      "generation": 13,
+      "credential_version": 1,
+      "rotation_pending": false,
+      "quarantined": true,
+      "quarantine_reason": "vault removal failed: MASTER cannot find private vault -1003964179108.",
+      "last_assigned_at": "2026-08-19T01:16:34.193Z"
+    }
+  },
+  "leases": {
+    "dts_328e7ff8795b84af9d2f9f4d6b374c1d": {
+      "session_id": "dts_328e7ff8795b84af9d2f9f4d6b374c1d",
+      "bot_id": "Bot03",
+      "installation_id": "6wtR8OBcmUuCz19ixvegK-B49LU",
+      "chat_id": "-1003964179108",
+      "generation": 13,
+      "credential_version": 1,
+      "status": "QUARANTINED",
+      "started_at": "2026-08-19T01:16:34.193Z",
+      "last_heartbeat_at": "2026-08-19T01:21:30.723Z",
+      "owner_instance": "2a78bacfe44a094d"
+    },
+    "dts_a85211f1a46fc5413dbe4e944170aee6": {
+      "session_id": "dts_a85211f1a46fc5413dbe4e944170aee6",
+      "bot_id": "Bot01",
+      "installation_id": "rH_3ZVafMhrcEDeKMHqs5fc47Ls",
+      "chat_id": "-1004378170359",
+      "generation": 14,
+      "credential_version": 1,
+      "status": "ACTIVE",
+      "started_at": "2026-08-19T01:18:04.088Z",
+      "last_heartbeat_at": "2026-08-19T01:42:53.408Z",
+      "owner_instance": "2a78bacfe44a094d"
+    }
+  },
+  "operations": {},
+  "metrics": {
+    "Bot01": {
+      "date": "2026-08-19",
+      "sessions_today": 1,
+      "total_sessions": 28,
+      "last_used_at": "2026-08-19T01:22:48.398Z"
+    },
+    "Bot02": {
+      "date": "2026-08-19",
+      "sessions_today": 0,
+      "total_sessions": 17,
+      "last_used_at": "2026-08-18T23:07:33.904Z"
+    },
+    "Bot03": {
+      "date": "2026-08-19",
+      "sessions_today": 0,
+      "total_sessions": 16,
+      "last_used_at": "2026-08-18T21:33:36.602Z"
+    }
+  },
+  "rotation": {
+    "Bot01": {
+      "last_rotated_at": null,
+      "last_status": "never",
+      "last_error": null
+    },
+    "Bot02": {
+      "last_rotated_at": null,
+      "last_status": "never",
+      "last_error": null
+    },
+    "Bot03": {
+      "last_rotated_at": null,
+      "last_status": "never",
+      "last_error": null
+    }
+  }
+}
