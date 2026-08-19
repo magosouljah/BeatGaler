@@ -7,6 +7,8 @@ const path = require('path');
 const readline = require('readline');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
+const dns = require('dns').promises;
+const net = require('net');
 
 const OUT = '__BEATGALER_DIRECT_JSON__';
 const BOOT = '__BEATGALER_DIRECT_BOOTSTRAP__';
@@ -16,6 +18,131 @@ const sessionFileIds = new Map();
 function emit(value) { process.stdout.write(`${OUT}${JSON.stringify(value)}\n`); }
 function fail(message, extra = {}) { emit({ ok: false, error: String(message || 'Direct transport failed.'), ...extra }); }
 function nowIso() { return new Date().toISOString(); }
+
+function safeUrl(value) {
+  try {
+    const u = new URL(String(value || ''));
+    // Never expose bot tokens embedded in Bot API paths.
+    u.pathname = u.pathname.replace(/\/bot[^/]+/g, '/bot<redacted>');
+    u.username = u.username ? '<redacted>' : '';
+    u.password = u.password ? '<redacted>' : '';
+    return u.toString();
+  } catch {
+    return '<invalid-url>';
+  }
+}
+
+function safeProxy(value) {
+  if (!value) return null;
+  try {
+    const u = new URL(String(value));
+    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+  } catch {
+    return '<configured-invalid-url>';
+  }
+}
+
+function errorDetails(error) {
+  const seen = new Set();
+  const chain = [];
+  let current = error;
+  for (let depth = 0; current && depth < 6; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    chain.push({
+      name: String(current?.name || ''),
+      message: String(current?.message || current || ''),
+      code: current?.code ?? null,
+      errno: current?.errno ?? null,
+      syscall: current?.syscall ?? null,
+      address: current?.address ?? null,
+      port: current?.port ?? null,
+      hostname: current?.hostname ?? null,
+    });
+    current = current?.cause;
+  }
+  return {
+    chain,
+    stack: String(error?.stack || '').split('\n').slice(0, 12).join(' | '),
+  };
+}
+
+function runtimeContext(session) {
+  let parsed = null;
+  try { parsed = new URL(session.botApiBase); } catch (_) {}
+  const interfaces = {};
+  try {
+    for (const [name, rows] of Object.entries(os.networkInterfaces() || {})) {
+      interfaces[name] = (rows || []).map(row => ({
+        address: row.address,
+        family: row.family,
+        internal: Boolean(row.internal),
+      }));
+    }
+  } catch (_) {}
+  return {
+    node_version: process.version,
+    node_exec_path: process.execPath,
+    platform: process.platform,
+    arch: process.arch,
+    release: os.release(),
+    hostname: os.hostname(),
+    cwd: process.cwd(),
+    helper_path: __filename,
+    bot_api_base: safeUrl(session.botApiBase),
+    bot_api_protocol: parsed?.protocol || null,
+    bot_api_hostname: parsed?.hostname || null,
+    bot_api_port: parsed?.port || (parsed?.protocol === 'https:' ? '443' : parsed?.protocol === 'http:' ? '80' : null),
+    proxy: {
+      http_proxy: safeProxy(process.env.HTTP_PROXY || process.env.http_proxy),
+      https_proxy: safeProxy(process.env.HTTPS_PROXY || process.env.https_proxy),
+      all_proxy: safeProxy(process.env.ALL_PROXY || process.env.all_proxy),
+      no_proxy_configured: Boolean(process.env.NO_PROXY || process.env.no_proxy),
+    },
+    network_interfaces: interfaces,
+  };
+}
+
+async function tcpProbe(hostname, port, timeoutMs = 2500) {
+  const result = { hostname, port: Number(port), dns: null, tcp: null };
+  if (!hostname || !port) return result;
+  try {
+    result.dns = await dns.lookup(hostname, { all: true });
+  } catch (error) {
+    result.dns = { error: errorDetails(error) };
+  }
+  result.tcp = await new Promise(resolve => {
+    const started = Date.now();
+    const socket = net.createConnection({ host: hostname, port: Number(port) });
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ ...value, ms: Date.now() - started });
+    };
+    socket.setTimeout(timeoutMs, () => finish({ ok: false, timeout: true }));
+    socket.once('connect', () => finish({ ok: true, local_address: socket.localAddress, remote_address: socket.remoteAddress }));
+    socket.once('error', error => finish({ ok: false, error: errorDetails(error) }));
+  });
+  return result;
+}
+
+async function networkFailureDiagnostics(session, label, targetUrl, error) {
+  let parsed = null;
+  try { parsed = new URL(targetUrl); } catch (_) {}
+  const port = parsed?.port || (parsed?.protocol === 'https:' ? 443 : parsed?.protocol === 'http:' ? 80 : 0);
+  const probe = await tcpProbe(parsed?.hostname || '', port);
+  const details = errorDetails(error);
+  diag('NETWORK_FAILURE_CONTEXT', {
+    label,
+    target: safeUrl(targetUrl),
+    runtime: runtimeContext(session),
+    probe,
+    error: details,
+  });
+  return { probe, details };
+}
 
 function diagPath() {
   const root = process.env.LOCALAPPDATA
@@ -172,8 +299,23 @@ async function botApi(session, method, payload = {}, timeoutMs = 30000) {
       return body.result;
     } catch (error) {
       const message = error?.name === 'AbortError' ? `${method} timed out` : String(error?.message || error);
-      diag('BOT_API_CALL_FAILED', { method, ms: Date.now() - started, error: message });
-      throw new Error(message);
+      const url = `${session.botApiBase}/bot${session.token}/${method}`;
+      const network = await networkFailureDiagnostics(session, `botApi:${method}`, url, error).catch(diagError => ({
+        details: errorDetails(error),
+        diagnostic_error: errorDetails(diagError),
+      }));
+      const cause = network?.details?.chain?.[1] || network?.details?.chain?.[0] || {};
+      const code = cause.code || cause.errno || '';
+      const suffix = [code, cause.syscall, cause.address, cause.port].filter(v => v !== null && v !== undefined && String(v) !== '').join(' ');
+      diag('BOT_API_CALL_FAILED', {
+        method,
+        target: safeUrl(url),
+        ms: Date.now() - started,
+        error: message,
+        cause: network?.details || null,
+        probe: network?.probe || null,
+      });
+      throw new Error(`${message}${suffix ? ` (${suffix})` : ''}`);
     } finally {
       clearTimeout(timer);
     }
@@ -205,11 +347,23 @@ async function getFileLocalPath(session, fileId) {
   if (!fs.existsSync(cachePath) || fs.statSync(cachePath).size <= 0) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 120000);
+    const fileUrl = `${session.botApiBase}/file/bot${session.token}/${filePath}`;
     try {
-      const response = await fetch(`${session.botApiBase}/file/bot${session.token}/${filePath}`, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Bot API file download failed (${response.status}).`);
+      const response = await fetch(fileUrl, { signal: controller.signal });
+      if (!response.ok) {
+        diag('BOT_API_FILE_HTTP_ERROR', {
+          target: safeUrl(fileUrl),
+          status: response.status,
+          status_text: response.statusText,
+          headers: Object.fromEntries([...response.headers.entries()].filter(([k]) => !/authorization|cookie|set-cookie/i.test(k))),
+        });
+        throw new Error(`Bot API file download failed (${response.status}).`);
+      }
       const data = Buffer.from(await response.arrayBuffer());
       fs.writeFileSync(cachePath, data);
+    } catch (error) {
+      await networkFailureDiagnostics(session, 'botApi:fileDownload', fileUrl, error).catch(() => {});
+      throw error;
     } finally { clearTimeout(timer); }
   }
   return { path: cachePath, size: fs.statSync(cachePath).size };
@@ -570,9 +724,11 @@ async function main() {
     session_id: session.session_id,
     transport_id: session.transport_id,
     vault: session.chatId,
-    bot_api_base: session.botApiBase,
+    bot_api_base: safeUrl(session.botApiBase),
     resolver_configured: Boolean(session.resolverChatId),
     token_rotation_enabled: Boolean(session.token_rotation_enabled),
+    runtime: runtimeContext(session),
+    diagnostics_file: diagPath(),
   });
 
   // No auth.ImportBotAuthorization. The helper first announces that its stdin
@@ -668,7 +824,14 @@ async function main() {
 }
 
 main().catch(error => {
-  diag('HELPER_FATAL', { error: error?.message || error });
-  fail(error?.message || error, { fatal: true });
+  const details = errorDetails(error);
+  diag('HELPER_FATAL', { error: error?.message || error, details, diagnostics_file: diagPath() });
+  const cause = details.chain?.[1] || details.chain?.[0] || {};
+  const code = cause.code || cause.errno || '';
+  const suffix = [code, cause.syscall, cause.address, cause.port].filter(v => v !== null && v !== undefined && String(v) !== '').join(' ');
+  fail(`${error?.message || error}${suffix && !String(error?.message || error).includes(String(code)) ? ` (${suffix})` : ''}`, {
+    fatal: true,
+    diagnostic_file: diagPath(),
+  });
   process.exitCode = 1;
 });
