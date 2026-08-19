@@ -1,0 +1,150 @@
+name: Fast BeatGaler macOS Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fast-macos-test:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Show source
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GitHub ref: $GITHUB_REF"
+          git log -1 --oneline
+
+      - name: Setup Node for build tools
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust for Apple Silicon only
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Cargo and Tauri build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-arm64-tauri-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          restore-keys: |
+            macos-arm64-tauri-
+
+      - name: Cache downloaded arm64 runtimes
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/beatgaler-fast-runtimes
+          key: macos-arm64-runtimes-ffmpeg-b6.1.1-node-22.18.0
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run version and regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run version:check
+          npm run test:regressions
+
+      - name: Prepare arm64 FFmpeg and Node runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          FFMPEG_TAG="b6.1.1"
+          NODE_VERSION="22.18.0"
+          CACHE_DIR="/tmp/beatgaler-fast-runtimes"
+          mkdir -p "$CACHE_DIR" src-tauri/resources
+
+          if [ ! -x "$CACHE_DIR/ffmpeg" ]; then
+            curl --fail --location --retry 3 \
+              "https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_TAG}/ffmpeg-darwin-arm64" \
+              -o "$CACHE_DIR/ffmpeg"
+            chmod +x "$CACHE_DIR/ffmpeg"
+          fi
+
+          if [ ! -x "$CACHE_DIR/node" ]; then
+            curl --fail --location --retry 3 \
+              "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-arm64.tar.gz" \
+              -o "$CACHE_DIR/node-arm64.tar.gz"
+            rm -rf "$CACHE_DIR/node-v${NODE_VERSION}-darwin-arm64"
+            tar -xzf "$CACHE_DIR/node-arm64.tar.gz" -C "$CACHE_DIR"
+            cp "$CACHE_DIR/node-v${NODE_VERSION}-darwin-arm64/bin/node" "$CACHE_DIR/node"
+            chmod +x "$CACHE_DIR/node"
+          fi
+
+          cp "$CACHE_DIR/ffmpeg" src-tauri/resources/ffmpeg
+          cp "$CACHE_DIR/node" src-tauri/resources/node
+          chmod +x src-tauri/resources/ffmpeg src-tauri/resources/node
+
+          test "$(lipo -archs src-tauri/resources/ffmpeg)" = "arm64"
+          test "$(lipo -archs src-tauri/resources/node)" = "arm64"
+          src-tauri/resources/node --version
+          src-tauri/resources/ffmpeg -version | head -n 3
+
+      - name: Build Apple Silicon DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          npx tauri build --bundles dmg --target aarch64-apple-darwin
+
+      - name: Verify runtimes inside DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG_PATH="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          test -n "$DMG_PATH" && test -f "$DMG_PATH"
+
+          ATTACH_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
+          MOUNT_POINT="$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's#^.*\(/Volumes/.*\)$#\1#p' | head -n 1)"
+          test -n "$MOUNT_POINT" && test -d "$MOUNT_POINT"
+          cleanup() { hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          APP_PATH="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name '*.app' | head -n 1)"
+          test -n "$APP_PATH" && test -d "$APP_PATH"
+
+          FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
+          NODE_PATH="$APP_PATH/Contents/Resources/node"
+          HELPER_PATH="$APP_PATH/Contents/Resources/direct-transport/transport-helper.cjs"
+
+          test -x "$FFMPEG_PATH"
+          test -x "$NODE_PATH"
+          test -f "$HELPER_PATH"
+          test "$(lipo -archs "$FFMPEG_PATH")" = "arm64"
+          test "$(lipo -archs "$NODE_PATH")" = "arm64"
+          "$NODE_PATH" --version
+
+      - name: Prepare test DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
+          SOURCE_DMG="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          mkdir -p release-assets
+          cp "$SOURCE_DMG" "release-assets/Beat.Galer_${VERSION_VALUE}_arm64-test.dmg"
+
+      - name: Upload fast macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeatGaler-macOS-ARM64-Test
+          path: release-assets/*.dmg
+          if-no-files-found: error
