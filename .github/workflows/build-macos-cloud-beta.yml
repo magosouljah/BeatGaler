@@ -128,11 +128,14 @@ jobs:
           APP_PATH="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name '*.app' | head -n 1)"
           test -n "$APP_PATH" && test -d "$APP_PATH"
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
+          HELPER_PATH="$APP_PATH/Contents/Resources/direct-transport/transport-helper.cjs"
           test -f "$FFMPEG_PATH"
+          test -f "$HELPER_PATH"
           ARCHS="$(lipo -archs "$FFMPEG_PATH")"
           echo "$ARCHS" | grep -q "arm64"
           echo "$ARCHS" | grep -q "x86_64"
           "$FFMPEG_PATH" -version | head -n 3
+          echo "Direct transport helper bundled: $HELPER_PATH"
 
       - name: Prepare public DMG
         shell: bash

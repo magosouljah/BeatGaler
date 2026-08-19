@@ -1,7 +1,8 @@
 {
   "bundle": {
     "resources": {
-      "resources/ffmpeg": "ffmpeg"
+      "resources/ffmpeg": "ffmpeg",
+      "direct-transport/transport-helper.cjs": "direct-transport/transport-helper.cjs"
     }
   }
 }
