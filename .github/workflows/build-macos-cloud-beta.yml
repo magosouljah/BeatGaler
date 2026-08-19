@@ -54,6 +54,25 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Cache Cargo and Tauri build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-universal-tauri-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          restore-keys: |
+            macos-universal-tauri-
+
+      - name: Cache downloaded macOS runtimes
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/beatgaler-ffmpeg
+            /tmp/beatgaler-node
+          key: macos-runtimes-ffmpeg-b6.1.1-node-22.18.0
+
       - name: Install npm dependencies
         run: npm ci
 
