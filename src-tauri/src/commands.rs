@@ -932,26 +932,43 @@ fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
     let start_lock = DIRECT_RUNTIME_START_LOCK.get_or_init(|| Mutex::new(()));
     let _startup_guard = start_lock.lock().map_err(|e| e.to_string())?;
 
-    let reusable = {
+    let runtime_state = {
         let slot = direct_runtime_slot();
         let mut guard = slot.lock().map_err(|e| e.to_string())?;
         if let Some(runtime) = guard.as_mut() {
-            runtime.user_id == user_id && runtime.child.try_wait().map_err(|e| e.to_string())?.is_none()
-        } else { false }
+            let exit_status = runtime.child.try_wait().map_err(|e| e.to_string())?;
+            Some((runtime.user_id == user_id, exit_status))
+        } else { None }
     };
-    if reusable { return Ok(true); }
+    if matches!(runtime_state, Some((true, None))) { return Ok(true); }
 
     let old = {
         let mut guard = direct_runtime_slot().lock().map_err(|e| e.to_string())?;
         guard.take()
     };
-    if let Some(runtime) = old {
+    if let Some(mut runtime) = old {
+        let same_user = runtime.user_id == user_id;
         let user = runtime.user_id.clone();
         let session = runtime.session_id.clone();
         let generation = runtime.generation;
+        let exit_status = runtime.child.try_wait().ok().flatten();
         clear_direct_lease_meta(Some(&session));
+        if let Some(status) = exit_status {
+            eprintln!(
+                "[direct] HELPER_EXITED session={} transport={} status={} reconnecting_same_lease={}",
+                session, runtime.transport_id, status, same_user
+            );
+        }
         kill_direct_runtime_without_releasing(runtime);
-        direct_stop_server_session(&user, &session, generation);
+
+        // A helper-process crash is not a BeatGaler logout. Keep the server-side
+        // lease alive for the same installation and let /session/start return the
+        // existing lease/token. This prevents a macOS helper failure from cycling
+        // Bot01 -> Bot02 -> Bot03 and preserves the session-token lifetime rule.
+        // Only release here when the runtime belongs to a different BeatGaler user.
+        if !same_user {
+            direct_stop_server_session(&user, &session, generation);
+        }
     }
 
     let url = format!("{}/transport/session/start", telegram_cloud_api_base());
