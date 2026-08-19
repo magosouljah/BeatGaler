@@ -72,7 +72,3 @@ cloud-server/transport-pool-state.json.tmp-*
 
 # Automated test build output
 .unit-build/
-
-cloud-server/transport-pool-state.backup.json
-tqueue.binlog
-webhooks_db.binlog

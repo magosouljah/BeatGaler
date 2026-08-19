@@ -667,6 +667,115 @@ fn direct_node_runtime_path() -> String {
         .unwrap_or_else(|| "node".to_string())
 }
 
+fn direct_bot_api_runtime_path() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("BEATGALER_BOT_API_RUNTIME") {
+        let p = PathBuf::from(value);
+        if p.is_file() { return Some(p); }
+    }
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("resources").join("telegram-bot-api"));
+        candidates.push(cwd.join("resources").join("telegram-bot-api"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("telegram-bot-api"));
+            candidates.push(dir.join("resources").join("telegram-bot-api"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("Resources").join("telegram-bot-api"));
+            }
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+static DIRECT_BOT_API_RUNTIME: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
+static DIRECT_BOT_API_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn direct_bot_api_slot() -> &'static Mutex<Option<Child>> {
+    DIRECT_BOT_API_RUNTIME.get_or_init(|| Mutex::new(None))
+}
+
+fn local_bot_api_reachable() -> bool {
+    let addr = "127.0.0.1:8081".parse().expect("valid loopback address");
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+}
+
+fn stop_local_bot_api_runtime() {
+    if let Ok(mut guard) = direct_bot_api_slot().lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            eprintln!("[direct] LOCAL_BOT_API_STOPPED");
+        }
+    }
+}
+
+fn ensure_local_bot_api(session: &Value) -> Result<(), String> {
+    if local_bot_api_reachable() { return Ok(()); }
+    let lock = DIRECT_BOT_API_START_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().map_err(|e| e.to_string())?;
+    if local_bot_api_reachable() { return Ok(()); }
+
+    // Reap a previous embedded server that exited unexpectedly.
+    if let Ok(mut slot) = direct_bot_api_slot().lock() {
+        if let Some(child) = slot.as_mut() {
+            if child.try_wait().map_err(|e| e.to_string())?.is_some() { *slot = None; }
+        }
+    }
+
+    let api_id = session.get("telegram_api_id").and_then(|v| v.as_i64())
+        .filter(|v| *v > 0)
+        .ok_or_else(|| "BeatGaler Cloud did not provide the Telegram application id required by the local data plane.".to_string())?;
+    let api_hash = session.get("telegram_api_hash").and_then(|v| v.as_str())
+        .map(str::trim).filter(|v| !v.is_empty())
+        .ok_or_else(|| "BeatGaler Cloud did not provide the Telegram application hash required by the local data plane.".to_string())?;
+    let binary = direct_bot_api_runtime_path()
+        .ok_or_else(|| "BeatGaler local data-plane runtime is missing from this installation.".to_string())?;
+    let work_dir = beatgaler_temp_dir().join("direct-bot-api");
+    std::fs::create_dir_all(&work_dir)
+        .map_err(|e| format!("Could not prepare BeatGaler local data-plane directory: {}", e))?;
+
+    let mut command = Command::new(&binary);
+    command
+        .arg("--local")
+        .arg(format!("--api-id={}", api_id))
+        .arg(format!("--api-hash={}", api_hash))
+        .arg("--http-ip-address=127.0.0.1")
+        .arg("--http-port=8081")
+        .arg(format!("--dir={}", work_dir.to_string_lossy()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn()
+        .map_err(|e| format!("Could not start BeatGaler local data plane '{}': {}", binary.display(), e))?;
+
+    let started = Instant::now();
+    loop {
+        if local_bot_api_reachable() {
+            eprintln!("[direct] LOCAL_BOT_API_READY address=127.0.0.1:8081");
+            let mut slot = direct_bot_api_slot().lock().map_err(|e| e.to_string())?;
+            *slot = Some(child);
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Err(format!("BeatGaler local data plane exited during startup ({}).", status));
+        }
+        if started.elapsed() >= Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("BeatGaler local data plane did not become ready on 127.0.0.1:8081.".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn direct_helper_path() -> Option<PathBuf> {
     if let Ok(value) = std::env::var("BEATGALER_DIRECT_HELPER") {
         let p = PathBuf::from(value);
@@ -761,6 +870,9 @@ fn direct_send_helper_command(runtime: &mut DirectTransportRuntime, mut command:
 }
 
 fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransportRuntime, String> {
+    // The Bot API server MUST run on the same machine as the file paths used by
+    // this helper. On macOS this launches the arm64 runtime bundled in the .app.
+    ensure_local_bot_api(session)?;
     let helper = direct_helper_path().ok_or_else(|| {
         "Direct transport helper is missing. Expected src-tauri/direct-transport/transport-helper.cjs.".to_string()
     })?;
@@ -778,7 +890,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     command.arg(&helper)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::inherit());
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -1044,12 +1156,24 @@ fn direct_begin_operation(user_id: &str, kind: &str) -> Result<String, String> {
 
 fn direct_end_operation(user_id: &str, session_id: &str, generation: i64, operation_id: &str) {
     let url = format!("{}/transport/operation/end", telegram_cloud_api_base());
-    let _ = post_json_cloud_auth_timeout(&url, &json!({
+    let body = json!({
         "beatgalerUserId": user_id,
         "sessionId": session_id,
         "generation": generation,
         "operationId": operation_id,
-    }), 8);
+    });
+    for attempt in 1..=3 {
+        match post_json_cloud_auth_timeout(&url, &body, 8) {
+            Ok(_) => return,
+            Err(error) if attempt < 3 => {
+                eprintln!("[direct] OPERATION_END_RETRY operation={} attempt={} reason={}", operation_id, attempt, error);
+                std::thread::sleep(Duration::from_millis(150 * attempt));
+            }
+            Err(error) => {
+                eprintln!("[direct] OPERATION_END_DEFERRED operation={} reason={}", operation_id, error);
+            }
+        }
+    }
 }
 
 fn direct_request(user_id: &str, command: Value) -> Result<Value, String> {
@@ -1540,6 +1664,7 @@ pub fn shutdown_direct_transport_runtime() {
         direct_stop_server_session(&user, &session, generation);
         eprintln!("[direct] DATA_PLANE_STOPPED transport={}", transport);
     }
+    stop_local_bot_api_runtime();
 }
 
 /// Managed by the Tauri app so a normal process shutdown releases the leased

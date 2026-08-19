@@ -105,10 +105,10 @@ async function authRequest(path: string, body: Record<string, unknown> = {}, tok
   return fetchJson(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) }, path === "/auth/register" ? 45000 : 20000);
 }
 
-function storeSession(result: AuthResponse) {
+async function storeSession(result: AuthResponse) {
   if (result.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
-    void invoke("set_cloud_auth_token", { token: result.token }).catch(() => {});
+    await invoke("set_cloud_auth_token", { token: result.token });
   }
   window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
   return result.user;
@@ -116,12 +116,12 @@ function storeSession(result: AuthResponse) {
 
 export async function registerBeatGalerAccount(usernameBase: string, email: string, password: string): Promise<BeatGalerAccount> {
   const result = await authRequest("/auth/register", { usernameBase, email, password, beatgalerUserId: await getInstallationId() });
-  return storeSession(result);
+  return await storeSession(result);
 }
 
 export async function loginBeatGalerAccount(identifier: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
   const result = await authRequest("/auth/login", { identifier, password, mfaCode, beatgalerUserId: await getInstallationId() });
-  return storeSession(result);
+  return await storeSession(result);
 }
 
 export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
@@ -129,11 +129,11 @@ export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null
   if (!token) return null;
   try {
     const result = await authRequest("/auth/session", { beatgalerUserId: await getInstallationId() }, token);
-    void invoke("set_cloud_auth_token", { token }).catch(() => {});
+    await invoke("set_cloud_auth_token", { token });
     return result.user;
   } catch {
     localStorage.removeItem(TOKEN_KEY);
-    void invoke("set_cloud_auth_token", { token: null }).catch(() => {});
+    try { await invoke("set_cloud_auth_token", { token: null }); } catch {}
     return null;
   }
 }
@@ -197,7 +197,7 @@ export async function oauthBeatGalerAccount(provider: OAuthProvider, linkExistin
     await new Promise(resolve => window.setTimeout(resolve, 900));
     const result = await authRequest("/auth/oauth/poll", { flowId: started.flow_id, beatgalerUserId }, token);
     if (result.pending) continue;
-    const user: BeatGalerAccount = linkExisting ? result.user : storeSession(result);
+    const user: BeatGalerAccount = linkExisting ? result.user : await storeSession(result);
     if (provider === "x") {
       const previousUsername = before?.username || null;
       window.dispatchEvent(new CustomEvent("beatgaler:x-username-unlocked", { detail: { username: user.username, previousUsername } }));
