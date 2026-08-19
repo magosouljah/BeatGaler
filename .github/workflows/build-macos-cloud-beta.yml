@@ -106,6 +106,26 @@ jobs:
           lipo -archs src-tauri/resources/ffmpeg
           src-tauri/resources/ffmpeg -version | head -n 3
 
+      - name: Download and build universal Node runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_VERSION="22.18.0"
+          mkdir -p src-tauri/resources /tmp/beatgaler-node
+          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-arm64.tar.gz" -o /tmp/beatgaler-node/node-arm64.tar.gz
+          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-x64.tar.gz" -o /tmp/beatgaler-node/node-x64.tar.gz
+          tar -xzf /tmp/beatgaler-node/node-arm64.tar.gz -C /tmp/beatgaler-node
+          tar -xzf /tmp/beatgaler-node/node-x64.tar.gz -C /tmp/beatgaler-node
+          lipo -create \
+            "/tmp/beatgaler-node/node-v${NODE_VERSION}-darwin-arm64/bin/node" \
+            "/tmp/beatgaler-node/node-v${NODE_VERSION}-darwin-x64/bin/node" \
+            -output src-tauri/resources/node
+          chmod +x src-tauri/resources/node
+          ARCHS="$(lipo -archs src-tauri/resources/node)"
+          echo "$ARCHS" | grep -q "arm64"
+          echo "$ARCHS" | grep -q "x86_64"
+          src-tauri/resources/node --version
+
       - name: Build universal macOS DMG
         shell: bash
         env:
@@ -114,7 +134,7 @@ jobs:
           set -euo pipefail
           npx tauri build --bundles dmg --target universal-apple-darwin
 
-      - name: Verify FFmpeg inside final DMG
+      - name: Verify Direct runtime and FFmpeg inside final DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -128,14 +148,20 @@ jobs:
           APP_PATH="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name '*.app' | head -n 1)"
           test -n "$APP_PATH" && test -d "$APP_PATH"
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
+          NODE_PATH="$APP_PATH/Contents/Resources/node"
           HELPER_PATH="$APP_PATH/Contents/Resources/direct-transport/transport-helper.cjs"
           test -f "$FFMPEG_PATH"
+          test -f "$NODE_PATH"
           test -f "$HELPER_PATH"
+          test -x "$NODE_PATH"
+          NODE_ARCHS="$(lipo -archs "$NODE_PATH")"
+          echo "$NODE_ARCHS" | grep -q "arm64"
+          echo "$NODE_ARCHS" | grep -q "x86_64"
+          "$NODE_PATH" --version
           ARCHS="$(lipo -archs "$FFMPEG_PATH")"
           echo "$ARCHS" | grep -q "arm64"
           echo "$ARCHS" | grep -q "x86_64"
           "$FFMPEG_PATH" -version | head -n 3
-          echo "Direct transport helper bundled: $HELPER_PATH"
 
       - name: Prepare public DMG
         shell: bash
