@@ -639,6 +639,34 @@ fn direct_message_id(locator: &str) -> Option<i64> {
     locator.trim().strip_prefix("direct:")?.parse::<i64>().ok().filter(|v| *v > 0)
 }
 
+fn direct_node_runtime_path() -> String {
+    if let Ok(value) = std::env::var("BEATGALER_NODE_RUNTIME") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() { return trimmed.to_string(); }
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("resources").join("node"));
+        candidates.push(cwd.join("resources").join("node"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("node"));
+            candidates.push(dir.join("resources").join("node"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("Resources").join("node"));
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "node".to_string())
+}
+
 fn direct_helper_path() -> Option<PathBuf> {
     if let Ok(value) = std::env::var("BEATGALER_DIRECT_HELPER") {
         let p = PathBuf::from(value);
@@ -736,7 +764,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     let helper = direct_helper_path().ok_or_else(|| {
         "Direct transport helper is missing. Expected src-tauri/direct-transport/transport-helper.cjs.".to_string()
     })?;
-    let node = std::env::var("BEATGALER_NODE_RUNTIME").unwrap_or_else(|_| "node".to_string());
+    let node = direct_node_runtime_path();
     let session_id = session.get("session_id").and_then(|v| v.as_str())
         .ok_or_else(|| "Direct control plane returned no session_id.".to_string())?.to_string();
     let transport_id = session.get("transport_id").and_then(|v| v.as_str()).unwrap_or("transport").to_string();
