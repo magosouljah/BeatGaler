@@ -1,0 +1,235 @@
+name: Fast BeatGaler macOS Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+jobs:
+  bot-api-arm64:
+    name: Build Bot API arm64
+    runs-on: macos-15
+    steps:
+      - name: Build static arm64 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cmake gperf openssl@3
+
+          ROOT=/tmp/beatgaler-telegram-bot-api-arm64
+          rm -rf "$ROOT"
+          git init "$ROOT"
+          git -C "$ROOT" remote add origin https://github.com/tdlib/telegram-bot-api.git
+          git -C "$ROOT" fetch --depth 1 origin "$BOT_API_COMMIT"
+          git -C "$ROOT" checkout --detach FETCH_HEAD
+          git -C "$ROOT" submodule update --init --recursive --depth 1
+
+          cmake -S "$ROOT" -B "$ROOT/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+
+          cmake --build "$ROOT/build" --target telegram-bot-api --parallel 3
+
+          mkdir -p runtime
+          cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
+          chmod +x runtime/telegram-bot-api
+          test "$(lipo -archs runtime/telegram-bot-api)" = "arm64"
+
+      - name: Upload Bot API arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-bot-api-arm64
+          path: runtime/telegram-bot-api
+          if-no-files-found: error
+
+  bot-api-x86_64:
+    name: Build Bot API x86_64
+    runs-on: macos-15-intel
+    steps:
+      - name: Build static Intel runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cmake gperf openssl@3
+
+          ROOT=/tmp/beatgaler-telegram-bot-api-x86_64
+          rm -rf "$ROOT"
+          git init "$ROOT"
+          git -C "$ROOT" remote add origin https://github.com/tdlib/telegram-bot-api.git
+          git -C "$ROOT" fetch --depth 1 origin "$BOT_API_COMMIT"
+          git -C "$ROOT" checkout --detach FETCH_HEAD
+          git -C "$ROOT" submodule update --init --recursive --depth 1
+
+          cmake -S "$ROOT" -B "$ROOT/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+
+          cmake --build "$ROOT/build" --target telegram-bot-api --parallel 3
+
+          mkdir -p runtime
+          cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
+          chmod +x runtime/telegram-bot-api
+          test "$(lipo -archs runtime/telegram-bot-api)" = "x86_64"
+
+      - name: Upload Bot API x86_64
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-bot-api-x86_64
+          path: runtime/telegram-bot-api
+          if-no-files-found: error
+
+  build-dmg:
+    name: Build Universal test DMG
+    needs: [bot-api-arm64, bot-api-x86_64]
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust Universal targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run portable gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run version:check
+          npm run test:mac-portability:static
+          npm run test:unit:ts
+          npm run test:regressions
+
+      - name: Download Bot API halves
+        uses: actions/download-artifact@v4
+        with:
+          pattern: telegram-bot-api-*
+          path: /tmp/beatgaler-bot-api-halves
+
+      - name: Build Universal Bot API runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/resources
+          ARM="/tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api"
+          INTEL="/tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api"
+          test -x "$ARM"
+          test -x "$INTEL"
+          lipo -create "$ARM" "$INTEL" -output src-tauri/resources/telegram-bot-api
+          chmod +x src-tauri/resources/telegram-bot-api
+          lipo -archs src-tauri/resources/telegram-bot-api | grep -q arm64
+          lipo -archs src-tauri/resources/telegram-bot-api | grep -q x86_64
+
+      - name: Build Universal Node runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_VERSION="22.18.0"
+          mkdir -p /tmp/beatgaler-node src-tauri/resources
+
+          curl --fail --location --retry 3 \
+            "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-arm64.tar.gz" \
+            -o /tmp/beatgaler-node/node-arm64.tar.gz
+
+          curl --fail --location --retry 3 \
+            "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-x64.tar.gz" \
+            -o /tmp/beatgaler-node/node-x64.tar.gz
+
+          tar -xzf /tmp/beatgaler-node/node-arm64.tar.gz -C /tmp/beatgaler-node
+          tar -xzf /tmp/beatgaler-node/node-x64.tar.gz -C /tmp/beatgaler-node
+
+          lipo -create \
+            "/tmp/beatgaler-node/node-v${NODE_VERSION}-darwin-arm64/bin/node" \
+            "/tmp/beatgaler-node/node-v${NODE_VERSION}-darwin-x64/bin/node" \
+            -output src-tauri/resources/node
+
+          chmod +x src-tauri/resources/node
+
+      - name: Build Universal FFmpeg runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          FFMPEG_TAG="b6.1.1"
+          BASE_URL="https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_TAG}"
+          mkdir -p /tmp/beatgaler-ffmpeg src-tauri/resources
+
+          curl --fail --location --retry 3 \
+            "${BASE_URL}/ffmpeg-darwin-arm64" \
+            -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
+
+          curl --fail --location --retry 3 \
+            "${BASE_URL}/ffmpeg-darwin-x64" \
+            -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
+
+          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64
+
+          lipo -create \
+            /tmp/beatgaler-ffmpeg/ffmpeg-arm64 \
+            /tmp/beatgaler-ffmpeg/ffmpeg-x64 \
+            -output src-tauri/resources/ffmpeg
+
+          chmod +x src-tauri/resources/ffmpeg
+
+      - name: Verify Universal runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in \
+            src-tauri/resources/node \
+            src-tauri/resources/ffmpeg \
+            src-tauri/resources/telegram-bot-api
+          do
+            echo "$path -> $(lipo -archs "$path")"
+            lipo -archs "$path" | grep -q arm64
+            lipo -archs "$path" | grep -q x86_64
+          done
+
+      - name: Build Universal DMG for testing
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          npm run build
+          npx tauri build --bundles dmg --target universal-apple-darwin
+
+      - name: Locate DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          test -n "$DMG"
+          test -f "$DMG"
+          echo "DMG created: $DMG"
+
+      - name: Upload Universal DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeatGaler-macOS-Test-DMG
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
