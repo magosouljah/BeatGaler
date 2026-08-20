@@ -20,7 +20,15 @@ jobs:
     runs-on: macos-15
 
     steps:
+      - name: Restore Bot API arm64 cache
+        id: botapi-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/telegram-bot-api
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+
       - name: Build static arm64 runtime
+        if: steps.botapi-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -47,8 +55,12 @@ jobs:
 
           mkdir -p runtime
           cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
-          chmod +x runtime/telegram-bot-api
 
+      - name: Verify Bot API arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x runtime/telegram-bot-api
           ARCHS="$(lipo -archs runtime/telegram-bot-api)"
           echo "ARM64 Bot API architectures: $ARCHS"
           [[ "$ARCHS" == *"arm64"* ]]
@@ -65,7 +77,15 @@ jobs:
     runs-on: macos-15-intel
 
     steps:
+      - name: Restore Bot API x86_64 cache
+        id: botapi-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/telegram-bot-api
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+
       - name: Build static Intel runtime
+        if: steps.botapi-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -92,8 +112,12 @@ jobs:
 
           mkdir -p runtime
           cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
-          chmod +x runtime/telegram-bot-api
 
+      - name: Verify Bot API x86_64
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x runtime/telegram-bot-api
           ARCHS="$(lipo -archs runtime/telegram-bot-api)"
           echo "Intel Bot API architectures: $ARCHS"
           [[ "$ARCHS" == *"x86_64"* ]]
