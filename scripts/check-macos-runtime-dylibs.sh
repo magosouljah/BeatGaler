@@ -10,6 +10,11 @@ for binary in "$@"; do
   test -x "$binary"
   bad=0
   while IFS= read -r line; do
+    # Universal Mach-O output repeats a header for each architecture after the
+    # first one. It is metadata, not a linked library dependency.
+    if [[ "$line" == "$binary (architecture "* ]]; then
+      continue
+    fi
     dep="$(printf '%s\n' "$line" | awk '{print $1}')"
     [ -z "$dep" ] && continue
     case "$dep" in

@@ -107,6 +107,7 @@ ok(macBuildWorkflow.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"'), "Mac build has
 ok(exists("scripts/check-macos-min-version.mjs") && exists("scripts/test-macos-min-version.mjs"), "Mach-O minimum-version checker has a portable parser regression test");
 ok(macBuildWorkflow.includes("check-macos-min-version.mjs"), "canonical Mac build rejects runtimes requiring a newer macOS than supported");
 ok(macBuildWorkflow.includes("macos-15-intel") && macBuildWorkflow.includes("macos-15"), "Universal Mac build creates native Bot API halves on Intel and ARM runners");
+ok((macBuildWorkflow.match(/Restore Bot API (?:arm64|x86_64) cache/g) || []).length === 2 && macBuildWorkflow.includes("steps.botapi-cache.outputs.cache-hit != 'true'"), "Universal Mac build reuses verified Bot API architecture caches");
 ok(macBuildWorkflow.includes("lipo -create") && macBuildWorkflow.includes("telegram-bot-api"), "Universal Mac build combines Bot API ARM64+x86_64 with lipo");
 ok(macBuildWorkflow.includes("APP_MAIN_PATH") && macBuildWorkflow.includes("BOT_API_PATH") && macBuildWorkflow.includes("NODE_PATH") && macBuildWorkflow.includes("FFMPEG_PATH"), "final DMG verifies app + Node + FFmpeg + Bot API architectures");
 ok(macBuildWorkflow.includes('APPLE_SIGNING_IDENTITY: "-"'), "canonical Mac build uses ad-hoc signing without Apple Developer ID");
@@ -129,6 +130,7 @@ ok(portabilityWorkflow.includes("npm run test:mac-portability:locked"), "hosted 
 ok(macBuildWorkflow.includes("cargo test --locked --manifest-path src-tauri/Cargo.toml --lib"), "Mac build refuses dependency resolution drift");
 ok(macBuildWorkflow.includes("cargo metadata --locked") && windowsBuildWorkflow.includes("cargo metadata --locked"), "Desktop build workflows preflight the committed Rust dependency graph");
 ok(exists("scripts/check-macos-runtime-dylibs.sh") && runtimeDylibCheck.includes('/usr/lib/*|/System/Library/*'), "embedded runtime dylib audit permits only Apple system dependencies");
+ok(runtimeDylibCheck.includes('[[ "$line" == "$binary (architecture "* ]]'), "embedded runtime dylib audit ignores Universal Mach-O architecture headers");
 ok((macBuildWorkflow.match(/check-macos-runtime-dylibs\.sh/g) || []).length >= 2, "Universal Mac build audits FFmpeg, Node, and Bot API both before bundling and inside the DMG");
 
 ok(desktopReleaseWorkflow.includes('group: release-desktop-${{ inputs.release_tag }}'), "Desktop release serializes publication per release tag");
