@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: beatgaler-public-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   PUBLIC_RELEASE_REPO: magosouljah/galer
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
@@ -71,6 +75,10 @@ jobs:
             throw "PUBLIC_RELEASE_TOKEN GitHub secret is missing."
           }
 
+      - name: Verify Cargo.lock before release build
+        shell: pwsh
+        run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
+
       - name: Build signed NSIS updater artifact
         run: npx tauri build --bundles nsis
 
@@ -79,6 +87,8 @@ jobs:
 
       - name: Prepare public release files
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
           $sourceExe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
@@ -93,8 +103,17 @@ jobs:
           Copy-Item $sourceExe.FullName $publicExe -Force
           Copy-Item $sourceSig $publicSig -Force
 
+          # Preserve already-published Mac updater entries if the Mac workflow ran first.
+          New-Item -ItemType Directory -Force "release-existing" | Out-Null
+          $existingManifest = "release-existing/latest.json"
+          gh release download "$env:RELEASE_TAG" --repo "$env:PUBLIC_RELEASE_REPO" --pattern "latest.json" --dir "release-existing" --clobber *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Remove-Item $existingManifest -Force -ErrorAction SilentlyContinue
+            $global:LASTEXITCODE = 0
+          }
+
           $url = "https://github.com/$env:PUBLIC_RELEASE_REPO/releases/download/$env:RELEASE_TAG/$publicExeName"
-          node scripts/updater-manifest.mjs generate --version $version --platform windows-x86_64 --artifact $publicExe --signature $publicSig --url $url --output release-assets/latest.json --notes "Beat Galer $version"
+          node scripts/updater-manifest.mjs generate --version $version --platform windows-x86_64 --artifact $publicExe --signature $publicSig --url $url --output release-assets/latest.json --notes "Beat Galer $version" --merge-existing $existingManifest
           node scripts/updater-manifest.mjs validate-release release-assets/latest.json
 
       - name: Create or update public GitHub Release

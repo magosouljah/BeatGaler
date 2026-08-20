@@ -33,6 +33,7 @@ try {
     "dragDropLogic.test.js",
     "proceduralBeatBackground.test.js",
     "securityFuzz.test.js",
+    "userVisibleError.test.js",
   ];
 
   for (const test of tests) {

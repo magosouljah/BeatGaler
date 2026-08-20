@@ -1,4 +1,4 @@
-﻿import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import uploadCompleteWav from "./assets/status/upload-complete.wav";
 import downloadCompleteWav from "./assets/status/download-complete.wav";
 import type { Beat, AppSettings } from "./types";
@@ -22,12 +22,14 @@ import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, c
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import ReactDOM from "react-dom";
 import { appAlert, appConfirm } from "./lib/dialog";
+import { sanitizeUserVisibleText } from "./lib/userVisibleError";
 import { useTagColors, setTagColor, renameTagColor, TAG_COLOR_PALETTE } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
 import { cleanTags, validateBpm, validateMusicKey } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
 import { artworkFileToDataUrl } from "./features/dragdrop/browserArtwork";
 import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeExternalImage";
+import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
 import { installHtmlDropController } from "./features/dragdrop/htmlDropController";
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
@@ -1861,7 +1863,7 @@ function BeatGalerApp() {
       }
       play(ready.id, playbackSources);
     } catch (e: any) {
-      const message = String(e?.message || e);
+      const message = sanitizeUserVisibleText(String(e?.message || e), "Cloud audio unavailable.");
       if (playbackOwnsDownloadState) {
         transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "PLAYBACK_DOWNLOAD_FAILED", message, retryable: true }, beat);
       }
@@ -1892,7 +1894,7 @@ function BeatGalerApp() {
       transitionRuntime(updated.id, { type: existingCloudBeat ? "SYNC_UPDATE_SUCCEEDED" : "SYNC_UPLOAD_SUCCEEDED" }, updated);
       setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
     } catch (e: any) {
-      const message = runtimeErrorMessage(e);
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");
       if (existingCloudBeat && isRuntimeConflictError(e)) {
         transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
       } else {
@@ -1927,7 +1929,7 @@ function BeatGalerApp() {
         message: `${beat.name}.zip is stored in Galer Cloud as one PROJECT file.`,
       });
     } catch (e: any) {
-      const message = runtimeErrorMessage(e);
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");
       if (isRuntimeConflictError(e)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
       else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "PROJECT_UPLOAD_FAILED", message, retryable: true }, beat);
       await appAlert({ title: "Project upload failed", message, danger: true });
@@ -1967,7 +1969,7 @@ function BeatGalerApp() {
         message: "The current PROJECT.zip has been synced to Galer Cloud.",
       });
     } catch (e: any) {
-      const message = runtimeErrorMessage(e);
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");
       if (isRuntimeConflictError(e)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
       else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "PROJECT_UPDATE_FAILED", message, retryable: true }, beat);
       await appAlert({
@@ -2018,7 +2020,7 @@ function BeatGalerApp() {
         console.error(err);
         const runtime = beatRuntimeStatesRef.current[id];
         if (runtime?.sync_state === "deleting") {
-          transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message: runtimeErrorMessage(err), retryable: true }, beat);
+          transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message: sanitizeUserVisibleText(runtimeErrorMessage(err), "Cloud operation failed."), retryable: true }, beat);
         }
       } finally {
         deleteInFlightRef.current.delete(id);
@@ -2053,7 +2055,7 @@ function BeatGalerApp() {
           for (const id of deleted) forgetRuntimeState(id);
         } catch (error) {
           console.warn("Telegram library index refresh after Remove all failed:", error);
-          const message = runtimeErrorMessage(error);
+          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
           for (const id of deleted) {
             const runtime = beatRuntimeStatesRef.current[id];
             if (runtime?.sync_state === "deleting") {
@@ -2429,7 +2431,7 @@ function BeatGalerApp() {
                 "",
                 hint,
                 "",
-                `Raw error: ${raw || "Unknown error"}`,
+                `Error detail: ${sanitizeUserVisibleText(raw, "Unknown error")}`,
               ].join("\n");
 
               if (!syncCommitted) {
@@ -2998,7 +3000,7 @@ function BeatGalerApp() {
       return true;
     } catch (error) {
       console.error(error);
-      const message = runtimeErrorMessage(error);
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
       if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
       else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "FOLDER_UPDATE_FAILED", message, retryable: true }, beat);
       alert(`Could not update "${beat.name}" from the dropped folder: ${message}`);
@@ -3071,7 +3073,7 @@ function BeatGalerApp() {
             if (after?.sync_state === "updating") transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, latestBeat);
           } catch (error) {
             console.warn("Telegram metadata sync failed:", error);
-            const message = runtimeErrorMessage(error);
+            const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
             const after = beatRuntimeStatesRef.current[beat.id];
             if (after?.sync_state === "updating" || after?.sync_state === "pending_update") {
               if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, latestBeat);
@@ -3158,24 +3160,35 @@ function BeatGalerApp() {
             return next;
           });
         } else {
-          // Rehydrate the canonical cloud-backed BeatMeta after removing the
-          // durable package. This clears any offline-only mp3/project paths that
-          // may have come from a cold Offline start while preserving Telegram as
-          // the source of truth. loadLibrary() is local SQLite work only.
-          let cloudBeat: Beat = { ...beat, offline_available: false, playback_path: "" };
-          try {
-            const canonical = await loadLibrary();
-            cloudBeat = canonical.find(item => item.id === beat.id) ?? cloudBeat;
-          } catch (error) {
-            console.warn("Could not rehydrate cloud beat after removing Offline availability:", error);
-          }
-          setBeats(current => current.map(item => item.id === beat.id ? { ...cloudBeat, offline_available: false } : item));
+          // Remove Offline is a local-storage operation only. Keep the live Beat
+          // object as the metadata/artwork authority and clear only paths owned by
+          // the durable Offline package. Re-loading SQLite here can replace newer
+          // in-memory artwork/metadata with an older or incomplete materialized row.
+          const withoutOfflinePaths = (item: Beat): Beat => ({
+            ...item,
+            offline_available: false,
+            folder_path: "",
+            mp3_path: "",
+            wav_path: null,
+            playback_path: "",
+            stems_path: null,
+            samples_path: null,
+            flp_path: null,
+            als_path: null,
+            other_files: [],
+            loop_path: null,
+          });
+          const cloudBeat = withoutOfflinePaths(beat);
+          setBeats(current => current.map(item => item.id === beat.id ? withoutOfflinePaths(item) : item));
+          setDrawer(current => current?.beat.id === beat.id
+            ? { ...current, beat: withoutOfflinePaths(current.beat) }
+            : current);
 
           // Re-enter Download Cooking immediately while online. This is only a
           // lightweight enqueue; it prevents the first post-Remove Play from
           // racing an old Offline source and restores the normal cloud fast path.
           if (cloudBeat.telegram_file_id) {
-            void ensureWarmPlaybackUrl({ ...cloudBeat, offline_available: false });
+            void ensureWarmPlaybackUrl(cloudBeat);
           }
         }
       } else {
@@ -3195,7 +3208,7 @@ function BeatGalerApp() {
         } catch {}
       }
     } catch (error) {
-      const message = runtimeErrorMessage(error);
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
       if (offlineOwnsDownloadState) {
         transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "OFFLINE_DOWNLOAD_FAILED", message, retryable: true }, beat);
       }
@@ -3233,7 +3246,7 @@ function BeatGalerApp() {
     const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
     updateBeat(updated);
 
-    if (updated.telegram_file_id && connectionState === "online" && cloudSessionVerified) {
+    if (updated.telegram_file_id && connectionState === "online") {
       const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);
       if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);
       transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);
@@ -3255,12 +3268,12 @@ function BeatGalerApp() {
         cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));
         transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);
       } catch (error) {
-        const message = runtimeErrorMessage(error);
+        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
         transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);
         throw error;
       }
     }
-  }, [updateBeat, rejectOfflineMutation, connectionState, cloudSessionVerified, transitionRuntime]);
+  }, [updateBeat, rejectOfflineMutation, connectionState, transitionRuntime]);
 
 
   const runBeatCloudUpdate = useCallback((beat: Beat, filePath: string, work: () => Promise<void>) => {
@@ -3291,7 +3304,7 @@ function BeatGalerApp() {
         } catch {}
       } catch (error) {
         console.error(error);
-        const message = runtimeErrorMessage(error);
+        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
         if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
         else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "BEAT_UPDATE_FAILED", message, retryable: true }, beat);
         setBeatCloudUpdateBusy(beat.id, false, false);
@@ -3461,8 +3474,9 @@ function BeatGalerApp() {
   }, [beatFileDrop, hasStoredProject, runBeatCloudUpdate, startProjectAssetUpdate, waitForUploadedBeatPlaybackReady]);
 
 
-  // Non-Windows/browser fallback only. On Windows, WRY/Tauri is the ONE
-  // external drop owner for both CF_HDROP paths and browser/Pinterest payloads.
+  // Browser/Pinterest controller. Windows desktop keeps the existing single native
+  // owner. macOS keeps HTML enabled for browser artwork while local Finder drops
+  // are claimed by the native-path fast path before staging can begin.
   useEffect(() => {
     // On Windows desktop, WRY/Tauri owns the external drop. Explorer gives us
     // original paths with zero byte staging, while browser/Pinterest payloads
@@ -3556,7 +3570,7 @@ function BeatGalerApp() {
       onEmptyFileDrop: async () => {
         await appAlert({
           title: "Nothing to import",
-          message: "Windows reported a file drop, but WebView2 did not expose any files or folder contents.",
+          message: "The desktop drag source reported files, but the app could not access any usable file or folder paths.",
         });
       },
       onError: async error => {
@@ -3567,11 +3581,12 @@ function BeatGalerApp() {
   }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]);
 
   useEffect(() => {
-    if (!isTauriAvailable || !/Windows/i.test(navigator.userAgent)) return;
+    if (!isTauriAvailable) return;
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     let activePaths: string[] = [];
     let activeExternalImage = false;
+    const isMacDesktop = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 
     type NativeFsPayload = {
       paths: string[];
@@ -3743,6 +3758,11 @@ function BeatGalerApp() {
       reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
 
       if (payload.paths.length === 0) return;
+      // On macOS, keep artwork drops on the proven HTML/DataTransfer path so
+      // Pinterest/browser artwork remains untouched. Native Finder paths own
+      // beat-card and library file drops only.
+      if (isMacDesktop && artworkBeatId) return;
+      if (cardBeatId || library) claimNativeLibraryDrop();
       if (payload.paths.length > MAX_NATIVE_DROP_ITEMS) {
         await appAlert({
           title: "Too many items",
@@ -3763,14 +3783,14 @@ function BeatGalerApp() {
 
       if (!library) return;
 
-      // Definitive B path: Tauri gives us the original Explorer paths. No
+      // Native fast path: Tauri gives us the original Finder/Explorer paths. No
       // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.
       if (REVIEW_SKELETON_ENABLED) setLibraryDropStaging(true);
       const started = performance.now();
-      reviewPerfMark(`WINDOWS_NATIVE_LIBRARY_IMPORT_START path_count=${payload.paths.length}`);
+      reviewPerfMark(`NATIVE_LIBRARY_IMPORT_START path_count=${payload.paths.length}`);
       try {
         await importDroppedPaths(payload.paths);
-        reviewPerfMark(`WINDOWS_NATIVE_LIBRARY_IMPORT_READY elapsed_ms=${Math.round(performance.now() - started)}`);
+        reviewPerfMark(`NATIVE_LIBRARY_IMPORT_READY elapsed_ms=${Math.round(performance.now() - started)}`);
       } finally {
         if (REVIEW_SKELETON_ENABLED) setLibraryDropStaging(false);
       }
@@ -3858,7 +3878,7 @@ function BeatGalerApp() {
         if (cancelled) stop();
         else unlisten = stop;
       } catch (error) {
-        console.error("Tauri native Windows drag/drop listener failed:", error);
+        console.error("Tauri native drag/drop listener failed:", error);
         reviewPerfMark(`TAURI_NATIVE_LISTENER_ERROR error=${String(error)}`);
       }
     })();
@@ -3942,7 +3962,7 @@ function BeatGalerApp() {
         status: "downloading",
       });
     } catch (error) {
-      const message = runtimeErrorMessage(error);
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
       if (ownsRuntimeDownloadState) {
         transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "DOWNLOAD_START_FAILED", message, retryable: true }, beat);
       }
@@ -3963,7 +3983,7 @@ function BeatGalerApp() {
 
       const ownsRuntimeDownloadState = backgroundDownloadRuntimeOwnersRef.current.delete(payload.task_id);
       if (payload.status === "error") {
-        const message = payload.error || "Download failed.";
+        const message = sanitizeUserVisibleText(payload.error || "Download failed.", "Download failed.");
         if (ownsRuntimeDownloadState) {
           transitionRuntime(payload.beat_id, { type: "DOWNLOAD_FAILED", code: "DOWNLOAD_FAILED", message, retryable: true });
         }
@@ -4197,7 +4217,7 @@ function BeatGalerApp() {
           await libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash");
           forgetRuntimeState(beat.id);
         } catch (error) {
-          const message = runtimeErrorMessage(error);
+          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
           const runtime = beatRuntimeStatesRef.current[beat.id];
           if (runtime?.sync_state === "deleting") {
             transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "DELETE_INDEX_SYNC_FAILED", message, retryable: true }, beat);
@@ -4217,7 +4237,7 @@ function BeatGalerApp() {
       console.error(err);
       const runtime = beatRuntimeStatesRef.current[beat.id];
       if (runtime?.sync_state === "deleting") {
-        transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message: runtimeErrorMessage(err), retryable: true }, beat);
+        transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message: sanitizeUserVisibleText(runtimeErrorMessage(err), "Cloud operation failed."), retryable: true }, beat);
       }
       await appAlert({
         title: "Could not remove beat",
@@ -4275,8 +4295,9 @@ const confirmTagRename = useCallback(async () => {
     renameTagColor(oldTag, newTag);
     setTagRename(null);
   } catch (e) {
-    setTagRenameError(String(e));
-    updateJob(jobId, { status: "error", message: String(e) });
+    const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Could not rename tag.");
+    setTagRenameError(message);
+    updateJob(jobId, { status: "error", message });
   } finally {
     setTagRenameBusy(false);
   }

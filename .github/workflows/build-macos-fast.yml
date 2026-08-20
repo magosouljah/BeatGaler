@@ -6,9 +6,13 @@ on:
 permissions:
   contents: read
 
+env:
+  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+
 jobs:
   fast-macos-test:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - name: Checkout selected source
@@ -51,16 +55,18 @@ jobs:
         with:
           path: |
             /tmp/beatgaler-fast-runtimes
-          key: macos-arm64-runtimes-ffmpeg-b6.1.1-node-22.18.0-botapi-v2
+          key: macos-arm64-runtimes-ffmpeg-b6.1.1-node-22.18.0-botapi-${{ env.BOT_API_COMMIT }}
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Run version and regression checks
+      - name: Run version and portable frontend/architecture checks
         shell: bash
         run: |
           set -euo pipefail
           npm run version:check
+          npm run test:mac-portability:static
+          npm run test:unit:ts
           npm run test:regressions
 
       - name: Prepare arm64 FFmpeg and Node runtime
@@ -109,10 +115,16 @@ jobs:
           if [ ! -x "$BIN" ]; then
             brew install cmake gperf openssl@3
             rm -rf /tmp/beatgaler-telegram-bot-api
-            git clone --recursive --depth 1 https://github.com/tdlib/telegram-bot-api.git /tmp/beatgaler-telegram-bot-api
+            git init /tmp/beatgaler-telegram-bot-api
+            git -C /tmp/beatgaler-telegram-bot-api remote add origin https://github.com/tdlib/telegram-bot-api.git
+            git -C /tmp/beatgaler-telegram-bot-api fetch --depth 1 origin "$BOT_API_COMMIT"
+            git -C /tmp/beatgaler-telegram-bot-api checkout --detach FETCH_HEAD
+            git -C /tmp/beatgaler-telegram-bot-api submodule update --init --recursive --depth 1
+            test "$(git -C /tmp/beatgaler-telegram-bot-api rev-parse HEAD)" = "$BOT_API_COMMIT"
             cmake -S /tmp/beatgaler-telegram-bot-api -B /tmp/beatgaler-telegram-bot-api/build \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
               -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
               -DOPENSSL_USE_STATIC_LIBS=TRUE
             cmake --build /tmp/beatgaler-telegram-bot-api/build --target telegram-bot-api --parallel 3
@@ -125,13 +137,37 @@ jobs:
           test "$(lipo -archs src-tauri/resources/telegram-bot-api)" = "arm64"
           src-tauri/resources/telegram-bot-api --version
 
-          # The installed app must not depend on Homebrew libraries that won't
-          # exist on an end-user Mac. Only Apple/system dylibs are allowed.
-          if otool -L src-tauri/resources/telegram-bot-api | tail -n +2 | grep -E '/opt/homebrew|/usr/local'; then
-            echo "::error::telegram-bot-api has a non-portable Homebrew dylib dependency"
-            otool -L src-tauri/resources/telegram-bot-api
-            exit 1
-          fi
+      - name: Verify bundled runtimes have only Apple system dylib dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/check-macos-runtime-dylibs.sh \
+            src-tauri/resources/ffmpeg \
+            src-tauri/resources/node \
+            src-tauri/resources/telegram-bot-api
+
+      - name: Verify bundled runtime minimum macOS versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-macos-min-version.mjs src-tauri/resources/ffmpeg "$MACOSX_DEPLOYMENT_TARGET"
+          node scripts/check-macos-min-version.mjs src-tauri/resources/node "$MACOSX_DEPLOYMENT_TARGET"
+          node scripts/check-macos-min-version.mjs src-tauri/resources/telegram-bot-api "$MACOSX_DEPLOYMENT_TARGET"
+
+      - name: Ad-hoc sign embedded Mach-O runtimes for test bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in src-tauri/resources/ffmpeg src-tauri/resources/node src-tauri/resources/telegram-bot-api; do
+            codesign --force --sign - "$path"
+            codesign --verify --strict --verbose=2 "$path"
+          done
+
+      - name: Compile and run Rust unit tests with the real bundled Mac runtimes present
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Build Apple Silicon DMG
         shell: bash
@@ -139,6 +175,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: "-"
         run: |
           set -euo pipefail
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
           npx tauri build --bundles dmg --target aarch64-apple-darwin
 
       - name: Verify runtimes inside DMG
@@ -160,21 +197,30 @@ jobs:
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
           NODE_PATH="$APP_PATH/Contents/Resources/node"
           HELPER_PATH="$APP_PATH/Contents/Resources/direct-transport/transport-helper.cjs"
+          WATCHDOG_PATH="$APP_PATH/Contents/Resources/direct-transport/runtime-watchdog.cjs"
           BOT_API_PATH="$APP_PATH/Contents/Resources/telegram-bot-api"
+          APP_MAIN_PATH="$(find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -perm -111 | head -n 1)"
 
           test -x "$FFMPEG_PATH"
           test -x "$NODE_PATH"
           test -f "$HELPER_PATH"
+          test -f "$WATCHDOG_PATH"
           test -x "$BOT_API_PATH"
+          test -x "$APP_MAIN_PATH"
+          test "$(lipo -archs "$APP_MAIN_PATH")" = "arm64"
           test "$(lipo -archs "$BOT_API_PATH")" = "arm64"
           "$BOT_API_PATH" --version
-          if otool -L "$BOT_API_PATH" | tail -n +2 | grep -E '/opt/homebrew|/usr/local'; then
-            echo "::error::DMG contains a telegram-bot-api binary with Homebrew dylib dependencies"
-            exit 1
-          fi
+          scripts/check-macos-runtime-dylibs.sh "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"
           test "$(lipo -archs "$FFMPEG_PATH")" = "arm64"
           test "$(lipo -archs "$NODE_PATH")" = "arm64"
           "$NODE_PATH" --version
+          for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
+            node scripts/check-macos-min-version.mjs "$path" "$MACOSX_DEPLOYMENT_TARGET"
+          done
+          for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
+            codesign --verify --strict --verbose=2 "$path"
+          done
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Prepare test DMG
         shell: bash

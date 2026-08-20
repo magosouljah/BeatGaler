@@ -6,6 +6,7 @@ import {
 import { captureHtmlDrop, stageCapturedHtmlDrop, type HtmlDroppedRoot } from "./dropStaging";
 import { preferredExternalDropEffect } from "./externalDropEffect";
 import { reviewPerfMark } from "../perf/reviewPerf";
+import { waitForNativeLibraryDropClaim } from "./nativeDropArbiter";
 
 const MAX_HTML_DROP_ITEMS = 50;
 
@@ -203,7 +204,7 @@ export function installHtmlDropController(options: HtmlDropControllerOptions): (
           const sources = await sourceCapture;
           if (sources.length === 0) {
             throw new Error(
-              `The browser drop reached the artwork, but WebView2 exposed no usable image payload. ` +
+              `The browser drop reached the artwork, but the embedded browser exposed no usable image payload. ` +
               `types=[${diagnostic.types.join(", ")}], files=[${diagnostic.files.join(", ")}], ` +
               `items=[${diagnostic.items.join(", ")}], strings=[${diagnostic.strings.join(" | ")}].`,
             );
@@ -246,6 +247,13 @@ export function installHtmlDropController(options: HtmlDropControllerOptions): (
 
     void (async () => {
       try {
+        // macOS can expose the same Finder drop through both WebView HTML5 and
+        // Tauri native paths. Give the native fast path a tiny claim window; if
+        // it wins, do not copy the File payload into staging a second time.
+        if (await waitForNativeLibraryDropClaim(htmlDropStartedAt)) {
+          if (beatId) options.onBeatFileStagingChange?.(beatId, false);
+          return;
+        }
         if (!beatId) {
           // On Windows, the native OLE router owns Explorer/Pinterest drops before
           // they become DOM events. Reaching this HTML path therefore means either

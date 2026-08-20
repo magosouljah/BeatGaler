@@ -73,7 +73,7 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
 
   return ReactDOM.createPortal(
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
-      {([["Edit metadata", onEdit], ["View detail", onDetail], ["Add to queue", onAddToQueue], ["Reveal in Explorer", onReveal], ["Remove from library", onDelete, true]] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
+      {([["Edit metadata", onEdit], ["View detail", onDetail], ["Add to queue", onAddToQueue], [typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent) ? "Reveal in Finder" : "Reveal in Explorer", onReveal], ["Remove from library", onDelete, true]] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
         <div key={label} onClick={() => { fn(); onClose(); }}
           style={{ padding: "9px 16px", fontSize: 13, color: danger ? "#f87171" : "#c0c0c0", cursor: "pointer" }}
           onMouseEnter={e => (e.currentTarget.style.background = "#242424")}

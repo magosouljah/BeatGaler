@@ -1,0 +1,68 @@
+name: BeatGaler macOS Portability Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portability:
+    name: Portable gate on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Run complete Mac portability gate without a Mac
+        run: npm run test:mac-portability
+      - name: Verify Cargo.lock is committed exactly as tested
+        run: git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Upload regenerated Cargo.lock when the lock is stale
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-Cargo-lock
+          path: src-tauri/Cargo.lock
+          if-no-files-found: ignore
+
+  macos-native-smoke:
+    name: Native macOS smoke (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Prepare compile-only Mac resource placeholders
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/resources
+          for name in ffmpeg node telegram-bot-api; do
+            printf '#!/bin/sh\nexit 0\n' > "src-tauri/resources/$name"
+            chmod +x "src-tauri/resources/$name"
+          done
+      - name: Compile and run portable Rust/TS regressions natively on macOS
+        run: npm run test:mac-portability:locked

@@ -14,6 +14,7 @@ tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 tauri-plugin-wdio = "1"
+tauri-plugin-single-instance = "=2.4.3"
 tauri = { version = "2.1", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2.0"
 tauri-plugin-fs = "2.0"
@@ -23,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 id3 = "1.14"
 walkdir = "2.5"
+zip = { version = "=4.6.1", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 anyhow = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -30,6 +32,7 @@ regex-lite = "0.1.6"
 sha2 = "0.10"
 rand = "0.8"
 url = "2.5"
+unicode-normalization = "=0.1.25"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

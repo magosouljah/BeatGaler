@@ -30,6 +30,8 @@
     "../src/features/dragdrop/nativeDropArbiter.ts",
     "../src/lib/proceduralBeatBackground.ts",
     "component/componentLogic.test.ts",
-    "../src/features/components/componentLogic.ts"
+    "../src/features/components/componentLogic.ts",
+    "unit/userVisibleError.test.ts",
+    "../src/lib/userVisibleError.ts"
   ]
 }

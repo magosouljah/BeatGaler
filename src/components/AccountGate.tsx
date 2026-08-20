@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
+import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
 export function getBeatGalerAuthToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
@@ -108,7 +109,7 @@ async function authRequest(path: string, body: Record<string, unknown> = {}, tok
 async function storeSession(result: AuthResponse) {
   if (result.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
-    await invoke("set_cloud_auth_token", { token: result.token });
+    await invoke("set_cloud_auth_token", { token: result.token, cloudApiBase: getResolvedCloudApiBase() });
   }
   window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
   return result.user;
@@ -129,11 +130,11 @@ export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null
   if (!token) return null;
   try {
     const result = await authRequest("/auth/session", { beatgalerUserId: await getInstallationId() }, token);
-    await invoke("set_cloud_auth_token", { token });
+    await invoke("set_cloud_auth_token", { token, cloudApiBase: getResolvedCloudApiBase() });
     return result.user;
   } catch {
     localStorage.removeItem(TOKEN_KEY);
-    try { await invoke("set_cloud_auth_token", { token: null }); } catch {}
+    try { await invoke("set_cloud_auth_token", { token: null, cloudApiBase: getResolvedCloudApiBase() }); } catch {}
     return null;
   }
 }
@@ -218,7 +219,7 @@ export async function logoutBeatGalerAccount(): Promise<void> {
   const token = localStorage.getItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
   try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getInstallationId() }, token); } catch {}
-  try { await invoke("set_cloud_auth_token", { token: null }); } catch {}
+  try { await invoke("set_cloud_auth_token", { token: null, cloudApiBase: getResolvedCloudApiBase() }); } catch {}
   window.dispatchEvent(new Event("beatgaler:account-logged-out"));
 }
 
@@ -438,7 +439,7 @@ export default function AccountGate({ children }: { children: React.ReactNode })
         {mfaRequired && <><label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>AUTHENTICATOR CODE</label><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={fieldStyle}/></>}
       </>}
 
-      {error && <div style={{ marginTop: 14, padding: "9px 10px", border: "1px solid #542020", borderRadius: 8, background: "#241010", color: "#e6a0a0", fontSize: 11, lineHeight: 1.55 }}>{error}</div>}
+      {error && <div style={{ marginTop: 14, padding: "9px 10px", border: "1px solid #542020", borderRadius: 8, background: "#241010", color: "#e6a0a0", fontSize: 11, lineHeight: 1.55 }}>{sanitizeUserVisibleText(error)}</div>}
       <button disabled={busy} type="submit" style={{ width: "100%", marginTop: 18, padding: "10px 12px", border: "1px solid #303030", borderRadius: 8, background: "#e9e9e9", color: "#111", fontWeight: 650, cursor: busy ? "default" : "pointer", opacity: busy ? .55 : 1 }}>{busy ? "Working…" : (registerMode ? "Create account" : "Sign in")}</button>
       <button type="button" disabled={busy} onClick={() => { setRegisterMode(v => !v); setError(null); setMfaRequired(false); setMfaCode(""); setPassword(""); setConfirmPassword(""); }} style={{ width: "100%", marginTop: 8, padding: 8, border: 0, background: "transparent", color: "#777", cursor: busy ? "default" : "pointer", fontSize: 11 }}>{registerMode ? "Already have an account? Sign in" : "New to BeatGaler? Create account"}</button>
       <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #1b1b1b", color: "#444", fontSize: 10, lineHeight: 1.55 }}>Normal BeatGaler usernames use username#1234. Claiming X replaces it with your official X username.</div>

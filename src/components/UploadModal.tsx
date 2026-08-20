@@ -15,6 +15,7 @@ import { registerJob } from "../lib/jobStore";
 import { hashFilePath } from "../utils/hash";
 import { getCachedUpload, setCachedUpload } from "../utils/uploadCache";
 import { appAlert, appConfirm } from "../lib/dialog";
+import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 
 interface Props {
   initialBeat: Beat | null;
@@ -892,7 +893,7 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
               reorderJobs={reorderJobs}
               onSelectJob={selectJob}
               canUpload={canUpload}
-              uploadError={uploadError}
+              uploadError={sanitizeUserVisibleText(uploadError)}
               updateJob={updateJob}
               setApplyScope={setApplyScope}
             />
@@ -1935,7 +1936,7 @@ function Step4({
 
       {uploadError && (
         <div style={{ padding: "10px 12px", borderRadius: 8, background: "#311313", border: "1px solid #5f1f1f", color: "#fca5a5", fontSize: 12 }}>
-          {uploadError}
+          {sanitizeUserVisibleText(uploadError)}
         </div>
       )}
 

@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::{HashMap, VecDeque};
 use url::Url;
+use unicode_normalization::UnicodeNormalization;
 use walkdir::WalkDir;
 use tauri::Emitter;
 use crate::matcher;
@@ -329,11 +330,36 @@ pub struct TelegramCloudStatus {
     pub username: Option<String>,
 }
 
-// URL base del backend de Telegram Cloud. Mientras desarrollamos, es el
-// servidor local (cloud-server/). Cuando exista api.beatgaler.com, este es
-// el único lugar que hay que cambiar.
+const DEFAULT_GALER_CLOUD_API: &str = "https://desktop-7l93a0j.tailabe8ff.ts.net";
+static CLOUD_API_BASE: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn normalize_cloud_api_base(value: &str) -> Result<String, String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    let parsed = url::Url::parse(trimmed).map_err(|_| "BeatGaler Cloud API URL is invalid.".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("BeatGaler Cloud API URL must use http or https.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn cloud_api_base_slot() -> &'static Mutex<String> {
+    CLOUD_API_BASE.get_or_init(|| {
+        let initial = std::env::var("BEATGALER_CLOUD_API")
+            .ok()
+            .and_then(|value| normalize_cloud_api_base(&value).ok())
+            .unwrap_or_else(|| DEFAULT_GALER_CLOUD_API.to_string());
+        Mutex::new(initial)
+    })
+}
+
+// Rust and React must talk to the exact same Galer Cloud origin. React resolves
+// local/remote reachability during authentication and sends that chosen base to
+// Rust together with the account token before Direct warmup begins.
 fn telegram_cloud_api_base() -> String {
-    std::env::var("BEATGALER_CLOUD_API").unwrap_or_else(|_| "https://desktop-7l93a0j.tailabe8ff.ts.net".to_string())
+    cloud_api_base_slot()
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_else(|_| DEFAULT_GALER_CLOUD_API.to_string())
 }
 
 fn beatgaler_temp_dir() -> PathBuf {
@@ -532,8 +558,14 @@ fn post_json_cloud_auth_timeout(url: &str, body: &Value, max_time_seconds: u64) 
 #[tauri::command]
 pub fn set_cloud_auth_token(
     token: Option<String>,
+    cloud_api_base: Option<String>,
     state: tauri::State<SettingsState>,
 ) -> Result<(), String> {
+    if let Some(base) = cloud_api_base.as_deref() {
+        let normalized_base = normalize_cloud_api_base(base)?;
+        let mut guard = cloud_api_base_slot().lock().map_err(|e| e.to_string())?;
+        *guard = normalized_base;
+    }
     let normalized = token
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
@@ -689,61 +721,33 @@ fn direct_bot_api_runtime_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-static DIRECT_BOT_API_RUNTIME: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
-static DIRECT_BOT_API_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn direct_bot_api_slot() -> &'static Mutex<Option<Child>> {
-    DIRECT_BOT_API_RUNTIME.get_or_init(|| Mutex::new(None))
-}
-
-fn local_bot_api_reachable() -> bool {
-    let addr = "127.0.0.1:8081".parse().expect("valid loopback address");
-    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
-}
-
-fn stop_local_bot_api_runtime() {
-    if let Ok(mut guard) = direct_bot_api_slot().lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-            eprintln!("[direct] LOCAL_BOT_API_STOPPED");
+fn direct_runtime_watchdog_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("direct-transport").join("runtime-watchdog.cjs"));
+        candidates.push(cwd.join("direct-transport").join("runtime-watchdog.cjs"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("direct-transport").join("runtime-watchdog.cjs"));
+            candidates.push(dir.join("resources").join("direct-transport").join("runtime-watchdog.cjs"));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("Resources").join("direct-transport").join("runtime-watchdog.cjs"));
+            }
         }
     }
+    candidates.into_iter().find(|p| p.is_file())
 }
 
-fn ensure_local_bot_api(session: &Value) -> Result<(), String> {
-    if local_bot_api_reachable() { return Ok(()); }
-    let lock = DIRECT_BOT_API_START_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock.lock().map_err(|e| e.to_string())?;
-    if local_bot_api_reachable() { return Ok(()); }
-
-    // Reap a previous embedded server that exited unexpectedly.
-    if let Ok(mut slot) = direct_bot_api_slot().lock() {
-        if let Some(child) = slot.as_mut() {
-            if child.try_wait().map_err(|e| e.to_string())?.is_some() { *slot = None; }
-        }
-    }
-
-    let api_id = session.get("telegram_api_id").and_then(|v| v.as_i64())
-        .filter(|v| *v > 0)
-        .ok_or_else(|| "BeatGaler Cloud did not provide the Telegram application id required by the local data plane.".to_string())?;
-    let api_hash = session.get("telegram_api_hash").and_then(|v| v.as_str())
-        .map(str::trim).filter(|v| !v.is_empty())
-        .ok_or_else(|| "BeatGaler Cloud did not provide the Telegram application hash required by the local data plane.".to_string())?;
-    let binary = direct_bot_api_runtime_path()
-        .ok_or_else(|| "BeatGaler local data-plane runtime is missing from this installation.".to_string())?;
-    let work_dir = beatgaler_temp_dir().join("direct-bot-api");
-    std::fs::create_dir_all(&work_dir)
-        .map_err(|e| format!("Could not prepare BeatGaler local data-plane directory: {}", e))?;
-
-    let mut command = Command::new(&binary);
+fn spawn_local_bot_api_watchdog(bot_pid: u32) -> Result<Child, String> {
+    let watchdog = direct_runtime_watchdog_path()
+        .ok_or_else(|| "BeatGaler local data-plane watchdog is missing from this installation.".to_string())?;
+    let node = direct_node_runtime_path();
+    let mut command = Command::new(&node);
     command
-        .arg("--local")
-        .arg(format!("--api-id={}", api_id))
-        .arg(format!("--api-hash={}", api_hash))
-        .arg("--http-ip-address=127.0.0.1")
-        .arg("--http-port=8081")
-        .arg(format!("--dir={}", work_dir.to_string_lossy()))
+        .arg(&watchdog)
+        .arg(std::process::id().to_string())
+        .arg(bot_pid.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -753,27 +757,228 @@ fn ensure_local_bot_api(session: &Value) -> Result<(), String> {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command.spawn()
-        .map_err(|e| format!("Could not start BeatGaler local data plane '{}': {}", binary.display(), e))?;
+    command.spawn().map_err(|e| format!("Could not start BeatGaler local data-plane watchdog: {}", e))
+}
 
-    let started = Instant::now();
-    loop {
-        if local_bot_api_reachable() {
-            eprintln!("[direct] LOCAL_BOT_API_READY address=127.0.0.1:8081");
-            let mut slot = direct_bot_api_slot().lock().map_err(|e| e.to_string())?;
-            *slot = Some(child);
-            return Ok(());
-        }
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            return Err(format!("BeatGaler local data plane exited during startup ({}).", status));
-        }
-        if started.elapsed() >= Duration::from_secs(20) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("BeatGaler local data plane did not become ready on 127.0.0.1:8081.".to_string());
-        }
-        std::thread::sleep(Duration::from_millis(100));
+struct LocalBotApiRuntime {
+    child: Child,
+    watchdog: Child,
+    port: u16,
+    base_url: String,
+    work_dir: PathBuf,
+}
+
+static DIRECT_BOT_API_RUNTIME: OnceLock<Mutex<Option<LocalBotApiRuntime>>> = OnceLock::new();
+static DIRECT_BOT_API_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static DIRECT_RUNTIME_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_direct_runtime_data_dir(path: &Path) {
+    let _ = DIRECT_RUNTIME_DATA_DIR.set(path.to_path_buf());
+}
+
+fn direct_bot_api_slot() -> &'static Mutex<Option<LocalBotApiRuntime>> {
+    DIRECT_BOT_API_RUNTIME.get_or_init(|| Mutex::new(None))
+}
+
+fn direct_diagnostics_dir() -> PathBuf {
+    let dir = DIRECT_RUNTIME_DATA_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| beatgaler_temp_dir())
+        .join("diagnostics");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn direct_bot_api_diag(event: &str, fields: &str) {
+    let path = direct_diagnostics_dir().join("local-data-plane.log");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{}] {} {}", ts, event, fields);
     }
+}
+
+fn local_bot_api_reachable(port: u16) -> bool {
+    let addr = format!("127.0.0.1:{}", port).parse().expect("valid loopback address");
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+}
+
+fn reserve_local_bot_api_port() -> Result<u16, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|e| format!("Could not reserve a local BeatGaler data-plane port: {}", e))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    drop(listener);
+    Ok(port)
+}
+
+fn owned_local_bot_api_is_healthy() -> bool {
+    let Ok(mut guard) = direct_bot_api_slot().lock() else { return false; };
+    let Some(runtime) = guard.as_mut() else { return false; };
+    matches!(runtime.child.try_wait(), Ok(None)) && local_bot_api_reachable(runtime.port)
+}
+
+fn stop_local_bot_api_runtime() {
+    if let Ok(mut guard) = direct_bot_api_slot().lock() {
+        if let Some(mut runtime) = guard.take() {
+            let pid = runtime.child.id();
+            let watchdog_pid = runtime.watchdog.id();
+            let _ = runtime.child.kill();
+            let status = runtime.child.wait().ok();
+            let _ = runtime.watchdog.kill();
+            let _ = runtime.watchdog.wait();
+            let _ = std::fs::remove_dir_all(&runtime.work_dir);
+            direct_bot_api_diag(
+                "BOT_API_STOP",
+                &format!("pid={} watchdog_pid={} port={} status={:?}", pid, watchdog_pid, runtime.port, status),
+            );
+            eprintln!("[direct] LOCAL_BOT_API_STOPPED pid={} port={}", pid, runtime.port);
+        }
+    }
+}
+
+fn ensure_local_bot_api(session: &Value) -> Result<String, String> {
+    let lock = DIRECT_BOT_API_START_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().map_err(|e| e.to_string())?;
+
+    // Reuse only the exact child process owned by this BeatGaler process. An
+    // arbitrary listener on localhost can never satisfy this readiness check.
+    if let Ok(mut slot) = direct_bot_api_slot().lock() {
+        if let Some(runtime) = slot.as_mut() {
+            match runtime.child.try_wait().map_err(|e| e.to_string())? {
+                None if local_bot_api_reachable(runtime.port) => return Ok(runtime.base_url.clone()),
+                Some(status) => {
+                    let _ = runtime.watchdog.kill();
+                    let _ = runtime.watchdog.wait();
+                    direct_bot_api_diag(
+                        "BOT_API_EXIT",
+                        &format!("pid={} port={} status={}", runtime.child.id(), runtime.port, status),
+                    );
+                    let _ = std::fs::remove_dir_all(&runtime.work_dir);
+                    *slot = None;
+                }
+                None => {
+                    let pid = runtime.child.id();
+                    let port = runtime.port;
+                    let _ = runtime.child.kill();
+                    let _ = runtime.child.wait();
+                    let _ = runtime.watchdog.kill();
+                    let _ = runtime.watchdog.wait();
+                    direct_bot_api_diag("BOT_API_UNREADY", &format!("pid={} port={}", pid, port));
+                    let _ = std::fs::remove_dir_all(&runtime.work_dir);
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    let api_id = session.get("telegram_api_id").and_then(|v| v.as_i64())
+        .filter(|v| *v > 0)
+        .ok_or_else(|| "Galer Cloud did not provide a required local data-plane credential.".to_string())?;
+    let api_hash = session.get("telegram_api_hash").and_then(|v| v.as_str())
+        .map(str::trim).filter(|v| !v.is_empty())
+        .ok_or_else(|| "Galer Cloud did not provide a required local data-plane credential.".to_string())?;
+    let binary = direct_bot_api_runtime_path()
+        .ok_or_else(|| "BeatGaler local data-plane runtime is missing from this installation.".to_string())?;
+    // A PID can eventually be reused after a Force Quit. Give every local
+    // runtime a unique directory so a new app instance can never inherit stale
+    // local data-plane state from an older process with the same PID.
+    let work_dir = beatgaler_temp_dir().join(format!(
+        "direct-bot-api-{}-{}",
+        std::process::id(),
+        random_urlsafe(8)
+    ));
+    std::fs::create_dir_all(&work_dir)
+        .map_err(|e| format!("Could not prepare BeatGaler local data-plane directory: {}", e))?;
+
+    let log_path = direct_diagnostics_dir().join("local-data-plane-process.log");
+    let overall_started = Instant::now();
+    let mut last_error = String::new();
+
+    for _attempt in 0..3 {
+        let port = reserve_local_bot_api_port()?;
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let stdout_file = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
+            .map_err(|e| format!("Could not open BeatGaler diagnostics log: {}", e))?;
+        let stderr_file = stdout_file.try_clone()
+            .map_err(|e| format!("Could not prepare BeatGaler diagnostics log: {}", e))?;
+
+        let mut command = Command::new(&binary);
+        command
+            .arg("--local")
+            .arg(format!("--api-id={}", api_id))
+            .arg(format!("--api-hash={}", api_hash))
+            .arg("--http-ip-address=127.0.0.1")
+            .arg(format!("--http-port={}", port))
+            .arg(format!("--dir={}", work_dir.to_string_lossy()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file));
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = command.spawn()
+            .map_err(|e| format!("Could not start BeatGaler local data plane '{}': {}", binary.display(), e))?;
+        let pid = child.id();
+        let mut watchdog = match spawn_local_bot_api_watchdog(pid) {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        let watchdog_pid = watchdog.id();
+        direct_bot_api_diag(
+            "BOT_API_START",
+            &format!(
+                "path={} pid={} watchdog_pid={} port={} os={} arch={} log={}",
+                binary.display(), pid, watchdog_pid, port, std::env::consts::OS, std::env::consts::ARCH, log_path.display()
+            ),
+        );
+
+        loop {
+            if local_bot_api_reachable(port) {
+                direct_bot_api_diag("BOT_API_READY", &format!("pid={} port={}", pid, port));
+                eprintln!("[direct] LOCAL_BOT_API_READY pid={} address=127.0.0.1:{}", pid, port);
+                let mut slot = direct_bot_api_slot().lock().map_err(|e| e.to_string())?;
+                *slot = Some(LocalBotApiRuntime { child, watchdog, port, base_url: base_url.clone(), work_dir: work_dir.clone() });
+                return Ok(base_url);
+            }
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                let _ = watchdog.kill();
+                let _ = watchdog.wait();
+                last_error = format!("BeatGaler local data plane exited during startup ({}).", status);
+                direct_bot_api_diag("BOT_API_EXIT", &format!("pid={} port={} status={}", pid, port, status));
+                break;
+            }
+            if overall_started.elapsed() >= Duration::from_secs(20) {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = watchdog.kill();
+                let _ = watchdog.wait();
+                last_error = "BeatGaler local data plane did not become ready before the startup deadline.".to_string();
+                direct_bot_api_diag("BOT_API_TIMEOUT", &format!("pid={} port={}", pid, port));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if overall_started.elapsed() >= Duration::from_secs(20) { break; }
+    }
+
+    let error = if last_error.is_empty() {
+        format!("BeatGaler local data plane could not start. See {}.", log_path.display())
+    } else {
+        format!("{} See {}.", last_error, log_path.display())
+    };
+    let _ = std::fs::remove_dir_all(&work_dir);
+    Err(error)
 }
 
 fn direct_helper_path() -> Option<PathBuf> {
@@ -825,7 +1030,7 @@ fn direct_activate_server_session(user_id: &str, session_id: &str, generation: i
     });
     let response = post_json_cloud_auth_timeout(&url, &body, 15)?;
     if response.get("activated").and_then(|v| v.as_bool()) != Some(true) {
-        return Err("Direct control plane did not activate the transport bot in the vault.".to_string());
+        return Err("Galer Cloud could not activate the assigned storage session.".to_string());
     }
     Ok(())
 }
@@ -871,19 +1076,24 @@ fn direct_send_helper_command(runtime: &mut DirectTransportRuntime, mut command:
 
 fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransportRuntime, String> {
     // The Bot API server MUST run on the same machine as the file paths used by
-    // this helper. On macOS this launches the arm64 runtime bundled in the .app.
-    ensure_local_bot_api(session)?;
+    // this helper. BeatGaler owns the exact child and passes its dynamic loopback
+    // endpoint explicitly; the helper never guesses or trusts a fixed port.
+    let bot_api_base = ensure_local_bot_api(session)?;
     let helper = direct_helper_path().ok_or_else(|| {
         "Direct transport helper is missing. Expected src-tauri/direct-transport/transport-helper.cjs.".to_string()
     })?;
     let node = direct_node_runtime_path();
     let session_id = session.get("session_id").and_then(|v| v.as_str())
-        .ok_or_else(|| "Direct control plane returned no session_id.".to_string())?.to_string();
+        .ok_or_else(|| "Galer Cloud returned incomplete session information.".to_string())?.to_string();
     let transport_id = session.get("transport_id").and_then(|v| v.as_str()).unwrap_or("transport").to_string();
     let generation = session.get("generation").and_then(|v| v.as_i64()).unwrap_or(0);
     let credential_version = session.get("credential_version").and_then(|v| v.as_i64()).unwrap_or(1);
+    let mut helper_session = session.clone();
+    if let Some(object) = helper_session.as_object_mut() {
+        object.insert("bot_api_base".to_string(), Value::String(bot_api_base));
+    }
     let payload = general_purpose::STANDARD.encode(
-        serde_json::to_vec(session).map_err(|e| format!("Could not encode direct session: {}", e))?
+        serde_json::to_vec(&helper_session).map_err(|e| format!("Could not encode direct session: {}", e))?
     );
 
     let mut command = Command::new(&node);
@@ -899,8 +1109,8 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     }
     let mut child = command.spawn()
         .map_err(|e| format!("Could not start Direct transport runtime '{}': {}", node, e))?;
-    let mut stdin = child.stdin.take().ok_or_else(|| "Direct transport helper has no stdin.".to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "Direct transport helper has no stdout.".to_string())?;
+    let mut stdin = child.stdin.take().ok_or_else(|| "Galer Storage local helper could not start correctly.".to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| "Galer Storage local helper could not start correctly.".to_string())?;
     let bootstrap = format!("__BEATGALER_DIRECT_BOOTSTRAP__{}\n", payload);
     stdin.write_all(bootstrap.as_bytes())
         .map_err(|e| format!("Could not bootstrap Direct transport helper: {}", e))?;
@@ -923,7 +1133,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     let listening = direct_read_helper_message(&mut runtime, None)?;
     if listening.get("op").and_then(|v| v.as_str()) != Some("listening") {
         let _ = runtime.child.kill();
-        return Err("Direct Bot API helper did not start.".to_string());
+        return Err("Galer Storage local helper did not start.".to_string());
     }
     if let Err(error) = direct_activate_server_session(user_id, &runtime.session_id, runtime.generation) {
         let _ = runtime.child.kill();
@@ -944,7 +1154,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     let ready = direct_read_helper_message(&mut runtime, None)?;
     if ready.get("op").and_then(|v| v.as_str()) != Some("ready") {
         let _ = runtime.child.kill();
-        return Err("Direct Bot API helper did not become ready after MASTER granted vault access.".to_string());
+        return Err("Galer Storage local helper did not become ready.".to_string());
     }
     eprintln!(
         "[direct] DATA_PLANE_READY transport={} generation={} credential_version={}",
@@ -1034,7 +1244,7 @@ fn start_direct_heartbeat_thread() {
 
 fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
     if !direct_transport_enabled() {
-        return Err("Telegram Direct transport is disabled. BeatGaler no longer falls back to the manager/service bot.".to_string());
+        return Err("Galer local storage transport is unavailable.".to_string());
     }
     start_direct_heartbeat_thread();
 
@@ -1052,7 +1262,15 @@ fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
             Some((runtime.user_id == user_id, exit_status))
         } else { None }
     };
-    if matches!(runtime_state, Some((true, None))) { return Ok(true); }
+    // A healthy helper is not enough: the localhost server it talks to is a
+    // separate owned child. If that Bot API process crashed while Node stayed
+    // alive, reusing the helper would make every future operation fail forever.
+    // Rebuild both local pieces through the SAME server-side lease instead.
+    let same_user_helper_alive = matches!(runtime_state, Some((true, None)));
+    if same_user_helper_alive && owned_local_bot_api_is_healthy() { return Ok(true); }
+    if same_user_helper_alive {
+        eprintln!("[direct] LOCAL_DATA_PLANE_UNHEALTHY helper_alive=true bot_api_healthy=false; rebuilding_same_lease=true");
+    }
 
     let old = {
         let mut guard = direct_runtime_slot().lock().map_err(|e| e.to_string())?;
@@ -1088,7 +1306,7 @@ fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
     let response = post_json_cloud_auth_timeout(&url, &body, 45)
         .map_err(|error| format!("BeatGaler Direct control plane unavailable: {}", error))?;
     if response.get("mode").and_then(|v| v.as_str()) != Some("telegram-direct-botapi-local") {
-        return Err("BeatGaler Cloud did not offer Telegram Direct transport.".to_string());
+        return Err("Galer Cloud did not offer the required local storage transport.".to_string());
     }
 
     let session_id = response.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1102,9 +1320,36 @@ fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
         }
         Err(error) => {
             if !session_id.is_empty() { direct_stop_server_session(user_id, &session_id, generation); }
-            Err(format!("BeatGaler Direct data plane unavailable: {}", error))
+            Err(format!("Galer Storage is unavailable: {}", error))
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum DirectBeginDisposition {
+    Ready(String),
+    Expired,
+    Refresh(Value),
+    Wait(u64),
+}
+
+fn classify_direct_begin_response(response: &Value) -> Result<DirectBeginDisposition, String> {
+    if response.get("expired").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(DirectBeginDisposition::Expired);
+    }
+    if response.get("refresh_required").and_then(|v| v.as_bool()) == Some(true) {
+        let refresh = response.get("credential_refresh")
+            .cloned()
+            .ok_or_else(|| "Galer Cloud returned incomplete refreshed session information.".to_string())?;
+        return Ok(DirectBeginDisposition::Refresh(refresh));
+    }
+    if response.get("wait").and_then(|v| v.as_bool()) == Some(true) {
+        let wait_ms = response.get("retry_after_ms").and_then(|v| v.as_u64()).unwrap_or(250).clamp(100, 1000);
+        return Ok(DirectBeginDisposition::Wait(wait_ms));
+    }
+    response.get("operation_id").and_then(|v| v.as_str())
+        .map(|value| DirectBeginDisposition::Ready(value.to_string()))
+        .ok_or_else(|| "Galer Cloud returned incomplete operation information.".to_string())
 }
 
 fn direct_begin_operation(user_id: &str, kind: &str) -> Result<String, String> {
@@ -1113,7 +1358,7 @@ fn direct_begin_operation(user_id: &str, kind: &str) -> Result<String, String> {
         ensure_direct_runtime(user_id)?;
         let (session_id, generation, credential_version) = {
             let guard = direct_runtime_slot().lock().map_err(|e| e.to_string())?;
-            let runtime = guard.as_ref().ok_or_else(|| "Direct transport runtime disappeared.".to_string())?;
+            let runtime = guard.as_ref().ok_or_else(|| "Galer Storage local runtime is unavailable.".to_string())?;
             (runtime.session_id.clone(), runtime.generation, runtime.credential_version)
         };
         let url = format!("{}/transport/operation/begin", telegram_cloud_api_base());
@@ -1125,32 +1370,32 @@ fn direct_begin_operation(user_id: &str, kind: &str) -> Result<String, String> {
             "kind": kind,
         }), 10)?;
 
-        if response.get("expired").and_then(|v| v.as_bool()) == Some(true) {
-            clear_direct_lease_meta(Some(&session_id));
-            let expired = direct_runtime_slot().lock().ok().and_then(|mut guard| guard.take());
-            if let Some(runtime) = expired { kill_direct_runtime_without_releasing(runtime); }
-            if started.elapsed() > Duration::from_secs(45) {
-                return Err("Direct session expired and could not be renewed.".to_string());
+        match classify_direct_begin_response(&response)? {
+            DirectBeginDisposition::Expired => {
+                // A Mac can wake after the 5-minute lease timeout. Discard only
+                // the stale local helper and loop through session/start again.
+                // Never turn wake-up into an account logout or explicit token rotation.
+                clear_direct_lease_meta(Some(&session_id));
+                let expired = direct_runtime_slot().lock().ok().and_then(|mut guard| guard.take());
+                if let Some(runtime) = expired { kill_direct_runtime_without_releasing(runtime); }
+                if started.elapsed() > Duration::from_secs(45) {
+                    return Err("Galer Cloud session expired and could not be renewed.".to_string());
+                }
+                continue;
             }
-            continue;
-        }
-        if response.get("refresh_required").and_then(|v| v.as_bool()) == Some(true) {
-            let refresh = response.get("credential_refresh")
-                .ok_or_else(|| "Direct control plane requested a token refresh without credentials.".to_string())?;
-            replace_direct_runtime_from_session(user_id, refresh)?;
-            continue;
-        }
-        if response.get("wait").and_then(|v| v.as_bool()) == Some(true) {
-            if started.elapsed() > Duration::from_secs(120) {
-                return Err("Transport bot token rotation is still waiting for another active transfer to finish.".to_string());
+            DirectBeginDisposition::Refresh(refresh) => {
+                replace_direct_runtime_from_session(user_id, &refresh)?;
+                continue;
             }
-            let wait_ms = response.get("retry_after_ms").and_then(|v| v.as_u64()).unwrap_or(250).clamp(100, 1000);
-            std::thread::sleep(Duration::from_millis(wait_ms));
-            continue;
+            DirectBeginDisposition::Wait(wait_ms) => {
+                if started.elapsed() > Duration::from_secs(120) {
+                    return Err("Galer Cloud is still waiting for another active transfer to finish.".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(wait_ms));
+                continue;
+            }
+            DirectBeginDisposition::Ready(operation_id) => return Ok(operation_id),
         }
-        return response.get("operation_id").and_then(|v| v.as_str())
-            .map(|v| v.to_string())
-            .ok_or_else(|| "Direct control plane returned no operation id.".to_string());
     }
 }
 
@@ -1182,7 +1427,7 @@ fn direct_request(user_id: &str, command: Value) -> Result<Value, String> {
     let (session_id, generation, result) = {
         let slot = direct_runtime_slot();
         let mut guard = slot.lock().map_err(|e| e.to_string())?;
-        let runtime = guard.as_mut().ok_or_else(|| "Direct transport runtime disappeared.".to_string())?;
+        let runtime = guard.as_mut().ok_or_else(|| "Galer Storage local runtime is unavailable.".to_string())?;
         let session_id = runtime.session_id.clone();
         let generation = runtime.generation;
         let result = direct_send_helper_command(runtime, command);
@@ -1210,7 +1455,7 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
     // transient helper/control-plane miss must not become an Upload Failed.
     let started = std::time::Instant::now();
     let mut attempt: u32 = 0;
-    let mut last_error = "Telegram INDEX is temporarily unavailable.".to_string();
+    let mut last_error = "Galer Library INDEX is temporarily unavailable.".to_string();
     loop {
         attempt += 1;
         match ensure_direct_runtime(user_id)
@@ -1223,8 +1468,8 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
                         cache_direct_library_manifest(&manifest);
                         return Ok(manifest);
                     }
-                    Some(_) => last_error = "Pinned Telegram document is not a BeatGaler library index.".to_string(),
-                    None => last_error = "Direct Bot API index response had no manifest.".to_string(),
+                    Some(_) => last_error = "Pinned Galer Library document is not a valid BeatGaler library index.".to_string(),
+                    None => last_error = "Galer Library index response had no manifest.".to_string(),
                 }
             }
             Err(error) => last_error = error,
@@ -1274,7 +1519,7 @@ fn direct_replace_library_manifest_with_options(
     cache_direct_library_manifest(manifest);
     let message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
     if message_id <= 0 {
-        return Err("Direct library index sync returned no Telegram message id.".to_string());
+        return Err("Galer Library index sync returned no storage message id.".to_string());
     }
     let index_file_id = response.get("file_id").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -1301,7 +1546,7 @@ fn direct_replace_library_manifest(
 
 fn apply_restore_from_trash_to_manifest(manifest: &mut Value, beat_id: &str) -> Result<bool, String> {
     if beat_id.trim().is_empty() { return Err("Cannot restore an empty beat id.".to_string()); }
-    let root = manifest.as_object_mut().ok_or_else(|| "Telegram library index root is invalid.".to_string())?;
+    let root = manifest.as_object_mut().ok_or_else(|| "Galer Library index root is invalid.".to_string())?;
 
     let existing_active = root.get("beats")
         .and_then(|v| v.as_array())
@@ -1325,7 +1570,7 @@ fn apply_restore_from_trash_to_manifest(manifest: &mut Value, beat_id: &str) -> 
     // intentionally idempotent and never creates a second active beat.
     let removed_trash = {
         let trash = root.entry("trash").or_insert_with(|| Value::Array(Vec::new()));
-        let rows = trash.as_array_mut().ok_or_else(|| "Telegram library trash field is invalid.".to_string())?;
+        let rows = trash.as_array_mut().ok_or_else(|| "Galer Library trash field is invalid.".to_string())?;
         let before = rows.len();
         rows.retain(|item| {
             let beat = item.get("beat").unwrap_or(item);
@@ -1335,7 +1580,7 @@ fn apply_restore_from_trash_to_manifest(manifest: &mut Value, beat_id: &str) -> 
     };
 
     let beats = root.entry("beats").or_insert_with(|| Value::Array(Vec::new()));
-    let rows = beats.as_array_mut().ok_or_else(|| "Telegram library beats field is invalid.".to_string())?;
+    let rows = beats.as_array_mut().ok_or_else(|| "Galer Library beats field is invalid.".to_string())?;
     if existing_active.is_none() {
         let entry = restored_entry.ok_or_else(|| "Cloud Trash record has no beat payload.".to_string())?;
         // Defensive dedupe in case a malformed INDEX already contains repeated ids.
@@ -1373,9 +1618,9 @@ fn direct_move_beats_to_trash(user_id: &str, beat_ids: &[String]) -> Result<usiz
     let now = now_epoch() as i64;
     let wanted: std::collections::HashSet<String> = beat_ids.iter().cloned().collect();
 
-    let root = manifest.as_object_mut().ok_or_else(|| "Telegram library index root is invalid.".to_string())?;
+    let root = manifest.as_object_mut().ok_or_else(|| "Galer Library index root is invalid.".to_string())?;
     let beats = root.entry("beats").or_insert_with(|| Value::Array(Vec::new()));
-    let beats_array = beats.as_array_mut().ok_or_else(|| "Telegram library beats field is invalid.".to_string())?;
+    let beats_array = beats.as_array_mut().ok_or_else(|| "Galer Library beats field is invalid.".to_string())?;
     let mut moved_entries = Vec::<Value>::new();
     beats_array.retain(|beat| {
         let id = beat.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1389,7 +1634,7 @@ fn direct_move_beats_to_trash(user_id: &str, beat_ids: &[String]) -> Result<usiz
 
     if moved_entries.is_empty() { return Ok(0); }
     let trash = root.entry("trash").or_insert_with(|| Value::Array(Vec::new()));
-    let trash_array = trash.as_array_mut().ok_or_else(|| "Telegram library trash field is invalid.".to_string())?;
+    let trash_array = trash.as_array_mut().ok_or_else(|| "Galer Library trash field is invalid.".to_string())?;
     let already: std::collections::HashSet<String> = trash_array.iter()
         .filter_map(|item| item.get("beat"))
         .filter_map(|beat| beat.get("id").and_then(|v| v.as_str()))
@@ -1444,7 +1689,7 @@ fn apply_permanent_delete_to_manifest(
     wanted: &std::collections::HashSet<String>,
     now: i64,
 ) -> Result<(usize, std::collections::HashSet<i64>), String> {
-    let root = manifest.as_object_mut().ok_or_else(|| "Telegram library index root is invalid.".to_string())?;
+    let root = manifest.as_object_mut().ok_or_else(|| "Galer Library index root is invalid.".to_string())?;
     let mut media_to_delete = std::collections::HashSet::<i64>::new();
     if let Some(beats) = root.get("beats").and_then(|v| v.as_array()) {
         for beat in beats {
@@ -1462,7 +1707,7 @@ fn apply_permanent_delete_to_manifest(
 
     let removed_beats = {
         let beats = root.entry("beats").or_insert_with(|| Value::Array(Vec::new()));
-        let beats_array = beats.as_array_mut().ok_or_else(|| "Telegram library beats field is invalid.".to_string())?;
+        let beats_array = beats.as_array_mut().ok_or_else(|| "Galer Library beats field is invalid.".to_string())?;
         let before = beats_array.len();
         beats_array.retain(|beat| !wanted.contains(beat.get("id").and_then(|v| v.as_str()).unwrap_or("")));
         before - beats_array.len()
@@ -1470,7 +1715,7 @@ fn apply_permanent_delete_to_manifest(
 
     let removed_trash = {
         let trash = root.entry("trash").or_insert_with(|| Value::Array(Vec::new()));
-        let trash_array = trash.as_array_mut().ok_or_else(|| "Telegram library trash field is invalid.".to_string())?;
+        let trash_array = trash.as_array_mut().ok_or_else(|| "Galer Library trash field is invalid.".to_string())?;
         let before = trash_array.len();
         trash_array.retain(|item| {
             let beat = item.get("beat").unwrap_or(item);
@@ -1483,7 +1728,7 @@ fn apply_permanent_delete_to_manifest(
     // Keep small tombstones inside the ONE index so a delayed stale client
     // cannot resurrect a permanently-deleted beat on its next sync.
     let deleted = root.entry("deleted").or_insert_with(|| Value::Array(Vec::new()));
-    let deleted_array = deleted.as_array_mut().ok_or_else(|| "Telegram library deleted field is invalid.".to_string())?;
+    let deleted_array = deleted.as_array_mut().ok_or_else(|| "Galer Library deleted field is invalid.".to_string())?;
     let mut by_id = std::collections::HashMap::<String, i64>::new();
     for row in deleted_array.iter() {
         let id = row.get("beat_id").or_else(|| row.get("id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1538,7 +1783,7 @@ fn direct_ensure_topic(user_id: &str, beat_id: &str, beat_name: &str) -> Result<
         "beatName": beat_name,
     }), 20)?;
     response.get("message_thread_id").and_then(|v| v.as_i64())
-        .ok_or_else(|| "Direct control plane returned no beat topic id.".to_string())
+        .ok_or_else(|| "Galer Storage returned incomplete beat storage information.".to_string())
 }
 
 fn direct_upload_file(
@@ -1560,7 +1805,7 @@ fn direct_upload_file(
         "workers": 4,
     }))?;
     let message_id = response.get("message_id").and_then(|v| v.as_i64())
-        .ok_or_else(|| "Direct upload returned no message id.".to_string())?;
+        .ok_or_else(|| "Galer Storage upload returned incomplete storage information.".to_string())?;
     let locator = format!("direct:{}", message_id);
     Ok(json!({
         "telegram_file_id": locator,
@@ -1648,7 +1893,7 @@ fn direct_download_range_with_retry(
             }
         }
     }
-    Err(format!("Telegram Direct range retry exhausted: {}", last_error))
+    Err(format!("Galer Storage range retry exhausted: {}", last_error))
 }
 
 pub fn shutdown_direct_transport_runtime() {
@@ -1768,7 +2013,7 @@ pub fn get_telegram_cloud_status(
     let url = format!("{}/telegram/connect/status?beatgalerUserId={}", base, user_id);
 
     let response = get_json_simple(&url)
-        .map_err(|e| format!("Could not verify Telegram Cloud status. Is the BeatGaler Cloud server running? ({})", e))?;
+        .map_err(|e| format!("Could not verify Galer Cloud status. Is the BeatGaler Cloud server running? ({})", e))?;
 
     let connected = response.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
     let reachable = response.get("reachable").and_then(|v| v.as_bool()).unwrap_or(connected);
@@ -1970,7 +2215,7 @@ pub fn upload_beat_to_telegram(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
     let user_id = ensure_beatgaler_user_id(&state)?;
@@ -2274,7 +2519,7 @@ pub fn sync_cloud_library_index(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected.".to_string());
+            return Err("Galer Cloud is not connected.".to_string());
         }
     }
 
@@ -2332,7 +2577,7 @@ pub fn sync_cloud_library_index(
     // active/trash, or replace their media, but it may NEVER make an existing
     // beat identity disappear. Permanent deletion has its own explicit path.
     let current_manifest = direct_get_library_manifest(&user_id)
-        .map_err(|e| format!("Could not read Telegram source-of-truth index before sync: {}", e))?;
+        .map_err(|e| format!("Could not read Galer Library source-of-truth index before sync: {}", e))?;
     let identity_ids = |value: &Value| -> std::collections::HashSet<String> {
         let mut out = std::collections::HashSet::new();
         if let Some(rows) = value.get("beats").and_then(|v| v.as_array()) {
@@ -2360,7 +2605,7 @@ pub fn sync_cloud_library_index(
     // from this computer. MASTER never carries index bytes. Automatic cleanup
     // is limited to replaced media for identities still present in the vault.
     let response = direct_replace_library_manifest(&user_id, &manifest, source_id.as_deref())
-        .map_err(|e| format!("Could not sync Telegram library index directly: {}", e))?;
+        .map_err(|e| format!("Could not sync Galer Library index directly: {}", e))?;
     let library_message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
 
     Ok(CloudLibrarySyncResult {
@@ -2556,7 +2801,7 @@ fn beat_from_cloud_manifest_entry(
     conn: &Connection,
 ) -> Result<BeatMeta, String> {
     let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if id.is_empty() { return Err("Telegram library entry has no beat id.".to_string()); }
+    if id.is_empty() { return Err("Galer Library entry has no beat id.".to_string()); }
     let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
     let master = entry.get("master").cloned().unwrap_or(Value::Null);
     let telegram_file_id = master.get("telegram_file_id").and_then(|v| v.as_str()).map(|v| v.to_string());
@@ -2650,7 +2895,7 @@ pub fn repair_stale_cloud_library_refs(
     }
     let user_id = ensure_beatgaler_user_id(&state)?;
     let mut manifest = direct_get_library_manifest(&user_id)
-        .map_err(|e| format!("Could not read Telegram library for integrity repair: {}", e))?;
+        .map_err(|e| format!("Could not read Galer Library for integrity repair: {}", e))?;
 
     let entries = manifest.get("beats").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     if entries.is_empty() { return Ok(0); }
@@ -2688,9 +2933,9 @@ pub fn repair_stale_cloud_library_refs(
 
     if stale_ids.is_empty() { return Ok(0); }
 
-    let root = manifest.as_object_mut().ok_or_else(|| "Telegram library index root is invalid.".to_string())?;
+    let root = manifest.as_object_mut().ok_or_else(|| "Galer Library index root is invalid.".to_string())?;
     let beats = root.entry("beats").or_insert_with(|| Value::Array(Vec::new()));
-    let beats_array = beats.as_array_mut().ok_or_else(|| "Telegram library beats field is invalid.".to_string())?;
+    let beats_array = beats.as_array_mut().ok_or_else(|| "Galer Library beats field is invalid.".to_string())?;
     let before = beats_array.len();
     beats_array.retain(|entry| {
         let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -2706,7 +2951,7 @@ pub fn repair_stale_cloud_library_refs(
     // missing by Telegram itself. Existing delete_messages/cleanup behavior remains
     // untouched.
     direct_replace_library_manifest_with_options(&user_id, &manifest, Some("integrity-repair"), true)
-        .map_err(|e| format!("Could not publish repaired Telegram library INDEX: {}", e))?;
+        .map_err(|e| format!("Could not publish repaired Galer Library INDEX: {}", e))?;
     eprintln!("[direct] INDEX_STALE_REPAIR_COMMIT removed={} remaining={}", removed, remaining);
     Ok(removed)
 }
@@ -2718,16 +2963,16 @@ pub fn restore_library_from_telegram(
 ) -> Result<Vec<BeatMeta>, String> {
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        if !settings.telegram_cloud_connected { return Err("Telegram is not connected.".to_string()); }
+        if !settings.telegram_cloud_connected { return Err("Galer Cloud is not connected.".to_string()); }
     }
     let user_id = ensure_beatgaler_user_id(&state)?;
     // Restore the authoritative index directly from Telegram through the
     // currently leased transport bot. No MASTER/backend download of the index.
     let manifest = direct_get_library_manifest(&user_id)
-        .map_err(|e| format!("Could not restore Telegram library directly: {}", e))?;
+        .map_err(|e| format!("Could not restore Galer Library directly: {}", e))?;
 
     let entries = manifest.get("beats").and_then(|v| v.as_array())
-        .ok_or_else(|| "Telegram library index has no beats array.".to_string())?;
+        .ok_or_else(|| "Galer Library index has no beats array.".to_string())?;
     let trash_entries = manifest.get("trash").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let manifest_ids: std::collections::HashSet<String> = entries.iter()
         .filter_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(|v| v.to_string()))
@@ -2866,17 +3111,17 @@ pub fn sync_beat_metadata_to_telegram(
 ) -> Result<CloudMetadataSyncResult, String> {
     let _sync_guard = CLOUD_METADATA_SYNC_LOCK
         .lock()
-        .map_err(|_| "Telegram metadata sync lock was poisoned.".to_string())?;
+        .map_err(|_| "Galer metadata sync lock was poisoned.".to_string())?;
 
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected.".to_string());
+            return Err("Galer Cloud is not connected.".to_string());
         }
     }
 
     if beat.telegram_file_id.as_deref().unwrap_or("").is_empty() {
-        return Err("Upload the beat master to Telegram before syncing its metadata.".to_string());
+        return Err("Upload the beat MASTER to Galer Cloud before syncing its metadata.".to_string());
     }
 
     let user_id = ensure_beatgaler_user_id(&state)?;
@@ -3053,7 +3298,7 @@ pub fn upload_dropped_file_to_telegram(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
 
@@ -3105,7 +3350,7 @@ pub fn upload_dropped_file_to_telegram(
 
         let telegram_file_id = response.get("telegram_file_id")
             .and_then(|v| v.as_str()).map(|v| v.to_string())
-            .ok_or_else(|| "Telegram did not return a file_id.".to_string())?;
+            .ok_or_else(|| "Galer Storage did not return a cloud file reference.".to_string())?;
         let telegram_message_id = response.get("telegram_message_id").and_then(|v| v.as_i64());
 
         let cloud_file_id = format!("MASTER:{}", beat.id);
@@ -3194,7 +3439,7 @@ pub fn upload_dropped_file_to_telegram(
     let parts = response.get("parts").and_then(|v| v.as_array())
         .ok_or_else(|| "BeatGaler Cloud did not return uploaded file parts.".to_string())?;
     if parts.is_empty() {
-        return Err("Telegram did not return any uploaded file parts.".to_string());
+        return Err("Galer Storage did not return any uploaded file parts.".to_string());
     }
 
     let first_file_id = parts.first()
@@ -3297,7 +3542,7 @@ fn download_telegram_file_to_path(
         }
     } else {
         return Err(
-            "This asset still uses a legacy Bot API file_id. 001BeatGaler is manager-only; migrate/re-upload it through Telegram Direct."
+            "This asset still uses a legacy storage reference. Re-upload it through Galer Cloud."
                 .to_string(),
         );
     }
@@ -3307,7 +3552,7 @@ fn download_telegram_file_to_path(
         .len();
     if downloaded_size == 0 {
         let _ = std::fs::remove_file(&tmp_path);
-        return Err("Telegram returned an empty file.".to_string());
+        return Err("Galer Storage returned an empty file.".to_string());
     }
 
     // rename is cheapest when possible. Fall back to copy for edge cases.
@@ -3330,12 +3575,12 @@ fn download_beat_from_telegram_inner(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
 
     let telegram_file_id = beat.telegram_file_id.clone()
-        .ok_or_else(|| "This beat has no Telegram file_id. Upload it first.".to_string())?;
+        .ok_or_else(|| "This beat has no Cloud MASTER reference. Upload it first.".to_string())?;
     let user_id = ensure_beatgaler_user_id(state)?;
 
     let destination = if !beat.playback_path.is_empty() {
@@ -3569,16 +3814,27 @@ pub fn make_beat_available_offline(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("BeatGaler is not connected to Telegram Cloud.".to_string());
+            return Err("BeatGaler is not connected to Galer Cloud.".to_string());
         }
     }
     let user_id = ensure_beatgaler_user_id(&state)?;
 
     let (mut current, sources, project_manifest, fingerprint, artwork_file_id) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let mut current = existing_beat_meta(&conn, &beat.id).unwrap_or_else(|| beat.clone());
-        if current.image_base64.as_deref().map(|v| v.trim().is_empty()).unwrap_or(true) {
-            current.image_base64 = beat.image_base64.clone();
+        // The Beat supplied by React is the authority for visible/current metadata.
+        // SQLite may lag behind the UI during a recent edit, so it may only fill
+        // operational cloud references that are genuinely missing from the live Beat.
+        let mut current = beat.clone();
+        if let Some(existing) = existing_beat_meta(&conn, &beat.id) {
+            if current.telegram_file_id.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_none() {
+                current.telegram_file_id = existing.telegram_file_id;
+            }
+            if current.telegram_message_id.is_none() {
+                current.telegram_message_id = existing.telegram_message_id;
+            }
+            if current.cloud_status.is_none() {
+                current.cloud_status = existing.cloud_status;
+            }
         }
         let fingerprint = offline_cloud_fingerprint(&conn, &current)?;
         let mut stmt = conn.prepare(
@@ -3618,7 +3874,7 @@ pub fn make_beat_available_offline(
 
     let master_file_id = current.telegram_file_id.clone()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "This beat has no Telegram MASTER.".to_string())?;
+        .ok_or_else(|| "This beat has no Cloud MASTER.".to_string())?;
 
     // Preserve the cover as part of the offline metadata snapshot. This avoids
     // any artwork network request when BeatGaler cold-starts with no internet.
@@ -3981,7 +4237,7 @@ pub fn prepare_beat_for_playback(
         // that started when the card became visible is promoted to HOT and the
         // HTML5 player receives a local URL immediately.
         let Some((cache_key, port)) = cooking_enqueue(&beat, &state, true)? else {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         };
         let mut ready = beat;
         ready.playback_path = format!("http://127.0.0.1:{}/play/{}", port, cache_key);
@@ -4137,7 +4393,8 @@ fn build_project_archive_if_needed(
     // Project files and FL Studio support archives.
     for entry in std::fs::read_dir(&folder).map_err(|e| e.to_string())?.flatten() {
         let path = entry.path();
-        if !path.is_file() { continue; }
+        let Ok(file_type) = entry.file_type() else { continue; };
+        if file_type.is_symlink() || !file_type.is_file() { continue; }
         let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
         if matches!(ext.as_str(), "flp" | "als" | "ptx" | "ptf" | "zpa") {
             std::fs::copy(&path, staging.join(entry.file_name())).map_err(|e| e.to_string())?;
@@ -4148,7 +4405,8 @@ fn build_project_archive_if_needed(
     // Telegram stores it independently as the MASTER cloud slot.
     for entry in std::fs::read_dir(&folder).map_err(|e| e.to_string())?.flatten() {
         let path = entry.path();
-        if !path.is_dir() { continue; }
+        let Ok(file_type) = entry.file_type() else { continue; };
+        if file_type.is_symlink() || !file_type.is_dir() { continue; }
         let name = entry.file_name().to_string_lossy().to_string();
         let lower = name.to_ascii_lowercase();
         if matches!(lower.as_str(), "backup" | "backups") {
@@ -4166,37 +4424,13 @@ fn build_project_archive_if_needed(
         return Err("PROJECT staging contains no recognized project file.".to_string());
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        // Compress-Archive is available on supported Windows PowerShell installs.
-        // Use Literal staging via wildcard so the ZIP root is FLP/Audio/Samples,
-        // not an extra BeatGaler temporary directory.
-        let script = format!(
-            "Compress-Archive -Path '{}\\*' -DestinationPath '{}' -CompressionLevel Optimal -Force",
-            staging.to_string_lossy().replace('\'', "''"),
-            archive.to_string_lossy().replace('\'', "''")
-        );
-        let status = background_command("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .status()
-            .map_err(|e| format!("Could not start PowerShell to package project: {}", e))?;
-        if !status.success() {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err("PowerShell Compress-Archive failed while packaging the project.".to_string());
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let status = std::process::Command::new("zip")
-            .current_dir(&staging)
-            .args(["-r", "-q", archive.to_string_lossy().as_ref(), "."])
-            .status()
-            .map_err(|e| format!("Could not start zip to package project: {}", e))?;
-        if !status.success() {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err("zip failed while packaging the project.".to_string());
-        }
+    // One Rust implementation on every desktop OS. The staging tree has
+    // already selected PROJECT assets and removed Backup/Backups; package its
+    // contents directly so Windows and macOS produce the same archive layout.
+    if let Err(error) = write_project_directory_zip(&staging, &archive) {
+        let _ = std::fs::remove_dir_all(&staging);
+        let _ = std::fs::remove_file(&archive);
+        return Err(error);
     }
 
     let _ = std::fs::remove_dir_all(&staging);
@@ -4211,6 +4445,12 @@ fn build_project_archive_if_needed(
 
 fn is_forbidden_project_component(name: &str) -> bool {
     matches!(name.trim().to_ascii_lowercase().as_str(), "backup" | "backups")
+}
+
+fn path_is_symbolic_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn is_recognized_project_extension(ext: &str) -> bool {
@@ -4256,70 +4496,19 @@ fn project_zip_entry_names(path: &Path) -> Result<Vec<String>, String> {
         return Err("ZIP file does not exist.".to_string());
     }
 
-    // Windows ships bsdtar as tar.exe. Listing through tar avoids the large
-    // PowerShell/.NET startup cost for the common case and only reads the ZIP
-    // directory, not the compressed project payload.
-    if let Ok(out) = Command::new("tar")
-        .args(["-tf", path.to_string_lossy().as_ref()])
-        .output()
-    {
-        if out.status.success() {
-            let entries = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|line| line.replace('\\', "/").trim_start_matches('/').trim().to_string())
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>();
-            if !entries.is_empty() { return Ok(entries); }
-        }
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("Could not open PROJECT ZIP: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Could not inspect PROJECT ZIP: {}", e))?;
+    let mut entries = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)
+            .map_err(|e| format!("Could not read PROJECT ZIP entry {}: {}", index, e))?;
+        let name = entry.name().replace('\\', "/").trim_start_matches('/').trim().to_string();
+        if !name.is_empty() { entries.push(name); }
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$z = [System.IO.Compression.ZipFile]::OpenRead($env:BEATGALER_PROJECT_ZIP)
-try {
-  foreach ($e in $z.Entries) { Write-Output $e.FullName }
-} finally {
-  $z.Dispose()
-}
-"#;
-        let out = background_command("powershell")
-            .env("BEATGALER_PROJECT_ZIP", path)
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output()
-            .map_err(|e| format!("Could not inspect PROJECT ZIP: {}", e))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            return Err(if stderr.is_empty() { "Windows could not read the ZIP directory.".to_string() } else { stderr });
-        }
-        let entries = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|line| line.replace('\\', "/").trim_start_matches('/').trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>();
-        if entries.is_empty() { return Err("The ZIP contains no entries.".to_string()); }
-        return Ok(entries);
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let out = Command::new("unzip")
-            .args(["-Z1", path.to_string_lossy().as_ref()])
-            .output()
-            .map_err(|e| format!("Could not inspect PROJECT ZIP: {}", e))?;
-        if !out.status.success() {
-            return Err("The ZIP directory could not be read.".to_string());
-        }
-        let entries = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|line| line.replace('\\', "/").trim_start_matches('/').trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>();
-        if entries.is_empty() { return Err("The ZIP contains no entries.".to_string()); }
-        Ok(entries)
-    }
+    if entries.is_empty() { return Err("The ZIP contains no entries.".to_string()); }
+    Ok(entries)
 }
 
 fn validate_project_zip_entry_names(entries: &[String]) -> Result<(), String> {
@@ -4401,6 +4590,15 @@ pub fn inspect_project_drop_source(source_path: String) -> ProjectDropInspection
         entry_count,
     };
 
+    if path_is_symbolic_link(&source) {
+        return invalid(
+            "symlink",
+            "Symbolic links are not imported. Drop the original project file or folder instead.".to_string(),
+            false,
+            0,
+            0,
+        );
+    }
     if !source.exists() {
         return invalid("unsupported", "The dropped file or folder no longer exists.".to_string(), false, 0, 0);
     }
@@ -4461,14 +4659,16 @@ fn copy_project_dir_filtered(src: &Path, dest: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
         let src_path = entry.path();
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if file_type.is_symlink() { continue; }
         let name = entry.file_name().to_string_lossy().to_string();
-        if src_path.is_dir() && matches!(name.trim().to_ascii_lowercase().as_str(), "backup" | "backups") {
+        if file_type.is_dir() && matches!(name.trim().to_ascii_lowercase().as_str(), "backup" | "backups") {
             continue;
         }
         let dest_path = dest.join(entry.file_name());
-        if src_path.is_dir() {
+        if file_type.is_dir() {
             copy_project_dir_filtered(&src_path, &dest_path)?;
-        } else if src_path.is_file() {
+        } else if file_type.is_file() {
             std::fs::copy(&src_path, &dest_path).map_err(|e| e.to_string())?;
         }
     }
@@ -4480,20 +4680,353 @@ fn folder_has_project_assets(folder: &Path) -> bool {
     let Ok(rd) = std::fs::read_dir(folder) else { return false; };
     for entry in rd.flatten() {
         let path = entry.path();
+        let Ok(file_type) = entry.file_type() else { continue; };
+        if file_type.is_symlink() { continue; }
         let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() {
+        if file_type.is_dir() {
             if is_forbidden_project_component(&name) { continue; }
             if path.extension().and_then(|v| v.to_str()).map(is_recognized_project_extension).unwrap_or(false) {
                 return true;
             }
             continue;
         }
+        if !file_type.is_file() { continue; }
         let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
         if is_recognized_project_extension(&ext) {
             return true;
         }
     }
     false
+}
+
+
+fn normalized_zip_name(raw: &str) -> String {
+    raw.replace('\\', "/").trim_start_matches('/').to_string()
+}
+
+fn zip_name_has_forbidden_component(raw: &str) -> bool {
+    normalized_zip_name(raw)
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .any(is_forbidden_project_component)
+}
+
+fn zip_name_contains_project_component(raw: &str) -> bool {
+    normalized_zip_name(raw)
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .any(|part| {
+            Path::new(part)
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(is_recognized_project_extension)
+                .unwrap_or(false)
+        })
+}
+
+fn zip_name_starts_with_case_insensitive(raw: &str, prefix: &str) -> bool {
+    normalized_zip_name(raw)
+        .to_ascii_lowercase()
+        .starts_with(&prefix.to_ascii_lowercase())
+}
+
+fn project_zip_file_options() -> zip::write::SimpleFileOptions {
+    zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644)
+}
+
+fn project_zip_dir_options() -> zip::write::SimpleFileOptions {
+    zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .unix_permissions(0o755)
+}
+
+fn copy_project_zip_entries<F>(
+    source_zip: &Path,
+    writer: &mut zip::ZipWriter<std::fs::File>,
+    mut exclude: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> bool,
+{
+    if !source_zip.is_file() { return Ok(()); }
+    let names = project_zip_entry_names(source_zip)?;
+    validate_project_zip_entry_names(&names)?;
+
+    let file = std::fs::File::open(source_zip)
+        .map_err(|e| format!("Could not open existing PROJECT ZIP: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Could not read existing PROJECT ZIP: {}", e))?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)
+            .map_err(|e| format!("Could not read PROJECT ZIP entry {}: {}", index, e))?;
+        let name = normalized_zip_name(entry.name());
+        if name.is_empty() || exclude(&name) { continue; }
+        if entry.is_dir() || name.ends_with('/') {
+            let directory = if name.ends_with('/') { name } else { format!("{}/", name) };
+            writer.add_directory(directory, project_zip_dir_options())
+                .map_err(|e| format!("Could not copy PROJECT ZIP directory: {}", e))?;
+            continue;
+        }
+        writer.start_file(name, project_zip_file_options())
+            .map_err(|e| format!("Could not copy PROJECT ZIP file: {}", e))?;
+        std::io::copy(&mut entry, writer)
+            .map_err(|e| format!("Could not copy PROJECT ZIP payload: {}", e))?;
+    }
+    Ok(())
+}
+
+fn relative_zip_path(path: &Path) -> Result<String, String> {
+    let text = path.to_str().ok_or_else(|| "PROJECT contains a filename that is not valid Unicode.".to_string())?;
+    Ok(text.replace('\\', "/"))
+}
+
+fn add_project_source_to_zip(
+    writer: &mut zip::ZipWriter<std::fs::File>,
+    source: &Path,
+    prefix: &str,
+) -> Result<(), String> {
+    if path_is_symbolic_link(source) {
+        return Err("Symbolic links are not imported. Drop the original project file or folder instead.".to_string());
+    }
+    if !source.exists() {
+        return Err("The PROJECT source no longer exists.".to_string());
+    }
+
+    if source.is_file() {
+        let filename = source.file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "PROJECT filename is not valid Unicode.".to_string())?;
+        if is_forbidden_project_component(filename) {
+            return Err("This Backup folder was skipped so old project copies are not uploaded.".to_string());
+        }
+        let entry_name = format!("{}{}", prefix, filename);
+        writer.start_file(entry_name, project_zip_file_options())
+            .map_err(|e| format!("Could not add PROJECT file to ZIP: {}", e))?;
+        let mut input = std::fs::File::open(source)
+            .map_err(|e| format!("Could not open PROJECT source file: {}", e))?;
+        std::io::copy(&mut input, writer)
+            .map_err(|e| format!("Could not write PROJECT source file: {}", e))?;
+        return Ok(());
+    }
+
+    if !source.is_dir() {
+        return Err("PROJECT source must be a file or folder.".to_string());
+    }
+    let root_name = source.file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "PROJECT folder name is not valid Unicode.".to_string())?;
+    if is_forbidden_project_component(root_name) {
+        return Err("This Backup folder was skipped so old project copies are not uploaded.".to_string());
+    }
+
+    let walker = WalkDir::new(source).follow_links(false).into_iter().filter_entry(|entry| {
+        if entry.depth() == 0 { return true; }
+        if entry.file_type().is_symlink() { return false; }
+        !is_forbidden_project_component(&entry.file_name().to_string_lossy())
+    });
+
+    for item in walker {
+        let entry = item.map_err(|e| format!("Could not read PROJECT folder: {}", e))?;
+        if entry.depth() == 0 || entry.file_type().is_symlink() { continue; }
+        let relative = entry.path().strip_prefix(source)
+            .map_err(|e| format!("Could not calculate PROJECT ZIP path: {}", e))?;
+        let relative = relative_zip_path(relative)?;
+        if relative.is_empty() { continue; }
+        let entry_name = format!("{}{}", prefix, relative);
+        if entry.file_type().is_dir() {
+            writer.add_directory(format!("{}/", entry_name.trim_end_matches('/')), project_zip_dir_options())
+                .map_err(|e| format!("Could not add PROJECT directory to ZIP: {}", e))?;
+        } else if entry.file_type().is_file() {
+            writer.start_file(entry_name, project_zip_file_options())
+                .map_err(|e| format!("Could not add PROJECT file to ZIP: {}", e))?;
+            let mut input = std::fs::File::open(entry.path())
+                .map_err(|e| format!("Could not open PROJECT asset: {}", e))?;
+            std::io::copy(&mut input, writer)
+                .map_err(|e| format!("Could not write PROJECT asset: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+fn write_project_directory_zip(source_dir: &Path, destination_zip: &Path) -> Result<(), String> {
+    if !source_dir.is_dir() {
+        return Err("PROJECT source directory does not exist.".to_string());
+    }
+    if let Some(parent) = destination_zip.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not prepare PROJECT ZIP folder: {}", e))?;
+    }
+    let temp = destination_zip.with_file_name(format!(".beatgaler-project-write-{}.zip", new_cloud_file_id()));
+    let result = (|| -> Result<(), String> {
+        let output = std::fs::File::create(&temp)
+            .map_err(|e| format!("Could not create PROJECT ZIP: {}", e))?;
+        let mut writer = zip::ZipWriter::new(output);
+        add_project_source_to_zip(&mut writer, source_dir, "")?;
+        writer.finish().map_err(|e| format!("Could not finish PROJECT ZIP: {}", e))?;
+        let entries = project_zip_entry_names(&temp)?;
+        validate_project_zip_entry_names(&entries)?;
+        let (_has_backups, project_count, _, _) = inspect_project_zip_entries(&entries);
+        if project_count == 0 {
+            return Err("PROJECT ZIP contains no supported project file.".to_string());
+        }
+        replace_project_zip_file(&temp, destination_zip)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temp); }
+    result
+}
+
+fn extract_project_zip_to_directory(source_zip: &Path, destination_dir: &Path) -> Result<(), String> {
+    let names = project_zip_entry_names(source_zip)?;
+    validate_project_zip_entry_names(&names)?;
+    if destination_dir.exists() {
+        std::fs::remove_dir_all(destination_dir)
+            .map_err(|e| format!("Could not reset PROJECT edit folder: {}", e))?;
+    }
+    std::fs::create_dir_all(destination_dir)
+        .map_err(|e| format!("Could not create PROJECT edit folder: {}", e))?;
+
+    let file = std::fs::File::open(source_zip)
+        .map_err(|e| format!("Could not open PROJECT ZIP: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Could not read PROJECT ZIP: {}", e))?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)
+            .map_err(|e| format!("Could not read PROJECT ZIP entry {}: {}", index, e))?;
+        if entry.unix_mode().map(|mode| mode & 0o170000 == 0o120000).unwrap_or(false) {
+            // Never materialize archive symlinks. This avoids an extracted path
+            // escaping the edit root on Unix-like filesystems.
+            continue;
+        }
+        let name = normalized_zip_name(entry.name());
+        if name.is_empty() || zip_name_has_forbidden_component(&name) { continue; }
+        let relative = PathBuf::from(&name);
+        let out = destination_dir.join(&relative);
+        if entry.is_dir() || name.ends_with('/') {
+            std::fs::create_dir_all(&out).map_err(|e| format!("Could not create PROJECT directory: {}", e))?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Could not create PROJECT directory: {}", e))?;
+        }
+        let mut output = std::fs::File::create(&out)
+            .map_err(|e| format!("Could not extract PROJECT file '{}': {}", name, e))?;
+        std::io::copy(&mut entry, &mut output)
+            .map_err(|e| format!("Could not extract PROJECT payload '{}': {}", name, e))?;
+    }
+    Ok(())
+}
+
+fn project_edit_root(beat: &BeatMeta) -> PathBuf {
+    beatgaler_temp_dir().join("project-edits").join(safe_cloud_filename(&beat.id))
+}
+
+fn project_edit_stamp_path(beat: &BeatMeta) -> PathBuf {
+    beatgaler_temp_dir().join("project-edits").join(format!("{}.stamp", safe_cloud_filename(&beat.id)))
+}
+
+fn project_archive_stamp(path: &Path) -> Result<String, String> {
+    let (size, modified_ms) = project_file_stamp(path)
+        .ok_or_else(|| "Could not read PROJECT ZIP metadata.".to_string())?;
+    Ok(format!("{}:{}", size, modified_ms))
+}
+
+fn invalidate_project_edit_copy(beat: &BeatMeta) {
+    let _ = std::fs::remove_dir_all(project_edit_root(beat));
+    let _ = std::fs::remove_file(project_edit_stamp_path(beat));
+}
+
+fn find_openable_project_in_directory(root: &Path, beat_name: &str) -> Option<PathBuf> {
+    let (target_core, _) = matcher::normalize_core_name(&clean_name_from_filename(beat_name));
+    let mut candidates: Vec<(i32, usize, String, PathBuf)> = Vec::new();
+    for item in WalkDir::new(root).follow_links(false).into_iter().filter_map(Result::ok) {
+        if item.depth() == 0 || item.file_type().is_symlink() { continue; }
+        let path = item.path();
+        let recognized = path.extension().and_then(|v| v.to_str()).map(is_recognized_project_extension).unwrap_or(false);
+        if !recognized { continue; }
+        let is_logic_bundle = path.is_dir() && path.extension().and_then(|v| v.to_str()).map(|v| v.eq_ignore_ascii_case("logicx")).unwrap_or(false);
+        if !(path.is_file() || is_logic_bundle) { continue; }
+        if path.components().any(|component| component.as_os_str().to_str().map(is_forbidden_project_component).unwrap_or(false)) { continue; }
+        let stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("");
+        let (core, _) = matcher::normalize_core_name(&clean_name_from_filename(stem));
+        let score = if !target_core.is_empty() && core == target_core { 1000 }
+            else if !target_core.is_empty() && (core.starts_with(&target_core) || target_core.starts_with(&core)) { 800 }
+            else { 0 };
+        candidates.push((score, item.depth(), path.to_string_lossy().to_lowercase(), path.to_path_buf()));
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+    candidates.into_iter().next().map(|(_, _, _, path)| path)
+}
+
+fn prepare_project_edit_copy(beat: &BeatMeta, archive_path: &Path) -> Result<PathBuf, String> {
+    let edit_root = project_edit_root(beat);
+    let stamp_path = project_edit_stamp_path(beat);
+    let archive_stamp = project_archive_stamp(archive_path)?;
+    let existing_stamp = std::fs::read_to_string(&stamp_path).ok();
+
+    // Reuse the extracted tree while the source archive has not changed. This
+    // intentionally preserves unsynced DAW saves between Open Project clicks.
+    if edit_root.is_dir() && existing_stamp.as_deref() == Some(archive_stamp.as_str()) {
+        if let Some(project) = find_openable_project_in_directory(&edit_root, &beat.name) {
+            return Ok(project);
+        }
+    }
+
+    let parent = edit_root.parent().ok_or_else(|| "PROJECT edit folder has no parent.".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("Could not prepare PROJECT edit storage: {}", e))?;
+    let staging = parent.join(format!(".{}-extract-{}", safe_cloud_filename(&beat.id), new_cloud_file_id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    extract_project_zip_to_directory(archive_path, &staging)?;
+    let project = find_openable_project_in_directory(&staging, &beat.name)
+        .ok_or_else(|| "PROJECT ZIP contains no openable .flp/.als/.logicx/.ptx/.ptf file.".to_string())?;
+    let rel = project.strip_prefix(&staging).map_err(|e| e.to_string())?.to_path_buf();
+    let _ = std::fs::remove_dir_all(&edit_root);
+    std::fs::rename(&staging, &edit_root)
+        .map_err(|e| format!("Could not activate PROJECT edit folder: {}", e))?;
+    std::fs::write(&stamp_path, archive_stamp.as_bytes())
+        .map_err(|e| format!("Could not save PROJECT edit marker: {}", e))?;
+    Ok(edit_root.join(rel))
+}
+
+fn repack_project_edit_copy_if_present(beat: &BeatMeta, archive_path: &Path) -> Result<bool, String> {
+    let edit_root = project_edit_root(beat);
+    if !edit_root.is_dir() { return Ok(false); }
+    if find_openable_project_in_directory(&edit_root, &beat.name).is_none() {
+        return Err("PROJECT edit folder no longer contains an openable project file.".to_string());
+    }
+    write_project_directory_zip(&edit_root, archive_path)?;
+    let stamp = project_archive_stamp(archive_path)?;
+    if let Some(parent) = project_edit_stamp_path(beat).parent() { let _ = std::fs::create_dir_all(parent); }
+    std::fs::write(project_edit_stamp_path(beat), stamp.as_bytes())
+        .map_err(|e| format!("Could not update PROJECT edit marker: {}", e))?;
+    Ok(true)
+}
+
+fn replace_project_zip_file(temp_path: &Path, final_path: &Path) -> Result<(), String> {
+    if let Some(parent) = final_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not prepare PROJECT folder: {}", e))?;
+    }
+    if !final_path.exists() {
+        return std::fs::rename(temp_path, final_path)
+            .map_err(|e| format!("Could not save PROJECT ZIP: {}", e));
+    }
+
+    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+    let backup = parent.join(format!(".beatgaler-project-backup-{}.zip", new_cloud_file_id()));
+    std::fs::rename(final_path, &backup)
+        .map_err(|e| format!("Could not prepare PROJECT ZIP replacement: {}", e))?;
+    match std::fs::rename(temp_path, final_path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::rename(&backup, final_path);
+            Err(format!("Could not replace PROJECT ZIP: {}", error))
+        }
+    }
 }
 
 fn filtered_project_zip_for_upload(source: &Path) -> Result<Option<PathBuf>, String> {
@@ -4509,84 +5042,16 @@ fn filtered_project_zip_for_upload(source: &Path) -> Result<Option<PathBuf>, Str
     std::fs::create_dir_all(&root).map_err(|e| format!("Could not prepare filtered PROJECT ZIP: {}", e))?;
     let filename = source.file_name().and_then(|v| v.to_str()).unwrap_or("PROJECT.zip");
     let dest = root.join(filename);
-
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-$ErrorActionPreference='Stop'
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$src = [System.IO.Compression.ZipFile]::OpenRead($env:BEATGALER_SOURCE_ZIP)
-$dst = [System.IO.Compression.ZipFile]::Open($env:BEATGALER_FILTERED_ZIP, [System.IO.Compression.ZipArchiveMode]::Create)
-try {
-  foreach ($entry in $src.Entries) {
-    $name = $entry.FullName.Replace('\\','/').TrimStart('/')
-    if ([string]::IsNullOrWhiteSpace($name)) { continue }
-    $parts = $name.Split('/') | Where-Object { $_ -ne '' }
-    $skip = $false
-    foreach ($part in $parts) {
-      $lower = $part.ToLowerInvariant()
-      if ($lower -eq 'backup' -or $lower -eq 'backups') { $skip = $true; break }
+    let output = std::fs::File::create(&dest)
+        .map_err(|e| format!("Could not create filtered PROJECT ZIP: {}", e))?;
+    let mut writer = zip::ZipWriter::new(output);
+    if let Err(error) = copy_project_zip_entries(source, &mut writer, zip_name_has_forbidden_component) {
+        let _ = std::fs::remove_dir_all(&root);
+        return Err(error);
     }
-    if ($skip) { continue }
-    if ($name.EndsWith('/')) { continue }
-
-    $outEntry = $dst.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
-    try { $outEntry.LastWriteTime = $entry.LastWriteTime } catch {}
-    $input = $entry.Open()
-    $output = $outEntry.Open()
-    try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
-  }
-} finally {
-  $dst.Dispose()
-  $src.Dispose()
-}
-"#;
-        let out = background_command("powershell")
-            .env("BEATGALER_SOURCE_ZIP", source)
-            .env("BEATGALER_FILTERED_ZIP", &dest)
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output()
-            .map_err(|e| format!("Could not filter Backup folders from PROJECT ZIP: {}", e))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            let _ = std::fs::remove_dir_all(&root);
-            return Err(if stderr.is_empty() { "Could not filter Backup folders from PROJECT ZIP.".to_string() } else { stderr });
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // macOS/Linux: use the platform ZIP tools only for the uncommon case
-        // where Backup/Backups actually exists. Normal PROJECT ZIPs are never rewritten.
-        let unpack = root.join("unpacked");
-        std::fs::create_dir_all(&unpack).map_err(|e| e.to_string())?;
-        let status = Command::new("unzip")
-            .args(["-qq", source.to_string_lossy().as_ref(), "-d", unpack.to_string_lossy().as_ref()])
-            .status()
-            .map_err(|e| format!("Could not unpack PROJECT ZIP for Backup filtering: {}", e))?;
-        if !status.success() {
-            let _ = std::fs::remove_dir_all(&root);
-            return Err("Could not unpack PROJECT ZIP for Backup filtering.".to_string());
-        }
-        let mut backup_dirs = WalkDir::new(&unpack)
-            .min_depth(1)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_dir() && is_forbidden_project_component(&entry.file_name().to_string_lossy()))
-            .map(|entry| entry.path().to_path_buf())
-            .collect::<Vec<_>>();
-        backup_dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-        for dir in backup_dirs { let _ = std::fs::remove_dir_all(dir); }
-        let status = Command::new("zip")
-            .current_dir(&unpack)
-            .args(["-q", "-r", dest.to_string_lossy().as_ref(), "."])
-            .status()
-            .map_err(|e| format!("Could not rebuild filtered PROJECT ZIP: {}", e))?;
-        if !status.success() {
-            let _ = std::fs::remove_dir_all(&root);
-            return Err("Could not rebuild filtered PROJECT ZIP.".to_string());
-        }
+    if let Err(error) = writer.finish() {
+        let _ = std::fs::remove_dir_all(&root);
+        return Err(format!("Could not finish filtered PROJECT ZIP: {}", error));
     }
 
     let filtered_entries = project_zip_entry_names(&dest)?;
@@ -4599,6 +5064,13 @@ try {
 }
 
 fn project_zip_is_valid(path: &Path) -> bool {
+    let Ok(entries) = project_zip_entry_names(path) else { return false; };
+    if validate_project_zip_entry_names(&entries).is_err() { return false; }
+    let (_has_backups, project_file_count, _, _) = inspect_project_zip_entries(&entries);
+    project_file_count > 0
+}
+
+fn project_zip_is_openable(path: &Path) -> bool {
     let Ok(entries) = project_zip_entry_names(path) else { return false; };
     if validate_project_zip_entry_names(&entries).is_err() { return false; }
     let (_has_backups, project_file_count, _, _) = inspect_project_zip_entries(&entries);
@@ -4670,128 +5142,83 @@ fn ensure_beatgaler_user_id_from_settings(state: &SettingsState) -> Result<Strin
 }
 
 fn mutate_project_zip(zip_path: &Path, source: &Path, kind: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let script_path = beatgaler_temp_dir().join("project-zip-update.ps1");
-        if let Some(parent) = script_path.parent() { std::fs::create_dir_all(parent).ok(); }
-        let script = r#"
-param([string]$ZipPath,[string]$SourcePath,[string]$Kind)
-$ErrorActionPreference='Stop'
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-
-function Test-ForbiddenPart([string]$PathText) {
-  $parts = $PathText.Replace('\','/').Split('/')
-  foreach ($part in $parts) {
-    $lower = $part.ToLowerInvariant()
-    if ($lower -eq 'backup' -or $lower -eq 'backups') { return $true }
-  }
-  return $false
-}
-
-function Test-ProjectRoot([string]$RootName) {
-  $lower = $RootName.ToLowerInvariant()
-  if ($lower.EndsWith('.logicx')) { return $true }
-  $ext = [System.IO.Path]::GetExtension($lower)
-  return $ext -eq '.flp' -or $ext -eq '.als' -or $ext -eq '.ptx' -or $ext -eq '.ptf'
-}
-
-function Add-FolderToZip($Zip,[string]$Folder,[string]$Prefix) {
-  $root = (Resolve-Path -LiteralPath $Folder).Path.TrimEnd('\','/')
-  Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
-    $relative = $_.FullName.Substring($root.Length).TrimStart('\','/').Replace('\','/')
-    if (Test-ForbiddenPart $relative) { return }
-    $entryName = "$Prefix$relative"
-    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-      $Zip, $_.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal
-    ) | Out-Null
-  }
-}
-
-if (-not (Test-Path -LiteralPath $ZipPath)) {
-  $parent = [System.IO.Path]::GetDirectoryName($ZipPath)
-  if ($parent) { [System.IO.Directory]::CreateDirectory($parent) | Out-Null }
-  $created = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
-  $created.Dispose()
-}
-
-$zip = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Update)
-try {
-  if ($Kind -eq 'flp' -or $Kind -eq 'projectfile') {
-    # One primary project file/package per PROJECT archive. Replacing a FLP with
-    # ALS/Logic/Pro Tools therefore cannot leave two competing project files.
-    @($zip.Entries) | Where-Object {
-      $n = $_.FullName.Replace('\','/').TrimStart('/')
-      $rootName = if ($n.Contains('/')) { $n.Substring(0, $n.IndexOf('/')) } else { $n }
-      Test-ProjectRoot $rootName
-    } | ForEach-Object { $_.Delete() }
-
-    $item = Get-Item -LiteralPath $SourcePath
-    if ($item.PSIsContainer) {
-      $folderName = $item.Name
-      if (Test-ForbiddenPart $folderName) { throw 'This Backup folder was skipped so old project copies are not uploaded.' }
-      Add-FolderToZip $zip $SourcePath "$folderName/"
-    } else {
-      $entryName = [System.IO.Path]::GetFileName($SourcePath)
-      [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-        $zip, $SourcePath, $entryName, [System.IO.Compression.CompressionLevel]::Optimal
-      ) | Out-Null
+    if !source.exists() {
+        return Err("The PROJECT source no longer exists.".to_string());
     }
-    exit 0
-  }
+    if let Some(parent) = zip_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not prepare PROJECT ZIP folder: {}", e))?;
+    }
 
-  if ($Kind -eq 'projectfolder') {
-    $item = Get-Item -LiteralPath $SourcePath
-    if (-not $item.PSIsContainer) { throw 'Project folder source is not a folder.' }
-    $folderName = $item.Name
-    if (Test-ForbiddenPart $folderName) { throw 'This Backup folder was skipped so old project copies are not uploaded.' }
-    $prefix = "$folderName/"
-
-    @($zip.Entries) | Where-Object {
-      $_.FullName.Replace('\','/').StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
-    } | ForEach-Object { $_.Delete() }
-
-    Add-FolderToZip $zip $SourcePath $prefix
-    exit 0
-  }
-
-  # Legacy Drawer actions remain supported, but the drag/drop UX now presents
-  # one generic "Add folder to Project" action instead of Samples vs Audio.
-  if ($Kind -ne 'samples' -and $Kind -ne 'audio') { throw "Unsupported project asset kind: $Kind" }
-  $folderName = if ($Kind -eq 'samples') { 'Samples' } else { 'Audio' }
-  $prefix = "$folderName/"
-
-  @($zip.Entries) | Where-Object {
-    $_.FullName.Replace('\','/').StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
-  } | ForEach-Object { $_.Delete() }
-
-  Add-FolderToZip $zip $SourcePath $prefix
-} finally {
-  $zip.Dispose()
-}
-"#;
-        std::fs::write(&script_path, script).map_err(|e| format!("Could not prepare project ZIP updater: {}", e))?;
-        let status = background_command("powershell")
-            .args([
-                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                "-File", script_path.to_string_lossy().as_ref(),
-                "-ZipPath", zip_path.to_string_lossy().as_ref(),
-                "-SourcePath", source.to_string_lossy().as_ref(),
-                "-Kind", kind,
-            ])
-            .status()
-            .map_err(|e| format!("Could not update PROJECT zip: {}", e))?;
-        if !status.success() {
-            return Err("PROJECT zip update failed.".to_string());
+    let normalized_kind = kind.trim().to_ascii_lowercase();
+    let (exclude_mode, add_prefix) = match normalized_kind.as_str() {
+        "flp" | "projectfile" => ("project", String::new()),
+        "projectfolder" => {
+            if !source.is_dir() { return Err("Project folder source is not a folder.".to_string()); }
+            let folder_name = source.file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| "PROJECT folder name is not valid Unicode.".to_string())?;
+            if is_forbidden_project_component(folder_name) {
+                return Err("This Backup folder was skipped so old project copies are not uploaded.".to_string());
+            }
+            ("prefix", format!("{}/", folder_name))
         }
-        return Ok(());
-    }
+        "samples" => ("prefix", "Samples/".to_string()),
+        "audio" => ("prefix", "Audio/".to_string()),
+        _ => return Err(format!("Unsupported project asset kind: {}", kind)),
+    };
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (zip_path, source, kind);
-        Err("Manual PROJECT zip editing is currently implemented for Windows.".to_string())
+    let parent = zip_path.parent().unwrap_or_else(|| Path::new("."));
+    let temp_path = parent.join(format!(".beatgaler-project-update-{}.zip", new_cloud_file_id()));
+    let result = (|| -> Result<(), String> {
+        let output = std::fs::File::create(&temp_path)
+            .map_err(|e| format!("Could not create PROJECT ZIP update: {}", e))?;
+        let mut writer = zip::ZipWriter::new(output);
+        if zip_path.is_file() {
+            let prefix = add_prefix.clone();
+            copy_project_zip_entries(zip_path, &mut writer, |name| {
+                if exclude_mode == "project" {
+                    zip_name_contains_project_component(name)
+                } else {
+                    zip_name_starts_with_case_insensitive(name, &prefix)
+                }
+            })?;
+        }
+
+        match normalized_kind.as_str() {
+            "flp" | "projectfile" => {
+                if source.is_dir() {
+                    let folder_name = source.file_name()
+                        .and_then(|value| value.to_str())
+                        .ok_or_else(|| "PROJECT folder name is not valid Unicode.".to_string())?;
+                    add_project_source_to_zip(&mut writer, source, &format!("{}/", folder_name))?;
+                } else {
+                    add_project_source_to_zip(&mut writer, source, "")?;
+                }
+            }
+            "projectfolder" => add_project_source_to_zip(&mut writer, source, &add_prefix)?,
+            "samples" | "audio" => {
+                if !source.is_dir() {
+                    return Err("Project asset source is not a folder.".to_string());
+                }
+                add_project_source_to_zip(&mut writer, source, &add_prefix)?;
+            }
+            _ => unreachable!(),
+        }
+
+        writer.finish().map_err(|e| format!("Could not finish PROJECT ZIP update: {}", e))?;
+        let entries = project_zip_entry_names(&temp_path)?;
+        validate_project_zip_entry_names(&entries)?;
+        let (_has_backups, project_count, _, _) = inspect_project_zip_entries(&entries);
+        if project_count == 0 {
+            return Err("PROJECT zip update removed the primary project file.".to_string());
+        }
+        replace_project_zip_file(&temp_path, zip_path)
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
     }
+    result
 }
 
 fn project_manifest(conn: &Connection, beat_id: &str) -> Result<Option<(Option<String>, Value, Option<u64>, Option<i64>)>, String> {
@@ -5011,7 +5438,7 @@ fn cooking_download_chunk(entry: &CookingEntry, start: u64, chunk_bytes: u64) ->
         }
     } else {
         return Err(
-            "Download Cooking requires a direct:<message_id> locator. Legacy 001BeatGaler media access is disabled."
+            "Cloud audio reference is outdated. Refresh the library and try again."
                 .to_string(),
         );
     };
@@ -5223,7 +5650,7 @@ fn cooking_handle_client(mut stream: TcpStream, manager: Arc<CookingManager>) ->
         };
         let Some(entry) = entry else { return Ok(()); };
         let Some(message_id) = direct_message_id(&entry.telegram_file_id) else {
-            return Err("Seek requires a direct:<message_id> locator; legacy 001BeatGaler media access is disabled.".to_string());
+            return Err("This cloud audio reference is outdated. Refresh the library and try playback again.".to_string());
         };
         let requested_len = end.saturating_sub(start).saturating_add(1);
         let seek_path = entry.part_path.with_extension(format!("seek-{}-{}", start, end));
@@ -5468,7 +5895,7 @@ pub fn upload_project_to_telegram(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
 
@@ -5484,6 +5911,11 @@ pub fn upload_project_to_telegram(
     } else {
         build_project_archive_if_needed(&beat, &state.data_dir)?
     };
+    if !generated_archive {
+        // If Open Project created an editable extracted tree, package the user's
+        // latest DAW saves back into PROJECT.zip immediately before upload.
+        let _ = repack_project_edit_copy_if_present(&beat, &zip_path)?;
+    }
     if !project_zip_is_valid(&zip_path) {
         if generated_archive { let _ = std::fs::remove_file(&zip_path); }
         return Err("PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.ptx/.ptf).".to_string());
@@ -5522,7 +5954,7 @@ pub fn upload_project_to_telegram(
         Some(parts) if !parts.is_empty() => parts,
         _ => {
             if generated_archive { let _ = std::fs::remove_file(&zip_path); }
-            return Err("Telegram did not return any project files.".to_string());
+            return Err("Galer Storage did not return any project files.".to_string());
         }
     };
     let part_count = parts.len();
@@ -5530,7 +5962,7 @@ pub fn upload_project_to_telegram(
     // not stale BeatMeta flags. This matters when a beat was created from audio
     // first and an FLP/ALS was added later.
     let (archive_has_flp, archive_has_als) = project_zip_capabilities(&zip_path);
-    let archive_openable = archive_has_flp || archive_has_als;
+    let archive_openable = project_zip_is_openable(&zip_path);
     if let Some(obj) = response.as_object_mut() {
         obj.insert("openable".to_string(), Value::Bool(archive_openable));
         obj.insert("has_flp".to_string(), Value::Bool(archive_has_flp));
@@ -5594,7 +6026,7 @@ fn download_project_parts_parallel(
             let file_id = parts[i]
                 .get("telegram_file_id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| format!("Project part {} has no Telegram file_id.", i + 1))?
+                .ok_or_else(|| format!("Project part {} has no cloud file reference.", i + 1))?
                 .to_string();
             let uid = user_id.to_string();
             let part_path = part_dir.join(format!("part-{:05}.bin", i + 1));
@@ -5652,7 +6084,7 @@ pub fn download_cloud_file_to_cache(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
 
@@ -5836,12 +6268,16 @@ fn detect_fl_studio_path(data_dir: &Path) -> Result<PathBuf, String> {
 fn open_path_as_fl_project(path: &Path, data_dir: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let fl = detect_fl_studio_path(data_dir)?;
-        std::process::Command::new(&fl)
-            .arg(path)
-            .spawn()
-            .map_err(|e| format!("Could not launch FL Studio at {}: {}", fl.display(), e))?;
-        return Ok(());
+        let is_flp = path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("flp")).unwrap_or(false);
+        if is_flp {
+            let fl = detect_fl_studio_path(data_dir)?;
+            std::process::Command::new(&fl)
+                .arg(path)
+                .spawn()
+                .map_err(|e| format!("Could not launch FL Studio at {}: {}", fl.display(), e))?;
+            return Ok(());
+        }
+        return open_project_file(path.to_string_lossy().to_string());
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -5861,13 +6297,15 @@ pub fn open_beat_project(
     // returns a durable saved Offline PROJECT immediately when one exists, and
     // only reaches the network when no local PROJECT is available.
 
-    // Stable TEMP/durable working copy: FL Studio can save back into this ZIP.
-    // BeatGaler does not watch it; the user explicitly chooses Update Project.
+    // Stable TEMP edit tree: BeatGaler safely extracts PROJECT.zip, opens the
+    // actual DAW project inside it, and repacks saved edits only when the user
+    // explicitly chooses Update Project.
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let archive_path = ensure_project_working_copy(&beat, &state, &conn)?;
     drop(conn);
 
-    open_path_as_fl_project(&archive_path, &state.data_dir)
+    let project_path = prepare_project_edit_copy(&beat, &archive_path)?;
+    open_path_as_fl_project(&project_path, &state.data_dir)
 }
 
 #[tauri::command]
@@ -5879,7 +6317,7 @@ pub fn download_project_to_cache(
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
 
@@ -5934,6 +6372,9 @@ pub fn update_project_archive_from_source(
     };
 
     mutate_project_zip(&workspace, &source, &kind)?;
+    // An explicit dropped replacement becomes the new archive authority. Any
+    // older extracted edit tree must not overwrite it on the next upload.
+    invalidate_project_edit_copy(&beat);
     if !project_zip_is_valid(&workspace) {
         return Err("PROJECT zip is invalid: no supported project file was found after the update.".to_string());
     }
@@ -6111,11 +6552,11 @@ fn ensure_master_export_cache(
 
     let telegram_file_id = beat.telegram_file_id.clone()
         .filter(|v| !v.trim().is_empty())
-        .ok_or_else(|| "MP3 MASTER is not available in Telegram Cloud.".to_string())?;
+        .ok_or_else(|| "MP3 MASTER is not available in Galer Cloud.".to_string())?;
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
-            return Err("Telegram is not connected. Connect it in Settings first.".to_string());
+            return Err("Galer Cloud is not connected. Connect it in Settings first.".to_string());
         }
     }
     let user_id = ensure_beatgaler_user_id(state)?;
@@ -7747,11 +8188,25 @@ pub fn canonical_filename(clean_name: &str, bpm: &str, key: &str, ext: &str) -> 
 }
 
 fn normalized_beat_name_key(name: &str) -> String {
-    name.split_whitespace()
+    // Finder/APFS can surface canonically equivalent Unicode using a different
+    // scalar representation than Windows. Normalize identity comparisons to NFC
+    // so e.g. "Canción" and "Cancio\u{301}n" cannot become two cloud beats.
+    let nfc = name.nfc().collect::<String>();
+    nfc.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
         .to_lowercase()
+}
+
+fn normalized_beat_display_name(name: &str) -> String {
+    name.nfc()
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn ensure_unique_beat_name(_conn: &Connection, beat: &BeatMeta) -> rusqlite::Result<()> {
@@ -7950,8 +8405,9 @@ fn db_load_all(conn: &Connection) -> rusqlite::Result<Vec<DbBeat>> {
 /// catches additions/removals, renames and edits to existing audio files.
 fn folder_signature(folder: &Path) -> Result<String, String> {
     let mut entries: Vec<String> = Vec::new();
-    for entry in WalkDir::new(folder) {
+    for entry in WalkDir::new(folder).follow_links(false) {
         let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().is_symlink() { continue; }
         let path = entry.path();
         if path == folder { continue; }
         let rel = path.strip_prefix(folder).unwrap_or(path).to_string_lossy();
@@ -8509,7 +8965,9 @@ fn scan_folder_structured(folder: &Path) -> FolderFiles {
 
     if let Ok(rd) = folder.read_dir() {
         for e in rd.flatten() {
-            let meta = e.metadata().unwrap_or_else(|_| e.path().metadata().unwrap());
+            let Ok(file_type) = e.file_type() else { continue; };
+            if file_type.is_symlink() { continue; }
+            let Ok(meta) = e.metadata() else { continue; };
             let p = e.path();
 
             // Stems folder detection (directory named with "stem")
@@ -9925,7 +10383,7 @@ fn purge_trash_now_blocking(state: &DbState, settings: &SettingsState) -> Result
         ));
         std::thread::sleep(Duration::from_millis(300));
         queue_topics().map_err(|second_error| format!(
-            "The Telegram index was updated, but BeatGaler could not queue Topic cleanup. Retry Empty Trash. First error: {}. Retry error: {}",
+            "The Galer Library index was updated, but BeatGaler could not queue storage cleanup. Retry Empty Trash. First error: {}. Retry error: {}",
             first_error, second_error
         ))?;
     }
@@ -9944,7 +10402,7 @@ fn purge_trash_now_blocking(state: &DbState, settings: &SettingsState) -> Result
     }
 
     log_info(&settings.data_dir, &format!(
-        "Queued {} Cloud trash item(s) for permanent delete; Telegram Topic cleanup continues in background",
+        "Queued {} Cloud trash item(s) for permanent delete; Galer Storage cleanup continues in background",
         accepted_ids.len()
     ));
     Ok(purged)
@@ -10592,7 +11050,8 @@ fn render_upload_video(data_dir: &Path, payload: &YouTubeUploadPayload) -> Resul
 		]);
     }
 
-    let status = Command::new("ffmpeg")
+    let ffmpeg = beatgaler_ffmpeg_program()?;
+    let status = Command::new(&ffmpeg)
         .args(&args)
         .status()
         .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
@@ -10675,7 +11134,8 @@ fn render_upload_video_cancellable(
         return Err("CANCELLED".to_string());
     }
 
-    let mut child = Command::new("ffmpeg")
+    let ffmpeg = beatgaler_ffmpeg_program()?;
+    let mut child = Command::new(&ffmpeg)
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
@@ -11109,10 +11569,11 @@ fn next_import_display_name(
     // SQLite or local Trash is allowed to participate in cloud name ownership.
     // We only add names chosen during THIS import batch so two beats in the same
     // transaction cannot receive the same name before Telegram is updated.
-    let base_key = normalized_beat_name_key(base);
+    let base = normalized_beat_display_name(base);
+    let base_key = normalized_beat_name_key(&base);
     if !reserved_names.contains(&base_key) {
         reserved_names.insert(base_key);
-        return Ok(base.to_string());
+        return Ok(base);
     }
 
     for n in 2..10000 {
@@ -11132,26 +11593,27 @@ fn final_cloud_display_name_after_review(
     beat_id: &str,
     requested_name: &str,
 ) -> Result<String, String> {
-    let requested = requested_name.trim();
+    let requested = normalized_beat_display_name(requested_name);
     if requested.is_empty() {
         return Err("Beat name cannot be empty.".to_string());
     }
 
     let reserved = telegram_authoritative_name_keys_excluding_beat(state, beat_id)?;
-    if reserved.contains(&normalized_beat_name_key(requested)) {
+    if reserved.contains(&normalized_beat_name_key(&requested)) {
         return Err(format!(
             "A beat named '{}' already exists. Change the beat name before continuing.",
             requested
         ));
     }
 
-    Ok(requested.to_string())
+    Ok(requested)
 }
 
 fn copy_import_tree_without_backups(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
 
     for entry in WalkDir::new(src).min_depth(1).into_iter().filter_map(Result::ok) {
+        if entry.file_type().is_symlink() { continue; }
         let path = entry.path();
         let rel = path.strip_prefix(src).map_err(|e| e.to_string())?;
 
@@ -11326,6 +11788,7 @@ fn merge_tree_into_existing_beat(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
 
     for entry in WalkDir::new(src).min_depth(1).into_iter().filter_map(Result::ok) {
+        if entry.file_type().is_symlink() { continue; }
         let path = entry.path();
         let rel = path.strip_prefix(src).map_err(|e| e.to_string())?;
 
@@ -11931,7 +12394,7 @@ pub fn preview_import_batch(
 
     for root in &root_paths {
         let root_path = PathBuf::from(root);
-        if !root_path.exists() { continue; }
+        if !root_path.exists() || path_is_symbolic_link(&root_path) { continue; }
 
         if root_path.is_file() {
             if is_audio_file(&root_path) {
@@ -11949,6 +12412,7 @@ pub fn preview_import_batch(
             .min_depth(1)
             .into_iter()
             .filter_entry(|entry| {
+                if entry.file_type().is_symlink() { return false; }
                 if !entry.file_type().is_dir() { return true; }
                 let name = entry.file_name().to_string_lossy();
                 !is_auxiliary_import_dir(&name)
@@ -11956,6 +12420,7 @@ pub fn preview_import_batch(
 
         for entry in walker {
             let entry = entry.map_err(|e| e.to_string())?;
+            if entry.file_type().is_symlink() { continue; }
             let p = entry.path().to_path_buf();
             if entry.file_type().is_dir() { continue; }
             if path_is_inside_auxiliary_dir(&p, &root_path) { continue; }
@@ -12953,14 +13418,61 @@ mod import_core_unit_tests {
 #[cfg(test)]
 mod project_zip_unit_tests {
     use super::{
+        extract_project_zip_to_directory,
+        filtered_project_zip_for_upload,
+        find_openable_project_in_directory,
         inspect_project_zip_entries,
         is_forbidden_project_component,
         is_recognized_project_extension,
+        mutate_project_zip,
+        project_zip_entry_names,
+        project_zip_is_openable,
         validate_project_zip_entry_names,
+        write_project_directory_zip,
     };
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempProjectTree { root: PathBuf }
+    impl TempProjectTree {
+        fn new(label: &str) -> Self {
+            let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+            let root = std::env::temp_dir().join(format!("beatgaler-project-test-{}-{}-{}", label, std::process::id(), stamp));
+            std::fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+        fn path(&self, rel: &str) -> PathBuf { self.root.join(rel) }
+        fn file(&self, rel: &str, bytes: &[u8]) -> PathBuf {
+            let path = self.path(rel);
+            if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).unwrap(); }
+            std::fs::write(&path, bytes).unwrap();
+            path
+        }
+        fn dir(&self, rel: &str) -> PathBuf {
+            let path = self.path(rel);
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        }
+    }
+    impl Drop for TempProjectTree {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); }
+    }
 
     fn entries(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    fn create_zip(path: &Path, values: &[(&str, &[u8])]) {
+        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).unwrap(); }
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in values {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
     }
 
     #[test]
@@ -13058,6 +13570,127 @@ mod project_zip_unit_tests {
     #[test]
     fn empty_zip_entry_list_is_rejected() {
         assert!(validate_project_zip_entry_names(&[]).is_err());
+    }
+
+    #[test]
+    fn rust_project_zip_mutation_replaces_primary_project_without_touching_assets() {
+        let tree = TempProjectTree::new("replace-project");
+        let archive = tree.path("Beat.zip");
+        create_zip(&archive, &[
+            ("Old.flp", b"old-project"),
+            ("Samples/kick.wav", b"kick"),
+            ("Audio/render.wav", b"render"),
+        ]);
+        let new_project = tree.file("New.flp", b"new-project");
+
+        mutate_project_zip(&archive, &new_project, "projectfile").unwrap();
+        let names = project_zip_entry_names(&archive).unwrap();
+        assert!(names.iter().any(|name| name == "New.flp"));
+        assert!(!names.iter().any(|name| name == "Old.flp"));
+        assert!(names.iter().any(|name| name == "Samples/kick.wav"));
+        assert!(names.iter().any(|name| name == "Audio/render.wav"));
+    }
+
+    #[test]
+    fn rust_project_zip_mutation_replaces_samples_tree_only() {
+        let tree = TempProjectTree::new("replace-samples");
+        let archive = tree.path("Beat.zip");
+        create_zip(&archive, &[
+            ("Beat.als", b"project"),
+            ("Samples/old.wav", b"old"),
+            ("Audio/render.wav", b"render"),
+        ]);
+        let samples = tree.dir("FreshSamples");
+        tree.file("FreshSamples/new.wav", b"new");
+        tree.file("FreshSamples/nested/snare.wav", b"snare");
+        tree.file("FreshSamples/Backup/should-not-upload.wav", b"backup");
+
+        mutate_project_zip(&archive, &samples, "samples").unwrap();
+        let names = project_zip_entry_names(&archive).unwrap();
+        assert!(names.iter().any(|name| name == "Beat.als"));
+        assert!(names.iter().any(|name| name == "Audio/render.wav"));
+        assert!(names.iter().any(|name| name == "Samples/new.wav"));
+        assert!(names.iter().any(|name| name == "Samples/nested/snare.wav"));
+        assert!(!names.iter().any(|name| name == "Samples/old.wav"));
+        assert!(!names.iter().any(|name| name.to_ascii_lowercase().contains("backup")));
+    }
+
+    #[test]
+    fn rust_project_zip_mutation_supports_logicx_package_directories() {
+        let tree = TempProjectTree::new("logicx");
+        let archive = tree.path("Logic Beat.zip");
+        let logicx = tree.dir("Logic Beat.logicx");
+        tree.file("Logic Beat.logicx/ProjectData", b"logic-project-data");
+        tree.file("Logic Beat.logicx/Media/Audio Files/kick.wav", b"kick");
+        tree.file("Logic Beat.logicx/Backup/old-version", b"old");
+
+        mutate_project_zip(&archive, &logicx, "projectfile").unwrap();
+        let names = project_zip_entry_names(&archive).unwrap();
+        assert!(names.iter().any(|name| name == "Logic Beat.logicx/ProjectData"));
+        assert!(names.iter().any(|name| name == "Logic Beat.logicx/Media/Audio Files/kick.wav"));
+        assert!(!names.iter().any(|name| name.to_ascii_lowercase().contains("/backup/")));
+        let (_, project_count, _, _) = inspect_project_zip_entries(&names);
+        assert!(project_count > 0);
+    }
+
+
+
+    #[test]
+    fn logic_and_pro_tools_projects_are_marked_openable_without_flp_or_als() {
+        let tree = TempProjectTree::new("openable-formats");
+        for (name, payload) in [("Logic.logicx/ProjectData", b"logic".as_slice()), ("ProTools.ptx", b"ptx".as_slice())] {
+            let archive = tree.path(&format!("{}.zip", name.replace('/', "_")));
+            create_zip(&archive, &[(name, payload)]);
+            assert!(project_zip_is_openable(&archive), "expected openable project: {name}");
+        }
+    }
+
+    #[test]
+    fn project_open_edit_repack_cycle_is_cross_platform_for_logicx_and_special_paths() {
+        let tree = TempProjectTree::new("open-edit-repack");
+        let source = tree.dir("Canción #1 & 50% PROJECT");
+        tree.file("Canción #1 & 50% PROJECT/Canción.logicx/ProjectData", b"version-one");
+        tree.file("Canción #1 & 50% PROJECT/Canción.logicx/Media/Audio Files/kick #1.wav", b"kick");
+        tree.file("Canción #1 & 50% PROJECT/Backup/old.logicx/ProjectData", b"old");
+        let archive = tree.path("Output #1 & 50%.zip");
+
+        write_project_directory_zip(&source, &archive).unwrap();
+        let first_names = project_zip_entry_names(&archive).unwrap();
+        assert!(first_names.iter().any(|name| name == "Canción.logicx/ProjectData"));
+        assert!(first_names.iter().any(|name| name.contains("kick #1.wav")));
+        assert!(!first_names.iter().any(|name| name.to_ascii_lowercase().contains("backup")));
+
+        let edit = tree.path("Edit Folder # & %");
+        extract_project_zip_to_directory(&archive, &edit).unwrap();
+        let project = find_openable_project_in_directory(&edit, "Canción").expect("Logic package should be openable");
+        assert!(project.is_dir());
+        assert_eq!(project.extension().and_then(|value| value.to_str()), Some("logicx"));
+
+        std::fs::write(project.join("ProjectData"), b"version-two").unwrap();
+        write_project_directory_zip(&edit, &archive).unwrap();
+
+        let verify = tree.path("Verify");
+        extract_project_zip_to_directory(&archive, &verify).unwrap();
+        assert_eq!(std::fs::read(verify.join("Canción.logicx/ProjectData")).unwrap(), b"version-two");
+    }
+
+    #[test]
+    fn upload_filter_removes_backup_tree_and_keeps_primary_project() {
+        let tree = TempProjectTree::new("filter-backup");
+        let archive = tree.path("Beat.zip");
+        create_zip(&archive, &[
+            ("Beat.flp", b"project"),
+            ("Samples/kick.wav", b"kick"),
+            ("Backup/old.flp", b"old"),
+            ("Backups/older.flp", b"older"),
+        ]);
+
+        let filtered = filtered_project_zip_for_upload(&archive).unwrap().expect("backup tree should require a filtered archive");
+        let names = project_zip_entry_names(&filtered).unwrap();
+        assert!(names.iter().any(|name| name == "Beat.flp"));
+        assert!(names.iter().any(|name| name == "Samples/kick.wav"));
+        assert!(!names.iter().any(|name| name.to_ascii_lowercase().contains("backup")));
+        if let Some(parent) = filtered.parent() { let _ = std::fs::remove_dir_all(parent); }
     }
 }
 
@@ -13289,6 +13922,58 @@ mod security_filename_unit_tests {
             let safe = safe_cloud_filename(value);
             assert!(!is_windows_reserved_component(&safe), "unsafe cloud component: {safe}");
         }
+    }
+}
+
+#[cfg(test)]
+mod direct_sleep_wake_unit_tests {
+    use super::{classify_direct_begin_response, DirectBeginDisposition};
+    use serde_json::json;
+
+    #[test]
+    fn expired_operation_after_sleep_requests_session_recovery() {
+        assert_eq!(
+            classify_direct_begin_response(&json!({"expired": true})).unwrap(),
+            DirectBeginDisposition::Expired
+        );
+    }
+
+    #[test]
+    fn recovered_operation_can_continue_without_reload() {
+        assert_eq!(
+            classify_direct_begin_response(&json!({"ok": true, "operation_id": "op_after_wake"})).unwrap(),
+            DirectBeginDisposition::Ready("op_after_wake".to_string())
+        );
+    }
+
+    #[test]
+    fn transfer_backpressure_is_bounded() {
+        assert_eq!(
+            classify_direct_begin_response(&json!({"wait": true, "retry_after_ms": 99999})).unwrap(),
+            DirectBeginDisposition::Wait(1000)
+        );
+    }
+}
+
+#[cfg(test)]
+mod beat_identity_unicode_tests {
+    use super::{normalized_beat_display_name, normalized_beat_name_key};
+
+    #[test]
+    fn canonical_unicode_forms_share_one_beat_identity() {
+        let nfc = "Canción";
+        let nfd = "Cancio\u{301}n";
+        assert_eq!(normalized_beat_name_key(nfc), normalized_beat_name_key(nfd));
+        assert_eq!(normalized_beat_display_name(nfd), nfc);
+    }
+
+    #[test]
+    fn beat_identity_normalizes_unicode_case_and_spacing_without_losing_emoji() {
+        assert_eq!(
+            normalized_beat_name_key("  NIÑO   🌙  "),
+            normalized_beat_name_key("niño 🌙")
+        );
+        assert_eq!(normalized_beat_display_name("  Sueño   🔥 "), "Sueño 🔥");
     }
 }
 
