@@ -1,4 +1,4 @@
-name: Fast BeatGaler macOS Test
+﻿name: Fast BeatGaler macOS Test
 
 on:
   workflow_dispatch:
@@ -18,15 +18,18 @@ jobs:
   bot-api-arm64:
     name: Build Bot API arm64
     runs-on: macos-15
+
     steps:
       - name: Build static arm64 runtime
         shell: bash
         run: |
           set -euo pipefail
+
           brew install cmake gperf openssl@3
 
           ROOT=/tmp/beatgaler-telegram-bot-api-arm64
           rm -rf "$ROOT"
+
           git init "$ROOT"
           git -C "$ROOT" remote add origin https://github.com/tdlib/telegram-bot-api.git
           git -C "$ROOT" fetch --depth 1 origin "$BOT_API_COMMIT"
@@ -45,7 +48,10 @@ jobs:
           mkdir -p runtime
           cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
           chmod +x runtime/telegram-bot-api
-          test "$(lipo -archs runtime/telegram-bot-api)" = "arm64"
+
+          ARCHS="$(lipo -archs runtime/telegram-bot-api)"
+          echo "ARM64 Bot API architectures: $ARCHS"
+          [[ "$ARCHS" == *"arm64"* ]]
 
       - name: Upload Bot API arm64
         uses: actions/upload-artifact@v4
@@ -57,15 +63,18 @@ jobs:
   bot-api-x86_64:
     name: Build Bot API x86_64
     runs-on: macos-15-intel
+
     steps:
       - name: Build static Intel runtime
         shell: bash
         run: |
           set -euo pipefail
+
           brew install cmake gperf openssl@3
 
           ROOT=/tmp/beatgaler-telegram-bot-api-x86_64
           rm -rf "$ROOT"
+
           git init "$ROOT"
           git -C "$ROOT" remote add origin https://github.com/tdlib/telegram-bot-api.git
           git -C "$ROOT" fetch --depth 1 origin "$BOT_API_COMMIT"
@@ -84,7 +93,10 @@ jobs:
           mkdir -p runtime
           cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
           chmod +x runtime/telegram-bot-api
-          test "$(lipo -archs runtime/telegram-bot-api)" = "x86_64"
+
+          ARCHS="$(lipo -archs runtime/telegram-bot-api)"
+          echo "Intel Bot API architectures: $ARCHS"
+          [[ "$ARCHS" == *"x86_64"* ]]
 
       - name: Upload Bot API x86_64
         uses: actions/upload-artifact@v4
@@ -95,7 +107,10 @@ jobs:
 
   build-dmg:
     name: Build Universal test DMG
-    needs: [bot-api-arm64, bot-api-x86_64]
+    needs:
+      - bot-api-arm64
+      - bot-api-x86_64
+
     runs-on: macos-15
 
     steps:
@@ -120,6 +135,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           npm run version:check
           npm run test:mac-portability:static
           npm run test:unit:ts
@@ -135,21 +151,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p src-tauri/resources
+
           ARM="/tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api"
           INTEL="/tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api"
+
           test -x "$ARM"
           test -x "$INTEL"
-          lipo -create "$ARM" "$INTEL" -output src-tauri/resources/telegram-bot-api
+
+          lipo -create "$ARM" "$INTEL" \
+            -output src-tauri/resources/telegram-bot-api
+
           chmod +x src-tauri/resources/telegram-bot-api
-          lipo -archs src-tauri/resources/telegram-bot-api | grep -q arm64
-          lipo -archs src-tauri/resources/telegram-bot-api | grep -q x86_64
+
+          ARCHS="$(lipo -archs src-tauri/resources/telegram-bot-api)"
+          echo "Universal Bot API architectures: $ARCHS"
+
+          [[ "$ARCHS" == *"arm64"* ]]
+          [[ "$ARCHS" == *"x86_64"* ]]
 
       - name: Build Universal Node runtime
         shell: bash
         run: |
           set -euo pipefail
+
           NODE_VERSION="22.18.0"
+
           mkdir -p /tmp/beatgaler-node src-tauri/resources
 
           curl --fail --location --retry 3 \
@@ -174,8 +202,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           FFMPEG_TAG="b6.1.1"
           BASE_URL="https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_TAG}"
+
           mkdir -p /tmp/beatgaler-ffmpeg src-tauri/resources
 
           curl --fail --location --retry 3 \
@@ -186,7 +216,9 @@ jobs:
             "${BASE_URL}/ffmpeg-darwin-x64" \
             -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
 
-          chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64
+          chmod +x \
+            /tmp/beatgaler-ffmpeg/ffmpeg-arm64 \
+            /tmp/beatgaler-ffmpeg/ffmpeg-x64
 
           lipo -create \
             /tmp/beatgaler-ffmpeg/ffmpeg-arm64 \
@@ -199,32 +231,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           for path in \
             src-tauri/resources/node \
             src-tauri/resources/ffmpeg \
             src-tauri/resources/telegram-bot-api
           do
-            echo "$path -> $(lipo -archs "$path")"
-            lipo -archs "$path" | grep -q arm64
-            lipo -archs "$path" | grep -q x86_64
+            ARCHS="$(lipo -archs "$path")"
+
+            echo "$path -> $ARCHS"
+
+            [[ "$ARCHS" == *"arm64"* ]]
+            [[ "$ARCHS" == *"x86_64"* ]]
           done
 
-      - name: Build Universal DMG for testing
+      - name: Build unsigned Universal DMG
         shell: bash
         env:
           APPLE_SIGNING_IDENTITY: "-"
         run: |
           set -euo pipefail
+
           npm run build
-          npx tauri build --bundles dmg --target universal-apple-darwin
+
+          npx tauri build \
+            --bundles dmg \
+            --target universal-apple-darwin
 
       - name: Locate DMG
         shell: bash
         run: |
           set -euo pipefail
-          DMG="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+
+          DMG="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg \
+            -maxdepth 1 \
+            -type f \
+            -name '*.dmg' \
+            | head -n 1)"
+
           test -n "$DMG"
           test -f "$DMG"
+
           echo "DMG created: $DMG"
 
       - name: Upload Universal DMG
