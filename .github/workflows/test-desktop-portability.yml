@@ -1,4 +1,4 @@
-name: BeatGaler macOS Portability Gate
+name: Test - Desktop Portability
 
 on:
   pull_request:

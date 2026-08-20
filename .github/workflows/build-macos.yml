@@ -1,31 +1,16 @@
-name: Release BeatGaler macOS
+name: Build - macOS
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Release tag, e.g. v0.8.0"
-        required: true
-        type: string
-      release_notes:
-        description: "Short release notes"
-        required: false
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: beatgaler-public-release-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  group: build-macos-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  PUBLIC_RELEASE_REPO: magosouljah/galer
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-  PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
   BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
   MACOSX_DEPLOYMENT_TARGET: "12.0"
   BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
@@ -133,7 +118,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "GitHub ref: $GITHUB_REF"
-          echo "Release tag: $RELEASE_TAG"
           git log -1 --oneline
           git rev-parse HEAD
 
@@ -178,13 +162,8 @@ jobs:
           npm run test:mac-portability:static
           npm run test:unit:ts
           npm run test:regressions
-          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
-          if [ "v${VERSION_VALUE}" != "$RELEASE_TAG" ]; then
-            echo "::error::VERSION (${VERSION_VALUE}) does not match release tag (${RELEASE_TAG})."
-            exit 1
-          fi
 
-      - name: Require public release, updater, and Apple signing secrets
+      - name: Require updater and Apple signing secrets
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -192,7 +171,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          for name in PUBLIC_RELEASE_TOKEN TAURI_SIGNING_PRIVATE_KEY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD; do
+          for name in TAURI_SIGNING_PRIVATE_KEY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD; do
             if [ -z "${!name:-}" ]; then
               echo "::error::$name GitHub secret is missing. Public Mac releases must be signed/notarized; use Fast BeatGaler macOS Test for ad-hoc testing."
               exit 1
@@ -387,72 +366,16 @@ jobs:
           test -n "$UPDATER_PATH" && test -f "$UPDATER_PATH"
           test -s "${UPDATER_PATH}.sig"
 
-      - name: Create or find public GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          NOTES="${{ inputs.release_notes }}"
-          if [ -z "$NOTES" ]; then NOTES="Beat Galer ${RELEASE_TAG}"; fi
-          if ! gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" --target main --title "Beat Galer $RELEASE_TAG" --notes "$NOTES"
-          fi
-
-      - name: Prepare DMG, updater bundle, and merged latest.json
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
-          ROOT="src-tauri/target/universal-apple-darwin/release/bundle"
-          SOURCE_DMG="$(find "$ROOT/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
-          SOURCE_UPDATER="$(find "$ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1)"
-          SOURCE_SIG="${SOURCE_UPDATER}.sig"
-          test -f "$SOURCE_DMG" && test -f "$SOURCE_UPDATER" && test -s "$SOURCE_SIG"
-
-          mkdir -p release-assets release-existing
-          DMG_NAME="Beat.Galer_${VERSION_VALUE}_universal.dmg"
-          UPDATER_NAME="Beat.Galer_${VERSION_VALUE}_universal.app.tar.gz"
-          cp "$SOURCE_DMG" "release-assets/$DMG_NAME"
-          cp "$SOURCE_UPDATER" "release-assets/$UPDATER_NAME"
-          cp "$SOURCE_SIG" "release-assets/$UPDATER_NAME.sig"
-
-          if gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
-            gh release download "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" --pattern latest.json --dir release-existing --clobber >/dev/null 2>&1 || true
-          fi
-
-          URL="https://github.com/$PUBLIC_RELEASE_REPO/releases/download/$RELEASE_TAG/$UPDATER_NAME"
-          node scripts/updater-manifest.mjs generate \
-            --version "$VERSION_VALUE" --platform darwin-aarch64 \
-            --artifact "release-assets/$UPDATER_NAME" --signature "release-assets/$UPDATER_NAME.sig" \
-            --url "$URL" --output release-assets/latest-arm.json --notes "Beat Galer $VERSION_VALUE" \
-            --merge-existing release-existing/latest.json
-          node scripts/updater-manifest.mjs generate \
-            --version "$VERSION_VALUE" --platform darwin-x86_64 \
-            --artifact "release-assets/$UPDATER_NAME" --signature "release-assets/$UPDATER_NAME.sig" \
-            --url "$URL" --output release-assets/latest.json --notes "Beat Galer $VERSION_VALUE" \
-            --merge-existing release-assets/latest-arm.json
-          rm release-assets/latest-arm.json
-          node scripts/updater-manifest.mjs validate-release release-assets/latest.json
-
-      - name: Upload public macOS release assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh release upload "$RELEASE_TAG" release-assets/*.dmg release-assets/*.app.tar.gz release-assets/*.app.tar.gz.sig release-assets/latest.json \
-            --repo "$PUBLIC_RELEASE_REPO" --clobber
-
-      - name: Upload macOS release as private workflow artifact
+      - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
           name: BeatGaler-macOS-Universal
           path: |
-            release-assets/*.dmg
-            release-assets/*.app.tar.gz
-            release-assets/*.app.tar.gz.sig
-            release-assets/latest.json
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            VERSION
           if-no-files-found: error
+
+
+

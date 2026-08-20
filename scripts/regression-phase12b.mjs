@@ -21,14 +21,18 @@ const verifier = read("scripts/verify-updater-artifacts.mjs");
 if (!verifier.includes("No .sig updater signatures found")) fail("Release artifact verifier no longer requires signatures.");
 if (!verifier.includes("fs.existsSync(`${file}.sig`)")) fail("Release artifact verifier no longer pairs artifacts with signatures.");
 
-const workflow = read(".github/workflows/release-windows-updater.yml");
-if (!workflow.includes("TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}")) fail("Release workflow does not source private key from GitHub Secrets.");
-if (workflow.includes("BEGIN PRIVATE KEY") || workflow.includes("untrusted comment: minisign secret key")) fail("Private signing key material was embedded in workflow source.");
-if (!workflow.includes("npm run updater:verify-artifacts")) fail("Release workflow does not verify .sig output.");
-if (!workflow.includes("latest.json")) fail("Release workflow does not publish a static updater manifest.");
-if (!workflow.includes("PUBLIC_RELEASE_REPO: magosouljah/galer")) fail("Release workflow is no longer bound to the public release repository.");
-if (!workflow.includes("PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}")) fail("Release workflow no longer authenticates cross-repository publishing through the dedicated secret.");
-if (!workflow.includes("GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}")) fail("Public GitHub Release publishing no longer uses the dedicated cross-repository token.");
-if (!workflow.includes("permissions:\n  contents: read")) fail("Private source workflow must keep its own repository permissions read-only.");
+const windowsBuild = read(".github/workflows/build-windows.yml");
+const macBuild = read(".github/workflows/build-macos.yml");
+const releaseWorkflow = read(".github/workflows/release-desktop-updater.yml");
+if (!windowsBuild.includes("TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}")) fail("Windows Build does not source the updater private key from GitHub Secrets.");
+if (!macBuild.includes("TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}")) fail("macOS Build does not source the updater private key from GitHub Secrets.");
+if ([windowsBuild, macBuild, releaseWorkflow].some(source => source.includes("BEGIN PRIVATE KEY") || source.includes("untrusted comment: minisign secret key"))) fail("Private signing key material was embedded in workflow source.");
+if (!windowsBuild.includes("npm run updater:verify-artifacts")) fail("Windows Build does not verify signed updater artifacts.");
+if (!releaseWorkflow.includes("Download Windows build") || !releaseWorkflow.includes("BeatGaler-Windows-x64")) fail("Desktop Release no longer consumes the prebuilt Windows artifact.");
+if (!releaseWorkflow.includes("Download macOS build") || !releaseWorkflow.includes("BeatGaler-macOS-Universal")) fail("Desktop Release no longer consumes the prebuilt macOS artifact.");
+if (!releaseWorkflow.includes("latest.json")) fail("Desktop Release does not publish a static updater manifest.");
+if (!releaseWorkflow.includes("PUBLIC_RELEASE_REPO: magosouljah/galer")) fail("Desktop Release is no longer bound to the public release repository.");
+if (!releaseWorkflow.includes("GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}")) fail("Public GitHub Release publishing no longer uses the dedicated cross-repository token.");
+if (!releaseWorkflow.includes("contents: read") || !releaseWorkflow.includes("actions: read")) fail("Desktop Release must keep source contents read-only while allowing artifact reads.");
 
-console.log("PASS Phase 12B updater signing pipeline: updater artifacts are enabled, keys stay outside repo, CI uses secrets, signatures are verified, and latest.json is published to the dedicated public release repository");
+console.log("PASS Phase 12B updater signing pipeline: signed Windows/macOS builds stay separate from publishing, release consumes verified artifacts, and latest.json is published to the dedicated public release repository");

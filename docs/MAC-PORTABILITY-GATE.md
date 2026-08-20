@@ -28,17 +28,17 @@ The first Cargo run after a dependency change may update `src-tauri/Cargo.lock`.
 
 ## Level B — hosted native macOS CI
 
-`.github/workflows/test-macos-portability.yml` repeats the gate on hosted native macOS runners for both Apple Silicon and Intel.
+`.github/workflows/test-desktop-portability.yml` repeats the gate on hosted native macOS runners for both Apple Silicon and Intel.
 
 The native jobs use the committed lockfile (`cargo test --locked`). This means CI refuses to silently resolve a different Rust dependency graph from the one tested on Windows.
 
-The public Fast ARM64 and Universal release workflows additionally test the real embedded Mach-O runtimes. They verify:
+`Build - macOS` additionally tests the real embedded Universal Mach-O runtimes before uploading the private build artifact. It verifies:
 
 - CPU architecture.
 - Minimum supported macOS version.
 - FFmpeg, Node, and the local data-plane runtime only link to Apple system dylibs.
 - Nested executable signatures.
-- Final app signature; public Universal release also checks notarization/stapling.
+- Final app signature, notarization, and stapling.
 
 ## Level C — physical Mac acceptance only
 
@@ -53,6 +53,8 @@ A physical Mac is still required for behavior that depends on Finder/macOS UI or
 
 These are acceptance tests, not the first place BeatGaler should discover ordinary portability bugs.
 
+`Release - Desktop Updater` does not rebuild the application. It publishes the already-verified Windows and macOS artifacts selected by workflow run ID and produces the shared `latest.json`.
+
 ## Release rule
 
 A macOS DMG must not be published unless:
@@ -60,5 +62,6 @@ A macOS DMG must not be published unless:
 1. Level A passes.
 2. `src-tauri/Cargo.lock` has no uncommitted changes.
 3. Level B passes on both architectures.
-4. The actual Fast/Universal build workflow passes its runtime/signing checks.
+4. `Build - macOS` passes its Universal runtime, signing, and notarization checks.
 5. Level C has passed for the release candidate.
+
