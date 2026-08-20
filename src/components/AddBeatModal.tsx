@@ -17,6 +17,7 @@ import {
   type ImportBatchPreview,
 } from "../lib/tauri";
 import ImportDecisionsModal from "./ImportDecisionsModal";
+import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 
 interface Props {
   onClose: () => void;
@@ -449,7 +450,7 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 </div>
               </button>
 
-              {error && <div style={{ padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5" }}>{error}</div>}
+              {error && <div style={{ padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5" }}>{sanitizeUserVisibleText(error)}</div>}
             </div>
           )}
 
@@ -477,7 +478,7 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
                 onChange={v => setResolving(r => ({ ...r, stems_path: v }))} />
               <FilePicker label="FLP / PROJECT" options={conflict.flp_files} value={resolving.flp_path}
                 onChange={v => setResolving(r => ({ ...r, flp_path: v }))} />
-              {error && <div style={{ padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5", marginBottom: 12 }}>{error}</div>}
+              {error && <div style={{ padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5", marginBottom: 12 }}>{sanitizeUserVisibleText(error)}</div>}
               <button onClick={handleResolve} disabled={!resolving.mp3_path}
                 style={{ width: "100%", padding: "11px", background: resolving.mp3_path ? "#fff" : "#1e1e1e", border: "none", borderRadius: 8, color: resolving.mp3_path ? "#000" : "#3a3a3a", fontWeight: 500, fontSize: 14, cursor: resolving.mp3_path ? "pointer" : "not-allowed" }}>
                 Add beat

@@ -1907,7 +1907,7 @@ app.post("/transport/session/start", async (req, res) => {
     res.json(session);
   } catch (error) {
     console.error("[direct] session start failed:", error?.message || error);
-    res.status(503).json({ error: `BeatGaler Direct session unavailable: ${error?.message || error}` });
+    res.status(503).json({ error: "Galer Cloud session unavailable. Please try again." });
   }
 });
 
@@ -1923,7 +1923,7 @@ app.post("/transport/session/activate", async (req, res) => {
     }));
   } catch (error) {
     console.error("[direct] session activation failed:", error?.message || error);
-    res.status(409).json({ error: `Could not activate the assigned transport bot: ${error?.message || error}` });
+    res.status(409).json({ error: "Galer Cloud could not activate this storage session. Please try again." });
   }
 });
 
@@ -1940,7 +1940,7 @@ app.post("/transport/session/heartbeat", async (req, res) => {
     }));
   } catch (error) {
     console.error("[direct] heartbeat failed:", error?.message || error);
-    res.status(500).json({ error: "Direct heartbeat failed." });
+    res.status(500).json({ error: "Cloud session heartbeat failed." });
   }
 });
 
@@ -1958,7 +1958,7 @@ app.post("/transport/session/stop", async (req, res) => {
     }));
   } catch (error) {
     console.error("[direct] session release failed:", error?.message || error);
-    res.status(500).json({ error: "BeatGaler Direct cleanup is pending." });
+    res.status(500).json({ error: "BeatGaler Cloud cleanup is pending." });
   }
 });
 
@@ -1983,7 +1983,7 @@ app.post("/transport/operation/begin", async (req, res) => {
     if (message.includes("transport pool lock")) {
       return res.json({ ok: false, wait: true, retry_after_ms: 250, reason: "pool_lock_busy" });
     }
-    res.status(500).json({ error: `Could not reserve the transport operation: ${message || "unknown error"}` });
+    res.status(500).json({ error: "Galer Storage operation unavailable. Please try again." });
   }
 });
 
@@ -2403,13 +2403,13 @@ async function recoverLibraryIndexFromBackups(account, pinned) {
 app.post("/library/upsert", upload.single("file"), (req, res) => {
   if (req.file) fs.unlink(req.file.path, () => {});
   return res.status(410).json({
-    error: "Legacy server-side library index upload is disabled. BeatGaler Desktop must publish the single index through its leased transport bot."
+    error: "Legacy server-side library index upload is disabled. BeatGaler Desktop must publish the current library through its active Galer Cloud session."
   });
 });
 
 app.get("/library/get", (_req, res) => {
   return res.status(410).json({
-    error: "Legacy server-side library index download is disabled. BeatGaler Desktop must read the index through its leased transport bot."
+    error: "Legacy server-side library index download is disabled. BeatGaler Desktop must read the current library through its active Galer Cloud session."
   });
 });
 
@@ -2424,15 +2424,16 @@ app.post("/library/cleanup-garbage", (_req, res) => {
 app.post("/library/artwork", async (req, res) => {
   const { beatgalerUserId, telegramFileId } = req.body || {};
   const account = linkedAccounts.get(beatgalerUserId);
-  if (!account) return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." });
-  if (!telegramFileId) return res.status(400).json({ error: "telegramFileId is required" });
+  if (!account) return res.status(400).json({ error: "Cloud storage is not connected for this BeatGaler installation." });
+  if (!telegramFileId) return res.status(400).json({ error: "Cloud artwork reference is required." });
   try {
     const raw = await downloadTelegramFileBuffer(telegramFileId);
     res.setHeader("Content-Type", "application/octet-stream");
     res.setHeader("Content-Length", String(raw.length));
     res.end(raw);
   } catch (err) {
-    res.status(500).json({ error: `Could not download Telegram artwork: ${err.message || err}` });
+    console.error("Cloud artwork download failed:", err);
+    res.status(500).json({ error: "Could not download Cloud artwork. Please retry." });
   }
 });
 
@@ -2442,7 +2443,7 @@ app.post("/metadata/artwork", upload.single("file"), async (req, res) => {
   const cleanup = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
   const account = linkedAccounts.get(beatgalerUserId);
 
-  if (!account) { cleanup(); return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." }); }
+  if (!account) { cleanup(); return res.status(400).json({ error: "Cloud storage is not connected for this BeatGaler installation." }); }
   if (!beatId) { cleanup(); return res.status(400).json({ error: "beatId is required" }); }
   if (!req.file) return res.status(400).json({ error: "No artwork file was uploaded." });
 
@@ -2522,19 +2523,20 @@ app.post("/metadata/artwork", upload.single("file"), async (req, res) => {
     cleanup();
     // Do NOT silently send a second artwork message when an edit fails. That
     // would bring back the duplicate-message problem this endpoint prevents.
-    res.status(500).json({ error: `Telegram artwork update failed: ${err.message || err}` });
+    console.error("Cloud artwork update failed:", err);
+    res.status(500).json({ error: "Cloud artwork update failed. Please retry." });
   }
 });
 
 app.post("/metadata/upsert", async (req, res) => {
   const { beatgalerUserId, beatId, parentMessageId, metadataMessageId, metadata } = req.body || {};
   const account = linkedAccounts.get(beatgalerUserId);
-  if (!account) return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." });
+  if (!account) return res.status(400).json({ error: "Cloud storage is not connected for this BeatGaler installation." });
   if (!beatId || !metadata) return res.status(400).json({ error: "beatId and metadata are required" });
 
   const text = `BEATGALER_METADATA_V1\n${JSON.stringify(metadata)}`;
   if (text.length > 3900) {
-    return res.status(400).json({ error: "Beat metadata is too large for a Telegram metadata message." });
+    return res.status(400).json({ error: "Beat metadata is too large for cloud storage." });
   }
 
   const existing = redirectMessageId(beatgalerUserId, metadataMessageId);
@@ -2567,7 +2569,8 @@ app.post("/metadata/upsert", async (req, res) => {
     );
     res.json({ telegram_metadata_message_id: sent.message_id, updated: false });
   } catch (err) {
-    res.status(500).json({ error: `Telegram metadata sync failed: ${err.message || err}` });
+    console.error("Cloud metadata sync failed:", err);
+    res.status(500).json({ error: "Cloud metadata sync failed. Please retry." });
   }
 });
 
@@ -2594,7 +2597,7 @@ app.post("/beats/upload", upload.single("file"), async (req, res) => {
   );
   if (!beatgalerUserId || !beatId) { cleanup(); return res.status(400).json({ error: "beatgalerUserId and beatId are required" }); }
   const account = linkedAccounts.get(beatgalerUserId);
-  if (!account) { cleanup(); return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." }); }
+  if (!account) { cleanup(); return res.status(400).json({ error: "Cloud storage is not connected for this BeatGaler installation." }); }
   if (!req.file) return res.status(400).json({ error: "No file was uploaded." });
   const originalName = req.file.originalname || beatName || "beat.mp3";
   const extension = path.extname(originalName) || ".mp3";
@@ -2613,7 +2616,8 @@ app.post("/beats/upload", upload.single("file"), async (req, res) => {
     res.json({ telegram_file_id: media.file_id, telegram_message_id: messageId, updated });
   } catch (err) {
     console.error(`[upload ${requestId}] MASTER Telegram failure:`, err?.message || err);
-    res.status(500).json({ error: `Telegram MASTER upload failed: ${err.message || err}` });
+    console.error("Cloud MASTER upload failed:", err);
+    res.status(500).json({ error: "Cloud MASTER upload failed. Please retry." });
   } finally { cleanup(); }
 });
 
@@ -2640,7 +2644,7 @@ app.post("/projects/upload", upload.single("file"), async (req, res) => {
   const cleanup = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
   if (!beatgalerUserId || !beatId) { cleanup(); return res.status(400).json({ error: "beatgalerUserId and beatId are required" }); }
   const account = linkedAccounts.get(beatgalerUserId);
-  if (!account) { cleanup(); return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." }); }
+  if (!account) { cleanup(); return res.status(400).json({ error: "Cloud storage is not connected for this BeatGaler installation." }); }
   if (!req.file) return res.status(400).json({ error: "No project ZIP was uploaded." });
   const originalName = `${beatName || path.basename(req.file.originalname || "project", ".zip")}.zip`;
   const stat = fs.statSync(req.file.path);
@@ -2648,7 +2652,7 @@ app.post("/projects/upload", upload.single("file"), async (req, res) => {
   if (stat.size > TELEGRAM_MAX_UPLOAD_BYTES) {
     cleanup();
     return res.status(413).json({
-      error: `PROJECT_TOO_LARGE:${stat.size}:${originalName} exceeds BeatGaler's single-file Telegram limit of 2000 MB.`,
+      error: `PROJECT_TOO_LARGE:${stat.size}:${originalName} exceeds BeatGaler's single-file cloud limit of 2000 MB.`,
     });
   }
 
@@ -2663,7 +2667,7 @@ app.post("/projects/upload", upload.single("file"), async (req, res) => {
     uploadedFiles.set(media.file_id, { beatgalerUserId, telegramUserId: account.telegramUserId, telegramMessageId: messageId, filename: originalName, kind: "project", beatId, partIndex: 0, totalParts: 1, originalName, createdAt: Date.now() });
     savePersistentData();
     res.json({ ok: true, updated, original_name: originalName, original_size: stat.size, parts: [{ telegram_file_id: media.file_id, telegram_message_id: messageId, index: 0, size: stat.size, filename: originalName }] });
-  } catch (err) { res.status(500).json({ error: `Telegram PROJECT upload failed: ${err.message || err}` }); }
+  } catch (err) { console.error("Cloud PROJECT upload failed:", err); res.status(500).json({ error: "Cloud PROJECT upload failed. Please retry." }); }
   finally { cleanup(); }
 });
 
@@ -2700,7 +2704,7 @@ app.post("/cloud-files/upload", upload.single("file"), async (req, res) => {
   const roleMeta = CLOUD_ROLE_META[normalizedType];
   if (!roleMeta) { cleanup(); return res.status(400).json({ error: `Unsupported cloud file type: ${fileType}` }); }
   const account = linkedAccounts.get(beatgalerUserId);
-  if (!account) { cleanup(); return res.status(400).json({ error: "Telegram is not connected for this BeatGaler installation." }); }
+  if (!account) { cleanup(); return res.status(400).json({ error: "Cloud storage is not connected for this BeatGaler installation." }); }
   if (!req.file) return res.status(400).json({ error: "No file was uploaded." });
   const uploadedOriginalName = req.file.originalname || "file";
   const originalName = normalizedType === "PROJECT"
@@ -2710,7 +2714,7 @@ app.post("/cloud-files/upload", upload.single("file"), async (req, res) => {
   if (stat.size > TELEGRAM_MAX_UPLOAD_BYTES) {
     cleanup();
     return res.status(413).json({
-      error: `FILE_TOO_LARGE:${stat.size}:${originalName} exceeds BeatGaler's single-file Telegram limit of 2000 MB.`,
+      error: `FILE_TOO_LARGE:${stat.size}:${originalName} exceeds BeatGaler's single-file cloud limit of 2000 MB.`,
     });
   }
   try {
@@ -2724,7 +2728,7 @@ app.post("/cloud-files/upload", upload.single("file"), async (req, res) => {
     uploadedFiles.set(media.file_id, { beatgalerUserId, telegramUserId: account.telegramUserId, telegramMessageId: messageId, filename: originalName, kind: normalizedType.toLowerCase(), beatId, partIndex: 0, totalParts: 1, originalName, createdAt: Date.now() });
     savePersistentData();
     res.json({ ok: true, updated, file_type: normalizedType, original_name: originalName, original_size: stat.size, parts: [{ telegram_file_id: media.file_id, telegram_message_id: messageId, index: 0, size: stat.size, filename: originalName }] });
-  } catch (err) { res.status(500).json({ error: `Telegram ${normalizedType.toLowerCase()} upload failed: ${err.message || err}` }); }
+  } catch (err) { console.error(`Cloud ${normalizedType.toLowerCase()} upload failed:`, err); res.status(500).json({ error: `Cloud ${normalizedType.toLowerCase()} upload failed. Please retry.` }); }
   finally { cleanup(); }
 });
 
@@ -2735,7 +2739,7 @@ app.post("/cloud-files/upload", upload.single("file"), async (req, res) => {
 // was disconnected.
 app.post("/library/move-to-trash-batch", (_req, res) => {
   return res.status(410).json({
-    error: "Offline Trash index reconciliation moved to the Desktop transport bot."
+    error: "Offline Trash reconciliation moved to the active Galer Cloud session."
   });
 });
 
@@ -2811,7 +2815,7 @@ app.post("/beats/delete-topic", async (req, res) => {
     const deleteResult = await deleteBeatTopic(account, beatgalerUserId, beatId, telegramTopicId);
     res.json({ ok: true, ...deleteResult, index_updated: false, index_owner: "desktop-transport-bot" });
   } catch (error) {
-    res.status(500).json({ error: `Could not permanently delete Telegram beat Topic: ${error?.message || error}` });
+    res.status(500).json({ error: `Could not permanently delete beat storage data: ${error?.message || error}` });
   }
 });
 
@@ -2875,7 +2879,7 @@ async function verifyTelegramFileOwnershipFromIndex(account, beatgalerUserId, te
 // playback and seek do not wait for the full MP3.
 app.get("/beats/stream", async (_req, res) => {
   return res.status(410).json({
-    error: "Legacy Bot API streaming is disabled. 001BeatGaler is manager-only; use a direct:<message_id> locator or migrate this beat."
+    error: "Legacy cloud streaming is disabled for this beat. Refresh or migrate the library entry."
   });
 });
 
@@ -2885,7 +2889,7 @@ app.get("/beats/stream", async (_req, res) => {
 // directo desde Telegram hacia la app; el token del bot nunca sale del server.
 app.post("/beats/download", async (_req, res) => {
   return res.status(410).json({
-    error: "Legacy Bot API downloads are disabled. 001BeatGaler is manager-only; use Telegram Direct or migrate this beat."
+    error: "Legacy cloud downloads are disabled for this beat. Refresh or migrate the library entry."
   });
 });
 

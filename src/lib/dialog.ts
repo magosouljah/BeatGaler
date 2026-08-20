@@ -1,3 +1,5 @@
+import { sanitizeUserVisibleText } from "./userVisibleError";
+
 type ConfirmOptions = {
   title: string;
   message: string;
@@ -183,7 +185,7 @@ export function appAlert(options: AlertOptions | string): Promise<void> {
   return new Promise(resolve => {
     const { overlay, panel, footer } = createShell(
       normalized.title ?? (normalized.danger ? "Something went wrong" : "Beat Galer"),
-      normalized.message,
+      sanitizeUserVisibleText(normalized.message, "Something went wrong."),
       !!normalized.danger
     );
     let settled = false;

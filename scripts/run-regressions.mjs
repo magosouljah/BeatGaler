@@ -70,7 +70,7 @@ try {
   const tauriConfig = readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8");
   if (!tauriConfig.includes('"dragDropEnabled": true')) fail("Windows native filesystem drag/drop is not enabled in Tauri config.");
   if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Windows Explorer drops are no longer using Tauri's native filesystem-path event.");
-  if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("WINDOWS_NATIVE_LIBRARY_IMPORT_START")) fail("Native Explorer drop diagnostics disappeared.");
+  if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("Native filesystem drop diagnostics disappeared.");
   if (!app.includes("MAX_NATIVE_DROP_ITEMS = 50")) fail("Native Explorer drop safety cap disappeared.");
   if (!app.includes("windowsNativeDrop") || !app.includes("if (windowsNativeDrop) return")) fail("HTML DataTransfer staging is still installed on Windows and can race native filesystem drops.");
   if (app.includes('listen<NativeDragPayload>("beatgaler-native-drag"')) fail("Obsolete custom OLE event router returned.");
@@ -105,14 +105,14 @@ try {
   if (!app.includes('window.addEventListener("native-external-image-drop"')) fail("BeatGaler no longer receives the native external-image artwork event.");
   if (!app.includes("nativeExternalImageSignalFromPaths(incomingPaths)")) fail("Reserved external-image markers are no longer filtered at the Tauri event boundary.");
   if (!app.includes("URLs never enter Import Beat and are accepted only by an artwork target")) fail("Pinterest artwork-only routing invariant disappeared.");
-  const nativeDropEffectStart = app.indexOf('if (!isTauriAvailable || !/Windows/i.test(navigator.userAgent)) return;', app.indexOf("Non-Windows/browser fallback only."));
+  const nativeDropEffectStart = app.indexOf("    const handleNativeDrop = async");
   const nativeDropEffectEnd = app.indexOf("  const handleCloudFiles =", nativeDropEffectStart);
   const nativeDropEffect = app.slice(nativeDropEffectStart, nativeDropEffectEnd);
   const nativeDropCodeOnly = nativeDropEffect
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
-  if (nativeDropCodeOnly.includes("stageCapturedHtmlDrop")) fail("Windows native local drop routes into stageCapturedHtmlDrop again.");
-  if (nativeDropCodeOnly.includes(".arrayBuffer(")) fail("Windows native local drop reads full file bytes with arrayBuffer().");
+  if (nativeDropCodeOnly.includes("stageCapturedHtmlDrop")) fail("Native local filesystem drop routes into stageCapturedHtmlDrop again.");
+  if (nativeDropCodeOnly.includes(".arrayBuffer(")) fail("Native local filesystem drop reads full file bytes with arrayBuffer().");
   const bridgeFilterIndex = nativeDropEffect.indexOf("nativeExternalImageSignalFromPaths(incomingPaths)");
   const localDropDispatchIndex = nativeDropEffect.indexOf("void handleNativeDrop({ paths: incomingPaths", bridgeFilterIndex);
   if (bridgeFilterIndex < 0 || localDropDispatchIndex < 0 || bridgeFilterIndex > localDropDispatchIndex) fail("External-image sentinel is not filtered before the local filesystem drop router.");
@@ -158,11 +158,11 @@ try {
   if (!rustLib.includes('inspect_project_drop_source')) fail("Tauri invoke handler lost PROJECT drop inspection.");
   if (!rustProjectCommands.includes('"flp" | "als" | "logicx" | "ptx" | "ptf"')) fail("PROJECT recognition must include FL Studio, Ableton, Logic Pro, and Pro Tools.");
   if (!rustProjectCommands.includes("A PROJECT ZIP needs at least one .flp, .als, .logicx, .ptx, or .ptf")) fail("PROJECT ZIP validation no longer requires a real project file.");
-  if (!rustProjectCommands.includes('Command::new("tar")') || !rustProjectCommands.includes('project_zip_entry_names')) fail("PROJECT ZIP inspection lost the fast directory-list path/fallback architecture.");
+  if (!rustProjectCommands.includes('zip::ZipArchive::new') || !rustProjectCommands.includes('project_zip_entry_names')) fail("PROJECT ZIP inspection is no longer handled by the cross-platform Rust ZIP reader.");
   if (rustProjectCommands.includes("elseif ($rootName -eq 'audio'") || rustProjectCommands.includes('matches!(root.as_str(), "audio" | "sample" | "samples")')) fail("Audio/Samples-only ZIPs became valid PROJECT archives again.");
-  if (!rustProjectCommands.includes("$Kind -eq 'projectfolder'") || !rustProjectCommands.includes('$prefix = "$folderName/"')) fail("Generic project folders must preserve their original folder name inside PROJECT.zip.");
+  if (!rustProjectCommands.includes('"projectfolder" =>') || !rustProjectCommands.includes('("prefix", format!("{}/", folder_name))')) fail("Generic project folders must preserve their original folder name inside PROJECT.zip.");
   if (!rustProjectCommands.includes("#[tauri::command(async)]\npub fn update_project_archive_from_source")) fail("PROJECT archive mutation must run as an async Tauri command so the UI remains usable during large ZIP work.");
-  if (!rustProjectCommands.includes("Test-ForbiddenPart")) fail("PROJECT ZIP mutation lost Backup/Backups filtering.");
+  if (!rustProjectCommands.includes('is_forbidden_project_component') || !rustProjectCommands.includes('copy_project_zip_entries(source, &mut writer, zip_name_has_forbidden_component)')) fail("PROJECT ZIP mutation lost Backup/Backups filtering.");
   if (!app.includes('Backup folders were found in') || !app.includes('Backup folders were skipped from') || !tauriClient.includes('has_backups: boolean')) fail("Nested Backup/Backups filtering must be surfaced before and after project updates.");
   if (!rustProjectCommands.includes('filtered_project_zip_for_upload') || !rustProjectCommands.includes('if !has_backups { return Ok(None); }')) fail("PROJECT ZIPs with Backup/Backups must continue through a filtered temporary upload copy instead of being rejected.");
   if (rustProjectCommands.includes('Remove that backup folder from the ZIP and try again.')) fail("PROJECT ZIPs with Backup/Backups must not be rejected; BeatGaler should skip those folders.");
@@ -337,7 +337,7 @@ try {
   if (loadLibraryBlock.includes('clear_offline_record(')) fail("Online library load must never delete a durable Offline package because of a transient fingerprint mismatch.");
   if (!loadLibraryBlock.includes('offline_record_available(')) fail("Online library load no longer preserves durable Offline availability.");
   if (!rustCommands.includes('if let Some((master_path, _)) = offline_record_available')) fail("Pinned playback can still reject its durable MASTER because cloud metadata changed during reconnect.");
-  if (!rustCommands.includes('direct_download_range_with_retry') || !rustCommands.includes('Telegram Direct range retry exhausted')) fail("Download Cooking lost transient reconnect retry for Direct MASTER ranges.");
+  if (!rustCommands.includes('direct_download_range_with_retry') || !rustCommands.includes('Galer Storage range retry exhausted')) fail("Download Cooking lost transient reconnect retry for Direct MASTER ranges.");
   if (cloudServer.includes('TEST: MASTER missing from cloud')) fail("Production MASTER streaming still contains a hard-coded test 404 fault injection.");
   if (!rustCommands.includes('preserves newer edits from another online device')) fail("Offline Trash reconciliation no longer documents current-online-wins behavior.");
   const openProjectStart = rustCommands.indexOf("pub fn open_beat_project(");
@@ -354,7 +354,15 @@ try {
   if (!app.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
   if (!app.includes('cookingPlaybackUrlRef.current.delete(beat.id)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
   if (!app.includes('cookingWarmPromisesRef.current.delete(beat.id)')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");
-  if (!app.includes('const canonical = await loadLibrary();')) fail("Remove from Available Offline no longer rehydrates canonical cloud BeatMeta after deleting local-only paths.");
+  const removeOfflineUiStart = app.indexOf('if (beat.offline_available) {', app.indexOf('const handleToggleOffline'));
+  const removeOfflineUiEnd = app.indexOf('} else {\n        const offline = await makeBeatAvailableOffline(beat);', removeOfflineUiStart);
+  const removeOfflineUiBlock = removeOfflineUiEnd > removeOfflineUiStart ? app.slice(removeOfflineUiStart, removeOfflineUiEnd) : '';
+  if (removeOfflineUiBlock.includes('await loadLibrary()')) fail("Remove from Available Offline must not replace the live Beat with a SQLite rehydrate.");
+  if (!removeOfflineUiBlock.includes('const withoutOfflinePaths = (item: Beat): Beat => ({')) fail("Remove from Available Offline lost its metadata-preserving local-path cleanup.");
+  if (!removeOfflineUiBlock.includes('...item,\n            offline_available: false')) fail("Remove from Available Offline must preserve the live Beat object before clearing Offline state.");
+  for (const localField of ['folder_path: ""', 'mp3_path: ""', 'wav_path: null', 'playback_path: ""', 'stems_path: null', 'samples_path: null', 'flp_path: null', 'als_path: null', 'other_files: []', 'loop_path: null']) {
+    if (!removeOfflineUiBlock.includes(localField)) fail(`Remove from Available Offline no longer clears local-only field ${localField}.`);
+  }
   const removeOfflineStart = rustCommands.indexOf('pub fn remove_beat_offline_availability(');
   const removeOfflineEnd = rustCommands.indexOf('#[tauri::command]', removeOfflineStart + 1);
   const removeOfflineBlock = removeOfflineEnd > removeOfflineStart ? rustCommands.slice(removeOfflineStart, removeOfflineEnd) : '';

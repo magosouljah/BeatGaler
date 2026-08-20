@@ -31,6 +31,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify Cargo.lock before build
+        shell: pwsh
+        run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
+
       - name: Build Tauri app
         run: npx tauri build
 

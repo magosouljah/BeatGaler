@@ -84,7 +84,7 @@ if (!rust.includes('/transport/session/heartbeat')) fail('Desktop heartbeat rout
 if (!rust.includes('/transport/session/activate')) fail('Desktop membership-update activation is missing.');
 if (!rust.includes('/transport/operation/begin') || !rust.includes('/transport/operation/end')) fail('Desktop no longer gates every Direct operation.');
 if (!rust.includes('telegram-direct-botapi-local')) fail('Desktop does not require the Local Bot API transport mode.');
-if (!rust.includes('BeatGaler no longer falls back to the manager/service bot')) fail('Direct fail-closed invariant disappeared.');
+if (!rust.includes('BeatGaler local data-plane runtime is missing from this installation.') || !rust.includes('Galer Storage is unavailable:')) fail('Direct fail-closed invariant disappeared.');
 if (!rust.includes('DATA_PLANE_READY')) fail('Direct data-plane readiness diagnostic disappeared.');
 if (!rust.includes('"op": "replace_index"') || !rust.includes('"op": "get_index"')) fail('Desktop index path is no longer Direct.');
 if (!rust.includes('fn direct_move_beats_to_trash')) fail('Offline Trash no longer mutates the current index through the transport bot.');

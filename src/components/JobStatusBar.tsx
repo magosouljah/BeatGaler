@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { subscribeJobs, updateJob, removeJob, type JobInfo } from "../lib/jobStore";
 import { cancelYoutubeUpload } from "../lib/tauri";
+import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 
 // Sets up ONE global listener for backend job events. Mounted once in
 // App.tsx so it keeps running no matter which modal (if any) is open —
@@ -33,7 +34,7 @@ export default function JobStatusBar() {
         const errFn = await listen("youtube:error", (e: any) => {
           const payload = e.payload as any;
           if (!payload?.job_id) return;
-          updateJob(payload.job_id, { status: "error", message: payload.error ?? "Upload failed" });
+          updateJob(payload.job_id, { status: "error", message: sanitizeUserVisibleText(payload.error ?? "Upload failed") });
         });
         const tagProgressFn = await listen("tag-rename:progress", (e: any) => {
           const payload = e.payload as any;
@@ -50,7 +51,7 @@ export default function JobStatusBar() {
         const tagErrorFn = await listen("tag-rename:error", (e: any) => {
           const payload = e.payload as any;
           if (!payload?.job_id) return;
-          updateJob(payload.job_id, { status: "error", message: payload.error ?? "Tag rename failed" });
+          updateJob(payload.job_id, { status: "error", message: sanitizeUserVisibleText(payload.error ?? "Tag rename failed") });
         });
 
         const cancelFn = await listen("youtube:cancelled", (e: any) => {

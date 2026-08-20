@@ -36,7 +36,12 @@
     "updater:keygen": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\setup-updater-signing.ps1",
     "updater:verify-artifacts": "node scripts/verify-updater-artifacts.mjs",
     "updater:manifest": "node scripts/updater-manifest.mjs",
-    "updater:test-baseline": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\build-updater-test-baseline.ps1"
+    "updater:test-baseline": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\build-updater-test-baseline.ps1",
+    "test:mac-portability:static": "node scripts/test-macos-portability.mjs && node scripts/test-macos-min-version.mjs && node scripts/test-runtime-watchdog.mjs && node scripts/test-updater-manifest.mjs",
+    "test:mac-portability": "npm run test:mac-portability:static && npm run test:typecheck && npm run test:unit:ts && npm run test:component:dom && npm run test:integration && npm run test:unit:cloud && npm run test:regressions && cargo test --manifest-path src-tauri/Cargo.toml --lib && npm run test:cargo-lock",
+    "test:cargo-lock": "node scripts/test-cargo-lock.mjs",
+    "test:mac-portability:locked": "npm run test:mac-portability:static && npm run test:typecheck && npm run test:unit:ts && npm run test:component:dom && npm run test:integration && npm run test:unit:cloud && npm run test:regressions && cargo test --locked --manifest-path src-tauri/Cargo.toml --lib && npm run test:cargo-lock",
+    "test:typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

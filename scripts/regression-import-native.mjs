@@ -12,16 +12,16 @@ const tauriConfig = read("src-tauri/tauri.conf.json");
 const commands = read("src-tauri/src/commands.rs");
 
 if (!tauriConfig.includes('"dragDropEnabled": true')) fail("Tauri native dragDropEnabled must remain enabled.");
-if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Windows Explorer drops must continue through Tauri onDragDropEvent.");
-if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("WINDOWS_NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");
+if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Desktop filesystem drops must continue through Tauri onDragDropEvent.");
+if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");
 if (!app.includes("await importDroppedPaths(payload.paths)")) fail("native library drop no longer enters the normal import stream with original filesystem paths.");
 if (!app.includes("startImportReviewStream(normalized)")) fail("native import no longer starts the incremental Review stream.");
 if (!app.includes("No\n      // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.")) fail("zero-copy native import invariant comment disappeared; review this path before release.");
 
-const fallbackStart = app.indexOf("Non-Windows/browser fallback only.");
-const fallbackGuard = app.indexOf("const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);", fallbackStart);
+const fallbackGuard = app.indexOf("const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);");
 const fallbackReturn = app.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
-if (fallbackStart < 0 || fallbackGuard < 0 || fallbackReturn < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");
+const fallbackInstall = app.indexOf("return installHtmlDropController(", fallbackReturn);
+if (fallbackGuard < 0 || fallbackReturn < 0 || fallbackInstall < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");
 
 const nativeStart = app.indexOf("const handleNativeDrop = async");
 const nativeEnd = app.indexOf("    void (async () => {", nativeStart);
@@ -50,4 +50,4 @@ if (!commands.includes("Do not descend into Samples/Stems/Backup trees")) fail("
 if (!commands.includes("A standalone file is ONE slot. Never scan its parent folder")) fail("loose-file single-slot invariant disappeared.");
 if (!commands.includes("discover_import_sources_recursive")) fail("deterministic recursive import discovery disappeared.");
 
-console.log("PASS Phase 9B native import contracts: Windows keeps original filesystem paths, skips HTML staging, separates artwork/card/library targets, and preserves browser fallback isolation");
+console.log("PASS Phase 9B native import contracts: native desktop drops keep original filesystem paths, Windows skips HTML staging, Mac arbitrates native-vs-HTML, and browser artwork fallback stays isolated");

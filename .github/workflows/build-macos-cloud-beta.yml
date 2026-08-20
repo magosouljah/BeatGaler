@@ -18,14 +18,108 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: beatgaler-public-release-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   PUBLIC_RELEASE_REPO: magosouljah/galer
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
   PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+  BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+  APPLE_ID: ${{ secrets.APPLE_ID }}
+  APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
 jobs:
+  bot-api-arm64:
+    name: Build pinned Bot API arm64
+    runs-on: macos-15
+    steps:
+      - name: Build static arm64 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cmake gperf openssl@3
+          ROOT=/tmp/beatgaler-telegram-bot-api-arm64
+          rm -rf "$ROOT"
+          git init "$ROOT"
+          git -C "$ROOT" remote add origin https://github.com/tdlib/telegram-bot-api.git
+          git -C "$ROOT" fetch --depth 1 origin "$BOT_API_COMMIT"
+          git -C "$ROOT" checkout --detach FETCH_HEAD
+          git -C "$ROOT" submodule update --init --recursive --depth 1
+          test "$(git -C "$ROOT" rev-parse HEAD)" = "$BOT_API_COMMIT"
+          cmake -S "$ROOT" -B "$ROOT/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build "$ROOT/build" --target telegram-bot-api --parallel 3
+          mkdir -p runtime
+          cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
+          chmod +x runtime/telegram-bot-api
+          test "$(lipo -archs runtime/telegram-bot-api)" = "arm64"
+          if otool -L runtime/telegram-bot-api | tail -n +2 | awk '{print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)' | grep -q .; then
+            echo "::error::arm64 telegram-bot-api contains a non-system dylib dependency"
+            otool -L runtime/telegram-bot-api
+            exit 1
+          fi
+          echo "$BOT_API_COMMIT" > runtime/telegram-bot-api.commit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telegram-bot-api-arm64
+          path: runtime/
+          if-no-files-found: error
+
+  bot-api-x86_64:
+    name: Build pinned Bot API x86_64
+    runs-on: macos-15-intel
+    steps:
+      - name: Build static Intel runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cmake gperf openssl@3
+          ROOT=/tmp/beatgaler-telegram-bot-api-x86_64
+          rm -rf "$ROOT"
+          git init "$ROOT"
+          git -C "$ROOT" remote add origin https://github.com/tdlib/telegram-bot-api.git
+          git -C "$ROOT" fetch --depth 1 origin "$BOT_API_COMMIT"
+          git -C "$ROOT" checkout --detach FETCH_HEAD
+          git -C "$ROOT" submodule update --init --recursive --depth 1
+          test "$(git -C "$ROOT" rev-parse HEAD)" = "$BOT_API_COMMIT"
+          cmake -S "$ROOT" -B "$ROOT/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build "$ROOT/build" --target telegram-bot-api --parallel 3
+          mkdir -p runtime
+          cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
+          chmod +x runtime/telegram-bot-api
+          test "$(lipo -archs runtime/telegram-bot-api)" = "x86_64"
+          if otool -L runtime/telegram-bot-api | tail -n +2 | awk '{print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)' | grep -q .; then
+            echo "::error::Intel telegram-bot-api contains a non-system dylib dependency"
+            otool -L runtime/telegram-bot-api
+            exit 1
+          fi
+          echo "$BOT_API_COMMIT" > runtime/telegram-bot-api.commit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telegram-bot-api-x86_64
+          path: runtime/
+          if-no-files-found: error
+
   release-macos:
-    runs-on: macos-latest
+    name: Build signed notarized Universal release
+    needs: [bot-api-arm64, bot-api-x86_64]
+    runs-on: macos-15
 
     steps:
       - name: Checkout exact release source
@@ -76,11 +170,13 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Verify BeatGaler version and release tag
+      - name: Verify BeatGaler version and portable frontend/architecture gate
         shell: bash
         run: |
           set -euo pipefail
           npm run version:check
+          npm run test:mac-portability:static
+          npm run test:unit:ts
           npm run test:regressions
           VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
           if [ "v${VERSION_VALUE}" != "$RELEASE_TAG" ]; then
@@ -88,14 +184,46 @@ jobs:
             exit 1
           fi
 
-      - name: Require public release token
+      - name: Require public release, updater, and Apple signing secrets
         shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${PUBLIC_RELEASE_TOKEN:-}" ]; then
-            echo "::error::PUBLIC_RELEASE_TOKEN GitHub secret is missing."
+          for name in PUBLIC_RELEASE_TOKEN TAURI_SIGNING_PRIVATE_KEY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name GitHub secret is missing. Public Mac releases must be signed/notarized; use Fast BeatGaler macOS Test for ad-hoc testing."
+              exit 1
+            fi
+          done
+
+      - name: Import Developer ID certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/beatgaler-developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/beatgaler-build.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          CERT_ID="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' | head -n 1)"
+          if [ -z "$CERT_ID" ]; then
+            echo "::error::No Developer ID Application identity was found in imported certificate."
             exit 1
           fi
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
 
       - name: Download and build universal FFmpeg
         shell: bash
@@ -122,8 +250,9 @@ jobs:
 
           lipo -create /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64 -output src-tauri/resources/ffmpeg
           chmod +x src-tauri/resources/ffmpeg
-          lipo -archs src-tauri/resources/ffmpeg
-          src-tauri/resources/ffmpeg -version | head -n 3
+          ARCHS="$(lipo -archs src-tauri/resources/ffmpeg)"
+          echo "$ARCHS" | grep -q arm64
+          echo "$ARCHS" | grep -q x86_64
 
       - name: Download and build universal Node runtime
         shell: bash
@@ -141,57 +270,124 @@ jobs:
             -output src-tauri/resources/node
           chmod +x src-tauri/resources/node
           ARCHS="$(lipo -archs src-tauri/resources/node)"
-          echo "$ARCHS" | grep -q "arm64"
-          echo "$ARCHS" | grep -q "x86_64"
+          echo "$ARCHS" | grep -q arm64
+          echo "$ARCHS" | grep -q x86_64
           src-tauri/resources/node --version
 
-      - name: Build universal macOS DMG
+      - name: Combine pinned Bot API into Universal runtime
+        uses: actions/download-artifact@v4
+        with:
+          pattern: telegram-bot-api-*
+          path: /tmp/beatgaler-bot-api-halves
+
+      - name: Verify and combine Bot API halves
         shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: "-"
         run: |
           set -euo pipefail
+          ARM="/tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api"
+          INTEL="/tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api"
+          test -x "$ARM" && test -x "$INTEL"
+          test "$(cat /tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api.commit)" = "$BOT_API_COMMIT"
+          test "$(cat /tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api.commit)" = "$BOT_API_COMMIT"
+          test "$(lipo -archs "$ARM")" = "arm64"
+          test "$(lipo -archs "$INTEL")" = "x86_64"
+          mkdir -p src-tauri/resources
+          lipo -create "$ARM" "$INTEL" -output src-tauri/resources/telegram-bot-api
+          chmod +x src-tauri/resources/telegram-bot-api
+          ARCHS="$(lipo -archs src-tauri/resources/telegram-bot-api)"
+          echo "$ARCHS" | grep -q arm64
+          echo "$ARCHS" | grep -q x86_64
+      - name: Verify Universal runtimes have only Apple system dylib dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/check-macos-runtime-dylibs.sh \
+            src-tauri/resources/ffmpeg \
+            src-tauri/resources/node \
+            src-tauri/resources/telegram-bot-api
+
+      - name: Verify Universal runtime minimum macOS versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-macos-min-version.mjs src-tauri/resources/ffmpeg "$MACOSX_DEPLOYMENT_TARGET"
+          node scripts/check-macos-min-version.mjs src-tauri/resources/node "$MACOSX_DEPLOYMENT_TARGET"
+          node scripts/check-macos-min-version.mjs src-tauri/resources/telegram-bot-api "$MACOSX_DEPLOYMENT_TARGET"
+
+      - name: Developer ID sign embedded Universal Mach-O runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${APPLE_SIGNING_IDENTITY:-}"
+          for path in src-tauri/resources/ffmpeg src-tauri/resources/node src-tauri/resources/telegram-bot-api; do
+            codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$path"
+            codesign --verify --strict --verbose=2 "$path"
+            codesign -dv --verbose=4 "$path" 2>&1 | grep -q "Authority=Developer ID Application:"
+          done
+
+      - name: Compile and run Rust unit tests with all Universal runtimes present
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build signed, notarized Universal macOS DMG and updater bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
           npx tauri build --bundles dmg --target universal-apple-darwin
 
-      - name: Verify Direct runtime and FFmpeg inside final DMG
+      - name: Verify Universal runtimes, signature, and notarization inside final DMG
         shell: bash
         run: |
           set -euo pipefail
-          DMG_PATH="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          ROOT="src-tauri/target/universal-apple-darwin/release/bundle"
+          DMG_PATH="$(find "$ROOT/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
           test -n "$DMG_PATH" && test -f "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
           ATTACH_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
           MOUNT_POINT="$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's#^.*\(/Volumes/.*\)$#\1#p' | head -n 1)"
           test -n "$MOUNT_POINT" && test -d "$MOUNT_POINT"
           cleanup() { hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true; }
           trap cleanup EXIT
+
           APP_PATH="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name '*.app' | head -n 1)"
           test -n "$APP_PATH" && test -d "$APP_PATH"
+          APP_MAIN_PATH="$(find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -perm -111 | head -n 1)"
           FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
           NODE_PATH="$APP_PATH/Contents/Resources/node"
+          BOT_API_PATH="$APP_PATH/Contents/Resources/telegram-bot-api"
           HELPER_PATH="$APP_PATH/Contents/Resources/direct-transport/transport-helper.cjs"
-          test -f "$FFMPEG_PATH"
-          test -f "$NODE_PATH"
+          WATCHDOG_PATH="$APP_PATH/Contents/Resources/direct-transport/runtime-watchdog.cjs"
+
+          for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
+            test -x "$path"
+            ARCHS="$(lipo -archs "$path")"
+            echo "$path -> $ARCHS"
+            echo "$ARCHS" | grep -q arm64
+            echo "$ARCHS" | grep -q x86_64
+          done
           test -f "$HELPER_PATH"
-          test -x "$NODE_PATH"
-          NODE_ARCHS="$(lipo -archs "$NODE_PATH")"
-          echo "$NODE_ARCHS" | grep -q "arm64"
-          echo "$NODE_ARCHS" | grep -q "x86_64"
-          "$NODE_PATH" --version
-          ARCHS="$(lipo -archs "$FFMPEG_PATH")"
-          echo "$ARCHS" | grep -q "arm64"
-          echo "$ARCHS" | grep -q "x86_64"
-          "$FFMPEG_PATH" -version | head -n 3
+          test -f "$WATCHDOG_PATH"
+          for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
+            node scripts/check-macos-min-version.mjs "$path" "$MACOSX_DEPLOYMENT_TARGET"
+          done
+          scripts/check-macos-runtime-dylibs.sh "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"
+          for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
+            codesign --verify --strict --verbose=2 "$path"
+            codesign -dv --verbose=4 "$path" 2>&1 | grep -q "Authority=Developer ID Application:"
+          done
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -q "Authority=Developer ID Application:"
+          xcrun stapler validate "$APP_PATH"
 
-      - name: Prepare public DMG
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
-          SOURCE_DMG="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
-          mkdir -p release-assets
-          cp "$SOURCE_DMG" "release-assets/Beat.Galer_${VERSION_VALUE}_universal.dmg"
+          UPDATER_PATH="$(find "$ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1)"
+          test -n "$UPDATER_PATH" && test -f "$UPDATER_PATH"
+          test -s "${UPDATER_PATH}.sig"
 
-      - name: Create or update public GitHub Release
+      - name: Create or find public GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
@@ -200,15 +396,63 @@ jobs:
           NOTES="${{ inputs.release_notes }}"
           if [ -z "$NOTES" ]; then NOTES="Beat Galer ${RELEASE_TAG}"; fi
           if ! gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" --target main --title "Beat Galer $RELEASE_TAG" --notes "$NOTES" || true
+            gh release create "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" --target main --title "Beat Galer $RELEASE_TAG" --notes "$NOTES"
           fi
-          gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null
-          DMG_PATH="$(find release-assets -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
-          gh release upload "$RELEASE_TAG" "$DMG_PATH" --repo "$PUBLIC_RELEASE_REPO" --clobber
 
-      - name: Upload macOS DMG as private workflow artifact
+      - name: Prepare DMG, updater bundle, and merged latest.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
+          ROOT="src-tauri/target/universal-apple-darwin/release/bundle"
+          SOURCE_DMG="$(find "$ROOT/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          SOURCE_UPDATER="$(find "$ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1)"
+          SOURCE_SIG="${SOURCE_UPDATER}.sig"
+          test -f "$SOURCE_DMG" && test -f "$SOURCE_UPDATER" && test -s "$SOURCE_SIG"
+
+          mkdir -p release-assets release-existing
+          DMG_NAME="Beat.Galer_${VERSION_VALUE}_universal.dmg"
+          UPDATER_NAME="Beat.Galer_${VERSION_VALUE}_universal.app.tar.gz"
+          cp "$SOURCE_DMG" "release-assets/$DMG_NAME"
+          cp "$SOURCE_UPDATER" "release-assets/$UPDATER_NAME"
+          cp "$SOURCE_SIG" "release-assets/$UPDATER_NAME.sig"
+
+          if gh release view "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" --repo "$PUBLIC_RELEASE_REPO" --pattern latest.json --dir release-existing --clobber >/dev/null 2>&1 || true
+          fi
+
+          URL="https://github.com/$PUBLIC_RELEASE_REPO/releases/download/$RELEASE_TAG/$UPDATER_NAME"
+          node scripts/updater-manifest.mjs generate \
+            --version "$VERSION_VALUE" --platform darwin-aarch64 \
+            --artifact "release-assets/$UPDATER_NAME" --signature "release-assets/$UPDATER_NAME.sig" \
+            --url "$URL" --output release-assets/latest-arm.json --notes "Beat Galer $VERSION_VALUE" \
+            --merge-existing release-existing/latest.json
+          node scripts/updater-manifest.mjs generate \
+            --version "$VERSION_VALUE" --platform darwin-x86_64 \
+            --artifact "release-assets/$UPDATER_NAME" --signature "release-assets/$UPDATER_NAME.sig" \
+            --url "$URL" --output release-assets/latest.json --notes "Beat Galer $VERSION_VALUE" \
+            --merge-existing release-assets/latest-arm.json
+          rm release-assets/latest-arm.json
+          node scripts/updater-manifest.mjs validate-release release-assets/latest.json
+
+      - name: Upload public macOS release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" release-assets/*.dmg release-assets/*.app.tar.gz release-assets/*.app.tar.gz.sig release-assets/latest.json \
+            --repo "$PUBLIC_RELEASE_REPO" --clobber
+
+      - name: Upload macOS release as private workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: BeatGaler-macOS-Universal
-          path: release-assets/*.dmg
+          path: |
+            release-assets/*.dmg
+            release-assets/*.app.tar.gz
+            release-assets/*.app.tar.gz.sig
+            release-assets/latest.json
           if-no-files-found: error

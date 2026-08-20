@@ -170,8 +170,10 @@ function loadSession(encodedInput) {
   catch { throw new Error('Direct transport session payload is invalid.'); }
   const token = String(parsed.bot_token || '');
   const chatId = String(parsed.chat_id || '');
-  const botApiBase = String(parsed.bot_api_base || 'http://127.0.0.1:8081').replace(/\/$/, '');
-  if (!token || !chatId) throw new Error('Direct transport session is incomplete.');
+  const botApiBase = String(parsed.bot_api_base || '').trim().replace(/\/$/, '');
+  if (!token || !chatId || !/^http:\/\/127\.0\.0\.1:\d+$/.test(botApiBase)) {
+    throw new Error('Direct transport session is incomplete.');
+  }
   return {
     ...parsed,
     token,

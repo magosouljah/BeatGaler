@@ -10,14 +10,34 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Single-instance must be registered first. A second launch focuses the
+        // existing window instead of creating a second SQLite/Direct runtime.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // macOS red close button should close the window visually, not
+                // terminate BeatGaler or destroy the only main window. Cmd+Q /
+                // app Quit still reaches RunEvent::ExitRequested below.
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
             let data_dir: PathBuf = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&data_dir).ok();
+            set_direct_runtime_data_dir(&data_dir);
             let db_path = data_dir.join("beatvault.db");
             let conn = init_db(&db_path).expect("Failed to open database");
             let purged = purge_old_trash_internal(&conn, &data_dir, 14);
@@ -36,12 +56,10 @@ pub fn run() {
             app.manage(UploadQueueState(std::sync::Mutex::new(tx)));
             app.manage(DirectTransportExitGuard);
 
-            // Windows Explorer drag/drop is owned by Tauri/Wry itself.
-            // `dragDropEnabled: true` makes the WebView host receive real filesystem
-            // paths instead of forcing WebView2/DataTransfer to materialize every
-            // dropped byte into BeatGaler drop-staging before Review.
-            #[cfg(target_os = "windows")]
-            eprintln!("[native-drop] Tauri native filesystem drop enabled");
+            // Finder/Explorer filesystem drops use Tauri native paths. On macOS
+            // the HTML controller remains installed only as the browser-artwork
+            // fallback; the native arbiter prevents duplicate file staging.
+            eprintln!("[native-drop] Tauri native filesystem drop enabled os={}", std::env::consts::OS);
 
             log_line(&data_dir, "INFO", "BeatVault started");
             Ok(())
@@ -71,8 +89,16 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building BeatVault")
-        .run(|_app_handle, event| {
+        .run(|app_handle, event| {
             match event {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                }
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                     // Do not rely only on managed-state Drop: on some desktop
                     // shutdown paths the process can tear down before that guard

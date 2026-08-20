@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import type { Beat } from "../types";
 import type { ImportAudioConflict } from "../lib/tauri";
 import { resolveImportAudioConflict } from "../lib/tauri";
+import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 
 interface Props {
   batchId: string;
@@ -116,7 +117,7 @@ export default function ImportAudioConflictsModal({ batchId, conflicts, onResolv
             </div>
           ))}
 
-          {error && <div style={{ padding: "10px 12px", borderRadius: 8, background: "#331414", border: "1px solid #642222", color: "#fca5a5", fontSize: 11 }}>{error}</div>}
+          {error && <div style={{ padding: "10px 12px", borderRadius: 8, background: "#331414", border: "1px solid #642222", color: "#fca5a5", fontSize: 11 }}>{sanitizeUserVisibleText(error)}</div>}
           <button
             onClick={() => void confirm()}
             disabled={!ready || busy}

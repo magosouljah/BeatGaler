@@ -92,12 +92,19 @@ function requireArg(args, name) {
   return args[index + 1];
 }
 
-export function buildStaticUpdaterManifest({ version, platform, artifactUrl, signature, notes = "", pubDate = new Date().toISOString() }) {
+export function buildStaticUpdaterManifest({ version, platform, artifactUrl, signature, notes = "", pubDate = new Date().toISOString(), baseManifest = null }) {
+  const normalizedVersion = parseSemver(version).raw;
+  const reusablePlatforms = baseManifest && typeof baseManifest === "object" && !Array.isArray(baseManifest)
+    && parseSemver(baseManifest.version).raw === normalizedVersion
+    && baseManifest.platforms && typeof baseManifest.platforms === "object" && !Array.isArray(baseManifest.platforms)
+      ? { ...baseManifest.platforms }
+      : {};
   const manifest = {
-    version: parseSemver(version).raw,
-    notes: String(notes),
+    version: normalizedVersion,
+    notes: String(notes || baseManifest?.notes || ""),
     pub_date: new Date(pubDate).toISOString(),
     platforms: {
+      ...reusablePlatforms,
       [platform]: {
         signature: String(signature).trim(),
         url: String(artifactUrl).trim(),
@@ -132,11 +139,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const output = path.resolve(requireArg(args, "--output"));
       const notesIndex = args.indexOf("--notes");
       const notes = notesIndex >= 0 && notesIndex + 1 < args.length ? args[notesIndex + 1] : "";
+      const mergeIndex = args.indexOf("--merge-existing");
+      const mergeFile = mergeIndex >= 0 && mergeIndex + 1 < args.length ? path.resolve(args[mergeIndex + 1]) : null;
+      let baseManifest = null;
+      if (mergeFile && fs.existsSync(mergeFile)) {
+        baseManifest = JSON.parse(fs.readFileSync(mergeFile, "utf8"));
+        validateStaticUpdaterManifest(baseManifest);
+      }
       if (!fs.existsSync(artifact)) throw new Error(`Updater artifact does not exist: ${artifact}`);
       if (!fs.existsSync(signatureFile)) throw new Error(`Updater signature does not exist: ${signatureFile}`);
       if (fs.statSync(artifact).size === 0) throw new Error("Updater artifact is empty.");
       const signature = fs.readFileSync(signatureFile, "utf8").trim();
-      const manifest = buildStaticUpdaterManifest({ version, platform, artifactUrl, signature, notes });
+      const manifest = buildStaticUpdaterManifest({ version, platform, artifactUrl, signature, notes, baseManifest });
       fs.mkdirSync(path.dirname(output), { recursive: true });
       fs.writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
       console.log(`PASS generated updater manifest: ${output}`);

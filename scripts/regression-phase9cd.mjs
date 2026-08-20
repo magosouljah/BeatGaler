@@ -32,7 +32,7 @@ if (!app.includes('libraryStateManager.commitSnapshot(refreshed, "dropped-master
 if (!app.includes('libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync")')) fail("WAV/PROJECT updates lost an authoritative commit.");
 if (!tauriClient.includes('update_project_archive_from_source')) fail("Tauri client lost PROJECT archive mutation.");
 if (!rust.includes('pub fn update_project_archive_from_source') && !rust.includes('pub async fn update_project_archive_from_source')) fail("Rust lost PROJECT archive mutation.");
-if (!rust.includes('Test-ForbiddenPart')) fail("PROJECT mutation lost Backup/Backups filtering.");
+if (!rust.includes('is_forbidden_project_component') || !rust.includes('write_project_directory_zip') || !rust.includes('Backup/old.logicx')) fail("PROJECT mutation lost cross-platform Backup/Backups filtering.");
 
 // 9D — Pinterest / external artwork isolation.
 if (!browserArtwork.includes('application/x-pinterest-closeup-image')) fail("Pinterest custom MIME support disappeared.");

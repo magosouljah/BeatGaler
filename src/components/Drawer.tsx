@@ -4,6 +4,7 @@ import { Artwork, Stars, TagEditor, TagPill } from "./ui";
 import ImageCropModal from "./ImageCropModal";
 import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { appConfirm } from "../lib/dialog";
+import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { listen } from "@tauri-apps/api/event";
 import { cleanTags, validateBpm, validateMusicKey } from "../lib/metadataValidation";
 import { getReviewFooterState, reviewHeaderLabel } from "../features/components/componentLogic";
@@ -951,13 +952,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                 Files marked PENDING are local selections only. Galer Cloud is not changed until you click Save Changes. Cancel closes the editor without uploading those selections.
                 <br />PLAY always uses the MASTER MP3; WAV is HQ/download only.
               </div>
-              {cloudError && <div style={{ marginTop: 8, color: "#f87171", fontSize: 10 }}>{cloudError}</div>}
+              {cloudError && <div style={{ marginTop: 8, color: "#f87171", fontSize: 10 }}>{sanitizeUserVisibleText(cloudError)}</div>}
             </div>
           )}
 
           {error && (
             <div style={{ marginTop: 12, padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5", lineHeight: 1.5 }}>
-              {error}
+              {sanitizeUserVisibleText(error)}
             </div>
           )}
         </div>

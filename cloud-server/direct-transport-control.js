@@ -24,7 +24,6 @@ const PROCESS_INSTANCE_ID = crypto.randomBytes(8).toString('hex');
 const HEARTBEAT_INTERVAL_MS = Math.max(30_000, Number(process.env.DIRECT_HEARTBEAT_INTERVAL_MS || 60_000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.DIRECT_HEARTBEAT_TIMEOUT_MS || 5 * 60_000));
 const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(process.env.DIRECT_TOKEN_ROTATION_ENABLED || 'false').trim().toLowerCase());
-const CLIENT_LOCAL_BOT_API_BASE = 'http://127.0.0.1:8081';
 const INDEX_OPERATION_TTL_MS = Math.max(60_000, Number(process.env.DIRECT_INDEX_OPERATION_TTL_MS || 5 * 60_000));
 const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DATA_OPERATION_TTL_MS || 4 * 60 * 60_000));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
@@ -712,9 +711,8 @@ function sessionPublic(runtime) {
     transport_username: runtime.bot.telegram_username || null,
     chat_id: String(runtime.chatId),
     bot_token: runtime.token,
-    // The Bot API server is part of the Desktop data plane. Every client talks
-    // to its OWN loopback server; BeatGaler Cloud never proxies media bytes.
-    bot_api_base: CLIENT_LOCAL_BOT_API_BASE,
+    // The Bot API server is part of the Desktop data plane. The Desktop
+    // chooses and owns its loopback port; the control plane never dictates it.
     telegram_api_id: apiCredentials().apiId,
     telegram_api_hash: apiCredentials().apiHash,
     resolver_chat_id: runtime.resolverChatId || String(process.env.DIRECT_BOTAPI_RESOLVER_CHAT_ID || '').trim() || null,
@@ -1292,7 +1290,6 @@ function getIndexPointer(chatId) {
 }
 module.exports = {
   TOKEN_ROTATION_ENABLED,
-  LOCAL_BOT_API_BASE: CLIENT_LOCAL_BOT_API_BASE,
   recordIndexPointer,
   getIndexPointer,
   enabled,
