@@ -114,6 +114,7 @@ ok(macBuildWorkflow.includes('APPLE_SIGNING_IDENTITY: "-"'), "canonical Mac buil
 ok(!macBuildWorkflow.includes("xcrun stapler validate") && macBuildWorkflow.includes("codesign --verify"), "Mac build verifies ad-hoc signing output without requiring notarization");
 ok(macBuildWorkflow.includes("Ad-hoc sign embedded Universal Mach-O runtimes") && macBuildWorkflow.includes("codesign --force --sign -"), "Mac build ad-hoc signs every embedded executable before bundling");
 ok(!macBuildWorkflow.includes("Authority=Developer ID Application:"), "ad-hoc Mac build does not require Developer ID authority");
+ok(macBuildWorkflow.includes("--bundles app,dmg"), "Mac build includes the app target required to generate updater artifacts");
 ok(macBuildWorkflow.includes(".app.tar.gz") && macBuildWorkflow.includes(".app.tar.gz.sig") && macBuildWorkflow.includes("BeatGaler-macOS-Universal"), "Mac build exports a signed updater-ready artifact without publishing it");
 ok(macBuildWorkflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json"), "Mac build compiles the real HTTPS updater endpoint into the app");
 ok(!macBuildWorkflow.includes("gh release create") && !macBuildWorkflow.includes("gh release upload") && !macBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Mac build does not publish a public GitHub release");

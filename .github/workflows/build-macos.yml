@@ -307,7 +307,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
-          npx tauri build --bundles dmg --target universal-apple-darwin
+          npx tauri build --bundles app,dmg --target universal-apple-darwin
 
       - name: Verify Universal runtimes and ad-hoc signatures inside final DMG
         shell: bash
