@@ -16,9 +16,7 @@ env:
   BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-  APPLE_ID: ${{ secrets.APPLE_ID }}
-  APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+  APPLE_SIGNING_IDENTITY: "-"
 
 jobs:
   bot-api-arm64:
@@ -102,7 +100,7 @@ jobs:
           if-no-files-found: error
 
   release-macos:
-    name: Build signed notarized Universal release
+    name: Build Tauri-signed Universal release
     needs: [bot-api-arm64, bot-api-x86_64]
     runs-on: macos-15
 
@@ -163,46 +161,14 @@ jobs:
           npm run test:unit:ts
           npm run test:regressions
 
-      - name: Require updater and Apple signing secrets
+      - name: Require updater signing secret
         shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          for name in TAURI_SIGNING_PRIVATE_KEY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::$name GitHub secret is missing. Public Mac releases must be signed/notarized; use Fast BeatGaler macOS Test for ad-hoc testing."
-              exit 1
-            fi
-          done
-
-      - name: Import Developer ID certificate
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          CERT_PATH="$RUNNER_TEMP/beatgaler-developer-id.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/beatgaler-build.keychain-db"
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-          security default-keychain -d user -s "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-          CERT_ID="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' | head -n 1)"
-          if [ -z "$CERT_ID" ]; then
-            echo "::error::No Developer ID Application identity was found in imported certificate."
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY GitHub secret is missing."
             exit 1
           fi
-          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
 
       - name: Download and build universal FFmpeg
         shell: bash
@@ -293,15 +259,13 @@ jobs:
           node scripts/check-macos-min-version.mjs src-tauri/resources/node "$MACOSX_DEPLOYMENT_TARGET"
           node scripts/check-macos-min-version.mjs src-tauri/resources/telegram-bot-api "$MACOSX_DEPLOYMENT_TARGET"
 
-      - name: Developer ID sign embedded Universal Mach-O runtimes
+      - name: Ad-hoc sign embedded Universal Mach-O runtimes
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${APPLE_SIGNING_IDENTITY:-}"
           for path in src-tauri/resources/ffmpeg src-tauri/resources/node src-tauri/resources/telegram-bot-api; do
-            codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$path"
+            codesign --force --sign - "$path"
             codesign --verify --strict --verbose=2 "$path"
-            codesign -dv --verbose=4 "$path" 2>&1 | grep -q "Authority=Developer ID Application:"
           done
 
       - name: Compile and run Rust unit tests with all Universal runtimes present
@@ -310,21 +274,20 @@ jobs:
           set -euo pipefail
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 
-      - name: Build signed, notarized Universal macOS DMG and updater bundle
+      - name: Build Universal macOS DMG and Tauri-signed updater bundle
         shell: bash
         run: |
           set -euo pipefail
           cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
           npx tauri build --bundles dmg --target universal-apple-darwin
 
-      - name: Verify Universal runtimes, signature, and notarization inside final DMG
+      - name: Verify Universal runtimes and ad-hoc signatures inside final DMG
         shell: bash
         run: |
           set -euo pipefail
           ROOT="src-tauri/target/universal-apple-darwin/release/bundle"
           DMG_PATH="$(find "$ROOT/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
           test -n "$DMG_PATH" && test -f "$DMG_PATH"
-          xcrun stapler validate "$DMG_PATH"
 
           ATTACH_OUTPUT="$(hdiutil attach "$DMG_PATH" -nobrowse -readonly)"
           MOUNT_POINT="$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's#^.*\(/Volumes/.*\)$#\1#p' | head -n 1)"
@@ -356,11 +319,8 @@ jobs:
           scripts/check-macos-runtime-dylibs.sh "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"
           for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
             codesign --verify --strict --verbose=2 "$path"
-            codesign -dv --verbose=4 "$path" 2>&1 | grep -q "Authority=Developer ID Application:"
           done
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -q "Authority=Developer ID Application:"
-          xcrun stapler validate "$APP_PATH"
 
           UPDATER_PATH="$(find "$ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1)"
           test -n "$UPDATER_PATH" && test -f "$UPDATER_PATH"
@@ -376,6 +336,5 @@ jobs:
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
             VERSION
           if-no-files-found: error
-
 
 
