@@ -109,10 +109,10 @@ ok(macBuildWorkflow.includes("check-macos-min-version.mjs"), "canonical Mac buil
 ok(macBuildWorkflow.includes("macos-15-intel") && macBuildWorkflow.includes("macos-15"), "Universal Mac build creates native Bot API halves on Intel and ARM runners");
 ok(macBuildWorkflow.includes("lipo -create") && macBuildWorkflow.includes("telegram-bot-api"), "Universal Mac build combines Bot API ARM64+x86_64 with lipo");
 ok(macBuildWorkflow.includes("APP_MAIN_PATH") && macBuildWorkflow.includes("BOT_API_PATH") && macBuildWorkflow.includes("NODE_PATH") && macBuildWorkflow.includes("FFMPEG_PATH"), "final DMG verifies app + Node + FFmpeg + Bot API architectures");
-ok(!macBuildWorkflow.includes('APPLE_SIGNING_IDENTITY: "-"'), "canonical Mac build is not ad-hoc signed");
-ok(macBuildWorkflow.includes("xcrun stapler validate") && macBuildWorkflow.includes("codesign --verify"), "Mac build verifies signing/notarization output");
-ok(macBuildWorkflow.includes("Developer ID sign embedded Universal Mach-O runtimes") && macBuildWorkflow.includes("codesign --force --timestamp --options runtime --sign"), "Mac build Developer-ID signs every embedded executable before bundling");
-ok(macBuildWorkflow.includes('codesign -dv --verbose=4 "$path"') && macBuildWorkflow.includes('Authority=Developer ID Application:'), "final Universal DMG verifies Developer ID authority on nested Mach-O executables");
+ok(macBuildWorkflow.includes('APPLE_SIGNING_IDENTITY: "-"'), "canonical Mac build uses ad-hoc signing without Apple Developer ID");
+ok(!macBuildWorkflow.includes("xcrun stapler validate") && macBuildWorkflow.includes("codesign --verify"), "Mac build verifies ad-hoc signing output without requiring notarization");
+ok(macBuildWorkflow.includes("Ad-hoc sign embedded Universal Mach-O runtimes") && macBuildWorkflow.includes("codesign --force --sign -"), "Mac build ad-hoc signs every embedded executable before bundling");
+ok(!macBuildWorkflow.includes("Authority=Developer ID Application:"), "ad-hoc Mac build does not require Developer ID authority");
 ok(macBuildWorkflow.includes(".app.tar.gz") && macBuildWorkflow.includes(".app.tar.gz.sig") && macBuildWorkflow.includes("BeatGaler-macOS-Universal"), "Mac build exports a signed updater-ready artifact without publishing it");
 ok(macBuildWorkflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json"), "Mac build compiles the real HTTPS updater endpoint into the app");
 ok(!macBuildWorkflow.includes("gh release create") && !macBuildWorkflow.includes("gh release upload") && !macBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Mac build does not publish a public GitHub release");
