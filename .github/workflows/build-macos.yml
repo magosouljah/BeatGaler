@@ -246,7 +246,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/check-macos-runtime-dylibs.sh \
+          bash scripts/check-macos-runtime-dylibs.sh \
             src-tauri/resources/ffmpeg \
             src-tauri/resources/node \
             src-tauri/resources/telegram-bot-api
@@ -316,7 +316,7 @@ jobs:
           for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
             node scripts/check-macos-min-version.mjs "$path" "$MACOSX_DEPLOYMENT_TARGET"
           done
-          scripts/check-macos-runtime-dylibs.sh "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"
+          bash scripts/check-macos-runtime-dylibs.sh "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"
           for path in "$APP_MAIN_PATH" "$FFMPEG_PATH" "$NODE_PATH" "$BOT_API_PATH"; do
             codesign --verify --strict --verbose=2 "$path"
           done
@@ -336,5 +336,4 @@ jobs:
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
             VERSION
           if-no-files-found: error
-
 
