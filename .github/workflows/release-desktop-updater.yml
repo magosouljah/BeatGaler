@@ -1,0 +1,210 @@
+name: Release - Desktop Updater
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, e.g. v0.8.0"
+        required: true
+        type: string
+      windows_run_id:
+        description: "Successful Build - Windows run ID"
+        required: true
+        type: string
+      macos_run_id:
+        description: "Successful Build - macOS run ID"
+        required: true
+        type: string
+      release_notes:
+        description: "Short release notes"
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-desktop-${{ inputs.release_tag }}
+  cancel-in-progress: false
+env:
+  PUBLIC_RELEASE_REPO: magosouljah/galer
+
+jobs:
+  release-desktop-updater:
+    name: Publish verified Desktop release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release tools
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify selected build runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_RUN_ID: ${{ inputs.windows_run_id }}
+          MACOS_RUN_ID: ${{ inputs.macos_run_id }}
+        run: |
+          set -euo pipefail
+
+          WIN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN_ID")"
+          MAC_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$MACOS_RUN_ID")"
+
+          WIN_NAME="$(printf '%s' "$WIN_JSON" | jq -r '.name')"
+          MAC_NAME="$(printf '%s' "$MAC_JSON" | jq -r '.name')"
+
+          WIN_RESULT="$(printf '%s' "$WIN_JSON" | jq -r '.conclusion')"
+          MAC_RESULT="$(printf '%s' "$MAC_JSON" | jq -r '.conclusion')"
+
+          WIN_SHA="$(printf '%s' "$WIN_JSON" | jq -r '.head_sha')"
+          MAC_SHA="$(printf '%s' "$MAC_JSON" | jq -r '.head_sha')"
+
+          test "$WIN_NAME" = "Build - Windows"
+          test "$MAC_NAME" = "Build - macOS"
+
+          test "$WIN_RESULT" = "success"
+          test "$MAC_RESULT" = "success"
+
+          if [ "$WIN_SHA" != "$MAC_SHA" ]; then
+            echo "::error::Windows and macOS builds came from different commits."
+            echo "Windows: $WIN_SHA"
+            echo "macOS:   $MAC_SHA"
+            exit 1
+          fi
+
+          echo "Verified shared source commit: $WIN_SHA"
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: BeatGaler-Windows-x64
+          path: release-input/windows
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.windows_run_id }}
+
+      - name: Download macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: BeatGaler-macOS-Universal
+          path: release-input/macos
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.macos_run_id }}
+
+      - name: Verify versions and prepare Desktop release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WIN_VERSION="$(tr -d '\r\n' < release-input/windows/VERSION)"
+          MAC_VERSION="$(tr -d '\r\n' < release-input/macos/VERSION)"
+
+          if [ "$WIN_VERSION" != "$MAC_VERSION" ]; then
+            echo "::error::Windows version ($WIN_VERSION) differs from macOS version ($MAC_VERSION)."
+            exit 1
+          fi
+
+          if [ "v$WIN_VERSION" != "${{ inputs.release_tag }}" ]; then
+            echo "::error::Build version ($WIN_VERSION) does not match release tag (${{ inputs.release_tag }})."
+            exit 1
+          fi
+
+          WIN_EXE="$(find release-input/windows -type f -name '*.exe' | head -n 1)"
+          WIN_SIG="${WIN_EXE}.sig"
+
+          MAC_DMG="$(find release-input/macos -type f -name '*.dmg' | head -n 1)"
+          MAC_UPDATER="$(find release-input/macos -type f -name '*.app.tar.gz' | head -n 1)"
+          MAC_SIG="${MAC_UPDATER}.sig"
+
+          test -f "$WIN_EXE"
+          test -s "$WIN_SIG"
+          test -f "$MAC_DMG"
+          test -f "$MAC_UPDATER"
+          test -s "$MAC_SIG"
+
+          mkdir -p release-assets
+
+          WIN_NAME="Beat.Galer_${WIN_VERSION}_x64-setup.exe"
+          MAC_DMG_NAME="Beat.Galer_${WIN_VERSION}_universal.dmg"
+          MAC_UPDATER_NAME="Beat.Galer_${WIN_VERSION}_universal.app.tar.gz"
+
+          cp "$WIN_EXE" "release-assets/$WIN_NAME"
+          cp "$WIN_SIG" "release-assets/$WIN_NAME.sig"
+
+          cp "$MAC_DMG" "release-assets/$MAC_DMG_NAME"
+          cp "$MAC_UPDATER" "release-assets/$MAC_UPDATER_NAME"
+          cp "$MAC_SIG" "release-assets/$MAC_UPDATER_NAME.sig"
+
+          WIN_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$WIN_NAME"
+          MAC_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$MAC_UPDATER_NAME"
+
+          node scripts/updater-manifest.mjs generate \
+            --version "$WIN_VERSION" \
+            --platform windows-x86_64 \
+            --artifact "release-assets/$WIN_NAME" \
+            --signature "release-assets/$WIN_NAME.sig" \
+            --url "$WIN_URL" \
+            --output release-assets/latest-windows.json \
+            --notes "Beat Galer $WIN_VERSION"
+
+          node scripts/updater-manifest.mjs generate \
+            --version "$WIN_VERSION" \
+            --platform darwin-aarch64 \
+            --artifact "release-assets/$MAC_UPDATER_NAME" \
+            --signature "release-assets/$MAC_UPDATER_NAME.sig" \
+            --url "$MAC_URL" \
+            --output release-assets/latest-arm.json \
+            --notes "Beat Galer $WIN_VERSION" \
+            --merge-existing release-assets/latest-windows.json
+
+          node scripts/updater-manifest.mjs generate \
+            --version "$WIN_VERSION" \
+            --platform darwin-x86_64 \
+            --artifact "release-assets/$MAC_UPDATER_NAME" \
+            --signature "release-assets/$MAC_UPDATER_NAME.sig" \
+            --url "$MAC_URL" \
+            --output release-assets/latest.json \
+            --notes "Beat Galer $WIN_VERSION" \
+            --merge-existing release-assets/latest-arm.json
+
+          node scripts/updater-manifest.mjs validate-release release-assets/latest.json
+
+          rm release-assets/latest-windows.json
+          rm release-assets/latest-arm.json
+
+      - name: Create or update public Desktop Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${{ inputs.release_tag }}"
+          NOTES="${{ inputs.release_notes }}"
+
+          if [ -z "$NOTES" ]; then
+            NOTES="Beat Galer $TAG"
+          fi
+
+          if ! gh release view "$TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$PUBLIC_RELEASE_REPO" \
+              --target main \
+              --title "Beat Galer $TAG" \
+              --notes "$NOTES"
+          fi
+
+          gh release upload "$TAG" \
+            release-assets/*.exe \
+            release-assets/*.exe.sig \
+            release-assets/*.dmg \
+            release-assets/*.app.tar.gz \
+            release-assets/*.app.tar.gz.sig \
+            release-assets/latest.json \
+            --repo "$PUBLIC_RELEASE_REPO" \
+            --clobber

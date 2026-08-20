@@ -448,7 +448,7 @@ try {
     stdio: "inherit",
   });
 
-  const macWorkflow = readFileSync(path.join(root, ".github", "workflows", "build-macos-cloud-beta.yml"), "utf8");
+  const macWorkflow = readFileSync(path.join(root, ".github", "workflows", "build-macos.yml"), "utf8");
   if (/galer-cloud-beta-v\d+/i.test(macWorkflow)) fail("macOS cloud beta workflow reintroduced a version-specific branch.");
   if (/BeatGaler-V\d+-macOS/i.test(macWorkflow)) fail("macOS artifact name reintroduced a version-specific hardcode.");
   if (!macWorkflow.includes("npm run version:check")) fail("macOS workflow must verify VERSION before building.");
@@ -478,3 +478,4 @@ try {
   if (actual !== expected) fail(`GitHub branch derivation mismatch. Expected ${expected}, got ${actual}.`);
   console.log(`PASS github guard: one command targets ${actual} from VERSION without force-push`);
 }
+

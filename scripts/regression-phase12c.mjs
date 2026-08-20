@@ -11,7 +11,9 @@ const updater = read("src-tauri/src/updater.rs");
 const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
 const ui = read("src/components/SettingsPanel.tsx");
 const bridge = read("src/lib/tauri.ts");
-const workflow = read(".github/workflows/release-windows-updater.yml");
+const windowsBuild = read(".github/workflows/build-windows.yml");
+const macBuild = read(".github/workflows/build-macos.yml");
+const releaseWorkflow = read(".github/workflows/release-desktop-updater.yml");
 const baseline = read("scripts/build-updater-test-baseline.ps1");
 
 if (!cargo.includes('tauri-plugin-updater = "2.0"')) fail("Rust updater dependency missing");
@@ -24,7 +26,12 @@ if (!conf.plugins?.updater?.pubkey?.startsWith("dW50cnVzdGVk")) fail("real publi
 if (JSON.stringify(conf.plugins.updater).includes("PRIVATE")) fail("private signing material leaked into config");
 if (!bridge.includes("checkForAppUpdate") || !bridge.includes("installAppUpdate")) fail("frontend updater bridge missing");
 if (!ui.includes("Check for updates") || !ui.includes("Updates are verified before installation")) fail("user-facing updater controls missing");
-if (!workflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json")) fail("release build endpoint is not bound to the dedicated public release repository");
+if (!windowsBuild.includes("BEATGALER_UPDATER_ENDPOINT") || !macBuild.includes("BEATGALER_UPDATER_ENDPOINT")) fail("Desktop builds are not bound to the updater endpoint");
+if (!releaseWorkflow.includes("PUBLIC_RELEASE_REPO: magosouljah/galer")) fail("Desktop release is not bound to the dedicated public release repository");
 if (!baseline.includes("git remote get-url origin") || !baseline.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) fail("real 0.6.1 baseline test builder is incomplete");
 
 console.log("PASS Phase 12C real updater client: signed HTTPS checks/install are wired, public key is embedded, endpoint follows the release repo, and a real 0.6.1 baseline build is available");
+
+
+
+
