@@ -1,4 +1,4 @@
-﻿name: Fast BeatGaler macOS Test
+name: Fast BeatGaler macOS Test
 
 on:
   workflow_dispatch:
