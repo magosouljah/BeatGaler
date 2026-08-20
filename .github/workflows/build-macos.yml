@@ -298,6 +298,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p dist
+          printf '<!doctype html><html><body></body></html>\n' > dist/index.html
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Build Universal macOS DMG and Tauri-signed updater bundle

@@ -128,6 +128,7 @@ ok(cargoLockTest.includes('"zip", "4.6.1"') && cargoLockTest.includes('"unicode-
 ok(portabilityWorkflow.includes("git diff --exit-code -- src-tauri/Cargo.lock") && portabilityWorkflow.includes("regenerated-Cargo-lock"), "Windows CI fails closed on an uncommitted regenerated Cargo.lock and preserves it as an artifact");
 ok(portabilityWorkflow.includes("npm run test:mac-portability:locked"), "hosted native Mac CI compiles only the committed Cargo.lock graph");
 ok(macBuildWorkflow.includes("cargo test --locked --manifest-path src-tauri/Cargo.toml --lib"), "Mac build refuses dependency resolution drift");
+ok(macBuildWorkflow.includes("mkdir -p dist") && macBuildWorkflow.indexOf("mkdir -p dist") < macBuildWorkflow.indexOf("cargo test --locked"), "Mac release build prepares frontendDist before Tauri Rust tests");
 ok(macBuildWorkflow.includes("cargo metadata --locked") && windowsBuildWorkflow.includes("cargo metadata --locked"), "Desktop build workflows preflight the committed Rust dependency graph");
 ok(exists("scripts/check-macos-runtime-dylibs.sh") && runtimeDylibCheck.includes('/usr/lib/*|/System/Library/*'), "embedded runtime dylib audit permits only Apple system dependencies");
 ok(runtimeDylibCheck.includes('[[ "$line" == "$binary (architecture "* ]]'), "embedded runtime dylib audit ignores Universal Mach-O architecture headers");
