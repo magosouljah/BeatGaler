@@ -157,6 +157,9 @@ jobs:
           ARM="/tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api"
           INTEL="/tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api"
 
+          # GitHub artifacts do not preserve executable mode bits.
+          chmod +x "$ARM" "$INTEL"
+
           test -x "$ARM"
           test -x "$INTEL"
 
