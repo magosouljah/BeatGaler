@@ -111,6 +111,18 @@ export interface PlatformDiagnosticsPort {
   reviewPerformance(message: string): void;
 }
 
+export interface PlatformImportCandidate {
+  beat: Beat;
+  hydrated: Promise<Beat>;
+}
+
+export interface PlatformImportPort {
+  pickBeat(): Promise<PlatformImportCandidate | null>;
+  fromFile(file: File): PlatformImportCandidate;
+  fileForBeat(beatId: string): File | null;
+  releaseBeat(beatId: string): void;
+}
+
 /** The only platform boundary React code should depend on after the migration. */
 export interface PlatformAdapter {
   kind: PlatformKind;
@@ -129,4 +141,5 @@ export interface PlatformAdapter {
   cloud: PlatformCloudPort;
   cloudAuth: PlatformCloudAuthPort;
   diagnostics: PlatformDiagnosticsPort;
+  importer: PlatformImportPort;
 }

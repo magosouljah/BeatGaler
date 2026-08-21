@@ -150,87 +150,9 @@ export async function flushOfflineTrashIntents(): Promise<number> {
   return invoke<number>("flush_offline_trash_intents");
 }
 
-// Parse ID3 tags from a browser File object using jsmediatags (dev-mode only)
-export async function parseId3FromFile(file: File): Promise<{ bpm: string; key: string; tags: string[]; image_base64: string | null }> {
-  // Use runtime UMD from CDN to avoid Vite/esbuild package entry resolution issues.
-  // This keeps the dev-mode parser out of the dependency graph so Vite won't fail.
-  try {
-    const globalName = (window as any).jsmediatags;
-    if (!globalName) {
-      // inject script
-      await new Promise<void>((resolve, reject) => {
-        const src = 'https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js';
-        const s = document.createElement('script');
-        s.src = src;
-        s.async = true;
-        s.onload = () => resolve();
-        s.onerror = () => reject(new Error('Failed to load jsmediatags from CDN'));
-        document.head.appendChild(s);
-      });
-    }
-    const jm: any = (window as any).jsmediatags;
-    if (!jm || typeof jm.read !== 'function') return { bpm: "", key: "", tags: [], image_base64: null };
-    return await new Promise((resolve) => {
-      try {
-        jm.read(file, {
-          onSuccess: (result: any) => {
-            const t = result.tags || {};
-            // Extract genre/tags
-            const genre = String(t.TCON || t.genre || "");
-            const tags = String(genre || "").split(/[,;\/]/).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
-
-            // Heuristic search for BPM and Key across tag fields
-            let bpm = "";
-            let key = "";
-            const bpmRe = /^\d{2,3}$/;
-            const keyRe = /^[A-G](?:b|#)?(?:\s*(?:maj|major|min|minor|m)?)?$/i;
-
-            // Check known fields first
-            const knownBpm = [t.TBPM, t.bpm, t.BPM, t.tbpm].find(Boolean);
-            if (knownBpm) bpm = String(knownBpm).trim();
-            const knownKey = [t.TKEY, t.key, t.INITIALKEY, t.initialkey].find(Boolean);
-            if (knownKey) key = String(knownKey).trim();
-
-            // Fallback: scan all string fields for bpm/key patterns
-            if (!bpm || !key) {
-              for (const k of Object.keys(t)) {
-                if (bpm && key) break;
-                try {
-                  const v = t[k];
-                  if (typeof v === 'string') {
-                    const s = v.trim();
-                    if (!bpm && bpmRe.test(s)) bpm = s;
-                    const sKey = s.split(/[\[\]\(\)\-_,]/)[0].trim();
-                    if (!key && keyRe.test(sKey)) key = sKey;
-                  }
-                  // jsmediatags may provide picture in t.picture
-                } catch (_e) { /* ignore */ }
-              }
-            }
-
-            // Normalize key: convert single-letter like 'C' to 'C Major' if ambiguous? Keep raw for now
-
-            let image_base64: string | null = null;
-            const pic = t.picture || t.PICTURE || null;
-            if (pic && pic.data && pic.format) {
-              const arr = pic.data as number[];
-              let binary = '';
-              for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i]);
-              const b64 = btoa(binary);
-              image_base64 = `data:${pic.format};base64,${b64}`;
-            }
-            resolve({ bpm: String(bpm || ""), key: String(key || ""), tags, image_base64 });
-          },
-          onError: (_err: any) => resolve({ bpm: "", key: "", tags: [], image_base64: null }),
-        });
-      } catch (e) {
-        resolve({ bpm: "", key: "", tags: [], image_base64: null });
-      }
-    });
-  } catch (e) {
-    return { bpm: "", key: "", tags: [], image_base64: null };
-  }
-}
+// Kept as a re-export while legacy Desktop/dev callers move behind adapters.
+export { parseId3FromFile } from "../features/import/webAudioMetadata";
+import { parseId3FromFile } from "../features/import/webAudioMetadata";
 
 export async function pickAndScanFolder(): Promise<Beat[]> {
   await initTauri();

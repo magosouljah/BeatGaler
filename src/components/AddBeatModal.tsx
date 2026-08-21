@@ -18,10 +18,12 @@ import {
 } from "../lib/tauri";
 import ImportDecisionsModal from "./ImportDecisionsModal";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
+import { platform } from "../platform";
 
 interface Props {
   onClose: () => void;
   onAdd: (beats: Beat[]) => void;
+  onCandidateHydrated?: (beat: Beat) => void;
   existingBeats: Beat[];
 }
 
@@ -77,7 +79,7 @@ function isDuplicateCandidate(beat: Beat, existingBeats: Beat[]) {
   ));
 }
 
-export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
+export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, existingBeats }: Props) {
   const [step, setStep] = useState<Step>("choose");
   const [scanned, setScanned] = useState<Beat[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -87,6 +89,45 @@ export default function AddBeatModal({ onClose, onAdd, existingBeats }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importBatch, setImportBatch] = useState<ImportBatchPreview | null>(null);
+
+  if (platform.capabilities.browserFileImport) {
+    const handleBrowserPick = async () => {
+      setError(null);
+      try {
+        const candidate = await platform.importer.pickBeat();
+        if (!candidate) return;
+        // Review paints before ID3/artwork parsing finishes.
+        onAdd([candidate.beat]);
+        onClose();
+        void candidate.hydrated.then(onCandidateHydrated).catch(() => {});
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    };
+
+    return (
+      <>
+        <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 400, backdropFilter: "blur(6px)" }} />
+        <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 420, maxWidth: "calc(100vw - 32px)", background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: 14, zIndex: 410, boxShadow: "0 24px 60px rgba(0,0,0,0.9)" }}>
+          <div style={{ padding: "18px 22px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontWeight: 500, fontSize: 14, color: "#e0e0e0" }}>Add beat</span>
+            <button aria-label="Close" onClick={onClose} style={{ background: "none", border: "none", color: "#777", fontSize: 18, cursor: "pointer" }}>×</button>
+          </div>
+          <div style={{ padding: 22 }}>
+            <button onClick={() => void handleBrowserPick()}
+              style={{ width: "100%", padding: "18px", background: "#161616", border: "1px solid #252525", borderRadius: 10, cursor: "pointer", textAlign: "left" }}>
+              <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Choose MP3 or WAV</div>
+              <div style={{ fontSize: 11, color: "#666", marginTop: 5 }}>One beat per import · Review opens immediately</div>
+            </button>
+            <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6, marginTop: 12 }}>
+              You can also drop one MP3 or WAV directly into your library.
+            </div>
+            {error && <div style={{ marginTop: 12, padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5" }}>{sanitizeUserVisibleText(error)}</div>}
+          </div>
+        </div>
+      </>
+    );
+  }
 
   // Smart import: pick any folder, scan it recursively (any structure —
   // separate mp3/flp/samples folders, or everything together), auto-group

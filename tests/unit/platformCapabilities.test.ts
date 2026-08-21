@@ -10,8 +10,12 @@ runSuite("platform capabilities", [
     equal(DESKTOP_CAPABILITIES.playbackCache, true, "Desktop must keep native playback cache");
     equal(DESKTOP_CAPABILITIES.developerTools, true, "Desktop must keep developer tools");
   }],
-  ["Web foundation never advertises unfinished features", () => {
-    for (const [name, enabled] of Object.entries(WEB_FOUNDATION_CAPABILITIES)) {
+  ["Web advertises only completed browser import features", () => {
+    equal(WEB_FOUNDATION_CAPABILITIES.browserFileImport, true, "Web supports one-file browser picking");
+    equal(WEB_FOUNDATION_CAPABILITIES.singleBeatDrop, true, "Web supports one-file library drops");
+    const unfinished = Object.entries(WEB_FOUNDATION_CAPABILITIES)
+      .filter(([name]) => name !== "browserFileImport" && name !== "singleBeatDrop");
+    for (const [name, enabled] of unfinished) {
       equal(enabled, false, `Web capability ${name} must remain disabled until implemented`);
     }
   }],

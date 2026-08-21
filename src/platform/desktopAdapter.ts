@@ -106,4 +106,10 @@ export const desktopAdapter: PlatformAdapter = {
         .catch(() => {});
     },
   },
+  importer: {
+    async pickBeat() { return null; },
+    fromFile() { throw new Error("Browser File import is not available in BeatGaler Desktop."); },
+    fileForBeat() { return null; },
+    releaseBeat() {},
+  },
 };
