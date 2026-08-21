@@ -74,6 +74,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isEdit = mode === "edit";
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
+  const displayedBeatIdRef = useRef(beat.id);
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
@@ -194,6 +195,19 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setData({ ...beat, tags: [] });
       return;
     }
+    if (displayedBeatIdRef.current === beat.id) {
+      // Progressive Web metadata must never erase edits already typed in Review.
+      setData(current => ({
+        ...current,
+        bpm: current.bpm || beat.bpm,
+        key: current.key || beat.key,
+        tags: current.tags.length > 0 ? current.tags : beat.tags,
+        image_base64: current.image_base64 || beat.image_base64,
+        image_preview_base64: current.image_preview_base64 || beat.image_preview_base64,
+      }));
+      return;
+    }
+    displayedBeatIdRef.current = beat.id;
     setData({ ...beat });
     setPending({});
     setPendingCloud({});
@@ -239,6 +253,15 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     setSaving(true);
     setError(null);
     try {
+      if (platform.kind === "web" && reviewInfo && !isBulk) {
+        const updated = { ...validatedData, cloud_status: "PENDING_UPLOAD" };
+        if (reviewAction === "all" && onSaveAll) await onSaveAll(updated);
+        else {
+          onSaved(updated);
+          if (closeAfterSave) onClose();
+        }
+        return;
+      }
       if (isBulk && onBulkSaved) {
         const updates: Partial<Beat> = {};
         const tagsInput = Array.from(new Set(validatedData.tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
@@ -879,8 +902,8 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             </div>
           </div>
 
-          {/* Telegram is the only persistent beat storage in V1. */}
-          {!isBulk && (
+          {/* Galer Cloud file replacement appears only when this runtime can commit it. */}
+          {!isBulk && platform.capabilities.directGalerCloudTransport && (
             <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                 <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div>

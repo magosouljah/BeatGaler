@@ -1,5 +1,6 @@
 import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
+import { webImportPort } from "./webImport";
 
 const WEB_CLIENT_ID_KEY = "beatgaler:web-client-id:v1";
 const WEB_INCOMPLETE_WARNINGS_KEY = "beatgaler:web-incomplete-warnings:v1";
@@ -141,4 +142,5 @@ export const webAdapter: PlatformAdapter = {
   diagnostics: {
     reviewPerformance() {},
   },
+  importer: webImportPort,
 };

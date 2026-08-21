@@ -37,8 +37,8 @@ export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freez
  * Capabilities turn true only when their Web implementation is complete.
  */
 export const WEB_FOUNDATION_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freeze({
-  browserFileImport: false,
-  singleBeatDrop: false,
+  browserFileImport: true,
+  singleBeatDrop: true,
   nativeFilesystemDrop: false,
   nativeExternalArtworkDrop: false,
   directGalerCloudTransport: false,
