@@ -13,8 +13,9 @@ runSuite("platform capabilities", [
   ["Web advertises only completed browser import features", () => {
     equal(WEB_FOUNDATION_CAPABILITIES.browserFileImport, true, "Web supports one-file browser picking");
     equal(WEB_FOUNDATION_CAPABILITIES.singleBeatDrop, true, "Web supports one-file library drops");
+    equal(WEB_FOUNDATION_CAPABILITIES.browserObjectPlayback, true, "Web previews imported browser audio directly");
     const unfinished = Object.entries(WEB_FOUNDATION_CAPABILITIES)
-      .filter(([name]) => name !== "browserFileImport" && name !== "singleBeatDrop");
+      .filter(([name]) => !["browserFileImport", "singleBeatDrop", "browserObjectPlayback"].includes(name));
     for (const [name, enabled] of unfinished) {
       equal(enabled, false, `Web capability ${name} must remain disabled until implemented`);
     }

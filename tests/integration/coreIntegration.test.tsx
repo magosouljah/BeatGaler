@@ -220,9 +220,11 @@ type AudioHook = ReturnType<(typeof import("../../src/hooks/useAudio"))["useAudi
 
 async function mountAudioHook() {
   vi.resetModules();
-  vi.doMock("../../src/lib/tauri", () => ({
-    filePathToUrl: (path: string) => `asset://${path.replace(/\\/g, "/")}`,
-    downloadCookingDiagnosticEvent: vi.fn(async () => undefined),
+  vi.doMock("../../src/platform", () => ({
+    platform: {
+      media: { resolveUrl: (path: string) => `asset://${path.replace(/\\/g, "/")}` },
+      diagnostics: { audioEvent: vi.fn(async () => undefined) },
+    },
   }));
 
   FakeAudio.instances = [];
@@ -261,7 +263,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe("useAudio ↔ browser/Tauri integration", () => {
+describe("useAudio ↔ platform integration", () => {
   it("converts file paths and falls back to the next source after a browser audio error", async () => {
     const mounted = await mountAudioHook();
     audioRoot = mounted.root;

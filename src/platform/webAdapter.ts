@@ -141,6 +141,7 @@ export const webAdapter: PlatformAdapter = {
   },
   diagnostics: {
     reviewPerformance() {},
+    async audioEvent() {},
   },
   importer: webImportPort,
 };

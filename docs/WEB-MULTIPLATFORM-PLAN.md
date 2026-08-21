@@ -33,6 +33,7 @@ Platform-specific behavior is controlled by an explicit capability matrix. React
 - Phase 2 slice B is complete: the signed-in browser shell bypasses native startup, library transactions cross the platform boundary, shared preferences persist in the browser, and Settings hides native Trash, playback cache, developer tools, and updater features by capability.
 - Phase 2 slice C is complete: Web accepts exactly one MP3/WAV from the browser picker or library drop, opens the shared Review UI immediately, keeps the real `File` behind the import port, and hydrates BPM, key, tags, and artwork progressively without overwriting fields the user already edited.
 - Direct transport slice D is complete: Web creates an ephemeral RSA-OAEP session key, sends only its public JWK to the control plane, receives the bot/API credential encrypted for that browser session, re-imports the private key as non-extractable, and keeps decrypted material in memory only. Desktop's existing session response remains unchanged.
+- Phase 2 slice E is complete: the shared audio hook resolves sources and diagnostics through the platform adapter, and freshly imported Web MP3/WAV files play from their browser object URL without Tauri or control-server transfer.
 - Phase 2 remains in progress: authoritative upload/library persistence, playback after refresh, card actions, and the remaining `App.tsx` controllers still need to move behind platform ports before the Galer Cloud Web library can be connected.
 
 ## Canonical model rule

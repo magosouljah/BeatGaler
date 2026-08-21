@@ -109,6 +109,7 @@ export interface PlatformAccountPort {
 
 export interface PlatformDiagnosticsPort {
   reviewPerformance(message: string): void;
+  audioEvent(event: string, beatId: string | null, beatName: string | null, detail: string): Promise<void>;
 }
 
 export interface PlatformImportCandidate {
