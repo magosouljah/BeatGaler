@@ -10,6 +10,9 @@ env:
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
   BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
+  NODE_VERSION: 22.18.0
+  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
+  VCPKG_COMMIT: 7f3781e19cc7d4e4882a4caec01668c6f7b5c163
 
 jobs:
   build-windows:
@@ -22,7 +25,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Setup Rust
@@ -33,12 +36,91 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Cache Telegram Bot API runtime
+        id: bot-api-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/windows-bot-api
+          key: telegram-bot-api-windows-static-${{ env.BOT_API_COMMIT }}-${{ env.VCPKG_COMMIT }}
+
+      - name: Build official Telegram Bot API runtime
+        if: steps.bot-api-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone https://github.com/tdlib/telegram-bot-api.git runtime/telegram-bot-api-source
+          git -C runtime/telegram-bot-api-source checkout $env:BOT_API_COMMIT
+          git -C runtime/telegram-bot-api-source submodule update --init --recursive
+
+          git clone https://github.com/microsoft/vcpkg.git runtime/vcpkg
+          git -C runtime/vcpkg checkout $env:VCPKG_COMMIT
+          & runtime/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed with exit code $LASTEXITCODE" }
+          & runtime/vcpkg/vcpkg.exe install gperf:x64-windows-static openssl:x64-windows-static zlib:x64-windows-static --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed with exit code $LASTEXITCODE" }
+
+          cmake -S runtime/telegram-bot-api-source -B runtime/telegram-bot-api-build -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/runtime/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DCMAKE_INSTALL_PREFIX="$PWD/runtime/telegram-bot-api-install"
+          if ($LASTEXITCODE -ne 0) { throw "Telegram Bot API configure failed with exit code $LASTEXITCODE" }
+          cmake --build runtime/telegram-bot-api-build --config Release --target install --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Telegram Bot API build failed with exit code $LASTEXITCODE" }
+
+          $bot = Get-ChildItem runtime/telegram-bot-api-install,runtime/telegram-bot-api-build -Filter telegram-bot-api.exe -Recurse | Select-Object -First 1
+          if (-not $bot) { throw "The official build did not produce telegram-bot-api.exe" }
+          New-Item -ItemType Directory -Force runtime/windows-bot-api | Out-Null
+          Copy-Item -LiteralPath $bot.FullName -Destination runtime/windows-bot-api/telegram-bot-api.exe
+
+      - name: Stage and verify Windows runtimes
+        shell: pwsh
+        run: |
+          $resourceDir = "src-tauri/resources/windows"
+          New-Item -ItemType Directory -Force $resourceDir | Out-Null
+          $node = (Get-Command node.exe -ErrorAction Stop).Source
+          Copy-Item -LiteralPath $node -Destination "$resourceDir/node.exe"
+          Copy-Item -LiteralPath "runtime/windows-bot-api/telegram-bot-api.exe" -Destination "$resourceDir/telegram-bot-api.exe"
+
+          foreach ($runtime in @("$resourceDir/node.exe", "$resourceDir/telegram-bot-api.exe")) {
+            $item = Get-Item -LiteralPath $runtime -ErrorAction Stop
+            if ($item.Length -lt 1MB) { throw "$runtime is unexpectedly small: $($item.Length) bytes" }
+            $magic = [System.IO.File]::ReadAllBytes($item.FullName)[0..1]
+            if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw "$runtime is not a Windows PE executable" }
+          }
+          & "$resourceDir/node.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled node.exe is not executable" }
+          & "$resourceDir/telegram-bot-api.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Bundled telegram-bot-api.exe is not executable" }
+
+      - name: Verify Windows packaging contract
+        run: npm run test:windows-packaging
+
       - name: Verify Cargo.lock before build
         shell: pwsh
         run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
 
       - name: Build Tauri app
-        run: npx tauri build --bundles nsis
+        run: npx tauri build --bundles nsis --config src-tauri/tauri.windows-release.conf.json
+
+      - name: Verify installed Windows runtimes
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          $installDir = Join-Path $env:RUNNER_TEMP "BeatGaler-install-check"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS test installation failed with exit code $($process.ExitCode)" }
+
+          foreach ($relative in @("node.exe", "telegram-bot-api.exe", "direct-transport/transport-helper.cjs", "direct-transport/runtime-watchdog.cjs")) {
+            $installed = Join-Path $installDir $relative
+            if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Installer omitted required runtime: $relative" }
+          }
+          $node = Join-Path $installDir "node.exe"
+          $bot = Join-Path $installDir "telegram-bot-api.exe"
+          & $node --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed node.exe is not executable" }
+          & $bot --help
+          if ($LASTEXITCODE -ne 0) { throw "Installed telegram-bot-api.exe is not executable" }
 
       - name: Verify updater artifacts
         run: npm run updater:verify-artifacts

@@ -12,7 +12,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::{HashMap, VecDeque};
 use url::Url;
@@ -82,6 +82,35 @@ pub fn get_log_dir(state: tauri::State<SettingsState>) -> String {
 pub fn review_perf_log(message: String) {
     let safe = message.replace('\r', " " ).replace('\n', " " );
     eprintln!("[review-diag] {}", safe);
+}
+
+/// General desktop diagnostic bridge. Keep each record single-line and bounded
+/// so Terminal and the rotating application log show the same useful timeline
+/// without accepting arbitrary multi-line renderer output.
+#[tauri::command]
+pub fn diagnostic_log(
+    scope: String,
+    event: String,
+    detail: Option<String>,
+    state: tauri::State<SettingsState>,
+) {
+    let clean = |value: &str, max: usize| -> String {
+        value
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .take(max)
+            .collect::<String>()
+    };
+    let scope = clean(&scope, 48);
+    let event = clean(&event, 80);
+    let detail = clean(detail.as_deref().unwrap_or(""), 900);
+    let line = if detail.is_empty() {
+        format!("[{}] {}", scope, event)
+    } else {
+        format!("[{}] {} {}", scope, event, detail)
+    };
+    eprintln!("[diag] {}", line);
+    log_info(&state.data_dir, &line);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -589,11 +618,7 @@ pub fn set_cloud_auth_token(
         .unwrap_or(false);
     if should_warm {
         let user_id = ensure_beatgaler_user_id(&state)?;
-        std::thread::spawn(move || {
-            if let Err(error) = ensure_direct_runtime(&user_id) {
-                eprintln!("[direct] AUTH_WARMUP_FAILED reason={}", error);
-            }
-        });
+        schedule_direct_warmup(user_id, "auth-token");
     }
     Ok(())
 }
@@ -627,6 +652,64 @@ static DIRECT_HEARTBEAT_STARTED: OnceLock<()> = OnceLock::new();
 // at once during startup; without this lock each caller could reserve the same
 // lease and spawn its own helper. Only one helper may exist per desktop session.
 static DIRECT_RUNTIME_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static DIRECT_WARMUP_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DIRECT_WARMUP_BACKOFF_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+const DIRECT_WARMUP_CONFIGURATION_BACKOFF_SECONDS: u64 = 60;
+
+fn is_direct_warmup_configuration_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("required local data-plane credential")
+        || normalized.contains("telegram application id")
+        || normalized.contains("telegram_api_id")
+        || normalized.contains("telegram_api_hash")
+}
+
+fn schedule_direct_warmup(user_id: String, trigger: &'static str) {
+    let now = Instant::now();
+    let backoff = DIRECT_WARMUP_BACKOFF_UNTIL.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = backoff.lock() {
+        if let Some(until) = *guard {
+            if until > now {
+                eprintln!(
+                    "[direct] WARMUP_SKIPPED trigger={} reason=configuration-backoff remaining_ms={}",
+                    trigger,
+                    until.saturating_duration_since(now).as_millis(),
+                );
+                return;
+            }
+            *guard = None;
+        }
+    }
+
+    if DIRECT_WARMUP_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        eprintln!("[direct] WARMUP_SKIPPED trigger={} reason=already-in-flight", trigger);
+        return;
+    }
+
+    std::thread::spawn(move || {
+        match ensure_direct_runtime(&user_id) {
+            Ok(_) => eprintln!("[direct] WARMUP_OK trigger={}", trigger),
+            Err(error) => {
+                if is_direct_warmup_configuration_error(&error) {
+                    if let Ok(mut guard) = DIRECT_WARMUP_BACKOFF_UNTIL
+                        .get_or_init(|| Mutex::new(None))
+                        .lock()
+                    {
+                        *guard = Some(
+                            Instant::now()
+                                + Duration::from_secs(DIRECT_WARMUP_CONFIGURATION_BACKOFF_SECONDS),
+                        );
+                    }
+                }
+                eprintln!("[direct] WARMUP_FAILED trigger={} reason={}", trigger, error);
+            }
+        }
+        DIRECT_WARMUP_ACTIVE.store(false, Ordering::Release);
+    });
+}
 
 fn direct_runtime_slot() -> &'static Mutex<Option<DirectTransportRuntime>> {
     DIRECT_TRANSPORT_RUNTIME.get_or_init(|| Mutex::new(None))
@@ -671,23 +754,33 @@ fn direct_message_id(locator: &str) -> Option<i64> {
     locator.trim().strip_prefix("direct:")?.parse::<i64>().ok().filter(|v| *v > 0)
 }
 
+fn direct_node_runtime_filename() -> &'static str {
+    if cfg!(target_os = "windows") { "node.exe" } else { "node" }
+}
+
+fn direct_bot_api_runtime_filename() -> &'static str {
+    if cfg!(target_os = "windows") { "telegram-bot-api.exe" } else { "telegram-bot-api" }
+}
+
 fn direct_node_runtime_path() -> String {
     if let Ok(value) = std::env::var("BEATGALER_NODE_RUNTIME") {
         let trimmed = value.trim();
         if !trimmed.is_empty() { return trimmed.to_string(); }
     }
 
+    let filename = direct_node_runtime_filename();
     let mut candidates = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("resources").join("node"));
-        candidates.push(cwd.join("resources").join("node"));
+        candidates.push(cwd.join("src-tauri").join("resources").join("windows").join(filename));
+        candidates.push(cwd.join("src-tauri").join("resources").join(filename));
+        candidates.push(cwd.join("resources").join(filename));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("node"));
-            candidates.push(dir.join("resources").join("node"));
+            candidates.push(dir.join(filename));
+            candidates.push(dir.join("resources").join(filename));
             if let Some(parent) = dir.parent() {
-                candidates.push(parent.join("Resources").join("node"));
+                candidates.push(parent.join("Resources").join(filename));
             }
         }
     }
@@ -696,7 +789,7 @@ fn direct_node_runtime_path() -> String {
         .into_iter()
         .find(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "node".to_string())
+        .unwrap_or_else(|| filename.to_string())
 }
 
 fn direct_bot_api_runtime_path() -> Option<PathBuf> {
@@ -704,17 +797,19 @@ fn direct_bot_api_runtime_path() -> Option<PathBuf> {
         let p = PathBuf::from(value);
         if p.is_file() { return Some(p); }
     }
+    let filename = direct_bot_api_runtime_filename();
     let mut candidates = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("resources").join("telegram-bot-api"));
-        candidates.push(cwd.join("resources").join("telegram-bot-api"));
+        candidates.push(cwd.join("src-tauri").join("resources").join("windows").join(filename));
+        candidates.push(cwd.join("src-tauri").join("resources").join(filename));
+        candidates.push(cwd.join("resources").join(filename));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("telegram-bot-api"));
-            candidates.push(dir.join("resources").join("telegram-bot-api"));
+            candidates.push(dir.join(filename));
+            candidates.push(dir.join("resources").join(filename));
             if let Some(parent) = dir.parent() {
-                candidates.push(parent.join("Resources").join("telegram-bot-api"));
+                candidates.push(parent.join("Resources").join(filename));
             }
         }
     }
@@ -1454,8 +1549,10 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
     // INDEX reads are on the critical path for refresh/import/metadata. A
     // transient helper/control-plane miss must not become an Upload Failed.
     let started = std::time::Instant::now();
+    let op = random_urlsafe(6);
     let mut attempt: u32 = 0;
     let mut last_error = "Galer Library INDEX is temporarily unavailable.".to_string();
+    eprintln!("[index] READ_BEGIN op={}", op);
     loop {
         attempt += 1;
         match ensure_direct_runtime(user_id)
@@ -1465,6 +1562,14 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
                 match response.get("manifest").cloned() {
                     Some(manifest) if manifest.get("schema").and_then(|v| v.as_str()) == Some(GALER_T_LIBRARY_SCHEMA) => {
                         let manifest = normalize_galer_t_library_manifest(manifest)?;
+                        eprintln!(
+                            "[index] READ_OK op={} attempt={} message_id={} beats={} elapsed_ms={}",
+                            op,
+                            attempt,
+                            response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0),
+                            manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+                            started.elapsed().as_millis(),
+                        );
                         cache_direct_library_manifest(&manifest);
                         return Ok(manifest);
                     }
@@ -1475,7 +1580,10 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
             Err(error) => last_error = error,
         }
 
+        eprintln!("[index] READ_RETRY op={} attempt={} reason={}", op, attempt, last_error);
+
         if attempt >= 8 || started.elapsed() >= Duration::from_secs(12) {
+            eprintln!("[index] READ_FAILED op={} attempts={} elapsed_ms={} reason={}", op, attempt, started.elapsed().as_millis(), last_error);
             return Err(format!("{} (after {} attempt(s))", last_error, attempt));
         }
         let shift = attempt.saturating_sub(1).min(4);
@@ -1490,6 +1598,8 @@ fn direct_replace_library_manifest_with_options(
     source_id: Option<&str>,
     allow_destructive: bool,
 ) -> Result<Value, String> {
+    let op = random_urlsafe(6);
+    let started = Instant::now();
     ensure_direct_runtime(user_id)?;
     if manifest.get("schema").and_then(|v| v.as_str()) != Some(GALER_T_LIBRARY_SCHEMA) {
         return Err("Refusing to publish a non-BeatGaler cloud index.".to_string());
@@ -1501,6 +1611,42 @@ fn direct_replace_library_manifest_with_options(
             manifest_version, GALER_T_LIBRARY_SCHEMA_VERSION
         ));
     }
+    let expected_beats = manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0);
+    let expected_projects: std::collections::HashSet<String> = manifest.get("beats")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("project").map(|project| !project.is_null()).unwrap_or(false))
+        .filter_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(|v| v.to_string()))
+        .collect();
+    let identity_ids = |value: &Value| -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        if let Some(rows) = value.get("beats").and_then(|v| v.as_array()) {
+            for row in rows {
+                if let Some(id) = row.get("id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+        if let Some(rows) = value.get("trash").and_then(|v| v.as_array()) {
+            for row in rows {
+                let beat = row.get("beat").unwrap_or(row);
+                if let Some(id) = beat.get("id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+        out
+    };
+    let expected_ids = identity_ids(manifest);
+    eprintln!(
+        "[index] WRITE_BEGIN op={} beats={} identities={} projects={} destructive={}",
+        op,
+        expected_beats,
+        expected_ids.len(),
+        expected_projects.len(),
+        allow_destructive,
+    );
     let temp_dir = beatgaler_temp_dir().join("cloud-upload-tmp");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let temp_path = temp_dir.join(format!("beatgaler-library-{}.json", random_urlsafe(8)));
@@ -1516,23 +1662,99 @@ fn direct_replace_library_manifest_with_options(
     }));
     let _ = std::fs::remove_file(&temp_path);
     let response = result?;
-    cache_direct_library_manifest(manifest);
     let message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
     if message_id <= 0 {
+        eprintln!("[index] WRITE_FAILED op={} stage=helper-response reason=missing-message-id", op);
         return Err("Galer Library index sync returned no storage message id.".to_string());
     }
     let index_file_id = response.get("file_id").and_then(|v| v.as_str()).unwrap_or("");
 
+    // Read-after-write verification closes the exact hole where media upload
+    // succeeds but the new PROJECT/artwork reference never becomes durable in
+    // the pinned source-of-truth INDEX. Telegram pin visibility can be briefly
+    // eventual, so retry before reporting a precise commit failure.
+    let mut verified_manifest: Option<Value> = None;
+    let mut verify_error = "Pinned INDEX could not be read back.".to_string();
+    for attempt in 1..=4 {
+        match direct_request(user_id, json!({ "op": "get_index" })) {
+            Ok(readback) => {
+                let readback_message_id = readback.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
+                let candidate = readback.get("manifest").cloned().unwrap_or(Value::Null);
+                let readback_ids = identity_ids(&candidate);
+                let missing_ids = expected_ids.iter().filter(|id| !readback_ids.contains(*id)).count();
+                let missing_projects = expected_projects.iter().filter(|id| {
+                    !candidate.get("beats").and_then(|v| v.as_array()).into_iter().flatten().any(|entry| {
+                        entry.get("id").and_then(|v| v.as_str()) == Some(id.as_str())
+                            && entry.get("project").map(|project| !project.is_null()).unwrap_or(false)
+                    })
+                }).count();
+                if readback_message_id == message_id && missing_ids == 0 && missing_projects == 0 {
+                    verified_manifest = Some(normalize_galer_t_library_manifest(candidate)?);
+                    eprintln!(
+                        "[index] VERIFY_OK op={} attempt={} message_id={} identities={} projects={} elapsed_ms={}",
+                        op,
+                        attempt,
+                        message_id,
+                        readback_ids.len(),
+                        expected_projects.len(),
+                        started.elapsed().as_millis(),
+                    );
+                    break;
+                }
+                verify_error = format!(
+                    "Pinned INDEX verification mismatch (message {} expected {}, missing identities {}, missing projects {}).",
+                    readback_message_id, message_id, missing_ids, missing_projects
+                );
+            }
+            Err(error) => verify_error = error,
+        }
+        eprintln!("[index] VERIFY_RETRY op={} attempt={} reason={}", op, attempt, verify_error);
+        std::thread::sleep(Duration::from_millis(150 * attempt));
+    }
+    let verified_manifest = verified_manifest.ok_or_else(|| {
+        eprintln!("[index] WRITE_FAILED op={} stage=read-after-write reason={}", op, verify_error);
+        format!("INDEX was uploaded but could not be verified as active: {}", verify_error)
+    })?;
+    cache_direct_library_manifest(&verified_manifest);
+
     // Tiny control-plane pointer only. The INDEX bytes themselves traveled
     // Desktop -> local Bot API -> Telegram and never traversed BeatGaler Cloud.
     let commit_url = format!("{}/transport/index/commit", telegram_cloud_api_base());
-    let _ = post_json_cloud_auth_timeout(&commit_url, &json!({
+    let pointer_body = json!({
         "beatgalerUserId": user_id,
         "messageId": message_id,
         "fileId": index_file_id,
         "sourceId": source_id.unwrap_or_default(),
         "beatCount": manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
-    }), 8);
+    });
+    let mut pointer_committed = false;
+    for attempt in 1..=3 {
+        match post_json_cloud_auth_timeout(&commit_url, &pointer_body, 8) {
+            Ok(_) => {
+                pointer_committed = true;
+                eprintln!("[index] POINTER_OK op={} attempt={} message_id={}", op, attempt, message_id);
+                break;
+            }
+            Err(error) => {
+                eprintln!("[index] POINTER_RETRY op={} attempt={} reason={}", op, attempt, error);
+                if attempt < 3 { std::thread::sleep(Duration::from_millis(150 * attempt)); }
+            }
+        }
+    }
+    if !pointer_committed {
+        // The pinned Telegram document is authoritative and already verified.
+        // This pointer is recovery/diagnostic metadata only, so keep the commit
+        // successful but make the degraded control-plane state unmistakable.
+        eprintln!("[index] POINTER_DEFERRED op={} message_id={} authoritative_pin_verified=true", op, message_id);
+    }
+    eprintln!(
+        "[index] WRITE_OK op={} message_id={} beats={} projects={} elapsed_ms={}",
+        op,
+        message_id,
+        expected_beats,
+        expected_projects.len(),
+        started.elapsed().as_millis(),
+    );
     Ok(response)
 }
 
@@ -1990,12 +2212,7 @@ pub fn poll_telegram_cloud_status(
     }
 
     if connected && reachable {
-        let warm_user_id = user_id.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = ensure_direct_runtime(&warm_user_id) {
-                eprintln!("[direct] WARMUP_FAILED reason={}", error);
-            }
-        });
+        schedule_direct_warmup(user_id.clone(), "connect-status");
     }
 
     Ok(TelegramCloudStatus { connected, reachable, username })
@@ -2037,12 +2254,7 @@ pub fn get_telegram_cloud_status(
     drop(settings);
 
     if connected && reachable {
-        let warm_user_id = user_id.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = ensure_direct_runtime(&warm_user_id) {
-                eprintln!("[direct] WARMUP_FAILED reason={}", error);
-            }
-        });
+        schedule_direct_warmup(user_id.clone(), "cloud-status");
     }
 
     Ok(TelegramCloudStatus { connected, reachable, username })
@@ -2516,6 +2728,9 @@ pub fn sync_cloud_library_index(
     state: tauri::State<SettingsState>,
     db: tauri::State<DbState>,
 ) -> Result<CloudLibrarySyncResult, String> {
+    let sync_op = random_urlsafe(6);
+    let sync_started = Instant::now();
+    eprintln!("[index] BUILD_BEGIN op={} snapshot_beats={} source={}", sync_op, beats.len(), source_id.as_deref().unwrap_or("none"));
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
@@ -2532,6 +2747,10 @@ pub fn sync_cloud_library_index(
             manifest_beats.push(entry);
         }
     }
+    let project_count = manifest_beats.iter()
+        .filter(|entry| entry.get("project").map(|value| !value.is_null()).unwrap_or(false))
+        .count();
+    eprintln!("[index] BUILD_ACTIVE_READY op={} indexed_beats={} projects={}", sync_op, manifest_beats.len(), project_count);
 
     // Trash is part of the Telegram source of truth. Files stay in their
     // original Telegram messages while trashed; only membership changes.
@@ -2608,6 +2827,14 @@ pub fn sync_cloud_library_index(
         .map_err(|e| format!("Could not sync Galer Library index directly: {}", e))?;
     let library_message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
 
+    eprintln!(
+        "[index] BUILD_COMMIT_OK op={} message_id={} beats={} projects={} elapsed_ms={}",
+        sync_op,
+        library_message_id,
+        manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+        project_count,
+        sync_started.elapsed().as_millis(),
+    );
     Ok(CloudLibrarySyncResult {
         telegram_file_id: format!("index:{}", library_message_id),
         telegram_message_id: library_message_id,
@@ -5892,6 +6119,9 @@ pub fn upload_project_to_telegram(
     state: tauri::State<SettingsState>,
     db: tauri::State<DbState>,
 ) -> Result<ProjectCloudStatus, String> {
+    let upload_op = random_urlsafe(6);
+    let upload_started = Instant::now();
+    eprintln!("[project-sync] UPLOAD_BEGIN op={} beat_id={}", upload_op, beat.id);
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
@@ -5923,6 +6153,14 @@ pub fn upload_project_to_telegram(
     let size = std::fs::metadata(&zip_path).map_err(|e| e.to_string())?.len();
     if size == 0 { return Err("Project ZIP is empty.".to_string()); }
     let (_, modified_ms) = project_file_stamp(&zip_path).ok_or_else(|| "Could not read project ZIP metadata.".to_string())?;
+    eprintln!(
+        "[project-sync] ARCHIVE_READY op={} beat_id={} bytes={} generated={} elapsed_ms={}",
+        upload_op,
+        beat.id,
+        size,
+        generated_archive,
+        upload_started.elapsed().as_millis(),
+    );
 
     let user_id = ensure_beatgaler_user_id(&state)?;
     let project_filename = zip_path
@@ -5958,6 +6196,14 @@ pub fn upload_project_to_telegram(
         }
     };
     let part_count = parts.len();
+    eprintln!(
+        "[project-sync] MEDIA_UPLOAD_OK op={} beat_id={} parts={} bytes={} elapsed_ms={}",
+        upload_op,
+        beat.id,
+        part_count,
+        size,
+        upload_started.elapsed().as_millis(),
+    );
     // The project manifest must reflect the archive we actually uploaded,
     // not stale BeatMeta flags. This matters when a beat was created from audio
     // first and an FLP/ALS was added later.
@@ -5975,9 +6221,17 @@ pub fn upload_project_to_telegram(
         if generated_archive { None } else { Some(zip_path.to_string_lossy().to_string()) };
     conn.execute(
         "INSERT INTO cloud_projects (beat_id, local_zip_path, manifest_json, source_size, source_modified_ms, uploaded_at) VALUES (?1,?2,?3,?4,?5,strftime('%s','now')) ON CONFLICT(beat_id) DO UPDATE SET local_zip_path=excluded.local_zip_path, manifest_json=excluded.manifest_json, source_size=excluded.source_size, source_modified_ms=excluded.source_modified_ms, uploaded_at=excluded.uploaded_at",
-        params![beat.id, stored_local_path, response.to_string(), size as i64, modified_ms],
+        params![beat.id.clone(), stored_local_path, response.to_string(), size as i64, modified_ms],
     ).map_err(|e| e.to_string())?;
     drop(conn);
+    eprintln!(
+        "[project-sync] LOCAL_MANIFEST_OK op={} beat_id={} parts={} openable={} elapsed_ms={}",
+        upload_op,
+        beat.id,
+        part_count,
+        archive_openable,
+        upload_started.elapsed().as_millis(),
+    );
 
     if generated_archive { let _ = std::fs::remove_file(&zip_path); }
 
@@ -10468,6 +10722,132 @@ pub fn path_is_directory(path: String) -> bool {
     Path::new(&path).is_dir()
 }
 
+fn supported_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+    {
+        return Some("image/avif");
+    }
+    None
+}
+
+#[cfg(test)]
+mod artwork_native_reader_tests {
+    use super::supported_image_mime;
+
+    #[test]
+    fn recognizes_supported_artwork_by_bytes_not_extension() {
+        assert_eq!(supported_image_mime(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]), Some("image/png"));
+        assert_eq!(supported_image_mime(&[0xff, 0xd8, 0xff, 0x00]), Some("image/jpeg"));
+        assert_eq!(supported_image_mime(b"GIF89a-rest"), Some("image/gif"));
+        assert_eq!(supported_image_mime(b"RIFF0000WEBP"), Some("image/webp"));
+        assert_eq!(supported_image_mime(b"BM-not-really-large"), Some("image/bmp"));
+        assert_eq!(supported_image_mime(b"0000ftypavif"), Some("image/avif"));
+        assert_eq!(supported_image_mime(b"not an image"), None);
+    }
+}
+
+#[cfg(test)]
+mod direct_warmup_tests {
+    use super::is_direct_warmup_configuration_error;
+
+    #[test]
+    fn configuration_credentials_trigger_warmup_backoff() {
+        assert!(is_direct_warmup_configuration_error(
+            "Galer Cloud did not provide a required local data-plane credential."
+        ));
+        assert!(is_direct_warmup_configuration_error(
+            "BeatGaler Cloud did not provide the Telegram application id required by the local data plane."
+        ));
+        assert!(!is_direct_warmup_configuration_error("curl SSL connection timeout"));
+    }
+}
+
+/// Reads artwork through Rust instead of the WebView asset protocol. Native
+/// file dialogs on macOS can return security-scoped paths whose asset URL has
+/// no useful Content-Type (or is denied by WebKit); direct native I/O avoids
+/// that platform-specific failure and gives us precise stage diagnostics.
+#[tauri::command]
+pub fn read_image_file_data_url(
+    path: String,
+    state: tauri::State<SettingsState>,
+) -> Result<String, String> {
+    const MAX_ARTWORK_BYTES: u64 = 64 * 1024 * 1024;
+    let op = random_urlsafe(6);
+    let started = Instant::now();
+    let image_path = PathBuf::from(&path);
+    let filename = image_path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("(unnamed image)")
+        .replace(['\r', '\n'], " ");
+    let extension = image_path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let begin = format!("ARTWORK_READ_BEGIN op={} file={} ext={}", op, filename, extension);
+    eprintln!("[artwork] {}", begin);
+    log_info(&state.data_dir, &begin);
+
+    let metadata = std::fs::metadata(&image_path).map_err(|error| {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=metadata error={}", op, error);
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        format!("Could not access the selected artwork file: {}", error)
+    })?;
+    if !metadata.is_file() {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=validate reason=not-a-file", op);
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        return Err("Selected artwork is not a file.".to_string());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_ARTWORK_BYTES {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=validate bytes={} reason=size", op, metadata.len());
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        return Err(format!("Artwork must be between 1 byte and {} MB.", MAX_ARTWORK_BYTES / 1024 / 1024));
+    }
+
+    let bytes = std::fs::read(&image_path).map_err(|error| {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=read bytes={} error={}", op, metadata.len(), error);
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        format!("Could not read the selected artwork file: {}", error)
+    })?;
+    let mime = supported_image_mime(&bytes).ok_or_else(|| {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=decode bytes={} reason=unsupported-signature", op, bytes.len());
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        "Artwork must be a valid PNG, JPEG, WebP, GIF, BMP, or AVIF image.".to_string()
+    })?;
+    let encoded = general_purpose::STANDARD.encode(&bytes);
+    let done = format!(
+        "ARTWORK_READ_OK op={} mime={} bytes={} encoded_bytes={} elapsed_ms={}",
+        op,
+        mime,
+        bytes.len(),
+        encoded.len(),
+        started.elapsed().as_millis(),
+    );
+    eprintln!("[artwork] {}", done);
+    log_info(&state.data_dir, &done);
+    Ok(format!("data:{};base64,{}", mime, encoded))
+}
+
 #[tauri::command]
 pub fn reveal_in_explorer(path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
@@ -11762,12 +12142,7 @@ pub fn inspect_beat_update_folder(folder_path: String) -> Result<BeatFolderUpdat
     }
 
     let files = scan_folder_structured(&folder);
-    let has_flp = files.flps.iter().any(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .eq_ignore_ascii_case("flp")
-    });
+    let has_project_file = !files.flps.is_empty() || !files.alss.is_empty();
 
     Ok(BeatFolderUpdatePreview {
         has_mp3: !files.mp3s.is_empty(),
@@ -11775,7 +12150,7 @@ pub fn inspect_beat_update_folder(folder_path: String) -> Result<BeatFolderUpdat
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string()),
         has_wav: !files.wavs.is_empty(),
-        has_project_file: has_flp,
+        has_project_file,
         has_project_assets: folder_has_project_assets(&folder),
     })
 }
@@ -11992,6 +12367,85 @@ fn stream_group_key() -> String {
     format!("__stream_{}", random_urlsafe(10))
 }
 
+/// Attach root-level DAW project files to one discovered audio beat.
+///
+/// Exact normalized-name matches always win. Real Ableton folders often use a
+/// render name such as `Trap House F#m.wav` and a session name such as
+/// `Trap House Project.als`, though. When the folder contains exactly one
+/// supported project file, that file is unambiguous and is safe to attach even
+/// when its stem differs from the audio stem. Multiple non-matching project
+/// files remain unresolved instead of BeatGaler guessing.
+fn attach_root_project_files(
+    group: &mut matcher::ConfirmedGroup,
+    direct_files: &[PathBuf],
+    audio_core: &str,
+) {
+    let candidates: Vec<(PathBuf, String, String)> = direct_files
+        .iter()
+        .filter_map(|path| {
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext != "flp" && ext != "als" {
+                return None;
+            }
+            let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
+            let clean = clean_name_from_filename(stem);
+            let (core, _) = matcher::normalize_core_name(&clean);
+            Some((path.clone(), ext, core))
+        })
+        .collect();
+
+    let mut exact_matches = 0usize;
+    for (path, ext, core) in &candidates {
+        if core != audio_core {
+            continue;
+        }
+        exact_matches += 1;
+        match ext.as_str() {
+            "flp" if group.flp.is_none() => group.flp = Some(path.clone()),
+            "als" if group.als.is_none() => group.als = Some(path.clone()),
+            _ => {}
+        }
+    }
+
+    let mut used_unique_fallback = false;
+    if group.flp.is_none() && group.als.is_none() && candidates.len() == 1 {
+        let (path, ext, _) = &candidates[0];
+        match ext.as_str() {
+            "flp" => group.flp = Some(path.clone()),
+            "als" => group.als = Some(path.clone()),
+            _ => unreachable!("project candidates are filtered above"),
+        }
+        used_unique_fallback = true;
+    }
+
+    let candidate_names = candidates
+        .iter()
+        .filter_map(|(path, _, _)| path.file_name())
+        .map(|name| name.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("|");
+    let selected_names = [group.flp.as_ref(), group.als.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|path| path.file_name())
+        .map(|name| name.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("|");
+    eprintln!(
+        "[review-diag] PROJECT_PAIR_DECISION audio_core={} candidates={} exact_matches={} unique_fallback={} candidate_names={} selected_names={}",
+        audio_core,
+        candidates.len(),
+        exact_matches,
+        used_unique_fallback,
+        candidate_names,
+        selected_names,
+    );
+}
+
 /// Advance a streaming import session only until the next NORMAL playable beat
 /// is known. Ambiguous folders are recorded for the conflict UI and skipped so
 /// they never delay the first usable Review item. Directory traversal is
@@ -12154,18 +12608,10 @@ fn discover_next_stream_group(batch: &mut PendingImportBatch) -> Result<Option<S
             }
         }
 
-        // Root-level project files with the same core are cheap to attach.
+        // Root-level project files are cheap to attach. Exact names win, while
+        // one unique project is also safe when Ableton names it `... Project`.
         // Deep project/Samples/Stems work stays out of Review and happens later.
-        for file in &direct_files {
-            let file_ext = file.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
-            if file_ext != "flp" && file_ext != "als" { continue; }
-            let stem = file.file_stem().and_then(|v| v.to_str()).unwrap_or("");
-            let clean = clean_name_from_filename(stem);
-            let (file_core, _) = matcher::normalize_core_name(&clean);
-            if file_core != core { continue; }
-            if file_ext == "flp" && group.flp.is_none() { group.flp = Some(file.clone()); }
-            if file_ext == "als" && group.als.is_none() { group.als = Some(file.clone()); }
-        }
+        attach_root_project_files(&mut group, &direct_files, &core);
 
         batch.source_folders.insert(key.clone(), path.clone());
         batch.display_names.insert(key.clone(), titleize(&core));
@@ -12313,6 +12759,7 @@ pub fn preview_import_batch(
             let mut matching_wav: Vec<PathBuf> = Vec::new();
             let mut matching_flp: Vec<PathBuf> = Vec::new();
             let mut matching_als: Vec<PathBuf> = Vec::new();
+            let mut root_project_files: Vec<PathBuf> = Vec::new();
             let mut root_audio_roles: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new();
 
             for entry in std::fs::read_dir(&root_path).map_err(|e| e.to_string())?.flatten() {
@@ -12320,6 +12767,9 @@ pub fn preview_import_batch(
                 if !path.is_file() { continue; }
                 let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
                 if !matches!(ext.as_str(), "mp3" | "wav" | "flp" | "als") { continue; }
+                if matches!(ext.as_str(), "flp" | "als") {
+                    root_project_files.push(path.clone());
+                }
 
                 let stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("");
                 let clean = clean_name_from_filename(stem);
@@ -12361,6 +12811,7 @@ pub fn preview_import_batch(
                 // FLPs inside Backup/ are never scanned here.
                 group.flp = matching_flp.into_iter().next();
                 group.als = matching_als.into_iter().next();
+                attach_root_project_files(&mut group, &root_project_files, &folder_core);
 
                 let batch_id = random_urlsafe(10);
                 let mut groups = std::collections::HashMap::new();
@@ -12948,21 +13399,24 @@ pub fn resolve_import_audio_conflict(
                 let clean = clean_name_from_filename(stem);
                 let (selected_core, _) = matcher::normalize_core_name(&clean);
                 if let Ok(entries) = std::fs::read_dir(folder) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if !path.is_file() || path == selected { continue; }
+                    let direct_files = entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| path.is_file())
+                        .collect::<Vec<_>>();
+                    for path in &direct_files {
+                        if !path.is_file() || path.as_path() == selected.as_path() { continue; }
                         let other_stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("");
                         let other_clean = clean_name_from_filename(other_stem);
                         let (other_core, _) = matcher::normalize_core_name(&other_clean);
                         if other_core != selected_core { continue; }
                         let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
                         match ext.as_str() {
-                            "wav" if group.wav.is_none() => group.wav = Some(path),
-                            "flp" if group.flp.is_none() => group.flp = Some(path),
-                            "als" if group.als.is_none() => group.als = Some(path),
+                            "wav" if group.wav.is_none() => group.wav = Some(path.clone()),
                             _ => {}
                         }
                     }
+                    attach_root_project_files(&mut group, &direct_files, &selected_core);
                 }
             }
         }
@@ -13256,10 +13710,17 @@ pub fn rename_tag_everywhere(
 #[cfg(test)]
 mod import_core_unit_tests {
     use super::{
+        attach_root_project_files,
         build_loose_candidate_from_audio,
+        discover_next_stream_group,
         discover_import_sources,
+        inspect_beat_update_folder,
         scan_folder_structured,
+        ImportDiscoveryStream,
+        ImportDiscoveryTarget,
+        PendingImportBatch,
     };
+    use crate::matcher::ConfirmedGroup;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -13412,6 +13873,73 @@ mod import_core_unit_tests {
         assert_eq!(found.len(), 2, "same-name MP3+WAV must discover as one logical beat anchor");
         assert!(found.iter().any(|value| value == "Loose A.mp3"));
         assert!(found.iter().any(|value| value == "Loose B.wav"));
+    }
+
+    #[test]
+    fn unique_root_ableton_project_attaches_even_when_its_name_differs_from_render() {
+        let tree = TempTree::new("ableton-project-name");
+        let wav = tree.file("trap-house Project/trap-house F#m.wav");
+        let als = tree.file("trap-house Project/trap-house Project.als");
+        let direct_files = vec![wav, als.clone()];
+        let mut group = ConfirmedGroup::default();
+
+        attach_root_project_files(&mut group, &direct_files, "trap-house f#m");
+
+        assert_eq!(group.als.as_deref(), Some(als.as_path()));
+        assert!(group.flp.is_none());
+    }
+
+    #[test]
+    fn streaming_folder_import_keeps_differently_named_ableton_project() {
+        let tree = TempTree::new("ableton-streaming-import");
+        let folder = tree.dir("trap-house Project");
+        tree.file("trap-house Project/trap-house F#m.wav");
+        let als = tree.file("trap-house Project/trap-house Project.als");
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(ImportDiscoveryTarget { path: folder });
+        let mut batch = PendingImportBatch {
+            groups: std::collections::HashMap::new(),
+            source_folders: std::collections::HashMap::new(),
+            review_order: Vec::new(),
+            review_cursor: 0,
+            prepared_cores: std::collections::HashSet::new(),
+            display_names: std::collections::HashMap::new(),
+            discovery_stream: Some(ImportDiscoveryStream { queue }),
+            discovery_complete: false,
+            audio_conflicts: Vec::new(),
+        };
+
+        let key = discover_next_stream_group(&mut batch).unwrap().unwrap();
+        let group = batch.groups.get(&key).expect("streaming group");
+
+        assert_eq!(group.als.as_deref(), Some(als.as_path()));
+        assert!(group.wav.is_some());
+        assert!(batch.audio_conflicts.is_empty());
+    }
+
+    #[test]
+    fn multiple_nonmatching_root_projects_are_never_guessed() {
+        let tree = TempTree::new("ambiguous-project-name");
+        let first = tree.file("Beat/First Project.als");
+        let second = tree.file("Beat/Second Project.als");
+        let mut group = ConfirmedGroup::default();
+
+        attach_root_project_files(&mut group, &[first, second], "render name");
+
+        assert!(group.als.is_none());
+        assert!(group.flp.is_none());
+    }
+
+    #[test]
+    fn beat_update_folder_recognizes_ableton_as_a_project_file() {
+        let tree = TempTree::new("ableton-update-preview");
+        let folder = tree.dir("Beat");
+        tree.file("Beat/Beat.wav");
+        tree.file("Beat/Beat Project.als");
+
+        let preview = inspect_beat_update_folder(folder.to_string_lossy().to_string()).unwrap();
+
+        assert!(preview.has_project_file);
     }
 }
 

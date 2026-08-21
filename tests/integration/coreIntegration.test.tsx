@@ -75,6 +75,7 @@ async function loadLibraryManager(mocks?: {
     restoreLibraryFromTelegram: restore,
     loadLibrary: load,
     syncCloudLibraryIndex: sync,
+    diagnosticLog: vi.fn(async () => undefined),
   }));
 
   const { libraryStateManager } = await import("../../src/lib/libraryStateManager");
