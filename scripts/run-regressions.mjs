@@ -60,6 +60,7 @@ try {
   const rustLib = readFileSync(path.join(root, "src-tauri", "src", "lib.rs"), "utf8");
   const nativeExternalImage = readFileSync(path.join(root, "src", "features", "dragdrop", "nativeExternalImage.ts"), "utf8");
   const wryPatch = readFileSync(path.join(root, "scripts", "wry-patches", "wry-0.54.2-drag_drop.rs"), "utf8").replace(/\r\n/g, "\n");
+  const macWryPatch = readFileSync(path.join(root, "scripts", "wry-patches", "wry-0.54.2-macos-drag_drop.rs"), "utf8").replace(/\r\n/g, "\n");
   const wryPatchInstaller = readFileSync(path.join(root, "scripts", "patch-wry-pinterest.mjs"), "utf8");
   const runTauriScript = readFileSync(path.join(root, "scripts", "run-tauri.ps1"), "utf8");
   const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
@@ -99,6 +100,8 @@ try {
   if (!wryPatch.includes("[native-drop-data] FORMAT CF_HDROP=false") || !wryPatch.includes("[native-drop-data] INSPECT_US=")) fail("Native Pinterest format/performance diagnostics disappeared.");
   if (!wryPatch.includes("MAX_EXTERNAL_TEXT_BYTES")) fail("Native browser payload inspection lost its bounded byte cap.");
   if (!wryPatch.includes("i.pinimg.com") || !wryPatch.includes("HTML Format") || !wryPatch.includes("UniformResourceLocatorW") || !wryPatch.includes("application/x-pinterest-closeup-image")) fail("Native Pinterest extraction lost required URL/HTML/custom-format coverage.");
+  if (!macWryPatch.includes("BEATGALER_MAC_EXTERNAL_IMAGE_PATCH_V1") || !macWryPatch.includes("application/x-pinterest-closeup-image") || !macWryPatch.includes("WebURLsWithTitlesPboardType") || !macWryPatch.includes("org.chromium.web-custom-data")) fail("macOS Pinterest bridge lost a Chrome/Safari pasteboard representation.");
+  if (macWryPatch.indexOf("collect_paths(drag_info)") > macWryPatch.indexOf("external_image_url(drag_info)")) fail("macOS browser-image fallback can run before the Finder filesystem fast path.");
 
   if (!nativeExternalImage.includes("__BEATGALER_EXTERNAL_IMAGE_V1__")) fail("Native external-image bridge prefix disappeared.");
   if (!app.includes('window.dispatchEvent(new CustomEvent("native-external-image-drop"')) fail("WRY external-image payload is no longer emitted as a separate BeatGaler artwork event.");
@@ -288,6 +291,12 @@ try {
   if (!rustCommands.includes("final_cloud_display_name_after_review")) fail("Bulk upload lost its Telegram-authoritative duplicate-name gate.");
   if (!reviewSkeleton.includes('right: 0') || !reviewSkeleton.includes('width: 340')) fail("Review skeleton no longer mirrors the existing right-side Review Drawer.");
   if (!drawerSource.includes("Skip beat") || !drawerSource.includes("Cancel import")) fail("Review no longer separates skipping one candidate from cancelling the remaining import.");
+  if (!drawerSource.includes("onCloudMutationCommit") || !app.includes("commitDrawerCloudMutation")) fail("Drawer cloud changes can upload media without committing the authoritative INDEX.");
+  if (!app.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !app.includes("DRAWER_CLOUD_COMMIT_JOINED") || !app.includes("drawerMetadataCommitVerifiedRef") || !app.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");
+  if (!rustCommands.includes("PROJECT_PAIR_DECISION") || !rustCommands.includes("attach_root_project_files")) fail("Streaming import lost the unambiguous Ableton/FL Studio project pairing decision.");
+  if (!rustCommands.includes("WARMUP_SKIPPED") || !rustCommands.includes("DIRECT_WARMUP_ACTIVE") || !rustCommands.includes("DIRECT_WARMUP_BACKOFF_UNTIL")) fail("Direct status polling can spawn repeated failing warmups again.");
+  if (!rustCommands.includes("read_image_file_data_url") || !drawerSource.includes("handlePickArtwork")) fail("macOS artwork selection regressed to the unreliable WebView file reader.");
+  if (!rustCommands.includes("VERIFY_OK") || !rustCommands.includes("missing_projects")) fail("INDEX writes no longer verify PROJECT membership after pinning.");
   if (!audioConflictModal.includes("Choose the main audio")) fail("Audio conflict UI no longer lets the user choose the main audio.");
   if (!audioConflictModal.includes("Skip this beat") || !audioConflictModal.includes("__skip__")) fail("One unwanted audio conflict can cancel the whole batch again.");
   if (!audioConflictModal.includes("for (const conflict of conflicts)")) fail("Audio conflicts are no longer resolved deterministically one at a time.");
@@ -443,6 +452,11 @@ try {
     stdio: "inherit",
   });
 
+  execFileSync(process.execPath, [path.join(root, "scripts", "test-windows-runtime-packaging.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
+
   execFileSync(process.execPath, [path.join(root, "scripts", "version.mjs"), "check"], {
     cwd: root,
     stdio: "inherit",
@@ -478,4 +492,3 @@ try {
   if (actual !== expected) fail(`GitHub branch derivation mismatch. Expected ${expected}, got ${actual}.`);
   console.log(`PASS github guard: one command targets ${actual} from VERSION without force-push`);
 }
-

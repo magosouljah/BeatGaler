@@ -23,7 +23,15 @@ jobs:
     name: Build pinned Bot API arm64
     runs-on: macos-15
     steps:
+      - name: Restore Bot API arm64 cache
+        id: botapi-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/telegram-bot-api
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+
       - name: Build static arm64 runtime
+        if: steps.botapi-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +53,11 @@ jobs:
           cmake --build "$ROOT/build" --target telegram-bot-api --parallel 3
           mkdir -p runtime
           cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
+
+      - name: Verify Bot API arm64
+        shell: bash
+        run: |
+          set -euo pipefail
           chmod +x runtime/telegram-bot-api
           test "$(lipo -archs runtime/telegram-bot-api)" = "arm64"
           if otool -L runtime/telegram-bot-api | tail -n +2 | awk '{print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)' | grep -q .; then
@@ -63,7 +76,15 @@ jobs:
     name: Build pinned Bot API x86_64
     runs-on: macos-15-intel
     steps:
+      - name: Restore Bot API x86_64 cache
+        id: botapi-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/telegram-bot-api
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+
       - name: Build static Intel runtime
+        if: steps.botapi-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -85,6 +106,11 @@ jobs:
           cmake --build "$ROOT/build" --target telegram-bot-api --parallel 3
           mkdir -p runtime
           cp "$ROOT/build/telegram-bot-api" runtime/telegram-bot-api
+
+      - name: Verify Bot API x86_64
+        shell: bash
+        run: |
+          set -euo pipefail
           chmod +x runtime/telegram-bot-api
           test "$(lipo -archs runtime/telegram-bot-api)" = "x86_64"
           if otool -L runtime/telegram-bot-api | tail -n +2 | awk '{print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)' | grep -q .; then
@@ -272,6 +298,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p dist
+          printf '<!doctype html><html><body></body></html>\n' > dist/index.html
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Build Universal macOS DMG and Tauri-signed updater bundle
@@ -279,7 +307,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
-          npx tauri build --bundles dmg --target universal-apple-darwin
+          npx tauri build --bundles app,dmg --target universal-apple-darwin
 
       - name: Verify Universal runtimes and ad-hoc signatures inside final DMG
         shell: bash
@@ -336,4 +364,3 @@ jobs:
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
             VERSION
           if-no-files-found: error
-

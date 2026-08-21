@@ -30,7 +30,10 @@ export function nativeExternalImageSignalFromPaths(paths: readonly string[]): Na
   const encoded = value.slice(NATIVE_EXTERNAL_IMAGE_PREFIX.length);
   if (!encoded || encoded === "PENDING") return null;
   try {
-    const url = decodeURIComponent(encoded);
+    // Windows transports an encoded URL; macOS NSPasteboard transports the
+    // original URL string. Preserve already-absolute URLs so signed/query
+    // percent escapes are not decoded a second time.
+    const url = /^https?:\/\//i.test(encoded) ? encoded : decodeURIComponent(encoded);
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     return { kind: "drop", url, source: sourceForExternalImageUrl(url) };

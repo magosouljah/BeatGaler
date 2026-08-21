@@ -46,6 +46,8 @@ const portabilityWorkflow = read(".github/workflows/test-desktop-portability.yml
 const packageJson = JSON.parse(read("package.json"));
 const cargoLockTest = read("scripts/test-cargo-lock.mjs");
 const runtimeDylibCheck = read("scripts/check-macos-runtime-dylibs.sh");
+const wryPatchInstaller = read("scripts/patch-wry-pinterest.mjs");
+const macWryDragDropPatch = read("scripts/wry-patches/wry-0.54.2-macos-drag_drop.rs");
 
 const projectZip = section(commands, "fn project_zip_entry_names", "fn project_manifest");
 ok(!commands.includes("Manual PROJECT zip editing is currently implemented for Windows"), "PROJECT mutation has no Windows-only hard failure");
@@ -63,7 +65,10 @@ ok(commands.includes("if !root_path.exists() || path_is_symbolic_link(&root_path
 ok(app.includes("getCurrentWebview().onDragDropEvent"), "Tauri native filesystem drop listener is installed");
 ok(app.includes("if (!isTauriAvailable) return;"), "native drop listener is not gated to Windows only");
 ok(app.includes("claimNativeLibraryDrop()") && htmlDrop.includes("waitForNativeLibraryDropClaim"), "Mac duplicate native/HTML local drops are arbitrated");
-ok(app.includes("if (isMacDesktop && artworkBeatId) return;"), "Mac native path leaves artwork/Pinterest on the proven HTML path");
+ok(app.includes('if (artworkBeatId && payload.paths.length === 1 && isImagePath(payload.paths[0]))') && app.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through native paths while preserving browser/Pinterest sentinels");
+ok(wryPatchInstaller.includes('patchPlatform === "darwin"') && wryPatchInstaller.includes('"wkwebview",\n      "drag_drop.rs"'), "macOS installs its native WRY browser-image bridge before compiling");
+ok(macWryDragDropPatch.includes("BEATGALER_MAC_EXTERNAL_IMAGE_PATCH_V1") && macWryDragDropPatch.includes("application/x-pinterest-closeup-image") && macWryDragDropPatch.includes("WebURLsWithTitlesPboardType") && macWryDragDropPatch.includes("org.chromium.web-custom-data") && macWryDragDropPatch.includes("NSPasteboardTypeURL") && macWryDragDropPatch.includes("NSPasteboardTypeHTML") && macWryDragDropPatch.includes("NSPasteboardTypeString"), "macOS native drop reads Pinterest, Chrome/Safari URL, HTML, and text pasteboard representations");
+ok(macWryDragDropPatch.indexOf("collect_paths(drag_info)") < macWryDragDropPatch.indexOf("external_image_url(drag_info)"), "macOS Finder paths stay ahead of browser-image fallback routing");
 
 ok(!helper.includes('|| "http://127.0.0.1:8081"') && !helper.includes("|| 'http://127.0.0.1:8081'"), "Direct helper has no fixed 8081 fallback");
 ok(commands.includes("TcpListener::bind((\"127.0.0.1\", 0))"), "local data plane reserves a dynamic loopback port");
@@ -107,12 +112,14 @@ ok(macBuildWorkflow.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"'), "Mac build has
 ok(exists("scripts/check-macos-min-version.mjs") && exists("scripts/test-macos-min-version.mjs"), "Mach-O minimum-version checker has a portable parser regression test");
 ok(macBuildWorkflow.includes("check-macos-min-version.mjs"), "canonical Mac build rejects runtimes requiring a newer macOS than supported");
 ok(macBuildWorkflow.includes("macos-15-intel") && macBuildWorkflow.includes("macos-15"), "Universal Mac build creates native Bot API halves on Intel and ARM runners");
+ok((macBuildWorkflow.match(/Restore Bot API (?:arm64|x86_64) cache/g) || []).length === 2 && macBuildWorkflow.includes("steps.botapi-cache.outputs.cache-hit != 'true'"), "Universal Mac build reuses verified Bot API architecture caches");
 ok(macBuildWorkflow.includes("lipo -create") && macBuildWorkflow.includes("telegram-bot-api"), "Universal Mac build combines Bot API ARM64+x86_64 with lipo");
 ok(macBuildWorkflow.includes("APP_MAIN_PATH") && macBuildWorkflow.includes("BOT_API_PATH") && macBuildWorkflow.includes("NODE_PATH") && macBuildWorkflow.includes("FFMPEG_PATH"), "final DMG verifies app + Node + FFmpeg + Bot API architectures");
 ok(macBuildWorkflow.includes('APPLE_SIGNING_IDENTITY: "-"'), "canonical Mac build uses ad-hoc signing without Apple Developer ID");
 ok(!macBuildWorkflow.includes("xcrun stapler validate") && macBuildWorkflow.includes("codesign --verify"), "Mac build verifies ad-hoc signing output without requiring notarization");
 ok(macBuildWorkflow.includes("Ad-hoc sign embedded Universal Mach-O runtimes") && macBuildWorkflow.includes("codesign --force --sign -"), "Mac build ad-hoc signs every embedded executable before bundling");
 ok(!macBuildWorkflow.includes("Authority=Developer ID Application:"), "ad-hoc Mac build does not require Developer ID authority");
+ok(macBuildWorkflow.includes("--bundles app,dmg"), "Mac build includes the app target required to generate updater artifacts");
 ok(macBuildWorkflow.includes(".app.tar.gz") && macBuildWorkflow.includes(".app.tar.gz.sig") && macBuildWorkflow.includes("BeatGaler-macOS-Universal"), "Mac build exports a signed updater-ready artifact without publishing it");
 ok(macBuildWorkflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json"), "Mac build compiles the real HTTPS updater endpoint into the app");
 ok(!macBuildWorkflow.includes("gh release create") && !macBuildWorkflow.includes("gh release upload") && !macBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Mac build does not publish a public GitHub release");
@@ -123,12 +130,15 @@ ok(exists("scripts/test-updater-manifest.mjs"), "updater Windows/Mac manifest me
 ok(cargo.includes('zip = { version = "=4.6.1"') && cargo.includes('unicode-normalization = "=0.1.25"'), "new cross-platform Rust dependencies are pinned to exact direct versions");
 ok(cargo.includes('tauri-plugin-single-instance = "=2.4.3"'), "single-instance dependency is also pinned exactly");
 ok(packageJson.scripts?.["test:mac-portability"]?.includes("npm run test:cargo-lock") && packageJson.scripts?.["test:mac-portability:locked"]?.includes("cargo test --locked"), "Mac portability commands validate Cargo.lock and expose a locked CI mode");
+ok(packageJson.scripts?.["test:mac-portability:locked"]?.startsWith("npm run patch:wry-pinterest"), "native macOS smoke installs the WRY patch before compiling it");
 ok(cargoLockTest.includes('"zip", "4.6.1"') && cargoLockTest.includes('"unicode-normalization", "0.1.25"') && cargoLockTest.includes('"tauri-plugin-single-instance", "2.4.3"'), "Cargo.lock regression validates every newly pinned portability dependency");
 ok(portabilityWorkflow.includes("git diff --exit-code -- src-tauri/Cargo.lock") && portabilityWorkflow.includes("regenerated-Cargo-lock"), "Windows CI fails closed on an uncommitted regenerated Cargo.lock and preserves it as an artifact");
 ok(portabilityWorkflow.includes("npm run test:mac-portability:locked"), "hosted native Mac CI compiles only the committed Cargo.lock graph");
 ok(macBuildWorkflow.includes("cargo test --locked --manifest-path src-tauri/Cargo.toml --lib"), "Mac build refuses dependency resolution drift");
+ok(macBuildWorkflow.includes("mkdir -p dist") && macBuildWorkflow.indexOf("mkdir -p dist") < macBuildWorkflow.indexOf("cargo test --locked"), "Mac release build prepares frontendDist before Tauri Rust tests");
 ok(macBuildWorkflow.includes("cargo metadata --locked") && windowsBuildWorkflow.includes("cargo metadata --locked"), "Desktop build workflows preflight the committed Rust dependency graph");
 ok(exists("scripts/check-macos-runtime-dylibs.sh") && runtimeDylibCheck.includes('/usr/lib/*|/System/Library/*'), "embedded runtime dylib audit permits only Apple system dependencies");
+ok(runtimeDylibCheck.includes('[[ "$line" == "$binary (architecture "* ]]'), "embedded runtime dylib audit ignores Universal Mach-O architecture headers");
 ok((macBuildWorkflow.match(/check-macos-runtime-dylibs\.sh/g) || []).length >= 2, "Universal Mac build audits FFmpeg, Node, and Bot API both before bundling and inside the DMG");
 
 ok(desktopReleaseWorkflow.includes('group: release-desktop-${{ inputs.release_tag }}'), "Desktop release serializes publication per release tag");
@@ -146,6 +156,11 @@ ok(!commands.includes('Command::new("ffmpeg")') && (commands.match(/beatgaler_ff
 ok(!app.includes("Windows reported a file drop"), "user-facing drag error is platform-neutral");
 ok(!htmlDrop.includes("WebView2 exposed no usable image payload"), "user-facing browser artwork error is platform-neutral");
 ok(player.includes("Reveal in Finder"), "Mac UI has Finder-specific reveal wording");
+ok(commands.includes("pub fn read_image_file_data_url") && commands.includes("ARTWORK_READ_OK"), "macOS artwork uses native byte reads with stage diagnostics");
+ok(drawer.includes('handlePickArtwork') && drawer.includes('beatgaler:drawer-native-path') && !drawer.includes('tauri://drag-drop'), "Drawer artwork uses the native picker and the single Webview drop receiver");
+ok(app.includes('target=${drawerTarget') && app.includes('beatgaler:drawer-native-path'), "native drop logs its resolved target and forwards Finder artwork to Drawer");
+ok(drawer.includes("onCloudMutationCommit") && app.includes("commitDrawerCloudMutation"), "Drawer PROJECT/artwork changes own an explicit authoritative INDEX commit");
+ok(commands.includes("VERIFY_OK") && commands.includes("missing projects"), "INDEX writes verify pinned project membership before reporting success");
 
 const publicServerErrorTexts = cloudServer.split(/\r?\n/).filter(line => line.includes("error:")).map(line => line.slice(line.indexOf("error:") + 6));
 ok(!publicServerErrorTexts.some(text => /telegram|bot api|transport bot|001beatgaler|tdlib/i.test(text)), "public Cloud HTTP errors do not expose the hidden storage implementation");
