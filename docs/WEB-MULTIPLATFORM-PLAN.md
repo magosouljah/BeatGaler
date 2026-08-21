@@ -30,7 +30,8 @@ Platform-specific behavior is controlled by an explicit capability matrix. React
 
 - Phase 1 is complete: shared beat domain, capability matrix, platform contracts, runtime adapter selection, React provider, and regression coverage are in place.
 - Phase 2 slice A is complete: the repository has dedicated Web dev/build/preview commands; authentication, external links, background events, and performance diagnostics now cross platform ports; and the signed-out account shell renders and logs in with a persistent browser client ID.
-- Phase 2 remains in progress: legacy consumers of `src/lib/tauri.ts` still need to move behind platform ports, and `App.tsx` orchestration still needs to be split into focused controllers before the complete signed-in library can run without Desktop services.
+- Phase 2 slice B is complete: the signed-in browser shell bypasses native startup, library transactions cross the platform boundary, shared preferences persist in the browser, and Settings hides native Trash, playback cache, developer tools, and updater features by capability.
+- Phase 2 remains in progress: import, playback, card actions, and the remaining `App.tsx` controllers still need to move behind platform ports before the authoritative Galer Cloud Web library can be connected.
 
 ## Canonical model rule
 

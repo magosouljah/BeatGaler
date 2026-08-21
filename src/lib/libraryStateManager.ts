@@ -1,5 +1,6 @@
 import type { Beat } from "../types";
-import { loadLibrary, restoreLibraryFromTelegram, syncCloudLibraryIndex, type CloudLibrarySyncResult } from "./tauri";
+import { platform } from "../platform";
+import type { PlatformLibrarySyncResult } from "../platform/contracts";
 
 type LibraryOperationKind = "reload" | "commit";
 
@@ -35,19 +36,19 @@ class LibraryStateManager {
 
   async reloadAuthoritative(): Promise<Beat[]> {
     return this.exclusive("reload", async () => {
-      await restoreLibraryFromTelegram();
-      const restored = await loadLibrary();
+      await platform.library.restoreAuthoritative();
+      const restored = await platform.library.load();
       this.lastVerified = restored.slice();
       return restored;
     });
   }
 
-  async commitSnapshot(beats: Beat[], reason = "unspecified"): Promise<CloudLibrarySyncResult> {
+  async commitSnapshot(beats: Beat[], reason = "unspecified"): Promise<PlatformLibrarySyncResult> {
     // Freeze the exact transaction candidate. React may mutate while this waits.
     const snapshot = beats.map(beat => ({ ...beat, tags: [...(beat.tags || [])] }));
     return this.exclusive("commit", async () => {
       console.info(`[library-tx] COMMIT reason=${reason} beats=${snapshot.length}`);
-      const result = await syncCloudLibraryIndex(snapshot);
+      const result = await platform.library.commitSnapshot(snapshot);
       this.lastVerified = snapshot;
       return result;
     });

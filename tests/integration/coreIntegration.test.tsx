@@ -71,17 +71,19 @@ async function loadLibraryManager(mocks?: {
   const load = mocks?.load ?? vi.fn(async () => [makeBeat()]);
   const sync = mocks?.sync ?? vi.fn(async () => ({ ok: true }));
 
-  vi.doMock("../../src/lib/tauri", () => ({
-    restoreLibraryFromTelegram: restore,
-    loadLibrary: load,
-    syncCloudLibraryIndex: sync,
+  vi.doMock("../../src/platform", () => ({
+    platform: { library: {
+      restoreAuthoritative: restore,
+      load,
+      commitSnapshot: sync,
+    } },
   }));
 
   const { libraryStateManager } = await import("../../src/lib/libraryStateManager");
   return { libraryStateManager, restore, load, sync };
 }
 
-describe("LibraryStateManager ↔ Tauri integration", () => {
+describe("LibraryStateManager ↔ platform integration", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import type { Beat } from "../types";
 import { Artwork } from "./ui";
-import { revealInExplorer } from "../lib/tauri";
+import { platform } from "../platform";
 import shufflePng from "../assets/player-icons/shuffle.png";
 import repeatPng from "../assets/player-icons/repeat.png";
 import backwardFillPng from "../assets/player-icons/backward.fill.png";
@@ -40,6 +40,7 @@ interface Props {
   onCycleRepeat: () => void;
   onToggleQueue: () => void;
   onPlayQueueIndex: (index: number) => void;
+  canAddBeat: boolean;
   onAddBeat: () => void;
   onDetail: (beat: Beat) => void;
   onEdit: (beat: Beat) => void;
@@ -47,11 +48,11 @@ interface Props {
   onAddToQueue: (beat: Beat) => void;
 }
 
-function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onClose }: {
+function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, canReveal, onReveal, onClose }: {
   x: number; y: number;
   onEdit: () => void; onDetail: () => void;
   onAddToQueue: () => void;
-  onDelete: () => void; onReveal: () => void; onClose: () => void;
+  onDelete: () => void; canReveal: boolean; onReveal: () => void; onClose: () => void;
 }) {
   React.useEffect(() => {
     const onAnyClick = () => onClose();
@@ -71,9 +72,24 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
     };
   }, []);
 
+  const actions: [string, () => void, boolean?][] = [
+    ["Edit metadata", onEdit],
+    ["View detail", onDetail],
+    ["Add to queue", onAddToQueue],
+    ["Remove from library", onDelete, true],
+  ];
+  if (canReveal) {
+    actions.splice(3, 0, [
+      typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent)
+        ? "Reveal in Finder"
+        : "Reveal in Explorer",
+      onReveal,
+    ]);
+  }
+
   return ReactDOM.createPortal(
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
-      {([["Edit metadata", onEdit], ["View detail", onDetail], ["Add to queue", onAddToQueue], [typeof navigator !== "undefined" && /Macintosh|Mac OS X/i.test(navigator.userAgent) ? "Reveal in Finder" : "Reveal in Explorer", onReveal], ["Remove from library", onDelete, true]] as [string, () => void, boolean?][]).map(([label, fn, danger]) => (
+      {actions.map(([label, fn, danger]) => (
         <div key={label} onClick={() => { fn(); onClose(); }}
           style={{ padding: "9px 16px", fontSize: 13, color: danger ? "#f87171" : "#c0c0c0", cursor: "pointer" }}
           onMouseEnter={e => (e.currentTarget.style.background = "#242424")}
@@ -322,6 +338,7 @@ export default function Player({
   onCycleRepeat,
   onToggleQueue,
   onPlayQueueIndex,
+  canAddBeat,
   onAddBeat,
   onDetail,
   onEdit,
@@ -576,9 +593,9 @@ export default function Player({
 
       {/* RIGHT: Auxiliary Controls */}
       <div style={{ display: "flex", alignItems: "center", gap: rightGap, flexShrink: 0, position: "relative" }}>
-        <button onClick={onAddBeat} style={controlButtonStyle(false, utilityBtnSize)} title="Add beat" {...iconButtonStateHandlers<HTMLButtonElement>()}>
+        {canAddBeat && <button onClick={onAddBeat} style={controlButtonStyle(false, utilityBtnSize)} title="Add beat" {...iconButtonStateHandlers<HTMLButtonElement>()}>
           <PlusIcon />
-        </button>
+        </button>}
         <button
           ref={queueButtonRef}
           onClick={() => {
@@ -796,7 +813,8 @@ export default function Player({
           onDetail={() => onDetail(beat)}
           onAddToQueue={() => onAddToQueue(beat)}
           onDelete={() => onDelete(beat)}
-          onReveal={() => revealInExplorer(beat.folder_path)}
+          canReveal={platform.capabilities.revealLocalFile}
+          onReveal={() => void platform.system.revealPath(beat.folder_path)}
           onClose={() => setMenu(null)}
         />
       )}

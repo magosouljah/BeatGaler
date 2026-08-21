@@ -11,6 +11,9 @@ export interface PlatformCapabilities {
   revealLocalFile: boolean;
   watchFolders: boolean;
   installAppUpdates: boolean;
+  trashLifecycle: boolean;
+  playbackCache: boolean;
+  developerTools: boolean;
 }
 
 export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freeze({
@@ -24,6 +27,9 @@ export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freez
   revealLocalFile: true,
   watchFolders: true,
   installAppUpdates: true,
+  trashLifecycle: true,
+  playbackCache: true,
+  developerTools: true,
 });
 
 /**
@@ -41,4 +47,7 @@ export const WEB_FOUNDATION_CAPABILITIES: Readonly<PlatformCapabilities> = Objec
   revealLocalFile: false,
   watchFolders: false,
   installAppUpdates: false,
+  trashLifecycle: false,
+  playbackCache: false,
+  developerTools: false,
 });
