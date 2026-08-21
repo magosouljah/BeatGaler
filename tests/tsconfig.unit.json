@@ -32,6 +32,8 @@
     "component/componentLogic.test.ts",
     "../src/features/components/componentLogic.ts",
     "unit/userVisibleError.test.ts",
-    "../src/lib/userVisibleError.ts"
+    "../src/lib/userVisibleError.ts",
+    "unit/platformCapabilities.test.ts",
+    "../src/platform/capabilities.ts"
   ]
 }
