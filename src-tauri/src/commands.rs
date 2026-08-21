@@ -84,6 +84,35 @@ pub fn review_perf_log(message: String) {
     eprintln!("[review-diag] {}", safe);
 }
 
+/// General desktop diagnostic bridge. Keep each record single-line and bounded
+/// so Terminal and the rotating application log show the same useful timeline
+/// without accepting arbitrary multi-line renderer output.
+#[tauri::command]
+pub fn diagnostic_log(
+    scope: String,
+    event: String,
+    detail: Option<String>,
+    state: tauri::State<SettingsState>,
+) {
+    let clean = |value: &str, max: usize| -> String {
+        value
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .take(max)
+            .collect::<String>()
+    };
+    let scope = clean(&scope, 48);
+    let event = clean(&event, 80);
+    let detail = clean(detail.as_deref().unwrap_or(""), 900);
+    let line = if detail.is_empty() {
+        format!("[{}] {}", scope, event)
+    } else {
+        format!("[{}] {} {}", scope, event, detail)
+    };
+    eprintln!("[diag] {}", line);
+    log_info(&state.data_dir, &line);
+}
+
 // ─────────────────────────────────────────────────────────────
 //  Types
 // ─────────────────────────────────────────────────────────────
@@ -1454,8 +1483,10 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
     // INDEX reads are on the critical path for refresh/import/metadata. A
     // transient helper/control-plane miss must not become an Upload Failed.
     let started = std::time::Instant::now();
+    let op = random_urlsafe(6);
     let mut attempt: u32 = 0;
     let mut last_error = "Galer Library INDEX is temporarily unavailable.".to_string();
+    eprintln!("[index] READ_BEGIN op={}", op);
     loop {
         attempt += 1;
         match ensure_direct_runtime(user_id)
@@ -1465,6 +1496,14 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
                 match response.get("manifest").cloned() {
                     Some(manifest) if manifest.get("schema").and_then(|v| v.as_str()) == Some(GALER_T_LIBRARY_SCHEMA) => {
                         let manifest = normalize_galer_t_library_manifest(manifest)?;
+                        eprintln!(
+                            "[index] READ_OK op={} attempt={} message_id={} beats={} elapsed_ms={}",
+                            op,
+                            attempt,
+                            response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0),
+                            manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+                            started.elapsed().as_millis(),
+                        );
                         cache_direct_library_manifest(&manifest);
                         return Ok(manifest);
                     }
@@ -1475,7 +1514,10 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
             Err(error) => last_error = error,
         }
 
+        eprintln!("[index] READ_RETRY op={} attempt={} reason={}", op, attempt, last_error);
+
         if attempt >= 8 || started.elapsed() >= Duration::from_secs(12) {
+            eprintln!("[index] READ_FAILED op={} attempts={} elapsed_ms={} reason={}", op, attempt, started.elapsed().as_millis(), last_error);
             return Err(format!("{} (after {} attempt(s))", last_error, attempt));
         }
         let shift = attempt.saturating_sub(1).min(4);
@@ -1490,6 +1532,8 @@ fn direct_replace_library_manifest_with_options(
     source_id: Option<&str>,
     allow_destructive: bool,
 ) -> Result<Value, String> {
+    let op = random_urlsafe(6);
+    let started = Instant::now();
     ensure_direct_runtime(user_id)?;
     if manifest.get("schema").and_then(|v| v.as_str()) != Some(GALER_T_LIBRARY_SCHEMA) {
         return Err("Refusing to publish a non-BeatGaler cloud index.".to_string());
@@ -1501,6 +1545,42 @@ fn direct_replace_library_manifest_with_options(
             manifest_version, GALER_T_LIBRARY_SCHEMA_VERSION
         ));
     }
+    let expected_beats = manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0);
+    let expected_projects: std::collections::HashSet<String> = manifest.get("beats")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("project").map(|project| !project.is_null()).unwrap_or(false))
+        .filter_map(|entry| entry.get("id").and_then(|v| v.as_str()).map(|v| v.to_string()))
+        .collect();
+    let identity_ids = |value: &Value| -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        if let Some(rows) = value.get("beats").and_then(|v| v.as_array()) {
+            for row in rows {
+                if let Some(id) = row.get("id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+        if let Some(rows) = value.get("trash").and_then(|v| v.as_array()) {
+            for row in rows {
+                let beat = row.get("beat").unwrap_or(row);
+                if let Some(id) = beat.get("id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+        out
+    };
+    let expected_ids = identity_ids(manifest);
+    eprintln!(
+        "[index] WRITE_BEGIN op={} beats={} identities={} projects={} destructive={}",
+        op,
+        expected_beats,
+        expected_ids.len(),
+        expected_projects.len(),
+        allow_destructive,
+    );
     let temp_dir = beatgaler_temp_dir().join("cloud-upload-tmp");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let temp_path = temp_dir.join(format!("beatgaler-library-{}.json", random_urlsafe(8)));
@@ -1516,23 +1596,99 @@ fn direct_replace_library_manifest_with_options(
     }));
     let _ = std::fs::remove_file(&temp_path);
     let response = result?;
-    cache_direct_library_manifest(manifest);
     let message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
     if message_id <= 0 {
+        eprintln!("[index] WRITE_FAILED op={} stage=helper-response reason=missing-message-id", op);
         return Err("Galer Library index sync returned no storage message id.".to_string());
     }
     let index_file_id = response.get("file_id").and_then(|v| v.as_str()).unwrap_or("");
 
+    // Read-after-write verification closes the exact hole where media upload
+    // succeeds but the new PROJECT/artwork reference never becomes durable in
+    // the pinned source-of-truth INDEX. Telegram pin visibility can be briefly
+    // eventual, so retry before reporting a precise commit failure.
+    let mut verified_manifest: Option<Value> = None;
+    let mut verify_error = "Pinned INDEX could not be read back.".to_string();
+    for attempt in 1..=4 {
+        match direct_request(user_id, json!({ "op": "get_index" })) {
+            Ok(readback) => {
+                let readback_message_id = readback.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
+                let candidate = readback.get("manifest").cloned().unwrap_or(Value::Null);
+                let readback_ids = identity_ids(&candidate);
+                let missing_ids = expected_ids.iter().filter(|id| !readback_ids.contains(*id)).count();
+                let missing_projects = expected_projects.iter().filter(|id| {
+                    !candidate.get("beats").and_then(|v| v.as_array()).into_iter().flatten().any(|entry| {
+                        entry.get("id").and_then(|v| v.as_str()) == Some(id.as_str())
+                            && entry.get("project").map(|project| !project.is_null()).unwrap_or(false)
+                    })
+                }).count();
+                if readback_message_id == message_id && missing_ids == 0 && missing_projects == 0 {
+                    verified_manifest = Some(normalize_galer_t_library_manifest(candidate)?);
+                    eprintln!(
+                        "[index] VERIFY_OK op={} attempt={} message_id={} identities={} projects={} elapsed_ms={}",
+                        op,
+                        attempt,
+                        message_id,
+                        readback_ids.len(),
+                        expected_projects.len(),
+                        started.elapsed().as_millis(),
+                    );
+                    break;
+                }
+                verify_error = format!(
+                    "Pinned INDEX verification mismatch (message {} expected {}, missing identities {}, missing projects {}).",
+                    readback_message_id, message_id, missing_ids, missing_projects
+                );
+            }
+            Err(error) => verify_error = error,
+        }
+        eprintln!("[index] VERIFY_RETRY op={} attempt={} reason={}", op, attempt, verify_error);
+        std::thread::sleep(Duration::from_millis(150 * attempt));
+    }
+    let verified_manifest = verified_manifest.ok_or_else(|| {
+        eprintln!("[index] WRITE_FAILED op={} stage=read-after-write reason={}", op, verify_error);
+        format!("INDEX was uploaded but could not be verified as active: {}", verify_error)
+    })?;
+    cache_direct_library_manifest(&verified_manifest);
+
     // Tiny control-plane pointer only. The INDEX bytes themselves traveled
     // Desktop -> local Bot API -> Telegram and never traversed BeatGaler Cloud.
     let commit_url = format!("{}/transport/index/commit", telegram_cloud_api_base());
-    let _ = post_json_cloud_auth_timeout(&commit_url, &json!({
+    let pointer_body = json!({
         "beatgalerUserId": user_id,
         "messageId": message_id,
         "fileId": index_file_id,
         "sourceId": source_id.unwrap_or_default(),
         "beatCount": manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
-    }), 8);
+    });
+    let mut pointer_committed = false;
+    for attempt in 1..=3 {
+        match post_json_cloud_auth_timeout(&commit_url, &pointer_body, 8) {
+            Ok(_) => {
+                pointer_committed = true;
+                eprintln!("[index] POINTER_OK op={} attempt={} message_id={}", op, attempt, message_id);
+                break;
+            }
+            Err(error) => {
+                eprintln!("[index] POINTER_RETRY op={} attempt={} reason={}", op, attempt, error);
+                if attempt < 3 { std::thread::sleep(Duration::from_millis(150 * attempt)); }
+            }
+        }
+    }
+    if !pointer_committed {
+        // The pinned Telegram document is authoritative and already verified.
+        // This pointer is recovery/diagnostic metadata only, so keep the commit
+        // successful but make the degraded control-plane state unmistakable.
+        eprintln!("[index] POINTER_DEFERRED op={} message_id={} authoritative_pin_verified=true", op, message_id);
+    }
+    eprintln!(
+        "[index] WRITE_OK op={} message_id={} beats={} projects={} elapsed_ms={}",
+        op,
+        message_id,
+        expected_beats,
+        expected_projects.len(),
+        started.elapsed().as_millis(),
+    );
     Ok(response)
 }
 
@@ -2516,6 +2672,9 @@ pub fn sync_cloud_library_index(
     state: tauri::State<SettingsState>,
     db: tauri::State<DbState>,
 ) -> Result<CloudLibrarySyncResult, String> {
+    let sync_op = random_urlsafe(6);
+    let sync_started = Instant::now();
+    eprintln!("[index] BUILD_BEGIN op={} snapshot_beats={} source={}", sync_op, beats.len(), source_id.as_deref().unwrap_or("none"));
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
@@ -2532,6 +2691,10 @@ pub fn sync_cloud_library_index(
             manifest_beats.push(entry);
         }
     }
+    let project_count = manifest_beats.iter()
+        .filter(|entry| entry.get("project").map(|value| !value.is_null()).unwrap_or(false))
+        .count();
+    eprintln!("[index] BUILD_ACTIVE_READY op={} indexed_beats={} projects={}", sync_op, manifest_beats.len(), project_count);
 
     // Trash is part of the Telegram source of truth. Files stay in their
     // original Telegram messages while trashed; only membership changes.
@@ -2608,6 +2771,14 @@ pub fn sync_cloud_library_index(
         .map_err(|e| format!("Could not sync Galer Library index directly: {}", e))?;
     let library_message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
 
+    eprintln!(
+        "[index] BUILD_COMMIT_OK op={} message_id={} beats={} projects={} elapsed_ms={}",
+        sync_op,
+        library_message_id,
+        manifest.get("beats").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+        project_count,
+        sync_started.elapsed().as_millis(),
+    );
     Ok(CloudLibrarySyncResult {
         telegram_file_id: format!("index:{}", library_message_id),
         telegram_message_id: library_message_id,
@@ -5892,6 +6063,9 @@ pub fn upload_project_to_telegram(
     state: tauri::State<SettingsState>,
     db: tauri::State<DbState>,
 ) -> Result<ProjectCloudStatus, String> {
+    let upload_op = random_urlsafe(6);
+    let upload_started = Instant::now();
+    eprintln!("[project-sync] UPLOAD_BEGIN op={} beat_id={}", upload_op, beat.id);
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         if !settings.telegram_cloud_connected {
@@ -5923,6 +6097,14 @@ pub fn upload_project_to_telegram(
     let size = std::fs::metadata(&zip_path).map_err(|e| e.to_string())?.len();
     if size == 0 { return Err("Project ZIP is empty.".to_string()); }
     let (_, modified_ms) = project_file_stamp(&zip_path).ok_or_else(|| "Could not read project ZIP metadata.".to_string())?;
+    eprintln!(
+        "[project-sync] ARCHIVE_READY op={} beat_id={} bytes={} generated={} elapsed_ms={}",
+        upload_op,
+        beat.id,
+        size,
+        generated_archive,
+        upload_started.elapsed().as_millis(),
+    );
 
     let user_id = ensure_beatgaler_user_id(&state)?;
     let project_filename = zip_path
@@ -5958,6 +6140,14 @@ pub fn upload_project_to_telegram(
         }
     };
     let part_count = parts.len();
+    eprintln!(
+        "[project-sync] MEDIA_UPLOAD_OK op={} beat_id={} parts={} bytes={} elapsed_ms={}",
+        upload_op,
+        beat.id,
+        part_count,
+        size,
+        upload_started.elapsed().as_millis(),
+    );
     // The project manifest must reflect the archive we actually uploaded,
     // not stale BeatMeta flags. This matters when a beat was created from audio
     // first and an FLP/ALS was added later.
@@ -5975,9 +6165,17 @@ pub fn upload_project_to_telegram(
         if generated_archive { None } else { Some(zip_path.to_string_lossy().to_string()) };
     conn.execute(
         "INSERT INTO cloud_projects (beat_id, local_zip_path, manifest_json, source_size, source_modified_ms, uploaded_at) VALUES (?1,?2,?3,?4,?5,strftime('%s','now')) ON CONFLICT(beat_id) DO UPDATE SET local_zip_path=excluded.local_zip_path, manifest_json=excluded.manifest_json, source_size=excluded.source_size, source_modified_ms=excluded.source_modified_ms, uploaded_at=excluded.uploaded_at",
-        params![beat.id, stored_local_path, response.to_string(), size as i64, modified_ms],
+        params![beat.id.clone(), stored_local_path, response.to_string(), size as i64, modified_ms],
     ).map_err(|e| e.to_string())?;
     drop(conn);
+    eprintln!(
+        "[project-sync] LOCAL_MANIFEST_OK op={} beat_id={} parts={} openable={} elapsed_ms={}",
+        upload_op,
+        beat.id,
+        part_count,
+        archive_openable,
+        upload_started.elapsed().as_millis(),
+    );
 
     if generated_archive { let _ = std::fs::remove_file(&zip_path); }
 
@@ -10466,6 +10664,116 @@ pub fn purge_interrupted_upload_local(
 #[tauri::command]
 pub fn path_is_directory(path: String) -> bool {
     Path::new(&path).is_dir()
+}
+
+fn supported_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+    {
+        return Some("image/avif");
+    }
+    None
+}
+
+#[cfg(test)]
+mod artwork_native_reader_tests {
+    use super::supported_image_mime;
+
+    #[test]
+    fn recognizes_supported_artwork_by_bytes_not_extension() {
+        assert_eq!(supported_image_mime(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]), Some("image/png"));
+        assert_eq!(supported_image_mime(&[0xff, 0xd8, 0xff, 0x00]), Some("image/jpeg"));
+        assert_eq!(supported_image_mime(b"GIF89a-rest"), Some("image/gif"));
+        assert_eq!(supported_image_mime(b"RIFF0000WEBP"), Some("image/webp"));
+        assert_eq!(supported_image_mime(b"BM-not-really-large"), Some("image/bmp"));
+        assert_eq!(supported_image_mime(b"0000ftypavif"), Some("image/avif"));
+        assert_eq!(supported_image_mime(b"not an image"), None);
+    }
+}
+
+/// Reads artwork through Rust instead of the WebView asset protocol. Native
+/// file dialogs on macOS can return security-scoped paths whose asset URL has
+/// no useful Content-Type (or is denied by WebKit); direct native I/O avoids
+/// that platform-specific failure and gives us precise stage diagnostics.
+#[tauri::command]
+pub fn read_image_file_data_url(
+    path: String,
+    state: tauri::State<SettingsState>,
+) -> Result<String, String> {
+    const MAX_ARTWORK_BYTES: u64 = 64 * 1024 * 1024;
+    let op = random_urlsafe(6);
+    let started = Instant::now();
+    let image_path = PathBuf::from(&path);
+    let filename = image_path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("(unnamed image)")
+        .replace(['\r', '\n'], " ");
+    let extension = image_path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let begin = format!("ARTWORK_READ_BEGIN op={} file={} ext={}", op, filename, extension);
+    eprintln!("[artwork] {}", begin);
+    log_info(&state.data_dir, &begin);
+
+    let metadata = std::fs::metadata(&image_path).map_err(|error| {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=metadata error={}", op, error);
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        format!("Could not access the selected artwork file: {}", error)
+    })?;
+    if !metadata.is_file() {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=validate reason=not-a-file", op);
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        return Err("Selected artwork is not a file.".to_string());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_ARTWORK_BYTES {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=validate bytes={} reason=size", op, metadata.len());
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        return Err(format!("Artwork must be between 1 byte and {} MB.", MAX_ARTWORK_BYTES / 1024 / 1024));
+    }
+
+    let bytes = std::fs::read(&image_path).map_err(|error| {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=read bytes={} error={}", op, metadata.len(), error);
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        format!("Could not read the selected artwork file: {}", error)
+    })?;
+    let mime = supported_image_mime(&bytes).ok_or_else(|| {
+        let detail = format!("ARTWORK_READ_FAILED op={} stage=decode bytes={} reason=unsupported-signature", op, bytes.len());
+        eprintln!("[artwork] {}", detail);
+        log_error(&state.data_dir, &detail);
+        "Artwork must be a valid PNG, JPEG, WebP, GIF, BMP, or AVIF image.".to_string()
+    })?;
+    let encoded = general_purpose::STANDARD.encode(&bytes);
+    let done = format!(
+        "ARTWORK_READ_OK op={} mime={} bytes={} encoded_bytes={} elapsed_ms={}",
+        op,
+        mime,
+        bytes.len(),
+        encoded.len(),
+        started.elapsed().as_millis(),
+    );
+    eprintln!("[artwork] {}", done);
+    log_info(&state.data_dir, &done);
+    Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
 #[tauri::command]

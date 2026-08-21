@@ -70,7 +70,7 @@ vi.mock("../../src/lib/tauri", () => ({
   addFileToBeat: vi.fn(async () => undefined),
   pickFile: vi.fn(async () => null),
   pickFolder: vi.fn(async () => null),
-  isTauriAvailable: vi.fn(() => false),
+  isTauriAvailable: false,
   listCloudFilesForBeat: vi.fn(async () => []),
   downloadCloudFileToCache: vi.fn(async () => "C:/cache/test.mp3"),
   uploadDroppedFileToTelegram: vi.fn(async () => undefined),
@@ -85,6 +85,7 @@ vi.mock("../../src/lib/tauri", () => ({
     image_base64: null,
   })),
   readImagePathAsDataUrl: vi.fn(async () => null),
+  diagnosticLog: vi.fn(async () => undefined),
 }));
 
 import BeatCard from "../../src/components/BeatCard";
@@ -341,5 +342,36 @@ describe("Review Beat / Drawer real DOM", () => {
       .find(button => button.textContent?.trim() === "Internet connection required") as HTMLButtonElement | undefined;
     expect(save).toBeDefined();
     expect(save?.disabled).toBe(true);
+  });
+
+  it("commits cloud metadata through the authoritative INDEX before reporting Drawer save", async () => {
+    const beat = makeBeat({ telegram_file_id: "cloud-master", telegram_message_id: 42 });
+    const onCloudMutationCommit = vi.fn(async () => undefined);
+    const onSaved = vi.fn();
+    await render(
+      <Drawer
+        beat={beat}
+        mode="edit"
+        mutationAllowed
+        onClose={() => undefined}
+        onSaved={onSaved}
+        onReleaseAudio={() => undefined}
+        onCloudMutationCommit={onCloudMutationCommit}
+      />
+    );
+
+    const bpmInput = document.querySelector('input[inputmode="decimal"]') as HTMLInputElement;
+    await setInputValue(bpmInput, "121");
+    const save = Array.from(document.querySelectorAll("button"))
+      .find(button => button.textContent?.trim() === "Save changes") as HTMLButtonElement;
+    await click(save);
+
+    expect(onCloudMutationCommit).toHaveBeenCalledTimes(1);
+    expect(onCloudMutationCommit.mock.calls[0][0].bpm).toBe("121");
+    expect(onCloudMutationCommit.mock.calls[0][1]).toEqual({
+      syncMetadata: true,
+      reason: "drawer-metadata-save",
+    });
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 });

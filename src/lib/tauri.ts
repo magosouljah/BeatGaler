@@ -28,6 +28,18 @@ export function getCloudClientId(): string {
   return CLOUD_CLIENT_ID;
 }
 
+export async function diagnosticLog(scope: string, event: string, detail?: string): Promise<void> {
+  const suffix = detail ? ` ${detail}` : "";
+  console.info(`[${scope}] ${event}${suffix}`);
+  await initTauri();
+  if (!invoke) return;
+  try {
+    await invoke<void>("diagnostic_log", { scope, event, detail: detail ?? null });
+  } catch (error) {
+    console.warn(`[${scope}] diagnostic bridge failed`, error);
+  }
+}
+
 let open: OpenFn | undefined;
 let save: SaveFn | undefined;
 let convertFileSrc: ConvertFileSrcFn | undefined;
@@ -432,27 +444,20 @@ export async function addFileToBeat(payload: AddFilePayload): Promise<string> {
 
 export async function readImagePathAsDataUrl(filePath: string): Promise<string> {
   await initTauri();
-  if (!convertFileSrc) throw new Error("Tauri file conversion is not available");
-
-  const url = convertFileSrc(filePath);
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Could not read dropped image (${response.status})`);
+  const filename = filePath.replace(/\\/g, "/").split("/").pop() || "(unnamed image)";
+  void diagnosticLog("artwork", "READ_REQUEST", `file=${filename}`);
+  if (!invoke) throw new Error("Native artwork reader is not available");
+  try {
+    const result = await invoke<string>("read_image_file_data_url", { path: filePath });
+    if (!/^data:image\//i.test(result) || result.length < 32) {
+      throw new Error("Native artwork reader returned an invalid image payload");
+    }
+    void diagnosticLog("artwork", "READ_RESOLVED", `file=${filename} data_url_bytes=${result.length}`);
+    return result;
+  } catch (error) {
+    void diagnosticLog("artwork", "READ_REJECTED", `file=${filename} error=${String(error)}`);
+    throw error;
   }
-
-  const blob = await response.blob();
-  if (!blob.type.startsWith("image/")) {
-    throw new Error("Dropped file is not an image");
-  }
-
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => typeof reader.result === "string"
-      ? resolve(reader.result)
-      : reject(new Error("Could not convert dropped image"));
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read dropped image"));
-    reader.readAsDataURL(blob);
-  });
 }
 
 export function filePathToUrl(filePath: string): string {
