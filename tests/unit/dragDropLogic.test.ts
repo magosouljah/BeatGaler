@@ -30,6 +30,11 @@ runSuite("Drag/drop external image decoding", [
     const encoded = `${NATIVE_EXTERNAL_IMAGE_PREFIX}${encodeURIComponent(url)}`;
     deepEqual(nativeExternalImageSignalFromPaths([encoded]), { kind: "drop", url, source: "browser" }, "generic HTTP images should remain browser sources");
   }],
+  ["decodes a raw macOS pasteboard image URL without changing percent escapes", () => {
+    const url = "https://i.pinimg.com/originals/aa/bb/image.jpg?token=keep%2Fencoded";
+    const raw = `${NATIVE_EXTERNAL_IMAGE_PREFIX}${url}`;
+    deepEqual(nativeExternalImageSignalFromPaths([raw]), { kind: "drop", url, source: "pinterest" }, "macOS raw URLs should be preserved exactly");
+  }],
   ["rejects non-http protocols", () => {
     const encoded = `${NATIVE_EXTERNAL_IMAGE_PREFIX}${encodeURIComponent("file:///C:/secret.txt")}`;
     equal(nativeExternalImageSignalFromPaths([encoded]), null, "file:// must not enter browser-image import");

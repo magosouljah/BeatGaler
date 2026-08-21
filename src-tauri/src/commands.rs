@@ -12,7 +12,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::{HashMap, VecDeque};
 use url::Url;
@@ -618,11 +618,7 @@ pub fn set_cloud_auth_token(
         .unwrap_or(false);
     if should_warm {
         let user_id = ensure_beatgaler_user_id(&state)?;
-        std::thread::spawn(move || {
-            if let Err(error) = ensure_direct_runtime(&user_id) {
-                eprintln!("[direct] AUTH_WARMUP_FAILED reason={}", error);
-            }
-        });
+        schedule_direct_warmup(user_id, "auth-token");
     }
     Ok(())
 }
@@ -656,6 +652,64 @@ static DIRECT_HEARTBEAT_STARTED: OnceLock<()> = OnceLock::new();
 // at once during startup; without this lock each caller could reserve the same
 // lease and spawn its own helper. Only one helper may exist per desktop session.
 static DIRECT_RUNTIME_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static DIRECT_WARMUP_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DIRECT_WARMUP_BACKOFF_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+const DIRECT_WARMUP_CONFIGURATION_BACKOFF_SECONDS: u64 = 60;
+
+fn is_direct_warmup_configuration_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("required local data-plane credential")
+        || normalized.contains("telegram application id")
+        || normalized.contains("telegram_api_id")
+        || normalized.contains("telegram_api_hash")
+}
+
+fn schedule_direct_warmup(user_id: String, trigger: &'static str) {
+    let now = Instant::now();
+    let backoff = DIRECT_WARMUP_BACKOFF_UNTIL.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = backoff.lock() {
+        if let Some(until) = *guard {
+            if until > now {
+                eprintln!(
+                    "[direct] WARMUP_SKIPPED trigger={} reason=configuration-backoff remaining_ms={}",
+                    trigger,
+                    until.saturating_duration_since(now).as_millis(),
+                );
+                return;
+            }
+            *guard = None;
+        }
+    }
+
+    if DIRECT_WARMUP_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        eprintln!("[direct] WARMUP_SKIPPED trigger={} reason=already-in-flight", trigger);
+        return;
+    }
+
+    std::thread::spawn(move || {
+        match ensure_direct_runtime(&user_id) {
+            Ok(_) => eprintln!("[direct] WARMUP_OK trigger={}", trigger),
+            Err(error) => {
+                if is_direct_warmup_configuration_error(&error) {
+                    if let Ok(mut guard) = DIRECT_WARMUP_BACKOFF_UNTIL
+                        .get_or_init(|| Mutex::new(None))
+                        .lock()
+                    {
+                        *guard = Some(
+                            Instant::now()
+                                + Duration::from_secs(DIRECT_WARMUP_CONFIGURATION_BACKOFF_SECONDS),
+                        );
+                    }
+                }
+                eprintln!("[direct] WARMUP_FAILED trigger={} reason={}", trigger, error);
+            }
+        }
+        DIRECT_WARMUP_ACTIVE.store(false, Ordering::Release);
+    });
+}
 
 fn direct_runtime_slot() -> &'static Mutex<Option<DirectTransportRuntime>> {
     DIRECT_TRANSPORT_RUNTIME.get_or_init(|| Mutex::new(None))
@@ -2146,12 +2200,7 @@ pub fn poll_telegram_cloud_status(
     }
 
     if connected && reachable {
-        let warm_user_id = user_id.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = ensure_direct_runtime(&warm_user_id) {
-                eprintln!("[direct] WARMUP_FAILED reason={}", error);
-            }
-        });
+        schedule_direct_warmup(user_id.clone(), "connect-status");
     }
 
     Ok(TelegramCloudStatus { connected, reachable, username })
@@ -2193,12 +2242,7 @@ pub fn get_telegram_cloud_status(
     drop(settings);
 
     if connected && reachable {
-        let warm_user_id = user_id.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = ensure_direct_runtime(&warm_user_id) {
-                eprintln!("[direct] WARMUP_FAILED reason={}", error);
-            }
-        });
+        schedule_direct_warmup(user_id.clone(), "cloud-status");
     }
 
     Ok(TelegramCloudStatus { connected, reachable, username })
@@ -10706,6 +10750,22 @@ mod artwork_native_reader_tests {
     }
 }
 
+#[cfg(test)]
+mod direct_warmup_tests {
+    use super::is_direct_warmup_configuration_error;
+
+    #[test]
+    fn configuration_credentials_trigger_warmup_backoff() {
+        assert!(is_direct_warmup_configuration_error(
+            "Galer Cloud did not provide a required local data-plane credential."
+        ));
+        assert!(is_direct_warmup_configuration_error(
+            "BeatGaler Cloud did not provide the Telegram application id required by the local data plane."
+        ));
+        assert!(!is_direct_warmup_configuration_error("curl SSL connection timeout"));
+    }
+}
+
 /// Reads artwork through Rust instead of the WebView asset protocol. Native
 /// file dialogs on macOS can return security-scoped paths whose asset URL has
 /// no useful Content-Type (or is denied by WebKit); direct native I/O avoids
@@ -12070,12 +12130,7 @@ pub fn inspect_beat_update_folder(folder_path: String) -> Result<BeatFolderUpdat
     }
 
     let files = scan_folder_structured(&folder);
-    let has_flp = files.flps.iter().any(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .eq_ignore_ascii_case("flp")
-    });
+    let has_project_file = !files.flps.is_empty() || !files.alss.is_empty();
 
     Ok(BeatFolderUpdatePreview {
         has_mp3: !files.mp3s.is_empty(),
@@ -12083,7 +12138,7 @@ pub fn inspect_beat_update_folder(folder_path: String) -> Result<BeatFolderUpdat
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string()),
         has_wav: !files.wavs.is_empty(),
-        has_project_file: has_flp,
+        has_project_file,
         has_project_assets: folder_has_project_assets(&folder),
     })
 }
@@ -12300,6 +12355,85 @@ fn stream_group_key() -> String {
     format!("__stream_{}", random_urlsafe(10))
 }
 
+/// Attach root-level DAW project files to one discovered audio beat.
+///
+/// Exact normalized-name matches always win. Real Ableton folders often use a
+/// render name such as `Trap House F#m.wav` and a session name such as
+/// `Trap House Project.als`, though. When the folder contains exactly one
+/// supported project file, that file is unambiguous and is safe to attach even
+/// when its stem differs from the audio stem. Multiple non-matching project
+/// files remain unresolved instead of BeatGaler guessing.
+fn attach_root_project_files(
+    group: &mut matcher::ConfirmedGroup,
+    direct_files: &[PathBuf],
+    audio_core: &str,
+) {
+    let candidates: Vec<(PathBuf, String, String)> = direct_files
+        .iter()
+        .filter_map(|path| {
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext != "flp" && ext != "als" {
+                return None;
+            }
+            let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
+            let clean = clean_name_from_filename(stem);
+            let (core, _) = matcher::normalize_core_name(&clean);
+            Some((path.clone(), ext, core))
+        })
+        .collect();
+
+    let mut exact_matches = 0usize;
+    for (path, ext, core) in &candidates {
+        if core != audio_core {
+            continue;
+        }
+        exact_matches += 1;
+        match ext.as_str() {
+            "flp" if group.flp.is_none() => group.flp = Some(path.clone()),
+            "als" if group.als.is_none() => group.als = Some(path.clone()),
+            _ => {}
+        }
+    }
+
+    let mut used_unique_fallback = false;
+    if group.flp.is_none() && group.als.is_none() && candidates.len() == 1 {
+        let (path, ext, _) = &candidates[0];
+        match ext.as_str() {
+            "flp" => group.flp = Some(path.clone()),
+            "als" => group.als = Some(path.clone()),
+            _ => unreachable!("project candidates are filtered above"),
+        }
+        used_unique_fallback = true;
+    }
+
+    let candidate_names = candidates
+        .iter()
+        .filter_map(|(path, _, _)| path.file_name())
+        .map(|name| name.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("|");
+    let selected_names = [group.flp.as_ref(), group.als.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|path| path.file_name())
+        .map(|name| name.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("|");
+    eprintln!(
+        "[review-diag] PROJECT_PAIR_DECISION audio_core={} candidates={} exact_matches={} unique_fallback={} candidate_names={} selected_names={}",
+        audio_core,
+        candidates.len(),
+        exact_matches,
+        used_unique_fallback,
+        candidate_names,
+        selected_names,
+    );
+}
+
 /// Advance a streaming import session only until the next NORMAL playable beat
 /// is known. Ambiguous folders are recorded for the conflict UI and skipped so
 /// they never delay the first usable Review item. Directory traversal is
@@ -12462,18 +12596,10 @@ fn discover_next_stream_group(batch: &mut PendingImportBatch) -> Result<Option<S
             }
         }
 
-        // Root-level project files with the same core are cheap to attach.
+        // Root-level project files are cheap to attach. Exact names win, while
+        // one unique project is also safe when Ableton names it `... Project`.
         // Deep project/Samples/Stems work stays out of Review and happens later.
-        for file in &direct_files {
-            let file_ext = file.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
-            if file_ext != "flp" && file_ext != "als" { continue; }
-            let stem = file.file_stem().and_then(|v| v.to_str()).unwrap_or("");
-            let clean = clean_name_from_filename(stem);
-            let (file_core, _) = matcher::normalize_core_name(&clean);
-            if file_core != core { continue; }
-            if file_ext == "flp" && group.flp.is_none() { group.flp = Some(file.clone()); }
-            if file_ext == "als" && group.als.is_none() { group.als = Some(file.clone()); }
-        }
+        attach_root_project_files(&mut group, &direct_files, &core);
 
         batch.source_folders.insert(key.clone(), path.clone());
         batch.display_names.insert(key.clone(), titleize(&core));
@@ -12621,6 +12747,7 @@ pub fn preview_import_batch(
             let mut matching_wav: Vec<PathBuf> = Vec::new();
             let mut matching_flp: Vec<PathBuf> = Vec::new();
             let mut matching_als: Vec<PathBuf> = Vec::new();
+            let mut root_project_files: Vec<PathBuf> = Vec::new();
             let mut root_audio_roles: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new();
 
             for entry in std::fs::read_dir(&root_path).map_err(|e| e.to_string())?.flatten() {
@@ -12628,6 +12755,9 @@ pub fn preview_import_batch(
                 if !path.is_file() { continue; }
                 let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
                 if !matches!(ext.as_str(), "mp3" | "wav" | "flp" | "als") { continue; }
+                if matches!(ext.as_str(), "flp" | "als") {
+                    root_project_files.push(path.clone());
+                }
 
                 let stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("");
                 let clean = clean_name_from_filename(stem);
@@ -12669,6 +12799,7 @@ pub fn preview_import_batch(
                 // FLPs inside Backup/ are never scanned here.
                 group.flp = matching_flp.into_iter().next();
                 group.als = matching_als.into_iter().next();
+                attach_root_project_files(&mut group, &root_project_files, &folder_core);
 
                 let batch_id = random_urlsafe(10);
                 let mut groups = std::collections::HashMap::new();
@@ -13256,21 +13387,24 @@ pub fn resolve_import_audio_conflict(
                 let clean = clean_name_from_filename(stem);
                 let (selected_core, _) = matcher::normalize_core_name(&clean);
                 if let Ok(entries) = std::fs::read_dir(folder) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if !path.is_file() || path == selected { continue; }
+                    let direct_files = entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| path.is_file())
+                        .collect::<Vec<_>>();
+                    for path in &direct_files {
+                        if !path.is_file() || path.as_path() == selected.as_path() { continue; }
                         let other_stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("");
                         let other_clean = clean_name_from_filename(other_stem);
                         let (other_core, _) = matcher::normalize_core_name(&other_clean);
                         if other_core != selected_core { continue; }
                         let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
                         match ext.as_str() {
-                            "wav" if group.wav.is_none() => group.wav = Some(path),
-                            "flp" if group.flp.is_none() => group.flp = Some(path),
-                            "als" if group.als.is_none() => group.als = Some(path),
+                            "wav" if group.wav.is_none() => group.wav = Some(path.clone()),
                             _ => {}
                         }
                     }
+                    attach_root_project_files(&mut group, &direct_files, &selected_core);
                 }
             }
         }
@@ -13564,10 +13698,17 @@ pub fn rename_tag_everywhere(
 #[cfg(test)]
 mod import_core_unit_tests {
     use super::{
+        attach_root_project_files,
         build_loose_candidate_from_audio,
+        discover_next_stream_group,
         discover_import_sources,
+        inspect_beat_update_folder,
         scan_folder_structured,
+        ImportDiscoveryStream,
+        ImportDiscoveryTarget,
+        PendingImportBatch,
     };
+    use crate::matcher::ConfirmedGroup;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -13720,6 +13861,73 @@ mod import_core_unit_tests {
         assert_eq!(found.len(), 2, "same-name MP3+WAV must discover as one logical beat anchor");
         assert!(found.iter().any(|value| value == "Loose A.mp3"));
         assert!(found.iter().any(|value| value == "Loose B.wav"));
+    }
+
+    #[test]
+    fn unique_root_ableton_project_attaches_even_when_its_name_differs_from_render() {
+        let tree = TempTree::new("ableton-project-name");
+        let wav = tree.file("trap-house Project/trap-house F#m.wav");
+        let als = tree.file("trap-house Project/trap-house Project.als");
+        let direct_files = vec![wav, als.clone()];
+        let mut group = ConfirmedGroup::default();
+
+        attach_root_project_files(&mut group, &direct_files, "trap-house f#m");
+
+        assert_eq!(group.als.as_deref(), Some(als.as_path()));
+        assert!(group.flp.is_none());
+    }
+
+    #[test]
+    fn streaming_folder_import_keeps_differently_named_ableton_project() {
+        let tree = TempTree::new("ableton-streaming-import");
+        let folder = tree.dir("trap-house Project");
+        tree.file("trap-house Project/trap-house F#m.wav");
+        let als = tree.file("trap-house Project/trap-house Project.als");
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(ImportDiscoveryTarget { path: folder });
+        let mut batch = PendingImportBatch {
+            groups: std::collections::HashMap::new(),
+            source_folders: std::collections::HashMap::new(),
+            review_order: Vec::new(),
+            review_cursor: 0,
+            prepared_cores: std::collections::HashSet::new(),
+            display_names: std::collections::HashMap::new(),
+            discovery_stream: Some(ImportDiscoveryStream { queue }),
+            discovery_complete: false,
+            audio_conflicts: Vec::new(),
+        };
+
+        let key = discover_next_stream_group(&mut batch).unwrap().unwrap();
+        let group = batch.groups.get(&key).expect("streaming group");
+
+        assert_eq!(group.als.as_deref(), Some(als.as_path()));
+        assert!(group.wav.is_some());
+        assert!(batch.audio_conflicts.is_empty());
+    }
+
+    #[test]
+    fn multiple_nonmatching_root_projects_are_never_guessed() {
+        let tree = TempTree::new("ambiguous-project-name");
+        let first = tree.file("Beat/First Project.als");
+        let second = tree.file("Beat/Second Project.als");
+        let mut group = ConfirmedGroup::default();
+
+        attach_root_project_files(&mut group, &[first, second], "render name");
+
+        assert!(group.als.is_none());
+        assert!(group.flp.is_none());
+    }
+
+    #[test]
+    fn beat_update_folder_recognizes_ableton_as_a_project_file() {
+        let tree = TempTree::new("ableton-update-preview");
+        let folder = tree.dir("Beat");
+        tree.file("Beat/Beat.wav");
+        tree.file("Beat/Beat Project.als");
+
+        let preview = inspect_beat_update_folder(folder.to_string_lossy().to_string()).unwrap();
+
+        assert!(preview.has_project_file);
     }
 }
 
