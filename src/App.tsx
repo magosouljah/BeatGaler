@@ -1810,6 +1810,20 @@ function BeatGalerApp() {
     beat = latestBeat;
 
     const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
+    const startingPlaybackSession = audio.playingId !== beat.id || runtime.playback_state === "idle" || runtime.playback_state === "error";
+
+    // A just-imported Web beat already owns a browser-safe object URL. Preview it
+    // directly; no Desktop cache, helper, filesystem path or control-server byte
+    // transfer is involved.
+    if (platform.capabilities.browserObjectPlayback && platform.importer.fileForBeat(beat.id) && beat.playback_path.startsWith("blob:")) {
+      if (startingPlaybackSession) {
+        if (audio.playingId && audio.playingId !== beat.id) transitionRuntime(audio.playingId, { type: "PLAYBACK_IDLE" });
+        transitionRuntime(beat.id, { type: "PLAYBACK_PREPARING" }, beat);
+      }
+      play(beat.id, [beat.playback_path]);
+      return;
+    }
+
     // Sync and playback are independent state machines. In V7 a beat can stay in
     // sync_state=uploading until the ONE final batch INDEX commit even though its
     // MASTER is already durable and Download Cooking has made it playable. Do not
@@ -1829,7 +1843,6 @@ function BeatGalerApp() {
       return;
     }
 
-    const startingPlaybackSession = audio.playingId !== beat.id || runtime.playback_state === "idle" || runtime.playback_state === "error";
     if (startingPlaybackSession) {
       if (audio.playingId && audio.playingId !== beat.id) transitionRuntime(audio.playingId, { type: "PLAYBACK_IDLE" });
       transitionRuntime(beat.id, { type: "PLAYBACK_PREPARING" }, beat);

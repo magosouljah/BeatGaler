@@ -3,6 +3,7 @@ export type PlatformKind = "desktop" | "web";
 export interface PlatformCapabilities {
   browserFileImport: boolean;
   singleBeatDrop: boolean;
+  browserObjectPlayback: boolean;
   nativeFilesystemDrop: boolean;
   nativeExternalArtworkDrop: boolean;
   directGalerCloudTransport: boolean;
@@ -19,6 +20,7 @@ export interface PlatformCapabilities {
 export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freeze({
   browserFileImport: false,
   singleBeatDrop: false,
+  browserObjectPlayback: false,
   nativeFilesystemDrop: true,
   nativeExternalArtworkDrop: true,
   directGalerCloudTransport: true,
@@ -39,6 +41,7 @@ export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freez
 export const WEB_FOUNDATION_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freeze({
   browserFileImport: true,
   singleBeatDrop: true,
+  browserObjectPlayback: true,
   nativeFilesystemDrop: false,
   nativeExternalArtworkDrop: false,
   directGalerCloudTransport: false,

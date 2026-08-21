@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { filePathToUrl, downloadCookingDiagnosticEvent } from "../lib/tauri";
+import { platform } from "../platform";
 
 export interface AudioState {
   playingId: string | null;
@@ -53,13 +53,13 @@ export function useAudio() {
       const beatId = currentBeatIdRef.current;
       setState((s) => ({ ...s, isPlaying: true }));
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-playing", { detail: { beatId } }));
-      void downloadCookingDiagnosticEvent("AUDIO_PLAYING", beatId, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
+      void platform.diagnostics.audioEvent("AUDIO_PLAYING", beatId, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
     };
     const onWaiting = () => {
-      void downloadCookingDiagnosticEvent("AUDIO_WAITING", currentBeatIdRef.current, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
+      void platform.diagnostics.audioEvent("AUDIO_WAITING", currentBeatIdRef.current, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
     };
     const onCanPlay = () => {
-      void downloadCookingDiagnosticEvent("AUDIO_CANPLAY", currentBeatIdRef.current, null, `readyState=${audio.readyState}`).catch(() => {});
+      void platform.diagnostics.audioEvent("AUDIO_CANPLAY", currentBeatIdRef.current, null, `readyState=${audio.readyState}`).catch(() => {});
     };
     const onPause = () => {
       const beatId = currentBeatIdRef.current;
@@ -115,7 +115,7 @@ export function useAudio() {
   }, []);
 
   const primeAudioEngine = useCallback(async (path: string): Promise<boolean> => {
-    const source = filePathToUrl(path);
+    const source = platform.media.resolveUrl(path);
     if (!source) return false;
     const audio = getAudio();
     if (audio.src === source && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return true;
@@ -125,7 +125,7 @@ export function useAudio() {
     audio.preload = "auto";
     audio.muted = true;
     currentBeatIdRef.current = null;
-    void downloadCookingDiagnosticEvent("AUDIO_ENGINE_PRIME_BEGIN", null, null, source).catch(() => {});
+    void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_BEGIN", null, null, source).catch(() => {});
 
     return await new Promise<boolean>((resolve) => {
       const cleanup = () => {
@@ -136,14 +136,14 @@ export function useAudio() {
         cleanup();
         primingRef.current = false;
         audio.muted = false;
-        void downloadCookingDiagnosticEvent("AUDIO_ENGINE_PRIME_READY", null, null, `readyState=${audio.readyState}`).catch(() => {});
+        void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_READY", null, null, `readyState=${audio.readyState}`).catch(() => {});
         resolve(true);
       };
       const onPrimeError = () => {
         cleanup();
         primingRef.current = false;
         audio.muted = false;
-        void downloadCookingDiagnosticEvent("AUDIO_ENGINE_PRIME_ERROR", null, null, "").catch(() => {});
+        void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_ERROR", null, null, "").catch(() => {});
         resolve(false);
       };
       audio.addEventListener("canplay", onReady, { once: true });
@@ -160,7 +160,7 @@ export function useAudio() {
       audio.paused ? audio.play().catch(console.error) : audio.pause();
       return;
     }
-    const sources = Array.from(new Set(paths.filter(Boolean).map(filePathToUrl)));
+    const sources = Array.from(new Set(paths.filter(Boolean).map(path => platform.media.resolveUrl(path))));
     if (sources.length === 0) {
       console.error("No audio sources available for beat", beatId);
       return;
@@ -179,9 +179,9 @@ export function useAudio() {
       audio.load();
     } else {
       audio.currentTime = 0;
-      void downloadCookingDiagnosticEvent("AUDIO_PRIMED_SOURCE_REUSED", beatId, null, `readyState=${audio.readyState}`).catch(() => {});
+      void platform.diagnostics.audioEvent("AUDIO_PRIMED_SOURCE_REUSED", beatId, null, `readyState=${audio.readyState}`).catch(() => {});
     }
-    void downloadCookingDiagnosticEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {});
+    void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {});
     setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
     audio.play().catch(console.error);
   }, [state.playingId, getAudio]);

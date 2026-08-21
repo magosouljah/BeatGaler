@@ -105,6 +105,10 @@ export const desktopAdapter: PlatformAdapter = {
         .then(({ invoke }) => invoke("review_perf_log", { message }))
         .catch(() => {});
     },
+    async audioEvent(event, beatId, beatName, detail) {
+      const { downloadCookingDiagnosticEvent } = await import("../lib/tauri");
+      await downloadCookingDiagnosticEvent(event, beatId, beatName, detail);
+    },
   },
   importer: {
     async pickBeat() { return null; },
