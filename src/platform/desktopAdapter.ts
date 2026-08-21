@@ -9,6 +9,55 @@ export const desktopAdapter: PlatformAdapter = {
   library: {
     load: loadLibrary,
     loadOffline: loadOfflineLibrary,
+    async restoreAuthoritative() {
+      const { restoreLibraryFromTelegram } = await import("../lib/tauri");
+      await restoreLibraryFromTelegram();
+    },
+    async commitSnapshot(beats) {
+      const { syncCloudLibraryIndex } = await import("../lib/tauri");
+      return syncCloudLibraryIndex(beats);
+    },
+    async flushOfflineTrashIntents() {
+      const { flushOfflineTrashIntents } = await import("../lib/tauri");
+      return flushOfflineTrashIntents();
+    },
+  },
+  preferences: {
+    async load() {
+      const { getSettings } = await import("../lib/tauri");
+      return getSettings();
+    },
+    async setIncompleteWarnings(enabled) {
+      const { setIncompleteWarningsEnabled } = await import("../lib/tauri");
+      await setIncompleteWarningsEnabled(enabled);
+    },
+    async setCustomCursor(enabled) {
+      const { setCustomCursorEnabled } = await import("../lib/tauri");
+      await setCustomCursorEnabled(enabled);
+    },
+  },
+  trash: {
+    async listBeats() { const { listTrash } = await import("../lib/tauri"); return listTrash(); },
+    async restoreBeat(id) { const { restoreBeatFromTrash } = await import("../lib/tauri"); return restoreBeatFromTrash(id); },
+    async purgeBeats() { const { purgeTrashNow } = await import("../lib/tauri"); return purgeTrashNow(); },
+    async listPresets() { const { listTemplateTrash } = await import("../lib/tauri"); return listTemplateTrash(); },
+    async restorePreset(id) { const { restoreTemplateFromTrash } = await import("../lib/tauri"); await restoreTemplateFromTrash(id); },
+    async purgePresets() { const { purgeTemplateTrashNow } = await import("../lib/tauri"); return purgeTemplateTrashNow(); },
+  },
+  playbackCache: {
+    async status() { const { getPlaybackCacheStatus } = await import("../lib/tauri"); return getPlaybackCacheStatus(); },
+    async setLimitMb(limitMb) { const { setPlaybackCacheLimitMb } = await import("../lib/tauri"); return setPlaybackCacheLimitMb(limitMb); },
+    async clear() { const { clearPlaybackCache } = await import("../lib/tauri"); return clearPlaybackCache(); },
+  },
+  system: {
+    async getLogDirectory() { const { getLogDir } = await import("../lib/tauri"); return getLogDir(); },
+    async getTemplatesDirectory() { const { getTemplatesDir } = await import("../lib/tauri"); return getTemplatesDir(); },
+    async revealPath(path) { const { revealInExplorer } = await import("../lib/tauri"); await revealInExplorer(path); },
+    async checkForUpdate() { const { checkForAppUpdate } = await import("../lib/tauri"); return checkForAppUpdate(); },
+    async installUpdate() { const { installAppUpdate } = await import("../lib/tauri"); await installAppUpdate(); },
+  },
+  startup: {
+    async loadAuthenticatedShell() { return null; },
   },
   media: {
     resolveUrl: filePathToUrl,
@@ -36,6 +85,12 @@ export const desktopAdapter: PlatformAdapter = {
         throw new Error("BeatGaler could not create its installation ID.");
       }
       return String(settings.beatgaler_user_id);
+    },
+  },
+  cloud: {
+    async status() {
+      const { pollTelegramCloudStatus } = await import("../lib/tauri");
+      return pollTelegramCloudStatus();
     },
   },
   cloudAuth: {

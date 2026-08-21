@@ -6,6 +6,9 @@ runSuite("platform capabilities", [
     equal(DESKTOP_CAPABILITIES.nativeFilesystemDrop, true, "Desktop native drop must remain enabled");
     equal(DESKTOP_CAPABILITIES.openProjectInDaw, true, "Desktop must keep DAW project opening");
     equal(DESKTOP_CAPABILITIES.installAppUpdates, true, "Desktop must keep native updates");
+    equal(DESKTOP_CAPABILITIES.trashLifecycle, true, "Desktop must keep native Trash");
+    equal(DESKTOP_CAPABILITIES.playbackCache, true, "Desktop must keep native playback cache");
+    equal(DESKTOP_CAPABILITIES.developerTools, true, "Desktop must keep developer tools");
   }],
   ["Web foundation never advertises unfinished features", () => {
     for (const [name, enabled] of Object.entries(WEB_FOUNDATION_CAPABILITIES)) {

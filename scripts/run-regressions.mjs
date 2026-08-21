@@ -196,7 +196,7 @@ try {
   if (!app.includes('an empty library is a valid, authoritative state')) fail("App.tsx lost the empty-library mutation invariant comment; review Remove All recovery behavior.");
   if (!settingsPanel.includes("setTrashItems([]);")) fail("Settings Trash must disappear immediately after permanent-delete confirmation.");
   if (!settingsPanel.includes("Deleting ${requested} beat")) fail("Settings Trash lost its non-blocking background-delete status.");
-  if (!settingsPanel.includes("const remaining = await listTrash();")) fail("Settings Trash must recover real rows if background deletion could not be queued.");
+  if (!settingsPanel.includes("const remaining = await platform.trash.listBeats();")) fail("Settings Trash must recover real rows through the platform boundary if background deletion could not be queued.");
   if (!rustCommands.includes('metadata_display_name')) fail("Cloud Trash insertion must prefer BeatMeta.name over synthetic import-* paths.");
   if (!rustCommands.includes('beat_meta_json FROM trash ORDER BY trashed_at DESC')) fail("Trash listing must recover names from beat metadata for already-broken rows.");
   if (!rustCommands.includes('/beats/delete-topics-batch')) fail("Rust Trash purge must use the batch permanent-delete endpoint.");
@@ -300,7 +300,7 @@ try {
   // per-user desktop pin, never ordinary playback cache and never web metadata.
   // Cold offline starts may expose only validated pins; ordinary cached cards
   // are allowed to survive only until the current app process closes.
-  if (!app.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
+  if (!app.includes('platform.library.loadOffline()')) fail("Cold Offline startup lost platform durable-library validation.");
   if (!app.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
   if (!app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!app.includes('const [beats, setBeats] = useState<Beat[]>([]);')) fail("Cold Offline startup can render ordinary cached cloud cards before verification again.");
@@ -478,4 +478,3 @@ try {
   if (actual !== expected) fail(`GitHub branch derivation mismatch. Expected ${expected}, got ${actual}.`);
   console.log(`PASS github guard: one command targets ${actual} from VERSION without force-push`);
 }
-

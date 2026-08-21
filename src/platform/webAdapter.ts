@@ -2,6 +2,25 @@ import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 
 const WEB_CLIENT_ID_KEY = "beatgaler:web-client-id:v1";
+const WEB_INCOMPLETE_WARNINGS_KEY = "beatgaler:web-incomplete-warnings:v1";
+const WEB_CUSTOM_CURSOR_KEY = "beatgaler:web-custom-cursor:v1";
+
+function readBooleanPreference(key: string, fallback: boolean): boolean {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value === null ? fallback : value === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeBooleanPreference(key: string, value: boolean): void {
+  try { window.localStorage.setItem(key, String(value)); } catch {}
+}
+
+function unavailable(feature: string): never {
+  throw new Error(`${feature} is not available in BeatGaler Web yet.`);
+}
 
 function createClientId(): string {
   const suffix = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -31,6 +50,60 @@ export const webAdapter: PlatformAdapter = {
     // Galer Cloud library support is implemented in the next Web phase.
     async load() { return []; },
     async loadOffline() { return []; },
+    async restoreAuthoritative() {},
+    async commitSnapshot() { return unavailable("Galer Cloud library writes"); },
+    async flushOfflineTrashIntents() { return 0; },
+  },
+  preferences: {
+    async load() {
+      return {
+        beats_folder: null,
+        incomplete_warnings_enabled: readBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, true),
+        custom_cursor_enabled: readBooleanPreference(WEB_CUSTOM_CURSOR_KEY, true),
+        beatgaler_user_id: webAdapter.clientId,
+        telegram_cloud_connected: true,
+        telegram_cloud_username: null,
+      };
+    },
+    async setIncompleteWarnings(enabled) {
+      writeBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, enabled);
+    },
+    async setCustomCursor(enabled) {
+      writeBooleanPreference(WEB_CUSTOM_CURSOR_KEY, enabled);
+    },
+  },
+  trash: {
+    async listBeats() { return []; },
+    async restoreBeat() { return unavailable("Trash restore"); },
+    async purgeBeats() { return unavailable("Trash deletion"); },
+    async listPresets() { return []; },
+    async restorePreset() { return unavailable("Preset restore"); },
+    async purgePresets() { return unavailable("Preset deletion"); },
+  },
+  playbackCache: {
+    async status() { return { used_bytes: 0, limit_mb: 0 }; },
+    async setLimitMb(limitMb) { return { used_bytes: 0, limit_mb: Math.max(0, limitMb) }; },
+    async clear() { return { used_bytes: 0, limit_mb: 0 }; },
+  },
+  system: {
+    async getLogDirectory() { return ""; },
+    async getTemplatesDirectory() { return ""; },
+    async revealPath() { return unavailable("Local file reveal"); },
+    async checkForUpdate() { return unavailable("Native app updates"); },
+    async installUpdate() { return unavailable("Native app updates"); },
+  },
+  startup: {
+    async loadAuthenticatedShell() {
+      const settings = await webAdapter.preferences.load();
+      const beats = await webAdapter.library.load();
+      const online = typeof navigator === "undefined" || navigator.onLine !== false;
+      return {
+        settings,
+        beats,
+        connectionState: online ? "online" : "offline",
+        libraryVerified: true,
+      };
+    },
   },
   media: {
     resolveUrl(source) { return source; },
@@ -52,6 +125,12 @@ export const webAdapter: PlatformAdapter = {
   account: {
     async getInstallationId() {
       return webAdapter.clientId;
+    },
+  },
+  cloud: {
+    async status() {
+      const reachable = typeof navigator === "undefined" || navigator.onLine !== false;
+      return { connected: true, reachable, username: null };
     },
   },
   cloudAuth: {
