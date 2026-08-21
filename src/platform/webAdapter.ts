@@ -2,6 +2,16 @@ import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 import { webImportPort } from "./webImport";
 
+let webCloudTransport: Promise<import("../features/cloud/webGalerCloudTransport").WebGalerCloudTransport> | null = null;
+
+async function resolveWebCloudTransport() {
+  if (!webCloudTransport) {
+    webCloudTransport = import("../features/cloud/webGalerCloudTransport")
+      .then(({ WebGalerCloudTransport }) => new WebGalerCloudTransport());
+  }
+  return webCloudTransport;
+}
+
 const WEB_CLIENT_ID_KEY = "beatgaler:web-client-id:v1";
 const WEB_INCOMPLETE_WARNINGS_KEY = "beatgaler:web-incomplete-warnings:v1";
 const WEB_CUSTOM_CURSOR_KEY = "beatgaler:web-custom-cursor:v1";
@@ -132,6 +142,18 @@ export const webAdapter: PlatformAdapter = {
     async status() {
       const reachable = typeof navigator === "undefined" || navigator.onLine !== false;
       return { connected: true, reachable, username: null };
+    },
+  },
+  cloudData: {
+    async upload(input, onProgress) {
+      const transport = await resolveWebCloudTransport();
+      return transport.upload(input, onProgress);
+    },
+    async disconnect() {
+      if (!webCloudTransport) return;
+      const transport = await webCloudTransport;
+      webCloudTransport = null;
+      await transport.disconnect();
     },
   },
   cloudAuth: {

@@ -93,6 +93,12 @@ export const desktopAdapter: PlatformAdapter = {
       return pollTelegramCloudStatus();
     },
   },
+  cloudData: {
+    async upload() {
+      throw new Error("Browser File upload is not available in BeatGaler Desktop.");
+    },
+    async disconnect() {},
+  },
   cloudAuth: {
     async syncSession(token, cloudApiBase) {
       const { invoke } = await import("@tauri-apps/api/core");

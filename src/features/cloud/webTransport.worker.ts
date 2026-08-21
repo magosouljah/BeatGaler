@@ -1,8 +1,9 @@
-import { planWebUploadParts } from "./webTransportParts";
-import type {
-  WebTransportUploadResult,
-  WebTransportWorkerCommand,
-  WebTransportWorkerResponse,
+import { InputMedia, MemoryStorage, TelegramClient } from "@mtcute/web";
+import {
+  WEB_DIRECT_MAX_FILE_BYTES,
+  type WebTransportUploadResult,
+  type WebTransportWorkerCommand,
+  type WebTransportWorkerResponse,
 } from "./webTransportWorkerProtocol";
 
 type WorkerScope = {
@@ -11,131 +12,117 @@ type WorkerScope = {
 };
 
 const scope = globalThis as unknown as WorkerScope;
-let botToken = "";
+let client: TelegramClient | null = null;
 let chatId = "";
+let vaultVerified = false;
 
-function apiUrl(method: string): string {
-  if (!botToken) throw new Error("Galer Cloud Web transport is not initialized.");
-  return `https://api.telegram.org/bot${botToken}/${method}`;
+async function closeClient(): Promise<void> {
+  const current = client;
+  client = null;
+  vaultVerified = false;
+  chatId = "";
+  if (current) await current.destroy().catch(() => {});
 }
 
-function retryDelay(error: any, attempt: number): number | null {
-  const retryAfter = Number(error?.parameters?.retry_after || 0);
-  if (retryAfter > 0) return Math.min(60_000, retryAfter * 1000);
-  const status = Number(error?.error_code || error?.status || 0);
-  if (status >= 400 && status < 500) return null;
-  return attempt < 3 ? 300 * (2 ** (attempt - 1)) : null;
-}
-
-async function callApi<T>(method: string, form: FormData): Promise<T> {
-  let lastError: any = null;
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    try {
-      const response = await fetch(apiUrl(method), { method: "POST", body: form });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.ok !== true) {
-        const error = Object.assign(new Error(payload?.description || `Galer Cloud HTTP ${response.status}`), payload, { status: response.status });
-        const delay = retryDelay(payload, attempt);
-        if (delay === null) throw error;
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      return payload.result as T;
-    } catch (error) {
-      lastError = error;
-      const delay = retryDelay(error, attempt);
-      if (delay === null) break;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
+async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
+  await closeClient();
+  const { bot_token, chat_id, telegram_api_id, telegram_api_hash } = command.session;
+  if (!bot_token || !chat_id || !telegram_api_id || !telegram_api_hash) {
+    throw new Error("Galer Cloud returned incomplete Web transport credentials.");
   }
-  throw lastError || new Error("Galer Cloud request failed.");
-}
 
-function textForm(fields: Record<string, string | number | boolean>): FormData {
-  const form = new FormData();
-  for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
-  return form;
-}
-
-function mediaFromMessage(message: any): { fileId: string; messageId: number } {
-  const media = message?.document || message?.audio || message?.video || message?.animation;
-  const fileId = String(media?.file_id || "");
-  const messageId = Number(message?.message_id || 0);
-  if (!fileId || !Number.isInteger(messageId) || messageId <= 0) {
-    throw new Error("Galer Cloud returned incomplete uploaded file information.");
-  }
-  return { fileId, messageId };
-}
-
-async function deleteUploadedMessages(messageIds: number[]): Promise<void> {
-  if (!messageIds.length) return;
-  const form = textForm({ chat_id: chatId });
-  form.append("message_ids", JSON.stringify(messageIds));
-  await callApi("deleteMessages", form);
-}
-
-async function upload(requestId: string, input: Extract<WebTransportWorkerCommand, { op: "upload" }>['input']): Promise<WebTransportUploadResult> {
-  const plans = planWebUploadParts(input.file.size, input.filename);
-  const parts: WebTransportUploadResult["parts"] = [];
+  const next = new TelegramClient({
+    apiId: telegram_api_id,
+    apiHash: telegram_api_hash,
+    storage: new MemoryStorage(),
+    disableUpdates: true,
+  });
   try {
-    for (const plan of plans) {
-      const form = textForm({
-        chat_id: chatId,
-        message_thread_id: input.threadId,
-        caption: `BEATGALER_MEDIA_V1 kind=${input.kind} beat=${input.beatId} part=${plan.index + 1}/${plans.length}`,
-        disable_notification: true,
-      });
-      const blob = input.file.slice(plan.offset, plan.offset + plan.size, "application/octet-stream");
-      form.append("document", blob, plan.filename);
-      const media = mediaFromMessage(await callApi<any>("sendDocument", form));
-      parts.push({
-        telegram_file_id: `direct:${media.messageId}`,
-        telegram_message_id: media.messageId,
-        index: plan.index,
-        size: plan.size,
-        filename: plan.filename,
-      });
+    await next.start({ botToken: bot_token });
+    await next.getMe();
+  } catch (error) {
+    await next.destroy().catch(() => {});
+    throw error;
+  }
+  client = next;
+  chatId = chat_id;
+}
+
+async function verifyReady(): Promise<void> {
+  if (!client || !chatId) throw new Error("Galer Cloud Web transport is not initialized.");
+  await client.getChat(chatId);
+  vaultVerified = true;
+}
+
+function validateFile(file: File): void {
+  if (!(file instanceof File) || file.size <= 0) throw new Error("Upload source is missing or empty.");
+  if (file.size > WEB_DIRECT_MAX_FILE_BYTES) {
+    throw new Error("This file exceeds the 1.9 GB Galer Cloud Web limit.");
+  }
+}
+
+async function upload(
+  requestId: string,
+  input: Extract<WebTransportWorkerCommand, { op: "upload" }>["input"],
+): Promise<WebTransportUploadResult> {
+  if (!client || !vaultVerified) throw new Error("Galer Cloud Web transport is not ready.");
+  validateFile(input.file);
+
+  // The browser File is read progressively in MTProto protocol chunks. Galer
+  // Cloud still receives exactly one document in exactly one message.
+  const message = await client.sendMedia(chatId, InputMedia.document(input.file, {
+    fileName: input.filename,
+    fileMime: input.file.type || "application/octet-stream",
+    fileSize: input.file.size,
+    caption: `BEATGALER_MEDIA_V1 kind=${input.kind} beat=${input.beatId}`,
+  }), {
+    silent: true,
+    replyTo: input.threadId,
+    threadId: input.threadId,
+    progressCallback: uploadedBytes => {
       scope.postMessage({
         requestId,
         event: "progress",
         progress: {
-          uploadedBytes: plan.offset + plan.size,
+          uploadedBytes: Math.min(input.file.size, Math.round(uploadedBytes)),
           totalBytes: input.file.size,
-          partIndex: plan.index,
-          partCount: plans.length,
         },
       });
-    }
-  } catch (error) {
-    await deleteUploadedMessages(parts.map(part => part.telegram_message_id)).catch(() => {});
-    throw error;
+    },
+  });
+  const messageId = Number(message?.id || 0);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    throw new Error("Galer Cloud returned incomplete uploaded file information.");
   }
+  const stored = {
+    telegram_file_id: `direct:${messageId}`,
+    telegram_message_id: messageId,
+    index: 0,
+    size: input.file.size,
+    filename: input.filename,
+  };
   return {
-    telegram_file_id: parts[0].telegram_file_id,
-    telegram_message_id: parts[0].telegram_message_id,
+    telegram_file_id: stored.telegram_file_id,
+    telegram_message_id: messageId,
     filename: input.filename,
     original_size: input.file.size,
-    parts,
+    parts: [stored],
     transport: "direct-web",
   };
 }
 
 async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
   switch (command.op) {
-    case "initialize": {
-      botToken = command.session.bot_token;
-      chatId = command.session.chat_id;
-      await callApi("getMe", new FormData());
+    case "initialize":
+      await initialize(command);
       return { ready: true };
-    }
     case "verify":
-      await callApi("getChat", textForm({ chat_id: chatId }));
+      await verifyReady();
       return { verified: true };
     case "upload":
       return upload(command.requestId, command.input);
     case "shutdown":
-      botToken = "";
-      chatId = "";
+      await closeClient();
       return { closed: true };
   }
 }
