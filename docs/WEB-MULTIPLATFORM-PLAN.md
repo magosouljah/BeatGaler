@@ -26,6 +26,12 @@ Tauri/Rust         Browser APIs + direct Galer Cloud transport
 
 Platform-specific behavior is controlled by an explicit capability matrix. React components must not accumulate scattered `if (web)` checks.
 
+## Implementation status
+
+- Phase 1 is complete: shared beat domain, capability matrix, platform contracts, runtime adapter selection, React provider, and regression coverage are in place.
+- Phase 2 slice A is complete: the repository has dedicated Web dev/build/preview commands; authentication, external links, background events, and performance diagnostics now cross platform ports; and the signed-out account shell renders and logs in with a persistent browser client ID.
+- Phase 2 remains in progress: legacy consumers of `src/lib/tauri.ts` still need to move behind platform ports, and `App.tsx` orchestration still needs to be split into focused controllers before the complete signed-in library can run without Desktop services.
+
 ## Canonical model rule
 
 The shared beat model contains identity, metadata, artwork, asset availability, and opaque Galer Cloud references. Filesystem paths live only in `DesktopBeatSources`. Existing `Beat` remains unchanged until callers are migrated incrementally.

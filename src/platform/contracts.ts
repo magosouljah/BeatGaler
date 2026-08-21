@@ -21,6 +21,18 @@ export interface PlatformExternalPort {
   openUrl(url: string): Promise<void>;
 }
 
+export interface PlatformCloudAuthPort {
+  syncSession(token: string | null, cloudApiBase: string): Promise<void>;
+}
+
+export interface PlatformAccountPort {
+  getInstallationId(): Promise<string>;
+}
+
+export interface PlatformDiagnosticsPort {
+  reviewPerformance(message: string): void;
+}
+
 /** The only platform boundary React code should depend on after the migration. */
 export interface PlatformAdapter {
   kind: PlatformKind;
@@ -30,4 +42,7 @@ export interface PlatformAdapter {
   media: PlatformMediaPort;
   events: PlatformEventPort;
   external: PlatformExternalPort;
+  account: PlatformAccountPort;
+  cloudAuth: PlatformCloudAuthPort;
+  diagnostics: PlatformDiagnosticsPort;
 }

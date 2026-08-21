@@ -49,4 +49,17 @@ export const webAdapter: PlatformAdapter = {
       window.open(url, "_blank", "noopener,noreferrer");
     },
   },
+  account: {
+    async getInstallationId() {
+      return webAdapter.clientId;
+    },
+  },
+  cloudAuth: {
+    // The browser already sends its account token to the control plane.
+    // Direct Galer Cloud transport receives its own session envelope later.
+    async syncSession() {},
+  },
+  diagnostics: {
+    reviewPerformance() {},
+  },
 };

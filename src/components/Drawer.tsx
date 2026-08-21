@@ -5,7 +5,7 @@ import ImageCropModal from "./ImageCropModal";
 import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { appConfirm } from "../lib/dialog";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
-import { listen } from "@tauri-apps/api/event";
+import { platform } from "../platform";
 import { cleanTags, validateBpm, validateMusicKey } from "../lib/metadataValidation";
 import { getReviewFooterState, reviewHeaderLabel } from "../features/components/componentLogic";
 
@@ -471,15 +471,15 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
     // Track drag position to know which row/artwork is hovered. Tauri can report
     // physical pixels on a scaled display, so test both raw and DPR-adjusted points.
-    listen<{ position?: { x: number; y: number } }>("tauri://drag-over", (event) => {
-      const pos = (event.payload as any)?.position;
+    platform.events.listen<{ position?: { x: number; y: number } }>("tauri://drag-over", payload => {
+      const pos = payload?.position;
       if (!pos) return;
       setDropTarget(targetAtPosition(pos));
     }).then(fn => unlisteners.push(fn));
 
     // On drop, queue a file role or load artwork into the crop editor.
-    listen<{ paths?: string[] }>("tauri://drag-drop", async (event) => {
-      const paths: string[] = (event.payload as any)?.paths ?? [];
+    platform.events.listen<{ paths?: string[] }>("tauri://drag-drop", async payload => {
+      const paths: string[] = payload?.paths ?? [];
       const role = dropTargetRef.current as "artwork" | "mp3" | "wav" | "stems" | "flp" | "als" | null;
       setDropTarget(null);
       if (!role || paths.length === 0) return;
@@ -502,7 +502,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setPending(p => ({ ...p, [role]: paths[0] }));
     }).then(fn => unlisteners.push(fn));
 
-    listen("tauri://drag-leave", () => setDropTarget(null))
+    platform.events.listen("tauri://drag-leave", () => setDropTarget(null))
       .then(fn => unlisteners.push(fn));
 
     return () => { unlisteners.forEach(fn => fn()); };

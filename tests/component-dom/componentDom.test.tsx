@@ -54,6 +54,10 @@ vi.mock("../../src/lib/dialog", () => ({
 }));
 
 vi.mock("../../src/lib/tauri", () => ({
+  getCloudClientId: vi.fn(() => "desktop-test-client"),
+  loadLibrary: vi.fn(async () => []),
+  loadOfflineLibrary: vi.fn(async () => []),
+  filePathToUrl: vi.fn((path: string) => path),
   revealInExplorer: vi.fn(async () => undefined),
   getProjectCloudStatus: vi.fn(async () => ({ state: "LOCAL" })),
   saveBeatMeta: vi.fn(async (payload: { mp3_path: string; wav_path: string | null }) => ({

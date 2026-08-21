@@ -1,5 +1,5 @@
-import { open } from "@tauri-apps/plugin-shell";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { platform } from "../../platform";
 
 export type DirectTelegramStatus = {
   ok: boolean;
@@ -57,7 +57,7 @@ export async function beginDirectTelegramIdentityLink(): Promise<void> {
     "/data-plane/telegram/link/start",
     { method: "POST", body: "{}" },
   );
-  await open(result.telegram_url);
+  await platform.external.openUrl(result.telegram_url);
 }
 
 export async function getDirectTelegramStatus(): Promise<DirectTelegramStatus> {
