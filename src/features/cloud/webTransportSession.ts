@@ -9,7 +9,7 @@ export interface WebTransportCredentialEnvelope {
 }
 
 export interface WebTransportSession {
-  mode: "telegram-direct-web-mtproto";
+  mode: "galer-direct-web-botapi";
   session_id: string;
   transport_id: string;
   transport_user_id: string | null;
@@ -22,13 +22,27 @@ export interface WebTransportSession {
   heartbeat_timeout_ms: number;
   token_rotation_enabled: boolean;
   bot_token: string;
-  telegram_api_id: number;
-  telegram_api_hash: string;
 }
 
-type SessionEnvelopeResponse = Omit<WebTransportSession, "bot_token" | "telegram_api_id" | "telegram_api_hash"> & {
+type SessionEnvelopeResponse = Omit<WebTransportSession, "bot_token"> & {
   credential_envelope: WebTransportCredentialEnvelope;
 };
+
+export interface WebTransportHeartbeatResponse {
+  ok?: boolean;
+  expired?: boolean;
+  credential_refresh?: SessionEnvelopeResponse;
+}
+
+export interface WebTransportOperationResponse {
+  ok?: boolean;
+  expired?: boolean;
+  wait?: boolean;
+  retry_after_ms?: number;
+  refresh_required?: boolean;
+  operation_id?: string;
+  credential_refresh?: SessionEnvelopeResponse;
+}
 
 type BrowserKeyState = {
   publicJwk: JsonWebKey;
@@ -84,10 +98,8 @@ async function decryptCredentials(envelope: WebTransportCredentialEnvelope, priv
   const compact = JSON.parse(new TextDecoder().decode(decrypted));
   const credentials = {
     bot_token: String(compact?.t || ""),
-    telegram_api_id: Number(compact?.i || 0),
-    telegram_api_hash: String(compact?.h || ""),
   };
-  if (!credentials.bot_token || !credentials.telegram_api_id || !credentials.telegram_api_hash) {
+  if (!credentials.bot_token) {
     throw new Error("Galer Cloud returned incomplete Web transport credentials.");
   }
   return credentials;
@@ -106,6 +118,21 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
   return payload as T;
 }
 
+async function unwrapSession(response: SessionEnvelopeResponse): Promise<WebTransportSession> {
+  const keys = await keyState();
+  const credentials = await decryptCredentials(response.credential_envelope, keys.privateKey);
+  const { credential_envelope: _credentialEnvelope, ...publicSession } = response;
+  return { ...publicSession, ...credentials };
+}
+
+function sessionIdentity(session: WebTransportSession) {
+  return {
+    sessionId: session.session_id,
+    generation: session.generation,
+    credentialVersion: session.credential_version,
+  };
+}
+
 /** Opens an in-memory Web lease. Nothing is persisted and no file bytes touch the control server. */
 export async function prepareWebTransportSession(): Promise<WebTransportSession> {
   const keys = await keyState();
@@ -113,6 +140,80 @@ export async function prepareWebTransportSession(): Promise<WebTransportSession>
     webTransportPublicKey: keys.publicJwk,
     browserClientId: platform.clientId,
   });
-  const credentials = await decryptCredentials(response.credential_envelope, keys.privateKey);
-  return { ...response, ...credentials };
+  return unwrapSession(response);
+}
+
+export async function activateWebTransportSession(session: WebTransportSession): Promise<void> {
+  const response = await transportRequest<{ activated?: boolean }>("/transport/session/activate", sessionIdentity(session));
+  if (response.activated !== true) throw new Error("Galer Cloud could not activate this Web storage session.");
+}
+
+export async function heartbeatWebTransportSession(session: WebTransportSession): Promise<{
+  expired: boolean;
+  credentialRefresh: WebTransportSession | null;
+}> {
+  const keys = await keyState();
+  const response = await transportRequest<WebTransportHeartbeatResponse>("/transport/session/heartbeat", {
+    ...sessionIdentity(session),
+    webTransportPublicKey: keys.publicJwk,
+  });
+  return {
+    expired: response.expired === true,
+    credentialRefresh: response.credential_refresh ? await unwrapSession(response.credential_refresh) : null,
+  };
+}
+
+export async function beginWebTransportOperation(
+  session: WebTransportSession,
+  kind: string,
+): Promise<{
+  expired: boolean;
+  waitMs: number | null;
+  credentialRefresh: WebTransportSession | null;
+  operationId: string | null;
+}> {
+  const keys = await keyState();
+  const response = await transportRequest<WebTransportOperationResponse>("/transport/operation/begin", {
+    ...sessionIdentity(session),
+    kind,
+    webTransportPublicKey: keys.publicJwk,
+  });
+  return {
+    expired: response.expired === true,
+    waitMs: response.wait === true ? Math.min(1000, Math.max(100, Number(response.retry_after_ms) || 250)) : null,
+    credentialRefresh: response.credential_refresh ? await unwrapSession(response.credential_refresh) : null,
+    operationId: typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null,
+  };
+}
+
+export async function endWebTransportOperation(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+  operationId: string,
+): Promise<void> {
+  await transportRequest("/transport/operation/end", {
+    sessionId: session.session_id,
+    generation: session.generation,
+    operationId,
+  });
+}
+
+export async function stopWebTransportSession(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+): Promise<void> {
+  await transportRequest("/transport/session/stop", {
+    sessionId: session.session_id,
+    generation: session.generation,
+  });
+}
+
+export async function ensureWebTransportTopic(beatId: string, beatName: string): Promise<number> {
+  const response = await transportRequest<{ message_thread_id?: number }>("/transport/topic/ensure", {
+    beatId,
+    beatName,
+  });
+  const threadId = Number(response.message_thread_id || 0);
+  if (!Number.isInteger(threadId) || threadId <= 0) {
+    throw new Error("Galer Cloud returned incomplete beat storage information.");
+  }
+  return threadId;
 }

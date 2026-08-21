@@ -1975,13 +1975,20 @@ app.post("/transport/operation/begin", async (req, res) => {
   if (!auth) return;
   const { beatgalerUserId } = auth;
   try {
-    res.json(await directTransport.beginOperation({
+    const operation = await directTransport.beginOperation({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
       kind: String(req.body?.kind || "data"),
-    }));
+    });
+    if (operation?.credential_refresh) {
+      operation.credential_refresh = wrapWebTransportSession(
+        operation.credential_refresh,
+        req.body?.webTransportPublicKey,
+      );
+    }
+    res.json(operation);
   } catch (error) {
     const message = String(error?.message || error || "");
     console.error("[direct] operation begin failed:", message);
