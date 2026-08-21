@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { subscribeJobs, updateJob, removeJob, type JobInfo } from "../lib/jobStore";
 import { cancelYoutubeUpload } from "../lib/tauri";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
+import { platform } from "../platform";
 
 // Sets up ONE global listener for backend job events. Mounted once in
 // App.tsx so it keeps running no matter which modal (if any) is open —
@@ -18,44 +19,35 @@ export default function JobStatusBar() {
 
     (async () => {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
-
-        const startedFn = await listen("youtube:started", (e: any) => {
-          const payload = e.payload as any;
+        const startedFn = await platform.events.listen<any>("youtube:started", payload => {
           if (!payload?.job_id) return;
           updateJob(payload.job_id, { status: "uploading" });
         });
-        const doneFn = await listen("youtube:done", (e: any) => {
-          const payload = e.payload as any;
+        const doneFn = await platform.events.listen<any>("youtube:done", payload => {
           if (!payload?.job_id) return;
           updateJob(payload.job_id, { status: "done", url: payload.result?.url });
           setTimeout(() => removeJob(payload.job_id), 8000);
         });
-        const errFn = await listen("youtube:error", (e: any) => {
-          const payload = e.payload as any;
+        const errFn = await platform.events.listen<any>("youtube:error", payload => {
           if (!payload?.job_id) return;
           updateJob(payload.job_id, { status: "error", message: sanitizeUserVisibleText(payload.error ?? "Upload failed") });
         });
-        const tagProgressFn = await listen("tag-rename:progress", (e: any) => {
-          const payload = e.payload as any;
+        const tagProgressFn = await platform.events.listen<any>("tag-rename:progress", payload => {
           if (!payload?.job_id) return;
           const progress = payload.total > 0 ? Math.round((payload.completed / payload.total) * 100) : 100;
           updateJob(payload.job_id, { status: "processing", progress, message: `${payload.completed}/${payload.total} files` });
         });
-        const tagDoneFn = await listen("tag-rename:done", (e: any) => {
-          const payload = e.payload as any;
+        const tagDoneFn = await platform.events.listen<any>("tag-rename:done", payload => {
           if (!payload?.job_id) return;
           updateJob(payload.job_id, { status: "done", progress: 100, message: `${payload.files_updated} files updated` });
           setTimeout(() => removeJob(payload.job_id), 8000);
         });
-        const tagErrorFn = await listen("tag-rename:error", (e: any) => {
-          const payload = e.payload as any;
+        const tagErrorFn = await platform.events.listen<any>("tag-rename:error", payload => {
           if (!payload?.job_id) return;
           updateJob(payload.job_id, { status: "error", message: sanitizeUserVisibleText(payload.error ?? "Tag rename failed") });
         });
 
-        const cancelFn = await listen("youtube:cancelled", (e: any) => {
-          const payload = e.payload as any;
+        const cancelFn = await platform.events.listen<any>("youtube:cancelled", payload => {
           if (!payload?.job_id) return;
           updateJob(payload.job_id, { status: "cancelled", message: "Cancelado" });
           setTimeout(() => removeJob(payload.job_id), 4000);
