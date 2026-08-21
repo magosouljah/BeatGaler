@@ -754,23 +754,33 @@ fn direct_message_id(locator: &str) -> Option<i64> {
     locator.trim().strip_prefix("direct:")?.parse::<i64>().ok().filter(|v| *v > 0)
 }
 
+fn direct_node_runtime_filename() -> &'static str {
+    if cfg!(target_os = "windows") { "node.exe" } else { "node" }
+}
+
+fn direct_bot_api_runtime_filename() -> &'static str {
+    if cfg!(target_os = "windows") { "telegram-bot-api.exe" } else { "telegram-bot-api" }
+}
+
 fn direct_node_runtime_path() -> String {
     if let Ok(value) = std::env::var("BEATGALER_NODE_RUNTIME") {
         let trimmed = value.trim();
         if !trimmed.is_empty() { return trimmed.to_string(); }
     }
 
+    let filename = direct_node_runtime_filename();
     let mut candidates = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("resources").join("node"));
-        candidates.push(cwd.join("resources").join("node"));
+        candidates.push(cwd.join("src-tauri").join("resources").join("windows").join(filename));
+        candidates.push(cwd.join("src-tauri").join("resources").join(filename));
+        candidates.push(cwd.join("resources").join(filename));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("node"));
-            candidates.push(dir.join("resources").join("node"));
+            candidates.push(dir.join(filename));
+            candidates.push(dir.join("resources").join(filename));
             if let Some(parent) = dir.parent() {
-                candidates.push(parent.join("Resources").join("node"));
+                candidates.push(parent.join("Resources").join(filename));
             }
         }
     }
@@ -779,7 +789,7 @@ fn direct_node_runtime_path() -> String {
         .into_iter()
         .find(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "node".to_string())
+        .unwrap_or_else(|| filename.to_string())
 }
 
 fn direct_bot_api_runtime_path() -> Option<PathBuf> {
@@ -787,17 +797,19 @@ fn direct_bot_api_runtime_path() -> Option<PathBuf> {
         let p = PathBuf::from(value);
         if p.is_file() { return Some(p); }
     }
+    let filename = direct_bot_api_runtime_filename();
     let mut candidates = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("resources").join("telegram-bot-api"));
-        candidates.push(cwd.join("resources").join("telegram-bot-api"));
+        candidates.push(cwd.join("src-tauri").join("resources").join("windows").join(filename));
+        candidates.push(cwd.join("src-tauri").join("resources").join(filename));
+        candidates.push(cwd.join("resources").join(filename));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("telegram-bot-api"));
-            candidates.push(dir.join("resources").join("telegram-bot-api"));
+            candidates.push(dir.join(filename));
+            candidates.push(dir.join("resources").join(filename));
             if let Some(parent) = dir.parent() {
-                candidates.push(parent.join("Resources").join("telegram-bot-api"));
+                candidates.push(parent.join("Resources").join(filename));
             }
         }
     }

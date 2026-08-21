@@ -452,6 +452,11 @@ try {
     stdio: "inherit",
   });
 
+  execFileSync(process.execPath, [path.join(root, "scripts", "test-windows-runtime-packaging.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
+
   execFileSync(process.execPath, [path.join(root, "scripts", "version.mjs"), "check"], {
     cwd: root,
     stdio: "inherit",
