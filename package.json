@@ -1,7 +1,7 @@
 {
   "name": "beat-galer",
   "private": true,
-  "version": "0.7.3",
+  "version": "0.7.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "build:release": "npm run version:check && npm run tauri build",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-tauri.ps1",
     "test:regressions": "node scripts/run-regressions.mjs",
+    "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
     "check": "npm run test:fast && npm run build",
     "version:sync": "node scripts/version.mjs sync",
     "version:check": "node scripts/version.mjs check",

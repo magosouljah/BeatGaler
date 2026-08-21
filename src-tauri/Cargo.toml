@@ -1,6 +1,6 @@
 [package]
 name = "beat_galer"
-version = "0.7.3"
+version = "0.7.4"
 description = "Beat Galer — personal beat library manager"
 authors = ["prodbruho"]
 edition = "2021"
