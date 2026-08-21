@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Module = require('module');
+const crypto = require('crypto');
 
 function test(name, fn) {
   try {
@@ -138,5 +139,39 @@ passed += test('pool state normalization deduplicates queue and preserves all co
   assert.deepEqual(state.queue, ['Bot01','Bot02','Bot03']);
 }) ? 1 : 0;
 
+const { wrapWebTransportSession } = require('../web-transport-envelope.js');
+passed += test('Web transport credentials are encrypted for the browser session key', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const wrapped = wrapWebTransportSession({
+    ok: true,
+    mode: 'telegram-direct-botapi-local',
+    session_id: 'session-1',
+    bot_token: '123456:prototype-secret',
+    telegram_api_id: 12345,
+    telegram_api_hash: '0123456789abcdef0123456789abcdef',
+  }, { ...publicKey.export({ format: 'jwk' }), alg: 'RSA-OAEP-256', key_ops: ['encrypt'] });
+
+  assert.equal(wrapped.mode, 'telegram-direct-web-mtproto');
+  assert.equal(wrapped.bot_token, undefined);
+  assert.equal(wrapped.telegram_api_hash, undefined);
+  const decrypted = crypto.privateDecrypt({
+    key: privateKey,
+    padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+    oaepHash: 'sha256',
+  }, Buffer.from(wrapped.credential_envelope.ciphertext, 'base64url'));
+  assert.deepEqual(JSON.parse(decrypted.toString('utf8')), {
+    t: '123456:prototype-secret',
+    i: 12345,
+    h: '0123456789abcdef0123456789abcdef',
+  });
+}) ? 1 : 0;
+
+passed += test('Web transport rejects weak browser encryption keys', () => {
+  const { publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 });
+  assert.throws(() => wrapWebTransportSession({
+    bot_token: 'token', telegram_api_id: 1, telegram_api_hash: 'hash',
+  }, { ...publicKey.export({ format: 'jwk' }), alg: 'RSA-OAEP-256', key_ops: ['encrypt'] }), /RSA-2048/);
+}) ? 1 : 0;
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`PASS cloud/direct unit tests: ${passed}/11`);
+console.log(`PASS cloud/direct unit tests: ${passed}/13`);
