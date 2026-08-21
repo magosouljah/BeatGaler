@@ -46,6 +46,8 @@ const portabilityWorkflow = read(".github/workflows/test-desktop-portability.yml
 const packageJson = JSON.parse(read("package.json"));
 const cargoLockTest = read("scripts/test-cargo-lock.mjs");
 const runtimeDylibCheck = read("scripts/check-macos-runtime-dylibs.sh");
+const wryPatchInstaller = read("scripts/patch-wry-pinterest.mjs");
+const macWryDragDropPatch = read("scripts/wry-patches/wry-0.54.2-macos-drag_drop.rs");
 
 const projectZip = section(commands, "fn project_zip_entry_names", "fn project_manifest");
 ok(!commands.includes("Manual PROJECT zip editing is currently implemented for Windows"), "PROJECT mutation has no Windows-only hard failure");
@@ -64,6 +66,9 @@ ok(app.includes("getCurrentWebview().onDragDropEvent"), "Tauri native filesystem
 ok(app.includes("if (!isTauriAvailable) return;"), "native drop listener is not gated to Windows only");
 ok(app.includes("claimNativeLibraryDrop()") && htmlDrop.includes("waitForNativeLibraryDropClaim"), "Mac duplicate native/HTML local drops are arbitrated");
 ok(app.includes('if (artworkBeatId && payload.paths.length === 1 && isImagePath(payload.paths[0]))') && app.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through native paths while preserving browser/Pinterest sentinels");
+ok(wryPatchInstaller.includes('patchPlatform === "darwin"') && wryPatchInstaller.includes('"wkwebview",\n      "drag_drop.rs"'), "macOS installs its native WRY browser-image bridge before compiling");
+ok(macWryDragDropPatch.includes("BEATGALER_MAC_EXTERNAL_IMAGE_PATCH_V1") && macWryDragDropPatch.includes("application/x-pinterest-closeup-image") && macWryDragDropPatch.includes("WebURLsWithTitlesPboardType") && macWryDragDropPatch.includes("org.chromium.web-custom-data") && macWryDragDropPatch.includes("NSPasteboardTypeURL") && macWryDragDropPatch.includes("NSPasteboardTypeHTML") && macWryDragDropPatch.includes("NSPasteboardTypeString"), "macOS native drop reads Pinterest, Chrome/Safari URL, HTML, and text pasteboard representations");
+ok(macWryDragDropPatch.indexOf("collect_paths(drag_info)") < macWryDragDropPatch.indexOf("external_image_url(drag_info)"), "macOS Finder paths stay ahead of browser-image fallback routing");
 
 ok(!helper.includes('|| "http://127.0.0.1:8081"') && !helper.includes("|| 'http://127.0.0.1:8081'"), "Direct helper has no fixed 8081 fallback");
 ok(commands.includes("TcpListener::bind((\"127.0.0.1\", 0))"), "local data plane reserves a dynamic loopback port");
@@ -125,6 +130,7 @@ ok(exists("scripts/test-updater-manifest.mjs"), "updater Windows/Mac manifest me
 ok(cargo.includes('zip = { version = "=4.6.1"') && cargo.includes('unicode-normalization = "=0.1.25"'), "new cross-platform Rust dependencies are pinned to exact direct versions");
 ok(cargo.includes('tauri-plugin-single-instance = "=2.4.3"'), "single-instance dependency is also pinned exactly");
 ok(packageJson.scripts?.["test:mac-portability"]?.includes("npm run test:cargo-lock") && packageJson.scripts?.["test:mac-portability:locked"]?.includes("cargo test --locked"), "Mac portability commands validate Cargo.lock and expose a locked CI mode");
+ok(packageJson.scripts?.["test:mac-portability:locked"]?.startsWith("npm run patch:wry-pinterest"), "native macOS smoke installs the WRY patch before compiling it");
 ok(cargoLockTest.includes('"zip", "4.6.1"') && cargoLockTest.includes('"unicode-normalization", "0.1.25"') && cargoLockTest.includes('"tauri-plugin-single-instance", "2.4.3"'), "Cargo.lock regression validates every newly pinned portability dependency");
 ok(portabilityWorkflow.includes("git diff --exit-code -- src-tauri/Cargo.lock") && portabilityWorkflow.includes("regenerated-Cargo-lock"), "Windows CI fails closed on an uncommitted regenerated Cargo.lock and preserves it as an artifact");
 ok(portabilityWorkflow.includes("npm run test:mac-portability:locked"), "hosted native Mac CI compiles only the committed Cargo.lock graph");

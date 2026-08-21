@@ -15,7 +15,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, loadCloudArtworkForBeat, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, loadCloudArtworkForBeat, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { listen } from "@tauri-apps/api/event";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
@@ -677,6 +677,18 @@ function cloudBeatFingerprint(beat: Beat): string {
   ].join("\u001e");
 }
 
+function drawerMetadataCommitFingerprint(beat: Beat): string {
+  const artwork = beat.image_base64 ?? "";
+  const artworkMark = artwork
+    ? `${artwork.length}:${artwork.slice(0, 32)}:${artwork.slice(-32)}`
+    : "";
+  return [
+    cloudBeatFingerprint(beat),
+    artworkMark,
+    JSON.stringify(beat.image_crop ?? null),
+  ].join("\u001d");
+}
+
 function libraryViewFingerprint(beats: Beat[]): string {
   return beats.map(beat => [
     beat.id,
@@ -790,6 +802,8 @@ function BeatGalerApp() {
   const cloudMetaTimersRef = useRef<Map<string, number>>(new Map());
   const cloudLibraryTimerRef = useRef<number | null>(null);
   const cloudLibrarySnapshotRef = useRef<string | null>(null);
+  const drawerMetadataCommitVerifiedRef = useRef<Map<string, string>>(new Map());
+  const drawerMetadataCommitInFlightRef = useRef<Map<string, { fingerprint: string; promise: Promise<void> }>>(new Map());
   const cacheSaveTimerRef = useRef<number | null>(null);
   const visibleLibraryFingerprintRef = useRef<string>("");
   const autoCloudUploadRef = useRef<Set<string>>(new Set());
@@ -3124,32 +3138,61 @@ function BeatGalerApp() {
     updated: Beat,
     options: { syncMetadata: boolean; reason: string },
   ) => {
-    const started = performance.now();
-    reviewPerfMark(
-      `DRAWER_CLOUD_COMMIT_BEGIN beat_id=${updated.id} reason=${options.reason} sync_metadata=${options.syncMetadata}`,
-    );
-    if (options.syncMetadata) {
-      await syncBeatMetadataToTelegram(updated);
-      reviewPerfMark(`DRAWER_CLOUD_METADATA_OK beat_id=${updated.id} reason=${options.reason}`);
+    const dedupeMetadata = options.syncMetadata && options.reason === "drawer-metadata-save";
+    const metadataFingerprint = dedupeMetadata ? drawerMetadataCommitFingerprint(updated) : null;
+    if (metadataFingerprint && drawerMetadataCommitVerifiedRef.current.get(updated.id) === metadataFingerprint) {
+      reviewPerfMark(`DRAWER_CLOUD_COMMIT_SKIPPED beat_id=${updated.id} reason=${options.reason} cause=already-verified`);
+      void diagnosticLog("drawer-save", "CLOUD_COMMIT_SKIPPED", `beat_id=${updated.id} reason=${options.reason} cause=already-verified`);
+      return;
     }
-    const snapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
-    await libraryStateManager.commitSnapshot(snapshot, options.reason);
+    const existing = drawerMetadataCommitInFlightRef.current.get(updated.id);
+    if (metadataFingerprint && existing?.fingerprint === metadataFingerprint) {
+      reviewPerfMark(`DRAWER_CLOUD_COMMIT_JOINED beat_id=${updated.id} reason=${options.reason}`);
+      await existing.promise;
+      return;
+    }
 
-    // Seed the explicit transaction snapshots before Drawer publishes its React
-    // state update. Otherwise the metadata observer can mistake that same save
-    // for a second independent transaction and upload/commit it again.
-    if (cloudLibraryTimerRef.current) {
-      window.clearTimeout(cloudLibraryTimerRef.current);
-      cloudLibraryTimerRef.current = null;
+    const commitPromise = (async () => {
+      const started = performance.now();
+      reviewPerfMark(
+        `DRAWER_CLOUD_COMMIT_BEGIN beat_id=${updated.id} reason=${options.reason} sync_metadata=${options.syncMetadata}`,
+      );
+      if (options.syncMetadata) {
+        await syncBeatMetadataToTelegram(updated);
+        reviewPerfMark(`DRAWER_CLOUD_METADATA_OK beat_id=${updated.id} reason=${options.reason}`);
+      }
+      const snapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
+      await libraryStateManager.commitSnapshot(snapshot, options.reason);
+
+      // Seed the explicit transaction snapshots before Drawer publishes its React
+      // state update. Otherwise the metadata observer can mistake that same save
+      // for a second independent transaction and upload/commit it again.
+      if (cloudLibraryTimerRef.current) {
+        window.clearTimeout(cloudLibraryTimerRef.current);
+        cloudLibraryTimerRef.current = null;
+      }
+      cloudLibrarySnapshotRef.current = snapshot
+        .filter(item => !!item.telegram_file_id)
+        .map(cloudBeatFingerprint)
+        .join("\u001c");
+      cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));
+      if (metadataFingerprint) {
+        drawerMetadataCommitVerifiedRef.current.set(updated.id, metadataFingerprint);
+      }
+      reviewPerfMark(
+        `DRAWER_CLOUD_COMMIT_OK beat_id=${updated.id} reason=${options.reason} elapsed_ms=${Math.round(performance.now() - started)}`,
+      );
+    })();
+
+    if (metadataFingerprint) {
+      drawerMetadataCommitInFlightRef.current.set(updated.id, { fingerprint: metadataFingerprint, promise: commitPromise });
     }
-    cloudLibrarySnapshotRef.current = snapshot
-      .filter(item => !!item.telegram_file_id)
-      .map(cloudBeatFingerprint)
-      .join("\u001c");
-    cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));
-    reviewPerfMark(
-      `DRAWER_CLOUD_COMMIT_OK beat_id=${updated.id} reason=${options.reason} elapsed_ms=${Math.round(performance.now() - started)}`,
-    );
+    try {
+      await commitPromise;
+    } finally {
+      const current = drawerMetadataCommitInFlightRef.current.get(updated.id);
+      if (current?.promise === commitPromise) drawerMetadataCommitInFlightRef.current.delete(updated.id);
+    }
   }, []);
 
   const handleToggleOffline = useCallback(async (beat: Beat) => {
@@ -3956,6 +3999,15 @@ function BeatGalerApp() {
           if (wasExternalImage) {
             clearNativeDragUi();
             reviewPerfMark("NATIVE_EXTERNAL_IMAGE_DROP unresolved");
+            void diagnosticLog(
+              "native-drop",
+              "EXTERNAL_IMAGE_UNRESOLVED",
+              "macOS exposed a browser drag type but no usable http(s) image URL",
+            );
+            void appAlert({
+              title: "Could not read the dragged browser image",
+              message: "The browser did not expose an image URL to BeatGaler. Try opening the full-size image before dragging it, or use the artwork button to choose a downloaded file.",
+            });
             return;
           }
 
