@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { PlatformProvider } from "./platform/react";
 
 function GlobalStyles() {
   return (
@@ -118,6 +119,8 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {error:
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <GlobalStyles />
-    <App />
+    <PlatformProvider>
+      <App />
+    </PlatformProvider>
   </ErrorBoundary>
 );

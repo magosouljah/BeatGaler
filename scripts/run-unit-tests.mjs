@@ -34,6 +34,7 @@ try {
     "proceduralBeatBackground.test.js",
     "securityFuzz.test.js",
     "userVisibleError.test.js",
+    "platformCapabilities.test.js",
   ];
 
   for (const test of tests) {
