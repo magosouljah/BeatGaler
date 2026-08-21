@@ -151,8 +151,9 @@ passed += test('Web transport credentials are encrypted for the browser session 
     telegram_api_hash: 'REDACTED_TELEGRAM_API_HASH',
   }, { ...publicKey.export({ format: 'jwk' }), alg: 'RSA-OAEP-256', key_ops: ['encrypt'] });
 
-  assert.equal(wrapped.mode, 'telegram-direct-web-mtproto');
+  assert.equal(wrapped.mode, 'galer-direct-web-botapi');
   assert.equal(wrapped.bot_token, undefined);
+  assert.equal(wrapped.telegram_api_id, undefined);
   assert.equal(wrapped.telegram_api_hash, undefined);
   const decrypted = crypto.privateDecrypt({
     key: privateKey,
@@ -161,8 +162,6 @@ passed += test('Web transport credentials are encrypted for the browser session 
   }, Buffer.from(wrapped.credential_envelope.ciphertext, 'base64url'));
   assert.deepEqual(JSON.parse(decrypted.toString('utf8')), {
     t: '123456:prototype-secret',
-    i: 12345,
-    h: 'REDACTED_TELEGRAM_API_HASH',
   });
 }) ? 1 : 0;
 
@@ -173,5 +172,14 @@ passed += test('Web transport rejects weak browser encryption keys', () => {
   }, { ...publicKey.export({ format: 'jwk' }), alg: 'RSA-OAEP-256', key_ops: ['encrypt'] }), /RSA-2048/);
 }) ? 1 : 0;
 
+passed += test('operation credential refreshes remain encrypted for Web clients', () => {
+  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const routeStart = serverSource.indexOf('app.post("/transport/operation/begin"');
+  const routeEnd = serverSource.indexOf('app.post("/transport/operation/end"', routeStart);
+  const route = serverSource.slice(routeStart, routeEnd);
+  assert(route.includes('wrapWebTransportSession'));
+  assert(route.includes('req.body?.webTransportPublicKey'));
+}) ? 1 : 0;
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`PASS cloud/direct unit tests: ${passed}/13`);
+console.log(`PASS cloud/direct unit tests: ${passed}/14`);
