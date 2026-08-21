@@ -67,8 +67,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_library, scan_beats_folder, scan_beat_folder, resolve_beat_files, read_beat_meta,
             save_beat_meta, inspect_audio_metadata, rename_tag_everywhere, rename_beat, reorder_beats,
-            remove_beat_from_library, purge_interrupted_upload_local, list_trash, restore_beat_from_trash, purge_trash_now, get_log_dir, review_perf_log,
-            reveal_in_explorer, path_is_directory, open_project_file, add_file_to_beat, get_settings, set_incomplete_warnings_enabled, get_playback_cache_status, set_playback_cache_limit_mb, clear_playback_cache,
+            remove_beat_from_library, purge_interrupted_upload_local, list_trash, restore_beat_from_trash, purge_trash_now, get_log_dir, review_perf_log, diagnostic_log,
+            reveal_in_explorer, path_is_directory, read_image_file_data_url, open_project_file, add_file_to_beat, get_settings, set_incomplete_warnings_enabled, get_playback_cache_status, set_playback_cache_limit_mb, clear_playback_cache,
             set_custom_cursor_enabled, set_beats_folder, preview_beats_folder, import_selected_beats,
             start_import_review_stream, get_import_review_batch_summary, preview_import_batch, prepare_next_import_review_beat, resolve_import_audio_conflict, discard_import_review_batch,
             list_openable_cloud_project_beat_ids, merge_folder_into_existing_beat,

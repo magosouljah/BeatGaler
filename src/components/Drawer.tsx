@@ -2,10 +2,9 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Beat } from "../types";
 import { Artwork, Stars, TagEditor, TagPill } from "./ui";
 import ImageCropModal from "./ImageCropModal";
-import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
+import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, diagnosticLog, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { appConfirm } from "../lib/dialog";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
-import { listen } from "@tauri-apps/api/event";
 import { cleanTags, validateBpm, validateMusicKey } from "../lib/metadataValidation";
 import { getReviewFooterState, reviewHeaderLabel } from "../features/components/componentLogic";
 
@@ -25,6 +24,10 @@ interface Props {
   onSaveAll?: (currentUpdated: Beat) => Promise<void> | void;
   isReviewNameTaken?: (name: string, beatId: string) => boolean;
   mutationAllowed?: boolean;
+  onCloudMutationCommit?: (
+    updated: Beat,
+    options: { syncMetadata: boolean; reason: string },
+  ) => Promise<void>;
 }
 
 // Pending file assignment — only committed on Save
@@ -60,7 +63,7 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
   OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
 };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   // pending holds files chosen by the user but NOT yet written to disk
   const [pending, setPending] = useState<PendingFiles>({});
@@ -170,15 +173,22 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     setCloudBusy("PROJECT-UPDATE");
     setCloudError(null);
     try {
+      void diagnosticLog("project-sync", "DRAWER_UPDATE_BEGIN", `beat_id=${beat.id}`);
       await uploadProjectToTelegram(data);
+      if (!onCloudMutationCommit) {
+        throw new Error("Project uploaded, but the library INDEX commit handler is unavailable.");
+      }
+      await onCloudMutationCommit(beat, { syncMetadata: false, reason: "drawer-project-update" });
       await refreshCloudFiles();
       window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
+      void diagnosticLog("project-sync", "DRAWER_UPDATE_CONFIRMED", `beat_id=${beat.id}`);
     } catch (e) {
+      void diagnosticLog("project-sync", "DRAWER_UPDATE_FAILED", `beat_id=${beat.id} error=${String(e)}`);
       setCloudError(String(e));
     } finally {
       setCloudBusy(null);
     }
-  }, [cloudBusy, beat.id, data, refreshCloudFiles]);
+  }, [cloudBusy, beat, data, refreshCloudFiles, onCloudMutationCommit]);
 
   const commonTags = useMemo(() => {
     if (!isBulk || !selectedBeats?.length) return [];
@@ -377,9 +387,42 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         await uploadProjectToTelegram(cloudUpdated);
       }
 
+      // Clear other_files — after rename old paths are gone; Rust re-scans on next load
+      const finalUpdated = { ...cloudUpdated, other_files: [] };
+      const metadataChanged =
+        finalUpdated.name !== beat.name ||
+        finalUpdated.bpm !== beat.bpm ||
+        finalUpdated.key !== beat.key ||
+        finalUpdated.rating !== beat.rating ||
+        finalUpdated.image_base64 !== beat.image_base64 ||
+        JSON.stringify(finalUpdated.tags) !== JSON.stringify(beat.tags);
+      const cloudFilesChanged = Object.keys(pendingCloud).length > 0;
+      const hasCloudAuthority = Boolean(finalUpdated.telegram_file_id) || cloudFiles.length > 0 || cloudFilesChanged;
+
+      // V7 has no generic "React state changed => rewrite INDEX" observer.
+      // Drawer mutations therefore own their logical cloud commit explicitly.
+      // This is especially important for artwork (excluded from the lightweight
+      // fingerprint) and PROJECT (stored in SQLite, not in the Beat object).
+      if ((metadataChanged && hasCloudAuthority) || cloudFilesChanged) {
+        if (!onCloudMutationCommit) {
+          throw new Error("Changes were saved locally, but the library INDEX commit handler is unavailable.");
+        }
+        const reason = cloudFilesChanged ? "drawer-cloud-save" : "drawer-metadata-save";
+        void diagnosticLog(
+          "drawer-save",
+          "CLOUD_COMMIT_BEGIN",
+          `beat_id=${beat.id} reason=${reason} metadata_changed=${metadataChanged} cloud_files_changed=${cloudFilesChanged}`,
+        );
+        await onCloudMutationCommit(finalUpdated, {
+          syncMetadata: metadataChanged && Boolean(finalUpdated.telegram_file_id),
+          reason,
+        });
+        void diagnosticLog("drawer-save", "CLOUD_COMMIT_CONFIRMED", `beat_id=${beat.id} reason=${reason}`);
+      }
+
       setPending({});
       setPendingCloud({});
-      if (Object.keys(pendingCloud).length > 0) {
+      if (cloudFilesChanged) {
         await refreshCloudFiles();
         window.dispatchEvent(new CustomEvent("beatgaler:cloud-files-updated", { detail: { beatId: beat.id } }));
         if (pendingCloud.PROJECT || projectChanged) {
@@ -387,8 +430,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         }
       }
 
-      // Clear other_files — after rename old paths are gone; Rust re-scans on next load
-      const finalUpdated = { ...cloudUpdated, other_files: [] };
       if (reviewAction === "all" && reviewInfo && onSaveAll) {
         await onSaveAll(finalUpdated);
       } else {
@@ -400,7 +441,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     } finally {
       setSaving(false);
     }
-  }, [beat, data, pending, pendingCloud, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed]);
+  }, [beat, data, pending, pendingCloud, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit]);
 
   // ── Enter to save ───────────────────────────────────────────
   useEffect(() => {
@@ -444,83 +485,112 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     setPending(p => ({ ...p, samples: folderPath }));
   };
 
-  // ── Tauri drag-drop — queues into pending ───────────────────
-  const dropTargetRef = useRef<string | null>(null);
-  useEffect(() => { dropTargetRef.current = dropTarget; }, [dropTarget]);
-
+  // App owns the single Tauri native receiver and forwards drawer-specific
+  // targets as DOM events. This avoids the legacy tauri://drag-* event path,
+  // which can report zero paths on macOS even though the Webview receiver has
+  // the final Finder paths at DROP time.
   useEffect(() => {
     if (!isEdit) return;
-    if (!isTauriAvailable) return;
-    const unlisteners: (() => void)[] = [];
-
-    const targetAtPosition = (pos: { x: number; y: number }): string | null => {
-      const ratio = Math.max(1, window.devicePixelRatio || 1);
-      const points: [number, number][] = [[pos.x, pos.y]];
-      if (ratio !== 1) points.push([pos.x / ratio, pos.y / ratio]);
-
-      for (const [x, y] of points) {
-        const el = document.elementFromPoint(x, y);
-        if (!el) continue;
-        if (el.closest("[data-artwork-drop]")) return "artwork";
-        const row = el.closest("[data-filerole]");
-        const role = row?.getAttribute("data-filerole");
-        if (role) return role;
-      }
-      return null;
+    const onNativeHover = (event: Event) => {
+      const detail = (event as CustomEvent<{ target?: string | null; active?: boolean }>).detail;
+      setDropTarget(detail?.active ? detail.target ?? null : null);
     };
-
-    // Track drag position to know which row/artwork is hovered. Tauri can report
-    // physical pixels on a scaled display, so test both raw and DPR-adjusted points.
-    listen<{ position?: { x: number; y: number } }>("tauri://drag-over", (event) => {
-      const pos = (event.payload as any)?.position;
-      if (!pos) return;
-      setDropTarget(targetAtPosition(pos));
-    }).then(fn => unlisteners.push(fn));
-
-    // On drop, queue a file role or load artwork into the crop editor.
-    listen<{ paths?: string[] }>("tauri://drag-drop", async (event) => {
-      const paths: string[] = (event.payload as any)?.paths ?? [];
-      const role = dropTargetRef.current as "artwork" | "mp3" | "wav" | "stems" | "flp" | "als" | null;
+    const onNativePath = (event: Event) => {
+      const detail = (event as CustomEvent<{ target?: string; path?: string }>).detail;
+      const role = detail?.target as "artwork" | "mp3" | "wav" | "stems" | "flp" | "als" | undefined;
+      const path = detail?.path;
       setDropTarget(null);
-      if (!role || paths.length === 0) return;
-
-      if (role === "artwork") {
-        const imagePath = paths[0];
-        if (!/\.(png|jpe?g|webp|bmp|gif)$/i.test(imagePath)) {
-          setError("Artwork must be an image file.");
-          return;
-        }
-        try {
-          setCropSrc(await readImagePathAsDataUrl(imagePath));
-          setError(null);
-        } catch (error) {
-          setError(`Could not read artwork: ${String(error)}`);
-        }
+      if (!role || !path) return;
+      if (role !== "artwork") {
+        setPending(current => ({ ...current, [role]: path }));
+        void diagnosticLog("drawer-drop", "FILE_QUEUED", `role=${role}`);
         return;
       }
-
-      setPending(p => ({ ...p, [role]: paths[0] }));
-    }).then(fn => unlisteners.push(fn));
-
-    listen("tauri://drag-leave", () => setDropTarget(null))
-      .then(fn => unlisteners.push(fn));
-
-    return () => { unlisteners.forEach(fn => fn()); };
+      void (async () => {
+        try {
+          void diagnosticLog("drawer-drop", "ARTWORK_READ_BEGIN", "source=native-drop");
+          const image = await readImagePathAsDataUrl(path);
+          setCropSrc(image);
+          setError(null);
+          void diagnosticLog("drawer-drop", "ARTWORK_READY", `source=native-drop data_url_bytes=${image.length}`);
+        } catch (error) {
+          void diagnosticLog("drawer-drop", "ARTWORK_FAILED", `source=native-drop error=${String(error)}`);
+          setError(`Could not read artwork: ${String(error)}`);
+        }
+      })();
+    };
+    const onExternalArtwork = (event: Event) => {
+      const imageData = (event as CustomEvent<{ imageData?: string }>).detail?.imageData;
+      if (!imageData || !/^data:image\//i.test(imageData)) {
+        void diagnosticLog("drawer-drop", "ARTWORK_FAILED", "source=browser-native reason=invalid-data-url");
+        setError("Could not decode the dropped browser artwork.");
+        return;
+      }
+      setCropSrc(imageData);
+      setError(null);
+      void diagnosticLog("drawer-drop", "ARTWORK_READY", `source=browser-native data_url_bytes=${imageData.length}`);
+    };
+    window.addEventListener("beatgaler:drawer-native-hover", onNativeHover);
+    window.addEventListener("beatgaler:drawer-native-path", onNativePath);
+    window.addEventListener("beatgaler:drawer-artwork-data", onExternalArtwork);
+    return () => {
+      window.removeEventListener("beatgaler:drawer-native-hover", onNativeHover);
+      window.removeEventListener("beatgaler:drawer-native-path", onNativePath);
+      window.removeEventListener("beatgaler:drawer-artwork-data", onExternalArtwork);
+    };
   }, [isEdit]);
 
   const handleImageFile = (file: File) => {
+    void diagnosticLog("drawer-artwork", "WEB_FILE_BEGIN", `name=${file.name || "(unnamed)"} type=${file.type || "unknown"} bytes=${file.size}`);
     if (file.type && !file.type.startsWith("image/")) {
+      void diagnosticLog("drawer-artwork", "WEB_FILE_REJECTED", `reason=not-image type=${file.type}`);
       setError("Artwork must be an image file.");
       return;
     }
     const reader = new FileReader();
     reader.onload = e => {
-      setCropSrc(e.target?.result as string);
+      const result = e.target?.result;
+      if (typeof result !== "string" || !/^data:image\//i.test(result) || result.length < 32) {
+        void diagnosticLog("drawer-artwork", "WEB_FILE_REJECTED", "reason=invalid-data-url");
+        setError("Could not decode the selected artwork image.");
+        return;
+      }
+      setCropSrc(result);
       setError(null);
+      void diagnosticLog("drawer-artwork", "WEB_FILE_READY", `data_url_bytes=${result.length}`);
     };
-    reader.onerror = () => setError("Could not read artwork.");
+    reader.onerror = () => {
+      void diagnosticLog("drawer-artwork", "WEB_FILE_FAILED", `error=${String(reader.error)}`);
+      setError(`Could not read artwork: ${String(reader.error ?? "FileReader failed")}`);
+    };
     reader.readAsDataURL(file);
   };
+
+  const handlePickArtwork = useCallback(async () => {
+    if (!isTauriAvailable) {
+      imgRef.current?.click();
+      return;
+    }
+    setError(null);
+    void diagnosticLog("drawer-artwork", "PICKER_OPEN", "source=native-dialog");
+    try {
+      const path = await pickFile([{
+        name: "Artwork image",
+        extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"],
+      }], beat.folder_path || undefined);
+      if (!path) {
+        void diagnosticLog("drawer-artwork", "PICKER_CANCELLED", "source=native-dialog");
+        return;
+      }
+      void diagnosticLog("drawer-artwork", "PICKER_SELECTED", "source=native-dialog");
+      const image = await readImagePathAsDataUrl(path);
+      setCropSrc(image);
+      void diagnosticLog("drawer-artwork", "PICKER_READY", `data_url_bytes=${image.length}`);
+    } catch (error) {
+      void diagnosticLog("drawer-artwork", "PICKER_FAILED", `error=${String(error)}`);
+      setError(`Could not load artwork: ${String(error)}`);
+    }
+  }, [beat.folder_path]);
 
   const changeBulkTagsMode = (mode: "add" | "replace" | "remove") => {
     setBulkTagsMode(mode);
@@ -667,6 +737,10 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                   setDropTarget(null);
                   const file = e.dataTransfer.files?.[0];
                   if (file) handleImageFile(file);
+                  else {
+                    void diagnosticLog("drawer-artwork", "HTML_DROP_EMPTY", `types=${Array.from(e.dataTransfer.types || []).join("|") || "none"}`);
+                    setError("The image drop reached BeatGaler, but macOS provided no readable file. Use Add cover to select it.");
+                  }
                 }}
                 style={{
                   borderRadius: 10,
@@ -678,7 +752,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
               </div>
               {isEdit && (
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <button onClick={() => imgRef.current?.click()}
+                  <button onClick={() => void handlePickArtwork()}
                     style={{ flex: 1, padding: "7px 12px", background: "#1a1a1a", border: "1px solid #252525", borderRadius: 7, color: "#ccc", fontSize: 12, cursor: "pointer" }}>
                     {data.image_base64 ? "Change cover" : "Add cover"}
                   </button>
@@ -692,8 +766,12 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                   )}
                 </div>
               )}
-              <input ref={imgRef} type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif" style={{ display: "none" }}
-                onChange={e => e.target.files?.[0] && handleImageFile(e.target.files[0])} />
+              <input ref={imgRef} type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif,image/avif" style={{ display: "none" }}
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImageFile(file);
+                  e.currentTarget.value = "";
+                }} />
             </>
           )}
 

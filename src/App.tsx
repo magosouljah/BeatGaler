@@ -3120,6 +3120,38 @@ function BeatGalerApp() {
     if (drawer?.beat.id === updated.id) setDrawer(d => d ? { ...d, beat: updated } : null);
   }, [connectionState, drawer, transitionRuntime]);
 
+  const commitDrawerCloudMutation = useCallback(async (
+    updated: Beat,
+    options: { syncMetadata: boolean; reason: string },
+  ) => {
+    const started = performance.now();
+    reviewPerfMark(
+      `DRAWER_CLOUD_COMMIT_BEGIN beat_id=${updated.id} reason=${options.reason} sync_metadata=${options.syncMetadata}`,
+    );
+    if (options.syncMetadata) {
+      await syncBeatMetadataToTelegram(updated);
+      reviewPerfMark(`DRAWER_CLOUD_METADATA_OK beat_id=${updated.id} reason=${options.reason}`);
+    }
+    const snapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
+    await libraryStateManager.commitSnapshot(snapshot, options.reason);
+
+    // Seed the explicit transaction snapshots before Drawer publishes its React
+    // state update. Otherwise the metadata observer can mistake that same save
+    // for a second independent transaction and upload/commit it again.
+    if (cloudLibraryTimerRef.current) {
+      window.clearTimeout(cloudLibraryTimerRef.current);
+      cloudLibraryTimerRef.current = null;
+    }
+    cloudLibrarySnapshotRef.current = snapshot
+      .filter(item => !!item.telegram_file_id)
+      .map(cloudBeatFingerprint)
+      .join("\u001c");
+    cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));
+    reviewPerfMark(
+      `DRAWER_CLOUD_COMMIT_OK beat_id=${updated.id} reason=${options.reason} elapsed_ms=${Math.round(performance.now() - started)}`,
+    );
+  }, []);
+
   const handleToggleOffline = useCallback(async (beat: Beat) => {
     if (offlineBusyIds.has(beat.id)) return;
     if (!beat.offline_available && connectionState !== "online") {
@@ -3586,7 +3618,6 @@ function BeatGalerApp() {
     let unlisten: (() => void) | undefined;
     let activePaths: string[] = [];
     let activeExternalImage = false;
-    const isMacDesktop = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 
     type NativeFsPayload = {
       paths: string[];
@@ -3621,16 +3652,21 @@ function BeatGalerApp() {
       setDropActive(false);
       window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", { detail: { beatId: null, active: false } }));
       window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
+      window.dispatchEvent(new CustomEvent("beatgaler:drawer-native-hover", { detail: { target: null, active: false } }));
     };
 
     const updateNativeExternalImageUi = (position: { x?: number; y?: number } | null | undefined) => {
       const target = elementAtNativePosition(position);
       const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
       const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
       setDropActive(false);
       window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
       window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
         detail: { beatId: artworkBeatId, active: Boolean(artworkBeatId) },
+      }));
+      window.dispatchEvent(new CustomEvent("beatgaler:drawer-native-hover", {
+        detail: { target: drawerArtwork ? "artwork" : null, active: Boolean(drawerArtwork) },
       }));
     };
 
@@ -3639,9 +3675,24 @@ function BeatGalerApp() {
       const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
       const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
       const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
+      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+      const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
+      const drawerTarget = drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null;
       const localImage = payload.paths.length === 1 && isImagePath(payload.paths[0]);
       const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
       const cardBeatId = card?.dataset.beatCardId ?? null;
+
+      if (drawerTarget) {
+        setDropActive(false);
+        window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", { detail: { beatId: null, active: false } }));
+        window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
+        window.dispatchEvent(new CustomEvent("beatgaler:drawer-native-hover", {
+          detail: { target: drawerTarget, active: true },
+        }));
+        return;
+      }
+
+      window.dispatchEvent(new CustomEvent("beatgaler:drawer-native-hover", { detail: { target: null, active: false } }));
 
       if (artworkBeatId && localImage) {
         setDropActive(false);
@@ -3680,7 +3731,16 @@ function BeatGalerApp() {
       // URLs never enter Import Beat and are accepted only by an artwork target.
       const target = elementAtNativePosition(detail);
       const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
       const beatId = artwork?.dataset.beatArtworkId ?? null;
+      if (drawerArtwork) {
+        const imageData = await fetchInternetArtworkDataUrl(detail.url);
+        if (!/^data:image\//i.test(imageData) || imageData.length < 32) {
+          throw new Error("Pinterest/browser artwork returned an invalid image payload.");
+        }
+        window.dispatchEvent(new CustomEvent("beatgaler:drawer-artwork-data", { detail: { imageData } }));
+        return;
+      }
       if (!beatId) return;
       const beat = beatsLatestRef.current.find(item => item.id === beatId);
       if (!beat) return;
@@ -3751,17 +3811,39 @@ function BeatGalerApp() {
       const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
       const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
       const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
+      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+      const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
+      const drawerTarget = drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null;
       const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
       const cardBeatId = card?.dataset.beatCardId ?? null;
       clearNativeDragUi();
 
-      reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
+      reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} target=${drawerTarget ?? (artworkBeatId ? "card-artwork" : cardBeatId ? "beat-card" : library ? "library" : "none")} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
 
-      if (payload.paths.length === 0) return;
-      // On macOS, keep artwork drops on the proven HTML/DataTransfer path so
-      // Pinterest/browser artwork remains untouched. Native Finder paths own
-      // beat-card and library file drops only.
-      if (isMacDesktop && artworkBeatId) return;
+      if (payload.paths.length === 0) {
+        if (drawerTarget || artworkBeatId || cardBeatId || library) {
+          await appAlert({
+            title: "Drop could not be read",
+            message: "The drop reached BeatGaler, but macOS supplied no filesystem path. Try selecting the file with the button instead.",
+            danger: true,
+          });
+        }
+        return;
+      }
+      if (drawerTarget) {
+        if (payload.paths.length !== 1) {
+          await appAlert({ title: "Drop one file", message: "Choose one file for this field." });
+          return;
+        }
+        if (drawerTarget === "artwork" && !isImagePath(payload.paths[0])) {
+          await appAlert({ title: "Artwork must be an image", message: "Choose a PNG, JPEG, WebP, GIF, BMP, or AVIF image." });
+          return;
+        }
+        window.dispatchEvent(new CustomEvent("beatgaler:drawer-native-path", {
+          detail: { target: drawerTarget, path: payload.paths[0] },
+        }));
+        return;
+      }
       if (cardBeatId || library) claimNativeLibraryDrop();
       if (payload.paths.length > MAX_NATIVE_DROP_ITEMS) {
         await appAlert({
@@ -3802,6 +3884,17 @@ function BeatGalerApp() {
         const stop = await getCurrentWebview().onDragDropEvent(event => {
           const payload = event.payload as any;
           if (!payload) return;
+          const eventPaths = Array.isArray(payload.paths)
+            ? payload.paths.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+            : [];
+          const eventPosition = payload.position && typeof payload.position.x === "number" && typeof payload.position.y === "number"
+            ? `${Math.round(payload.position.x)},${Math.round(payload.position.y)}`
+            : "none";
+          if (payload.type !== "over") {
+            reviewPerfMark(
+              `TAURI_NATIVE_EVENT type=${String(payload.type)} path_count=${eventPaths.length} active_path_count=${activePaths.length} position=${eventPosition} names=${eventPaths.map(fileNameFromPath).slice(0, 8).join("|")}`,
+            );
+          }
 
           if (payload.type === "leave") {
             activePaths = [];
@@ -3811,9 +3904,7 @@ function BeatGalerApp() {
           }
 
           if (payload.type === "enter") {
-            const incomingPaths = Array.isArray(payload.paths)
-              ? payload.paths.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
-              : [];
+            const incomingPaths = eventPaths;
             const externalSignal = nativeExternalImageSignalFromPaths(incomingPaths);
             if (externalSignal?.kind === "pending") {
               activePaths = [];
@@ -3837,9 +3928,7 @@ function BeatGalerApp() {
           }
 
           if (payload.type !== "drop") return;
-          const incomingPaths = Array.isArray(payload.paths)
-            ? payload.paths.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
-            : activePaths;
+          const incomingPaths = eventPaths.length > 0 ? eventPaths : activePaths;
           const externalSignal = nativeExternalImageSignalFromPaths(incomingPaths);
           const wasExternalImage = activeExternalImage;
           activePaths = [];
@@ -5224,6 +5313,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}
           onBulkSaved={applyBulkUpdate}
           mutationAllowed={connectionState === "online"}
+          onCloudMutationCommit={commitDrawerCloudMutation}
         />
       )}
 
@@ -5261,6 +5351,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
               existing.name.trim().toLocaleLowerCase() === normalized
             );
           }}
+          onCloudMutationCommit={commitDrawerCloudMutation}
           onSaved={handleReviewedBeatSaved}
           onReleaseAudio={() => {
             if (audio.playingId === reviewQueue.beats[reviewQueue.index].id) releaseFile();

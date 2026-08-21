@@ -63,7 +63,7 @@ ok(commands.includes("if !root_path.exists() || path_is_symbolic_link(&root_path
 ok(app.includes("getCurrentWebview().onDragDropEvent"), "Tauri native filesystem drop listener is installed");
 ok(app.includes("if (!isTauriAvailable) return;"), "native drop listener is not gated to Windows only");
 ok(app.includes("claimNativeLibraryDrop()") && htmlDrop.includes("waitForNativeLibraryDropClaim"), "Mac duplicate native/HTML local drops are arbitrated");
-ok(app.includes("if (isMacDesktop && artworkBeatId) return;"), "Mac native path leaves artwork/Pinterest on the proven HTML path");
+ok(app.includes('if (artworkBeatId && payload.paths.length === 1 && isImagePath(payload.paths[0]))') && app.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through native paths while preserving browser/Pinterest sentinels");
 
 ok(!helper.includes('|| "http://127.0.0.1:8081"') && !helper.includes("|| 'http://127.0.0.1:8081'"), "Direct helper has no fixed 8081 fallback");
 ok(commands.includes("TcpListener::bind((\"127.0.0.1\", 0))"), "local data plane reserves a dynamic loopback port");
@@ -150,6 +150,11 @@ ok(!commands.includes('Command::new("ffmpeg")') && (commands.match(/beatgaler_ff
 ok(!app.includes("Windows reported a file drop"), "user-facing drag error is platform-neutral");
 ok(!htmlDrop.includes("WebView2 exposed no usable image payload"), "user-facing browser artwork error is platform-neutral");
 ok(player.includes("Reveal in Finder"), "Mac UI has Finder-specific reveal wording");
+ok(commands.includes("pub fn read_image_file_data_url") && commands.includes("ARTWORK_READ_OK"), "macOS artwork uses native byte reads with stage diagnostics");
+ok(drawer.includes('handlePickArtwork') && drawer.includes('beatgaler:drawer-native-path') && !drawer.includes('tauri://drag-drop'), "Drawer artwork uses the native picker and the single Webview drop receiver");
+ok(app.includes('target=${drawerTarget') && app.includes('beatgaler:drawer-native-path'), "native drop logs its resolved target and forwards Finder artwork to Drawer");
+ok(drawer.includes("onCloudMutationCommit") && app.includes("commitDrawerCloudMutation"), "Drawer PROJECT/artwork changes own an explicit authoritative INDEX commit");
+ok(commands.includes("VERIFY_OK") && commands.includes("missing projects"), "INDEX writes verify pinned project membership before reporting success");
 
 const publicServerErrorTexts = cloudServer.split(/\r?\n/).filter(line => line.includes("error:")).map(line => line.slice(line.indexOf("error:") + 6));
 ok(!publicServerErrorTexts.some(text => /telegram|bot api|transport bot|001beatgaler|tdlib/i.test(text)), "public Cloud HTTP errors do not expose the hidden storage implementation");
