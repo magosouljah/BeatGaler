@@ -34,8 +34,6 @@
     "unit/userVisibleError.test.ts",
     "../src/lib/userVisibleError.ts",
     "unit/platformCapabilities.test.ts",
-    "../src/platform/capabilities.ts",
-    "unit/webTransportParts.test.ts",
-    "../src/features/cloud/webTransportParts.ts"
+    "../src/platform/capabilities.ts"
   ]
 }

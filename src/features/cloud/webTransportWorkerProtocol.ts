@@ -8,7 +8,9 @@ export interface WebTransportUploadInput {
   threadId: number;
 }
 
-export interface WebTransportUploadedPart {
+export const WEB_DIRECT_MAX_FILE_BYTES = 1900 * 1024 * 1024;
+
+export interface WebTransportStoredFile {
   telegram_file_id: string;
   telegram_message_id: number;
   index: number;
@@ -21,19 +23,18 @@ export interface WebTransportUploadResult {
   telegram_message_id: number;
   filename: string;
   original_size: number;
-  parts: WebTransportUploadedPart[];
+  /** Galer T-Library compatibility: Web always writes exactly one stored file. */
+  parts: [WebTransportStoredFile];
   transport: "direct-web";
 }
 
 export interface WebTransportProgress {
   uploadedBytes: number;
   totalBytes: number;
-  partIndex: number;
-  partCount: number;
 }
 
 export type WebTransportWorkerCommand =
-  | { requestId: string; op: "initialize"; session: Pick<WebTransportSession, "bot_token" | "chat_id"> }
+  | { requestId: string; op: "initialize"; session: Pick<WebTransportSession, "bot_token" | "chat_id" | "telegram_api_id" | "telegram_api_hash"> }
   | { requestId: string; op: "verify" }
   | { requestId: string; op: "upload"; input: WebTransportUploadInput }
   | { requestId: string; op: "shutdown" };

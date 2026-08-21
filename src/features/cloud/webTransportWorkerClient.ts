@@ -61,7 +61,15 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   async initialize(session: WebTransportSession): Promise<void> {
-    await this.request({ op: "initialize", session: { bot_token: session.bot_token, chat_id: session.chat_id } });
+    await this.request({
+      op: "initialize",
+      session: {
+        bot_token: session.bot_token,
+        chat_id: session.chat_id,
+        telegram_api_id: session.telegram_api_id,
+        telegram_api_hash: session.telegram_api_hash,
+      },
+    });
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {

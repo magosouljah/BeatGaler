@@ -9,7 +9,7 @@ export interface WebTransportCredentialEnvelope {
 }
 
 export interface WebTransportSession {
-  mode: "galer-direct-web-botapi";
+  mode: "galer-direct-web-mtproto";
   session_id: string;
   transport_id: string;
   transport_user_id: string | null;
@@ -22,9 +22,11 @@ export interface WebTransportSession {
   heartbeat_timeout_ms: number;
   token_rotation_enabled: boolean;
   bot_token: string;
+  telegram_api_id: number;
+  telegram_api_hash: string;
 }
 
-type SessionEnvelopeResponse = Omit<WebTransportSession, "bot_token"> & {
+type SessionEnvelopeResponse = Omit<WebTransportSession, "bot_token" | "telegram_api_id" | "telegram_api_hash"> & {
   credential_envelope: WebTransportCredentialEnvelope;
 };
 
@@ -98,8 +100,10 @@ async function decryptCredentials(envelope: WebTransportCredentialEnvelope, priv
   const compact = JSON.parse(new TextDecoder().decode(decrypted));
   const credentials = {
     bot_token: String(compact?.t || ""),
+    telegram_api_id: Number(compact?.i || 0),
+    telegram_api_hash: String(compact?.h || ""),
   };
-  if (!credentials.bot_token) {
+  if (!credentials.bot_token || !credentials.telegram_api_id || !credentials.telegram_api_hash) {
     throw new Error("Galer Cloud returned incomplete Web transport credentials.");
   }
   return credentials;

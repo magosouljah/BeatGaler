@@ -103,6 +103,37 @@ export interface PlatformCloudPort {
   status(): Promise<TelegramCloudStatus>;
 }
 
+export interface PlatformCloudUploadProgress {
+  uploadedBytes: number;
+  totalBytes: number;
+}
+
+export interface PlatformCloudUploadResult {
+  telegram_file_id: string;
+  telegram_message_id: number;
+  filename: string;
+  original_size: number;
+  parts: Array<{
+    telegram_file_id: string;
+    telegram_message_id: number;
+    index: number;
+    size: number;
+    filename: string;
+  }>;
+  transport: "direct-web";
+}
+
+export interface PlatformCloudDataPort {
+  upload(input: {
+    file: File;
+    filename: string;
+    beatId: string;
+    beatName: string;
+    kind: "MASTER" | "WAV" | "LOOP" | "PROJECT" | "STEMS" | "OTHER";
+  }, onProgress?: (progress: PlatformCloudUploadProgress) => void): Promise<PlatformCloudUploadResult>;
+  disconnect(): Promise<void>;
+}
+
 export interface PlatformAccountPort {
   getInstallationId(): Promise<string>;
 }
@@ -140,6 +171,7 @@ export interface PlatformAdapter {
   external: PlatformExternalPort;
   account: PlatformAccountPort;
   cloud: PlatformCloudPort;
+  cloudData: PlatformCloudDataPort;
   cloudAuth: PlatformCloudAuthPort;
   diagnostics: PlatformDiagnosticsPort;
   importer: PlatformImportPort;

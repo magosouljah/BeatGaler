@@ -151,7 +151,7 @@ passed += test('Web transport credentials are encrypted for the browser session 
     telegram_api_hash: 'REDACTED_TELEGRAM_API_HASH',
   }, { ...publicKey.export({ format: 'jwk' }), alg: 'RSA-OAEP-256', key_ops: ['encrypt'] });
 
-  assert.equal(wrapped.mode, 'galer-direct-web-botapi');
+  assert.equal(wrapped.mode, 'galer-direct-web-mtproto');
   assert.equal(wrapped.bot_token, undefined);
   assert.equal(wrapped.telegram_api_id, undefined);
   assert.equal(wrapped.telegram_api_hash, undefined);
@@ -162,6 +162,8 @@ passed += test('Web transport credentials are encrypted for the browser session 
   }, Buffer.from(wrapped.credential_envelope.ciphertext, 'base64url'));
   assert.deepEqual(JSON.parse(decrypted.toString('utf8')), {
     t: '123456:prototype-secret',
+    i: 12345,
+    h: 'REDACTED_TELEGRAM_API_HASH',
   });
 }) ? 1 : 0;
 

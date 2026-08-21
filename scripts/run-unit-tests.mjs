@@ -35,7 +35,6 @@ try {
     "securityFuzz.test.js",
     "userVisibleError.test.js",
     "platformCapabilities.test.js",
-    "webTransportParts.test.js",
   ];
 
   for (const test of tests) {

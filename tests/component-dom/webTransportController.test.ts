@@ -8,7 +8,7 @@ import type { WebTransportSession } from "../../src/features/cloud/webTransportS
 
 function session(version = 1): WebTransportSession {
   return {
-    mode: "galer-direct-web-botapi",
+    mode: "galer-direct-web-mtproto",
     session_id: "web-session",
     transport_id: "transport-1",
     transport_user_id: null,
@@ -21,6 +21,8 @@ function session(version = 1): WebTransportSession {
     heartbeat_timeout_ms: 300_000,
     token_rotation_enabled: false,
     bot_token: `secret-${version}`,
+    telegram_api_id: 123,
+    telegram_api_hash: `hash-${version}`,
   };
 }
 

@@ -24,8 +24,10 @@ function wrapWebTransportSession(session, publicJwk) {
   const key = importBrowserPublicKey(publicJwk);
   const compactCredentials = {
     t: String(session?.bot_token || ''),
+    i: Number(session?.telegram_api_id || 0),
+    h: String(session?.telegram_api_hash || ''),
   };
-  if (!compactCredentials.t) {
+  if (!compactCredentials.t || !compactCredentials.i || !compactCredentials.h) {
     throw new Error('Web transport credentials are incomplete.');
   }
 
@@ -40,7 +42,7 @@ function wrapWebTransportSession(session, publicJwk) {
   delete wrapped.bot_token;
   delete wrapped.telegram_api_id;
   delete wrapped.telegram_api_hash;
-  wrapped.mode = 'galer-direct-web-botapi';
+  wrapped.mode = 'galer-direct-web-mtproto';
   wrapped.credential_envelope = {
     version: 1,
     format: ENVELOPE_FORMAT,
