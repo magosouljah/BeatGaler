@@ -31,14 +31,6 @@ const activeStreams = new Map<string, {
 }>();
 
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
-const EMPTY_LIBRARY_MANIFEST = {
-  schema: "beatgaler.telegram.library",
-  version: 2,
-  beats: [],
-  trash: [],
-  deleted: [],
-};
-
 async function closeClient(): Promise<void> {
   for (const stream of activeStreams.values()) {
     stream.controller.abort();
@@ -119,7 +111,12 @@ async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
       const fullChat = await active.getFullChat(chatId);
       const pinnedId = Number(fullChat.pinnedMsgId || 0);
       if (!Number.isInteger(pinnedId) || pinnedId <= 0) {
-        return { manifest: EMPTY_LIBRARY_MANIFEST, messageId: null };
+        // A freshly admitted transport bot can see the vault before Telegram
+        // propagates its pinned message. Returning an authoritative empty index
+        // on that first read makes a real library appear empty on a new phone.
+        // Retry the same way we do for a stale pin, and only accept an actually
+        // empty vault after the propagation window has elapsed.
+        throw new Error("Galer Cloud library index is still synchronizing.");
       }
 
       const [message] = await active.getMessages(chatId, [pinnedId]);
