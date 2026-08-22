@@ -2,19 +2,56 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { WEB_DIRECT_MAX_FILE_BYTES } from "../../src/features/cloud/webTransportWorkerProtocol";
 
 const transport = vi.hoisted(() => {
-  const sendMedia = vi.fn(async (_vault: unknown, _media: unknown, options: any) => {
+  const indexMedia = { type: "document", mimeType: "application/json" };
+  const artworkMedia = { type: "document", mimeType: "image/png" };
+  const audioMedia = { type: "audio", mimeType: "audio/mpeg", fileSize: 5 };
+  const projectMedia = { type: "document", mimeType: "application/zip", fileSize: 5 };
+  let pinnedId = 501;
+  const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
     options.progressCallback?.(2, 5);
     options.progressCallback?.(5, 5);
-    return { id: 91 };
+    return { id: media.caption === "BEATGALER_LIBRARY_INDEX_V1" ? 901 : 91 };
   });
+  const pinMessage = vi.fn(async ({ message }: { message: number }) => { pinnedId = message; });
+  const deleteMessagesById = vi.fn(async () => undefined);
   class TelegramClient {
     start = vi.fn(async () => ({}));
     getMe = vi.fn(async () => ({}));
     getChat = vi.fn(async () => ({ id: "vault-1" }));
+    getFullChat = vi.fn(async () => ({ pinnedMsgId: pinnedId }));
+    getMessages = vi.fn(async (_vault: unknown, ids: number[]) => ids.map(id => id === 501
+      ? { id, text: "BEATGALER_LIBRARY_INDEX_V1", media: indexMedia }
+      : id === 601
+        ? { id, text: "", media: artworkMedia }
+        : id === 701
+          ? { id, text: "", media: audioMedia }
+          : id === 702
+            ? { id, text: "", media: projectMedia }
+        : null));
+    downloadAsBuffer = vi.fn(async (media: unknown) => media === indexMedia
+      ? new TextEncoder().encode(JSON.stringify({
+          schema: "beatgaler.telegram.library",
+          version: 2,
+          beats: [{ id: "beat-from-index", name: "Cloud Beat" }],
+          trash: [],
+        }))
+      : new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    downloadAsIterable = vi.fn(async function* () {
+      yield new Uint8Array([1, 2]);
+      yield new Uint8Array([3, 4, 5]);
+    });
     sendMedia = sendMedia;
+    pinMessage = pinMessage;
+    deleteMessagesById = deleteMessagesById;
     destroy = vi.fn(async () => {});
   }
-  return { sendMedia, TelegramClient };
+  return {
+    sendMedia,
+    pinMessage,
+    deleteMessagesById,
+    resetPinned: () => { pinnedId = 501; },
+    TelegramClient,
+  };
 });
 
 vi.mock("@mtcute/web", () => ({
@@ -29,7 +66,16 @@ const originalOnMessage = globalThis.onmessage;
 const posted: any[] = [];
 
 beforeAll(async () => {
-  vi.stubGlobal("postMessage", (message: unknown) => posted.push(message));
+  vi.stubGlobal("postMessage", (message: any) => {
+    posted.push(message);
+    if (message?.event === "download-chunk") {
+      queueMicrotask(() => {
+        (globalThis.onmessage as any)?.({
+          data: { requestId: `ack-${message.downloadedBytes}`, op: "stream_ack", targetRequestId: message.requestId },
+        });
+      });
+    }
+  });
   await import("../../src/features/cloud/webTransport.worker");
   await send({
     requestId: "init",
@@ -60,7 +106,10 @@ async function send(data: any): Promise<any[]> {
 
 describe("Galer Cloud single-file Web Worker", () => {
   beforeEach(() => {
+    transport.resetPinned();
     transport.sendMedia.mockClear();
+    transport.pinMessage.mockClear();
+    transport.deleteMessagesById.mockClear();
   });
 
   it("sends the original File once and returns one stored-file manifest", async () => {
@@ -94,6 +143,118 @@ describe("Galer Cloud single-file Web Worker", () => {
       parts: [{ telegram_message_id: 91, size: 5 }],
     });
     expect(completed.result.parts).toHaveLength(1);
+  });
+
+  it("reads the authorized pinned library index directly", async () => {
+    const messages = await send({ requestId: "get-index", op: "get_index" });
+    const completed = messages.find(message => message.ok === true);
+
+    expect(completed.result).toMatchObject({
+      messageId: 501,
+      manifest: {
+        schema: "beatgaler.telegram.library",
+        version: 2,
+        beats: [{ id: "beat-from-index", name: "Cloud Beat" }],
+      },
+    });
+  });
+
+  it("pins one complete replacement index before deleting the previous index", async () => {
+    const messages = await send({
+      requestId: "replace-index",
+      op: "replace_index",
+      input: {
+        expectedMessageId: 501,
+        manifest: {
+          schema: "beatgaler.telegram.library",
+          version: 2,
+          beats: [
+            { id: "new-beat", name: "New Beat" },
+            { id: "beat-from-index", name: "Cloud Beat" },
+          ],
+          trash: [],
+        },
+      },
+    });
+    const completed = messages.find(message => message.ok === true);
+
+    expect(transport.sendMedia).toHaveBeenCalledOnce();
+    expect(transport.sendMedia.mock.calls[0][1]).toMatchObject({
+      caption: "BEATGALER_LIBRARY_INDEX_V1",
+      fileMime: "application/json",
+    });
+    expect(transport.pinMessage).toHaveBeenCalledWith({ chatId: "vault-1", message: 901, notify: false });
+    expect(transport.deleteMessagesById).toHaveBeenCalledWith("vault-1", [501]);
+    expect(completed.result).toEqual({ messageId: 901, previousMessageId: 501, beatCount: 2 });
+  });
+
+  it("allows an identity to disappear only when the replacement carries its tombstone", async () => {
+    const messages = await send({
+      requestId: "replace-with-tombstone",
+      op: "replace_index",
+      input: {
+        expectedMessageId: 501,
+        manifest: {
+          schema: "beatgaler.telegram.library",
+          version: 2,
+          beats: [],
+          trash: [],
+          deleted: [{ beat_id: "beat-from-index", deleted_at: 100 }],
+        },
+      },
+    });
+
+    expect(messages.find(message => message.ok === false)).toBeUndefined();
+    expect(messages.find(message => message.ok === true)?.result).toMatchObject({ beatCount: 0 });
+  });
+
+  it("deletes permanent media references in bounded batches", async () => {
+    const ids = Array.from({ length: 105 }, (_, index) => index + 1);
+    const messages = await send({ requestId: "delete-media", op: "delete_messages", input: { messageIds: ids } });
+
+    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(1, "vault-1", ids.slice(0, 100));
+    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(2, "vault-1", ids.slice(100));
+    expect(messages.find(message => message.ok === true)?.result).toEqual({ deleted: 105 });
+  });
+
+  it("hydrates artwork by its direct message reference", async () => {
+    const messages = await send({
+      requestId: "download-artwork",
+      op: "download",
+      input: { messageId: 601, mimeType: "image/png" },
+    });
+    const completed = messages.find(message => message.ok === true);
+
+    expect(completed.result).toEqual({
+      messageId: 601,
+      dataUrl: "data:image/png;base64,iVBORw==",
+    });
+  });
+
+  it("streams MASTER chunks progressively from one authorized message", async () => {
+    const messages = await send({
+      requestId: "stream-master",
+      op: "stream",
+      input: { messageId: 701, mimeType: "audio/mpeg" },
+    });
+    const chunks = messages.filter(message => message.event === "download-chunk");
+    const completed = messages.find(message => message.requestId === "stream-master" && message.ok === true);
+
+    expect(chunks).toHaveLength(2);
+    expect(Array.from(new Uint8Array(chunks[0].chunk))).toEqual([1, 2]);
+    expect(chunks.at(-1)).toMatchObject({ downloadedBytes: 5, totalBytes: 5 });
+    expect(completed.result).toEqual({ messageId: 701, totalBytes: 5, mimeType: "audio/mpeg" });
+  });
+
+  it("streams non-audio Cloud objects without rewriting their MIME type", async () => {
+    const messages = await send({
+      requestId: "stream-project",
+      op: "stream",
+      input: { messageId: 702, mimeType: "application/zip" },
+    });
+    const completed = messages.find(message => message.requestId === "stream-project" && message.ok === true);
+
+    expect(completed.result).toEqual({ messageId: 702, totalBytes: 5, mimeType: "application/zip" });
   });
 
   it("passes a large browser File once and still creates one cloud file", async () => {

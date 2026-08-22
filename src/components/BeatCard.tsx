@@ -43,11 +43,14 @@ interface Props {
   dragEnabled: boolean;
   networkOnline: boolean;
   offlineBusy: boolean;
+  canUseOfflinePackage: boolean;
+  canUseLocalHelper: boolean;
+  canInspectNativeProject: boolean;
   onToggleOffline: (beat: Beat) => void;
   onRetryUpload: (beat: Beat) => void;
 }
 
-function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, telegramSynced, projectCloudState, canOpenProject, onOpenProject, onUpdateProject, onCloudFiles, offlineAvailable, networkOnline, offlineBusy, uploadFailed, onRetryUpload, onToggleOffline, onClose }: {
+function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, telegramSynced, projectCloudState, canOpenProject, onOpenProject, onUpdateProject, onCloudFiles, offlineAvailable, networkOnline, offlineBusy, canUseOfflinePackage, canUseLocalHelper, uploadFailed, onRetryUpload, onToggleOffline, onClose }: {
   x: number; y: number;
   onEdit: () => void; onDetail: () => void;
   onAddToQueue: () => void;
@@ -65,6 +68,8 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
   offlineAvailable: boolean;
   networkOnline: boolean;
   offlineBusy: boolean;
+  canUseOfflinePackage: boolean;
+  canUseLocalHelper: boolean;
   uploadFailed: boolean;
   onRetryUpload: () => void;
   onToggleOffline: () => void;
@@ -96,12 +101,12 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
   return ReactDOM.createPortal(
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
       {([
-        ...(uploadFailed && networkOnline ? [["Retry upload", onRetryUpload] as [string, () => void]] : []),
-        ["Upload to YouTube", onUpload],
+        ...(canUseLocalHelper && uploadFailed && networkOnline ? [["Retry upload", onRetryUpload] as [string, () => void]] : []),
+        ...(canUseLocalHelper ? [["Upload to YouTube", onUpload] as [string, () => void]] : []),
         ...(canOpenProject ? [["Open project", onOpenProject] as [string, () => void]] : []),
         ...(canOpenProject && projectCloudState && projectCloudState !== "LOCAL" ? [["Update project", onUpdateProject] as [string, () => void]] : []),
         ["Download", onCloudFiles],
-        ...((offlineAvailable || networkOnline) && !offlineBusy
+        ...(canUseOfflinePackage && (offlineAvailable || networkOnline) && !offlineBusy
           ? [[offlineAvailable ? "Remove offline download" : "Make available offline", onToggleOffline] as [string, () => void]]
           : []),
         ["Edit metadata", onEdit],
@@ -121,12 +126,13 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
   );
 }
 
-function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }: {
+function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, canUseLocalHelper, onClose }: {
   x: number;
   y: number;
   onEditAll: () => void;
   onUploadBulk: () => void;
   onRemoveAll: () => void;
+  canUseLocalHelper: boolean;
   onClose: () => void;
 }) {
   React.useEffect(() => {
@@ -146,7 +152,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 
   const items: [string, () => void, boolean?][] = [
     ["Edit all", onEditAll],
-    ["Upload to YouTube (bulk)", onUploadBulk],
+    ...(canUseLocalHelper ? [["Upload to YouTube (bulk)", onUploadBulk] as [string, () => void]] : []),
     ["Remove all", onRemoveAll, true],
   ];
 
@@ -169,7 +175,7 @@ export default function BeatCard({
   beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
   onPlay, onWarm, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect,
-  animDelay = 0, dragEnabled, networkOnline, offlineBusy, onToggleOffline, onRetryUpload
+  animDelay = 0, dragEnabled, networkOnline, offlineBusy, canUseOfflinePackage, canUseLocalHelper, canInspectNativeProject, onToggleOffline, onRetryUpload
 }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hovered, setHovered] = useState(false);
@@ -275,6 +281,10 @@ export default function BeatCard({
   // Avoid one Tauri invoke (and possible ZIP validation) for every offscreen card.
   useEffect(() => {
     if (!hasEnteredViewport) return;
+    if (!canInspectNativeProject) {
+      setProjectCloud(null);
+      return;
+    }
     let cancelled = false;
     const refresh = () => {
       if (!(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY" || beat.flp_path)) {
@@ -295,7 +305,7 @@ export default function BeatCard({
       cancelled = true;
       window.removeEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
     };
-  }, [hasEnteredViewport, beat.id, beat.flp_path, beat.folder_path, beat.cloud_status]);
+  }, [hasEnteredViewport, beat.id, beat.flp_path, beat.folder_path, beat.cloud_status, canInspectNativeProject]);
 
   const incompleteReasons = useMemo(() => beatCardIncompleteReasons(projectCloud), [projectCloud]);
   const cloudUploading = beat.cloud_status === "UPLOADING";
@@ -707,6 +717,7 @@ export default function BeatCard({
           onEditAll={onBulkEdit}
           onUploadBulk={onBulkUpload}
           onRemoveAll={onBulkDelete}
+          canUseLocalHelper={canUseLocalHelper}
           onClose={() => setMenu(null)}
         />
       ) : menu ? (
@@ -719,13 +730,15 @@ export default function BeatCard({
           onUploadProjectTelegram={() => onUploadProjectTelegram(beat)}
           telegramSynced={beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY"}
           projectCloudState={projectCloud?.state ?? null}
-          canOpenProject={openableProject}
+          canOpenProject={canInspectNativeProject && openableProject}
           onOpenProject={() => onOpenProject(beat)}
           onUpdateProject={() => onUpdateProject(beat)}
           onCloudFiles={() => onCloudFiles(beat)}
           offlineAvailable={Boolean(beat.offline_available)}
           networkOnline={networkOnline}
           offlineBusy={offlineBusy}
+          canUseOfflinePackage={canUseOfflinePackage}
+          canUseLocalHelper={canUseLocalHelper}
           uploadFailed={cloudUploadError}
           onRetryUpload={() => onRetryUpload(beat)}
           onToggleOffline={() => onToggleOffline(beat)}

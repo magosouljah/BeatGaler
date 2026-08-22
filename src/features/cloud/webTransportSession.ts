@@ -221,3 +221,12 @@ export async function ensureWebTransportTopic(beatId: string, beatName: string):
   }
   return threadId;
 }
+
+/** Records only the tiny authoritative INDEX pointer; document bytes stay on the direct data plane. */
+export async function commitWebTransportIndexPointer(input: {
+  messageId: number;
+  sourceId: string;
+  beatCount: number;
+}): Promise<void> {
+  await transportRequest("/transport/index/commit", input);
+}

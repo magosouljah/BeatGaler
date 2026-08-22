@@ -39,6 +39,7 @@ export interface PlatformPresetTrashItem {
 }
 
 export interface PlatformTrashPort {
+  moveBeats(ids: string[]): Promise<string[]>;
   listBeats(): Promise<PlatformTrashItem[]>;
   restoreBeat(id: string): Promise<Beat>;
   purgeBeats(): Promise<number>;
@@ -85,6 +86,8 @@ export interface PlatformStartupPort {
 
 export interface PlatformMediaPort {
   resolveUrl(source: string): string;
+  preparePlayback(beat: Beat): Promise<{ url: string; completed: Promise<void> }>;
+  releasePlayback(beatId: string | null): void;
 }
 
 export interface PlatformEventPort {
@@ -108,6 +111,10 @@ export interface PlatformCloudUploadProgress {
   totalBytes: number;
 }
 
+export interface PlatformCloudCommitProgress extends PlatformCloudUploadProgress {
+  stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library";
+}
+
 export interface PlatformCloudUploadResult {
   telegram_file_id: string;
   telegram_message_id: number;
@@ -129,9 +136,49 @@ export interface PlatformCloudDataPort {
     filename: string;
     beatId: string;
     beatName: string;
-    kind: "MASTER" | "WAV" | "LOOP" | "PROJECT" | "STEMS" | "OTHER";
+    kind: "MASTER" | "WAV" | "LOOP" | "PROJECT" | "STEMS" | "ARTWORK" | "OTHER";
   }, onProgress?: (progress: PlatformCloudUploadProgress) => void): Promise<PlatformCloudUploadResult>;
+  commitImportedBeat(
+    beat: Beat,
+    onProgress?: (progress: PlatformCloudCommitProgress) => void,
+  ): Promise<Beat>;
   disconnect(): Promise<void>;
+}
+
+export type PlatformDownloadKind = "MP3" | "WAV" | "ARTWORK" | "PROJECT" | "ALL";
+
+export interface PlatformDownloadProgress {
+  downloadedBytes: number;
+  totalBytes: number;
+  currentKind: Exclude<PlatformDownloadKind, "ALL">;
+}
+
+export interface PlatformDownloadTask {
+  id: string;
+  completed: Promise<{ cancelled: boolean }>;
+  cancel(): void;
+}
+
+export interface PlatformDownloadsPort {
+  start(
+    beat: Beat,
+    kind: PlatformDownloadKind,
+    onProgress?: (progress: PlatformDownloadProgress) => void,
+  ): PlatformDownloadTask;
+  cancelAll(): void;
+}
+
+export type PlatformBeatEditSlotKind = "MASTER" | "WAV" | "PROJECT";
+export type PlatformBeatEditFiles = Partial<Record<PlatformBeatEditSlotKind, File>>;
+
+export interface PlatformBeatEditorPort {
+  pickFile(kind: PlatformBeatEditSlotKind): Promise<File | null>;
+  commit(
+    original: Beat,
+    updated: Beat,
+    files: PlatformBeatEditFiles,
+    onProgress?: (progress: PlatformCloudCommitProgress) => void,
+  ): Promise<Beat>;
 }
 
 export interface PlatformAccountPort {
@@ -148,10 +195,15 @@ export interface PlatformImportCandidate {
   hydrated: Promise<Beat>;
 }
 
+export type PlatformImportSlotKind = "MASTER" | "WAV" | "PROJECT";
+export type PlatformImportSlotFiles = Partial<Record<PlatformImportSlotKind, File>>;
+
 export interface PlatformImportPort {
   pickBeat(): Promise<PlatformImportCandidate | null>;
   fromFile(file: File): PlatformImportCandidate;
   fileForBeat(beatId: string): File | null;
+  slotFilesForBeat(beatId: string): PlatformImportSlotFiles;
+  pickSlotFile(beatId: string, kind: PlatformImportSlotKind): Promise<File | null>;
   releaseBeat(beatId: string): void;
 }
 
@@ -172,6 +224,8 @@ export interface PlatformAdapter {
   account: PlatformAccountPort;
   cloud: PlatformCloudPort;
   cloudData: PlatformCloudDataPort;
+  downloads: PlatformDownloadsPort;
+  editor: PlatformBeatEditorPort;
   cloudAuth: PlatformCloudAuthPort;
   diagnostics: PlatformDiagnosticsPort;
   importer: PlatformImportPort;

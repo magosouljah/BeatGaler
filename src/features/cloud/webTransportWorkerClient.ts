@@ -1,7 +1,16 @@
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
 import type {
+  WebTransportDownloadInput,
+  WebTransportDownloadResult,
+  WebTransportDeleteMessagesInput,
+  WebTransportDeleteMessagesResult,
+  WebTransportLibraryIndexResult,
+  WebTransportReplaceIndexInput,
+  WebTransportReplaceIndexResult,
   WebTransportProgress,
+  WebTransportStreamInput,
+  WebTransportStreamResult,
   WebTransportUploadInput,
   WebTransportUploadResult,
   WebTransportWorkerCommand,
@@ -13,7 +22,13 @@ type PendingRequest = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   onProgress?: (progress: WebTransportProgress) => void;
+  onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
 };
+
+export interface WebTransportStreamHandle {
+  completed: Promise<WebTransportStreamResult>;
+  cancel(): void;
+}
 
 export class WebTransportWorkerClient implements WebTransportRuntime {
   private worker: Worker | null = null;
@@ -36,7 +51,16 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
     if ("event" in message) {
-      pending.onProgress?.(message.progress);
+      if (message.event === "progress") pending.onProgress?.(message.progress);
+      else {
+        void Promise.resolve(pending.onChunk?.(message.chunk, message.downloadedBytes, message.totalBytes))
+          .then(() => this.sendStreamControl("stream_ack", message.requestId))
+          .catch(error => {
+            this.pending.delete(message.requestId);
+            this.sendStreamControl("cancel", message.requestId);
+            pending.reject(error instanceof Error ? error : new Error(String(error)));
+          });
+      }
       return;
     }
     this.pending.delete(message.requestId);
@@ -52,10 +76,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private request<T>(
     command: WebTransportWorkerRequest,
     onProgress?: (progress: WebTransportProgress) => void,
+    onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
+    requestId = crypto.randomUUID(),
   ): Promise<T> {
-    const requestId = crypto.randomUUID();
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(requestId, { resolve: value => resolve(value as T), reject, onProgress });
+      this.pending.set(requestId, { resolve: value => resolve(value as T), reject, onProgress, onChunk });
       this.ensureWorker().postMessage({ ...command, requestId } as WebTransportWorkerCommand);
     });
   }
@@ -78,6 +103,41 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   async verifyReady(): Promise<void> {
     await this.request({ op: "verify" });
+  }
+
+  getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+    return this.request<WebTransportLibraryIndexResult>({ op: "get_index" });
+  }
+
+  replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promise<WebTransportReplaceIndexResult> {
+    return this.request<WebTransportReplaceIndexResult>({ op: "replace_index", input });
+  }
+
+  deleteMessages(input: WebTransportDeleteMessagesInput): Promise<WebTransportDeleteMessagesResult> {
+    return this.request<WebTransportDeleteMessagesResult>({ op: "delete_messages", input });
+  }
+
+  download(input: WebTransportDownloadInput): Promise<WebTransportDownloadResult> {
+    return this.request<WebTransportDownloadResult>({ op: "download", input });
+  }
+
+  stream(
+    input: WebTransportStreamInput,
+    onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
+  ): WebTransportStreamHandle {
+    const requestId = crypto.randomUUID();
+    return {
+      completed: this.request<WebTransportStreamResult>({ op: "stream", input }, undefined, onChunk, requestId),
+      cancel: () => this.sendStreamControl("cancel", requestId),
+    };
+  }
+
+  private sendStreamControl(op: "stream_ack" | "cancel", targetRequestId: string): void {
+    this.ensureWorker().postMessage({
+      requestId: crypto.randomUUID(),
+      op,
+      targetRequestId,
+    } as WebTransportWorkerCommand);
   }
 
   upload(input: WebTransportUploadInput, onProgress?: (progress: WebTransportProgress) => void): Promise<WebTransportUploadResult> {
