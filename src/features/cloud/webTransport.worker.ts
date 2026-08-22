@@ -1,4 +1,5 @@
-import { InputMedia, MemoryStorage, TelegramClient, type FileDownloadLocation } from "@mtcute/web";
+import { InputMedia, MemoryStorage, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
+import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import {
   WEB_DIRECT_MAX_FILE_BYTES,
   type WebTransportDownloadInput,
@@ -22,7 +23,7 @@ type WorkerScope = {
 
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
-let chatId = "";
+let chatId = 0;
 let vaultVerified = false;
 const activeStreams = new Map<string, {
   controller: AbortController;
@@ -47,7 +48,7 @@ async function closeClient(): Promise<void> {
   const current = client;
   client = null;
   vaultVerified = false;
-  chatId = "";
+  chatId = 0;
   if (current) await current.destroy().catch(() => {});
 }
 
@@ -62,6 +63,11 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     apiId: telegram_api_id,
     apiHash: telegram_api_hash,
     storage: new MemoryStorage(),
+    // @mtcute's automatic import.meta.url lookup points at Vite's optimized
+    // dependency directory during development, where the WASM file does not
+    // exist and the SPA HTML fallback is returned. Supplying Vite's emitted
+    // asset URL explicitly works in both dev and production builds.
+    crypto: new WebCryptoProvider({ wasmInput: mtcuteWasmUrl }),
     disableUpdates: true,
   });
   try {
@@ -71,8 +77,16 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     await next.destroy().catch(() => {});
     throw error;
   }
+  const numericChatId = Number(chat_id);
+  if (!Number.isSafeInteger(numericChatId) || numericChatId === 0) {
+    await next.destroy().catch(() => {});
+    throw new Error("Galer Cloud returned an invalid vault identifier.");
+  }
   client = next;
-  chatId = chat_id;
+  // MTcute treats strings as Telegram usernames. Vault ids arrive from the
+  // control plane as JSON strings, so retain the exact safe integer value but
+  // pass it to every MTProto API as a number.
+  chatId = numericChatId;
 }
 
 async function verifyReady(): Promise<void> {

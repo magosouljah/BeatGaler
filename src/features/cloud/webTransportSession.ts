@@ -115,11 +115,20 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
   const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
+    // Every control-plane route authorizes the signed-in account against its
+    // installation identity. Desktop supplies this field through its native
+    // session bridge; Web must attach the browser client id to every request.
+    // Without it, /transport/session/start fails before Telegram is contacted
+    // and the UI incorrectly degrades to "Poor connection".
+    body: JSON.stringify(webTransportRequestBody(body)),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error || `Galer Cloud HTTP ${response.status}`);
   return payload as T;
+}
+
+export function webTransportRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  return { ...body, beatgalerUserId: platform.clientId };
 }
 
 async function unwrapSession(response: SessionEnvelopeResponse): Promise<WebTransportSession> {
