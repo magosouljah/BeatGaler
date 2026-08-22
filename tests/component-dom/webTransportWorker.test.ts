@@ -7,6 +7,7 @@ const transport = vi.hoisted(() => {
   const audioMedia = { type: "audio", mimeType: "audio/mpeg", fileSize: 5 };
   const projectMedia = { type: "document", mimeType: "application/zip", fileSize: 5 };
   let pinnedId = 501;
+  let missingPinnedReads = 0;
   let clientOptions: any = null;
   const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
     options.progressCallback?.(2, 5);
@@ -20,7 +21,13 @@ const transport = vi.hoisted(() => {
     start = vi.fn(async () => ({}));
     getMe = vi.fn(async () => ({}));
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
-    getFullChat = vi.fn(async () => ({ pinnedMsgId: pinnedId }));
+    getFullChat = vi.fn(async () => {
+      if (missingPinnedReads > 0) {
+        missingPinnedReads -= 1;
+        return { pinnedMsgId: 0 };
+      }
+      return { pinnedMsgId: pinnedId };
+    });
     getMessages = vi.fn(async (_vault: unknown, ids: number[]) => ids.map(id => id === 501
       ? { id, text: "BEATGALER_LIBRARY_INDEX_V1", media: indexMedia }
       : id === 601
@@ -51,7 +58,8 @@ const transport = vi.hoisted(() => {
     sendMedia,
     pinMessage,
     deleteMessagesById,
-    resetPinned: () => { pinnedId = 501; },
+    resetPinned: () => { pinnedId = 501; missingPinnedReads = 0; },
+    delayPinnedReads: (count: number) => { missingPinnedReads = Math.max(0, count); },
     TelegramClient,
     WebCryptoProvider: class {
       constructor(public readonly options: unknown) {}
@@ -102,12 +110,12 @@ afterAll(() => {
   vi.unstubAllGlobals();
 });
 
-async function send(data: any): Promise<any[]> {
+async function send(data: any, timeout = 1000): Promise<any[]> {
   const start = posted.length;
   (globalThis.onmessage as any)?.({ data });
   await vi.waitFor(() => {
     expect(posted.slice(start).some(message => message.requestId === data.requestId && "ok" in message)).toBe(true);
-  });
+  }, { timeout });
   return posted.slice(start);
 }
 
@@ -168,6 +176,25 @@ describe("Galer Cloud single-file Web Worker", () => {
         beats: [{ id: "beat-from-index", name: "Cloud Beat" }],
       },
     });
+  });
+
+  it("waits for a new phone session to receive the pinned library index", async () => {
+    transport.delayPinnedReads(2);
+    const messages = await send({ requestId: "get-index-after-propagation", op: "get_index" });
+    const completed = messages.find(message => message.ok === true);
+
+    expect(completed.result).toMatchObject({
+      messageId: 501,
+      manifest: { beats: [{ id: "beat-from-index", name: "Cloud Beat" }] },
+    });
+  });
+
+  it("never turns a missing pinned index into an authoritative empty gallery", async () => {
+    transport.delayPinnedReads(10);
+    const messages = await send({ requestId: "get-index-still-missing", op: "get_index" }, 2500);
+
+    expect(messages.find(message => message.ok === true)).toBeUndefined();
+    expect(messages.find(message => message.ok === false)?.error).toContain("still synchronizing");
   });
 
   it("pins one complete replacement index before deleting the previous index", async () => {

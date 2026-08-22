@@ -1,6 +1,34 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { platform } from "../platform";
 
+let silentGestureUrl: string | null = null;
+
+function getSilentGestureUrl(): string {
+  if (silentGestureUrl) return silentGestureUrl;
+  const sampleCount = 800;
+  const bytes = new Uint8Array(44 + sampleCount);
+  const view = new DataView(bytes.buffer);
+  const write = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) bytes[offset + index] = value.charCodeAt(index);
+  };
+  write(0, "RIFF");
+  view.setUint32(4, 36 + sampleCount, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 8000, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  write(36, "data");
+  view.setUint32(40, sampleCount, true);
+  bytes.fill(128, 44);
+  silentGestureUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+  return silentGestureUrl;
+}
+
 export interface AudioState {
   playingId: string | null;
   isPlaying: boolean;
@@ -156,6 +184,30 @@ export function useAudio() {
     });
   }, [getAudio]);
 
+  // iOS Safari requires play() to be called in the synchronous user-gesture
+  // stack. Cloud playback must first lease a transport and download/stream the
+  // MASTER, so arm the same HTMLAudioElement with a muted local sample at click
+  // time and reuse that authorized element once the real source is ready.
+  const armPlaybackGesture = useCallback((): Promise<boolean> => {
+    const audio = getAudio();
+    const silentUrl = getSilentGestureUrl();
+    primingRef.current = true;
+    audio.pause();
+    audio.preload = "auto";
+    audio.loop = true;
+    audio.muted = true;
+    audio.src = silentUrl;
+    audio.currentTime = 0;
+    audio.load();
+    const attempt = audio.play();
+    return Promise.resolve(attempt).then(() => true, () => false).finally(() => {
+      if (audio.src === silentUrl) audio.pause();
+      audio.loop = false;
+      audio.muted = false;
+      primingRef.current = false;
+    });
+  }, [getAudio]);
+
   const play = useCallback((beatId: string, paths: string[]) => {
     const audio = getAudio();
     if (state.playingId === beatId) {
@@ -173,6 +225,7 @@ export function useAudio() {
     errorNotifiedRef.current = false;
     primingRef.current = false;
     audio.muted = false;
+    audio.loop = false;
     sourceUrlsRef.current = sources;
     sourceIndexRef.current = 0;
     const canReusePrimedSource = audio.src === sources[0] && audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
@@ -225,5 +278,5 @@ export function useAudio() {
     setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
   }, [getAudio]);
 
-  return { state, play, primeAudioEngine, togglePause, seek, setVolume, releaseFile };
+  return { state, play, primeAudioEngine, armPlaybackGesture, togglePause, seek, setVolume, releaseFile };
 }

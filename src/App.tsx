@@ -986,7 +986,7 @@ function BeatGalerApp() {
   const [queueIds, setQueueIds] = useState<string[]>([]);
   const lastHandledEndedSeqRef = useRef(0);
 
-  const { state: audio, play, primeAudioEngine, togglePause, seek, setVolume, releaseFile } = useAudio();
+  const { state: audio, play, primeAudioEngine, armPlaybackGesture, togglePause, seek, setVolume, releaseFile } = useAudio();
 
   // Keep a ref to togglePause so the keydown handler never goes stale
   const togglePauseRef = useRef(togglePause);
@@ -1885,7 +1885,11 @@ function BeatGalerApp() {
     // URL. Credentials and provider locators never become part of audio.src.
     if (platform.capabilities.authorizedCloudPlayback && beat.telegram_file_id) {
       try {
-        const prepared = await platform.media.preparePlayback(beat);
+        const gestureReady = startingPlaybackSession ? armPlaybackGesture() : Promise.resolve(true);
+        const [prepared] = await Promise.all([
+          platform.media.preparePlayback(beat),
+          gestureReady,
+        ]);
         if (playbackRequestRun !== playbackRequestRunRef.current) {
           platform.media.releasePlayback(beat.id);
           return;
@@ -1967,7 +1971,7 @@ function BeatGalerApp() {
         danger: true,
       });
     }
-  }, [audio.playingId, play, transitionRuntime]);
+  }, [audio.playingId, armPlaybackGesture, play, transitionRuntime]);
 
   const handleUpload = useCallback((beat: Beat) => {
     if (!platform.capabilities.localHelper) return;

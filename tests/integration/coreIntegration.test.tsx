@@ -184,6 +184,9 @@ class FakeAudio extends EventTarget {
   currentTime = 0;
   duration = 120;
   volume = 0.75;
+  muted = false;
+  loop = false;
+  preload = "";
   paused = true;
   playCalls = 0;
   pauseCalls = 0;
@@ -268,6 +271,26 @@ afterEach(async () => {
 });
 
 describe("useAudio ↔ platform integration", () => {
+  it("arms the shared audio element synchronously for delayed Safari cloud playback", async () => {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:beatgaler-silent-gesture"),
+    });
+    const mounted = await mountAudioHook();
+    audioRoot = mounted.root;
+
+    let armed = false;
+    await act(async () => {
+      armed = await mounted.hook.armPlaybackGesture();
+    });
+
+    expect(armed).toBe(true);
+    expect(mounted.audio.src).toBe("blob:beatgaler-silent-gesture");
+    expect(mounted.audio.playCalls).toBe(1);
+    expect(mounted.audio.muted).toBe(false);
+    expect(mounted.audio.loop).toBe(false);
+  });
+
   it("converts file paths and falls back to the next source after a browser audio error", async () => {
     const mounted = await mountAudioHook();
     audioRoot = mounted.root;
