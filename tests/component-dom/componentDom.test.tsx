@@ -264,6 +264,9 @@ describe("BeatCard real DOM", () => {
       dragEnabled: false,
       networkOnline: true,
       offlineBusy: false,
+      canUseOfflinePackage: true,
+      canUseLocalHelper: true,
+      canInspectNativeProject: true,
       onToggleOffline: () => undefined,
       onRetryUpload: () => undefined,
     };
@@ -291,6 +294,25 @@ describe("BeatCard real DOM", () => {
     expect(artwork?.getAttribute("aria-disabled")).toBe("true");
     await click(artwork!);
     expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("hides Desktop-only actions when Web capabilities are disabled", async () => {
+    const beat = makeBeat({ cloud_status: "ERROR", offline_available: false, telegram_file_id: "cloud-1" });
+    await render(<BeatCard {...cardProps(beat, vi.fn())}
+      openableProject
+      canUseOfflinePackage={false}
+      canUseLocalHelper={false}
+      canInspectNativeProject={false}
+    />);
+
+    const card = document.querySelector('[data-beat-card-id="beat-1"]');
+    await act(async () => {
+      card?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 20, clientY: 20 }));
+    });
+
+    expect(document.body.textContent).not.toContain("Upload to YouTube");
+    expect(document.body.textContent).not.toContain("Make available offline");
+    expect(document.body.textContent).not.toContain("Open project");
   });
 });
 

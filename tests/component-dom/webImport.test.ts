@@ -32,6 +32,7 @@ describe("BeatGaler Web single-beat import", () => {
     expect(candidate.beat.playback_path).toBe("blob:beat-preview");
     expect(candidate.beat.cloud_status).toBe("PENDING_UPLOAD");
     expect(webImportPort.fileForBeat(candidate.beat.id)).toBe(file);
+    expect(webImportPort.slotFilesForBeat(candidate.beat.id)).toEqual({ MASTER: file });
 
     const hydrated = await candidate.hydrated;
     expect(hydrated.bpm).toBe("140");
@@ -41,6 +42,15 @@ describe("BeatGaler Web single-beat import", () => {
     webImportPort.releaseBeat(candidate.beat.id);
     expect(webImportPort.fileForBeat(candidate.beat.id)).toBeNull();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:beat-preview");
+  });
+
+  it("keeps an initial WAV in its HQ slot and requires a separate MASTER selection", () => {
+    const file = new File(["hq"], "Night Drive.wav", { type: "audio/wav" });
+    const candidate = createWebImportCandidate(file);
+
+    expect(webImportPort.slotFilesForBeat(candidate.beat.id)).toEqual({ WAV: file });
+    expect(webImportPort.slotFilesForBeat(candidate.beat.id).MASTER).toBeUndefined();
+    webImportPort.releaseBeat(candidate.beat.id);
   });
 
   it("rejects non-audio files before Review", () => {

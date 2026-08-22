@@ -121,7 +121,11 @@ export default function SettingsPanel(props: Props) {
     getBeatGalerPlanCatalog().then(setPlanCatalog).catch(console.error);
     if (platform.capabilities.trashLifecycle) {
       platform.trash.listBeats().then(setTrashItems).catch(console.error).finally(() => setLoadingTrash(false));
-      platform.trash.listPresets().then(setPresetTrashItems).catch(console.error).finally(() => setLoadingPresetTrash(false));
+      if (platform.capabilities.localHelper) {
+        platform.trash.listPresets().then(setPresetTrashItems).catch(console.error).finally(() => setLoadingPresetTrash(false));
+      } else {
+        setLoadingPresetTrash(false);
+      }
     } else {
       setLoadingTrash(false);
       setLoadingPresetTrash(false);
@@ -426,7 +430,37 @@ export default function SettingsPanel(props: Props) {
 
         {active === "preferences" && <>{title("Preferences", "Control how BeatGaler behaves on this device.")}{card(<><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Incomplete file warnings</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Warn when Samples or a project file is missing.</div></div>{switchButton(showIncompleteWarnings, toggleIncomplete)}</div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0 8px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Custom cursor</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Use the BeatGaler custom pointer.</div></div>{switchButton(customCursorEnabled, toggleCursor)}</div>{platform.capabilities.playbackCache && <div style={{ padding: "14px 0 4px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Playback cache</div><div style={{ fontSize: 10, color: "#555", marginTop: 3, maxWidth: 380 }}>Keeps recently played MASTER MP3s on this device so repeat playback starts instantly. BeatGaler removes older cached audio automatically when the limit is reached.</div></div><select disabled={cacheBusy || !cacheStatus} value={[0,500,1024,2048,5120,10240].includes(cacheStatus?.limit_mb ?? -1) ? String(cacheStatus?.limit_mb ?? 2048) : "custom"} onChange={(e) => { if (e.target.value !== "custom") void updateCacheLimit(Number(e.target.value)); }} style={{ background: "#151515", color: "#bbb", border: "1px solid #2a2a2a", borderRadius: 7, padding: "7px 9px", minWidth: 110 }}><option value="0">Off</option><option value="500">500 MB</option><option value="1024">1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option><option value="10240">10 GB</option><option value="custom">Custom…</option></select></div><div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}><span style={{ fontSize: 10, color: "#666" }}>Used: {cacheStatus ? formatBytes(cacheStatus.used_bytes) : "…"}{cacheStatus && cacheStatus.limit_mb > 0 ? ` of ${cacheStatus.limit_mb >= 1024 ? `${(cacheStatus.limit_mb / 1024).toFixed(cacheStatus.limit_mb % 1024 === 0 ? 0 : 1)} GB` : `${cacheStatus.limit_mb} MB`}` : ""}</span><input type="number" min={0} max={51200} step={100} value={customCacheMb} onChange={(e) => setCustomCacheMb(e.target.value)} style={{ width: 90, background: "#111", color: "#aaa", border: "1px solid #272727", borderRadius: 6, padding: "6px 7px", fontSize: 10 }} /><span style={{ fontSize: 10, color: "#555" }}>MB</span><button disabled={cacheBusy || !customCacheMb} onClick={() => void updateCacheLimit(Number(customCacheMb))} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Set</button><button disabled={cacheBusy || !cacheStatus || cacheStatus.used_bytes === 0} onClick={() => void clearCache()} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Clear cache</button></div></div>}</>)}</>}
 
-        {active === "trash" && platform.capabilities.trashLifecycle && <>{title("Trash", "Restore deleted beats and presets or remove them permanently.")}{card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Beats</div>{loadingTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : trashItems.length === 0 ? <div style={{ color: "#444", fontSize: 11 }}>Trash is empty</div> : <>{trashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}><span style={{ color: "#aaa", fontSize: 11 }}>{item.beat_name || "Untitled beat"}</span><button disabled={restoringIds.has(item.id)} onClick={() => restore(item)} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>{restoringIds.has(item.id) ? "Restoring…" : "Restore"}</button></div>)}<button disabled={purging || !props.networkOnline} title={!props.networkOnline ? "Internet connection required" : undefined} onClick={() => void emptyTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777", opacity: props.networkOnline ? 1 : 0.45, cursor: props.networkOnline ? "pointer" : "default" }}>{purging ? "Emptying…" : "Empty beat trash"}</button></>}{trashMessage && <div style={{ marginTop: 8, color: "#777", fontSize: 10 }}>{trashMessage}</div>}{trashError && <div style={{ marginTop: 8, color: "#c77777", fontSize: 10 }}>{sanitizeUserVisibleText(trashError)}</div>}</>)}{card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Presets</div>{loadingPresetTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : presetTrashItems.length === 0 ? <div style={{ color: "#444", fontSize: 11 }}>Preset trash is empty</div> : <>{presetTrashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}><span style={{ color: "#aaa", fontSize: 11 }}>{item.preset_name}</span><button disabled={restoringPresetId === item.id} onClick={async () => { setRestoringPresetId(item.id); try { await platform.trash.restorePreset(item.id); setPresetTrashItems(x => x.filter(y => y.id !== item.id)); } finally { setRestoringPresetId(null); } }} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Restore</button></div>)}<button disabled={purgingPresets} onClick={() => void emptyPresetTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777" }}>{purgingPresets ? "Emptying…" : "Empty preset trash"}</button></>}</>)}</>}
+        {active === "trash" && platform.capabilities.trashLifecycle && <>
+          {title("Trash", platform.capabilities.localHelper
+            ? "Restore deleted beats and presets or remove them permanently."
+            : "Restore deleted beats or remove them permanently.")}
+          {card(<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Beats</div>
+            {loadingTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : trashItems.length === 0
+              ? <div style={{ color: "#444", fontSize: 11 }}>Trash is empty</div>
+              : <>
+                {trashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}>
+                  <span style={{ color: "#aaa", fontSize: 11 }}>{item.beat_name || "Untitled beat"}</span>
+                  <button disabled={restoringIds.has(item.id)} onClick={() => restore(item)} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>{restoringIds.has(item.id) ? "Restoring…" : "Restore"}</button>
+                </div>)}
+                <button disabled={purging || !props.networkOnline} title={!props.networkOnline ? "Internet connection required" : undefined} onClick={() => void emptyTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777", opacity: props.networkOnline ? 1 : 0.45, cursor: props.networkOnline ? "pointer" : "default" }}>{purging ? "Emptying…" : "Empty beat trash"}</button>
+              </>}
+            {trashMessage && <div style={{ marginTop: 8, color: "#777", fontSize: 10 }}>{trashMessage}</div>}
+            {trashError && <div style={{ marginTop: 8, color: "#c77777", fontSize: 10 }}>{sanitizeUserVisibleText(trashError)}</div>}
+          </>)}
+          {platform.capabilities.localHelper && card(<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Presets</div>
+            {loadingPresetTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : presetTrashItems.length === 0
+              ? <div style={{ color: "#444", fontSize: 11 }}>Preset trash is empty</div>
+              : <>
+                {presetTrashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}>
+                  <span style={{ color: "#aaa", fontSize: 11 }}>{item.preset_name}</span>
+                  <button disabled={restoringPresetId === item.id} onClick={async () => { setRestoringPresetId(item.id); try { await platform.trash.restorePreset(item.id); setPresetTrashItems(x => x.filter(y => y.id !== item.id)); } finally { setRestoringPresetId(null); } }} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Restore</button>
+                </div>)}
+                <button disabled={purgingPresets} onClick={() => void emptyPresetTrash()} style={{ ...buttonStyle, marginTop: 10, color: "#c77777" }}>{purgingPresets ? "Emptying…" : "Empty preset trash"}</button>
+              </>}
+          </>)}
+        </>}
 
         {active === "privacy" && <>
           {title("Beat Galer Privacy Policy", `Last updated: ${LEGAL_UPDATED}`)}

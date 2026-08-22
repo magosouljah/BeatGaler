@@ -222,7 +222,11 @@ async function mountAudioHook() {
   vi.resetModules();
   vi.doMock("../../src/platform", () => ({
     platform: {
-      media: { resolveUrl: (path: string) => `asset://${path.replace(/\\/g, "/")}` },
+      media: {
+        resolveUrl: (path: string) => `asset://${path.replace(/\\/g, "/")}`,
+        preparePlayback: async (beat: Beat) => ({ url: beat.playback_path, completed: Promise.resolve() }),
+        releasePlayback: () => undefined,
+      },
       diagnostics: { audioEvent: vi.fn(async () => undefined) },
     },
   }));

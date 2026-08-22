@@ -23,6 +23,22 @@ vi.mock("../../src/components/AccountGate", () => ({
   oauthBeatGalerAccount: vi.fn(),
 }));
 
+vi.mock("../../src/features/cloud/webGalerCloudTransport", () => ({
+  WebGalerCloudTransport: class {
+    getLibraryIndex = vi.fn(async () => ({
+      messageId: null,
+      manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [] },
+    }));
+    downloadFiles = vi.fn(async () => []);
+    listTrashItems = vi.fn(async () => []);
+    moveBeatsToTrash = vi.fn(async () => []);
+    restoreBeatFromTrash = vi.fn();
+    purgeTrash = vi.fn(async () => 0);
+    upload = vi.fn();
+    disconnect = vi.fn(async () => undefined);
+  },
+}));
+
 import SettingsPanel from "../../src/components/SettingsPanel";
 import { webAdapter } from "../../src/platform/webAdapter";
 
@@ -74,7 +90,7 @@ describe("BeatGaler Web platform shell", () => {
     });
 
     expect(host.textContent).toContain("Account");
-    expect(host.textContent).not.toContain("Trash");
+    expect(host.textContent).toContain("trash");
     expect(host.textContent).not.toContain("Tools (Dev)");
 
     const preferences = Array.from(host.querySelectorAll("button"))
@@ -85,6 +101,13 @@ describe("BeatGaler Web platform shell", () => {
     expect(host.textContent).toContain("Incomplete file warnings");
     expect(host.textContent).toContain("Custom cursor");
     expect(host.textContent).not.toContain("Playback cache");
+
+    const trash = Array.from(host.querySelectorAll("button"))
+      .find(button => button.textContent?.trim().toLowerCase() === "trash");
+    expect(trash).toBeTruthy();
+    await act(async () => trash?.click());
+    expect(host.textContent).toContain("Trash is empty");
+    expect(host.textContent).not.toContain("Presets");
 
     await act(async () => root.unmount());
     host.remove();

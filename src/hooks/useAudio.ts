@@ -70,10 +70,12 @@ export function useAudio() {
       if (primingRef.current) return;
       const nextIndex = sourceIndexRef.current + 1;
       if (nextIndex >= sourceUrlsRef.current.length) {
+        const failedBeatId = currentBeatIdRef.current;
         console.error("Audio playback failed for all available sources.", sourceUrlsRef.current);
         audio.pause();
         audio.removeAttribute("src");
         audio.load();
+        platform.media.releasePlayback(failedBeatId);
         sourceUrlsRef.current = [];
         sourceIndexRef.current = 0;
         setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
@@ -165,6 +167,7 @@ export function useAudio() {
       console.error("No audio sources available for beat", beatId);
       return;
     }
+    const previousBeatId = currentBeatIdRef.current;
     audio.pause();
     currentBeatIdRef.current = beatId;
     errorNotifiedRef.current = false;
@@ -181,6 +184,7 @@ export function useAudio() {
       audio.currentTime = 0;
       void platform.diagnostics.audioEvent("AUDIO_PRIMED_SOURCE_REUSED", beatId, null, `readyState=${audio.readyState}`).catch(() => {});
     }
+    if (previousBeatId && previousBeatId !== beatId) platform.media.releasePlayback(previousBeatId);
     void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {});
     setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
     audio.play().catch(console.error);
@@ -209,6 +213,7 @@ export function useAudio() {
   /** Fully releases the file handle — MUST call before renaming on Windows */
   const releaseFile = useCallback(() => {
     const audio = getAudio();
+    const releasedBeatId = currentBeatIdRef.current;
     audio.pause();
     audio.removeAttribute("src");
     audio.load(); // this forces the browser to release the file handle
@@ -216,6 +221,7 @@ export function useAudio() {
     sourceIndexRef.current = 0;
     currentBeatIdRef.current = null;
     errorNotifiedRef.current = false;
+    platform.media.releasePlayback(releasedBeatId);
     setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
   }, [getAudio]);
 

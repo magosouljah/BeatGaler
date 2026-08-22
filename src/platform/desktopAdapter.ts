@@ -37,6 +37,15 @@ export const desktopAdapter: PlatformAdapter = {
     },
   },
   trash: {
+    async moveBeats(ids) {
+      const { removeBeatFromLibrary } = await import("../lib/tauri");
+      const moved: string[] = [];
+      for (const id of ids) {
+        await removeBeatFromLibrary(id);
+        moved.push(id);
+      }
+      return moved;
+    },
     async listBeats() { const { listTrash } = await import("../lib/tauri"); return listTrash(); },
     async restoreBeat(id) { const { restoreBeatFromTrash } = await import("../lib/tauri"); return restoreBeatFromTrash(id); },
     async purgeBeats() { const { purgeTrashNow } = await import("../lib/tauri"); return purgeTrashNow(); },
@@ -61,6 +70,10 @@ export const desktopAdapter: PlatformAdapter = {
   },
   media: {
     resolveUrl: filePathToUrl,
+    async preparePlayback(beat) {
+      return { url: filePathToUrl(beat.playback_path), completed: Promise.resolve() };
+    },
+    releasePlayback() {},
   },
   events: {
     async listen<T>(event: string, handler: PlatformEventHandler<T>): Promise<PlatformUnlisten> {
@@ -97,7 +110,18 @@ export const desktopAdapter: PlatformAdapter = {
     async upload() {
       throw new Error("Browser File upload is not available in BeatGaler Desktop.");
     },
+    async commitImportedBeat() {
+      throw new Error("Browser Review commit is not available in BeatGaler Desktop.");
+    },
     async disconnect() {},
+  },
+  downloads: {
+    start() { throw new Error("Browser downloads are not available in BeatGaler Desktop."); },
+    cancelAll() {},
+  },
+  editor: {
+    async pickFile() { throw new Error("Browser Cloud editing is not available in BeatGaler Desktop."); },
+    async commit() { throw new Error("Browser Cloud editing is not available in BeatGaler Desktop."); },
   },
   cloudAuth: {
     async syncSession(token, cloudApiBase) {
@@ -120,6 +144,8 @@ export const desktopAdapter: PlatformAdapter = {
     async pickBeat() { return null; },
     fromFile() { throw new Error("Browser File import is not available in BeatGaler Desktop."); },
     fileForBeat() { return null; },
+    slotFilesForBeat() { return {}; },
+    async pickSlotFile() { throw new Error("Browser File import is not available in BeatGaler Desktop."); },
     releaseBeat() {},
   },
 };

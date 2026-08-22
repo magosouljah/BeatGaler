@@ -1,3 +1,5 @@
+import type { BeatAssets } from "../domain/beat.js";
+
 export interface Beat {
   id: string;
   name: string;
@@ -34,6 +36,8 @@ export interface Beat {
   telegram_message_id?: number | null;
   /** Local-only durable pin. Stored outside the temporary playback cache. */
   offline_available?: boolean;
+  /** Platform-neutral Cloud slots. Web uses these instead of local paths. */
+  assets?: BeatAssets;
 }
 
 export interface SaveMetaPayload {

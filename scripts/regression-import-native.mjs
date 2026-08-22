@@ -18,7 +18,7 @@ if (!app.includes("await importDroppedPaths(payload.paths)")) fail("native libra
 if (!app.includes("startImportReviewStream(normalized)")) fail("native import no longer starts the incremental Review stream.");
 if (!app.includes("No\n      // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.")) fail("zero-copy native import invariant comment disappeared; review this path before release.");
 
-const fallbackGuard = app.indexOf("const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);");
+const fallbackGuard = app.indexOf("const windowsNativeDrop = platform.capabilities.nativeFilesystemDrop && isTauriAvailable && /Windows/i.test(navigator.userAgent);");
 const fallbackReturn = app.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
 const fallbackInstall = app.indexOf("return installHtmlDropController(", fallbackReturn);
 if (fallbackGuard < 0 || fallbackReturn < 0 || fallbackInstall < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");

@@ -18,6 +18,7 @@ import { useAudio } from "./hooks/useAudio";
 import { makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, removeBeatFromLibrary, reorderBeats, readBeatMeta, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, loadCloudArtworkForBeat, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
+import type { PlatformCloudCommitProgress } from "./platform/contracts";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import ReactDOM from "react-dom";
@@ -111,26 +112,30 @@ function isRuntimeConflictError(error: unknown): boolean {
   return message.includes("409") || message.includes("conflict") || message.includes("revision mismatch") || message.includes("version mismatch");
 }
 
-type BeatDownloadKind = "MP3" | "WAV" | "PROJECT" | "ALL";
+type BeatDownloadKind = "MP3" | "WAV" | "ARTWORK" | "PROJECT" | "ALL";
 type ConnectionState = "checking" | "online" | "poor" | "offline";
 
 function CloudFilesModal({
-  beat, files, busyId, downloadedIds, onDownload, onClose,
+  beat, files, busyId, downloadedIds, progress, canCancel, onDownload, onCancel, onClose,
 }: {
   beat: Beat;
   files: CloudFileRecord[];
   busyId: string | null;
   downloadedIds: Set<string>;
+  progress: number | null;
+  canCancel: boolean;
   onDownload: (kind: BeatDownloadKind) => void;
+  onCancel: () => void;
   onClose: () => void;
 }) {
   // Available Offline is a complete local package, not just a playback hint.
   // Prefer the durable local paths when present so the Download UI keeps
   // working on a cold start with no Telegram connection at all.
   const hasMp3 = Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
-  const hasWav = Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
-  const hasProject = Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
-  const availableCount = Number(hasMp3) + Number(hasWav) + Number(hasProject);
+  const hasWav = Boolean(beat.assets?.wav) || Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
+  const hasProject = Boolean(beat.assets?.project) || Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
+  const hasArtwork = platform.capabilities.browserCloudDownloads && Boolean(beat.assets?.artwork || beat.image_base64);
+  const availableCount = Number(hasMp3) + Number(hasWav) + Number(hasArtwork) + Number(hasProject);
 
   const option = (
     kind: BeatDownloadKind,
@@ -140,12 +145,12 @@ function CloudFilesModal({
   ) => {
     const busy = busyId === kind;
     const downloaded = downloadedIds.has(kind);
-    const disabled = !available || busyId !== null;
+    const disabled = !available || (busyId !== null && !(busy && canCancel));
     return (
       <button
         key={kind}
         disabled={disabled}
-        onClick={() => onDownload(kind)}
+        onClick={() => busy && canCancel ? onCancel() : onDownload(kind)}
         style={{
           width: "100%",
           display: "grid",
@@ -159,7 +164,7 @@ function CloudFilesModal({
           marginTop: 9,
           background: available ? "#181818" : "#141414",
           color: available ? "#f0f0f0" : "#555",
-          cursor: available && busyId === null ? "pointer" : "default",
+          cursor: !disabled ? "pointer" : "default",
           opacity: available ? 1 : .62,
           transition: "background 120ms ease, border-color 120ms ease, transform 120ms ease",
         }}
@@ -185,7 +190,11 @@ function CloudFilesModal({
           color: busy ? "#d7d7d7" : downloaded ? "#55d878" : available ? "#9b9b9b" : "#555",
           whiteSpace: "nowrap",
         }}>
-          {busy ? "Downloading..." : downloaded ? "Downloaded" : available ? "Download" : "Unavailable"}
+          {busy
+            ? canCancel
+              ? `${progress === null ? "Downloading" : `${progress}%`} · Cancel`
+              : "Downloading..."
+            : downloaded ? "Downloaded" : available ? "Download" : "Unavailable"}
         </div>
       </button>
     );
@@ -241,6 +250,7 @@ function CloudFilesModal({
         <div style={{ borderTop: "1px solid #202020", paddingTop: 2 }}>
           {option("MP3", "MP3", "Master audio", hasMp3)}
           {option("WAV", "WAV", "Original high-quality audio", hasWav)}
+          {option("ARTWORK", "Artwork", "Original cover image", hasArtwork)}
           {option("PROJECT", "Full Project", "Project archive with included audio and samples", hasProject)}
           {option("ALL", "Download Everything", `${availableCount} available ${availableCount === 1 ? "asset" : "assets"} in a new folder`, availableCount > 0)}
         </div>
@@ -481,7 +491,7 @@ function TagColorMenu({
   x, y, current, onSelect, onRename, onClose,
 }: {
   x: number; y: number; current: string | null;
-  onSelect: (hex: string | null) => void; onRename: () => void; onClose: () => void;
+  onSelect: (hex: string | null) => void; onRename?: () => void; onClose: () => void;
 }) {
   React.useEffect(() => {
     const onAnyClick = () => onClose();
@@ -518,10 +528,12 @@ function TagColorMenu({
         style={{ marginTop: 8, width: "100%", padding: "5px 0", background: "transparent", border: "1px solid #333", borderRadius: 6, color: "#999", fontSize: 11, cursor: "pointer" }}>
         Ninguno
       </button>
-      <button onClick={onRename}
-        style={{ marginTop: 6, width: "100%", padding: "6px 0", background: "#222", border: "1px solid #383838", borderRadius: 6, color: "#ddd", fontSize: 11, cursor: "pointer" }}>
-        Renombrar…
-      </button>
+      {onRename && (
+        <button onClick={onRename}
+          style={{ marginTop: 6, width: "100%", padding: "6px 0", background: "#222", border: "1px solid #383838", borderRadius: 6, color: "#ddd", fontSize: 11, cursor: "pointer" }}>
+          Renombrar…
+        </button>
+      )}
     </div>,
     document.body
   );
@@ -924,6 +936,7 @@ function BeatGalerApp() {
   const [cloudFilesBeat, setCloudFilesBeat] = useState<Beat | null>(null);
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudFilesBusyId, setCloudFilesBusyId] = useState<string | null>(null);
+  const [cloudFilesDownloadProgress, setCloudFilesDownloadProgress] = useState<number | null>(null);
   const [cloudFilesDownloadedIds, setCloudFilesDownloadedIds] = useState<Set<string>>(new Set());
   const [cloudFilesDownloadError, setCloudFilesDownloadError] = useState<string | null>(null);
   const [cloudDownloadNotice, setCloudDownloadNotice] = useState<{
@@ -933,6 +946,7 @@ function BeatGalerApp() {
     status: "downloading" | "completed";
   } | null>(null);
   const backgroundDownloadRuntimeOwnersRef = useRef<Set<string>>(new Set());
+  const browserDownloadTaskRef = useRef<ReturnType<typeof platform.downloads.start> | null>(null);
   const [projectUpdateNotice, setProjectUpdateNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!projectUpdateNotice) return;
@@ -998,6 +1012,20 @@ function BeatGalerApp() {
       // effect briefly expose every cached cloud card (and could resolve the
       // reveal pipeline while the Offline list was still empty).
       setCloudSessionVerified(false);
+      if (!platform.capabilities.offlinePackage) {
+        if (!cancelled) {
+          beatsLatestRef.current = [];
+          startupCookingResolvedRef.current = true;
+          startupPipelineStartedRef.current = false;
+          progressiveRevealRunRef.current += 1;
+          setRevealedBeatIds(new Set());
+          setStartupCookingGate(false);
+          setBeats([]);
+          setConnectionState(state);
+          dismissBeatGalerStartupLoader();
+        }
+        return;
+      }
       const offline = await platform.library.loadOffline().catch(error => {
         console.warn("Could not load Offline library:", error);
         return [] as Beat[];
@@ -1589,6 +1617,7 @@ function BeatGalerApp() {
   }, [transitionRuntime]);
 
   const previousAudioBeatIdRef = useRef<string | null>(null);
+  const playbackRequestRunRef = useRef(0);
   useEffect(() => {
     const previous = previousAudioBeatIdRef.current;
     if (previous && previous !== audio.playingId) transitionRuntime(previous, { type: "PLAYBACK_IDLE" });
@@ -1797,6 +1826,7 @@ function BeatGalerApp() {
   }, [ensureWarmPlaybackUrl]);
 
   const handlePlay = useCallback(async (beat: Beat) => {
+    const playbackRequestRun = ++playbackRequestRunRef.current;
     // Never let a stale card/queue callback bypass the upload readiness gate.
     // Read the latest Beat object because upload state can change after the
     // caller captured its render-time object.
@@ -1850,6 +1880,35 @@ function BeatGalerApp() {
 
     const clickedAt = performance.now();
     void downloadCookingDiagnosticEvent("PLAY_CLICK", beat.id, beat.name, "").catch(() => {});
+
+    // Web streams the authorized MASTER directly into a temporary MediaSource
+    // URL. Credentials and provider locators never become part of audio.src.
+    if (platform.capabilities.authorizedCloudPlayback && beat.telegram_file_id) {
+      try {
+        const prepared = await platform.media.preparePlayback(beat);
+        if (playbackRequestRun !== playbackRequestRunRef.current) {
+          platform.media.releasePlayback(beat.id);
+          return;
+        }
+        void prepared.completed.catch(error => {
+          console.warn("Cloud playback stream ended with an error:", error);
+        });
+        play(beat.id, [prepared.url]);
+      } catch (error: any) {
+        if (error?.name === "AbortError" || playbackRequestRun !== playbackRequestRunRef.current) return;
+        const message = sanitizeUserVisibleText(error, "Cloud audio unavailable.");
+        if (startingPlaybackSession) {
+          transitionRuntime(beat.id, {
+            type: "PLAYBACK_FAILED",
+            code: "WEB_PLAYBACK_PREPARE_FAILED",
+            message,
+            retryable: true,
+          }, beat);
+        }
+        await appAlert({ title: "Beat unavailable", message, danger: true });
+      }
+      return;
+    }
 
     // FAST PATH: a visible Cloud beat already has a localhost playback URL.
     // Set audio.src immediately. The localhost request itself promotes the beat
@@ -1911,6 +1970,7 @@ function BeatGalerApp() {
   }, [audio.playingId, play, transitionRuntime]);
 
   const handleUpload = useCallback((beat: Beat) => {
+    if (!platform.capabilities.localHelper) return;
     if (rejectOfflineMutation("Uploading to YouTube")) return;
     setShowUpload({ initialBeat: beat, selectedIds: undefined });
   }, [rejectOfflineMutation]);
@@ -1969,6 +2029,7 @@ function BeatGalerApp() {
   }, [rejectOfflineMutation, transitionRuntime]);
 
   const handleOpenProject = useCallback(async (beat: Beat) => {
+    if (!platform.capabilities.openProjectInDaw) return;
     if (connectionState !== "online" && !beat.offline_available) {
       await appAlert({
         title: "Project unavailable offline",
@@ -1988,6 +2049,7 @@ function BeatGalerApp() {
   }, [connectionState]);
 
   const handleUpdateProject = useCallback(async (beat: Beat) => {
+    if (!platform.capabilities.openProjectInDaw) return;
     if (rejectOfflineMutation("Updating a project")) return;
     transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
     transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
@@ -2013,6 +2075,7 @@ function BeatGalerApp() {
   }, [rejectOfflineMutation, transitionRuntime]);
 
   const handleUploadBulk = useCallback(() => {
+    if (!platform.capabilities.localHelper) return;
     if (rejectOfflineMutation("Bulk upload")) return;
     setShowUpload({ initialBeat: null, selectedIds: Array.from(selectedIds) });
   }, [selectedIds, rejectOfflineMutation]);
@@ -2035,6 +2098,43 @@ function BeatGalerApp() {
       danger: true,
     });
     if (!approved) return;
+
+    if (platform.capabilities.cloudTrashTransactions) {
+      for (const id of ids) {
+        const beat = beats.find(item => item.id === id);
+        if (beat?.telegram_file_id) transitionRuntime(id, { type: "SYNC_DELETE_STARTED" }, beat);
+      }
+      try {
+        const movedIds = await platform.trash.moveBeats(ids);
+        const moved = new Set(movedIds);
+        const next = beats.filter(beat => !moved.has(beat.id));
+        beatsLatestRef.current = next;
+        setBeats(next);
+        setQueueIds(queue => queue.filter(id => !moved.has(id)));
+        for (const id of moved) forgetRuntimeState(id);
+        if (moved.size !== ids.length) {
+          await appAlert({
+            title: "Some beats were not removed",
+            message: "One or more selected beats changed before the Trash update. Refresh and try again.",
+            danger: true,
+          });
+        }
+      } catch (error) {
+        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+        for (const id of ids) {
+          const beat = beats.find(item => item.id === id);
+          const runtime = beatRuntimeStatesRef.current[id];
+          if (runtime?.sync_state === "deleting") {
+            transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message, retryable: true }, beat);
+          }
+        }
+        await appAlert({ title: "Could not remove beats", message, danger: true });
+      }
+      setSelectedIds(new Set());
+      setSelectMode(false);
+      setAnchorIdx(null);
+      return;
+    }
 
     const deleted = new Set<string>();
     for (const id of ids) {
@@ -2620,26 +2720,46 @@ function BeatGalerApp() {
     });
   }, []);
 
-  const handleReviewedBeatSaved = useCallback((updated: Beat) => {
+  const handleReviewedBeatSaved = useCallback(async (
+    updated: Beat,
+    onProgress?: (progress: PlatformCloudCommitProgress) => void,
+  ) => {
+    let committed = updated;
+    if (platform.capabilities.reviewBeatCloudCommit) {
+      transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPLOAD" }, updated);
+      transitionRuntime(updated.id, { type: "SYNC_UPLOAD_STARTED" }, updated);
+      try {
+        committed = await platform.cloudData.commitImportedBeat(updated, onProgress);
+        transitionRuntime(committed.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, committed);
+        platform.importer.releaseBeat(updated.id);
+      } catch (error) {
+        const message = sanitizeUserVisibleText(
+          error instanceof Error ? error.message : String(error),
+          "Galer Cloud could not save this beat.",
+        );
+        transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "WEB_IMPORT_COMMIT_FAILED", message, retryable: true }, updated);
+        throw new Error(message);
+      }
+    }
     setBeats(bs => {
-      const exists = bs.some(b => b.id === updated.id);
+      const exists = bs.some(b => b.id === committed.id);
       const next = exists
-        ? bs.map(b => b.id === updated.id ? updated : b)
-        : [updated, ...bs];
+        ? bs.map(b => b.id === committed.id ? committed : b)
+        : [committed, ...bs];
       beatsLatestRef.current = next;
       return next;
     });
     setReviewQueue(q => {
       if (!q) return null;
-      const nextBeats = q.beats.map(b => b.id === updated.id ? updated : b);
+      const nextBeats = q.beats.map(b => b.id === committed.id ? committed : b);
       const knownLast = q.total !== null && q.index >= q.total - 1;
       if (knownLast && !q.preparing) return null;
       return { ...q, beats: nextBeats, index: q.index + 1 };
     });
 
     // Fire-and-forget. Save/next closes immediately; Telegram work is secondary.
-    if (platform.capabilities.directGalerCloudTransport) cloudifyImportedBeats([updated]);
-  }, [cloudifyImportedBeats]);
+    if (platform.capabilities.directGalerCloudTransport) cloudifyImportedBeats([committed]);
+  }, [cloudifyImportedBeats, transitionRuntime]);
 
   const handleReviewedSaveAll = useCallback(async (currentUpdated: Beat) => {
     const queue = reviewQueueLatestRef.current;
@@ -2956,6 +3076,10 @@ function BeatGalerApp() {
   }, [deferredImportBatch, reviewPreparationDone, bulkSaveAllBusy, reviewBootstrap, reviewQueue, audioConflictBatch, dropImportBatch]);
 
   const refreshOpenableCloudProjects = useCallback(async () => {
+    if (!platform.capabilities.openProjectInDaw) {
+      setOpenableCloudProjectIds(new Set());
+      return;
+    }
     try {
       const t = await import("./lib/tauri");
       const ids = await t.listOpenableCloudProjectBeatIds();
@@ -3059,6 +3183,7 @@ function BeatGalerApp() {
   }, [refreshOpenableCloudProjects, rejectOfflineMutation, transitionRuntime]);
 
   useEffect(() => {
+    if (!platform.capabilities.directGalerCloudTransport) return;
     if (connectionState !== "online" || !cloudSessionVerified) return;
     const next = new Map<string, string>();
     for (const beat of beats) {
@@ -3160,7 +3285,7 @@ function BeatGalerApp() {
   }, [releaseFile]);
 
   const updateBeat = useCallback((updated: Beat) => {
-    if (updated.telegram_file_id && connectionState === "online") {
+    if (platform.capabilities.directGalerCloudTransport && updated.telegram_file_id && connectionState === "online") {
       const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);
       if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);
     }
@@ -3169,6 +3294,7 @@ function BeatGalerApp() {
   }, [connectionState, drawer, transitionRuntime]);
 
   const handleToggleOffline = useCallback(async (beat: Beat) => {
+    if (!platform.capabilities.offlinePackage) return;
     if (offlineBusyIds.has(beat.id)) return;
     if (!beat.offline_available && connectionState !== "online") {
       await appAlert({ title: "Internet required", message: "Connect to the internet once to download this beat for Offline mode." });
@@ -3276,6 +3402,15 @@ function BeatGalerApp() {
 
   const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {
     if (rejectOfflineMutation("Changing artwork")) return;
+    if (platform.capabilities.browserCloudEditing) {
+      const committed = await platform.editor.commit(
+        beat,
+        { ...beat, image_base64: imageBase64, image_preview_base64: imageBase64 },
+        {},
+      );
+      updateBeat(committed);
+      return;
+    }
     // Artwork is an explicit cloud transaction. Decoding/loading artwork is no
     // longer part of cloudBeatFingerprint, so only a real user artwork change
     // reaches Telegram here. Order is intentionally:
@@ -3531,7 +3666,7 @@ function BeatGalerApp() {
     // stay on that same native receiver. The HTML DataTransfer controller is
     // intentionally not installed there; otherwise the same local file drop
     // can fall back to File.arrayBuffer() and recreate the 20-40s staging delay.
-    const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);
+    const windowsNativeDrop = platform.capabilities.nativeFilesystemDrop && isTauriAvailable && /Windows/i.test(navigator.userAgent);
     if (windowsNativeDrop) return;
     return installHtmlDropController({
       setGlobalDropActive: setDropActive,
@@ -3641,6 +3776,7 @@ function BeatGalerApp() {
   }, [addBeatsAndReview, handleAutoProjectDrop, handleDropArtwork, hydrateWebReviewCandidate, importDroppedPaths]);
 
   useEffect(() => {
+    if (!platform.capabilities.nativeFilesystemDrop && !platform.capabilities.nativeExternalArtworkDrop) return;
     if (!isTauriAvailable) return;
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -3965,7 +4101,9 @@ function BeatGalerApp() {
       return;
     }
     try {
-      const files = await listCloudFilesForBeat(beat.id);
+      const files = platform.capabilities.browserCloudDownloads
+        ? []
+        : await listCloudFilesForBeat(beat.id);
       setCloudFiles(files);
       setCloudFilesDownloadedIds(new Set());
       setCloudFilesDownloadError(null);
@@ -3994,6 +4132,47 @@ function BeatGalerApp() {
     let ownsRuntimeDownloadState = false;
     try {
       setCloudFilesDownloadError(null);
+      setCloudFilesDownloadProgress(null);
+
+      if (platform.capabilities.browserCloudDownloads) {
+        const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
+        if (runtime.download_state !== "downloading") {
+          transitionRuntime(beat.id, { type: "DOWNLOAD_STARTED" }, beat);
+          ownsRuntimeDownloadState = true;
+        }
+        const task = platform.downloads.start(beat, kind, progress => {
+          const ratio = progress.downloadedBytes / Math.max(1, progress.totalBytes);
+          const percentage = Math.round(ratio * 100);
+          setCloudFilesDownloadProgress(previous => Math.max(previous ?? 0, Math.max(0, Math.min(100, percentage))));
+          transitionRuntime(beat.id, { type: "DOWNLOAD_PROGRESS", progress: ratio }, beat);
+        });
+        browserDownloadTaskRef.current = task;
+        setCloudFilesBusyId(kind);
+        setCloudDownloadNotice({ taskId: task.id, kind, beatName: beat.name || "Beat", status: "downloading" });
+        const result = await task.completed;
+        if (browserDownloadTaskRef.current?.id === task.id) browserDownloadTaskRef.current = null;
+        setCloudFilesBusyId(current => current === kind ? null : current);
+        setCloudFilesDownloadProgress(null);
+        if (result.cancelled) {
+          if (ownsRuntimeDownloadState) transitionRuntime(beat.id, { type: "DOWNLOAD_SUCCEEDED" });
+          setCloudDownloadNotice(current => current?.taskId === task.id ? null : current);
+          return;
+        }
+        if (ownsRuntimeDownloadState) transitionRuntime(beat.id, { type: "DOWNLOAD_SUCCEEDED" });
+        setCloudFilesDownloadedIds(previous => new Set(previous).add(kind));
+        try {
+          const audio = new Audio(downloadCompleteWav);
+          audio.volume = 0.68;
+          void audio.play().catch(() => {});
+        } catch {}
+        setCloudDownloadNotice({ taskId: task.id, kind, beatName: beat.name || "Beat", status: "completed" });
+        window.setTimeout(() => {
+          setCloudDownloadNotice(current => current?.taskId === task.id && current.status === "completed" ? null : current);
+        }, 5000);
+        return;
+      }
+
+      if (kind === "ARTWORK") throw new Error("Artwork download is not available on this platform.");
 
       let destination: string | null = null;
       if (kind === "MP3") destination = await chooseExportFilePath(`${audioSafeBase}.mp3`, "mp3");
@@ -4027,6 +4206,8 @@ function BeatGalerApp() {
         transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "DOWNLOAD_START_FAILED", message, retryable: true }, beat);
       }
       setCloudFilesBusyId(null);
+      browserDownloadTaskRef.current = null;
+      setCloudFilesDownloadProgress(null);
       setCloudDownloadNotice(null);
       setCloudFilesDownloadError(message);
     }
@@ -4169,7 +4350,9 @@ function BeatGalerApp() {
         return;
       }
 
-      const offline = await platform.library.loadOffline();
+      const offline = platform.capabilities.offlinePackage
+        ? await platform.library.loadOffline()
+        : [];
       if (browserOffline) {
         setConnectionState("offline");
         setCloudSessionVerified(false);
@@ -4234,10 +4417,12 @@ function BeatGalerApp() {
   const deleteBeat = useCallback(async (beat: Beat) => {
     const approved = await appConfirm({
       title: "Remove beat?",
-      message: beat.telegram_file_id
+      message: platform.capabilities.cloudTrashTransactions
+        ? `Move "${beat.name}" to Trash?\n\nYou can restore it from Settings until Trash is emptied.`
+        : beat.telegram_file_id
         ? `Remove "${beat.name}" from BeatGaler?\n\nIts cloud files will stay stored. The active Galer Library index will stop listing this beat after the next sync.`
         : `Are you sure you want to remove "${beat.name}"?\n\nThis will move its local files to BeatGaler trash.`,
-      confirmLabel: beat.telegram_file_id ? "Remove beat" : "Move to trash",
+      confirmLabel: platform.capabilities.cloudTrashTransactions ? "Move to trash" : beat.telegram_file_id ? "Remove beat" : "Move to trash",
       cancelLabel: "Cancel",
       danger: true,
     });
@@ -4256,9 +4441,14 @@ function BeatGalerApp() {
         transitionRuntime(beat.id, { type: "PLAYBACK_IDLE" }, beat);
         releaseFile();
       }
-      await removeBeatFromLibrary(beat.id);
+      if (platform.capabilities.cloudTrashTransactions) {
+        const moved = await platform.trash.moveBeats([beat.id]);
+        if (!moved.includes(beat.id)) throw new Error("This beat changed before the Trash update. Refresh and try again.");
+      } else {
+        await removeBeatFromLibrary(beat.id);
+      }
       let trashIntentError: unknown = null;
-      if (connectionState !== "online" && beat.telegram_file_id) {
+      if (!platform.capabilities.cloudTrashTransactions && connectionState !== "online" && beat.telegram_file_id) {
         try {
           await recordOfflineTrashIntent(beat.id);
         } catch (error) {
@@ -4270,8 +4460,9 @@ function BeatGalerApp() {
       beatsLatestRef.current = nextLibrary;
       setBeats(nextLibrary);
       setQueueIds(ids => ids.filter(id => id !== beat.id));
+      if (platform.capabilities.cloudTrashTransactions) forgetRuntimeState(beat.id);
 
-      if (connectionState === "online" && beat.telegram_file_id) {
+      if (!platform.capabilities.cloudTrashTransactions && connectionState === "online" && beat.telegram_file_id) {
         try {
           await libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash");
           forgetRuntimeState(beat.id);
@@ -4333,6 +4524,7 @@ function BeatGalerApp() {
   const tagColors = useTagColors();
 
 const confirmTagRename = useCallback(async () => {
+  if (!platform.capabilities.localHelper) return;
   if (!tagRename) return;
   const oldTag = tagRename.oldTag.trim().toLowerCase();
   const newTag = tagRename.newTag.trim().toLowerCase();
@@ -4398,6 +4590,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : null;
     setActiveDragId(null);
+    if (!platform.capabilities.manualLibraryReorder) return;
     if (!overId || activeId === overId) return;
 
     setBeats((current) => {
@@ -4834,7 +5027,9 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           boxShadow: "0 12px 34px rgba(0,0,0,.4)", fontSize: 11.5, lineHeight: 1.4, textAlign: "center",
         }}>
           {connectionState === "offline"
-            ? "You're offline. This session can keep using already prepared audio; after restart only beats with the green Offline check are shown."
+            ? platform.capabilities.offlinePackage
+              ? "You're offline. This session can keep using already prepared audio; after restart only beats with the green Offline check are shown."
+              : "You're offline. Reconnect to load your Galer Cloud library. Offline packages are available only in the Desktop app."
             : "Poor connection. BeatGaler is retrying automatically; cloud actions may take longer."}
         </div>
       )}
@@ -4890,11 +5085,14 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           boxShadow: "0 14px 44px rgba(0,0,0,.45)", fontSize: 12, lineHeight: 1.45,
         }}>
           {cloudDownloadNotice.status === "downloading" ? (
-            cloudDownloadNotice.kind === "ALL"
-              ? <>Downloading everything from &quot;{cloudDownloadNotice.beatName}&quot;...</>
-              : cloudDownloadNotice.kind === "PROJECT"
-                ? <>Downloading Full Project from &quot;{cloudDownloadNotice.beatName}&quot;...</>
-                : <>Downloading {cloudDownloadNotice.kind} from &quot;{cloudDownloadNotice.beatName}&quot;...</>
+            <>
+              {cloudDownloadNotice.kind === "ALL"
+                ? <>Downloading everything from &quot;{cloudDownloadNotice.beatName}&quot;...</>
+                : cloudDownloadNotice.kind === "PROJECT"
+                  ? <>Downloading Full Project from &quot;{cloudDownloadNotice.beatName}&quot;...</>
+                  : <>Downloading {cloudDownloadNotice.kind} from &quot;{cloudDownloadNotice.beatName}&quot;...</>}
+              {cloudFilesDownloadProgress !== null ? ` ${cloudFilesDownloadProgress}%` : ""}
+            </>
           ) : (
             cloudDownloadNotice.kind === "ALL"
               ? <>Downloaded everything from &quot;{cloudDownloadNotice.beatName}&quot;.</>
@@ -4993,10 +5191,12 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>
             Edit all
           </button>
-          <button onClick={handleUploadBulk}
-            style={{ padding: "5px 14px", background: "#202020", border: "1px solid #2e2e2e", borderRadius: 6, color: "#e0e0e0", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
-            Upload to YouTube
-          </button>
+          {platform.capabilities.localHelper && (
+            <button onClick={handleUploadBulk}
+              style={{ padding: "5px 14px", background: "#202020", border: "1px solid #2e2e2e", borderRadius: 6, color: "#e0e0e0", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
+              Upload to YouTube
+            </button>
+          )}
           <button onClick={handleRemoveBulk}
             style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>
             Remove all
@@ -5051,18 +5251,18 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     y={tagColorMenu.y}
     current={tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}
     onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }}
-    onRename={() => {
+    onRename={platform.capabilities.localHelper ? () => {
       const oldTag = tagColorMenu.tag.trim().toLowerCase();
       setTagColorMenu(null);
       setTagRename({ oldTag, newTag: oldTag, stage: "name" });
       setTagRenameError(null);
-    }}
+    } : undefined}
     onClose={() => setTagColorMenu(null)}
   />
 )}
 
 
-{tagRename && (() => {
+{tagRename && platform.capabilities.localHelper && (() => {
   const normalizedOld = tagRename.oldTag.trim().toLowerCase();
   const affected = beats.filter(b => b.tags.some(t => t.trim().toLowerCase() === normalizedOld));
   const mp3Count = affected.filter(b => !!b.mp3_path).length;
@@ -5144,7 +5344,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                   <BeatCard
                     key={beat.id}
                     beat={beat}
-                    openableProject={openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path))}
+                    openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}
                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}
                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
@@ -5152,9 +5352,12 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     selected={selectedIds.has(beat.id)}
                     selectedCount={selectedIds.size}
                     selectMode={selectMode}
-                    dragEnabled={!selectMode}
+                    dragEnabled={!selectMode && platform.capabilities.manualLibraryReorder}
                     networkOnline={connectionState === "online"}
                     offlineBusy={offlineBusyIds.has(beat.id)}
+                    canUseOfflinePackage={platform.capabilities.offlinePackage}
+                    canUseLocalHelper={platform.capabilities.localHelper}
+                    canInspectNativeProject={platform.capabilities.openProjectInDaw}
                     onToggleOffline={handleToggleOffline}
                     onRetryUpload={retryBackgroundUpload}
                     onBulkEdit={handleEditBulk}
@@ -5209,7 +5412,10 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           files={cloudFiles}
           busyId={cloudFilesBusyId}
           downloadedIds={cloudFilesDownloadedIds}
+          progress={cloudFilesDownloadProgress}
+          canCancel={platform.capabilities.browserCloudDownloads}
           onDownload={handleGetCloudFile}
+          onCancel={() => browserDownloadTaskRef.current?.cancel()}
           onClose={() => setCloudFilesBeat(null)}
         />
       )}
@@ -5235,9 +5441,14 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true, custom_cursor_enabled: true })}
           onBeatRestored={beat => {
             if (connectionState !== "online") {
-              void platform.library.loadOffline().then(setBeats).catch(error => {
-                console.warn("Could not refresh Offline library after Trash restore:", error);
-              });
+              if (platform.capabilities.offlinePackage) {
+                void platform.library.loadOffline().then(setBeats).catch(error => {
+                  console.warn("Could not refresh Offline library after Trash restore:", error);
+                });
+              } else {
+                beatsLatestRef.current = [];
+                setBeats([]);
+              }
               return;
             }
 
@@ -5454,7 +5665,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         />
       )}
 
-      {showUpload && (
+      {showUpload && platform.capabilities.localHelper && (
         <UploadModal
           initialBeat={showUpload.initialBeat}
           allBeats={beats}
@@ -5463,7 +5674,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         />
       )}
 
-      <JobStatusBar />
+      {platform.capabilities.localHelper && <JobStatusBar />}
     </div>
   );
 }
