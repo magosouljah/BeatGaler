@@ -7,6 +7,7 @@ const transport = vi.hoisted(() => {
   const audioMedia = { type: "audio", mimeType: "audio/mpeg", fileSize: 5 };
   const projectMedia = { type: "document", mimeType: "application/zip", fileSize: 5 };
   let pinnedId = 501;
+  let clientOptions: any = null;
   const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
     options.progressCallback?.(2, 5);
     options.progressCallback?.(5, 5);
@@ -15,9 +16,10 @@ const transport = vi.hoisted(() => {
   const pinMessage = vi.fn(async ({ message }: { message: number }) => { pinnedId = message; });
   const deleteMessagesById = vi.fn(async () => undefined);
   class TelegramClient {
+    constructor(options: unknown) { clientOptions = options; }
     start = vi.fn(async () => ({}));
     getMe = vi.fn(async () => ({}));
-    getChat = vi.fn(async () => ({ id: "vault-1" }));
+    getChat = vi.fn(async () => ({ id: -1001234567890 }));
     getFullChat = vi.fn(async () => ({ pinnedMsgId: pinnedId }));
     getMessages = vi.fn(async (_vault: unknown, ids: number[]) => ids.map(id => id === 501
       ? { id, text: "BEATGALER_LIBRARY_INDEX_V1", media: indexMedia }
@@ -51,11 +53,16 @@ const transport = vi.hoisted(() => {
     deleteMessagesById,
     resetPinned: () => { pinnedId = 501; },
     TelegramClient,
+    WebCryptoProvider: class {
+      constructor(public readonly options: unknown) {}
+    },
+    getClientOptions: () => clientOptions,
   };
 });
 
 vi.mock("@mtcute/web", () => ({
   TelegramClient: transport.TelegramClient,
+  WebCryptoProvider: transport.WebCryptoProvider,
   MemoryStorage: class {},
   InputMedia: {
     document: (file: File, options: unknown) => ({ type: "document", file, ...options as object }),
@@ -82,7 +89,7 @@ beforeAll(async () => {
     op: "initialize",
     session: {
       bot_token: "secret-token",
-      chat_id: "vault-1",
+      chat_id: "-1001234567890",
       telegram_api_id: 123,
       telegram_api_hash: "secret-hash",
     },
@@ -112,6 +119,10 @@ describe("Galer Cloud single-file Web Worker", () => {
     transport.deleteMessagesById.mockClear();
   });
 
+  it("initializes MTProto crypto with Vite's explicit WASM asset URL", () => {
+    expect(transport.getClientOptions()?.crypto?.options?.wasmInput).toMatch(/mtcute\.wasm/);
+  });
+
   it("sends the original File once and returns one stored-file manifest", async () => {
     const file = new File(["audio"], "beat.mp3", { type: "audio/mpeg" });
     const messages = await send({
@@ -121,7 +132,7 @@ describe("Galer Cloud single-file Web Worker", () => {
     });
 
     expect(transport.sendMedia).toHaveBeenCalledOnce();
-    expect(transport.sendMedia.mock.calls[0][0]).toBe("vault-1");
+    expect(transport.sendMedia.mock.calls[0][0]).toBe(-1001234567890);
     expect(transport.sendMedia.mock.calls[0][1]).toMatchObject({
       file,
       fileSize: 5,
@@ -183,8 +194,8 @@ describe("Galer Cloud single-file Web Worker", () => {
       caption: "BEATGALER_LIBRARY_INDEX_V1",
       fileMime: "application/json",
     });
-    expect(transport.pinMessage).toHaveBeenCalledWith({ chatId: "vault-1", message: 901, notify: false });
-    expect(transport.deleteMessagesById).toHaveBeenCalledWith("vault-1", [501]);
+    expect(transport.pinMessage).toHaveBeenCalledWith({ chatId: -1001234567890, message: 901, notify: false });
+    expect(transport.deleteMessagesById).toHaveBeenCalledWith(-1001234567890, [501]);
     expect(completed.result).toEqual({ messageId: 901, previousMessageId: 501, beatCount: 2 });
   });
 
@@ -212,8 +223,8 @@ describe("Galer Cloud single-file Web Worker", () => {
     const ids = Array.from({ length: 105 }, (_, index) => index + 1);
     const messages = await send({ requestId: "delete-media", op: "delete_messages", input: { messageIds: ids } });
 
-    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(1, "vault-1", ids.slice(0, 100));
-    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(2, "vault-1", ids.slice(100));
+    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(1, -1001234567890, ids.slice(0, 100));
+    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(2, -1001234567890, ids.slice(100));
     expect(messages.find(message => message.ok === true)?.result).toEqual({ deleted: 105 });
   });
 
