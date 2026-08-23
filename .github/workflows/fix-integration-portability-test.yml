@@ -1,0 +1,37 @@
+name: Fix Integration Portability Assertion
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration-v0.8.0-alpha.1
+      - name: Update stale platform auth assertion
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/test-macos-portability.mjs')
+          text = path.read_text()
+          old_decl = 'const settingsPanel = read("src/components/SettingsPanel.tsx");\nconst drawer = read("src/components/Drawer.tsx");'
+          new_decl = 'const settingsPanel = read("src/components/SettingsPanel.tsx");\nconst desktopAdapter = read("src/platform/desktopAdapter.ts");\nconst drawer = read("src/components/Drawer.tsx");'
+          old_assert = 'ok(accountGate.includes("cloudApiBase: getResolvedCloudApiBase()"), "React passes the resolved Galer Cloud base to Rust auth context");'
+          new_assert = 'ok(accountGate.includes("platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase())") && desktopAdapter.includes(\'invoke("set_cloud_auth_token", { token, cloudApiBase })\'), "React passes the resolved Galer Cloud base through the Desktop auth adapter");'
+          if old_decl not in text or old_assert not in text:
+              raise SystemExit('Expected stale assertion shape was not found; refusing broad rewrite.')
+          text = text.replace(old_decl, new_decl, 1).replace(old_assert, new_assert, 1)
+          path.write_text(text)
+          PY
+          rm .github/workflows/fix-integration-portability-test.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/test-macos-portability.mjs .github/workflows/fix-integration-portability-test.yml
+          git commit -m "test: follow platform auth adapter"
+          git push origin HEAD:integration-v0.8.0-alpha.1
