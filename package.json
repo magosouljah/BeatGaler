@@ -48,6 +48,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@mtcute/web": "^0.31.0",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-dialog": "^2.0.3",
     "@tauri-apps/plugin-fs": "^2.0.3",
