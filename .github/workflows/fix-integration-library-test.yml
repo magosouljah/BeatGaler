@@ -1,0 +1,49 @@
+name: Fix Integration Library Test
+
+on:
+  push:
+    branches:
+      - integration-v0.8.0-alpha.1
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration-v0.8.0-alpha.1
+      - name: Route library integration test through platform adapter
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/integration/coreIntegration.test.tsx')
+          text = path.read_text()
+          old = '''  vi.doMock("../../src/lib/tauri", () => ({
+            restoreLibraryFromTelegram: restore,
+            loadLibrary: load,
+            syncCloudLibraryIndex: sync,
+            diagnosticLog: vi.fn(async () => undefined),
+          }));'''.replace('          ', '')
+          new = '''  vi.doMock("../../src/platform", () => ({
+            platform: { library: {
+              restoreAuthoritative: restore,
+              load,
+              commitSnapshot: sync,
+            } },
+          }));'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('Expected legacy library mock was not found; refusing broad rewrite.')
+          text = text.replace(old, new, 1)
+          text = text.replace('describe("LibraryStateManager ↔ Tauri integration", () => {', 'describe("LibraryStateManager ↔ platform integration", () => {', 1)
+          path.write_text(text)
+          PY
+          rm .github/workflows/fix-integration-library-test.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/integration/coreIntegration.test.tsx .github/workflows/fix-integration-library-test.yml
+          git commit -m "test: route library manager through platform adapter"
+          git push origin HEAD:integration-v0.8.0-alpha.1
