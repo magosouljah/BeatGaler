@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { platform } from "../../platform";
 
 /**
  * Diagnostic-only bridge: mirrors Review performance markers into Rust stderr
@@ -8,7 +8,5 @@ import { invoke } from "@tauri-apps/api/core";
 export function reviewPerfMark(message: string): void {
   const safe = String(message ?? "").replace(/[\r\n]+/g, " ").slice(0, 2000);
   console.info(`[review-diag] ${safe}`);
-  void invoke("review_perf_log", { message: safe }).catch(() => {
-    // Diagnostics must never change product behavior if logging is unavailable.
-  });
+  platform.diagnostics.reviewPerformance(safe);
 }
