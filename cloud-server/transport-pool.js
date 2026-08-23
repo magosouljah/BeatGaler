@@ -3,7 +3,9 @@ const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
 
-const CONFIG_FILE = path.join(__dirname, 'transport-bots.json');
+const CONFIG_FILE = process.env.TRANSPORT_BOTS_FILE
+  ? path.resolve(process.env.TRANSPORT_BOTS_FILE)
+  : path.join(__dirname, 'transport-bots.local.json');
 const STATE_FILE = path.join(__dirname, 'transport-pool-state.json');
 const DEFAULT_ROTATION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LEASE_TTL_MS = 45 * 60 * 1000;
