@@ -6,7 +6,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (...parts) => readFileSync(path.join(root, ...parts), 'utf8');
 const fail = (message) => { console.error(`FAIL direct shared-pool guard: ${message}`); process.exit(1); };
 
-const server = read('cloud-server', 'server.js');
+const serverEntry = read('cloud-server', 'server.js');
+const serverCore = read('cloud-server', 'server-core.js');
+const server = `${serverEntry}\n${serverCore}`;
 const master = read('cloud-server', 'master-storage.js');
 const control = read('cloud-server', 'direct-transport-control.js');
 const helper = read('src-tauri', 'direct-transport', 'transport-helper.cjs');
@@ -20,8 +22,9 @@ if (packageJson.dependencies?.['node-telegram-bot-api']) fail('node-telegram-bot
 if (/TELEGRAM_BOT_TOKEN\s*=/.test(envExample)) fail('A service/data-plane bot token is still requested in .env.example.');
 if (!envExample.includes('MANAGER_BOT_TOKEN_1=')) fail('Managed-bot manager credential is missing from .env.example.');
 if (!envExample.includes('BEATGALER_DIRECT_REQUIRED=true')) fail('Direct fail-closed mode is not documented as required.');
+if (!serverEntry.includes('require("./server-core")')) fail('server.js no longer boots the contained server core.');
 if (server.includes('new TelegramBot(') || server.includes('.startPolling(') || server.includes('bot.on("message"')) fail('001BeatGaler polling/command runtime returned.');
-if (/\bTELEGRAM_BOT_TOKEN\b|\bconst\s+BOT_TOKEN\b/.test(server)) fail('server.js still contains a permanent service/data-plane bot token variable.');
+if (/\bTELEGRAM_BOT_TOKEN\b|\bconst\s+BOT_TOKEN\b/.test(server)) fail('Cloud server still contains a permanent service/data-plane bot token variable.');
 if (!server.includes('001BeatGaler manager-only: no polling, no commands, no vault membership, no data plane')) fail('Manager-only invariant marker disappeared.');
 if (!server.includes('ensurePrivateUserStorageBotAbsent')) fail('Old vault migration no longer removes 001BeatGaler.');
 
