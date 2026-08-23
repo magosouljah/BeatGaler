@@ -1,4 +1,4 @@
-import type { BeatAssets } from "../domain/beat";
+import type { BeatAssets } from "../domain/beat.js";
 
 export interface Beat {
   id: string;
