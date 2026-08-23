@@ -1,3 +1,5 @@
+import type { BeatAssets } from "../domain/beat";
+
 export interface Beat {
   id: string;
   name: string;
@@ -32,6 +34,8 @@ export interface Beat {
   cloud_status?: string | null; // undefined/null == LOCAL, "SYNCED" once uploaded
   telegram_file_id?: string | null;
   telegram_message_id?: number | null;
+  /** Platform-neutral Cloud slot references used by the shared Web/Desktop model. */
+  assets?: BeatAssets;
   /** Local-only durable pin. Stored outside the temporary playback cache. */
   offline_available?: boolean;
 }
