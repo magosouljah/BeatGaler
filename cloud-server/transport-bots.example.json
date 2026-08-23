@@ -18,7 +18,7 @@
       "id": "Bot03",
       "label": "Transport 03",
       "managed": true,
-      "telegram_user_id": "REPLACE_WITH_MANAGED_BOT_USER_ID",
+      "telegram_user_id": "REPLACE_WITH_MANAGED_BOT_USER_ID_3",
       "manager_token_env": "MANAGER_BOT_TOKEN_1"
     }
   ]
