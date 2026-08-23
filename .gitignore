@@ -59,18 +59,12 @@ patches/
 # Telegram Direct backend runtime/secrets
 cloud-server/masters.local.json
 cloud-server/vault-registry.json
-cloud-server/transport-pool-state.json
-cloud-server/transport-pool-state.json.lock
-
-
-cloud-server/transport-pool-state.json.tmp-*
-cloud-server/transport-pool-state.json.tmp-*
-
-cloud-server/transport-pool-state.json.tmp-*
-
-cloud-server/transport-pool-state.json.tmp-*
-
-cloud-server/transport-pool-state.json.tmp-*
+cloud-server/transport-bots.json
+cloud-server/transport-bots.local.json
+cloud-server/transport-pool-state*.json
+!cloud-server/transport-pool-state.example.json
+cloud-server/transport-pool-state*.lock
+cloud-server/transport-pool-state*.tmp*
 
 # Automated test build output
 .unit-build/
