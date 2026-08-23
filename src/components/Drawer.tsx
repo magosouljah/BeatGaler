@@ -5,7 +5,9 @@ import ImageCropModal from "./ImageCropModal";
 import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { appConfirm } from "../lib/dialog";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
-import { listen } from "@tauri-apps/api/event";
+import { platform } from "../platform";
+import type { PlatformCloudCommitProgress } from "../platform/contracts";
+import type { PlatformBeatEditFiles, PlatformBeatEditSlotKind, PlatformImportSlotKind } from "../platform/contracts";
 import { cleanTags, validateBpm, validateMusicKey } from "../lib/metadataValidation";
 import { getReviewFooterState, reviewHeaderLabel } from "../features/components/componentLogic";
 
@@ -14,7 +16,7 @@ interface Props {
   mode: "detail" | "edit";
   tagSuggestions?: string[];
   onClose: () => void;
-  onSaved: (updated: Beat) => void;
+  onSaved: (updated: Beat, onProgress?: (progress: PlatformCloudCommitProgress) => void) => Promise<void> | void;
   onReleaseAudio: () => void;
   selectedBeats?: Beat[];
   onBulkSaved?: (updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => void;
@@ -65,6 +67,11 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   // pending holds files chosen by the user but NOT yet written to disk
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState<PlatformCloudCommitProgress | null>(null);
+  const [reviewSlotNames, setReviewSlotNames] = useState<Partial<Record<PlatformImportSlotKind, string>>>(() => {
+    const slots = platform.capabilities.reviewBeatCloudCommit ? platform.importer.slotFilesForBeat(beat.id) : {};
+    return Object.fromEntries(Object.entries(slots).map(([kind, file]) => [kind, file?.name]));
+  });
   const [error, setError] = useState<string | null>(null);
   const [duplicateNameError, setDuplicateNameError] = useState(false);
   const [bulkFields, setBulkFields] = useState<Set<string>>(new Set());
@@ -74,11 +81,12 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isEdit = mode === "edit";
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
+  const displayedBeatIdRef = useRef(beat.id);
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [pendingCloud, setPendingCloud] = useState<PendingCloudFiles>({});
-  const hasPending = Object.keys(pending).length > 0 || Object.keys(pendingCloud).length > 0;
+  const [pendingWebEdit, setPendingWebEdit] = useState<PlatformBeatEditFiles>({});
   const bpmValidation = validateBpm(data.bpm);
   const keyValidation = validateMusicKey(data.key);
 
@@ -194,14 +202,52 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setData({ ...beat, tags: [] });
       return;
     }
+    if (displayedBeatIdRef.current === beat.id) {
+      // Progressive Web metadata must never erase edits already typed in Review.
+      setData(current => ({
+        ...current,
+        bpm: current.bpm || beat.bpm,
+        key: current.key || beat.key,
+        tags: current.tags.length > 0 ? current.tags : beat.tags,
+        image_base64: current.image_base64 || beat.image_base64,
+        image_preview_base64: current.image_preview_base64 || beat.image_preview_base64,
+      }));
+      return;
+    }
+    displayedBeatIdRef.current = beat.id;
     setData({ ...beat });
+    if (platform.capabilities.reviewBeatCloudCommit) {
+      const slots = platform.importer.slotFilesForBeat(beat.id);
+      setReviewSlotNames(Object.fromEntries(Object.entries(slots).map(([kind, file]) => [kind, file?.name])));
+    }
     setPending({});
     setPendingCloud({});
+    setPendingWebEdit({});
     setDuplicateNameError(false);
   }, [beat, isBulk]);
 
   const toggleBulkField = (f: string) =>
     setBulkFields(s => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n; });
+
+  const handleReviewSlotPick = useCallback(async (kind: PlatformImportSlotKind) => {
+    if (saving) return;
+    try {
+      const file = await platform.importer.pickSlotFile(beat.id, kind);
+      if (file) setReviewSlotNames(current => ({ ...current, [kind]: file.name }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [beat.id, saving]);
+
+  const handleWebEditFilePick = useCallback(async (kind: PlatformBeatEditSlotKind) => {
+    if (saving) return;
+    try {
+      const file = await platform.editor.pickFile(kind);
+      if (file) setPendingWebEdit(current => ({ ...current, [kind]: file }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [saving]);
 
   // ── Save ────────────────────────────────────────────────────
   const handleSave = useCallback(async (reviewAction: "next" | "all" = "next") => {
@@ -237,8 +283,30 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     };
     setData(validatedData);
     setSaving(true);
+    setSaveProgress(null);
     setError(null);
     try {
+      if (platform.capabilities.reviewBeatCloudCommit && reviewInfo && !isBulk) {
+        const updated = { ...validatedData, cloud_status: "PENDING_UPLOAD" };
+        if (reviewAction === "all" && onSaveAll) await onSaveAll(updated);
+        else {
+          await onSaved(updated, progress => setSaveProgress(progress));
+          if (closeAfterSave) onClose();
+        }
+        return;
+      }
+      if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk) {
+        const committed = await platform.editor.commit(
+          beat,
+          validatedData,
+          pendingWebEdit,
+          progress => setSaveProgress(progress),
+        );
+        setPendingWebEdit({});
+        await onSaved(committed);
+        if (closeAfterSave) onClose();
+        return;
+      }
       if (isBulk && onBulkSaved) {
         const updates: Partial<Beat> = {};
         const tagsInput = Array.from(new Set(validatedData.tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
@@ -399,8 +467,9 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setError(String(e));
     } finally {
       setSaving(false);
+      setSaveProgress(null);
     }
-  }, [beat, data, pending, pendingCloud, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed]);
+  }, [beat, data, pending, pendingCloud, pendingWebEdit, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed]);
 
   // ── Enter to save ───────────────────────────────────────────
   useEffect(() => {
@@ -471,15 +540,15 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
     // Track drag position to know which row/artwork is hovered. Tauri can report
     // physical pixels on a scaled display, so test both raw and DPR-adjusted points.
-    listen<{ position?: { x: number; y: number } }>("tauri://drag-over", (event) => {
-      const pos = (event.payload as any)?.position;
+    platform.events.listen<{ position?: { x: number; y: number } }>("tauri://drag-over", payload => {
+      const pos = payload?.position;
       if (!pos) return;
       setDropTarget(targetAtPosition(pos));
     }).then(fn => unlisteners.push(fn));
 
     // On drop, queue a file role or load artwork into the crop editor.
-    listen<{ paths?: string[] }>("tauri://drag-drop", async (event) => {
-      const paths: string[] = (event.payload as any)?.paths ?? [];
+    platform.events.listen<{ paths?: string[] }>("tauri://drag-drop", async payload => {
+      const paths: string[] = payload?.paths ?? [];
       const role = dropTargetRef.current as "artwork" | "mp3" | "wav" | "stems" | "flp" | "als" | null;
       setDropTarget(null);
       if (!role || paths.length === 0) return;
@@ -502,7 +571,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setPending(p => ({ ...p, [role]: paths[0] }));
     }).then(fn => unlisteners.push(fn));
 
-    listen("tauri://drag-leave", () => setDropTarget(null))
+    platform.events.listen("tauri://drag-leave", () => setDropTarget(null))
       .then(fn => unlisteners.push(fn));
 
     return () => { unlisteners.forEach(fn => fn()); };
@@ -879,8 +948,69 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             </div>
           </div>
 
-          {/* Telegram is the only persistent beat storage in V1. */}
-          {!isBulk && (
+          {/* Galer Cloud file replacement appears only when this runtime can commit it. */}
+          {!isBulk && reviewInfo && platform.capabilities.reviewBeatCloudCommit && (
+            <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div>
+                <span style={{ fontSize: 10, color: "#4ade80" }}>GALER CLOUD</span>
+              </div>
+              {(["MASTER", "WAV", "PROJECT"] as PlatformImportSlotKind[]).map(kind => {
+                const filename = reviewSlotNames[kind];
+                const required = kind === "MASTER";
+                return (
+                  <div key={kind} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 62, fontSize: 10, color: kind === "MASTER" ? "#60a5fa" : kind === "WAV" ? "#34d399" : "#c084fc", fontWeight: 700 }}>{kind}</span>
+                    <span title={filename} style={{ flex: 1, minWidth: 0, color: filename ? "#aaa" : required ? "#f87171" : "#555", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {filename || (required ? "Required MP3" : "Optional")}
+                    </span>
+                    <button disabled={saving} onClick={() => void handleReviewSlotPick(kind)}
+                      style={{ padding: "4px 8px", background: "#1a1a1a", border: "1px solid #303030", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
+                      {filename ? "Replace" : `+ ${kind}`}
+                    </button>
+                  </div>
+                );
+              })}
+              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>
+                Each selected slot is stored as one Cloud file. Nothing is uploaded until Save.
+              </div>
+            </div>
+          )}
+
+          {!isBulk && !reviewInfo && platform.capabilities.browserCloudEditing && (
+            <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div>
+                <span style={{ fontSize: 10, color: "#4ade80" }}>GALER CLOUD</span>
+              </div>
+              {(["MASTER", "WAV", "PROJECT"] as PlatformBeatEditSlotKind[]).map(kind => {
+                const queued = pendingWebEdit[kind];
+                const current = kind === "MASTER"
+                  ? data.assets?.master
+                  : kind === "WAV"
+                    ? data.assets?.wav
+                    : data.assets?.project;
+                const filename = queued?.name || current?.filename;
+                return (
+                  <div key={kind} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 62, fontSize: 10, color: kind === "MASTER" ? "#60a5fa" : kind === "WAV" ? "#34d399" : "#c084fc", fontWeight: 700 }}>{kind}</span>
+                    <span title={filename || undefined} style={{ flex: 1, minWidth: 0, color: queued ? "#fb923c" : current ? "#aaa" : "#555", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {queued ? `Pending: ${queued.name}` : filename || (kind === "MASTER" ? "Cloud MASTER" : "Not added")}
+                    </span>
+                    <button disabled={saving} onClick={() => void handleWebEditFilePick(kind)}
+                      style={{ padding: "4px 8px", background: queued ? "#2a1a00" : "#1a1a1a", border: `1px solid ${queued ? "#4a2e00" : "#303030"}`, borderRadius: 5, color: queued ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
+                      {current || queued ? "Replace" : `+ ${kind}`}
+                    </button>
+                  </div>
+                );
+              })}
+              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>
+                Files stay pending until Save Changes. Metadata, artwork, and replacements are then published together.
+              </div>
+            </div>
+          )}
+
+          {!isBulk && platform.capabilities.directGalerCloudTransport && (
             <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                 <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div>
@@ -982,14 +1112,16 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                 reviewCurrent: reviewInfo?.current,
                 reviewTotal: reviewInfo?.total,
                 hasOnSaveAll: !!onSaveAll,
-                pendingFileCount: Object.keys(pending).length + Object.keys(pendingCloud).length,
+                pendingFileCount: Object.keys(pending).length + Object.keys(pendingCloud).length + Object.keys(pendingWebEdit).length,
               });
               const { disabled, label, canSaveAll } = footerState;
               return (
                 <div style={{ display: "flex", gap: canSaveAll ? 8 : 0 }}>
                   <button onClick={() => void handleSave("next")} disabled={disabled}
                     style={{ flex: 1, width: "100%", padding: "10px", background: disabled ? "#1e1e1e" : "#fff", border: "none", borderRadius: 8, color: disabled ? "#3a3a3a" : "#000", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
-                    {label}
+                    {saving && saveProgress
+                      ? `Saving ${Math.round((saveProgress.uploadedBytes / Math.max(1, saveProgress.totalBytes)) * 100)}%…`
+                      : label}
                   </button>
                   {canSaveAll && <button onClick={() => void handleSave("all")} disabled={disabled}
                     style={{ flex: 1, padding: "10px", background: disabled ? "#1e1e1e" : "#171717", border: `1px solid ${disabled ? "#222" : "#353535"}`, borderRadius: 8, color: disabled ? "#3a3a3a" : "#e7e7e7", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
