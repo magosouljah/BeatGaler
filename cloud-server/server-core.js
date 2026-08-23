@@ -28,6 +28,7 @@ const multer = require("multer");
 const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, masterStorageReady } = require("./master-storage");
 const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
+const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
 
 const PORT = process.env.PORT || 4000;
@@ -1904,7 +1905,7 @@ app.post("/transport/session/start", async (req, res) => {
       installationId: beatgalerUserId,
       chatId: storageChatId(account),
     });
-    res.json(session);
+    res.json(wrapWebTransportSession(session, req.body?.webTransportPublicKey));
   } catch (error) {
     console.error("[direct] session start failed:", error?.message || error);
     res.status(503).json({ error: "Galer Cloud session unavailable. Please try again." });
@@ -1932,12 +1933,19 @@ app.post("/transport/session/heartbeat", async (req, res) => {
   if (!auth) return;
   const { beatgalerUserId } = auth;
   try {
-    res.json(await directTransport.heartbeat({
+    const heartbeat = await directTransport.heartbeat({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
-    }));
+    });
+    if (heartbeat?.credential_refresh) {
+      heartbeat.credential_refresh = wrapWebTransportSession(
+        heartbeat.credential_refresh,
+        req.body?.webTransportPublicKey,
+      );
+    }
+    res.json(heartbeat);
   } catch (error) {
     console.error("[direct] heartbeat failed:", error?.message || error);
     res.status(500).json({ error: "Cloud session heartbeat failed." });
@@ -1967,13 +1975,20 @@ app.post("/transport/operation/begin", async (req, res) => {
   if (!auth) return;
   const { beatgalerUserId } = auth;
   try {
-    res.json(await directTransport.beginOperation({
+    const operation = await directTransport.beginOperation({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
       kind: String(req.body?.kind || "data"),
-    }));
+    });
+    if (operation?.credential_refresh) {
+      operation.credential_refresh = wrapWebTransportSession(
+        operation.credential_refresh,
+        req.body?.webTransportPublicKey,
+      );
+    }
+    res.json(operation);
   } catch (error) {
     const message = String(error?.message || error || "");
     console.error("[direct] operation begin failed:", message);
