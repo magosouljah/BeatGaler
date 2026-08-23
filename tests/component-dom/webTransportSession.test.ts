@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/platform", () => ({
-  platform: { clientId: "beatgaler-web-browser-test" },
+vi.mock("../../src/platform/webClientId", () => ({
+  getWebClientId: () => "beatgaler-web-browser-test",
 }));
 
 vi.mock("../../src/components/AccountGate", () => ({
