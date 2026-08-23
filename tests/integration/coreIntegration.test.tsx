@@ -71,18 +71,19 @@ async function loadLibraryManager(mocks?: {
   const load = mocks?.load ?? vi.fn(async () => [makeBeat()]);
   const sync = mocks?.sync ?? vi.fn(async () => ({ ok: true }));
 
-  vi.doMock("../../src/lib/tauri", () => ({
-    restoreLibraryFromTelegram: restore,
-    loadLibrary: load,
-    syncCloudLibraryIndex: sync,
-    diagnosticLog: vi.fn(async () => undefined),
+  vi.doMock("../../src/platform", () => ({
+    platform: { library: {
+      restoreAuthoritative: restore,
+      load,
+      commitSnapshot: sync,
+    } },
   }));
 
   const { libraryStateManager } = await import("../../src/lib/libraryStateManager");
   return { libraryStateManager, restore, load, sync };
 }
 
-describe("LibraryStateManager ↔ Tauri integration", () => {
+describe("LibraryStateManager ↔ platform integration", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -183,6 +184,9 @@ class FakeAudio extends EventTarget {
   currentTime = 0;
   duration = 120;
   volume = 0.75;
+  muted = false;
+  loop = false;
+  preload = "";
   paused = true;
   playCalls = 0;
   pauseCalls = 0;
@@ -219,9 +223,15 @@ type AudioHook = ReturnType<(typeof import("../../src/hooks/useAudio"))["useAudi
 
 async function mountAudioHook() {
   vi.resetModules();
-  vi.doMock("../../src/lib/tauri", () => ({
-    filePathToUrl: (path: string) => `asset://${path.replace(/\\/g, "/")}`,
-    downloadCookingDiagnosticEvent: vi.fn(async () => undefined),
+  vi.doMock("../../src/platform", () => ({
+    platform: {
+      media: {
+        resolveUrl: (path: string) => `asset://${path.replace(/\\/g, "/")}`,
+        preparePlayback: async (beat: Beat) => ({ url: beat.playback_path, completed: Promise.resolve() }),
+        releasePlayback: () => undefined,
+      },
+      diagnostics: { audioEvent: vi.fn(async () => undefined) },
+    },
   }));
 
   FakeAudio.instances = [];
@@ -260,7 +270,27 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe("useAudio ↔ browser/Tauri integration", () => {
+describe("useAudio ↔ platform integration", () => {
+  it("arms the shared audio element synchronously for delayed Safari cloud playback", async () => {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:beatgaler-silent-gesture"),
+    });
+    const mounted = await mountAudioHook();
+    audioRoot = mounted.root;
+
+    let armed = false;
+    await act(async () => {
+      armed = await mounted.hook.armPlaybackGesture();
+    });
+
+    expect(armed).toBe(true);
+    expect(mounted.audio.src).toBe("blob:beatgaler-silent-gesture");
+    expect(mounted.audio.playCalls).toBe(1);
+    expect(mounted.audio.muted).toBe(false);
+    expect(mounted.audio.loop).toBe(false);
+  });
+
   it("converts file paths and falls back to the next source after a browser audio error", async () => {
     const mounted = await mountAudioHook();
     audioRoot = mounted.root;
