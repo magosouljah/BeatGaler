@@ -1,7 +1,9 @@
 name: Fix Integration Portability Assertion
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - integration-v0.8.0-alpha.1
 
 permissions:
   contents: write
