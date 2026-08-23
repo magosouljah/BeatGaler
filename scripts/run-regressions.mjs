@@ -192,7 +192,10 @@ try {
   // runs from a durable background queue.
   const settingsPanel = readFileSync(path.join(root, "src", "components", "SettingsPanel.tsx"), "utf8");
   const rustCommands = readFileSync(path.join(root, "src-tauri", "src", "commands.rs"), "utf8");
-  const cloudServer = readFileSync(path.join(root, "cloud-server", "server.js"), "utf8");
+  const cloudServer = [
+    readFileSync(path.join(root, "cloud-server", "server.js"), "utf8"),
+    readFileSync(path.join(root, "cloud-server", "server-core.js"), "utf8"),
+  ].join("\n");
 
   const forbiddenEmptyRecovery = /if \(!settings\?\.telegram_cloud_connected\) return;\s*if \(beats\.length !== 0\) return;\s*void recoverTelegramLibraryOnceIfEmpty\(\);/;
   if (forbiddenEmptyRecovery.test(app)) fail("App.tsx reintroduced automatic Telegram recovery whenever beats becomes empty; Remove All can resurrect stale cards.");
