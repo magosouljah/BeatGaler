@@ -1,16 +1,24 @@
 import type { Beat } from "../types";
-import { diagnosticLog, loadLibrary, restoreLibraryFromTelegram, syncCloudLibraryIndex, type CloudLibrarySyncResult } from "./tauri";
+import { platform } from "../platform";
+import type { PlatformLibrarySyncResult } from "../platform/contracts";
 
 type LibraryOperationKind = "reload" | "commit";
 
+function libraryDiagnostic(event: string, detail: string): void {
+  if (platform.kind !== "desktop") return;
+  void import("./tauri")
+    .then(({ diagnosticLog }) => diagnosticLog("library-tx", event, detail))
+    .catch(() => {});
+}
+
 /**
- * Single serialization point for authoritative Telegram library operations.
+ * Single serialization point for authoritative library operations.
  *
  * Rules:
- *  - Telegram INDEX is the authority.
+ *  - Galer T-Library INDEX is the authority.
  *  - Only one INDEX read/commit transaction may be in flight from this renderer.
- *  - Refresh replaces local state from Telegram; it never merges a stale render snapshot.
- *  - Callers may update React/SQLite only after this manager resolves.
+ *  - Refresh replaces local state from the authority; it never merges a stale render snapshot.
+ *  - Callers may update React/local cache only after this manager resolves.
  */
 class LibraryStateManager {
   private tail: Promise<void> = Promise.resolve();
@@ -26,12 +34,12 @@ class LibraryStateManager {
     const started = performance.now();
     try {
       console.info(`[library-tx] BEGIN kind=${kind} seq=${seq}`);
-      void diagnosticLog("library-tx", "BEGIN", `kind=${kind} seq=${seq}`);
+      libraryDiagnostic("BEGIN", `kind=${kind} seq=${seq}`);
       const result = await fn();
-      void diagnosticLog("library-tx", "OK", `kind=${kind} seq=${seq} elapsed_ms=${Math.round(performance.now() - started)}`);
+      libraryDiagnostic("OK", `kind=${kind} seq=${seq} elapsed_ms=${Math.round(performance.now() - started)}`);
       return result;
     } catch (error) {
-      void diagnosticLog("library-tx", "FAILED", `kind=${kind} seq=${seq} elapsed_ms=${Math.round(performance.now() - started)} error=${String(error)}`);
+      libraryDiagnostic("FAILED", `kind=${kind} seq=${seq} elapsed_ms=${Math.round(performance.now() - started)} error=${String(error)}`);
       throw error;
     } finally {
       console.info(`[library-tx] END kind=${kind} seq=${seq} ms=${Math.round(performance.now() - started)}`);
@@ -41,26 +49,23 @@ class LibraryStateManager {
 
   async reloadAuthoritative(): Promise<Beat[]> {
     return this.exclusive("reload", async () => {
-      await restoreLibraryFromTelegram();
-      const restored = await loadLibrary();
+      await platform.library.restoreAuthoritative();
+      const restored = await platform.library.load();
       this.lastVerified = restored.slice();
       return restored;
     });
   }
 
-  async commitSnapshot(beats: Beat[], reason = "unspecified"): Promise<CloudLibrarySyncResult> {
-    // Freeze the exact transaction candidate. React may mutate while this waits.
+  async commitSnapshot(beats: Beat[], reason = "unspecified"): Promise<PlatformLibrarySyncResult> {
     const snapshot = beats.map(beat => ({ ...beat, tags: [...(beat.tags || [])] }));
     return this.exclusive("commit", async () => {
       console.info(`[library-tx] COMMIT reason=${reason} beats=${snapshot.length}`);
-      void diagnosticLog(
-        "library-tx",
+      libraryDiagnostic(
         "COMMIT_CANDIDATE",
         `reason=${reason} beats=${snapshot.length} cloud_beats=${snapshot.filter(beat => Boolean(beat.telegram_file_id)).length}`,
       );
-      const result = await syncCloudLibraryIndex(snapshot);
-      void diagnosticLog(
-        "library-tx",
+      const result = await platform.library.commitSnapshot(snapshot);
+      libraryDiagnostic(
         "COMMIT_CONFIRMED",
         `reason=${reason} message_id=${result.telegram_message_id} beat_count=${result.beat_count} updated=${result.updated}`,
       );

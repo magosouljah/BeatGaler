@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
+import { platform } from "../platform";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
 export function getBeatGalerAuthToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
 const API_KEY = "beatgaler:cloud-api:v1";
 const LOCAL_API = "http://127.0.0.1:4000";
 const REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
+
+function sameOriginProxyApi(): string | null {
+  if (typeof window === "undefined") return null;
+  return `${window.location.origin}/beatgaler-api`;
+}
 
 export type OAuthProvider = "google" | "x";
 export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";
@@ -83,6 +87,11 @@ async function probe(base: string, timeoutMs: number): Promise<boolean> {
 export async function resolveBeatGalerCloudApi(): Promise<string> {
   const remembered = localStorage.getItem(API_KEY);
   if (remembered && await probe(remembered, 1200)) return remembered;
+  const sameOriginProxy = sameOriginProxyApi();
+  if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
+    localStorage.setItem(API_KEY, sameOriginProxy);
+    return sameOriginProxy;
+  }
   if (await probe(LOCAL_API, 900)) { localStorage.setItem(API_KEY, LOCAL_API); return LOCAL_API; }
   if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
   throw new Error("Could not reach BeatGaler Cloud.");
@@ -90,13 +99,8 @@ export async function resolveBeatGalerCloudApi(): Promise<string> {
 
 export function getResolvedCloudApiBase(): string { return localStorage.getItem(API_KEY) || REMOTE_API; }
 
-async function getInstallationId(): Promise<string> {
-  let settings: any = await invoke("get_settings");
-  if (settings?.beatgaler_user_id) return String(settings.beatgaler_user_id);
-  try { await invoke("poll_telegram_cloud_status"); } catch {}
-  settings = await invoke("get_settings");
-  if (!settings?.beatgaler_user_id) throw new Error("BeatGaler could not create its installation ID.");
-  return String(settings.beatgaler_user_id);
+export async function getBeatGalerInstallationId(): Promise<string> {
+  return platform.account.getInstallationId();
 }
 
 async function authRequest(path: string, body: Record<string, unknown> = {}, token?: string): Promise<any> {
@@ -109,19 +113,19 @@ async function authRequest(path: string, body: Record<string, unknown> = {}, tok
 async function storeSession(result: AuthResponse) {
   if (result.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
-    await invoke("set_cloud_auth_token", { token: result.token, cloudApiBase: getResolvedCloudApiBase() });
+    await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
   }
   window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
   return result.user;
 }
 
 export async function registerBeatGalerAccount(usernameBase: string, email: string, password: string): Promise<BeatGalerAccount> {
-  const result = await authRequest("/auth/register", { usernameBase, email, password, beatgalerUserId: await getInstallationId() });
+  const result = await authRequest("/auth/register", { usernameBase, email, password, beatgalerUserId: await getBeatGalerInstallationId() });
   return await storeSession(result);
 }
 
 export async function loginBeatGalerAccount(identifier: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
-  const result = await authRequest("/auth/login", { identifier, password, mfaCode, beatgalerUserId: await getInstallationId() });
+  const result = await authRequest("/auth/login", { identifier, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() });
   return await storeSession(result);
 }
 
@@ -129,12 +133,12 @@ export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) return null;
   try {
-    const result = await authRequest("/auth/session", { beatgalerUserId: await getInstallationId() }, token);
-    await invoke("set_cloud_auth_token", { token, cloudApiBase: getResolvedCloudApiBase() });
+    const result = await authRequest("/auth/session", { beatgalerUserId: await getBeatGalerInstallationId() }, token);
+    await platform.cloudAuth.syncSession(token, getResolvedCloudApiBase());
     return result.user;
   } catch {
     localStorage.removeItem(TOKEN_KEY);
-    try { await invoke("set_cloud_auth_token", { token: null, cloudApiBase: getResolvedCloudApiBase() }); } catch {}
+    try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
     return null;
   }
 }
@@ -188,11 +192,11 @@ export async function disableMfa(code: string): Promise<void> {
 }
 
 export async function oauthBeatGalerAccount(provider: OAuthProvider, linkExisting: boolean): Promise<BeatGalerAccount> {
-  const beatgalerUserId = await getInstallationId();
+  const beatgalerUserId = await getBeatGalerInstallationId();
   const token = linkExisting ? getBeatGalerAuthToken() || undefined : undefined;
   const before = linkExisting ? await getBeatGalerAccountInfo().catch(() => null) : null;
   const started = await authRequest("/auth/oauth/start", { provider, beatgalerUserId }, token);
-  await open(started.authorization_url);
+  await platform.external.openUrl(started.authorization_url);
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60 * 1000) {
     await new Promise(resolve => window.setTimeout(resolve, 900));
@@ -218,8 +222,8 @@ export async function disconnectOAuthProvider(provider: OAuthProvider): Promise<
 export async function logoutBeatGalerAccount(): Promise<void> {
   const token = localStorage.getItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
-  try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getInstallationId() }, token); } catch {}
-  try { await invoke("set_cloud_auth_token", { token: null, cloudApiBase: getResolvedCloudApiBase() }); } catch {}
+  try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getBeatGalerInstallationId() }, token); } catch {}
+  try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
   window.dispatchEvent(new Event("beatgaler:account-logged-out"));
 }
 
