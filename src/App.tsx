@@ -17,6 +17,7 @@ import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
 import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, loadCloudArtworkForBeat, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
+import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
@@ -5226,7 +5227,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                   <BeatCard
                     key={beat.id}
                     beat={beat}
-                    openableProject={openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path))}
+                    openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}
                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}
                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
@@ -5234,9 +5235,12 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     selected={selectedIds.has(beat.id)}
                     selectedCount={selectedIds.size}
                     selectMode={selectMode}
-                    dragEnabled={!selectMode}
+                    dragEnabled={!selectMode && platform.capabilities.manualLibraryReorder}
                     networkOnline={connectionState === "online"}
                     offlineBusy={offlineBusyIds.has(beat.id)}
+                    canUseOfflinePackage={platform.capabilities.offlinePackage}
+                    canUseLocalHelper={platform.capabilities.localHelper}
+                    canInspectNativeProject={platform.capabilities.openProjectInDaw}
                     onToggleOffline={handleToggleOffline}
                     onRetryUpload={retryBackgroundUpload}
                     onBulkEdit={handleEditBulk}
@@ -5529,6 +5533,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             handlePlay(target);
             setQueueIds((ids) => ids.filter((id) => id !== target.id));
           }}
+          canAddBeat={platform.capabilities.browserFileImport || platform.capabilities.nativeFilesystemDrop}
           onAddBeat={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}
           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })}
           onEdit={(b) => { if (!rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}
