@@ -30,16 +30,16 @@ env:
 jobs:
   release-desktop-updater:
     name: Publish verified Desktop release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout release tools
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
       - name: Verify selected build runs
@@ -50,36 +50,28 @@ jobs:
           MACOS_RUN_ID: ${{ inputs.macos_run_id }}
         run: |
           set -euo pipefail
-
           WIN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN_ID")"
           MAC_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$MACOS_RUN_ID")"
-
           WIN_NAME="$(printf '%s' "$WIN_JSON" | jq -r '.name')"
           MAC_NAME="$(printf '%s' "$MAC_JSON" | jq -r '.name')"
-
           WIN_RESULT="$(printf '%s' "$WIN_JSON" | jq -r '.conclusion')"
           MAC_RESULT="$(printf '%s' "$MAC_JSON" | jq -r '.conclusion')"
-
           WIN_SHA="$(printf '%s' "$WIN_JSON" | jq -r '.head_sha')"
           MAC_SHA="$(printf '%s' "$MAC_JSON" | jq -r '.head_sha')"
-
           test "$WIN_NAME" = "Build - Windows"
           test "$MAC_NAME" = "Build - macOS"
-
           test "$WIN_RESULT" = "success"
           test "$MAC_RESULT" = "success"
-
           if [ "$WIN_SHA" != "$MAC_SHA" ]; then
             echo "::error::Windows and macOS builds came from different commits."
             echo "Windows: $WIN_SHA"
             echo "macOS:   $MAC_SHA"
             exit 1
           fi
-
           echo "Verified shared source commit: $WIN_SHA"
 
       - name: Download Windows build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: BeatGaler-Windows-x64
           path: release-input/windows
@@ -88,7 +80,7 @@ jobs:
           run-id: ${{ inputs.windows_run_id }}
 
       - name: Download macOS build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: BeatGaler-macOS-Universal
           path: release-input/macos
@@ -96,19 +88,16 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.macos_run_id }}
 
-      - name: Verify versions and prepare Desktop release
+      - name: Verify versions, build checksums and prepare Desktop release
         shell: bash
         run: |
           set -euo pipefail
-
           WIN_VERSION="$(tr -d '\r\n' < release-input/windows/VERSION)"
           MAC_VERSION="$(tr -d '\r\n' < release-input/macos/VERSION)"
-
           if [ "$WIN_VERSION" != "$MAC_VERSION" ]; then
             echo "::error::Windows version ($WIN_VERSION) differs from macOS version ($MAC_VERSION)."
             exit 1
           fi
-
           if [ "v$WIN_VERSION" != "${{ inputs.release_tag }}" ]; then
             echo "::error::Build version ($WIN_VERSION) does not match release tag (${{ inputs.release_tag }})."
             exit 1
@@ -116,29 +105,44 @@ jobs:
 
           WIN_EXE="$(find release-input/windows -type f -name '*.exe' | head -n 1)"
           WIN_SIG="${WIN_EXE}.sig"
-
+          WIN_PROVENANCE="$(find release-input/windows -type f -name 'runtime-provenance-windows.json' | head -n 1)"
+          WIN_SUMS="$(find release-input/windows -type f -name 'SHA256SUMS-Windows.txt' | head -n 1)"
           MAC_DMG="$(find release-input/macos -type f -name '*.dmg' | head -n 1)"
           MAC_UPDATER="$(find release-input/macos -type f -name '*.app.tar.gz' | head -n 1)"
           MAC_SIG="${MAC_UPDATER}.sig"
+          MAC_PROVENANCE="$(find release-input/macos -type f -name 'runtime-provenance-macos.json' | head -n 1)"
+          MAC_SUMS="$(find release-input/macos -type f -name 'SHA256SUMS-macOS.txt' | head -n 1)"
 
-          test -f "$WIN_EXE"
-          test -s "$WIN_SIG"
-          test -f "$MAC_DMG"
-          test -f "$MAC_UPDATER"
-          test -s "$MAC_SIG"
+          for file in "$WIN_EXE" "$WIN_SIG" "$WIN_PROVENANCE" "$WIN_SUMS" "$MAC_DMG" "$MAC_UPDATER" "$MAC_SIG" "$MAC_PROVENANCE" "$MAC_SUMS"; do
+            test -n "$file" && test -s "$file"
+          done
+
+          verify_digest() {
+            local sums="$1"
+            local file="$2"
+            local expected actual
+            expected="$(awk -v name="$(basename "$file")" '$2 == name {print $1; exit}' "$sums")"
+            actual="$(sha256sum "$file" | awk '{print $1}')"
+            test -n "$expected"
+            test "$expected" = "$actual"
+          }
+          verify_digest "$WIN_SUMS" "$WIN_EXE"
+          verify_digest "$WIN_SUMS" "$WIN_SIG"
+          verify_digest "$MAC_SUMS" "$MAC_DMG"
+          verify_digest "$MAC_SUMS" "$MAC_UPDATER"
+          verify_digest "$MAC_SUMS" "$MAC_SIG"
 
           mkdir -p release-assets
-
           WIN_NAME="Beat.Galer_${WIN_VERSION}_x64-setup.exe"
           MAC_DMG_NAME="Beat.Galer_${WIN_VERSION}_universal.dmg"
           MAC_UPDATER_NAME="Beat.Galer_${WIN_VERSION}_universal.app.tar.gz"
-
           cp "$WIN_EXE" "release-assets/$WIN_NAME"
           cp "$WIN_SIG" "release-assets/$WIN_NAME.sig"
-
           cp "$MAC_DMG" "release-assets/$MAC_DMG_NAME"
           cp "$MAC_UPDATER" "release-assets/$MAC_UPDATER_NAME"
           cp "$MAC_SIG" "release-assets/$MAC_UPDATER_NAME.sig"
+          cp "$WIN_PROVENANCE" release-assets/runtime-provenance-windows.json
+          cp "$MAC_PROVENANCE" release-assets/runtime-provenance-macos.json
 
           WIN_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$WIN_NAME"
           MAC_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$MAC_UPDATER_NAME"
@@ -151,7 +155,6 @@ jobs:
             --url "$WIN_URL" \
             --output release-assets/latest-windows.json \
             --notes "Beat Galer $WIN_VERSION"
-
           node scripts/updater-manifest.mjs generate \
             --version "$WIN_VERSION" \
             --platform darwin-aarch64 \
@@ -161,7 +164,6 @@ jobs:
             --output release-assets/latest-arm.json \
             --notes "Beat Galer $WIN_VERSION" \
             --merge-existing release-assets/latest-windows.json
-
           node scripts/updater-manifest.mjs generate \
             --version "$WIN_VERSION" \
             --platform darwin-x86_64 \
@@ -171,34 +173,33 @@ jobs:
             --output release-assets/latest.json \
             --notes "Beat Galer $WIN_VERSION" \
             --merge-existing release-assets/latest-arm.json
-
           node scripts/updater-manifest.mjs validate-release release-assets/latest.json
+          rm release-assets/latest-windows.json release-assets/latest-arm.json
 
-          rm release-assets/latest-windows.json
-          rm release-assets/latest-arm.json
+          (cd release-assets && sha256sum \
+            "$WIN_NAME" "$WIN_NAME.sig" \
+            "$MAC_DMG_NAME" "$MAC_UPDATER_NAME" "$MAC_UPDATER_NAME.sig" \
+            latest.json runtime-provenance-windows.json runtime-provenance-macos.json \
+            | sort > SHA256SUMS)
 
-      - name: Create or update public Desktop Release
+      - name: Create immutable public Desktop Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-
           TAG="${{ inputs.release_tag }}"
           NOTES="${{ inputs.release_notes }}"
-
-          if [ -z "$NOTES" ]; then
-            NOTES="Beat Galer $TAG"
+          if [ -z "$NOTES" ]; then NOTES="Beat Galer $TAG"; fi
+          if gh release view "$TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. BeatGaler release assets are immutable; use a new version/tag."
+            exit 1
           fi
-
-          if ! gh release view "$TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --repo "$PUBLIC_RELEASE_REPO" \
-              --target main \
-              --title "Beat Galer $TAG" \
-              --notes "$NOTES"
-          fi
-
+          gh release create "$TAG" \
+            --repo "$PUBLIC_RELEASE_REPO" \
+            --target main \
+            --title "Beat Galer $TAG" \
+            --notes "$NOTES"
           gh release upload "$TAG" \
             release-assets/*.exe \
             release-assets/*.exe.sig \
@@ -206,5 +207,7 @@ jobs:
             release-assets/*.app.tar.gz \
             release-assets/*.app.tar.gz.sig \
             release-assets/latest.json \
-            --repo "$PUBLIC_RELEASE_REPO" \
-            --clobber
+            release-assets/runtime-provenance-windows.json \
+            release-assets/runtime-provenance-macos.json \
+            release-assets/SHA256SUMS \
+            --repo "$PUBLIC_RELEASE_REPO"
