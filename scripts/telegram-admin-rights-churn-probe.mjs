@@ -82,11 +82,40 @@ function rightsToPlain(rights) {
 function buildRights(base, deleteMessages) {
   return new Api.ChatAdminRights({
     ...base,
-    // This is the permission we intentionally churn in the first experiment.
     deleteMessages: Boolean(deleteMessages),
-    // Pin stays exactly as it was. BeatGaler may need this as a baseline right.
     pinMessages: Boolean(base.pinMessages),
   });
+}
+
+function peerIdString(entity) {
+  const id = entity?.id ?? entity?.userId ?? null;
+  return id === null || id === undefined ? null : String(id);
+}
+
+async function resolveBotsFromVault(client, channel, botRefs) {
+  // A bare numeric Telegram user ID is not enough for MTProto calls: the
+  // client also needs the user's access_hash. Fetching participants from the
+  // explicitly configured test vault hydrates those entities safely without
+  // requiring usernames or extra secrets.
+  const participants = await client.getParticipants(channel, { limit: 10000 });
+  const byId = new Map();
+  for (const participant of participants) {
+    const id = peerIdString(participant);
+    if (id) byId.set(id, participant);
+  }
+
+  const resolved = [];
+  const missing = [];
+  for (const ref of botRefs) {
+    const entity = byId.get(String(ref));
+    if (entity) resolved.push({ ref, entity });
+    else missing.push(ref);
+  }
+
+  if (missing.length) {
+    throw new Error(`Could not resolve bot(s) ${missing.join(', ')} from the configured test vault. Confirm each bot is already a member of PERMISSION_CHURN_CHAT.`);
+  }
+  return resolved;
 }
 
 async function readBotRights(client, channel, botEntity) {
@@ -151,8 +180,7 @@ async function main() {
     if (!(await client.checkAuthorization())) throw new Error('MASTER Telegram session is not authorized');
 
     channel = await client.getEntity(chatRef);
-    bots = [];
-    for (const ref of botRefs) bots.push({ ref, entity: await client.getEntity(ref) });
+    bots = await resolveBotsFromVault(client, channel, botRefs);
 
     for (const bot of bots) {
       const original = await readBotRights(client, channel, bot.entity);
