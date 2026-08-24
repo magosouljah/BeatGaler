@@ -128,7 +128,13 @@ function timeout(promise, label, ms = TIMEOUT_MS) {
 }
 
 async function makeCrypto(m) {
-  const crypto = new m.WebCryptoProvider({ wasmInput: m.wasmBytes });
+  // @mtcute/web 0.31.0's BufferSource path returns the WebAssembly.instantiate
+  // result object, while initSync expects the instance itself. Feeding a
+  // Response takes the package's streaming path, which unwraps the instance.
+  const response = new Response(m.wasmBytes, {
+    headers: { 'Content-Type': 'application/wasm' },
+  });
+  const crypto = new m.WebCryptoProvider({ wasmInput: response });
   await crypto.initialize();
   return crypto;
 }
@@ -196,10 +202,6 @@ function longJson(value) {
 
 function longFromJson(Long, value) {
   return new Long(value.low, value.high, Boolean(value.unsigned));
-}
-
-function hex(bytes) {
-  return Buffer.from(bytes).toString('hex');
 }
 
 async function buildBindingEnvelope(m, crypto, permanentKeyBytes, metadata) {
@@ -333,9 +335,6 @@ async function clientMain() {
     const permAuthKeyId = longFromJson(m.Long, envelope.permAuthKeyId);
     const encryptedMessage = new Uint8Array(Buffer.from(envelope.encryptedMessage, 'base64'));
 
-    // Verify the binder returned an envelope for a DIFFERENT key id than the
-    // client's random sentinel. This catches accidental local use of the real
-    // permanent key material without ever exposing the material itself.
     assert.notEqual(permAuthKeyId.toString(), m.longFromBuffer(connection._session._authKey.id).toString());
 
     const pending = new DeferredLike();
