@@ -367,9 +367,6 @@ async function clientMain() {
     }
     assert.equal(result, true, 'Telegram must return boolTrue for the split bind.');
 
-    // Reproduce mtcute's post-bind state transition, but keep the random
-    // unauthorized sentinel in the permanent slot. All outgoing application RPC
-    // traffic now encrypts with the bound temporary key only.
     connection._session._authKeyTempSecondary = connection._session._authKeyTemp;
     connection._session._authKeyTemp = tempKey;
     connection._salts.currentSalt = tempServerSalt;
@@ -380,6 +377,9 @@ async function clientMain() {
       connection.sendRpc({ _: 'help.getNearestDc' }),
       'post-bind direct RPC',
     );
+    if (directRpc._ === 'mt_rpc_error') {
+      throw new Error(`Post-bind direct RPC rejected: ${directRpc.errorCode}:${directRpc.errorMessage}`);
+    }
     assert.equal(directRpc._, 'nearestDc', 'Post-bind direct RPC must return nearestDc.');
 
     console.log('PASS M0-B1 split network bind + direct RPC: Telegram accepted auth.bindTempAuthKey and a post-bind RPC using the temp key');
