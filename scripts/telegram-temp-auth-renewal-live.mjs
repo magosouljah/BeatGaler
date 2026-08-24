@@ -342,6 +342,15 @@ async function generateAndBindTempKey(m, crypto, connection, label) {
     m.doAuthorization(connection, crypto, TEMP_EXPIRY_SECONDS),
     `temporary auth generation ${label}`,
   );
+
+  // Preserve the exact ordering proven by M0-B2 for the first temp handshake:
+  // do not arm mtcute's random permanent-slot sentinel until fresh temp-key
+  // generation has finished. Before A exists, an invalid sentinel can make
+  // background encrypted traffic interfere with the unencrypted auth handshake.
+  if (!connection._session._authKey.ready) {
+    connection._session._authKey.setup(crypto.randomBytes(256));
+  }
+
   candidate.setup(generatedTempKey);
   const keyId = authKeyIdHex(candidate);
 
@@ -462,14 +471,12 @@ async function clientMain() {
   const tempKeyBuffers = [];
 
   try {
-    // Harness-only mtcute 0.31.0 decrypt guard workaround. This random key is
-    // not authorized and is never the binder's permanent key.
-    connection._session._authKey.setup(crypto.randomBytes(256));
-
     const operationId = Buffer.from(crypto.randomBytes(8)).toString('hex');
     const checkpoints = [];
 
-    // Checkpoint 1: operation starts under temp key A.
+    // Checkpoint 1: operation starts under temp key A. generateAndBindTempKey()
+    // arms the harness-only decrypt sentinel only after A's fresh handshake,
+    // matching the ordering already proven in M0-B2.
     const tempA = await generateAndBindTempKey(m, crypto, connection, 'A');
     tempKeyBuffers.push(tempA.keyBytes);
     activateBoundTempKey(connection, tempA);
