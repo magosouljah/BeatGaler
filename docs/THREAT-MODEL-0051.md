@@ -26,20 +26,21 @@
 - atacante que captura/repite solicitudes;
 - cliente modificado que altera IDs, scopes u operaciones;
 - abuso automatizado/rate-limit;
-- crash o desconexión durante una privilege lease;
-- transport bot compartido cuyo acceso produce blast radius excesivo.
+- transport bot compartido cuyo acceso produce blast radius excesivo;
+- fallo/rate-limit durante cambios de membership o permisos administrativos.
 
 ## 3. Invariantes de seguridad
 
 1. Los archivos viajan usuario <-> Telegram directamente.
 2. Galer Cloud nunca recibe los bytes como relay del data plane.
-3. El cliente no recibe el bot token permanente en el diseño objetivo.
+3. El cliente no recibe el bot token, API hash ni permanent auth key en el diseño objetivo.
 4. Una sesión de usuario A no puede operar sobre el vault B.
 5. Una temporary auth key robada tiene vida limitada y no amplía membresía/permisos del bot.
-6. Los permisos delicados permanecen apagados salvo necesidad concreta.
-7. Un crash no deja privilegios elevados indefinidamente.
+6. Los permisos baseline son mínimos, estables y justificados por operaciones reales.
+7. La seguridad no depende de grant/revoke dinámico por operación.
 8. El cierre/expiry deja la sesión temporal inutilizable según política.
 9. Ningún servicio localhost se considera auténtico solo por escuchar en loopback.
+10. Un bot compartido entre tenants no se permite hasta demostrar aislamiento aceptable.
 
 ## 4. Amenazas y pruebas obligatorias
 
@@ -69,7 +70,7 @@
 
 ### TM-05 — Operación larga cruza renovación
 
-**Escenario:** PROJECT ZIP grande sigue transfiriéndose cuando rota la temp key.
+**Escenario:** PROJECT ZIP grande sigue transfiriéndose cuando cambia la temp key activa.
 
 **Esperado:** política explícita: terminar con sesión en vuelo o reanudar de forma segura; nunca duplicar/corromper el asset ni caer a relay Galer.
 
@@ -79,23 +80,25 @@
 
 **Esperado:** autorización server-side ata identidad, vault y operación; el cliente no decide ownership.
 
-### TM-07 — Permission escalation
+### TM-07 — Baseline privilege abuse
 
-**Ataque:** solicitar `can_delete_messages`, `can_promote_members` u otro permiso administrativo sin necesidad real.
+**Ataque:** una temp key robada intenta usar `delete_messages`, `pin_messages` u otro derecho baseline contra recursos que no corresponden a la sesión.
 
-**Esperado:** deny-by-default. Solo se concede el permiso exacto requerido por una operación autorizada.
+**Esperado:** baseline contiene solo derechos funcionalmente indispensables; tenant isolation y membership reducen el alcance; cualquier derecho adicional se rechaza por diseño.
 
-### TM-08 — Crash después de elevar permisos
+### TM-08 — Permission churn / restore bloqueado
 
-**Escenario:** MASTER concede un permiso delicado y cliente/backend falla antes de retirarlo.
+**Escenario:** cambios administrativos frecuentes disparan rate limit y Telegram impide tanto el cambio como la restauración inmediata.
 
-**Esperado:** watchdog detecta privilege lease vencida y revierte el permiso de forma idempotente.
+**Evidencia actual:** el probe PR #12 logró 80 cambios en una primera corrida; una segunda corrida poco después, a 250 ms, recibió `FLOOD_WAIT 533s` después de 20 cambios de esa corrida, y la restauración inmediata también recibió `FLOOD`. La actividad acumulada impide afirmar que el límite sea 20.
 
-### TM-09 — Permission churn / escalabilidad
+**Esperado:** la arquitectura principal no depende de grant/revoke dinámico por operación. Backoff y recuperación se reservan a cambios administrativos/membership que sean realmente necesarios.
 
-**Ataque/estrés:** gran volumen de acciones provoca promote/demote repetidos.
+### TM-09 — Escalabilidad administrativa
 
-**Esperado:** uploads/downloads normales no generan elevaciones; backoff ante flood limits; cola por bot/vault; métricas y admission control antes de degradar aislamiento.
+**Ataque/estrés:** volumen de sesiones provoca joins/leaves o acciones administrativas repetidas.
+
+**Esperado:** uploads/downloads normales no generan permission churn; medir membership changes, aplicar backoff ante flood limits, cola por bot/vault y admission control antes de degradar aislamiento.
 
 ### TM-10 — Pin baseline
 
@@ -103,13 +106,15 @@
 
 **Esperado:** identificar el derecho mínimo exacto para pin. Ese derecho puede permanecer en baseline si es imprescindible; no concede derechos administrativos adicionales no usados.
 
-### TM-11 — Delete propio
+### TM-11 — Delete propio y cross-bot
 
-**Escenario:** transport bot elimina un mensaje que él mismo envió.
+**Escenario A:** transport bot elimina un mensaje que él mismo envió.
 
-**Esperado:** probar que puede hacerlo sin `can_delete_messages`. Telegram Bot API documenta que bots pueden borrar outgoing messages en groups/supergroups. Si MTProto usado por BeatGaler difiere en la práctica, documentar y justificar la elevación mínima.
+**Esperado A:** probar que puede hacerlo sin `can_delete_messages` cuando Telegram lo permita.
 
-Referencia: https://core.telegram.org/bots/api#deletemessage
+**Escenario B:** un transport bot necesita reemplazar/modificar contenido cuyo mensaje fue creado por **otro** transport bot.
+
+**Esperado B:** probar el derecho exacto requerido. Si `can_delete_messages` es imprescindible para la operación normal cross-bot, documentarlo como baseline estable mínimo; no convertirlo en grant/revoke por operación.
 
 ### TM-12 — Bot asignado a múltiples vaults
 
@@ -137,9 +142,9 @@ Referencia: https://core.telegram.org/bots/api#deletemessage
 
 ### TM-16 — XSS/session theft
 
-**Ataque:** JavaScript inyectado intenta leer sesión y credenciales.
+**Ataque:** JavaScript inyectado intenta leer sesión y temporary auth key.
 
-**Esperado:** CSP restrictiva, sesión no legible por JS cuando sea viable, ninguna credencial permanente de infraestructura disponible en browser.
+**Esperado:** CSP restrictiva, sesión Web no legible por JS cuando sea viable, ninguna credencial permanente de infraestructura disponible en browser. La temp key se considera robable por XSS y su blast radius debe seguir siendo aceptable.
 
 ### TM-17 — SSRF
 
@@ -149,7 +154,7 @@ Referencia: https://core.telegram.org/bots/api#deletemessage
 
 ### TM-18 — Rate-limit/abuse
 
-**Ataque:** usuario válido automatiza creación de sesiones, key bindings, privilege leases o acciones destructivas.
+**Ataque:** usuario válido automatiza creación de sesiones, key bindings, membership changes o acciones destructivas.
 
 **Esperado:** límites por cuenta/instalación/bot/vault; rechazo antes de trabajo caro; observabilidad sin secretos.
 
@@ -157,49 +162,59 @@ Referencia: https://core.telegram.org/bots/api#deletemessage
 
 **Escenario:** logout o cierre limpio.
 
-**Esperado:** borrar key local de RAM; limpiar leases; retirar privilegios temporales; política de `auth.dropTempAuthKeys` sin rotar bot token permanente de rutina.
+**Esperado:** borrar temp key local de RAM; limpiar leases; política de limpieza de temp keys sin rotar/revocar bot token permanente de rutina.
 
 ### TM-20 — Logs/crash dumps
 
 **Ataque:** recuperar secrets desde logs, telemetry, error strings o crash dumps.
 
-**Esperado:** redacción/ausencia de bot token, permanent auth key y temp key; test de patrones sensibles.
+**Esperado:** redacción/ausencia de bot token, permanent auth key, API hash y temp key; test de patrones sensibles.
+
+### TM-21 — Split bind permanent-side/temp-side
+
+**Ataque:** cliente intenta obtener la permanent auth key, API hash o material equivalente durante el bind; binder recibe una temp auth key completa o bytes de archivos innecesarios.
+
+**Esperado:** permanent auth material nunca sale del lado controlado. El binder recibe solo metadata mínima necesaria para construir el `encrypted_message`; la temp auth key permanece en el dispositivo y el RPC `auth.bindTempAuthKey` se realiza dispositivo -> Telegram.
 
 ## 5. Matriz de privilegios a validar
 
-| Capacidad BeatGaler | Derecho esperado | Elevación temporal |
+| Capacidad BeatGaler | Derecho esperado | Política candidata |
 |---|---|---|
-| Upload normal | permiso mínimo para enviar | No |
-| Download/playback | acceso de lectura | No |
-| Edit de mensaje propio | mínimo permitido por Telegram | No, si posible |
-| Delete de mensaje propio | sin `can_delete_messages` según Bot API | No, sujeto a prueba MTProto |
+| Upload normal | permiso mínimo para enviar | Baseline normal |
+| Download/playback | acceso de lectura | Baseline normal |
+| Edit de mensaje propio | mínimo permitido por Telegram | Baseline normal |
+| Delete de mensaje propio | sin `can_delete_messages` si Telegram lo permite | Probar |
 | Pin/unpin índice | mínimo derecho de pin requerido | Baseline si imprescindible |
-| Delete de mensaje no propio | `can_delete_messages` | Sí, solo si existe caso legítimo |
-| Gestionar miembros | derecho específico | Sí |
-| Promover administradores | normalmente no permitido a transport bot | Sí solo con diseño explícito / preferir MASTER |
+| Delete de mensaje creado por otro transport bot | posiblemente `can_delete_messages` | Baseline si imprescindible |
+| Gestionar miembros | MASTER/control plane únicamente cuando sea necesario | No transport data plane |
+| Promover administradores | no usar por operación normal | Fuera de arquitectura principal |
 
 ## 6. Criterios de fallo
 
 La arquitectura se rechaza si cualquiera de estas condiciones es necesaria:
 
 - relay de archivos por Galer Cloud;
-- bot token permanente en Web/React;
-- bot token permanente persistido en Desktop;
-- permiso administrativo amplio permanente sin justificación;
+- bot token, API hash o permanent auth key en Web/React;
+- bot token o permanent auth key persistido/expuesto en Desktop;
+- permiso administrativo amplio permanente sin justificación funcional;
+- seguridad dependiente de grant/revoke frecuente por operación;
 - bot compartido con acceso transversal no mitigado;
 - no poder probar 1.9 GB directo;
 - renovación visible o pérdida de operaciones;
-- dependencia en cambios admin a una frecuencia no escalable;
 - confiar en localhost sin autenticación.
 
 ## 7. Evidencia requerida antes de implementación sensible
 
-- prototipo aislado de bot + temp auth key;
+- prototipo aislado permanent-side + temp auth key client-side;
+- prueba de bind real contra Telegram sin permanent credentials en cliente;
 - prueba de renovación;
 - prueba 1.9 GB;
+- prueba de operación larga cruzando renovación;
 - prueba de pin con mínimo privilegio;
-- prueba de delete propio;
-- prueba de crash/watchdog de privilege lease;
+- prueba de delete propio y cross-bot;
 - prueba de bot compartido cross-vault;
-- medición de flood/rate behavior;
+- medición de flood/rate behavior para membership/control actions;
+- Windows, macOS y Web pura;
 - revisión independiente de seguridad.
+
+Hasta completar esa evidencia, 5.1 permanece **EN PROGRESO / NO-GO**.
