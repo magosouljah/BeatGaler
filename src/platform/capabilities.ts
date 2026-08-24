@@ -12,6 +12,7 @@ export interface PlatformCapabilities {
   nativeExternalArtworkDrop: boolean;
   directGalerCloudTransport: boolean;
   offlinePackage: boolean;
+  youtubePublishing: boolean;
   openProjectInDaw: boolean;
   revealLocalFile: boolean;
   watchFolders: boolean;
@@ -36,6 +37,7 @@ export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freez
   nativeExternalArtworkDrop: true,
   directGalerCloudTransport: true,
   offlinePackage: true,
+  youtubePublishing: true,
   openProjectInDaw: true,
   revealLocalFile: true,
   watchFolders: true,
@@ -49,8 +51,8 @@ export const DESKTOP_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freez
 });
 
 /**
- * Conservative runtime matrix for the first Web foundation commit.
- * Capabilities turn true only when their Web implementation is complete.
+ * Runtime truth for the current Web implementation, not the product roadmap.
+ * Planned Web capabilities remain false here until their implementation and tests land.
  */
 export const WEB_FOUNDATION_CAPABILITIES: Readonly<PlatformCapabilities> = Object.freeze({
   browserFileImport: true,
@@ -64,6 +66,7 @@ export const WEB_FOUNDATION_CAPABILITIES: Readonly<PlatformCapabilities> = Objec
   nativeExternalArtworkDrop: false,
   directGalerCloudTransport: false,
   offlinePackage: false,
+  youtubePublishing: false,
   openProjectInDaw: false,
   revealLocalFile: false,
   watchFolders: false,
