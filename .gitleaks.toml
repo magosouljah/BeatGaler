@@ -22,11 +22,3 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''^cloud-server/tests/unit\.test\.cjs$''']
 regexes = ['''^\s*telegram_api_hash:\s*['"]REDACTED_TELEGRAM_API_HASH['"],?\s*$''']
-
-[[allowlists]]
-description = "E2E recovery localStorage key names are identifiers, not credentials"
-targetRules = ["generic-api-key"]
-condition = "AND"
-regexTarget = "line"
-paths = ['''^tests/e2e-harness/E2ERecoveryHarness\.tsx$''']
-regexes = ['''^const\s+(OP_KEY|TMP_KEY)\s*=\s*['"]beatgaler-e2e-phase11-(operation|temp)['"];\s*$''']
