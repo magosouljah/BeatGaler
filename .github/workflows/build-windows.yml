@@ -10,49 +10,52 @@ env:
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
   BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
-  NODE_VERSION: 22.18.0
+  NODE_VERSION: 22.23.2
   BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
   VCPKG_COMMIT: 7f3781e19cc7d4e4882a4caec01668c6f7b5c163
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: 1.98.0
           targets: x86_64-pc-windows-msvc
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Cache Telegram Bot API runtime
+      - name: Cache pinned Bot API runtime
         id: bot-api-cache
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/windows-bot-api
           key: telegram-bot-api-windows-static-${{ env.BOT_API_COMMIT }}-${{ env.VCPKG_COMMIT }}
 
-      - name: Build official Telegram Bot API runtime
+      - name: Build official pinned Bot API runtime
         if: steps.bot-api-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           git clone https://github.com/tdlib/telegram-bot-api.git runtime/telegram-bot-api-source
           git -C runtime/telegram-bot-api-source checkout $env:BOT_API_COMMIT
+          if ((git -C runtime/telegram-bot-api-source rev-parse HEAD).Trim() -ne $env:BOT_API_COMMIT) { throw "Bot API source commit mismatch" }
           git -C runtime/telegram-bot-api-source submodule update --init --recursive
 
           git clone https://github.com/microsoft/vcpkg.git runtime/vcpkg
           git -C runtime/vcpkg checkout $env:VCPKG_COMMIT
+          if ((git -C runtime/vcpkg rev-parse HEAD).Trim() -ne $env:VCPKG_COMMIT) { throw "vcpkg source commit mismatch" }
           & runtime/vcpkg/bootstrap-vcpkg.bat -disableMetrics
           if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed with exit code $LASTEXITCODE" }
           & runtime/vcpkg/vcpkg.exe install gperf:x64-windows-static openssl:x64-windows-static zlib:x64-windows-static --clean-after-build
@@ -78,6 +81,8 @@ jobs:
           $resourceDir = "src-tauri/resources/windows"
           New-Item -ItemType Directory -Force $resourceDir | Out-Null
           $node = (Get-Command node.exe -ErrorAction Stop).Source
+          $actualNodeVersion = (& $node --version).TrimStart('v')
+          if ($actualNodeVersion -ne $env:NODE_VERSION) { throw "Node runtime version mismatch: $actualNodeVersion" }
           Copy-Item -LiteralPath $node -Destination "$resourceDir/node.exe"
           Copy-Item -LiteralPath "runtime/windows-bot-api/telegram-bot-api.exe" -Destination "$resourceDir/telegram-bot-api.exe"
 
@@ -92,6 +97,16 @@ jobs:
           & "$resourceDir/telegram-bot-api.exe" --help
           if ($LASTEXITCODE -ne 0) { throw "Bundled telegram-bot-api.exe is not executable" }
 
+      - name: Record Windows runtime provenance
+        shell: pwsh
+        run: |
+          node scripts/write-runtime-provenance.mjs `
+            --output artifacts/runtime-provenance-windows.json `
+            --platform windows-x64 `
+            --sources supply-chain/runtime-sources.json `
+            node=src-tauri/resources/windows/node.exe `
+            bot-api=src-tauri/resources/windows/telegram-bot-api.exe
+
       - name: Verify Windows packaging contract
         run: npm run test:windows-packaging
 
@@ -102,7 +117,7 @@ jobs:
       - name: Build Tauri app
         run: npx tauri build --bundles nsis --config src-tauri/tauri.windows-release.conf.json
 
-      - name: Verify installed Windows runtimes
+      - name: Verify installed Windows runtimes by content digest
         shell: pwsh
         run: |
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
@@ -122,15 +137,35 @@ jobs:
           & $bot --help
           if ($LASTEXITCODE -ne 0) { throw "Installed telegram-bot-api.exe is not executable" }
 
+          $stagedNodeHash = (Get-FileHash "src-tauri/resources/windows/node.exe" -Algorithm SHA256).Hash
+          $installedNodeHash = (Get-FileHash $node -Algorithm SHA256).Hash
+          if ($stagedNodeHash -ne $installedNodeHash) { throw "Installed Node digest differs from staged runtime" }
+          $stagedBotHash = (Get-FileHash "src-tauri/resources/windows/telegram-bot-api.exe" -Algorithm SHA256).Hash
+          $installedBotHash = (Get-FileHash $bot -Algorithm SHA256).Hash
+          if ($stagedBotHash -ne $installedBotHash) { throw "Installed Bot API digest differs from staged runtime" }
+
       - name: Verify updater artifacts
         run: npm run updater:verify-artifacts
 
+      - name: Create Windows artifact checksums
+        shell: pwsh
+        run: |
+          $out = "artifacts/SHA256SUMS-Windows.txt"
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $files = Get-ChildItem src-tauri/target/release/bundle/nsis -File | Sort-Object Name
+          foreach ($file in $files) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            Add-Content -Path $out -Value "$hash  $($file.Name)"
+          }
+
       - name: Upload Windows build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: BeatGaler-Windows-x64
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
+            artifacts/runtime-provenance-windows.json
+            artifacts/SHA256SUMS-Windows.txt
             VERSION
           if-no-files-found: error
