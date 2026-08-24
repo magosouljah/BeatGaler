@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.8.0-alpha.1",
   "type": "module",
+  "engines": {
+    "node": ">=22.23.2 <23",
+    "npm": ">=10.9.8 <11"
+  },
+  "packageManager": "npm@10.9.8",
   "scripts": {
     "dev": "vite",
     "build": "node scripts/patch-wry-pinterest.mjs && tsc && vite build",
