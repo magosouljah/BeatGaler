@@ -17,7 +17,7 @@
     "version:bump": "node scripts/version.mjs bump-patch",
     "build:release": "npm run version:check && npm run tauri build",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-tauri.ps1",
-    "test:regressions": "node scripts/run-regressions.mjs",
+    "test:regressions": "node scripts/run-regressions.mjs && node scripts/telegram-temp-auth-binding-vector.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
     "test:packaging:static": "npm run test:windows-packaging && npm run test:mac-portability:static",
     "test:web:smoke": "wdio run wdio.web.conf.mjs",
