@@ -95,18 +95,15 @@ async function main() {
   ]);
   assert.ok(authorization, 'Could not locate mtcute temporary auth-key generation implementation.');
 
-  // These are the exact properties M0-B needs to separate. The existing PFS
-  // implementation already creates a temporary key and sends the bind request
-  // under that key, but it also consumes the permanent key bytes locally to
-  // build encrypted_message. Therefore simply enabling usePfs would NOT satisfy
-  // Task 5.1; the permanent-side envelope construction must be delegated.
-  assert.ok(pfs.text.includes('doAuthorization(this, this._crypto, TEMP_AUTH_KEY_EXPIRY)'));
-  assert.ok(pfs.text.includes("_: 'auth.bindTempAuthKey'"));
-  assert.ok(pfs.text.includes('this._session._authKey.key'));
+  // These semantic checks intentionally avoid quote/style assumptions because
+  // npm's published JS may differ cosmetically from the TypeScript source.
+  assert.match(pfs.text, /doAuthorization\(this,\s*this\._crypto,\s*TEMP_AUTH_KEY_EXPIRY\)/);
+  assert.ok(pfs.text.includes('auth.bindTempAuthKey'));
+  assert.ok(pfs.text.includes('_authKey.key'));
   assert.ok(pfs.text.includes('tempKey.encryptMessage'));
   assert.ok(pfs.text.includes('TEMP_AUTH_KEY_REFRESH_MARGIN'));
-  assert.ok(pfs.text.includes('this._authorizePfs(true)'));
-  assert.ok(authorization.text.includes("expiresIn ? 'mt_p_q_inner_data_temp_dc'"));
+  assert.match(pfs.text, /_authorizePfs\(true\)/);
+  assert.ok(authorization.text.includes('mt_p_q_inner_data_temp_dc'));
 
   const summary = {
     mode: 'M0-B0 mtcute seam audit only',
