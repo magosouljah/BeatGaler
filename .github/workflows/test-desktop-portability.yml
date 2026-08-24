@@ -150,7 +150,7 @@ jobs:
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $ARCHIVE" | sha256sum --check --strict
           tar -xzf "$ARCHIVE" -C /tmp gitleaks
           : > artifacts/supply-chain/gitleaks.json
-          /tmp/gitleaks dir --no-banner --redact --report-format json --report-path artifacts/supply-chain/gitleaks.json .
+          /tmp/gitleaks dir --no-banner --redact --config .gitleaks.toml --report-format json --report-path artifacts/supply-chain/gitleaks.json .
 
       - name: Generate npm and Rust CycloneDX SBOMs
         shell: bash
