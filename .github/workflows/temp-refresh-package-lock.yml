@@ -1,6 +1,7 @@
 name: TEMP - Refresh package lock for Task 4.2
 
 on:
+  pull_request:
   push:
     branches:
       - task-4.2-supply-chain
