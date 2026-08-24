@@ -536,7 +536,12 @@ async function binderMain() {
     permanentKeyBytes?.fill(0);
     if (client?.connected) client.disconnect();
     if (client && !client.killed) client.kill('SIGTERM');
-    await connection?.destroy().catch(() => {});
+    if (connection) {
+      await Promise.race([
+        connection.destroy().catch(() => {}),
+        new Promise(resolve => setTimeout(resolve, 2_000)),
+      ]);
+    }
   }
 }
 
@@ -544,4 +549,7 @@ if (process.argv.includes('--client') || process.env.BEATGALER_M0_B2_CLIENT === 
   await clientMain();
 } else {
   await binderMain();
+  // Probe-only hard stop: the success evidence is already emitted and secrets/keys
+  // have been cleared best-effort above; do not let mtcute cleanup handles hold CI.
+  process.exit(0);
 }
