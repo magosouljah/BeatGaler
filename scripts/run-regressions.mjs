@@ -202,7 +202,7 @@ try {
   if (!app.includes('an empty library is a valid, authoritative state')) fail("App.tsx lost the empty-library mutation invariant comment; review Remove All recovery behavior.");
   if (!settingsPanel.includes("setTrashItems([]);")) fail("Settings Trash must disappear immediately after permanent-delete confirmation.");
   if (!settingsPanel.includes("Deleting ${requested} beat")) fail("Settings Trash lost its non-blocking background-delete status.");
-  if (!settingsPanel.includes("const remaining = await listTrash();")) fail("Settings Trash must recover real rows if background deletion could not be queued.");
+  if (!settingsPanel.includes("const remaining = await platform.trash.listBeats();")) fail("Settings Trash must recover real rows through the platform boundary if background deletion could not be queued.");
   if (!rustCommands.includes('metadata_display_name')) fail("Cloud Trash insertion must prefer BeatMeta.name over synthetic import-* paths.");
   if (!rustCommands.includes('beat_meta_json FROM trash ORDER BY trashed_at DESC')) fail("Trash listing must recover names from beat metadata for already-broken rows.");
   if (!rustCommands.includes('/beats/delete-topics-batch')) fail("Rust Trash purge must use the batch permanent-delete endpoint.");
