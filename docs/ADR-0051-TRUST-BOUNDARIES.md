@@ -60,23 +60,35 @@ Referencias oficiales:
 - https://core.telegram.org/method/auth.dropTempAuthKeys
 - https://core.telegram.org/mtproto/auth_key
 
-### 4.1 Flujo propuesto
+### 4.1 Frontera a probar en M0
+
+Telegram no documenta una API de “delegación remota” lista para usar. La especificación sí separa dos piezas del bind:
+
+- el `encrypted_message` de binding se construye y cifra usando la **permanent auth key**;
+- la llamada `auth.bindTempAuthKey` se envía a Telegram usando la **temporary auth key**.
+
+Eso hace protocolariamente plausible que el lado controlado construya el binding sin entregar la permanent auth key al dispositivo, mientras el dispositivo conserva la temp key y realiza el RPC directamente contra Telegram. **Sigue siendo hipótesis hasta demostrarlo end-to-end con nuestra stack.**
+
+El probe M0 debe verificar que el lado controlado solo reciba metadata de binding necesaria (por ejemplo temp auth key id, temp session id, nonce, expiry y msg_id) y que nunca reciba ni transporte bytes del archivo.
+
+### 4.2 Flujo candidato
 
 ```text
-1. Galer Cloud mantiene la autorización permanente del transport bot.
-2. BeatGaler obtiene/genera una temporary auth key contra Telegram.
-3. La temporary key se liga a la autorización permanente mediante el protocolo MTProto.
-4. BeatGaler conserva la temporary key únicamente en RAM.
-5. BeatGaler transfiere archivos directamente a/desde Telegram usando MTProto.
-6. Antes de expirar, se prepara silenciosamente una nueva temporary key.
-7. Al salir o limpiar una sesión, se descarta la key local y se limpian temporary keys según política.
+1. Galer/controlado mantiene la autorización permanente del transport bot.
+2. BeatGaler genera una temporary auth key directamente contra Telegram.
+3. BeatGaler entrega al binder solo metadata necesaria para construir el binding.
+4. El binder construye encrypted_message con la permanent auth key y lo devuelve.
+5. BeatGaler invoca auth.bindTempAuthKey directamente contra Telegram usando la temp key.
+6. BeatGaler conserva la temporary key únicamente en RAM.
+7. BeatGaler transfiere archivos directamente a/desde Telegram usando MTProto.
+8. Antes de expirar, se prepara silenciosamente una nueva temporary key.
 ```
 
-### 4.2 Renovación transparente
+Ningún paso autoriza a Galer a recibir los bytes de MP3/WAV/ZIP/artwork/samples.
+
+### 4.3 Renovación transparente
 
 La expiración no debe interrumpir al usuario.
-
-Ejemplo conceptual:
 
 ```text
 T0      Key A activa
@@ -87,7 +99,7 @@ T0+N+2  Key A deja de usarse y desaparece de RAM
 
 Debe existir margen suficiente para terminar operaciones en vuelo o reanudarlas sin corrupción. El TTL final no se fija en este ADR hasta medir latencia, uploads largos, reconexión y comportamiento de Telegram.
 
-## 5. Defensa adicional: membresía y permisos mínimos
+## 5. Defensa adicional: membresía y permisos mínimos estables
 
 Las temporary auth keys limitan **cuánto tiempo** una sesión robada puede ser útil, pero no crean por sí solas scopes por vault u operación. Por eso deben combinarse con aislamiento por bot/vault y mínimo privilegio.
 
@@ -95,44 +107,39 @@ Las temporary auth keys limitan **cuánto tiempo** una sesión robada puede ser 
 
 Un transport bot solo debe estar presente en los vaults que le correspondan según las leases activas. El allocator conserva la regla de reparto justo por carga.
 
-### 5.2 Permisos base
+Membership no equivale automáticamente a tenant scope si un mismo bot está simultáneamente en varios vaults. Ese caso debe probarse adversarialmente antes de permitir compartir transport bots entre tenants.
 
-El bot mantiene de forma estable únicamente los permisos realmente necesarios para las operaciones normales. BeatGaler necesita pin/index management, por lo que el permiso requerido para pin se considera parte del baseline si las pruebas confirman que no existe una alternativa con menos privilegio.
+### 5.2 Permisos baseline
 
-No se concederán derechos administrativos no utilizados.
+El bot mantiene de forma estable únicamente los permisos realmente necesarios para las operaciones normales.
 
-### 5.3 Permisos delicados temporales
+- `pin_messages` puede permanecer baseline si las pruebas confirman que es imprescindible para el índice fijado.
+- `delete_messages` puede necesitar permanecer baseline si BeatGaler debe borrar mensajes creados por **otro** transport bot. No se asumirá que “el bot puede borrar sus propios mensajes” cubre ese caso.
+- no se concederán derechos administrativos no utilizados.
 
-Los permisos de alto impacto se elevan solo si una operación real de BeatGaler los necesita.
+La lista final de baseline rights se decide por pruebas funcionales reales, no por conveniencia.
 
-Ejemplos a evaluar:
+### 5.3 Permission churn dinámico: fuera de la arquitectura principal
 
-- borrar mensajes ajenos: `can_delete_messages`;
-- gestionar miembros;
-- promover administradores;
-- cambiar información del chat;
-- otros derechos administrativos no indispensables.
-
-Importante: Telegram Bot API documenta que **los bots pueden borrar sus propios mensajes salientes en grupos y supergrupos sin `can_delete_messages`**. Por tanto, el flujo normal de borrar un beat enviado por el mismo transport bot no debe elevar permisos si esta propiedad se confirma también en el transporte MTProto elegido.
-
-Referencia: https://core.telegram.org/bots/api#deletemessage
-
-### 5.4 Privilege lease
-
-Si una operación sí necesita elevación:
+Por ahora BeatGaler **no** diseñará:
 
 ```text
-Galer valida usuario + vault + operación
-        -> crea privilege lease corta
-        -> MASTER concede derecho mínimo
-        -> se ejecuta operación directa en Telegram
-        -> se confirma resultado
-        -> MASTER retira derecho
+operación -> grant delete -> borrar -> revoke delete
 ```
 
-Debe existir watchdog server-side para retirar permisos aunque el cliente se cierre o falle después de la elevación.
+ni promote/demote por chunk u operación.
 
-No se cambiarán permisos por cada chunk ni se promoverá/degradará por operación cuando Telegram no lo requiera. Esto evita convertir a MASTER en cuello de botella y reduce riesgo de flood limits.
+El probe aislado de PR #12 demostró que cambios administrativos frecuentes pueden entrar en `FLOOD_WAIT`, y que el mismo rate limit puede impedir una restauración inmediata de derechos. Por eso un grant/revoke frecuente no puede considerarse un mecanismo de seguridad fiable.
+
+Resultado observado el 2026-08-24:
+
+- primera corrida: 80 cambios exitosos a 5 s, 2.5 s, 1 s y 500 ms, sin `FLOOD_WAIT`;
+- segunda corrida poco después, a 250 ms: después de 20 cambios de esa corrida Telegram devolvió `FLOOD_WAIT 533s`;
+- la restauración automática inmediata también recibió `FLOOD`.
+
+La actividad acumulada de la primera corrida puede haber contribuido. **No se interpreta esto como “el límite es 20”.** La conclusión válida es únicamente que churn frecuente puede bloquear tanto el cambio como su restauración.
+
+Permisos dinámicos quedan fuera de la arquitectura 5.1 principal hasta que nueva evidencia justifique reabrir esa decisión.
 
 ## 6. Escalabilidad
 
@@ -140,16 +147,15 @@ La seguridad no puede depender de cambios administrativos excesivamente frecuent
 
 Reglas:
 
-- no permission churn por chunk;
-- no elevate/demote para uploads/downloads normales si no es técnicamente necesario;
-- agrupar/serializar operaciones administrativas por bot+vault;
-- privilege leases idempotentes;
-- backoff explícito ante `FLOOD_WAIT`/rate limits;
-- métricas de promociones, degradaciones, joins/leaves y temporary-key rotations;
+- no permission churn por chunk u operación normal;
+- permisos baseline mínimos y estables;
+- membership changes solo cuando la lease realmente lo requiera, con medición y backoff;
+- métricas de joins/leaves, temporary-key bindings/renewals y `FLOOD_WAIT`;
 - admission control si la capacidad segura del pool se agota;
-- nunca ampliar blast radius solo para aumentar throughput.
+- nunca ampliar blast radius solo para aumentar throughput;
+- no compartir transport bot entre tenants hasta demostrar aislamiento aceptable.
 
-Telegram no publica una cifra universal que garantice una frecuencia segura para todos los cambios administrativos; la capacidad debe medirse adversarialmente antes de producción.
+Telegram no publica una cifra universal que garantice una frecuencia segura para cambios administrativos; la capacidad debe medirse antes de producción.
 
 ## 7. Separación Desktop / Web
 
@@ -159,7 +165,11 @@ La temporary auth key debe vivir únicamente en el runtime nativo, no en React, 
 
 ### Web
 
-Web sigue siendo aplicación Web pura. No puede usar Tauri/helper Desktop. La viabilidad de temporary auth keys MTProto directamente desde el navegador debe probarse sin introducir una credencial permanente ni un relay de archivos. Si el navegador no puede mantener el límite de confianza requerido de forma aceptable, la tarea permanece bloqueada; no se sustituirá silenciosamente por upload vía Galer Cloud.
+Web sigue siendo aplicación Web pura. No puede usar Tauri/helper Desktop. La viabilidad de temporary auth keys MTProto directamente desde el navegador debe probarse sin introducir una credencial permanente ni un relay de archivos.
+
+Una temp key en JavaScript/WASM es temporal, **no secreta frente al propio cliente ni frente a XSS**. El threat model debe tratarla como credencial robable con TTL y blast radius controlado, no como secreto inaccesible.
+
+Si el navegador no puede mantener el límite de confianza requerido de forma aceptable, la tarea permanece bloqueada; no se sustituirá silenciosamente por upload vía Galer Cloud.
 
 ## 8. Origen de API / localhost
 
@@ -189,13 +199,14 @@ Antes de cerrar 5.1 se debe definir:
 
 No se aprueba todavía:
 
+- viabilidad end-to-end del split permanent-side/temp-side;
 - TTL final de temp auth keys;
 - librería MTProto final;
 - reemplazo del Local Bot API;
 - comportamiento exacto ante upload de 1.9 GB que cruza renovación;
-- frecuencia segura de cambios de permisos;
-- lista final de derechos base del transport bot;
+- lista final de derechos baseline del transport bot;
 - diseño final Web MTProto;
+- política final para transport bots compartidos entre tenants;
 - implementación de CSP/cookies/CORS/Tauri scopes.
 
 Todo lo anterior requiere prototipo y pruebas antes de implementación productiva.
@@ -206,10 +217,15 @@ Este ADR solo pasa de `DRAFT` a `ACCEPTED` cuando:
 
 1. el threat model 0051 tiene pruebas adversariales concretas;
 2. el plan de migración/rollback 0051 conserva Direct y cero pérdida de datos;
-3. se demuestra un prototipo de temporary auth key para bot;
-4. se demuestra renovación transparente;
-5. se prueba transferencia directa grande, incluido objetivo 1.9 GB;
-6. se mide permission churn y comportamiento ante rate limit;
-7. se valida que pin funciona con el mínimo derecho necesario;
-8. se valida delete propio sin elevación o se documenta la excepción;
-9. revisión independiente de seguridad aprueba los límites de confianza.
+3. se demuestra que la permanent auth nunca llega al cliente;
+4. se demuestra un prototipo de temporary auth key para bot y bind split controlado/cliente;
+5. se demuestra renovación transparente;
+6. se prueba una operación larga cruzando renovación sin corrupción/duplicado;
+7. se prueba transferencia directa grande, incluido objetivo 1.9 GB;
+8. se valida Windows, macOS y Web pura;
+9. se valida pin con el mínimo derecho necesario;
+10. se valida delete propio y delete de mensajes creados por otro transport bot para fijar el baseline real;
+11. se prueba cross-vault con bot compartido y se decide si compartir entre tenants se prohíbe o limita;
+12. revisión independiente de seguridad aprueba los límites de confianza.
+
+Hasta entonces, 5.1 permanece **EN PROGRESO / NO-GO**.
