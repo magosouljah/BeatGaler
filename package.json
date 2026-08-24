@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/patch-wry-pinterest.mjs && tsc && vite build",
-    "build:web": "tsc && vite build",
+    "build:web": "tsc && vite build --mode web",
     "preview": "vite preview",
     "version:set": "node scripts/version.mjs set",
     "version:bump": "node scripts/version.mjs bump-patch",
