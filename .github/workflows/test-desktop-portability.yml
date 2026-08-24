@@ -106,7 +106,7 @@ jobs:
           path: src-tauri/Cargo.lock
           if-no-files-found: ignore
 
-  macos_native_smoke:
+  macos-native-smoke:
     name: Native macOS smoke (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -162,14 +162,14 @@ jobs:
     needs:
       - web_shared
       - windows_portability
-      - macos_native_smoke
+      - macos-native-smoke
     runs-on: ubuntu-24.04
     steps:
       - name: Enforce every required gate
         env:
           WEB_RESULT: ${{ needs.web_shared.result }}
           WINDOWS_RESULT: ${{ needs.windows_portability.result }}
-          MACOS_RESULT: ${{ needs.macos_native_smoke.result }}
+          MACOS_RESULT: ${{ needs['macos-native-smoke'].result }}
         shell: bash
         run: |
           echo "Web/shared: $WEB_RESULT"
