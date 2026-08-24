@@ -5,48 +5,108 @@ on:
   push:
     branches:
       - main
+      - integration-v0.8.0-alpha.1
   workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  windows-portability:
-    name: Portable gate on Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+concurrency:
+  group: required-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-      - uses: actions/setup-node@v4
+jobs:
+  web_shared:
+    name: Web + shared gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked npm graph
+        run: npm ci
 
-      - run: npm ci
+      - name: Verify version and manifests agree
+        run: npm run version:check
+
+      - name: Build real Web bundle
+        run: npm run build:web
+
+      - name: Smoke compiled Web bundle in Chrome
+        run: npm run test:web:smoke
+
+      - name: Typecheck shared frontend
+        run: npm run test:typecheck
+
+      - name: Run TypeScript unit contract
+        run: npm run test:unit:ts
+
+      - name: Run DOM component contract
+        run: npm run test:component:dom
+
+      - name: Run shared integration contract
+        run: npm run test:integration
+
+      - name: Run backend unit contract
+        run: npm run test:unit:cloud
+
+      - name: Run regression guards
+        run: npm run test:regressions
+
+      - name: Run static packaging and portability guards
+        run: npm run test:packaging:static
+
+  windows_portability:
+    name: Portable gate on Windows
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked npm graph
+        run: npm ci
 
       - name: Prepare compile-only frontend placeholder
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p dist
-          printf '<!doctype html><html><body></body></html>\n' > dist/index.html
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Set-Content -Path dist/index.html -Value '<!doctype html><html><body>CI compile placeholder</body></html>'
 
-      - name: Run complete Mac portability gate without a Mac
-        run: npm run test:mac-portability
+      - name: Run locked portability gate on Windows
+        run: npm run test:mac-portability:locked
 
       - name: Verify Cargo.lock is committed exactly as tested
+        shell: pwsh
         run: git diff --exit-code -- src-tauri/Cargo.lock
 
       - name: Upload regenerated Cargo.lock when the lock is stale
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: regenerated-Cargo-lock
+          name: stale-cargo-lock-windows
           path: src-tauri/Cargo.lock
           if-no-files-found: ignore
 
-  macos-native-smoke:
+  macos_native_smoke:
     name: Native macOS smoke (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -56,39 +116,67 @@ jobs:
             runner: macos-15
           - arch: x86_64
             runner: macos-15-intel
-
     runs-on: ${{ matrix.runner }}
-
+    timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: "12.0"
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
 
-      - run: npm ci
+      - name: Install locked npm graph
+        run: npm ci
 
       - name: Prepare compile-only frontend placeholder
         shell: bash
         run: |
           mkdir -p dist
-          printf '<!doctype html><html><body></body></html>\n' > dist/index.html
+          printf '%s\n' '<!doctype html><html><body>CI compile placeholder</body></html>' > dist/index.html
 
       - name: Prepare compile-only Mac resource placeholders
         shell: bash
         run: |
-          set -euo pipefail
           mkdir -p src-tauri/resources
-          for name in ffmpeg node telegram-bot-api; do
-            printf '#!/bin/sh\nexit 0\n' > "src-tauri/resources/$name"
-            chmod +x "src-tauri/resources/$name"
-          done
+          printf '#!/bin/sh\nexit 0\n' > src-tauri/resources/ffmpeg
+          printf '#!/bin/sh\nexit 0\n' > src-tauri/resources/node
+          printf '#!/bin/sh\nexit 0\n' > src-tauri/resources/telegram-bot-api
+          chmod +x src-tauri/resources/ffmpeg src-tauri/resources/node src-tauri/resources/telegram-bot-api
 
-      - name: Compile and run portable Rust/TS regressions natively on macOS
+      - name: Compile and run locked portable Rust/TS regressions natively on macOS
         run: npm run test:mac-portability:locked
+
+  required_ci:
+    name: Required CI
+    if: ${{ always() }}
+    needs:
+      - web_shared
+      - windows_portability
+      - macos_native_smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce every required gate
+        env:
+          WEB_RESULT: ${{ needs.web_shared.result }}
+          WINDOWS_RESULT: ${{ needs.windows_portability.result }}
+          MACOS_RESULT: ${{ needs.macos_native_smoke.result }}
+        shell: bash
+        run: |
+          echo "Web/shared: $WEB_RESULT"
+          echo "Windows: $WINDOWS_RESULT"
+          echo "macOS matrix: $MACOS_RESULT"
+          if [[ "$WEB_RESULT" != "success" || "$WINDOWS_RESULT" != "success" || "$MACOS_RESULT" != "success" ]]; then
+            echo "Required CI failed because at least one gate did not succeed."
+            exit 1
+          fi
+          echo "Required CI PASS: Web build/browser smoke, shared/backend/regressions, packaging/portability, Windows, and macOS all succeeded."
