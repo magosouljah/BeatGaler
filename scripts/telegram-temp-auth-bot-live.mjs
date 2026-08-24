@@ -33,14 +33,36 @@ const SECRET_NAMES = [
 ];
 const TEMP_EXPIRY_SECONDS = 10 * 60;
 const TIMEOUT_MS = 60_000;
-const PROD_DC = {
-  id: 2,
-  ipAddress: 'venus.web.telegram.org',
-  port: 443,
-  testMode: false,
-  mediaOnly: false,
-  ipv6: false,
+const DEFAULT_PROD_DC_ID = 2;
+const PROD_DC_SUBDOMAINS = {
+  1: 'pluto',
+  2: 'venus',
+  3: 'aurora',
+  4: 'vesta',
+  5: 'flora',
 };
+
+function productionDc(dcId) {
+  const subdomain = PROD_DC_SUBDOMAINS[dcId];
+  assert.ok(subdomain, `Unsupported Telegram production DC ${dcId}.`);
+  return {
+    id: dcId,
+    ipAddress: `${subdomain}.web.telegram.org`,
+    port: 443,
+    testMode: false,
+    mediaOnly: false,
+    ipv6: false,
+  };
+}
+
+function parseProductionDcId(value, label) {
+  const dcId = Number(value);
+  assert.ok(
+    Number.isInteger(dcId) && PROD_DC_SUBDOMAINS[dcId],
+    `${label} must be a Telegram production DC id from 1 to 5.`,
+  );
+  return dcId;
+}
 
 function requiredSecret(name) {
   const value = String(process.env[name] || '').trim();
@@ -48,8 +70,12 @@ function requiredSecret(name) {
   return value;
 }
 
-function sanitizedClientEnv() {
-  const env = { ...process.env, BEATGALER_M0_B2_CLIENT: '1' };
+function sanitizedClientEnv(dcId) {
+  const env = {
+    ...process.env,
+    BEATGALER_M0_B2_CLIENT: '1',
+    BEATGALER_M0_B2_DC_ID: String(dcId),
+  };
   for (const name of SECRET_NAMES) delete env[name];
   return env;
 }
@@ -159,7 +185,7 @@ async function makeCrypto(m) {
   return crypto;
 }
 
-async function makeManualConnection(m, crypto, label, apiId = 0) {
+async function makeManualConnection(m, crypto, label, apiId = 0, dcId = DEFAULT_PROD_DC_ID) {
   class ManualSessionConnection extends m.SessionConnection {
     onConnected() {
       // The probe explicitly drives permanent or temporary key generation.
@@ -187,7 +213,7 @@ async function makeManualConnection(m, crypto, label, apiId = 0) {
       query: { _: 'help.getNearestDc' },
     },
     transport,
-    dc: PROD_DC,
+    dc: productionDc(dcId),
     testMode: false,
     reconnectionStrategy: m.defaultReconnectionStrategy,
     layer: m.tl.LAYER,
@@ -297,10 +323,11 @@ async function waitForProcessMessage(proc, acceptedTypes, label) {
 async function clientMain() {
   assertClientHasNoSecrets();
   assert.ok(globalThis.WebSocket, 'Node runtime must provide WebSocket.');
+  const dcId = parseProductionDcId(process.env.BEATGALER_M0_B2_DC_ID, 'BEATGALER_M0_B2_DC_ID');
 
   const m = await loadMtcuteInternals();
   const crypto = await makeCrypto(m);
-  const connection = await makeManualConnection(m, crypto, 'client', 0);
+  const connection = await makeManualConnection(m, crypto, 'client', 0, dcId);
   let tempAuthKeyBytes;
 
   try {
@@ -418,42 +445,67 @@ async function binderMain() {
 
   const m = await loadMtcuteInternals();
   const crypto = await makeCrypto(m);
-  const connection = await makeManualConnection(m, crypto, 'binder', apiId);
+  let connection;
   let permanentKeyBytes;
   let client;
+  let dcId = DEFAULT_PROD_DC_ID;
+  let authorizedBotId;
 
   try {
-    const [generatedPermanentKey, permanentServerSalt, permanentTimeOffset] = await timeout(
-      m.doAuthorization(connection, crypto),
-      'permanent auth generation',
-    );
-    permanentKeyBytes = generatedPermanentKey;
-    connection._session._authKey.setup(permanentKeyBytes);
-    connection._salts.currentSalt = permanentServerSalt;
-    connection._session.updateTimeOffset(permanentTimeOffset, true);
-    connection.onConnectionUsable();
+    const visitedDcs = new Set();
+    while (!authorizedBotId) {
+      if (visitedDcs.has(dcId)) {
+        throw new Error(`Bot authorization migration loop detected at DC ${dcId}.`);
+      }
+      visitedDcs.add(dcId);
 
-    const authorization = await timeout(
-      connection.sendRpc({
-        _: 'auth.importBotAuthorization',
-        flags: 0,
-        apiId,
-        apiHash,
-        botAuthToken: botToken,
-      }, 30_000),
-      'bot authorization',
-    );
-    if (authorization?._ === 'mt_rpc_error') {
-      throw new Error(`Bot authorization rejected: ${authorization.errorCode}:${authorization.errorMessage}`);
+      connection = await makeManualConnection(m, crypto, 'binder', apiId, dcId);
+      const [generatedPermanentKey, permanentServerSalt, permanentTimeOffset] = await timeout(
+        m.doAuthorization(connection, crypto),
+        `permanent auth generation on DC ${dcId}`,
+      );
+      permanentKeyBytes = generatedPermanentKey;
+      connection._session._authKey.setup(permanentKeyBytes);
+      connection._salts.currentSalt = permanentServerSalt;
+      connection._session.updateTimeOffset(permanentTimeOffset, true);
+      connection.onConnectionUsable();
+
+      const authorization = await timeout(
+        connection.sendRpc({
+          _: 'auth.importBotAuthorization',
+          flags: 0,
+          apiId,
+          apiHash,
+          botAuthToken: botToken,
+        }, 30_000),
+        `bot authorization on DC ${dcId}`,
+      );
+
+      if (authorization?._ === 'mt_rpc_error') {
+        const migrate = /^USER_MIGRATE_(\d+)$/.exec(String(authorization.errorMessage || ''));
+        if (migrate) {
+          const nextDcId = parseProductionDcId(migrate[1], 'USER_MIGRATE target');
+          await connection.destroy().catch(() => {});
+          connection = undefined;
+          permanentKeyBytes.fill(0);
+          permanentKeyBytes = undefined;
+          dcId = nextDcId;
+          continue;
+        }
+        throw new Error(`Bot authorization rejected: ${authorization.errorCode}:${authorization.errorMessage}`);
+      }
+
+      assert.equal(authorization?._, 'auth.authorization', 'Expected auth.authorization for bot login.');
+      assert.equal(authorization?.user?._, 'user', 'Bot login must return a user object.');
+      assert.equal(authorization?.user?.bot, true, 'Authorized permanent identity must be a bot.');
+      authorizedBotId = String(authorization.user.id);
     }
-    assert.equal(authorization?._, 'auth.authorization', 'Expected auth.authorization for bot login.');
-    assert.equal(authorization?.user?._, 'user', 'Bot login must return a user object.');
-    assert.equal(authorization?.user?.bot, true, 'Authorized permanent identity must be a bot.');
-    const authorizedBotId = String(authorization.user.id);
+
+    assert.ok(connection && permanentKeyBytes, 'Authorized binder connection/key must be available.');
 
     client = fork(fileURLToPath(import.meta.url), ['--client'], {
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env: sanitizedClientEnv(),
+      env: sanitizedClientEnv(dcId),
     });
 
     const bindingRequest = await waitForProcessMessage(client, 'build-binding', 'client');
@@ -467,6 +519,7 @@ async function binderMain() {
     console.log('PASS M0-B2 bot temp-auth proof: authorized bot identity and direct RPC succeeded while permanent credentials stayed binder-side');
     console.log(JSON.stringify({
       mode: 'M0-B2 isolated production-DC bot identity proof',
+      production_dc_id: dcId,
       bot_identity_proven: true,
       network_bind_proven: true,
       direct_mtproto_operation_proven: true,
@@ -483,7 +536,7 @@ async function binderMain() {
     permanentKeyBytes?.fill(0);
     if (client?.connected) client.disconnect();
     if (client && !client.killed) client.kill('SIGTERM');
-    await connection.destroy().catch(() => {});
+    await connection?.destroy().catch(() => {});
   }
 }
 
