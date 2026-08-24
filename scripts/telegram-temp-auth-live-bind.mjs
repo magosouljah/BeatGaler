@@ -370,7 +370,10 @@ async function clientMain() {
     connection._session._authKeyTempSecondary = connection._session._authKeyTemp;
     connection._session._authKeyTemp = tempKey;
     connection._salts.currentSalt = tempServerSalt;
-    connection._session.initConnectionCalled = false;
+    // For this anonymous protocol-level operation only, skip initConnection so
+    // the synthetic apiId=0 never reaches Telegram. Bot/application identity is
+    // deliberately deferred to M0-B2.
+    connection._session.initConnectionCalled = true;
     connection.onConnectionUsable();
 
     const directRpc = await timeout(
