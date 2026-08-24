@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "node": {
+    "version": "22.23.2",
+    "source": "https://nodejs.org/dist/v22.23.2/",
+    "checksumSource": "https://nodejs.org/dist/v22.23.2/SHASUMS256.txt"
+  },
+  "rustToolchain": {
+    "version": "1.98.0",
+    "source": "rustup dist manifest",
+    "lock": "rust-toolchain.toml"
+  },
+  "ffmpeg": {
+    "repository": "eugeneware/ffmpeg-static",
+    "tag": "b6.1.1",
+    "checksumSource": "GitHub release asset digest"
+  },
+  "telegramBotApi": {
+    "repository": "tdlib/telegram-bot-api",
+    "commit": "adfd7f6a8e990272851777eeb3ae0def4216f161",
+    "verification": "source commit plus SHA-256 of each produced binary"
+  },
+  "vcpkg": {
+    "repository": "microsoft/vcpkg",
+    "commit": "7f3781e19cc7d4e4882a4caec01668c6f7b5c163",
+    "purpose": "Windows Bot API static build dependencies"
+  },
+  "securityTools": {
+    "cargoAudit": "0.22.2",
+    "cargoCycloneDx": "0.5.9",
+    "gitleaks": "8.30.1"
+  }
+}
