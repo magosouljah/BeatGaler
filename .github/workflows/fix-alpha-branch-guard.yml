@@ -1,0 +1,42 @@
+name: Fix alpha branch regression guard
+
+on:
+  push:
+    branches:
+      - integration-v0.8.0-alpha.1
+    paths:
+      - .github/workflows/fix-alpha-branch-guard.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration-v0.8.0-alpha.1
+      - name: Align regression guard with prerelease branch derivation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/run-regressions.mjs')
+          text = path.read_text()
+          old = '  const expected = /-beta(?:\\.|$)/i.test(version) ? `galer-cloud-beta-v${stable}` : `galer-cloud-v${stable}`;'
+          new = '''  const prerelease = version.match(/^\\d+\\.\\d+\\.\\d+(?:-([0-9A-Za-z.-]+))?$/)?.[1] || "";
+  const channel = prerelease ? prerelease.split(".")[0].replace(/[^0-9A-Za-z-]+/g, "-").toLowerCase() : "";
+  const expected = channel ? `galer-cloud-${channel}-v${stable}` : `galer-cloud-v${stable}`;'''
+          if old not in text:
+              raise SystemExit('expected stale branch guard not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/fix-alpha-branch-guard.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "test(integration): recognize prerelease branch channels"
+          git push origin HEAD:integration-v0.8.0-alpha.1
