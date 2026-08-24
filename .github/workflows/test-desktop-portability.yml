@@ -157,10 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           npm sbom --sbom-format cyclonedx > artifacts/supply-chain/npm.cdx.json
-          cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --override-filename beatgaler-rust.cdx.json
-          RUST_SBOM="$(find src-tauri -type f -name 'beatgaler-rust.cdx.json' | head -n 1)"
-          test -n "$RUST_SBOM" && test -f "$RUST_SBOM"
-          mv "$RUST_SBOM" artifacts/supply-chain/rust.cdx.json
+          cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --override-filename beatgaler-rust.cdx
+          test -f src-tauri/beatgaler-rust.cdx.json
+          mv src-tauri/beatgaler-rust.cdx.json artifacts/supply-chain/rust.cdx.json
 
       - name: Record source-lock checksums and runtime source pins
         shell: bash
