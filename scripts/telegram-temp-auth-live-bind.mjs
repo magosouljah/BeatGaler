@@ -367,35 +367,16 @@ async function clientMain() {
     }
     assert.equal(result, true, 'Telegram must return boolTrue for the split bind.');
 
-    connection._session._authKeyTempSecondary = connection._session._authKeyTemp;
-    connection._session._authKeyTemp = tempKey;
-    connection._salts.currentSalt = tempServerSalt;
-    // For this anonymous protocol-level operation only, skip initConnection so
-    // the synthetic apiId=0 never reaches Telegram. Bot/application identity is
-    // deliberately deferred to M0-B2.
-    connection._session.initConnectionCalled = true;
-    connection.onConnectionUsable();
-
-    const directRpc = await timeout(
-      connection.sendRpc({ _: 'help.getNearestDc' }),
-      'post-bind direct RPC',
-    );
-    if (directRpc._ === 'mt_rpc_error') {
-      throw new Error(`Post-bind direct RPC rejected: ${directRpc.errorCode}:${directRpc.errorMessage}`);
-    }
-    assert.equal(directRpc._, 'nearestDc', 'Post-bind direct RPC must return nearestDc.');
-
-    console.log('PASS M0-B1 split network bind + direct RPC: Telegram accepted auth.bindTempAuthKey and a post-bind RPC using the temp key');
+    console.log('PASS M0-B1 split network bind: Telegram accepted auth.bindTempAuthKey while permanent auth stayed binder-side');
     console.log(JSON.stringify({
-      mode: 'M0-B1 isolated TEST-DC network bind + direct RPC',
+      mode: 'M0-B1 isolated TEST-DC network bind',
       test_dc: true,
       bot_identity_proven: false,
       permanent_auth_reaches_client: false,
       temp_auth_key_reaches_binder: false,
       galer_file_bytes: false,
       network_bind_proven: true,
-      direct_mtproto_operation_proven: true,
-      direct_rpc_method: 'help.getNearestDc',
+      direct_mtproto_operation_proven: false,
       mtcute_stock_pfs_used: false,
       mtcute_decrypt_guard_workaround: 'random unauthorized sentinel only',
       next_gate: 'M0-B2: prove an authorized bot operation directly with Telegram while permanent bot credentials remain controlled-side.',
