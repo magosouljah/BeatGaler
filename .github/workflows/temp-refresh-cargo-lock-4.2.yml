@@ -1,0 +1,43 @@
+name: TEMP - Refresh Cargo lock for Task 4.2
+
+on:
+  push:
+    branches:
+      - task-4.2-supply-chain
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-cargo-lock:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: task-4.2-supply-chain
+
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
+
+      - name: Move vulnerable Rust transitives to patched releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo update --manifest-path src-tauri/Cargo.toml -p plist --precise 1.10.0
+          cargo update --manifest-path src-tauri/Cargo.toml -p anyhow --precise 1.0.103
+          cargo update --manifest-path src-tauri/Cargo.toml -p rand@0.8.5 --precise 0.8.6
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
+
+      - name: Commit regenerated Cargo lock and remove this temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git rm .github/workflows/temp-refresh-cargo-lock-4.2.yml
+          git commit -m "chore(deps): lock patched Rust supply chain"
+          git push origin HEAD:task-4.2-supply-chain
