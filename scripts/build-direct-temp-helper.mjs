@@ -54,6 +54,7 @@ for (const [name, target] of aliases) {
   if (!existsSync(target)) throw new Error(`Missing ${name} target: ${target}`);
 }
 
+// Keep this bundle self-contained: packaged Desktop has no node_modules beside the helper.
 await build({
   entryPoints: [path.join(root, "src-tauri", "direct-transport", "transport-helper.source.mjs")],
   outfile: path.join(root, "src-tauri", "direct-transport", "transport-helper.cjs"),
