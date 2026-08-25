@@ -11,6 +11,8 @@ const REQUIRED = [
   'BEATGALER_M0_F_API_BASE',
   'BEATGALER_M0_F_V074_HELPER',
 ];
+const OP_TIMEOUT_MS = 30_000;
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 function required(name) {
   const value = String(process.env[name] || '').trim();
@@ -29,11 +31,16 @@ const BOOT = '__BEATGALER_DIRECT_BOOTSTRAP__';
 
 assert.ok(fs.existsSync(helperPath), `v0.7.4 helper missing: ${helperPath}`);
 
+function phase(name, fields = {}) {
+  console.log(JSON.stringify({ event: 'phase', name, at: new Date().toISOString(), ...fields }));
+}
+
 class HelperSession {
   constructor(label, token) {
     this.label = label;
     this.pending = new Map();
     this.buffer = '';
+    this.closed = false;
     this.child = spawn(process.execPath, [helperPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
@@ -43,7 +50,11 @@ class HelperSession {
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', chunk => this.#onStdout(chunk));
     this.child.on('exit', (code, signal) => {
-      for (const { reject } of this.pending.values()) reject(new Error(`${label} helper exited code=${code} signal=${signal}`));
+      this.closed = true;
+      for (const waiter of this.pending.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error(`${label} helper exited code=${code} signal=${signal}`));
+      }
       this.pending.clear();
     });
 
@@ -72,32 +83,67 @@ class HelperSession {
       if (!id || !this.pending.has(id)) continue;
       const waiter = this.pending.get(id);
       this.pending.delete(id);
+      clearTimeout(waiter.timer);
       if (payload.ok === false) waiter.reject(new Error(String(payload.error || 'helper operation failed')));
       else waiter.resolve(payload);
     }
   }
 
-  request(op, extra = {}) {
+  request(op, extra = {}, timeoutMs = OP_TIMEOUT_MS) {
+    if (this.closed || this.child.killed) return Promise.reject(new Error(`${this.label} helper is not running`));
     const requestId = `${this.label}-${op}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const promise = new Promise((resolve, reject) => this.pending.set(requestId, { resolve, reject }));
-    this.child.stdin.write(`${JSON.stringify({ request_id: requestId, op, ...extra })}\n`);
-    return promise;
+    phase(`${this.label}:${op}:begin`, { request_id: requestId, timeout_ms: timeoutMs });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        phase(`${this.label}:${op}:timeout`, { request_id: requestId, timeout_ms: timeoutMs });
+        reject(new Error(`${this.label} ${op} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(requestId, {
+        timer,
+        resolve: value => {
+          phase(`${this.label}:${op}:done`, { request_id: requestId });
+          resolve(value);
+        },
+        reject,
+      });
+      try {
+        this.child.stdin.write(`${JSON.stringify({ request_id: requestId, op, ...extra })}\n`);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(requestId);
+        reject(error);
+      }
+    });
   }
 
   async close() {
-    try { await this.request('shutdown'); } catch {}
+    if (this.closed) return;
+    try { await this.request('shutdown', {}, SHUTDOWN_TIMEOUT_MS); } catch (error) {
+      phase(`${this.label}:shutdown:forced`, { reason: String(error?.message || error) });
+    }
     try { this.child.stdin.end(); } catch {}
+    if (!this.closed) {
+      try { this.child.kill('SIGKILL'); } catch {}
+    }
   }
 }
 
-async function rawDelete(token, messageId) {
-  const r = await fetch(`${botApiBase}/bot${token}/deleteMessage`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
-  });
-  const body = await r.json().catch(() => null);
-  return { http_ok: r.ok, ok: body?.ok === true, result: body?.result, description: body?.description || null };
+async function rawDelete(token, messageId, timeoutMs = OP_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${botApiBase}/bot${token}/deleteMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+      signal: controller.signal,
+    });
+    const body = await r.json().catch(() => null);
+    return { http_ok: r.ok, ok: body?.ok === true, result: body?.result, description: body?.description || null };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-m0f-v074-'));
@@ -111,7 +157,7 @@ let b;
 let oldMessageId = 0;
 let newMessageId = 0;
 try {
-  // Session A: exact v0.7.4 helper uploads the original slot payload.
+  phase('session-a:start');
   a = new HelperSession('A', tokenA);
   const oldUpload = await a.request('upload', {
     path: oldPath,
@@ -121,11 +167,11 @@ try {
   oldMessageId = Number(oldUpload.message_id || 0);
   assert.ok(Number.isInteger(oldMessageId) && oldMessageId > 0, 'Session A upload must return message_id.');
   console.log(JSON.stringify({ event: 'v074-session-a-upload', message_id: oldMessageId, api_base: botApiBase }));
+  phase('session-a:close');
   await a.close();
   a = null;
 
-  // Session B: exact v0.7.4 helper uploads the replacement, then executes the
-  // exact delete_messages operation used by BeatGaler cleanup for obsolete media.
+  phase('session-b:start');
   b = new HelperSession('B', tokenB);
   const newUpload = await b.request('upload', {
     path: newPath,
@@ -136,12 +182,11 @@ try {
   assert.ok(Number.isInteger(newMessageId) && newMessageId > 0, 'Session B upload must return message_id.');
   console.log(JSON.stringify({ event: 'v074-session-b-replacement-upload', message_id: newMessageId, previous_message_id: oldMessageId }));
 
+  phase('session-b:delete-old', { previous_message_id: oldMessageId });
   const deletion = await b.request('delete_messages', { message_ids: [oldMessageId] });
   console.log(JSON.stringify({ event: 'v074-session-b-delete-old-via-helper', previous_message_id: oldMessageId, helper_result: deletion }));
 
-  // Independent verification: if B really deleted A's old message, A must no
-  // longer be able to delete that same server message. If B failed silently,
-  // A's own-token delete would still return true here.
+  phase('verify-origin-delete', { previous_message_id: oldMessageId });
   const verification = await rawDelete(tokenA, oldMessageId);
   console.log(JSON.stringify({ event: 'verify-old-message-after-b-delete', previous_message_id: oldMessageId, a_delete_after_b: verification }));
 
@@ -170,11 +215,13 @@ try {
   assert.equal(oldGoneForOriginBot, true, `Origin bot could still delete old message after Bot B cleanup: ${JSON.stringify(verification)}`);
   console.log('PASS M0-F v0.7.4 exact helper cross-bot replacement proof');
 } finally {
+  phase('cleanup:start');
   if (a) await a.close().catch(() => {});
   if (b) {
-    if (newMessageId > 0) await b.request('delete_messages', { message_ids: [newMessageId] }).catch(() => {});
+    if (newMessageId > 0) await b.request('delete_messages', { message_ids: [newMessageId] }, 10_000).catch(() => {});
     await b.close().catch(() => {});
   }
-  if (oldMessageId > 0) await rawDelete(tokenA, oldMessageId).catch(() => {});
+  if (oldMessageId > 0) await rawDelete(tokenA, oldMessageId, 10_000).catch(() => {});
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  phase('cleanup:done');
 }
