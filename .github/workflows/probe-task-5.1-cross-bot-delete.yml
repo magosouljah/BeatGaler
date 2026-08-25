@@ -8,6 +8,10 @@ on:
     paths:
       - .github/workflows/probe-task-5.1-cross-bot-delete.yml
       - scripts/telegram-cross-bot-delete-live.mjs
+  pull_request:
+    paths:
+      - .github/workflows/probe-task-5.1-cross-bot-delete.yml
+      - scripts/telegram-cross-bot-delete-live.mjs
 
 permissions:
   contents: read
