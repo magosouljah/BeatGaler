@@ -1,7 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { browserId3Reader } from "./lib/id3BrowserParser";
 import { PlatformProvider } from "./platform/react";
+
+// Browser metadata parsing is bundled with BeatGaler. The legacy fallback in
+// tauri.ts is stripped from productive Vite output by the trust-boundary plugin,
+// so no runtime JavaScript is loaded from a CDN.
+(window as any).jsmediatags = browserId3Reader;
 
 function GlobalStyles() {
   return (
