@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   windows-temp-auth:
+    if: github.head_ref == 'task-5.1-temp-auth-cross-platform'
     name: M0-E Windows temp-auth boundary
     runs-on: windows-2025
     timeout-minutes: 30
@@ -41,6 +42,7 @@ jobs:
         run: node scripts/telegram-temp-auth-data-plane-live.mjs
 
   macos-temp-auth:
+    if: github.head_ref == 'task-5.1-temp-auth-cross-platform'
     name: M0-E macOS arm64 temp-auth boundary
     runs-on: macos-15
     timeout-minutes: 30
@@ -67,6 +69,7 @@ jobs:
         run: node scripts/telegram-temp-auth-data-plane-live.mjs
 
   web-pure-boundary:
+    if: github.head_ref == 'task-5.1-temp-auth-cross-platform'
     name: M0-E Web pure browser boundary guard
     runs-on: ubuntu-24.04
     timeout-minutes: 30
