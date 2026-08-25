@@ -229,7 +229,9 @@ export async function prepareWebTempAuth(dcId: number): Promise<PreparedWebTempA
           throw new Error(`Telegram rejected temporary authorization: ${bindResult.errorCode}:${bindResult.errorMessage}`);
         }
         if (bindResult !== true) throw new Error("Telegram did not accept temporary authorization.");
-        const exported = authKeyBytes.slice();
+        const activeAuthKey = authKeyBytes;
+        if (!activeAuthKey) throw new Error("Temporary authorization was cleared before it could be imported.");
+        const exported = activeAuthKey.slice();
         return {
           authKey: exported,
           primaryDcs: { main: productionDc(dcId), media: productionDc(dcId) },
