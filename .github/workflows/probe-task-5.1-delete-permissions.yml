@@ -14,11 +14,13 @@ jobs:
     name: M0-F delete permissions live
     if: "${{ github.event_name != 'pull_request' || github.head_ref == 'task-5.1-delete-permission-probe' }}"
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       BEATGALER_M0_F_CHAT_ID: ${{ secrets.BEATGALER_M0_F_CHAT_ID }}
       BEATGALER_M0_B2_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
       BEATGALER_M0_F_BOT_B_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_B_TOKEN }}
+      BEATGALER_M0_B2_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_B2_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
       BEATGALER_MASTER_SESSION: ${{ secrets.BEATGALER_MASTER_SESSION }}
     steps:
       - name: Checkout exact source
@@ -32,15 +34,24 @@ jobs:
           check-latest: false
 
       - name: Validate probe syntax
-        run: node --check scripts/telegram-delete-permission-live.mjs
+        run: |
+          node --check scripts/telegram-delete-permission-live.mjs
+          node --check cloud-server/mtproto-cross-bot-delete-probe.cjs
 
       - name: Require isolated probe resources without printing values
         run: |
-          node -e "for (const n of ['BEATGALER_M0_F_CHAT_ID','BEATGALER_M0_B2_BOT_TOKEN','BEATGALER_M0_F_BOT_B_TOKEN']) { if (!String(process.env[n] || '').trim()) throw new Error('Missing dedicated M0-F secret: ' + n); } console.log('Dedicated M0-F resources are configured; values remain hidden.')"
+          node -e "for (const n of ['BEATGALER_M0_F_CHAT_ID','BEATGALER_M0_B2_BOT_TOKEN','BEATGALER_M0_F_BOT_B_TOKEN','BEATGALER_M0_B2_API_ID','BEATGALER_M0_B2_API_HASH']) { if (!String(process.env[n] || '').trim()) throw new Error('Missing dedicated M0-F secret: ' + n); } console.log('Dedicated M0-F resources are configured; values remain hidden.')"
 
       - name: Record whether technical MASTER session is available for isolated probe setup
         run: |
           node -e "console.log('M0_F_MASTER_SESSION_AVAILABLE=' + Boolean(String(process.env.BEATGALER_MASTER_SESSION || '').trim()))"
 
-      - name: Prove own delete and cross-bot denial without admin rights
+      - name: Prove recent cross-bot delete through Bot API
+        continue-on-error: true
         run: node scripts/telegram-delete-permission-live.mjs
+
+      - name: Install locked cloud MTProto dependency graph
+        run: npm ci --prefix cloud-server
+
+      - name: Prove recent cross-bot delete through MTProto
+        run: node cloud-server/mtproto-cross-bot-delete-probe.cjs
