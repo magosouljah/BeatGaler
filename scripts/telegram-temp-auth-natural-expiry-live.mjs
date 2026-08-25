@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // Reuses the already-proven M0-C split permanent-side/temp-side harness without
 // changing product runtime. Temp A is requested with a 60-second TTL, used once,
 // left intact locally, then used again only after wall-clock expires_at. PASS
-// requires Telegram itself to reject A after expiry. A fresh Temp B must then
-// bind and restore the same bot identity. No vault, file, revoke or rotation.
+// requires Telegram itself to reject A after expiry twice consecutively. A fresh
+// Temp B must then bind and restore the same bot identity. No vault, file, revoke
+// or rotation.
 
 const TTL_SECONDS = 60;
 const EXPIRY_GRACE_MS = 15_000;
@@ -87,19 +88,20 @@ async function waitForMessage(proc, accepted, label) {
   }), `${label} IPC`, 90_000);
 }
 
-async function expiredRpcMustFail(connection) {
+async function oneExpiredRpc(connection, attempt) {
   const result = await timeout(connection.sendRpc({
     _: 'users.getUsers',
     id: [{ _: 'inputUserSelf' }],
-  }, 15_000), 'post-expiry RPC');
+  }, 15_000), `post-expiry RPC ${attempt}`);
+  assert.equal(result?._, 'mt_rpc_error', `Expired Temp A unexpectedly remained authorized on attempt ${attempt}: ${JSON.stringify(result)}`);
+  return { errorCode: result.errorCode, errorMessage: String(result.errorMessage || '') };
+}
 
-  assert.equal(result?._, 'mt_rpc_error', `Expired Temp A unexpectedly remained authorized: ${JSON.stringify(result)}`);
-  const errorMessage = String(result.errorMessage || '');
-  assert.ok(
-    /AUTH_KEY|SESSION|EXPIRED|UNREGISTERED/i.test(errorMessage),
-    `Telegram rejected post-expiry RPC, but not with an auth/session expiry-class error: ${result.errorCode}:${errorMessage}`,
-  );
-  return { errorCode: result.errorCode, errorMessage };
+async function expiredRpcMustFailTwice(connection) {
+  const first = await oneExpiredRpc(connection, 1);
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  const second = await oneExpiredRpc(connection, 2);
+  return [first, second];
 }
 
 async function clientMain() {
@@ -126,7 +128,7 @@ async function clientMain() {
 
     // Critical assertion: A remains present locally. We do NOT reset/fault-inject it.
     assert.equal(connectionA._session._authKeyTemp.ready, true, 'Temp A must remain locally present before server-expiry assertion.');
-    const rejection = await expiredRpcMustFail(connectionA);
+    const rejections = await expiredRpcMustFailTwice(connectionA);
 
     await connectionA.destroy().catch(() => {});
     connectionA = undefined;
@@ -143,8 +145,7 @@ async function clientMain() {
       userId: userB,
       ttlSeconds: TTL_SECONDS,
       tempAExpiresAt: tempA.expiresAt,
-      serverRejectionCode: rejection.errorCode,
-      serverRejectionMessage: rejection.errorMessage,
+      serverRejections: rejections,
       wallClockExpiryWaited: true,
       serverSideNaturalExpiryProven: true,
       freshTempRecoveryProven: true,
@@ -225,15 +226,15 @@ async function binderMain() {
     assert.equal(proof.wallClockExpiryWaited, true);
     assert.equal(proof.serverSideNaturalExpiryProven, true);
     assert.equal(proof.freshTempRecoveryProven, true);
+    assert.equal(proof.serverRejections?.length, 2, 'Two consecutive post-expiry Telegram rejections are required.');
 
-    console.log('PASS Task 5.1 natural temp-auth expiry: A worked, Telegram rejected the same locally-retained A after expires_at, and fresh B restored the same bot identity');
+    console.log('PASS Task 5.1 natural temp-auth expiry: A worked, Telegram rejected the same locally-retained A twice after expires_at, and fresh B restored the same bot identity');
     console.log(JSON.stringify({
       mode: 'Task 5.1 isolated production-DC natural temp-auth expiry proof',
       ttl_seconds: proof.ttlSeconds,
       wall_clock_expiry_waited: true,
       server_side_natural_expiry_proven: true,
-      expired_key_rejection_code: proof.serverRejectionCode,
-      expired_key_rejection_message: proof.serverRejectionMessage,
+      expired_key_rejections: proof.serverRejections,
       fresh_temp_recovery_proven: true,
       bot_identity_preserved: true,
       permanent_auth_reaches_client: false,
