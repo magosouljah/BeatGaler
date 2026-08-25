@@ -43,8 +43,8 @@ jobs:
 
   macos-temp-auth:
     if: github.head_ref == 'task-5.1-temp-auth-cross-platform'
-    name: M0-E macOS arm64 temp-auth boundary
-    runs-on: macos-15
+    name: M0-E macOS Intel temp-auth boundary
+    runs-on: macos-15-intel
     timeout-minutes: 30
     env:
       BEATGALER_M0_D_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
