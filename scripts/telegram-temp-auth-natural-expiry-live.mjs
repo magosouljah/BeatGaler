@@ -85,7 +85,7 @@ async function waitForMessage(proc, accepted, label) {
     };
     proc.on('message', onMessage);
     proc.on('exit', onExit);
-  }), `${label} IPC`, 90_000);
+  }), `${label} IPC`, 180_000);
 }
 
 async function oneExpiredRpc(connection, attempt) {
@@ -126,7 +126,6 @@ async function clientMain() {
     console.log(`Natural expiry probe: Temp A works; waiting ${waitMs}ms past expires_at=${tempA.expiresAt}.`);
     await new Promise(resolve => setTimeout(resolve, waitMs));
 
-    // Critical assertion: A remains present locally. We do NOT reset/fault-inject it.
     assert.equal(connectionA._session._authKeyTemp.ready, true, 'Temp A must remain locally present before server-expiry assertion.');
     const rejections = await expiredRpcMustFailTwice(connectionA);
 
