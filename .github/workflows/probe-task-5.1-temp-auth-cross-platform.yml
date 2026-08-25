@@ -6,8 +6,13 @@ on:
       - task-5.1-temp-auth-renewal-probe
     paths:
       - scripts/telegram-temp-auth-data-plane-live.mjs
+      - scripts/telegram-temp-auth-web-binder.mjs
       - tests/e2e-web/temp-auth-boundary.e2e.mjs
+      - tests/e2e-web/temp-auth-live.e2e.mjs
+      - tests/probes/temp-auth-web/**
+      - vite.temp-auth-probe.config.mjs
       - wdio.web.conf.mjs
+      - wdio.temp-auth-web.conf.mjs
       - .github/workflows/probe-task-5.1-temp-auth-cross-platform.yml
 
 permissions:
@@ -87,3 +92,31 @@ jobs:
         run: npm run build:web
       - name: Run real-Chrome pure-Web boundary guard
         run: npx wdio run wdio.web.conf.mjs --spec ./tests/e2e-web/temp-auth-boundary.e2e.mjs
+
+  web-temp-auth-live:
+    if: github.head_ref == 'task-5.1-temp-auth-cross-platform'
+    name: M0-E Web live temp-auth direct transfer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BEATGALER_M0_D_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_D_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
+      BEATGALER_M0_D_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked npm graph
+        run: npm ci
+      - name: Require dedicated live-probe secrets
+        shell: bash
+        run: |
+          test -n "$BEATGALER_M0_D_API_ID" && test -n "$BEATGALER_M0_D_API_HASH" && test -n "$BEATGALER_M0_D_BOT_TOKEN" || { echo 'M0-E Web secrets missing; this is not evidence.'; exit 1; }
+      - name: Build isolated pure-Web temp-auth probe bundle
+        run: npx vite build --config vite.temp-auth-probe.config.mjs
+      - name: Run live temp-auth A-to-B transfer inside real Chrome
+        run: npx wdio run wdio.temp-auth-web.conf.mjs
