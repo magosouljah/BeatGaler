@@ -41,6 +41,7 @@ const SECRET_NAMES = [
 
 const TEMP_EXPIRY_SECONDS = 2 * 60 * 60;
 const HANDSHAKE_TIMEOUT_MS = 60_000;
+const FULL_CLIENT_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000;
 const PART_RPC_TIMEOUT_MS = 90_000;
 const DEFAULT_PROD_DC_ID = 2;
 const PART_SIZE_BYTES = 512 * 1024;
@@ -339,7 +340,7 @@ class DeferredLike {
   }
 }
 
-async function waitForProcessMessage(proc, acceptedTypes, label) {
+async function waitForProcessMessage(proc, acceptedTypes, label, timeoutMs = HANDSHAKE_TIMEOUT_MS) {
   const types = new Set(Array.isArray(acceptedTypes) ? acceptedTypes : [acceptedTypes]);
   return timeout(new Promise((resolve, reject) => {
     const onMessage = message => {
@@ -358,7 +359,7 @@ async function waitForProcessMessage(proc, acceptedTypes, label) {
     };
     proc.on('message', onMessage);
     proc.on('exit', onExit);
-  }), `${label} message`);
+  }), `${label} message`, timeoutMs);
 }
 
 async function generateAndBindTempKey(m, crypto, connection, label) {
@@ -680,14 +681,26 @@ async function binderMain() {
       env: sanitizedClientEnv(dcId, mode),
     });
 
-    for (const expectedLabel of BIND_ROUNDS) {
-      const bindingRequest = await waitForProcessMessage(client, 'build-binding', 'client');
+    for (let bindIndex = 0; bindIndex < BIND_ROUNDS.length; bindIndex += 1) {
+      const expectedLabel = BIND_ROUNDS[bindIndex];
+      const clientProgressTimeoutMs = mode === 'full' && bindIndex > 0
+        ? FULL_CLIENT_PROGRESS_TIMEOUT_MS
+        : HANDSHAKE_TIMEOUT_MS;
+      const bindingRequest = await waitForProcessMessage(
+        client,
+        'build-binding',
+        'client',
+        clientProgressTimeoutMs,
+      );
       assert.equal(bindingRequest.label, expectedLabel, `Expected temp-key bind round ${expectedLabel}.`);
       const envelope = await buildBindingEnvelope(m, crypto, permanentKeyBytes, bindingRequest.metadata);
       client.send({ type: 'binding-envelope', label: expectedLabel, envelope });
     }
 
-    const proof = await waitForProcessMessage(client, 'client-proof', 'client');
+    const clientProofTimeoutMs = mode === 'full'
+      ? FULL_CLIENT_PROGRESS_TIMEOUT_MS
+      : HANDSHAKE_TIMEOUT_MS;
+    const proof = await waitForProcessMessage(client, 'client-proof', 'client', clientProofTimeoutMs);
     const expectedParts = mode === 'full' ? FULL_PART_COUNT : SMOKE_PART_COUNT;
     const expectedBytes = expectedParts * PART_SIZE_BYTES;
     assert.equal(proof.mode, mode);
