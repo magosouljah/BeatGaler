@@ -21,6 +21,7 @@ const PROD_DC_SUBDOMAINS = {
   5: "flora",
 };
 const permanentByTransport = new Map();
+let permanentAuthorizationTail = Promise.resolve();
 let mtcutePromise = null;
 
 function timeout(promise, label, ms = TIMEOUT_MS) {
@@ -28,6 +29,12 @@ function timeout(promise, label, ms = TIMEOUT_MS) {
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
   ]);
+}
+
+function serializePermanentAuthorization(task) {
+  const run = permanentAuthorizationTail.then(task, task);
+  permanentAuthorizationTail = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 function productionDc(dcId) {
@@ -203,7 +210,12 @@ async function authorizePermanent(session) {
   const cached = permanentByTransport.get(cacheKey);
   if (cached) return cached;
 
-  const promise = (async () => {
+  // Fresh bot authorization is a control-plane operation with a much tighter
+  // Telegram rate-limit surface than normal bound-temp RPCs. Serialize only
+  // cache misses globally; warm sessions remain concurrent and direct media is
+  // unaffected. This prevents a burst of client starts from importing dozens
+  // of bot authorizations at once.
+  const promise = serializePermanentAuthorization(async () => {
     assert.ok(globalThis.WebSocket, "Node runtime must provide WebSocket for productive temporary auth.");
     const m = await loadMtcuteInternals();
     const crypto = await makeCrypto(m);
@@ -252,7 +264,7 @@ async function authorizePermanent(session) {
     const expected = session.transport_user_id == null ? "" : String(session.transport_user_id);
     if (expected && expected !== authorizedBotId) throw new Error("Controlled temporary-auth binder resolved the wrong transport bot identity.");
     return { m, crypto, connection, permanentKeyBytes, dcId, authorizedBotId };
-  })();
+  });
   permanentByTransport.set(cacheKey, promise);
   try {
     return await promise;
@@ -353,11 +365,19 @@ async function transformTransportBody(req, body) {
   const metadata = req.body?.tempAuthMetadata || null;
   if (req.path === "/transport/session/start") return transformSession(body, metadata);
   if (body.credential_refresh) {
+    const { credential_refresh: refresh, ...safeBody } = body;
+    if (!metadata) {
+      return {
+        ...safeBody,
+        refresh_required: true,
+        temp_auth_required: true,
+      };
+    }
     return {
-      ...body,
+      ...safeBody,
       refresh_required: true,
-      credential_refresh: metadata ? await transformSession(body.credential_refresh, metadata) : null,
-      temp_auth_required: !metadata,
+      credential_refresh: await transformSession(refresh, metadata),
+      temp_auth_required: false,
     };
   }
   return body;
