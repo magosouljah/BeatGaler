@@ -35,6 +35,7 @@ function stopPreview() {
 export const config = {
   runner: "local",
   specs: ["./tests/e2e-web/**/*.e2e.mjs"],
+  exclude: ["./tests/e2e-web/temp-auth-live.e2e.mjs"],
   maxInstances: 1,
   logLevel: "warn",
   bail: 1,
