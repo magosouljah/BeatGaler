@@ -84,7 +84,9 @@ async function deleteMessage(token, actor, origin, message) {
       deleted: result,
     }));
     assert.equal(result, true, 'deleteMessage must return true.');
+    return { ok: true, error: null };
   } catch (error) {
+    const errorMessage = String(error?.message || error);
     console.error(JSON.stringify({
       event: 'deleteMessage-error',
       actor,
@@ -93,15 +95,15 @@ async function deleteMessage(token, actor, origin, message) {
       source_chat_id: String(message?.chat?.id),
       message_id: message?.message_id,
       source_sender_bot_id: String(message?.from?.id),
-      error: String(error?.message || error),
+      error: errorMessage,
     }));
-    throw error;
+    return { ok: false, error: errorMessage };
   }
 }
 
 async function safeDelete(token, actor, origin, message) {
   if (!message?.message_id) return;
-  try { await deleteMessage(token, actor, origin, message); } catch {}
+  await deleteMessage(token, actor, origin, message).catch(() => {});
 }
 
 const created = [];
@@ -144,28 +146,38 @@ try {
   // Own-delete A.
   const aOwn = await sendMarker(botAToken, 'A', 'A-own');
   created.push({ origin: 'A', message: aOwn });
-  await deleteMessage(botAToken, 'A', 'A', aOwn);
+  const aOwnDelete = await deleteMessage(botAToken, 'A', 'A', aOwn);
+  assert.equal(aOwnDelete.ok, true, `Bot A own-delete failed: ${aOwnDelete.error}`);
   created.pop();
 
   // Own-delete B.
   const bOwn = await sendMarker(botBToken, 'B', 'B-own');
   created.push({ origin: 'B', message: bOwn });
-  await deleteMessage(botBToken, 'B', 'B', bOwn);
+  const bOwnDelete = await deleteMessage(botBToken, 'B', 'B', bOwn);
+  assert.equal(bOwnDelete.ok, true, `Bot B own-delete failed: ${bOwnDelete.error}`);
   created.pop();
 
-  // Cross-delete: A deletes B's message.
+  // Cross-delete both directions; do not stop after first failure so the probe
+  // can prove whether the Telegram behavior is symmetric.
   const bForA = await sendMarker(botBToken, 'B', 'B-cross-deleted-by-A');
   created.push({ origin: 'B', message: bForA });
-  await deleteMessage(botAToken, 'A', 'B', bForA);
-  created.pop();
+  const crossADeletesB = await deleteMessage(botAToken, 'A', 'B', bForA);
+  if (crossADeletesB.ok) created.pop();
+  else {
+    await safeDelete(botBToken, 'B', 'B', bForA);
+    created.pop();
+  }
 
-  // Cross-delete: B deletes A's message.
   const aForB = await sendMarker(botAToken, 'A', 'A-cross-deleted-by-B');
   created.push({ origin: 'A', message: aForB });
-  await deleteMessage(botBToken, 'B', 'A', aForB);
-  created.pop();
+  const crossBDeletesA = await deleteMessage(botBToken, 'B', 'A', aForB);
+  if (crossBDeletesA.ok) created.pop();
+  else {
+    await safeDelete(botAToken, 'A', 'A', aForB);
+    created.pop();
+  }
 
-  console.log('PASS M0-F own/cross-bot delete proof');
+  const crossBotSymmetric = crossADeletesB.ok === crossBDeletesA.ok;
   console.log(JSON.stringify({
     mode: 'M0-F isolated own/cross-bot delete proof',
     bot_a_id: String(botA.id),
@@ -173,8 +185,11 @@ try {
     distinct_bots_proven: true,
     own_delete_bot_a_proven: true,
     own_delete_bot_b_proven: true,
-    cross_delete_a_deletes_b_proven: true,
-    cross_delete_b_deletes_a_proven: true,
+    cross_delete_a_deletes_b_proven: crossADeletesB.ok,
+    cross_delete_b_deletes_a_proven: crossBDeletesA.ok,
+    cross_delete_a_deletes_b_error: crossADeletesB.error,
+    cross_delete_b_deletes_a_error: crossBDeletesA.error,
+    cross_bot_behavior_symmetric: crossBotSymmetric,
     same_test_chat_proven: true,
     bot_a_status: memberA.status,
     bot_b_status: memberB.status,
@@ -185,10 +200,12 @@ try {
     vault_migration_used: false,
     token_rotation_or_revoke: false,
     production_runtime_changed: false,
-    note: 'Only four disposable text marker messages are created and immediately deleted in the explicitly configured test chat.',
   }));
+
+  assert.equal(crossADeletesB.ok, true, `Bot A cross-delete failed: ${crossADeletesB.error}`);
+  assert.equal(crossBDeletesA.ok, true, `Bot B cross-delete failed: ${crossBDeletesA.error}`);
+  console.log('PASS M0-F own/cross-bot delete proof');
 } finally {
-  // Best-effort cleanup only for probe marker messages that survived a failed assertion.
   for (const item of created.reverse()) {
     await safeDelete(item.origin === 'A' ? botAToken : botBToken, item.origin, item.origin, item.message);
     await safeDelete(item.origin === 'A' ? botBToken : botAToken, item.origin === 'A' ? 'B' : 'A', item.origin, item.message);
