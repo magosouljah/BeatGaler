@@ -30,7 +30,6 @@ async function main() {
   const chatId = required('BEATGALER_M0_F_CHAT_ID');
   assert.ok(Number.isInteger(apiId) && apiId > 0, 'API id must be positive.');
   assert.match(chatId, /^-100\d+$/, 'M0-F chat must be a Bot API supergroup id.');
-  const rawChannelId = chatId.slice(4);
 
   const meA = await botApi(botAToken, 'getMe');
   const meB = await botApi(botBToken, 'getMe');
@@ -40,6 +39,11 @@ async function main() {
   assert.equal(String(memberA.status), 'administrator', 'Bot A must be administrator.');
   assert.equal(memberA.can_delete_messages, true, 'Bot A must have delete_messages.');
   assert.equal(['administrator', 'creator'].includes(String(memberB.status)), false, 'Bot B must remain plain member.');
+
+  const chat = await botApi(botAToken, 'getChat', { chat_id: chatId });
+  const username = String(chat?.username || '').trim();
+  console.log(JSON.stringify({ mode: 'M0-F MTProto peer resolution preflight', public_username_available: Boolean(username) }));
+  assert.ok(username, 'The isolated M0-F supergroup has no public username. A fresh MTProto bot session cannot resolve this private peer without an account-local access_hash; make only this non-user probe group temporarily public and give it a unique username.');
 
   const message = await botApi(botBToken, 'sendMessage', {
     chat_id: chatId,
@@ -53,13 +57,8 @@ async function main() {
   let deleted = false;
   try {
     await client.start({ botAuthToken: botAToken, onError: error => console.error(String(error?.message || error)) });
-    const dialogs = await client.getDialogs({ limit: 1000 });
-    const dialog = dialogs.find(item => String(item?.entity?.id || '') === rawChannelId);
-    assert.ok(dialog?.entity, 'Bot A could not resolve the isolated supergroup from its MTProto dialogs.');
-    const result = await client.invoke(new Api.channels.DeleteMessages({
-      channel: dialog.entity,
-      id: [messageId],
-    }));
+    const channel = await client.getInputEntity(`@${username}`);
+    const result = await client.invoke(new Api.channels.DeleteMessages({ channel, id: [messageId] }));
     assert.ok(Number(result?.ptsCount ?? 0) >= 0, 'Unexpected channels.deleteMessages result.');
     deleted = true;
     console.log('PASS M0-F MTProto positive cross-bot delete proof');
@@ -69,8 +68,8 @@ async function main() {
       message_author_is_bot_b: true,
       delete_messages_baseline_required_by_negative_probe: true,
       mtproto_channels_delete_messages_used: true,
-      channel_resolved_from_current_bot_dialogs: true,
-      zero_access_hash_direct_path_proven: false,
+      channel_resolved_by_public_username_for_probe: true,
+      account_local_access_hash_obtained_by_bot_session: true,
       over_48h_proven: false,
       user_vault_used: false,
       production_runtime_changed: false,
