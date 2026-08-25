@@ -51,14 +51,29 @@ jobs:
 
       - name: Prove Telegram natural expiry and fresh-temp recovery
         if: steps.probe-secrets.outputs.ready == 'true'
-        run: node scripts/telegram-temp-auth-natural-expiry-live.mjs
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts/natural-expiry
+          node scripts/telegram-temp-auth-natural-expiry-live.mjs 2>&1 | tee artifacts/natural-expiry/output.log
+          STATUS=${PIPESTATUS[0]}
+          echo "$STATUS" > artifacts/natural-expiry/exit-code.txt
+          exit "$STATUS"
+
+      - name: Upload natural-expiry evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: natural-expiry-evidence
+          path: artifacts/natural-expiry/
+          if-no-files-found: warn
 
       - name: Record live-proof status
         if: always()
         shell: bash
         run: |
           if [[ "${{ steps.probe-secrets.outputs.ready }}" == "true" ]]; then
-            echo "Natural-expiry secret-backed execution was attempted; preceding step must explicitly PASS."
+            echo "Natural-expiry secret-backed execution was attempted; probe output is preserved as an artifact."
           else
             echo "NATURAL_EXPIRY_LIVE_PROOF=NOT_RUN"
             exit 1
