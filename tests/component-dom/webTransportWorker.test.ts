@@ -9,6 +9,7 @@ const transport = vi.hoisted(() => {
   let pinnedId = 501;
   let missingPinnedReads = 0;
   let clientOptions: any = null;
+  const importSession = vi.fn(async () => undefined);
   const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
     options.progressCallback?.(2, 5);
     options.progressCallback?.(5, 5);
@@ -18,8 +19,8 @@ const transport = vi.hoisted(() => {
   const deleteMessagesById = vi.fn(async () => undefined);
   class TelegramClient {
     constructor(options: unknown) { clientOptions = options; }
-    start = vi.fn(async () => ({}));
-    getMe = vi.fn(async () => ({}));
+    importSession = importSession;
+    getMe = vi.fn(async () => ({ id: 4242, isBot: true }));
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
     getFullChat = vi.fn(async () => {
       if (missingPinnedReads > 0) {
@@ -55,6 +56,7 @@ const transport = vi.hoisted(() => {
     destroy = vi.fn(async () => {});
   }
   return {
+    importSession,
     sendMedia,
     pinMessage,
     deleteMessagesById,
@@ -96,10 +98,11 @@ beforeAll(async () => {
     requestId: "init",
     op: "initialize",
     session: {
-      bot_token: "secret-token",
       chat_id: "-1001234567890",
-      telegram_api_id: 123,
-      telegram_api_hash: "secret-hash",
+      transport_user_id: "4242",
+      expected_bot_id: "4242",
+      temp_auth_key: new Uint8Array(256).fill(7),
+      temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
     },
   });
   await send({ requestId: "verify", op: "verify" });
@@ -127,8 +130,10 @@ describe("Galer Cloud single-file Web Worker", () => {
     transport.deleteMessagesById.mockClear();
   });
 
-  it("initializes MTProto crypto with Vite's explicit WASM asset URL", () => {
+  it("imports temporary auth with Vite's explicit WASM asset URL", () => {
     expect(transport.getClientOptions()?.crypto?.options?.wasmInput).toMatch(/mtcute\.wasm/);
+    expect(transport.getClientOptions()).toMatchObject({ apiId: 0, apiHash: "" });
+    expect(transport.importSession).toHaveBeenCalledOnce();
   });
 
   it("sends the original File once and returns one stored-file manifest", async () => {
