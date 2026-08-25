@@ -1,0 +1,65 @@
+name: Probe - Task 5.1 Temp Auth Natural Expiry
+
+on:
+  push:
+    branches:
+      - task-5.1-temp-auth-natural-expiry-probe
+    paths:
+      - scripts/telegram-temp-auth-natural-expiry-live.mjs
+      - .github/workflows/probe-task-5.1-temp-auth-natural-expiry.yml
+
+permissions:
+  contents: read
+
+jobs:
+  natural-expiry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BEATGALER_M0_C_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_C_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
+      BEATGALER_M0_C_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+          check-latest: false
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Validate probe syntax
+        run: node --check scripts/telegram-temp-auth-natural-expiry-live.mjs
+
+      - name: Detect dedicated probe secrets without printing them
+        id: probe-secrets
+        shell: bash
+        run: |
+          if [[ -n "$BEATGALER_M0_C_API_ID" && -n "$BEATGALER_M0_C_API_HASH" && -n "$BEATGALER_M0_C_BOT_TOKEN" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Natural-expiry secrets are configured; live proof will run."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "NATURAL EXPIRY LIVE PROOF NOT RUN: dedicated secrets are missing."
+          fi
+
+      - name: Prove Telegram natural expiry and fresh-temp recovery
+        if: steps.probe-secrets.outputs.ready == 'true'
+        run: node scripts/telegram-temp-auth-natural-expiry-live.mjs
+
+      - name: Record live-proof status
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.probe-secrets.outputs.ready }}" == "true" ]]; then
+            echo "Natural-expiry secret-backed execution was attempted; preceding step must explicitly PASS."
+          else
+            echo "NATURAL_EXPIRY_LIVE_PROOF=NOT_RUN"
+            exit 1
+          fi
