@@ -2,6 +2,12 @@ name: Task 5.1 M0-F - Own and cross-bot delete probe
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - task-5.1-delete-permissions-probe
+    paths:
+      - .github/workflows/probe-task-5.1-cross-bot-delete.yml
+      - scripts/telegram-cross-bot-delete-live.mjs
 
 permissions:
   contents: read
