@@ -34,6 +34,18 @@ const meA = assertOk(await botApi(botAToken, 'getMe'), 'bot A getMe');
 const meB = assertOk(await botApi(botBToken, 'getMe'), 'bot B getMe');
 assert.notEqual(String(meA.id), String(meB.id), 'M0-F requires two distinct bot identities.');
 
+const chatA = await botApi(botAToken, 'getChat', { chat_id: chatId });
+const chatB = await botApi(botBToken, 'getChat', { chat_id: chatId });
+console.log(JSON.stringify({
+  mode: 'M0-F isolated resource visibility check',
+  bot_a_chat_visible: chatA.ok === true,
+  bot_b_chat_visible: chatB.ok === true,
+  bot_a_chat_error_class: chatA.ok === true ? null : String(chatA.description || '').replace(/[-+]?\d{5,}/g, '<redacted-id>'),
+  bot_b_chat_error_class: chatB.ok === true ? null : String(chatB.description || '').replace(/[-+]?\d{5,}/g, '<redacted-id>'),
+}));
+assert.equal(chatA.ok, true, 'Bot A cannot see the isolated M0-F chat. Add bot A to that non-user probe group or correct the dedicated chat secret.');
+assert.equal(chatB.ok, true, 'Bot B cannot see the isolated M0-F chat. Add bot B to that non-user probe group or correct the dedicated chat secret.');
+
 const memberA = assertOk(await botApi(botAToken, 'getChatMember', { chat_id: chatId, user_id: meA.id }), 'bot A membership');
 const memberB = assertOk(await botApi(botBToken, 'getChatMember', { chat_id: chatId, user_id: meB.id }), 'bot B membership');
 const privilegedStatuses = new Set(['administrator', 'creator']);
