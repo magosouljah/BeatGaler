@@ -1,9 +1,5 @@
 import assert from 'node:assert/strict';
 
-// Task 5.1 M0-F permission probe only.
-// Uses an isolated non-user supergroup with two dedicated bots.
-// It does not alter product runtime, vaults, files, roles, tokens or sessions.
-
 const required = name => {
   const value = String(process.env[name] || '').trim();
   if (!value) throw new Error(`Missing required M0-F secret: ${name}`);
@@ -33,79 +29,48 @@ function assertOk(result, label) {
 const meA = assertOk(await botApi(botAToken, 'getMe'), 'bot A getMe');
 const meB = assertOk(await botApi(botBToken, 'getMe'), 'bot B getMe');
 assert.notEqual(String(meA.id), String(meB.id), 'M0-F requires two distinct bot identities.');
-console.log(JSON.stringify({
-  mode: 'M0-F probe bot identities',
-  bot_a_username: String(meA.username || ''),
-  bot_b_username: String(meB.username || ''),
-}));
-
-const chatA = await botApi(botAToken, 'getChat', { chat_id: chatId });
-const chatB = await botApi(botBToken, 'getChat', { chat_id: chatId });
-console.log(JSON.stringify({
-  mode: 'M0-F isolated resource visibility check',
-  bot_a_chat_visible: chatA.ok === true,
-  bot_b_chat_visible: chatB.ok === true,
-  bot_a_chat_error_class: chatA.ok === true ? null : String(chatA.description || '').replace(/[-+]?\d{5,}/g, '<redacted-id>'),
-  bot_b_chat_error_class: chatB.ok === true ? null : String(chatB.description || '').replace(/[-+]?\d{5,}/g, '<redacted-id>'),
-}));
-assert.equal(chatA.ok, true, 'Bot A cannot see the isolated M0-F chat. Add bot A to that non-user probe group or correct the dedicated chat secret.');
-assert.equal(chatB.ok, true, 'Bot B cannot see the isolated M0-F chat. Add bot B to that non-user probe group or correct the dedicated chat secret.');
 
 const memberA = assertOk(await botApi(botAToken, 'getChatMember', { chat_id: chatId, user_id: meA.id }), 'bot A membership');
 const memberB = assertOk(await botApi(botBToken, 'getChatMember', { chat_id: chatId, user_id: meB.id }), 'bot B membership');
-const privilegedStatuses = new Set(['administrator', 'creator']);
-assert.equal(privilegedStatuses.has(String(memberA.status)), false, 'Bot A must be a plain member; otherwise cross-bot denial is not meaningful.');
-assert.equal(privilegedStatuses.has(String(memberB.status)), false, 'Bot B must be a plain member for the isolated baseline probe.');
+assert.equal(String(memberA.status), 'administrator', 'Bot A must be administrator for the positive cross-bot proof.');
+assert.equal(memberA.can_delete_messages, true, 'Bot A must have can_delete_messages=true.');
+assert.equal(['administrator', 'creator'].includes(String(memberB.status)), false, 'Bot B must remain a plain member.');
 
 const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-let ownMessageId = 0;
-let otherMessageId = 0;
-let ownDeleted = false;
-let otherDeletedByB = false;
-
+let messageId = 0;
+let deletedByA = false;
 try {
-  const ownMessage = assertOk(await botApi(botAToken, 'sendMessage', {
+  const msg = assertOk(await botApi(botBToken, 'sendMessage', {
     chat_id: chatId,
-    text: `BeatGaler M0-F own-delete probe ${nonce}`,
-    disable_notification: true,
-  }), 'bot A sendMessage');
-  ownMessageId = Number(ownMessage.message_id || 0);
-  assert.ok(ownMessageId > 0, 'Bot A message id is missing.');
-
-  const otherMessage = assertOk(await botApi(botBToken, 'sendMessage', {
-    chat_id: chatId,
-    text: `BeatGaler M0-F cross-delete probe ${nonce}`,
+    text: `BeatGaler M0-F positive cross-bot delete ${nonce}`,
     disable_notification: true,
   }), 'bot B sendMessage');
-  otherMessageId = Number(otherMessage.message_id || 0);
-  assert.ok(otherMessageId > 0, 'Bot B message id is missing.');
+  messageId = Number(msg.message_id || 0);
+  assert.ok(messageId > 0, 'Bot B message id is missing.');
 
-  const ownDelete = await botApi(botAToken, 'deleteMessage', { chat_id: chatId, message_id: ownMessageId });
-  assert.equal(ownDelete.ok, true, `Plain-member bot must delete its own outgoing message: ${ownDelete.description || ownDelete.http}`);
-  ownDeleted = true;
+  const crossDelete = await botApi(botAToken, 'deleteMessage', { chat_id: chatId, message_id: messageId });
+  assert.equal(crossDelete.ok, true, `Admin bot A with delete_messages must delete bot B message: ${crossDelete.description || crossDelete.http}`);
+  deletedByA = true;
 
-  const crossDelete = await botApi(botAToken, 'deleteMessage', { chat_id: chatId, message_id: otherMessageId });
-  assert.equal(crossDelete.ok, false, 'Plain-member bot unexpectedly deleted another bot message; isolated baseline assumptions changed.');
-  assert.match(String(crossDelete.description || ''), /delete|rights|administrator|not enough|forbidden/i, 'Cross-bot denial did not look permission-related.');
-
-  console.log('PASS M0-F delete permission proof: plain-member bot deletes own message but cannot delete another bot message');
+  console.log('PASS M0-F positive cross-bot delete proof');
   console.log(JSON.stringify({
-    mode: 'M0-F isolated two-bot delete permission proof',
-    own_delete_without_admin_proven: true,
-    cross_bot_delete_without_admin_denied: true,
-    bot_a_admin: false,
+    mode: 'M0-F positive cross-bot delete permission proof',
+    cross_bot_delete_with_stable_admin_proven: true,
+    bot_a_admin: true,
+    bot_a_can_delete_messages: true,
     bot_b_admin: false,
+    message_author_is_other_bot: true,
     user_vault_used: false,
     file_bytes_used: false,
     permission_churn_used: false,
     token_rotation_or_revoke: false,
     production_runtime_changed: false,
-    next_gate: 'Decide whether runtime can enforce uploader-owned cleanup; otherwise cross-bot deletion requires a stable privileged baseline and separate positive proof.',
+    over_48h_proven: false,
+    mtproto_delete_proven: false,
+    next_gate: 'Prove the same cross-bot delete through MTProto channels.deleteMessages; separately retain >48h historical proof as pending.',
   }));
 } finally {
-  if (ownMessageId > 0 && !ownDeleted) await botApi(botAToken, 'deleteMessage', { chat_id: chatId, message_id: ownMessageId }).catch(() => {});
-  if (otherMessageId > 0 && !otherDeletedByB) {
-    const cleanup = await botApi(botBToken, 'deleteMessage', { chat_id: chatId, message_id: otherMessageId }).catch(() => null);
-    otherDeletedByB = cleanup?.ok === true;
+  if (messageId > 0 && !deletedByA) {
+    await botApi(botBToken, 'deleteMessage', { chat_id: chatId, message_id: messageId }).catch(() => {});
   }
 }
