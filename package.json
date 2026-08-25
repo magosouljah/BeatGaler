@@ -11,7 +11,7 @@
     "version:bump": "node scripts/version.mjs bump-patch",
     "build:release": "npm run version:check && npm run tauri build",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-tauri.ps1",
-    "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-direct-master-cleanup.mjs",
+    "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-direct-master-cleanup.mjs && npm run test:windows-packaging",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
     "check": "npm run test:fast && npm run build",
     "version:sync": "node scripts/version.mjs sync",
