@@ -15,6 +15,10 @@ on:
       - scripts/telegram-cross-bot-delete-live.mjs
       - scripts/telegram-v074-real-replace-cross-bot-live.mjs
 
+concurrency:
+  group: task-5-1-m0-f-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -26,7 +30,7 @@ jobs:
   m0f-v074-real-replacement:
     name: M0-F v0.7.4 real replacement path
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 15
     env:
       BEATGALER_M0_F_BOT_A_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_A_TOKEN }}
       BEATGALER_M0_F_BOT_B_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_B_TOKEN }}
@@ -96,6 +100,7 @@ jobs:
           Copy-Item -LiteralPath $bot.FullName -Destination runtime/windows-bot-api/telegram-bot-api.exe
 
       - name: Run exact v0.7.4 replacement path across two bot sessions
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $runtimeDir = (Resolve-Path 'runtime/windows-bot-api').Path
