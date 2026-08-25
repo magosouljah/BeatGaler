@@ -89,10 +89,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     await this.request({
       op: "initialize",
       session: {
-        bot_token: session.bot_token,
         chat_id: session.chat_id,
-        telegram_api_id: session.telegram_api_id,
-        telegram_api_hash: session.telegram_api_hash,
+        transport_user_id: session.transport_user_id,
+        expected_bot_id: session.temp_auth.expected_bot_id,
+        temp_auth_key: session.temp_auth_key,
+        temp_primary_dcs: session.temp_primary_dcs,
       },
     });
   }
@@ -133,11 +134,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   private sendStreamControl(op: "stream_ack" | "cancel", targetRequestId: string): void {
-    this.ensureWorker().postMessage({
-      requestId: crypto.randomUUID(),
-      op,
-      targetRequestId,
-    } as WebTransportWorkerCommand);
+    this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op, targetRequestId } as WebTransportWorkerCommand);
   }
 
   upload(input: WebTransportUploadInput, onProgress?: (progress: WebTransportProgress) => void): Promise<WebTransportUploadResult> {
