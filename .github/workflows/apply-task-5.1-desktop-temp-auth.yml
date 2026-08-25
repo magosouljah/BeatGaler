@@ -38,6 +38,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
           p = Path("src-tauri/src/commands.rs")
           s = p.read_text(encoding="utf-8")
 
@@ -82,40 +83,38 @@ jobs:
               raise SystemExit("Direct mode seam did not match exact baseline")
           s = s.replace(old_mode, new_mode, 1)
 
-          needle = '''        let value: Value = serde_json::from_str(raw)
-                  .map_err(|e| format!("Direct transport helper returned invalid JSON: {}", e))?;
-              if let Some(expected) = expected_request_id {
-          '''
-          replacement = '''        let value: Value = serde_json::from_str(raw)
-                  .map_err(|e| format!("Direct transport helper returned invalid JSON: {}", e))?;
-              if value.get("op").and_then(|v| v.as_str()) == Some("temp_auth_metadata") {
-                  let metadata = value.get("temp_auth_metadata").cloned()
-                      .ok_or_else(|| "Desktop temporary-auth helper returned no binding metadata.".to_string())?;
-                  let url = format!("{}/transport/session/start", telegram_cloud_api_base());
-                  let body = json!({
-                      "beatgalerUserId": runtime.user_id,
-                      "tempAuthMetadata": metadata,
-                  });
-                  let bound = post_json_cloud_auth_timeout(&url, &body, 45)
-                      .map_err(|e| format!("Galer Cloud temporary-auth bind unavailable: {}", e))?;
-                  if bound.get("mode").and_then(|v| v.as_str()) != Some("galer-direct-temp-mtproto")
-                      || bound.get("session_id").and_then(|v| v.as_str()) != Some(runtime.session_id.as_str())
-                      || bound.get("generation").and_then(|v| v.as_i64()) != Some(runtime.generation)
-                  {
-                      return Err("Galer Cloud returned a mismatched Desktop temporary-auth lease.".to_string());
-                  }
-                  let reply = json!({ "op": "temp_auth_binding", "session": bound });
-                  writeln!(runtime.stdin, "{}", reply)
-                      .map_err(|e| format!("Direct temporary-auth binding write failed: {}", e))?;
-                  runtime.stdin.flush()
-                      .map_err(|e| format!("Direct temporary-auth binding flush failed: {}", e))?;
-                  continue;
-              }
-              if let Some(expected) = expected_request_id {
-          '''
-          if needle not in s:
+          pattern = re.compile(r'(?P<indent>\s*)let value: Value = serde_json::from_str\(raw\)\s*\.map_err\(\|e\| format!\("Direct transport helper returned invalid JSON: \{\}", e\)\)\?;\s*(?P=indent)if let Some\(expected\) = expected_request_id \{')
+          match = pattern.search(s)
+          if not match:
               raise SystemExit("helper message seam did not match exact baseline")
-          s = s.replace(needle, replacement, 1)
+          indent = match.group("indent")
+          replacement = f'''{indent}let value: Value = serde_json::from_str(raw)
+{indent}    .map_err(|e| format!("Direct transport helper returned invalid JSON: {{}}", e))?;
+{indent}if value.get("op").and_then(|v| v.as_str()) == Some("temp_auth_metadata") {{
+{indent}    let metadata = value.get("temp_auth_metadata").cloned()
+{indent}        .ok_or_else(|| "Desktop temporary-auth helper returned no binding metadata.".to_string())?;
+{indent}    let url = format!("{{}}/transport/session/start", telegram_cloud_api_base());
+{indent}    let body = json!({{
+{indent}        "beatgalerUserId": runtime.user_id,
+{indent}        "tempAuthMetadata": metadata,
+{indent}    }});
+{indent}    let bound = post_json_cloud_auth_timeout(&url, &body, 45)
+{indent}        .map_err(|e| format!("Galer Cloud temporary-auth bind unavailable: {{}}", e))?;
+{indent}    if bound.get("mode").and_then(|v| v.as_str()) != Some("galer-direct-temp-mtproto")
+{indent}        || bound.get("session_id").and_then(|v| v.as_str()) != Some(runtime.session_id.as_str())
+{indent}        || bound.get("generation").and_then(|v| v.as_i64()) != Some(runtime.generation)
+{indent}    {{
+{indent}        return Err("Galer Cloud returned a mismatched Desktop temporary-auth lease.".to_string());
+{indent}    }}
+{indent}    let reply = json!({{ "op": "temp_auth_binding", "session": bound }});
+{indent}    writeln!(runtime.stdin, "{{}}", reply)
+{indent}        .map_err(|e| format!("Direct temporary-auth binding write failed: {{}}", e))?;
+{indent}    runtime.stdin.flush()
+{indent}        .map_err(|e| format!("Direct temporary-auth binding flush failed: {{}}", e))?;
+{indent}    continue;
+{indent}}}
+{indent}if let Some(expected) = expected_request_id {{'''
+          s = s[:match.start()] + replacement + s[match.end():]
           p.write_text(s, encoding="utf-8")
 
       - name: Enforce narrow diff
