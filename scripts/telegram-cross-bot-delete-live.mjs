@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 // BeatGaler production runtime, vault migration, user files, token rotation or
 // revoke. Bot tokens remain only in the GitHub Actions runner environment.
 
-const API_BASE = 'https://api.telegram.org';
+const API_BASE = String(process.env.BEATGALER_M0_F_API_BASE || 'https://api.telegram.org').trim().replace(/\/$/, '');
 const REQUIRED = [
   'BEATGALER_M0_F_BOT_A_TOKEN',
   'BEATGALER_M0_F_BOT_B_TOKEN',
@@ -51,6 +51,7 @@ async function sendMarker(token, actor, label) {
     event: 'sendMessage',
     actor,
     label,
+    api_base: API_BASE,
     requested_chat_id: String(chatId),
     returned_chat_id: String(message?.chat?.id),
     message_id: message?.message_id,
@@ -66,6 +67,7 @@ async function deleteMessage(token, actor, origin, message) {
     event: 'deleteMessage-attempt',
     actor,
     origin,
+    api_base: API_BASE,
     requested_chat_id: String(chatId),
     source_chat_id: String(message?.chat?.id),
     message_id: message?.message_id,
@@ -132,6 +134,7 @@ try {
 
   console.log(JSON.stringify({
     event: 'preflight',
+    api_base: API_BASE,
     configured_chat_id: String(chatId),
     bot_a_id: String(botA.id),
     bot_b_id: String(botB.id),
@@ -143,22 +146,18 @@ try {
     bot_b_resolved_chat_id: String(chatB.id),
   }));
 
-  // Own-delete A.
   const aOwn = await sendMarker(botAToken, 'A', 'A-own');
   created.push({ origin: 'A', message: aOwn });
   const aOwnDelete = await deleteMessage(botAToken, 'A', 'A', aOwn);
   assert.equal(aOwnDelete.ok, true, `Bot A own-delete failed: ${aOwnDelete.error}`);
   created.pop();
 
-  // Own-delete B.
   const bOwn = await sendMarker(botBToken, 'B', 'B-own');
   created.push({ origin: 'B', message: bOwn });
   const bOwnDelete = await deleteMessage(botBToken, 'B', 'B', bOwn);
   assert.equal(bOwnDelete.ok, true, `Bot B own-delete failed: ${bOwnDelete.error}`);
   created.pop();
 
-  // Cross-delete both directions; do not stop after first failure so the probe
-  // can prove whether the Telegram behavior is symmetric.
   const bForA = await sendMarker(botBToken, 'B', 'B-cross-deleted-by-A');
   created.push({ origin: 'B', message: bForA });
   const crossADeletesB = await deleteMessage(botAToken, 'A', 'B', bForA);
@@ -180,6 +179,7 @@ try {
   const crossBotSymmetric = crossADeletesB.ok === crossBDeletesA.ok;
   console.log(JSON.stringify({
     mode: 'M0-F isolated own/cross-bot delete proof',
+    api_base: API_BASE,
     bot_a_id: String(botA.id),
     bot_b_id: String(botB.id),
     distinct_bots_proven: true,
