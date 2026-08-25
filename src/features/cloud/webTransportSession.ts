@@ -1,15 +1,22 @@
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
 import { getWebClientId } from "../../platform/webClientId";
+import {
+  prepareWebTempAuth,
+  type TempAuthBinding,
+  type TempAuthMetadata,
+} from "./webTempAuth";
 
-export interface WebTransportCredentialEnvelope {
+export interface WebTransportTempAuthPublic {
   version: 1;
-  format: "beatgaler-web-transport-v1";
-  algorithm: "RSA-OAEP-256";
-  ciphertext: string;
+  dc_id: number;
+  expected_bot_id: string;
+  expires_at: number | null;
+  binding: TempAuthBinding | null;
 }
 
-export interface WebTransportSession {
-  mode: "galer-direct-web-mtproto";
+export interface WebTransportSessionPublic {
+  ok?: boolean;
+  mode: "galer-direct-temp-mtproto";
   session_id: string;
   transport_id: string;
   transport_user_id: string | null;
@@ -21,19 +28,27 @@ export interface WebTransportSession {
   heartbeat_interval_ms: number;
   heartbeat_timeout_ms: number;
   token_rotation_enabled: boolean;
-  bot_token: string;
-  telegram_api_id: number;
-  telegram_api_hash: string;
+  temp_auth_required: boolean;
+  temp_auth: WebTransportTempAuthPublic;
 }
 
-type SessionEnvelopeResponse = Omit<WebTransportSession, "bot_token" | "telegram_api_id" | "telegram_api_hash"> & {
-  credential_envelope: WebTransportCredentialEnvelope;
-};
+export interface WebTransportSession extends WebTransportSessionPublic {
+  temp_auth_required: false;
+  temp_auth: WebTransportTempAuthPublic & {
+    expires_at: number;
+    binding: TempAuthBinding;
+  };
+  /** Client-generated temporary key. It is never serialized back to Galer Cloud. */
+  temp_auth_key: Uint8Array;
+  temp_primary_dcs: unknown;
+}
 
 export interface WebTransportHeartbeatResponse {
   ok?: boolean;
   expired?: boolean;
-  credential_refresh?: SessionEnvelopeResponse;
+  refresh_required?: boolean;
+  temp_auth_required?: boolean;
+  credential_refresh?: WebTransportSessionPublic | null;
 }
 
 export interface WebTransportOperationResponse {
@@ -42,71 +57,9 @@ export interface WebTransportOperationResponse {
   wait?: boolean;
   retry_after_ms?: number;
   refresh_required?: boolean;
+  temp_auth_required?: boolean;
   operation_id?: string;
-  credential_refresh?: SessionEnvelopeResponse;
-}
-
-type BrowserKeyState = {
-  publicJwk: JsonWebKey;
-  privateKey: CryptoKey;
-};
-
-let browserKeyState: Promise<BrowserKeyState> | null = null;
-
-function decodeBase64Url(value: string): ArrayBuffer {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-  const binary = atob(base64);
-  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-}
-
-async function createBrowserKeyState(): Promise<BrowserKeyState> {
-  const generated = await crypto.subtle.generateKey({
-    name: "RSA-OAEP",
-    modulusLength: 2048,
-    publicExponent: new Uint8Array([1, 0, 1]),
-    hash: "SHA-256",
-  }, true, ["encrypt", "decrypt"]);
-
-  const [publicJwk, exportedPrivate] = await Promise.all([
-    crypto.subtle.exportKey("jwk", generated.publicKey),
-    crypto.subtle.exportKey("pkcs8", generated.privateKey),
-  ]);
-  const privateKey = await crypto.subtle.importKey(
-    "pkcs8",
-    exportedPrivate,
-    { name: "RSA-OAEP", hash: "SHA-256" },
-    false,
-    ["decrypt"],
-  );
-  new Uint8Array(exportedPrivate).fill(0);
-  return { publicJwk, privateKey };
-}
-
-async function keyState(): Promise<BrowserKeyState> {
-  if (!browserKeyState) browserKeyState = createBrowserKeyState();
-  return browserKeyState;
-}
-
-async function decryptCredentials(envelope: WebTransportCredentialEnvelope, privateKey: CryptoKey) {
-  if (envelope?.version !== 1 || envelope?.format !== "beatgaler-web-transport-v1" || envelope?.algorithm !== "RSA-OAEP-256") {
-    throw new Error("Galer Cloud returned an unsupported Web credential envelope.");
-  }
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "RSA-OAEP" },
-    privateKey,
-    decodeBase64Url(envelope.ciphertext),
-  );
-  const compact = JSON.parse(new TextDecoder().decode(decrypted));
-  const credentials = {
-    bot_token: String(compact?.t || ""),
-    telegram_api_id: Number(compact?.i || 0),
-    telegram_api_hash: String(compact?.h || ""),
-  };
-  if (!credentials.bot_token || !credentials.telegram_api_id || !credentials.telegram_api_hash) {
-    throw new Error("Galer Cloud returned incomplete Web transport credentials.");
-  }
-  return credentials;
+  credential_refresh?: WebTransportSessionPublic | null;
 }
 
 async function transportRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
@@ -126,11 +79,25 @@ export function webTransportRequestBody(body: Record<string, unknown>): Record<s
   return { ...body, beatgalerUserId: getWebClientId() };
 }
 
-async function unwrapSession(response: SessionEnvelopeResponse): Promise<WebTransportSession> {
-  const keys = await keyState();
-  const credentials = await decryptCredentials(response.credential_envelope, keys.privateKey);
-  const { credential_envelope: _credentialEnvelope, ...publicSession } = response;
-  return { ...publicSession, ...credentials };
+function assertNoPermanentCredentials(value: unknown): void {
+  const serialized = JSON.stringify(value);
+  for (const forbidden of ["bot_token", "telegram_api_id", "telegram_api_hash", "credential_envelope"]) {
+    if (serialized.includes(`\"${forbidden}\"`)) {
+      throw new Error("Galer Cloud refused an unsafe transport credential response.");
+    }
+  }
+}
+
+function validateBootstrap(response: WebTransportSessionPublic): WebTransportSessionPublic {
+  assertNoPermanentCredentials(response);
+  if (response?.mode !== "galer-direct-temp-mtproto") {
+    throw new Error("Galer Cloud returned an unsupported Direct transport mode.");
+  }
+  const dcId = Number(response?.temp_auth?.dc_id || 0);
+  if (!Number.isInteger(dcId) || dcId < 1 || dcId > 5 || !response?.temp_auth?.expected_bot_id) {
+    throw new Error("Galer Cloud returned incomplete temporary authorization metadata.");
+  }
+  return response;
 }
 
 function sessionIdentity(session: WebTransportSession) {
@@ -141,14 +108,81 @@ function sessionIdentity(session: WebTransportSession) {
   };
 }
 
-/** Opens an in-memory Web lease. Nothing is persisted and no file bytes touch the control server. */
+async function bindTemporarySession(
+  bootstrap: WebTransportSessionPublic,
+  metadata?: TempAuthMetadata,
+): Promise<WebTransportSession> {
+  const safeBootstrap = validateBootstrap(bootstrap);
+  const prepared = await prepareWebTempAuth(safeBootstrap.temp_auth.dc_id);
+  try {
+    if (metadata) throw new Error("Unexpected prebuilt temporary-auth metadata.");
+    const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+      browserClientId: getWebClientId(),
+      tempAuthMetadata: prepared.metadata,
+    }));
+    if (
+      response.session_id !== safeBootstrap.session_id ||
+      response.generation !== safeBootstrap.generation ||
+      response.transport_id !== safeBootstrap.transport_id
+    ) {
+      throw new Error("Galer Cloud changed the Direct lease while binding temporary authorization.");
+    }
+    const binding = response.temp_auth.binding;
+    const expiresAt = Number(response.temp_auth.expires_at || 0);
+    if (!binding || expiresAt !== prepared.metadata.expiresAt) {
+      throw new Error("Galer Cloud returned an incomplete temporary authorization binding.");
+    }
+    const imported = await prepared.bind(binding);
+    return {
+      ...response,
+      temp_auth_required: false,
+      temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
+      temp_auth_key: imported.authKey,
+      temp_primary_dcs: imported.primaryDcs,
+    } as WebTransportSession;
+  } finally {
+    await prepared.destroy().catch(() => {});
+  }
+}
+
+/** Opens a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
 export async function prepareWebTransportSession(): Promise<WebTransportSession> {
-  const keys = await keyState();
-  const response = await transportRequest<SessionEnvelopeResponse>("/transport/session/start", {
-    webTransportPublicKey: keys.publicJwk,
+  const bootstrap = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
     browserClientId: getWebClientId(),
-  });
-  return unwrapSession(response);
+  }));
+  return bindTemporarySession(bootstrap);
+}
+
+export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
+  const prepared = await prepareWebTempAuth(session.temp_auth.dc_id);
+  try {
+    const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+      browserClientId: getWebClientId(),
+      tempAuthMetadata: prepared.metadata,
+    }));
+    if (
+      response.session_id !== session.session_id ||
+      response.generation !== session.generation ||
+      response.transport_id !== session.transport_id
+    ) {
+      throw new Error("Galer Cloud changed the Direct lease during temporary-auth renewal.");
+    }
+    const binding = response.temp_auth.binding;
+    const expiresAt = Number(response.temp_auth.expires_at || 0);
+    if (!binding || expiresAt !== prepared.metadata.expiresAt) {
+      throw new Error("Galer Cloud returned an incomplete renewal binding.");
+    }
+    const imported = await prepared.bind(binding);
+    return {
+      ...response,
+      temp_auth_required: false,
+      temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
+      temp_auth_key: imported.authKey,
+      temp_primary_dcs: imported.primaryDcs,
+    } as WebTransportSession;
+  } finally {
+    await prepared.destroy().catch(() => {});
+  }
 }
 
 export async function activateWebTransportSession(session: WebTransportSession): Promise<void> {
@@ -160,14 +194,15 @@ export async function heartbeatWebTransportSession(session: WebTransportSession)
   expired: boolean;
   credentialRefresh: WebTransportSession | null;
 }> {
-  const keys = await keyState();
-  const response = await transportRequest<WebTransportHeartbeatResponse>("/transport/session/heartbeat", {
-    ...sessionIdentity(session),
-    webTransportPublicKey: keys.publicJwk,
-  });
+  const response = await transportRequest<WebTransportHeartbeatResponse>("/transport/session/heartbeat", sessionIdentity(session));
+  assertNoPermanentCredentials(response);
+  if (response.expired === true) return { expired: true, credentialRefresh: null };
+  const now = Math.floor(Date.now() / 1000);
+  const renewBefore = session.temp_auth.expires_at - 120;
+  const needsRenewal = now >= renewBefore || response.refresh_required === true || response.temp_auth_required === true;
   return {
-    expired: response.expired === true,
-    credentialRefresh: response.credential_refresh ? await unwrapSession(response.credential_refresh) : null,
+    expired: false,
+    credentialRefresh: needsRenewal ? await renewWebTransportSession(session) : null,
   };
 }
 
@@ -180,16 +215,26 @@ export async function beginWebTransportOperation(
   credentialRefresh: WebTransportSession | null;
   operationId: string | null;
 }> {
-  const keys = await keyState();
   const response = await transportRequest<WebTransportOperationResponse>("/transport/operation/begin", {
     ...sessionIdentity(session),
     kind,
-    webTransportPublicKey: keys.publicJwk,
   });
+  assertNoPermanentCredentials(response);
+  if (response.expired === true) {
+    return { expired: true, waitMs: null, credentialRefresh: null, operationId: null };
+  }
+  if (response.refresh_required === true || response.temp_auth_required === true) {
+    return {
+      expired: false,
+      waitMs: null,
+      credentialRefresh: await renewWebTransportSession(session),
+      operationId: null,
+    };
+  }
   return {
-    expired: response.expired === true,
+    expired: false,
     waitMs: response.wait === true ? Math.min(1000, Math.max(100, Number(response.retry_after_ms) || 250)) : null,
-    credentialRefresh: response.credential_refresh ? await unwrapSession(response.credential_refresh) : null,
+    credentialRefresh: null,
     operationId: typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null,
   };
 }
