@@ -1,0 +1,36 @@
+name: Task 5.1 M0-F - Own and cross-bot delete probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  m0f-cross-bot-delete:
+    name: M0-F own/cross-bot delete
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BEATGALER_M0_F_BOT_A_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_A_TOKEN }}
+      BEATGALER_M0_F_BOT_B_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_B_TOKEN }}
+      BEATGALER_M0_F_CHAT_ID: ${{ secrets.BEATGALER_M0_F_CHAT_ID }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          check-latest: false
+
+      - name: Require isolated probe secrets
+        shell: bash
+        run: |
+          test -n "$BEATGALER_M0_F_BOT_A_TOKEN" || { echo 'BEATGALER_M0_F_BOT_A_TOKEN missing'; exit 1; }
+          test -n "$BEATGALER_M0_F_BOT_B_TOKEN" || { echo 'BEATGALER_M0_F_BOT_B_TOKEN missing'; exit 1; }
+          test -n "$BEATGALER_M0_F_CHAT_ID" || { echo 'BEATGALER_M0_F_CHAT_ID missing'; exit 1; }
+
+      - name: Run isolated own/cross-bot delete proof
+        run: node scripts/telegram-cross-bot-delete-live.mjs
