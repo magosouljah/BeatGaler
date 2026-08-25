@@ -27,5 +27,8 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Run isolated pool scalability probe
+      - name: Characterize fair allocator and concurrency
         run: node scripts/probe-task-5.1-pool-scalability.cjs
+
+      - name: Prove max-4 admission and bounded waitlist
+        run: node scripts/regression-direct-admission-control.cjs

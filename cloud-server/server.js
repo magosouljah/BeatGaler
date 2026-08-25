@@ -5,6 +5,9 @@
 // and make this bootstrap the canonical server.js entrypoint.
 const express = require("express");
 const { installHttpContainment } = require("./http-containment");
+const directTransport = require("./direct-transport-control");
+const { installDirectTransportAdmission } = require("./direct-transport-admission");
 
 installHttpContainment(express, { dataDir: __dirname });
+installDirectTransportAdmission(directTransport);
 require("./server-core");
