@@ -2,8 +2,9 @@
 
 $repo = "E:\777\app\beatvault"
 $cloudDir = Join-Path $repo "cloud-server"
-$botDir = "D:\BeatGalerBotAPI\telegram-bot-api\build\Release"
+$botDir = if ($env:BEATGALER_BOT_API_SOURCE_DIR) { $env:BEATGALER_BOT_API_SOURCE_DIR } else { "D:\BeatGalerBotAPI\telegram-bot-api\build\Release" }
 $botExe = Join-Path $botDir "telegram-bot-api.exe"
+$resourceDir = Join-Path $repo "src-tauri\resources\windows"
 
 Write-Host ""
 Write-Host "BeatGaler local cloud launcher"
@@ -16,8 +17,46 @@ if (-not (Test-Path $cloudDir)) {
     throw "Cloud server folder not found: $cloudDir"
 }
 if (-not (Test-Path $botExe)) {
-    throw "Telegram Bot API executable not found: $botExe"
+    throw "BeatGaler local data-plane runtime not found: $botExe"
 }
+
+# Development provisioning only. src-tauri/resources/windows is gitignored, so
+# runtime executables/DLLs remain local and can never expose backend credentials.
+# Release CI builds its own statically linked runtime and stages it separately.
+Write-Host "Staging BeatGaler Windows development runtime..."
+New-Item -ItemType Directory -Force $resourceDir | Out-Null
+
+$nodeExe = (Get-Command node.exe -ErrorAction Stop).Source
+Copy-Item -LiteralPath $nodeExe -Destination (Join-Path $resourceDir "node.exe") -Force
+Copy-Item -LiteralPath $botExe -Destination (Join-Path $resourceDir "telegram-bot-api.exe") -Force
+
+foreach ($dllName in @("libcrypto-3-x64.dll", "libssl-3-x64.dll", "z.dll")) {
+    $dllSource = Join-Path $botDir $dllName
+    $dllTarget = Join-Path $resourceDir $dllName
+    if (Test-Path -LiteralPath $dllSource -PathType Leaf) {
+        Copy-Item -LiteralPath $dllSource -Destination $dllTarget -Force
+    } elseif (Test-Path -LiteralPath $dllTarget -PathType Leaf) {
+        Remove-Item -LiteralPath $dllTarget -Force
+    }
+}
+
+$stagedNode = Join-Path $resourceDir "node.exe"
+$stagedBot = Join-Path $resourceDir "telegram-bot-api.exe"
+& $stagedNode --version
+if ($LASTEXITCODE -ne 0) {
+    throw "Staged BeatGaler Node runtime is not executable (exit $LASTEXITCODE)."
+}
+
+Push-Location $resourceDir
+try {
+    & $stagedBot --help | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Staged BeatGaler local data-plane runtime cannot start (exit $LASTEXITCODE). Check its adjacent runtime DLLs."
+    }
+} finally {
+    Pop-Location
+}
+Write-Host "BeatGaler development runtime ready in $resourceDir"
 
 if (-not $env:TELEGRAM_API_ID) {
     $env:TELEGRAM_API_ID = Read-Host "Telegram API ID"
