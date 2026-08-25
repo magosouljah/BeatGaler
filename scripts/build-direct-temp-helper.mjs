@@ -55,6 +55,7 @@ for (const [name, target] of aliases) {
 }
 
 // Keep this bundle self-contained: packaged Desktop has no node_modules beside the helper.
+// Task 5.1: this source is also the deterministic trigger for the exact Desktop seam applicator.
 await build({
   entryPoints: [path.join(root, "src-tauri", "direct-transport", "transport-helper.source.mjs")],
   outfile: path.join(root, "src-tauri", "direct-transport", "transport-helper.cjs"),
