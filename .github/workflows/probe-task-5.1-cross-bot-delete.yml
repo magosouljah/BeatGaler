@@ -82,34 +82,56 @@ jobs:
           New-Item -ItemType Directory -Force runtime/windows-bot-api | Out-Null
           Copy-Item -LiteralPath $bot.FullName -Destination runtime/windows-bot-api/telegram-bot-api.exe
 
-      - name: Start exact v0.7.4 local Bot API mode
+      - name: Run exact v0.7.4 local Bot API cross-bot delete proof
         shell: pwsh
         run: |
-          $exe = Resolve-Path 'runtime/windows-bot-api/telegram-bot-api.exe'
-          $proc = Start-Process -FilePath $exe -ArgumentList @(
-            "--api-id=$env:TELEGRAM_API_ID",
-            "--api-hash=$env:TELEGRAM_API_HASH",
-            '--local',
-            '--http-port=8081',
-            '--verbosity=3'
-          ) -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/bot-api.stdout.log" -RedirectStandardError "$env:RUNNER_TEMP/bot-api.stderr.log"
-          "BOT_API_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $deadline = (Get-Date).AddSeconds(30)
-          do {
-            Start-Sleep -Milliseconds 500
-            $ready = Test-NetConnection 127.0.0.1 -Port 8081 -InformationLevel Quiet -WarningAction SilentlyContinue
-          } until ($ready -or (Get-Date) -ge $deadline)
-          if (-not $ready) {
-            Get-Content "$env:RUNNER_TEMP/bot-api.stderr.log" -ErrorAction SilentlyContinue | Select-Object -Last 100
-            throw 'telegram-bot-api did not open 127.0.0.1:8081'
+          $runtimeDir = (Resolve-Path 'runtime/windows-bot-api').Path
+          $exe = Join-Path $runtimeDir 'telegram-bot-api.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'bot-api.stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'bot-api.stderr.log'
+          $proc = $null
+
+          try {
+            $proc = Start-Process -FilePath $exe -WorkingDirectory $runtimeDir -ArgumentList @(
+              "--api-id=$env:TELEGRAM_API_ID",
+              "--api-hash=$env:TELEGRAM_API_HASH",
+              '--local',
+              '--http-port=8081',
+              '--verbosity=3'
+            ) -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+            $deadline = (Get-Date).AddSeconds(30)
+            $ready = $false
+            do {
+              Start-Sleep -Milliseconds 500
+              if ($proc.HasExited) {
+                Write-Host "telegram-bot-api exited before readiness with code $($proc.ExitCode)"
+                Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
+                throw 'telegram-bot-api exited before opening 127.0.0.1:8081'
+              }
+              $ready = Test-NetConnection 127.0.0.1 -Port 8081 -InformationLevel Quiet -WarningAction SilentlyContinue
+            } until ($ready -or (Get-Date) -ge $deadline)
+
+            if (-not $ready) {
+              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
+              throw 'telegram-bot-api did not open 127.0.0.1:8081'
+            }
+
+            Start-Sleep -Milliseconds 750
+            if ($proc.HasExited) {
+              Write-Host "telegram-bot-api exited after readiness with code $($proc.ExitCode)"
+              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
+              throw 'telegram-bot-api exited before M0-F probe'
+            }
+
+            node scripts/telegram-cross-bot-delete-live.mjs
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host 'M0-F probe failed; local Bot API stderr follows:'
+              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
+              throw "M0-F probe failed with exit code $LASTEXITCODE"
+            }
+          } finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
           }
-
-      - name: Run exact cross-bot delete proof through local Bot API
-        shell: pwsh
-        run: node scripts/telegram-cross-bot-delete-live.mjs
-
-      - name: Stop local Bot API
-        if: always()
-        shell: pwsh
-        run: |
-          if ($env:BOT_API_PID) { Stop-Process -Id ([int]$env:BOT_API_PID) -Force -ErrorAction SilentlyContinue }
