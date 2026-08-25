@@ -42,6 +42,27 @@ function stopProcess(proc) {
   if (proc && proc.exitCode == null) proc.kill("SIGTERM");
 }
 
+async function startBinderWithRetry(maxAttempts = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    binderProcess = spawn(process.execPath, ["scripts/telegram-temp-auth-web-binder.mjs"], {
+      cwd: root,
+      env: { ...process.env },
+      stdio: "inherit",
+    });
+    try {
+      await waitFor(binderHealth, `M0-E2 binder attempt ${attempt}`, () => binderProcess);
+      return;
+    } catch (error) {
+      lastError = error;
+      stopProcess(binderProcess);
+      binderProcess = null;
+      if (attempt < maxAttempts) await sleep(750 * attempt);
+    }
+  }
+  throw lastError || new Error("M0-E2 binder could not start after bounded retries.");
+}
+
 function sanitizedBrowserServerEnv() {
   const env = { ...process.env };
   for (const name of SECRET_NAMES) delete env[name];
@@ -77,12 +98,7 @@ export const config = {
   ],
 
   onPrepare: async () => {
-    binderProcess = spawn(process.execPath, ["scripts/telegram-temp-auth-web-binder.mjs"], {
-      cwd: root,
-      env: { ...process.env },
-      stdio: "inherit",
-    });
-    await waitFor(binderHealth, "M0-E2 binder", () => binderProcess);
+    await startBinderWithRetry();
 
     const npx = process.platform === "win32" ? "npx.cmd" : "npx";
     viteProcess = spawn(npx, ["--no-install", "vite", "--config", "vite.m0-e2.config.mjs"], {
