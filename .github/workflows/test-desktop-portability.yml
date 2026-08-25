@@ -271,7 +271,7 @@ jobs:
 
   temp_auth_cross_platform_probe:
     name: M0-E1 temp auth live (${{ matrix.label }})
-    if: github.event_name == 'pull_request' && github.head_ref == 'task-5.1-temp-auth-cross-platform-probe'
+    if: "${{ github.event_name == 'pull_request' && github.head_ref == 'task-5.1-temp-auth-cross-platform-probe' }}"
     strategy:
       fail-fast: false
       matrix:
@@ -306,13 +306,15 @@ jobs:
         run: node --check scripts/telegram-temp-auth-bot-live.mjs
 
       - name: Require dedicated probe secrets without printing them
-        run: node -e "for (const n of ['BEATGALER_M0_B2_API_ID','BEATGALER_M0_B2_API_HASH','BEATGALER_M0_B2_BOT_TOKEN']) { if (!String(process.env[n] || '').trim()) throw new Error('Missing dedicated probe secret: ' + n); } console.log('Dedicated M0-B2 secrets are present; values remain hidden.')"
+        run: |
+          node -e "for (const n of ['BEATGALER_M0_B2_API_ID','BEATGALER_M0_B2_API_HASH','BEATGALER_M0_B2_BOT_TOKEN']) { if (!String(process.env[n] || '').trim()) throw new Error('Missing dedicated probe secret: ' + n); } console.log('Dedicated M0-B2 secrets are present; values remain hidden.')"
 
       - name: Prove bound bot temporary auth live on this OS
         run: node scripts/telegram-temp-auth-bot-live.mjs
 
       - name: Record evidence boundary
-        run: node -e "console.log('M0-E1 platform=${{ matrix.label }} live_temp_auth_attempted=true production_runtime_changed=false web_browser_proven=false')"
+        run: |
+          node -e "console.log('M0-E1 platform=${{ matrix.label }} live_temp_auth_attempted=true production_runtime_changed=false web_browser_proven=false')"
 
   required_ci:
     name: Required CI
