@@ -1,5 +1,7 @@
 mod matcher;
-mod commands;
+mod commands {
+    include!(concat!(env!("OUT_DIR"), "/commands_task_5_1.rs"));
+}
 mod versioning;
 mod updater;
 pub use commands::*;

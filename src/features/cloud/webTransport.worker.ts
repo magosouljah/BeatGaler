@@ -46,28 +46,42 @@ async function closeClient(): Promise<void> {
 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
   await closeClient();
-  const { bot_token, chat_id, telegram_api_id, telegram_api_hash } = command.session;
-  if (!bot_token || !chat_id || !telegram_api_id || !telegram_api_hash) {
-    throw new Error("Galer Cloud returned incomplete Web transport credentials.");
+  const { chat_id, expected_bot_id, temp_auth_key, temp_primary_dcs } = command.session;
+  if (!chat_id || !expected_bot_id || !(temp_auth_key instanceof Uint8Array) || temp_auth_key.byteLength !== 256 || !temp_primary_dcs) {
+    throw new Error("Galer Cloud returned incomplete temporary transport authorization.");
   }
 
   const next = new TelegramClient({
-    apiId: telegram_api_id,
-    apiHash: telegram_api_hash,
+    // API credentials are required only for login/importBotAuthorization. This
+    // runtime is already authorized by auth.bindTempAuthKey, so productive
+    // clients intentionally receive neither the real API ID nor API hash.
+    apiId: 0,
+    apiHash: "",
     storage: new MemoryStorage(),
-    // @mtcute's automatic import.meta.url lookup points at Vite's optimized
-    // dependency directory during development, where the WASM file does not
-    // exist and the SPA HTML fallback is returned. Supplying Vite's emitted
-    // asset URL explicitly works in both dev and production builds.
     crypto: new WebCryptoProvider({ wasmInput: mtcuteWasmUrl }),
     disableUpdates: true,
   });
   try {
-    await next.start({ botToken: bot_token });
-    await next.getMe();
+    await next.importSession({
+      primaryDcs: temp_primary_dcs as any,
+      self: {
+        userId: Number(expected_bot_id),
+        isBot: true,
+        isPremium: false,
+        usernames: [],
+      } as any,
+      authKey: temp_auth_key,
+    }, true);
+    const self = await next.getMe();
+    if (!self?.isBot || String(self.id) !== String(expected_bot_id)) {
+      throw new Error("Temporary authorization resolved to the wrong transport identity.");
+    }
   } catch (error) {
     await next.destroy().catch(() => {});
     throw error;
+  } finally {
+    // Worker owns a structured-cloned copy. mtcute has imported it into MemoryStorage.
+    temp_auth_key.fill(0);
   }
   const numericChatId = Number(chat_id);
   if (!Number.isSafeInteger(numericChatId) || numericChatId === 0) {
@@ -75,9 +89,6 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     throw new Error("Galer Cloud returned an invalid vault identifier.");
   }
   client = next;
-  // MTcute treats strings as Telegram usernames. Vault ids arrive from the
-  // control plane as JSON strings, so retain the exact safe integer value but
-  // pass it to every MTProto API as a number.
   chatId = numericChatId;
 }
 
@@ -103,22 +114,13 @@ function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessag
 async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
   const active = requireReady();
   let lastError: unknown = null;
-
-  // Pin propagation can briefly lag behind an INDEX replacement. Re-read the
-  // authoritative pin a few times instead of accepting an older snapshot.
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const fullChat = await active.getFullChat(chatId);
       const pinnedId = Number(fullChat.pinnedMsgId || 0);
       if (!Number.isInteger(pinnedId) || pinnedId <= 0) {
-        // A freshly admitted transport bot can see the vault before Telegram
-        // propagates its pinned message. Returning an authoritative empty index
-        // on that first read makes a real library appear empty on a new phone.
-        // Retry the same way we do for a stale pin, and only accept an actually
-        // empty vault after the propagation window has elapsed.
         throw new Error("Galer Cloud library index is still synchronizing.");
       }
-
       const [message] = await active.getMessages(chatId, [pinnedId]);
       if (!message || !message.text.startsWith(LIBRARY_INDEX_CAPTION)) {
         throw new Error("Galer Cloud library index is not available.");
@@ -127,10 +129,7 @@ async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
       if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) {
         throw new Error("Galer Cloud library index has an invalid size.");
       }
-      return {
-        manifest: JSON.parse(new TextDecoder().decode(bytes)),
-        messageId: pinnedId,
-      };
+      return { manifest: JSON.parse(new TextDecoder().decode(bytes)), messageId: pinnedId };
     } catch (error) {
       lastError = error;
       if (attempt < 4) await new Promise(resolve => setTimeout(resolve, Math.min(1000, 80 * (2 ** attempt))));
@@ -170,17 +169,13 @@ async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promis
   if (!root || root.schema !== "beatgaler.telegram.library" || Number(root.version) !== 2) {
     throw new Error("Galer Cloud refused an invalid library update.");
   }
-
   const current = await getLibraryIndex();
   if (current.messageId !== input.expectedMessageId) {
     throw new Error("Your library changed on another device. Retry Save to use the latest version.");
   }
   const candidateIds = libraryIdentityIds(root);
   const missing = Array.from(libraryIdentityIds(current.manifest)).filter(id => !candidateIds.has(id));
-  if (missing.length > 0) {
-    throw new Error("Galer Cloud blocked a stale library update.");
-  }
-
+  if (missing.length > 0) throw new Error("Galer Cloud blocked a stale library update.");
   const bytes = new TextEncoder().encode(JSON.stringify(root));
   if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) {
     throw new Error("Galer Cloud library update has an invalid size.");
@@ -193,19 +188,13 @@ async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promis
     caption: LIBRARY_INDEX_CAPTION,
   }), { silent: true });
   const messageId = Number(sent?.id || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) {
-    throw new Error("Galer Cloud returned incomplete library information.");
-  }
-
+  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud returned incomplete library information.");
   try {
     await active.pinMessage({ chatId, message: messageId, notify: false });
     let pinned = false;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const full = await active.getFullChat(chatId);
-      if (Number(full.pinnedMsgId || 0) === messageId) {
-        pinned = true;
-        break;
-      }
+      if (Number(full.pinnedMsgId || 0) === messageId) { pinned = true; break; }
       await new Promise(resolve => setTimeout(resolve, 80 * (attempt + 1)));
     }
     if (!pinned) throw new Error("Galer Cloud could not verify the library update.");
@@ -213,7 +202,6 @@ async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promis
     await active.deleteMessagesById(chatId, [messageId]).catch(() => {});
     throw error;
   }
-
   if (current.messageId && current.messageId !== messageId) {
     await active.deleteMessagesById(chatId, [current.messageId]).catch(() => {});
   }
@@ -236,9 +224,7 @@ function sniffImageMime(bytes: Uint8Array): string {
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   return btoa(binary);
 }
 
@@ -251,17 +237,13 @@ async function download(input: WebTransportDownloadInput): Promise<WebTransportD
   const bytes = await active.downloadAsBuffer(downloadableMedia(message), { stallTimeout: 20_000 });
   if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty object.");
   const declaredMime = String(input.mimeType || "").trim().toLowerCase();
-  const mimeType = /^image\/(?:png|jpe?g|gif|webp|bmp|avif)$/.test(declaredMime)
-    ? declaredMime
-    : sniffImageMime(bytes);
+  const mimeType = /^image\/(?:png|jpe?g|gif|webp|bmp|avif)$/.test(declaredMime) ? declaredMime : sniffImageMime(bytes);
   return { messageId, dataUrl: `data:${mimeType};base64,${bytesToBase64(bytes)}` };
 }
 
 async function deleteMessages(input: WebTransportDeleteMessagesInput): Promise<WebTransportDeleteMessagesResult> {
   const active = requireReady();
-  const ids = Array.from(new Set(input.messageIds
-    .map(Number)
-    .filter(id => Number.isInteger(id) && id > 0)));
+  const ids = Array.from(new Set(input.messageIds.map(Number).filter(id => Number.isInteger(id) && id > 0)));
   let deleted = 0;
   for (let offset = 0; offset < ids.length; offset += 100) {
     const batch = ids.slice(offset, offset + 100);
@@ -273,15 +255,10 @@ async function deleteMessages(input: WebTransportDeleteMessagesInput): Promise<W
 
 function downloadMime(value: unknown): string {
   const mime = String(value || "").trim().toLowerCase();
-  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i.test(mime)
-    ? mime
-    : "application/octet-stream";
+  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i.test(mime) ? mime : "application/octet-stream";
 }
 
-async function stream(
-  requestId: string,
-  input: WebTransportStreamInput,
-): Promise<WebTransportStreamResult> {
+async function stream(requestId: string, input: WebTransportStreamInput): Promise<WebTransportStreamResult> {
   const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
@@ -295,26 +272,11 @@ async function stream(
   activeStreams.set(requestId, state);
   let downloadedBytes = 0;
   try {
-    for await (const chunk of active.downloadAsIterable(media, {
-      abortSignal: controller.signal,
-      stallTimeout: 20_000,
-      partSize: 256,
-    })) {
+    for await (const chunk of active.downloadAsIterable(media, { abortSignal: controller.signal, stallTimeout: 20_000, partSize: 256 })) {
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
       downloadedBytes += chunk.byteLength;
-      const transferable = chunk.buffer.slice(
-        chunk.byteOffset,
-        chunk.byteOffset + chunk.byteLength,
-      ) as ArrayBuffer;
-      scope.postMessage({
-        requestId,
-        event: "download-chunk",
-        chunk: transferable,
-        downloadedBytes,
-        totalBytes: totalBytes || downloadedBytes,
-      }, [transferable]);
-      // Backpressure: do not request another MTProto chunk until the browser's
-      // SourceBuffer has appended this one (or the Blob fallback has stored it).
+      const transferable = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+      scope.postMessage({ requestId, event: "download-chunk", chunk: transferable, downloadedBytes, totalBytes: totalBytes || downloadedBytes }, [transferable]);
       await new Promise<void>(resolve => { state.acknowledge = resolve; });
       state.acknowledge = null;
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
@@ -341,20 +303,12 @@ function acknowledgeStream(targetRequestId: string): { acknowledged: boolean } {
 
 function validateFile(file: File): void {
   if (!(file instanceof File) || file.size <= 0) throw new Error("Upload source is missing or empty.");
-  if (file.size > WEB_DIRECT_MAX_FILE_BYTES) {
-    throw new Error("This file exceeds the 1.9 GB Galer Cloud Web limit.");
-  }
+  if (file.size > WEB_DIRECT_MAX_FILE_BYTES) throw new Error("This file exceeds the 1.9 GB Galer Cloud Web limit.");
 }
 
-async function upload(
-  requestId: string,
-  input: Extract<WebTransportWorkerCommand, { op: "upload" }>["input"],
-): Promise<WebTransportUploadResult> {
+async function upload(requestId: string, input: Extract<WebTransportWorkerCommand, { op: "upload" }>["input"]): Promise<WebTransportUploadResult> {
   const active = requireReady();
   validateFile(input.file);
-
-  // The browser File is read progressively in MTProto protocol chunks. Galer
-  // Cloud still receives exactly one document in exactly one message.
   const message = await active.sendMedia(chatId, InputMedia.document(input.file, {
     fileName: input.filename,
     fileMime: input.file.type || "application/octet-stream",
@@ -364,28 +318,15 @@ async function upload(
     silent: true,
     replyTo: input.threadId,
     threadId: input.threadId,
-    progressCallback: uploadedBytes => {
-      scope.postMessage({
-        requestId,
-        event: "progress",
-        progress: {
-          uploadedBytes: Math.min(input.file.size, Math.round(uploadedBytes)),
-          totalBytes: input.file.size,
-        },
-      });
-    },
+    progressCallback: uploadedBytes => scope.postMessage({
+      requestId,
+      event: "progress",
+      progress: { uploadedBytes: Math.min(input.file.size, Math.round(uploadedBytes)), totalBytes: input.file.size },
+    }),
   });
   const messageId = Number(message?.id || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) {
-    throw new Error("Galer Cloud returned incomplete uploaded file information.");
-  }
-  const stored = {
-    telegram_file_id: `direct:${messageId}`,
-    telegram_message_id: messageId,
-    index: 0,
-    size: input.file.size,
-    filename: input.filename,
-  };
+  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud returned incomplete uploaded file information.");
+  const stored = { telegram_file_id: `direct:${messageId}`, telegram_message_id: messageId, index: 0, size: input.file.size, filename: input.filename };
   return {
     telegram_file_id: stored.telegram_file_id,
     telegram_message_id: messageId,
@@ -398,31 +339,17 @@ async function upload(
 
 async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
   switch (command.op) {
-    case "initialize":
-      await initialize(command);
-      return { ready: true };
-    case "verify":
-      await verifyReady();
-      return { verified: true };
-    case "get_index":
-      return getLibraryIndex();
-    case "replace_index":
-      return replaceLibraryIndex(command.input);
-    case "delete_messages":
-      return deleteMessages(command.input);
-    case "download":
-      return download(command.input);
-    case "stream":
-      return stream(command.requestId, command.input);
-    case "stream_ack":
-      return acknowledgeStream(command.targetRequestId);
-    case "cancel":
-      return cancelStream(command.targetRequestId);
-    case "upload":
-      return upload(command.requestId, command.input);
-    case "shutdown":
-      await closeClient();
-      return { closed: true };
+    case "initialize": await initialize(command); return { ready: true };
+    case "verify": await verifyReady(); return { verified: true };
+    case "get_index": return getLibraryIndex();
+    case "replace_index": return replaceLibraryIndex(command.input);
+    case "delete_messages": return deleteMessages(command.input);
+    case "download": return download(command.input);
+    case "stream": return stream(command.requestId, command.input);
+    case "stream_ack": return acknowledgeStream(command.targetRequestId);
+    case "cancel": return cancelStream(command.targetRequestId);
+    case "upload": return upload(command.requestId, command.input);
+    case "shutdown": await closeClient(); return { closed: true };
   }
 }
 
@@ -430,6 +357,6 @@ scope.onmessage = event => {
   const command = event.data;
   void handle(command).then(
     result => scope.postMessage({ requestId: command.requestId, ok: true, result }),
-    error => scope.postMessage({ requestId: command.requestId, ok: false, error: String(error?.message || error) }),
+    error => scope.postMessage({ requestId: command.requestId, ok: false, error: String((error as any)?.message || error) }),
   );
 };

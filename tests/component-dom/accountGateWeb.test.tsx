@@ -7,12 +7,12 @@ import AccountGate, { getBeatGalerInstallationId, loginBeatGalerAccount } from "
 
 const API_KEY = "beatgaler:cloud-api:v1";
 const TOKEN_KEY = "beatgaler:account-session:v1";
-const TEST_API = "https://galer-cloud.test";
+const TRUSTED_REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
 
 describe("AccountGate Web adapter", () => {
   beforeEach(() => {
     localStorage.clear();
-    localStorage.setItem(API_KEY, TEST_API);
+    localStorage.setItem(API_KEY, TRUSTED_REMOTE_API);
     vi.restoreAllMocks();
   });
 
@@ -39,10 +39,10 @@ describe("AccountGate Web adapter", () => {
   it("logs in through the Web adapter and persists the account token", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === `${TEST_API}/auth/health`) {
+      if (url === `${TRUSTED_REMOTE_API}/auth/health`) {
         return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
       }
-      if (url === `${TEST_API}/auth/login`) {
+      if (url === `${TRUSTED_REMOTE_API}/auth/login`) {
         const body = JSON.parse(String(init?.body || "{}"));
         expect(body.beatgalerUserId).toMatch(/^beatgaler-web-/);
         return new Response(JSON.stringify({
@@ -58,5 +58,6 @@ describe("AccountGate Web adapter", () => {
     const account = await loginBeatGalerAccount("web#0001", "password");
     expect(account.id).toBe("web-user");
     expect(localStorage.getItem(TOKEN_KEY)).toBe("web-test-token");
+    expect(localStorage.getItem(API_KEY)).toBe(TRUSTED_REMOTE_API);
   });
 });
