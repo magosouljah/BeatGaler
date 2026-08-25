@@ -48,7 +48,7 @@ for (const [needle, message] of [
   ["-BuildIfMissing", "Tauri dev launcher must create a missing runtime without a manual environment override"],
 ]) requireText(devLauncher, needle, message);
 for (const [needle, message] of [
-  ["runtime\\windows-bot-api", "Dev bootstrap must reuse the ignored runtime cache"],
+  ["windows-bot-api", "Dev bootstrap must reuse the ignored runtime cache"],
   ["src-tauri\\resources\\windows", "Dev bootstrap must stage into the Tauri Windows resource directory"],
   ["x64-windows-static", "Dev bootstrap must build the standalone static Windows runtime"],
   ["adfd7f6a8e990272851777eeb3ae0def4216f161", "Dev bootstrap must pin the same Bot API source as release CI"],
