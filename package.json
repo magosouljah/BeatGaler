@@ -26,7 +26,7 @@
     "test": "npm run test:fast",
     "test:unit:ts": "node scripts/run-unit-tests.mjs",
     "test:unit:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
-    "test:unit:cloud": "node cloud-server/tests/unit.test.cjs",
+    "test:unit:cloud": "node cloud-server/tests/unit.test.cjs && node cloud-server/tests/master-media-cleanup-hook.test.cjs",
     "test:component:dom": "vitest run tests/component-dom --environment jsdom",
     "test:integration": "vitest run tests/integration --environment jsdom",
     "test:e2e:desktop:build": "npm run build && cargo build --manifest-path src-tauri/Cargo.toml --release",
