@@ -1,4 +1,4 @@
-name: Task 5.1 M0-F - Own and cross-bot delete probe
+name: Task 5.1 M0-F - Local Bot API cross-bot delete probe
 
 on:
   workflow_dispatch:
@@ -16,15 +16,22 @@ on:
 permissions:
   contents: read
 
+env:
+  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
+  VCPKG_COMMIT: 7f3781e19cc7d4e4882a4caec01668c6f7b5c163
+
 jobs:
-  m0f-cross-bot-delete:
-    name: M0-F own/cross-bot delete
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  m0f-local-botapi-cross-bot-delete:
+    name: M0-F local Bot API own/cross-bot delete
+    runs-on: windows-latest
+    timeout-minutes: 120
     env:
       BEATGALER_M0_F_BOT_A_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_A_TOKEN }}
       BEATGALER_M0_F_BOT_B_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_B_TOKEN }}
       BEATGALER_M0_F_CHAT_ID: ${{ secrets.BEATGALER_M0_F_CHAT_ID }}
+      TELEGRAM_API_ID: ${{ secrets.BEATGALER_M0_D_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.BEATGALER_M0_D_API_HASH }}
+      BEATGALER_M0_F_API_BASE: http://127.0.0.1:8081
     steps:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -36,11 +43,73 @@ jobs:
           check-latest: false
 
       - name: Require isolated probe secrets
-        shell: bash
+        shell: pwsh
         run: |
-          test -n "$BEATGALER_M0_F_BOT_A_TOKEN" || { echo 'BEATGALER_M0_F_BOT_A_TOKEN missing'; exit 1; }
-          test -n "$BEATGALER_M0_F_BOT_B_TOKEN" || { echo 'BEATGALER_M0_F_BOT_B_TOKEN missing'; exit 1; }
-          test -n "$BEATGALER_M0_F_CHAT_ID" || { echo 'BEATGALER_M0_F_CHAT_ID missing'; exit 1; }
+          foreach ($name in @('BEATGALER_M0_F_BOT_A_TOKEN','BEATGALER_M0_F_BOT_B_TOKEN','BEATGALER_M0_F_CHAT_ID','TELEGRAM_API_ID','TELEGRAM_API_HASH')) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "$name missing" }
+          }
 
-      - name: Run isolated own/cross-bot delete proof
+      - name: Restore v0.7.4 Telegram Bot API runtime cache
+        id: bot-api-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/windows-bot-api
+          key: telegram-bot-api-windows-static-${{ env.BOT_API_COMMIT }}-${{ env.VCPKG_COMMIT }}
+
+      - name: Build exact v0.7.4 Telegram Bot API runtime if cache is absent
+        if: steps.bot-api-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone https://github.com/tdlib/telegram-bot-api.git runtime/telegram-bot-api-source
+          git -C runtime/telegram-bot-api-source checkout $env:BOT_API_COMMIT
+          git -C runtime/telegram-bot-api-source submodule update --init --recursive
+          git clone https://github.com/microsoft/vcpkg.git runtime/vcpkg
+          git -C runtime/vcpkg checkout $env:VCPKG_COMMIT
+          & runtime/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+          & runtime/vcpkg/vcpkg.exe install gperf:x64-windows-static openssl:x64-windows-static zlib:x64-windows-static --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed" }
+          cmake -S runtime/telegram-bot-api-source -B runtime/telegram-bot-api-build -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/runtime/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DCMAKE_INSTALL_PREFIX="$PWD/runtime/telegram-bot-api-install"
+          if ($LASTEXITCODE -ne 0) { throw "Telegram Bot API configure failed" }
+          cmake --build runtime/telegram-bot-api-build --config Release --target install --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Telegram Bot API build failed" }
+          $bot = Get-ChildItem runtime/telegram-bot-api-install,runtime/telegram-bot-api-build -Filter telegram-bot-api.exe -Recurse | Select-Object -First 1
+          if (-not $bot) { throw "telegram-bot-api.exe was not produced" }
+          New-Item -ItemType Directory -Force runtime/windows-bot-api | Out-Null
+          Copy-Item -LiteralPath $bot.FullName -Destination runtime/windows-bot-api/telegram-bot-api.exe
+
+      - name: Start exact v0.7.4 local Bot API mode
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path 'runtime/windows-bot-api/telegram-bot-api.exe'
+          $proc = Start-Process -FilePath $exe -ArgumentList @(
+            "--api-id=$env:TELEGRAM_API_ID",
+            "--api-hash=$env:TELEGRAM_API_HASH",
+            '--local',
+            '--http-port=8081',
+            '--verbosity=3'
+          ) -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/bot-api.stdout.log" -RedirectStandardError "$env:RUNNER_TEMP/bot-api.stderr.log"
+          "BOT_API_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            Start-Sleep -Milliseconds 500
+            $ready = Test-NetConnection 127.0.0.1 -Port 8081 -InformationLevel Quiet -WarningAction SilentlyContinue
+          } until ($ready -or (Get-Date) -ge $deadline)
+          if (-not $ready) {
+            Get-Content "$env:RUNNER_TEMP/bot-api.stderr.log" -ErrorAction SilentlyContinue | Select-Object -Last 100
+            throw 'telegram-bot-api did not open 127.0.0.1:8081'
+          }
+
+      - name: Run exact cross-bot delete proof through local Bot API
+        shell: pwsh
         run: node scripts/telegram-cross-bot-delete-live.mjs
+
+      - name: Stop local Bot API
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:BOT_API_PID) { Stop-Process -Id ([int]$env:BOT_API_PID) -Force -ErrorAction SilentlyContinue }
