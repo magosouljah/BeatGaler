@@ -49,6 +49,8 @@ const FULL_PART_COUNT = FULL_TARGET_BYTES / PART_SIZE_BYTES;
 const SMOKE_PART_COUNT = 32;
 const UPLOAD_CONCURRENCY = 2;
 const LOG_EVERY_PARTS = 200;
+const MAX_FLOOD_RETRIES_PER_PART = 8;
+const MAX_CUMULATIVE_FLOOD_WAIT_MS = 60_000;
 const BIND_ROUNDS = ['A', 'B'];
 
 assert.equal(Number.isInteger(FULL_PART_COUNT), true);
@@ -136,6 +138,10 @@ function timeout(promise, label, ms = HANDSHAKE_TIMEOUT_MS) {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   });
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function findPackageRoot(entryUrl, expectedName) {
@@ -456,32 +462,52 @@ function makeSyntheticPart(workerId) {
   return bytes;
 }
 
-async function uploadPart(connection, fileId, totalParts, partIndex, bytes) {
+async function uploadPart(connection, fileId, totalParts, partIndex, bytes, floodStats) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   view.setUint32(0, partIndex, true);
   view.setUint32(4, totalParts, true);
   view.setUint32(8, PART_SIZE_BYTES, true);
   view.setUint32(12, 0x4d304431, true); // "M0D1" marker, synthetic only.
 
-  const result = await timeout(
-    connection.sendRpc({
-      _: 'upload.saveBigFilePart',
-      fileId,
-      filePart: partIndex,
-      fileTotalParts: totalParts,
-      bytes,
-    }, PART_RPC_TIMEOUT_MS),
-    `upload.saveBigFilePart ${partIndex + 1}/${totalParts}`,
-    PART_RPC_TIMEOUT_MS + 5_000,
-  );
+  let floodRetries = 0;
+  while (true) {
+    const result = await timeout(
+      connection.sendRpc({
+        _: 'upload.saveBigFilePart',
+        fileId,
+        filePart: partIndex,
+        fileTotalParts: totalParts,
+        bytes,
+      }, PART_RPC_TIMEOUT_MS),
+      `upload.saveBigFilePart ${partIndex + 1}/${totalParts}`,
+      PART_RPC_TIMEOUT_MS + 5_000,
+    );
 
-  if (result?._ === 'mt_rpc_error') {
-    throw new Error(`Part ${partIndex} rejected: ${result.errorCode}:${result.errorMessage}`);
+    if (result?._ === 'mt_rpc_error') {
+      const flood = /^FLOOD_WAIT_(\d+)$/.exec(String(result.errorMessage || ''));
+      if (Number(result.errorCode) === 420 && flood) {
+        const waitMs = Number(flood[1]) * 1000;
+        floodRetries += 1;
+        floodStats.events += 1;
+        floodStats.waitMs += waitMs;
+        if (floodRetries > MAX_FLOOD_RETRIES_PER_PART) {
+          throw new Error(`Part ${partIndex} exceeded ${MAX_FLOOD_RETRIES_PER_PART} FLOOD_WAIT retries.`);
+        }
+        if (floodStats.waitMs > MAX_CUMULATIVE_FLOOD_WAIT_MS) {
+          throw new Error(`M0-D exceeded cumulative FLOOD_WAIT budget of ${MAX_CUMULATIVE_FLOOD_WAIT_MS}ms.`);
+        }
+        console.log(`M0-D FLOOD_WAIT: part ${partIndex + 1}/${totalParts}, wait ${waitMs}ms, retry ${floodRetries}/${MAX_FLOOD_RETRIES_PER_PART}`);
+        await sleep(waitMs);
+        continue;
+      }
+      throw new Error(`Part ${partIndex} rejected: ${result.errorCode}:${result.errorMessage}`);
+    }
+    assert.equal(result, true, `Telegram must acknowledge part ${partIndex}.`);
+    return;
   }
-  assert.equal(result, true, `Telegram must acknowledge part ${partIndex}.`);
 }
 
-async function uploadRange(connection, fileId, totalParts, startPart, endPartExclusive, phaseLabel) {
+async function uploadRange(connection, fileId, totalParts, startPart, endPartExclusive, phaseLabel, floodStats) {
   assert.ok(startPart >= 0 && endPartExclusive <= totalParts && endPartExclusive > startPart);
   const phaseStarted = Date.now();
   let nextPart = startPart;
@@ -496,7 +522,7 @@ async function uploadRange(connection, fileId, totalParts, startPart, endPartExc
       const partIndex = nextPart;
       nextPart += 1;
       if (partIndex >= endPartExclusive) break;
-      await uploadPart(connection, fileId, totalParts, partIndex, bytes);
+      await uploadPart(connection, fileId, totalParts, partIndex, bytes, floodStats);
       acceptedParts += 1;
       acceptedBytes += PART_SIZE_BYTES;
       if (acceptedParts === phasePartCount || acceptedParts - lastLoggedAt >= LOG_EVERY_PARTS) {
@@ -528,6 +554,7 @@ async function clientMain() {
   const crypto = await makeCrypto(m);
   const connection = await makeManualConnection(m, crypto, 'client', 0, dcId);
   const tempKeyBuffers = [];
+  const floodStats = { events: 0, waitMs: 0 };
   const transferStarted = Date.now();
 
   try {
@@ -538,7 +565,7 @@ async function clientMain() {
     tempKeyBuffers.push(tempA.keyBytes);
     activateBoundTempKey(connection, tempA);
 
-    const phaseA = await uploadRange(connection, fileId, totalParts, 0, splitPart, 'A');
+    const phaseA = await uploadRange(connection, fileId, totalParts, 0, splitPart, 'A', floodStats);
     assert.equal(authKeyIdHex(connection._session._authKeyTemp), tempA.keyId, 'A must remain primary through first upload half.');
 
     const tempB = await generateAndBindTempKey(m, crypto, connection, 'B');
@@ -549,7 +576,7 @@ async function clientMain() {
     const oldKeyRetainedAsSecondary = authKeyIdHex(connection._session._authKeyTempSecondary) === tempA.keyId;
     assert.equal(oldKeyRetainedAsSecondary, true);
 
-    const phaseB = await uploadRange(connection, fileId, totalParts, splitPart, totalParts, 'B');
+    const phaseB = await uploadRange(connection, fileId, totalParts, splitPart, totalParts, 'B', floodStats);
     const acceptedParts = phaseA.acceptedParts + phaseB.acceptedParts;
     const acceptedBytes = phaseA.acceptedBytes + phaseB.acceptedBytes;
     assert.equal(acceptedParts, totalParts);
@@ -567,6 +594,8 @@ async function clientMain() {
       phaseAParts: phaseA.acceptedParts,
       phaseBParts: phaseB.acceptedParts,
       transferDurationMs: Date.now() - transferStarted,
+      floodWaitEvents: floodStats.events,
+      floodWaitTotalMs: floodStats.waitMs,
       proactiveRenewalDuringTransferProven: true,
       sameFileIdAcrossRenewal: true,
       oldKeySecondarySlotRetentionProven: oldKeyRetainedAsSecondary,
@@ -669,6 +698,9 @@ async function binderMain() {
     assert.equal(proof.proactiveRenewalDuringTransferProven, true);
     assert.equal(proof.sameFileIdAcrossRenewal, true);
     assert.equal(proof.oldKeySecondarySlotRetentionProven, true);
+    assert.ok(Number.isInteger(proof.floodWaitEvents) && proof.floodWaitEvents >= 0);
+    assert.ok(Number.isInteger(proof.floodWaitTotalMs) && proof.floodWaitTotalMs >= 0);
+    assert.ok(proof.floodWaitTotalMs <= MAX_CUMULATIVE_FLOOD_WAIT_MS);
 
     const durationSeconds = Math.max(0.001, Number(proof.transferDurationMs) / 1000);
     const averageMbps = Number(((proof.acceptedBytes * 8) / durationSeconds / 1_000_000).toFixed(2));
@@ -685,6 +717,10 @@ async function binderMain() {
       accepted_parts: proof.acceptedParts,
       accepted_bytes: proof.acceptedBytes,
       average_mbps: averageMbps,
+      flood_wait_events: proof.floodWaitEvents,
+      flood_wait_total_ms: proof.floodWaitTotalMs,
+      flood_wait_retry_cap_per_part: MAX_FLOOD_RETRIES_PER_PART,
+      flood_wait_cumulative_cap_ms: MAX_CUMULATIVE_FLOOD_WAIT_MS,
       direct_mtproto_file_parts_proven: true,
       full_product_limit_proven: fullProductLimitProven,
       proactive_renewal_during_transfer_proven: true,
@@ -698,7 +734,7 @@ async function binderMain() {
       message_created: false,
       server_materialized_file_proven: false,
       token_rotation_or_revoke: false,
-      note: 'All saveBigFilePart calls were acknowledged. This probe does not claim a final vault message or later download because no vault/message is used.',
+      note: 'All saveBigFilePart calls were acknowledged. FLOOD_WAIT responses, if any, were honored exactly and retried within strict probe-only caps. This probe does not claim a final vault message or later download because no vault/message is used.',
     }));
   } finally {
     permanentKeyBytes?.fill(0);
