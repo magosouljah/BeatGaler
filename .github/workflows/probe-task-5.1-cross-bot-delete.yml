@@ -29,8 +29,8 @@ jobs:
       BEATGALER_M0_F_BOT_A_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_A_TOKEN }}
       BEATGALER_M0_F_BOT_B_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_B_TOKEN }}
       BEATGALER_M0_F_CHAT_ID: ${{ secrets.BEATGALER_M0_F_CHAT_ID }}
-      TELEGRAM_API_ID: ${{ secrets.BEATGALER_M0_D_API_ID }}
-      TELEGRAM_API_HASH: ${{ secrets.BEATGALER_M0_D_API_HASH }}
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       BEATGALER_M0_F_API_BASE: http://127.0.0.1:8081
     steps:
       - name: Checkout exact source
