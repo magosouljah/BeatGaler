@@ -1,0 +1,86 @@
+name: Probe - Task 5.1 Temp Auth Cross Platform
+
+on:
+  pull_request:
+    branches:
+      - task-5.1-temp-auth-renewal-probe
+    paths:
+      - scripts/telegram-temp-auth-data-plane-live.mjs
+      - tests/e2e-web/temp-auth-boundary.e2e.mjs
+      - wdio.web.conf.mjs
+      - .github/workflows/probe-task-5.1-temp-auth-cross-platform.yml
+
+permissions:
+  contents: read
+
+jobs:
+  windows-temp-auth:
+    name: M0-E Windows temp-auth boundary
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      BEATGALER_M0_D_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_D_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
+      BEATGALER_M0_D_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
+      BEATGALER_M0_D_MODE: smoke
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked npm graph
+        run: npm ci
+      - name: Require dedicated live-probe secrets
+        shell: pwsh
+        run: |
+          if (-not $env:BEATGALER_M0_D_API_ID -or -not $env:BEATGALER_M0_D_API_HASH -or -not $env:BEATGALER_M0_D_BOT_TOKEN) { throw 'M0-E Windows secrets missing; this is not evidence.' }
+      - name: Run split-bind and A-to-B direct transfer natively on Windows
+        run: node scripts/telegram-temp-auth-data-plane-live.mjs
+
+  macos-temp-auth:
+    name: M0-E macOS arm64 temp-auth boundary
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      BEATGALER_M0_D_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_D_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
+      BEATGALER_M0_D_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
+      BEATGALER_M0_D_MODE: smoke
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked npm graph
+        run: npm ci
+      - name: Require dedicated live-probe secrets
+        shell: bash
+        run: |
+          test -n "$BEATGALER_M0_D_API_ID" && test -n "$BEATGALER_M0_D_API_HASH" && test -n "$BEATGALER_M0_D_BOT_TOKEN" || { echo 'M0-E macOS secrets missing; this is not evidence.'; exit 1; }
+      - name: Run split-bind and A-to-B direct transfer natively on macOS
+        run: node scripts/telegram-temp-auth-data-plane-live.mjs
+
+  web-pure-boundary:
+    name: M0-E Web pure browser boundary guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked npm graph
+        run: npm ci
+      - name: Build real Web bundle
+        run: npm run build:web
+      - name: Run real-Chrome pure-Web boundary guard
+        run: npx wdio run wdio.web.conf.mjs --spec ./tests/e2e-web/temp-auth-boundary.e2e.mjs
