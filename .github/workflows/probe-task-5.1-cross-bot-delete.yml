@@ -1,4 +1,4 @@
-name: Task 5.1 M0-F - Local Bot API cross-bot delete probe
+name: Task 5.1 M0-F - v0.7.4 replacement cross-bot probe
 
 on:
   workflow_dispatch:
@@ -8,10 +8,12 @@ on:
     paths:
       - .github/workflows/probe-task-5.1-cross-bot-delete.yml
       - scripts/telegram-cross-bot-delete-live.mjs
+      - scripts/telegram-v074-real-replace-cross-bot-live.mjs
   pull_request:
     paths:
       - .github/workflows/probe-task-5.1-cross-bot-delete.yml
       - scripts/telegram-cross-bot-delete-live.mjs
+      - scripts/telegram-v074-real-replace-cross-bot-live.mjs
 
 permissions:
   contents: read
@@ -21,8 +23,8 @@ env:
   VCPKG_COMMIT: 7f3781e19cc7d4e4882a4caec01668c6f7b5c163
 
 jobs:
-  m0f-local-botapi-cross-bot-delete:
-    name: M0-F local Bot API own/cross-bot delete
+  m0f-v074-real-replacement:
+    name: M0-F v0.7.4 real replacement path
     runs-on: windows-latest
     timeout-minutes: 120
     env:
@@ -32,8 +34,9 @@ jobs:
       TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
       TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       BEATGALER_M0_F_API_BASE: http://127.0.0.1:8081
+      BEATGALER_M0_F_V074_HELPER: runtime/v074/transport-helper.cjs
     steps:
-      - name: Checkout exact source
+      - name: Checkout exact probe source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up pinned Node
@@ -48,6 +51,16 @@ jobs:
           foreach ($name in @('BEATGALER_M0_F_BOT_A_TOKEN','BEATGALER_M0_F_BOT_B_TOKEN','BEATGALER_M0_F_CHAT_ID','TELEGRAM_API_ID','TELEGRAM_API_HASH')) {
             if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "$name missing" }
           }
+
+      - name: Extract exact galer-cloud-v0.7.4 transport helper
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force runtime/v074 | Out-Null
+          git fetch --depth=1 origin galer-cloud-v0.7.4
+          git show FETCH_HEAD:src-tauri/direct-transport/transport-helper.cjs | Set-Content -LiteralPath runtime/v074/transport-helper.cjs -Encoding utf8
+          if (-not (Test-Path runtime/v074/transport-helper.cjs)) { throw 'v0.7.4 transport-helper.cjs extraction failed' }
+          $helperText = Get-Content runtime/v074/transport-helper.cjs -Raw
+          if ($helperText -notmatch "case 'upload'" -or $helperText -notmatch "case 'delete_messages'") { throw 'Extracted helper is not the expected v0.7.4 direct helper' }
 
       - name: Restore v0.7.4 Telegram Bot API runtime cache
         id: bot-api-cache
@@ -82,7 +95,7 @@ jobs:
           New-Item -ItemType Directory -Force runtime/windows-bot-api | Out-Null
           Copy-Item -LiteralPath $bot.FullName -Destination runtime/windows-bot-api/telegram-bot-api.exe
 
-      - name: Run exact v0.7.4 local Bot API cross-bot delete proof
+      - name: Run exact v0.7.4 replacement path across two bot sessions
         shell: pwsh
         run: |
           $runtimeDir = (Resolve-Path 'runtime/windows-bot-api').Path
@@ -105,30 +118,21 @@ jobs:
             do {
               Start-Sleep -Milliseconds 500
               if ($proc.HasExited) {
-                Write-Host "telegram-bot-api exited before readiness with code $($proc.ExitCode)"
-                Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
-                throw 'telegram-bot-api exited before opening 127.0.0.1:8081'
+                Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 120
+                throw "telegram-bot-api exited before readiness with code $($proc.ExitCode)"
               }
               $ready = Test-NetConnection 127.0.0.1 -Port 8081 -InformationLevel Quiet -WarningAction SilentlyContinue
             } until ($ready -or (Get-Date) -ge $deadline)
-
             if (-not $ready) {
-              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
+              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 120
               throw 'telegram-bot-api did not open 127.0.0.1:8081'
             }
 
-            Start-Sleep -Milliseconds 750
-            if ($proc.HasExited) {
-              Write-Host "telegram-bot-api exited after readiness with code $($proc.ExitCode)"
-              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
-              throw 'telegram-bot-api exited before M0-F probe'
-            }
-
-            node scripts/telegram-cross-bot-delete-live.mjs
+            node scripts/telegram-v074-real-replace-cross-bot-live.mjs
             if ($LASTEXITCODE -ne 0) {
-              Write-Host 'M0-F probe failed; local Bot API stderr follows:'
-              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 100
-              throw "M0-F probe failed with exit code $LASTEXITCODE"
+              Write-Host 'Exact v0.7.4 replacement probe failed; Bot API stderr follows:'
+              Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -Last 160
+              throw "Exact v0.7.4 replacement probe failed with exit code $LASTEXITCODE"
             }
           } finally {
             if ($proc -and -not $proc.HasExited) {
