@@ -41,6 +41,7 @@ const SECRET_NAMES = [
 
 const TEMP_EXPIRY_SECONDS = 2 * 60 * 60;
 const HANDSHAKE_TIMEOUT_MS = 60_000;
+const AUTH_UNENCRYPTED_TIMEOUT_MS = 15_000;
 const FULL_CLIENT_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000;
 const PART_RPC_TIMEOUT_MS = 90_000;
 const DEFAULT_PROD_DC_ID = 2;
@@ -226,6 +227,10 @@ async function makeManualConnection(m, crypto, label, apiId = 0, dcId = DEFAULT_
   class ManualSessionConnection extends m.SessionConnection {
     onConnected() {
       // The probe explicitly drives permanent or temporary key generation.
+    }
+
+    waitForUnencryptedMessage(timeoutMs = AUTH_UNENCRYPTED_TIMEOUT_MS) {
+      return super.waitForUnencryptedMessage(timeoutMs);
     }
   }
 
