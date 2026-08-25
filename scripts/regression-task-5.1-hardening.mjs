@@ -13,6 +13,7 @@ const capabilities = JSON.parse(read("src-tauri/capabilities/default.json"));
 const serverCore = read("cloud-server/server-core.js");
 const server = read("cloud-server/server.js");
 const headers = read("cloud-server/security-headers.js");
+const tempAuthBoundary = read("cloud-server/productive-temp-auth-boundary.js");
 
 if (!vite.includes("beatgaler-productive-trust-boundary")) fail("productive Vite trust-boundary transform is missing");
 if (!vite.includes("refusing an unsafe build") || !vite.includes("trustedRememberedApi")) fail("cloud-origin transform is not fail-closed");
@@ -40,6 +41,14 @@ for (const header of ["X-Content-Type-Options", "X-Frame-Options", "Referrer-Pol
   if (!headers.includes(header)) fail(`API security header missing: ${header}`);
 }
 
+if (!tempAuthBoundary.includes("serializePermanentAuthorization")) fail("fresh permanent bot authorizations are no longer globally serialized");
+if (!tempAuthBoundary.includes("const { credential_refresh: refresh, ...safeBody } = body")) fail("credential refresh is no longer stripped before safe reconstruction");
+const noMetadataBranch = tempAuthBoundary.slice(
+  tempAuthBoundary.indexOf("if (!metadata) {", tempAuthBoundary.indexOf("async function transformTransportBody")),
+  tempAuthBoundary.indexOf("return {", tempAuthBoundary.indexOf("if (!metadata) {", tempAuthBoundary.indexOf("async function transformTransportBody")) + 20),
+);
+if (noMetadataBranch.includes("credential_refresh")) fail("refresh without temp metadata can expose a nullable/unsafe credential_refresh field");
+
 const dist = path.join(root, "dist");
 if (existsSync(dist)) {
   const pending = [dist];
@@ -57,4 +66,4 @@ if (existsSync(dist)) {
   }
 }
 
-console.log("PASS Task 5.1 hardening: fixed Cloud origin, local ID3, CSP/CORS headers, and reduced Tauri FS scopes");
+console.log("PASS Task 5.1 hardening: fixed Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and serialized permanent auth");
