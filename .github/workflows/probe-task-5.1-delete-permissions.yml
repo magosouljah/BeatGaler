@@ -19,6 +19,7 @@ jobs:
       BEATGALER_M0_F_CHAT_ID: ${{ secrets.BEATGALER_M0_F_CHAT_ID }}
       BEATGALER_M0_B2_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
       BEATGALER_M0_F_BOT_B_TOKEN: ${{ secrets.BEATGALER_M0_F_BOT_B_TOKEN }}
+      BEATGALER_MASTER_SESSION: ${{ secrets.BEATGALER_MASTER_SESSION }}
     steps:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,6 +37,10 @@ jobs:
       - name: Require isolated probe resources without printing values
         run: |
           node -e "for (const n of ['BEATGALER_M0_F_CHAT_ID','BEATGALER_M0_B2_BOT_TOKEN','BEATGALER_M0_F_BOT_B_TOKEN']) { if (!String(process.env[n] || '').trim()) throw new Error('Missing dedicated M0-F secret: ' + n); } console.log('Dedicated M0-F resources are configured; values remain hidden.')"
+
+      - name: Record whether technical MASTER session is available for isolated probe setup
+        run: |
+          node -e "console.log('M0_F_MASTER_SESSION_AVAILABLE=' + Boolean(String(process.env.BEATGALER_MASTER_SESSION || '').trim()))"
 
       - name: Prove own delete and cross-bot denial without admin rights
         run: node scripts/telegram-delete-permission-live.mjs
