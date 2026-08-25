@@ -33,6 +33,11 @@ function assertOk(result, label) {
 const meA = assertOk(await botApi(botAToken, 'getMe'), 'bot A getMe');
 const meB = assertOk(await botApi(botBToken, 'getMe'), 'bot B getMe');
 assert.notEqual(String(meA.id), String(meB.id), 'M0-F requires two distinct bot identities.');
+console.log(JSON.stringify({
+  mode: 'M0-F probe bot identities',
+  bot_a_username: String(meA.username || ''),
+  bot_b_username: String(meB.username || ''),
+}));
 
 const chatA = await botApi(botAToken, 'getChat', { chat_id: chatId });
 const chatB = await botApi(botBToken, 'getChat', { chat_id: chatId });
