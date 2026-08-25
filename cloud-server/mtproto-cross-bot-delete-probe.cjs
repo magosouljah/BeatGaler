@@ -30,6 +30,7 @@ async function main() {
   const chatId = required('BEATGALER_M0_F_CHAT_ID');
   assert.ok(Number.isInteger(apiId) && apiId > 0, 'API id must be positive.');
   assert.match(chatId, /^-100\d+$/, 'M0-F chat must be a Bot API supergroup id.');
+  const rawChannelId = chatId.slice(4);
 
   const meA = await botApi(botAToken, 'getMe');
   const meB = await botApi(botBToken, 'getMe');
@@ -52,10 +53,11 @@ async function main() {
   let deleted = false;
   try {
     await client.start({ botAuthToken: botAToken, onError: error => console.error(String(error?.message || error)) });
-    const rawChannelId = -BigInt(chatId) - 1000000000000n;
-    assert.ok(rawChannelId > 0n, 'Invalid Bot API -> MTProto channel id conversion.');
+    const dialogs = await client.getDialogs({ limit: 1000 });
+    const dialog = dialogs.find(item => String(item?.entity?.id || '') === rawChannelId);
+    assert.ok(dialog?.entity, 'Bot A could not resolve the isolated supergroup from its MTProto dialogs.');
     const result = await client.invoke(new Api.channels.DeleteMessages({
-      channel: new Api.InputChannel({ channelId: rawChannelId, accessHash: 0n }),
+      channel: dialog.entity,
       id: [messageId],
     }));
     assert.ok(Number(result?.ptsCount ?? 0) >= 0, 'Unexpected channels.deleteMessages result.');
@@ -66,9 +68,9 @@ async function main() {
       current_transport_identity_is_bot_a: true,
       message_author_is_bot_b: true,
       delete_messages_baseline_required_by_negative_probe: true,
-      bot_api_cross_bot_positive_proven: false,
       mtproto_channels_delete_messages_used: true,
-      zero_access_hash_bot_path_used: true,
+      channel_resolved_from_current_bot_dialogs: true,
+      zero_access_hash_direct_path_proven: false,
       over_48h_proven: false,
       user_vault_used: false,
       production_runtime_changed: false,
