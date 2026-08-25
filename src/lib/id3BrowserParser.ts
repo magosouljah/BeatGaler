@@ -38,7 +38,7 @@ function utf16be(bytes: Uint8Array): string {
 function decodeText(bytes: Uint8Array): string {
   if (!bytes.length) return "";
   const encoding = bytes[0];
-  let payload = bytes.subarray(1);
+  const payload = bytes.subarray(1);
   let decoded = "";
   if (encoding === 0) decoded = latin1(payload);
   else if (encoding === 3) decoded = new TextDecoder("utf-8", { fatal: false }).decode(payload);
@@ -135,9 +135,23 @@ function parseId3(bytes: Uint8Array): BrowserId3Result {
   return { tags };
 }
 
+function readFileArrayBuffer(file: File): Promise<ArrayBuffer> {
+  const native = (file as File & { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
+  if (typeof native === "function") return native.call(file);
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Could not read ID3 file."));
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) resolve(reader.result);
+      else reject(new Error("ID3 FileReader returned a non-binary result."));
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 export const browserId3Reader = {
   read(file: File, handlers: BrowserId3Handlers): void {
-    void file.arrayBuffer()
+    void readFileArrayBuffer(file)
       .then(buffer => handlers.onSuccess(parseId3(new Uint8Array(buffer))))
       .catch(error => handlers.onError?.(error));
   },
