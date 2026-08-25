@@ -11,7 +11,8 @@ const REQUIRED = [
   'BEATGALER_M0_F_API_BASE',
   'BEATGALER_M0_F_V074_HELPER',
 ];
-const OP_TIMEOUT_MS = 30_000;
+const OP_TIMEOUT_MS = 60_000;
+const PREWARM_TIMEOUT_MS = 90_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 function required(name) {
@@ -33,6 +34,39 @@ assert.ok(fs.existsSync(helperPath), `v0.7.4 helper missing: ${helperPath}`);
 
 function phase(name, fields = {}) {
   console.log(JSON.stringify({ event: 'phase', name, at: new Date().toISOString(), ...fields }));
+}
+
+async function rawBotApi(token, method, payload = {}, timeoutMs = PREWARM_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${botApiBase}/bot${token}/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const body = await r.json().catch(() => null);
+    if (!r.ok || body?.ok !== true) {
+      throw new Error(`${method} failed: ${body?.description || `HTTP ${r.status}`}`);
+    }
+    return body.result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function prewarmBot(label, token) {
+  phase(`${label}:prewarm:getMe:begin`, { timeout_ms: PREWARM_TIMEOUT_MS });
+  const me = await rawBotApi(token, 'getMe');
+  phase(`${label}:prewarm:getMe:done`, { bot_id: Number(me?.id || 0) });
+
+  phase(`${label}:prewarm:getChat:begin`, { timeout_ms: PREWARM_TIMEOUT_MS });
+  const chat = await rawBotApi(token, 'getChat', { chat_id: chatId });
+  phase(`${label}:prewarm:getChat:done`, {
+    resolved_chat_id: String(chat?.id || ''),
+    chat_type: String(chat?.type || ''),
+  });
 }
 
 class HelperSession {
@@ -157,6 +191,11 @@ let b;
 let oldMessageId = 0;
 let newMessageId = 0;
 try {
+  phase('prewarm:start');
+  await prewarmBot('A', tokenA);
+  await prewarmBot('B', tokenB);
+  phase('prewarm:done');
+
   phase('session-a:start');
   a = new HelperSession('A', tokenA);
   const oldUpload = await a.request('upload', {
