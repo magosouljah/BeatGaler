@@ -63,6 +63,42 @@ jobs:
       - name: Run static packaging and portability guards
         run: npm run test:packaging:static
 
+  postgres_integration:
+    name: PostgreSQL live integration gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_ci
+      BEATGALER_POSTGRES_ENABLED: "true"
+      BEATGALER_POSTGRES_SSL_MODE: disable
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked cloud-server graph
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Execute migrations and adversarial persistence checks on PostgreSQL
+        run: node cloud-server/tests/postgres-live.integration.cjs
+
   supply_chain:
     name: Supply chain gate
     runs-on: ubuntu-24.04
@@ -91,8 +127,10 @@ jobs:
             ~/.cargo/bin/cargo-cyclonedx
           key: supply-tools-cargo-audit-0.22.2-cyclonedx-0.5.9-rust-1.98.0
 
-      - name: Install locked npm graph
-        run: npm ci
+      - name: Install locked npm graphs
+        run: |
+          npm ci
+          npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
 
       - name: Prepare supply-chain reports
         run: mkdir -p artifacts/supply-chain
@@ -102,13 +140,18 @@ jobs:
         run: |
           set +e
           npm audit --audit-level=high --json > artifacts/supply-chain/npm-audit.json
-          STATUS=$?
+          ROOT_STATUS=$?
+          npm --prefix cloud-server audit --audit-level=high --json > artifacts/supply-chain/cloud-npm-audit.json
+          CLOUD_STATUS=$?
           set -e
-          node -e "const r=require('./artifacts/supply-chain/npm-audit.json'); console.log(JSON.stringify(r.metadata?.vulnerabilities ?? {}, null, 2))"
-          exit "$STATUS"
+          node -e "const r=require('./artifacts/supply-chain/npm-audit.json'); console.log('root', JSON.stringify(r.metadata?.vulnerabilities ?? {}, null, 2))"
+          node -e "const r=require('./artifacts/supply-chain/cloud-npm-audit.json'); console.log('cloud-server', JSON.stringify(r.metadata?.vulnerabilities ?? {}, null, 2))"
+          if [[ "$ROOT_STATUS" -ne 0 || "$CLOUD_STATUS" -ne 0 ]]; then exit 1; fi
 
       - name: Verify npm dependency licenses
-        run: node scripts/check-npm-licenses.mjs
+        run: |
+          node scripts/check-npm-licenses.mjs
+          node scripts/check-pg-licenses.mjs cloud-server/package-lock.json artifacts/supply-chain/postgres-npm-licenses.json
 
       - name: Install pinned Rust security/SBOM tools
         if: steps.security-tools-cache.outputs.cache-hit != 'true'
@@ -157,6 +200,7 @@ jobs:
         run: |
           set -euo pipefail
           npm sbom --sbom-format cyclonedx > artifacts/supply-chain/npm.cdx.json
+          npm --prefix cloud-server sbom --sbom-format cyclonedx > artifacts/supply-chain/cloud-npm.cdx.json
           cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --override-filename beatgaler-rust.cdx
           test -f src-tauri/beatgaler-rust.cdx.json
           mv src-tauri/beatgaler-rust.cdx.json artifacts/supply-chain/rust.cdx.json
@@ -165,7 +209,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum package-lock.json src-tauri/Cargo.lock supply-chain/runtime-sources.json > artifacts/supply-chain/source-locks.sha256
+          sha256sum package-lock.json cloud-server/package-lock.json src-tauri/Cargo.lock supply-chain/runtime-sources.json > artifacts/supply-chain/source-locks.sha256
           cp supply-chain/runtime-sources.json artifacts/supply-chain/runtime-sources.json
 
       - name: Upload supply-chain evidence
@@ -274,6 +318,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - web_shared
+      - postgres_integration
       - supply_chain
       - windows_portability
       - macos-native-smoke
@@ -282,17 +327,19 @@ jobs:
       - name: Enforce every required gate
         env:
           WEB_RESULT: ${{ needs.web_shared.result }}
+          POSTGRES_RESULT: ${{ needs.postgres_integration.result }}
           SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
           WINDOWS_RESULT: ${{ needs.windows_portability.result }}
           MACOS_RESULT: ${{ needs['macos-native-smoke'].result }}
         shell: bash
         run: |
           echo "Web/shared: $WEB_RESULT"
+          echo "PostgreSQL live: $POSTGRES_RESULT"
           echo "Supply chain: $SUPPLY_CHAIN_RESULT"
           echo "Windows: $WINDOWS_RESULT"
           echo "macOS matrix: $MACOS_RESULT"
-          if [[ "$WEB_RESULT" != "success" || "$SUPPLY_CHAIN_RESULT" != "success" || "$WINDOWS_RESULT" != "success" || "$MACOS_RESULT" != "success" ]]; then
+          if [[ "$WEB_RESULT" != "success" || "$POSTGRES_RESULT" != "success" || "$SUPPLY_CHAIN_RESULT" != "success" || "$WINDOWS_RESULT" != "success" || "$MACOS_RESULT" != "success" ]]; then
             echo "Required CI failed because at least one gate did not succeed."
             exit 1
           fi
-          echo "Required CI PASS: Web/shared, supply-chain security, packaging/portability, Windows, and macOS all succeeded."
+          echo "Required CI PASS: Web/shared, live PostgreSQL, supply-chain security, packaging/portability, Windows, and macOS all succeeded."
