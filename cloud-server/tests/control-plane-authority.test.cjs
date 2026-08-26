@@ -7,12 +7,14 @@ assert.deepEqual(controlPlaneAuthorityConfig({}), {
   authority: 'json',
   postgresEnabled: false,
   expectedSnapshotSha256: '',
+  expectedRollbackSha256: '',
 });
 
 assert.deepEqual(controlPlaneAuthorityConfig({ BEATGALER_POSTGRES_ENABLED: 'true' }), {
   authority: 'json',
   postgresEnabled: true,
   expectedSnapshotSha256: '',
+  expectedRollbackSha256: '',
 });
 
 assert.throws(() => controlPlaneAuthorityConfig({ BEATGALER_CONTROL_PLANE_AUTHORITY: 'postgres' }), /requires BEATGALER_POSTGRES_ENABLED=true/);
@@ -31,7 +33,22 @@ assert.deepEqual(controlPlaneAuthorityConfig({
   authority: 'postgres',
   postgresEnabled: true,
   expectedSnapshotSha256: sha,
+  expectedRollbackSha256: '',
 });
+
+assert.throws(() => controlPlaneAuthorityConfig({
+  BEATGALER_CONTROL_PLANE_AUTHORITY: 'postgres',
+  BEATGALER_POSTGRES_ENABLED: 'true',
+  BEATGALER_POSTGRES_CUTOVER_SNAPSHOT_SHA256: sha,
+  BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: sha,
+}), /cannot be set/);
+assert.throws(() => controlPlaneAuthorityConfig({
+  BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: sha,
+}), /requires BEATGALER_POSTGRES_ENABLED=true/);
+assert.equal(controlPlaneAuthorityConfig({
+  BEATGALER_POSTGRES_ENABLED: 'true',
+  BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: sha,
+}).expectedRollbackSha256, sha);
 
 const keyB64 = Buffer.alloc(32, 9).toString('base64');
 const devKey = developmentEnvelopeKeyConfig({
@@ -46,4 +63,4 @@ assert.throws(() => developmentEnvelopeKeyConfig({
   BEATGALER_SECRET_ENVELOPE_KEY_B64: keyB64,
 }), /real KMS\/Secret Manager/);
 
-console.log('PASS control-plane authority: explicit, default-off, production fail-closed');
+console.log('PASS control-plane authority: explicit, default-off, rollback-guarded, production fail-closed');
