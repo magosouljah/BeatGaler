@@ -151,7 +151,7 @@ jobs:
       - name: Verify npm dependency licenses
         run: |
           node scripts/check-npm-licenses.mjs
-          node scripts/check-npm-licenses.mjs cloud-server/package-lock.json artifacts/supply-chain/cloud-npm-licenses.json
+          node scripts/check-pg-licenses.mjs cloud-server/package-lock.json artifacts/supply-chain/postgres-npm-licenses.json
 
       - name: Install pinned Rust security/SBOM tools
         if: steps.security-tools-cache.outputs.cache-hit != 'true'
