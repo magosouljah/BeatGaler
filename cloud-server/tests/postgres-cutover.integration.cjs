@@ -6,6 +6,11 @@ const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations.js');
 const { preparePostgresCutover } = require('../postgres-cutover-preparation.js');
 const {
+  exportCurrentPostgresForRollback,
+  commitPostgresRollback,
+  assertJsonRollbackSnapshot,
+} = require('../postgres-rollback-preparation.js');
+const {
   PostgresControlPlaneRuntime,
   assertCutoverReady,
   loadAuthSnapshot,
@@ -144,6 +149,38 @@ function databaseUrl(base, database) {
       (SELECT count(*)::int FROM control_plane_cutovers WHERE state='READY') ready_markers`);
     assert.deepEqual(counts.rows[0], { users: 1, sessions: 1, providers: 0, mfa: 0, entitlements: 1, ready_markers: 1 });
 
+    // A blind authority flip must fail while PostgreSQL is READY.
+    await assert.rejects(() => assertJsonRollbackSnapshot(pool, '', {
+      authRaw,
+      persistentRaw,
+    }), /refused while PostgreSQL cutover is READY/);
+
+    // Rollback exports the CURRENT PostgreSQL state, including post-cutover writes,
+    // validates legacy compatibility, and binds JSON reactivation to that exact digest.
+    const rollback = await exportCurrentPostgresForRollback(pool, { cryptoConfig });
+    assert.equal(rollback.auth.users[0].email, 'after@example.com');
+    assert.equal(rollback.auth.sessions[sessionB].userId, 'usr_cutover_1');
+    assert.equal(rollback.auth.sessions[sessionA], undefined);
+    assert.equal(rollback.persistent.messageRedirects['installation-cutover:101'], 102);
+    assert.match(rollback.snapshot.manifest_sha256, /^[0-9a-f]{64}$/);
+
+    const committedRollback = await commitPostgresRollback(pool, {
+      originalCutoverSnapshotSha256: first.snapshot.manifest_sha256,
+      rollbackExportSha256: rollback.snapshot.manifest_sha256,
+    });
+    assert.equal(committedRollback.state, 'ROLLED_BACK');
+    assert.equal(committedRollback.rollback_export_sha256, rollback.snapshot.manifest_sha256);
+    await assert.rejects(() => assertCutoverReady(pool, first.snapshot.manifest_sha256), /ROLLED_BACK/);
+    await assert.rejects(() => assertJsonRollbackSnapshot(pool, rollback.snapshot.manifest_sha256, {
+      authRaw,
+      persistentRaw,
+    }), /do not match/);
+    const jsonRollback = await assertJsonRollbackSnapshot(pool, rollback.snapshot.manifest_sha256, {
+      authRaw: rollback.authRaw,
+      persistentRaw: rollback.persistentRaw,
+    });
+    assert.equal(jsonRollback.rollbackExportSha256, rollback.snapshot.manifest_sha256);
+
     console.log(JSON.stringify({
       postgres_cutover_proven: true,
       import_twice_idempotent: true,
@@ -151,11 +188,14 @@ function databaseUrl(base, database) {
       oauth_mfa_envelope_roundtrip_proven: true,
       post_cutover_writes_persisted: true,
       stale_auth_rows_removed: true,
+      blind_json_rollback_rejected: true,
+      rollback_current_state_exported: true,
+      rollback_exact_digest_required: true,
       json_disk_dual_write_used: false,
       production_kms_proven: false,
       production_rpo_rto_proven: false,
     }));
-    console.log('PASS PostgreSQL controlled cutover integration');
+    console.log('PASS PostgreSQL controlled cutover + rollback integration');
   } finally {
     if (pool) await pool.end().catch(() => {});
     await admin.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => {});
