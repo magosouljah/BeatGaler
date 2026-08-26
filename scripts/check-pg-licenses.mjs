@@ -9,6 +9,7 @@ const packages = lock.packages || {};
 const allowed = new Set([
   '0BSD', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'MIT', 'MIT-0', 'Unlicense',
 ]);
+const rootNames = ['pg', '@aws-sdk/client-secrets-manager'];
 
 function resolveDependency(parentPath, name) {
   let current = parentPath;
@@ -23,10 +24,12 @@ function resolveDependency(parentPath, name) {
   return packages[root] ? root : null;
 }
 
-const root = 'node_modules/pg';
-if (!packages[root]) throw new Error('pg is not present in the cloud-server lockfile.');
+const roots = rootNames.map(name => `node_modules/${name}`);
+for (let index = 0; index < roots.length; index += 1) {
+  if (!packages[roots[index]]) throw new Error(`${rootNames[index]} is not present in the cloud-server lockfile.`);
+}
 
-const queue = [root];
+const queue = [...roots];
 const visited = new Set();
 const report = [];
 const failures = [];
@@ -47,10 +50,10 @@ while (queue.length) {
 }
 
 fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-fs.writeFileSync(reportPath, `${JSON.stringify({ root: 'pg', packages: report, failures }, null, 2)}\n`);
+fs.writeFileSync(reportPath, `${JSON.stringify({ roots: rootNames, packages: report, failures }, null, 2)}\n`);
 if (failures.length) {
-  console.error('PostgreSQL npm license gate failed:');
+  console.error('PostgreSQL/AWS npm license gate failed:');
   for (const failure of failures) console.error(`- ${failure.package}: ${failure.license || 'MISSING'}`);
   process.exit(1);
 }
-console.log(`PASS PostgreSQL npm license gate (${report.length} packages)`);
+console.log(`PASS PostgreSQL/AWS npm license gate (${report.length} packages)`);
