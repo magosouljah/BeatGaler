@@ -27,6 +27,8 @@ function databaseUrl(base, database) {
   const baseUrl = process.env.DATABASE_URL;
   if (!baseUrl) throw new Error('DATABASE_URL is required.');
 
+  // This database exists only inside the PostgreSQL service container owned by
+  // this CI job. It intentionally is not force-dropped during process teardown.
   const dbName = `beatgaler_cutover_${crypto.randomBytes(5).toString('hex')}`;
   const admin = new Pool({ connectionString: databaseUrl(baseUrl, 'postgres'), ssl: false, max: 1 });
   let pool = null;
@@ -195,9 +197,6 @@ function databaseUrl(base, database) {
     console.log('PASS PostgreSQL controlled cutover + rollback integration');
   } finally {
     if (pool) await pool.end().catch(() => {});
-    // This database is isolated inside the ephemeral CI PostgreSQL service and
-    // is destroyed with that container. Avoid DROP ... WITH (FORCE) here: it
-    // races pg's connection teardown and can turn a passing test into 57P01.
     await admin.end().catch(() => {});
   }
 })().catch(error => {
