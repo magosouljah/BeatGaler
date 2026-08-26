@@ -17,6 +17,13 @@ function providerEntries(user) {
   return Object.entries(providers).filter(([, value]) => value && typeof value === 'object');
 }
 
+function assertStorageEnvelope(value, label) {
+  if (!value || !Buffer.isBuffer(value.ciphertext) || !Buffer.isBuffer(value.nonce) || !Number.isInteger(value.keyVersion)) {
+    throw new Error(`${label} encryption callback must return ciphertext Buffer, nonce Buffer and keyVersion.`);
+  }
+  return value;
+}
+
 function buildLegacyRows(authData) {
   const users = [];
   const sessions = [];
@@ -63,8 +70,7 @@ function buildLegacyRows(authData) {
         enabled: true,
       });
     }
-    // pendingMfaSecret is intentionally not migrated: an incomplete enrollment
-    // must restart after cutover rather than becoming an active factor accidentally.
+    // pendingMfaSecret is intentionally not migrated: incomplete enrollment restarts after cutover.
 
     const planState = user.planState || {};
     entitlements.push({
@@ -109,9 +115,9 @@ function buildLegacyRows(authData) {
   return { users, sessions, providers, mfa, entitlements, vaults };
 }
 
-async function importLegacyControlPlane(client, authData, { encryptSecret, keyVersion = 1 } = {}) {
+async function importLegacyControlPlane(client, authData, { encryptSecretForStorage } = {}) {
   if (!client || typeof client.query !== 'function') throw new Error('PostgreSQL client is required.');
-  if (typeof encryptSecret !== 'function') throw new Error('encryptSecret callback is required.');
+  if (typeof encryptSecretForStorage !== 'function') throw new Error('encryptSecretForStorage callback is required.');
   const rows = buildLegacyRows(authData);
   await client.query('BEGIN');
   try {
@@ -131,24 +137,26 @@ async function importLegacyControlPlane(client, authData, { encryptSecret, keyVe
     }
 
     for (const row of rows.providers) {
-      const access = row.record.accessToken ? encryptSecret(row.record.accessToken, { keyVersion, aad: `provider:${row.provider}:${row.user_id}:access` }) : null;
-      const refresh = row.record.refreshToken ? encryptSecret(row.record.refreshToken, { keyVersion, aad: `provider:${row.provider}:${row.user_id}:refresh` }) : null;
+      const access = row.record.accessToken ? assertStorageEnvelope(encryptSecretForStorage(row.record.accessToken, { aad: `provider:${row.provider}:${row.user_id}:access` }), 'access token') : null;
+      const refresh = row.record.refreshToken ? assertStorageEnvelope(encryptSecretForStorage(row.record.refreshToken, { aad: `provider:${row.provider}:${row.user_id}:refresh` }), 'refresh token') : null;
+      const keyVersions = [access?.keyVersion, refresh?.keyVersion].filter(Boolean);
+      if (new Set(keyVersions).size > 1) throw new Error(`Provider ${row.provider} for ${row.user_id} used mixed key versions.`);
       await client.query(`INSERT INTO provider_identities(id,user_id,provider,provider_subject,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,secret_key_version,token_expires_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT(provider,provider_subject) DO UPDATE SET user_id=EXCLUDED.user_id, access_token_ciphertext=EXCLUDED.access_token_ciphertext,
           access_token_nonce=EXCLUDED.access_token_nonce, refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext, refresh_token_nonce=EXCLUDED.refresh_token_nonce,
           secret_key_version=EXCLUDED.secret_key_version, token_expires_at=EXCLUDED.token_expires_at`,
       [row.id,row.user_id,row.provider,row.provider_subject,access?.ciphertext || null,access?.nonce || null,refresh?.ciphertext || null,refresh?.nonce || null,
-        access || refresh ? keyVersion : null, msToDate(row.record.tokenExpiresAt)]);
+        keyVersions[0] || null, msToDate(row.record.tokenExpiresAt)]);
     }
 
     for (const row of rows.mfa) {
-      const encrypted = encryptSecret(row.plaintext_secret, { keyVersion, aad: `mfa:${row.user_id}:totp` });
+      const encrypted = assertStorageEnvelope(encryptSecretForStorage(row.plaintext_secret, { aad: `mfa:${row.user_id}:totp` }), 'MFA secret');
       await client.query(`INSERT INTO mfa_factors(id,user_id,factor_type,secret_ciphertext,secret_nonce,secret_key_version,enabled)
         VALUES($1,$2,$3,$4,$5,$6,$7)
         ON CONFLICT(user_id,factor_type) DO UPDATE SET secret_ciphertext=EXCLUDED.secret_ciphertext, secret_nonce=EXCLUDED.secret_nonce,
           secret_key_version=EXCLUDED.secret_key_version, enabled=EXCLUDED.enabled`,
-      [row.id,row.user_id,row.factor_type,encrypted.ciphertext,encrypted.nonce,keyVersion,row.enabled]);
+      [row.id,row.user_id,row.factor_type,encrypted.ciphertext,encrypted.nonce,encrypted.keyVersion,row.enabled]);
     }
 
     for (const row of rows.entitlements) {
