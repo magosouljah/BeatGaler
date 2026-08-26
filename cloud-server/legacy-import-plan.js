@@ -29,12 +29,15 @@ function normalizeUsers(authData) {
     if (!id) throw new Error(`auth.users[${index}] is missing id.`);
     if (ids.has(id)) throw new Error(`Duplicate legacy user id: ${id}`);
     ids.add(id);
+    const providers = user.providers && typeof user.providers === 'object' && !Array.isArray(user.providers)
+      ? user.providers
+      : {};
     return {
       id,
       email: user.email == null ? null : String(user.email).trim().toLowerCase(),
       has_password_hash: Boolean(user.passwordHash || user.password_hash),
       has_mfa_secret: Boolean(user.mfaSecret || user.mfa_secret),
-      provider_count: Array.isArray(user.providers) ? user.providers.length : 0,
+      provider_count: Object.values(providers).filter(Boolean).length,
       storage_chat_id: user.storageChatId == null ? null : String(user.storageChatId),
       base_plan_id: user.planState?.basePlanId || user.plan_state?.base_plan_id || 'free',
       grant_count: Array.isArray(user.planState?.grants) ? user.planState.grants.length : 0,
@@ -48,16 +51,29 @@ function normalizeSessionCount(authData) {
   return Object.keys(sessions).length;
 }
 
+function linkedAccountOwners(linkedAccounts) {
+  const owners = [];
+  for (const [installationId, account] of Object.entries(linkedAccounts)) {
+    assertPlainObject(account, `persistent.linkedAccounts[${installationId}]`);
+    const ownerId = String(account.beatgalerAccountId || '').trim();
+    if (!ownerId) {
+      throw new Error(`Legacy linked account ${installationId} is missing beatgalerAccountId.`);
+    }
+    owners.push(ownerId);
+  }
+  return owners;
+}
+
 function planLegacyImport(authData, persistentData) {
   assertPlainObject(authData, 'auth');
   assertPlainObject(persistentData, 'persistent');
   const users = normalizeUsers(authData);
+  const userIds = new Set(users.map(user => user.id));
   const linkedAccounts = persistentData.linkedAccounts || {};
   assertPlainObject(linkedAccounts, 'persistent.linkedAccounts');
 
-  const unknownLinkedUsers = Object.keys(linkedAccounts)
-    .map(String)
-    .filter(id => !users.some(user => user.id === id))
+  const unknownLinkedUsers = [...new Set(linkedAccountOwners(linkedAccounts)
+    .filter(id => !userIds.has(id)))]
     .sort();
   if (unknownLinkedUsers.length) {
     throw new Error(`Legacy linkedAccounts reference unknown users: ${unknownLinkedUsers.join(', ')}`);
