@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const repo = require('../garbage-journal-repository.js');
+const worker = require('../garbage-reconciliation-worker.js');
 
 const calls = [];
 const client = {
@@ -42,5 +43,15 @@ const client = {
   assert(calls.at(-1).text.includes("state='blocked'"));
 
   await assert.rejects(() => repo.claimGarbageBatch(client, { workerId:'w', limit:101 }), /1..100/);
-  console.log('PASS garbage journal repository: idempotent enqueue, SKIP LOCKED lease, retry/block/done');
+
+  assert.equal(worker.retryDelayMs(0), 5000);
+  assert.equal(worker.retryDelayMs(1), 10000);
+  assert.equal(worker.retryDelayMs(20), 15 * 60 * 1000, 'retry backoff must stay bounded');
+  assert.equal(worker.normalizeErrorCode({ message:'400: MESSAGE_DELETE_FORBIDDEN' }), 'MESSAGE_DELETE_FORBIDDEN');
+  assert.equal(worker.normalizeErrorCode({ code:'ETIMEDOUT' }), 'ETIMEDOUT');
+  assert.equal(worker.redactedError({ message:'secret-bearing arbitrary error', status:503 }, 'UPSTREAM_FAILURE'), 'UPSTREAM_FAILURE (status 503)');
+  assert(worker.ALREADY_GONE_CODES.has('MESSAGE_ID_INVALID'));
+  assert(worker.PERMANENT_BLOCK_CODES.has('MESSAGE_DELETE_FORBIDDEN'));
+
+  console.log('PASS garbage journal + worker policy: idempotent enqueue, SKIP LOCKED lease, bounded retry/block/done');
 })().catch(error => { console.error(error); process.exitCode = 1; });

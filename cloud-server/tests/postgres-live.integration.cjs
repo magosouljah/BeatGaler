@@ -24,6 +24,10 @@ const {
   claimGarbageBatch,
   markGarbageDone,
 } = require('../garbage-journal-repository.js');
+const {
+  processGarbageBatch,
+  reconcileVault,
+} = require('../garbage-reconciliation-worker.js');
 
 const env = {
   ...process.env,
@@ -137,6 +141,62 @@ async function main() {
   await markGarbageDone(poolA, { id: 'gc-live-1', workerId: winner });
   assert.equal((await poolA.query('SELECT state FROM garbage_journal WHERE id=$1', ['gc-live-1'])).rows[0].state, 'done');
 
+  // Worker retry policy is durable and never stores arbitrary upstream error text.
+  await enqueueGarbage(poolA, {
+    id: 'gc-retry-live', idempotency_key: 'gc-retry-live-key', vault_id: vault.id,
+    object_kind: 'media', object_id: 'message-retry', reason: 'orphan_upload', index_commit_ref: 'index-rev-live-1',
+  });
+  const retryNow = new Date('2026-08-26T12:00:00Z');
+  const retrySummary = await processGarbageBatch(poolA, {
+    workerId: 'worker-retry', limit: 1, now: retryNow, baseRetryMs: 5000,
+    deleteObject: async () => { const error = new Error('timeout with should-not-persist-this-secret'); error.code = 'ETIMEDOUT'; throw error; },
+  });
+  assert.equal(retrySummary.retried, 1);
+  const retryRow = (await poolA.query('SELECT state,attempt_count,next_attempt_at,last_error_code,last_error_redacted FROM garbage_journal WHERE id=$1', ['gc-retry-live'])).rows[0];
+  assert.equal(retryRow.state, 'retrying');
+  assert.equal(retryRow.attempt_count, 1);
+  assert.equal(retryRow.next_attempt_at.toISOString(), '2026-08-26T12:00:05.000Z');
+  assert.equal(retryRow.last_error_code, 'ETIMEDOUT');
+  assert.equal(retryRow.last_error_redacted, 'ETIMEDOUT');
+  await poolA.query("UPDATE garbage_journal SET next_attempt_at='2030-01-01T00:00:00Z' WHERE id='gc-retry-live'");
+
+  // Crash after the external delete but before marking done: the lease expires, a second worker reclaims it,
+  // an already-missing object is treated as idempotent success, and the debt ends in done rather than resurrecting.
+  await enqueueGarbage(poolA, {
+    id: 'gc-crash-live', idempotency_key: 'gc-crash-live-key', vault_id: vault.id,
+    object_kind: 'media', object_id: 'message-crash', reason: 'permanent_delete', index_commit_ref: 'index-rev-live-1',
+  });
+  const crashAt = new Date('2026-08-26T13:00:00Z');
+  const crashedClaim = await claimGarbageBatch(poolA, { workerId: 'worker-crashed', limit: 1, leaseMs: 1000, now: crashAt });
+  assert.equal(crashedClaim.length, 1);
+  assert.equal(crashedClaim[0].id, 'gc-crash-live');
+  const recoverySummary = await processGarbageBatch(poolB, {
+    workerId: 'worker-recovery', limit: 1, leaseMs: 1000, now: new Date(crashAt.getTime() + 1001),
+    deleteObject: async item => {
+      assert.equal(item.id, 'gc-crash-live');
+      const error = new Error('400: MESSAGE_ID_INVALID');
+      error.code = 'MESSAGE_ID_INVALID';
+      throw error;
+    },
+  });
+  assert.equal(recoverySummary.recoveredAlreadyGone, 1);
+  assert.equal((await poolA.query('SELECT state FROM garbage_journal WHERE id=$1', ['gc-crash-live'])).rows[0].state, 'done');
+
+  // A known permanent permission boundary is blocked, not retried forever.
+  await enqueueGarbage(poolA, {
+    id: 'gc-block-live', idempotency_key: 'gc-block-live-key', vault_id: vault.id,
+    object_kind: 'media', object_id: 'message-old-cross-bot', reason: 'permanent_delete', index_commit_ref: 'index-rev-live-1',
+  });
+  const blockedSummary = await processGarbageBatch(poolA, {
+    workerId: 'worker-block', limit: 1, now: new Date('2026-08-26T14:00:00Z'),
+    deleteObject: async () => { const error = new Error('400: MESSAGE_DELETE_FORBIDDEN'); error.code = 'MESSAGE_DELETE_FORBIDDEN'; throw error; },
+  });
+  assert.equal(blockedSummary.blocked, 1);
+  const blockedRow = (await poolA.query('SELECT state,attempt_count,last_error_code FROM garbage_journal WHERE id=$1', ['gc-block-live'])).rows[0];
+  assert.equal(blockedRow.state, 'blocked');
+  assert.equal(blockedRow.attempt_count, 1);
+  assert.equal(blockedRow.last_error_code, 'MESSAGE_DELETE_FORBIDDEN');
+
   // Pinned INDEX is supplied as the authority. Reconciliation only moves the PG observation to it.
   const indexHashA = 'b'.repeat(64);
   const indexHashB = 'c'.repeat(64);
@@ -175,6 +235,20 @@ async function main() {
   assert.equal(discoveredB.length, 1, 'repeat discovery may return the same durable debt but must not duplicate it');
   assert.equal((await poolA.query("SELECT count(*)::int AS n FROM garbage_journal WHERE object_id='message-orphan'")).rows[0].n, 1);
   assert.equal((await poolA.query("SELECT count(*)::int AS n FROM garbage_journal WHERE object_id='message-kept'")).rows[0].n, 0);
+
+  const reconciledByWorker = await reconcileVault(poolA, {
+    vaultId: vault.id,
+    safetyBefore: new Date(Date.now() - 5 * 60 * 1000),
+    fetchAuthoritativeIndex: async requestedVaultId => {
+      assert.equal(requestedVaultId, vault.id);
+      return {
+        pinnedMessageId: 'index-msg-2', revision: 'rev-2', manifestSha256: indexHashB,
+        objectIds: ['message-kept'],
+      };
+    },
+  });
+  assert.equal(reconciledByWorker.observation.authority, 'pinned-index');
+  assert.equal((await poolA.query("SELECT count(*)::int AS n FROM garbage_journal WHERE object_id='message-orphan'")).rows[0].n, 1, 'worker reconciliation must remain idempotent');
 
   // Normal saga transition is monotonic and replay-safe.
   await beginDirectOperation(poolA, {
@@ -231,7 +305,7 @@ async function main() {
     env,
   });
 
-  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, saga states, garbage leasing, max-4 cap, controlled authority cutover');
+  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, garbage crash recovery/retry/blocking, saga states, max-4 cap, controlled authority cutover');
 }
 
 main()
