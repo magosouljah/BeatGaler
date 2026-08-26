@@ -10,6 +10,39 @@ function requireKey(key, label) {
 function normalizeSecretKeyring(config) {
   if (!config || typeof config !== 'object') throw new Error('Secret key configuration is required.');
 
+  // Already-normalized keyrings may cross provider/runtime boundaries. Revalidate
+  // rather than trusting object shape so normalization remains an idempotent
+  // security boundary.
+  if (typeof config.resolveKey === 'function' && Buffer.isBuffer(config.encryptKey) && Array.isArray(config.availableVersions)) {
+    const activeKeyVersion = Number(config.activeKeyVersion);
+    if (!Number.isInteger(activeKeyVersion) || activeKeyVersion <= 0) {
+      throw new Error('Secret keyring activeKeyVersion must be a positive integer.');
+    }
+    requireKey(config.encryptKey, `Secret key v${activeKeyVersion}`);
+    const versions = [...new Set(config.availableVersions.map(Number))].sort((a, b) => a - b);
+    if (!versions.length || versions.some(version => !Number.isInteger(version) || version <= 0)) {
+      throw new Error('Secret keyring availableVersions must contain positive integers.');
+    }
+    if (!versions.includes(activeKeyVersion)) {
+      throw new Error(`Active secret key version ${activeKeyVersion} is unavailable.`);
+    }
+    for (const version of versions) requireKey(config.resolveKey(version), `Secret key v${version}`);
+    const activeResolved = config.resolveKey(activeKeyVersion);
+    if (!activeResolved.equals(config.encryptKey)) {
+      throw new Error(`Active secret key version ${activeKeyVersion} does not match encryptKey.`);
+    }
+    return Object.freeze({
+      activeKeyVersion,
+      encryptKey: config.encryptKey,
+      resolveKey(requestedVersion) {
+        const version = Number(requestedVersion);
+        if (!versions.includes(version)) throw new Error(`Envelope key version ${requestedVersion} is unavailable.`);
+        return requireKey(config.resolveKey(version), `Secret key v${version}`);
+      },
+      availableVersions: Object.freeze(versions),
+    });
+  }
+
   // Backward-compatible single-key form used by CI/development today.
   if (Buffer.isBuffer(config.key)) {
     const version = Number(config.keyVersion);
