@@ -13,6 +13,7 @@ This runbook defines the required software/operational sequence for moving BeatG
 - A PostgreSQL process may become authority only after a `READY` marker exists for the exact final source snapshot.
 - Invalid legacy source is quarantined; rows are never silently skipped.
 - Cleanup/garbage failure never rolls INDEX back or resurrects tombstones.
+- Recoverable OAuth/MFA secrets must remain ciphertext in PostgreSQL/backups; the KEK/master material is external and versioned.
 
 ## Infrastructure gates required before a real cutover
 
@@ -25,6 +26,7 @@ A production cutover is forbidden until all of these are independently evidenced
 5. An isolated restore from the production backup path succeeds.
 6. The measured recovery drill demonstrates RPO <= 15 minutes and RTO <= 2 hours at representative scale.
 7. Monitoring, alerts, on-call ownership and rollback authority are assigned.
+8. The productive KMS path proves both decrypt-by-version and a rehearsed key rotation without exposing key material to PostgreSQL or backup storage.
 
 The CI development envelope key and CI dump/restore drill are not substitutes for these gates.
 
@@ -89,6 +91,21 @@ During the defined observation window:
 - verify file bytes still bypass Galer Cloud;
 - verify backup/PITR health and replication/provider alerts.
 
+## Secret-key rotation procedure
+
+A key rotation is a maintenance operation. Do not rotate while uncontrolled control-plane writes are occurring.
+
+1. Enter maintenance/write freeze and drain in-flight writes.
+2. Confirm the productive KMS/Secret Manager can resolve the **current** key version and has created a distinct **new** active key version.
+3. Record only KMS key identifiers/versions; never export raw key material into PostgreSQL, logs, artifacts or snapshot bundles.
+4. Run `rotateStoredControlPlaneSecrets` with a source keyring capable of decrypting every currently stored `secret_key_version` and a target keyring whose active version is the new version.
+5. The rotation must run transactionally. Any unavailable/wrong old key, malformed ciphertext or unsupported MFA factor aborts and rolls back the entire rotation.
+6. Verify every encrypted `provider_identities` and `mfa_factors` row now carries the new `secret_key_version` and that OAuth/MFA round-trip succeeds through the productive KMS path.
+7. Restart/smoke the service using the new active key version while the previous version remains recoverable in KMS for the approved rollback window.
+8. Retire/disable the old KMS version only after smoke, backup and rollback-window requirements are satisfied.
+
+CI proves the transaction, wrong/missing-key rejection and v7→v8 re-encryption on an isolated restored PostgreSQL database. It does **not** prove the real provider's KMS IAM, key lifecycle or deletion/retirement controls.
+
 ## Rollback after PostgreSQL writes exist
 
 Never point authority back at the pre-cutover JSON snapshot.
@@ -117,6 +134,7 @@ Never point authority back at the pre-cutover JSON snapshot.
 - operator/release-owner approvals and maintenance timestamps;
 - migration ledger/checksums;
 - KMS key identifiers/versions without key material;
+- key-rotation evidence showing all encrypted rows moved to the intended version;
 - backup/PITR configuration evidence;
 - isolated restore evidence and measured RPO/RTO;
 - smoke/monitoring evidence;
@@ -124,6 +142,6 @@ Never point authority back at the pre-cutover JSON snapshot.
 
 ## What the repository/CI can prove today
 
-The repository can prove exact snapshot hashing, quarantine behavior, stage-before-READY, final-delta mismatch rejection, exact READY commit, post-cutover durable writes, current-state rollback export, exact rollback digest enforcement, PostgreSQL migrations/constraints, encrypted secret round-trip in the CI development-key model, and isolated CI dump/restore.
+The repository can prove exact snapshot hashing, quarantine behavior, stage-before-READY, final-delta mismatch rejection, exact READY commit, post-cutover durable writes, current-state rollback export, exact rollback digest enforcement, PostgreSQL migrations/constraints, encrypted secret round-trip in the CI development-key model, ciphertext-only database storage, wrong/missing-key rejection, transactional secret-key rotation on an isolated restore, and isolated CI dump/restore.
 
-It **cannot** prove a real production PostgreSQL provider, production KMS/Secret Manager, production immutable storage, WAL/PITR retention, representative RPO/RTO, or a real maintenance-window cutover until those external systems are provisioned and exercised.
+It **cannot** prove a real production PostgreSQL provider, production KMS/Secret Manager/IAM, production immutable storage, WAL/PITR retention, representative RPO/RTO, productive key lifecycle controls, or a real maintenance-window cutover until those external systems are provisioned and exercised.
