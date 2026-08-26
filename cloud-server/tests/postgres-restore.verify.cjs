@@ -13,7 +13,7 @@ const unseal = (stored, { aad }) => decryptSecretFromStorage(stored, { resolveKe
 async function main() {
   const started = Date.now();
   const ledger = await pool.query('SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version');
-  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002']);
+  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002', '0003']);
   assert(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum_sha256)));
 
   const counts = {};
