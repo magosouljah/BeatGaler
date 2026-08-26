@@ -3,12 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
-const { controlPlaneAuthorityConfig, developmentEnvelopeKeyConfig } = require('./control-plane-authority');
+const { controlPlaneAuthorityConfig } = require('./control-plane-authority');
+const { resolveSecretEnvelopeKeyring } = require('./secret-envelope-provider');
 const { PostgresControlPlaneRuntime } = require('./postgres-control-plane-runtime');
 const { assertJsonRollbackSnapshot } = require('./postgres-rollback-preparation');
 const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('./control-plane-json-compat');
 
-async function prepareControlPlaneCutover({ pool, env = process.env } = {}) {
+async function prepareControlPlaneCutover({ pool, env = process.env, secretProviderOptions } = {}) {
   const config = controlPlaneAuthorityConfig(env);
   const authPath = path.join(__dirname, 'accounts-data.json');
   const persistentPath = path.join(__dirname, 'cloud-data.json');
@@ -25,7 +26,7 @@ async function prepareControlPlaneCutover({ pool, env = process.env } = {}) {
   }
   if (!pool) throw new Error('PostgreSQL authority requires an initialized PostgreSQL pool.');
 
-  const cryptoConfig = developmentEnvelopeKeyConfig(env);
+  const cryptoConfig = await resolveSecretEnvelopeKeyring(env, secretProviderOptions);
   const runtime = new PostgresControlPlaneRuntime({
     pool,
     expectedSnapshotSha256: config.expectedSnapshotSha256,
@@ -47,6 +48,7 @@ async function prepareControlPlaneCutover({ pool, env = process.env } = {}) {
     authority: 'postgres',
     runtime,
     snapshotSha256: config.expectedSnapshotSha256,
+    secretKeyVersion: cryptoConfig.activeKeyVersion,
   });
 }
 
