@@ -4,8 +4,19 @@ const assert = require('assert');
 const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations.js');
 const { createPostgresPool } = require('../postgres-runtime-config.js');
-const { importLegacyControlPlane } = require('../legacy-import-executor.js');
+const { importLegacyControlPlane, buildLegacyRows } = require('../legacy-import-executor.js');
+const { exportLegacyAccounts } = require('../legacy-exporter.js');
 const { encryptSecretForStorage, decryptSecretFromStorage } = require('../secret-envelope.js');
+const {
+  beginDirectOperation,
+  recordExternalEffect,
+  markIndexCommitted,
+  markOperationCommitted,
+} = require('../direct-operation-repository.js');
+const {
+  reconcileIndexObservation,
+  discoverOrphanUploads,
+} = require('../index-reconciliation.js');
 const {
   enqueueGarbage,
   claimGarbageBatch,
@@ -24,6 +35,7 @@ const poolA = createPostgresPool(Pool, env);
 const poolB = createPostgresPool(Pool, env);
 const key = Buffer.alloc(32, 9);
 const seal = (plaintext, { aad }) => encryptSecretForStorage(plaintext, { key, keyVersion: 7, aad });
+const unseal = (stored, { aad }) => decryptSecretFromStorage(stored, { resolveKey: () => key, aad });
 
 async function main() {
   await poolA.query('DROP SCHEMA public CASCADE');
@@ -122,6 +134,75 @@ async function main() {
   await markGarbageDone(poolA, { id: 'gc-live-1', workerId: winner });
   assert.equal((await poolA.query('SELECT state FROM garbage_journal WHERE id=$1', ['gc-live-1'])).rows[0].state, 'done');
 
+  // Pinned INDEX is supplied as the authority. Reconciliation only moves the PG observation to it.
+  const indexHashA = 'b'.repeat(64);
+  const indexHashB = 'c'.repeat(64);
+  const firstObservation = await reconcileIndexObservation(poolA, {
+    vaultId: vault.id, pinnedMessageId: 'index-msg-1', revision: 'rev-1', manifestSha256: indexHashA,
+  });
+  assert.equal(firstObservation.authority, 'pinned-index');
+  assert.equal(firstObservation.changed, true);
+  const secondObservation = await reconcileIndexObservation(poolA, {
+    vaultId: vault.id, pinnedMessageId: 'index-msg-2', revision: 'rev-2', manifestSha256: indexHashB,
+  });
+  assert.equal(secondObservation.previous.manifest_sha256, indexHashA);
+  assert.equal(secondObservation.current.manifest_sha256, indexHashB);
+
+  // Crash-after-external-effect simulation: produced IDs survive, INDEX omits one, and only the old unreferenced ID becomes debt.
+  await beginDirectOperation(poolA, {
+    id: 'op-orphan-live', idempotencyKey: 'op-orphan-live-key', vaultId: vault.id, operationType: 'upload',
+  });
+  await recordExternalEffect(poolA, {
+    idempotencyKey: 'op-orphan-live-key', producedObjectIds: ['message-kept', 'message-orphan'],
+  });
+  await poolA.query("UPDATE direct_operations SET updated_at=now()-interval '10 minutes' WHERE idempotency_key='op-orphan-live-key'");
+  const discoveredA = await discoverOrphanUploads(poolA, {
+    vaultId: vault.id,
+    authoritativeObjectIds: ['message-kept'],
+    indexCommitRef: indexHashB,
+    safetyBefore: new Date(Date.now() - 5 * 60 * 1000),
+  });
+  const discoveredB = await discoverOrphanUploads(poolA, {
+    vaultId: vault.id,
+    authoritativeObjectIds: ['message-kept'],
+    indexCommitRef: indexHashB,
+    safetyBefore: new Date(Date.now() - 5 * 60 * 1000),
+  });
+  assert.equal(discoveredA.length, 1);
+  assert.equal(discoveredB.length, 1, 'repeat discovery may return the same durable debt but must not duplicate it');
+  assert.equal((await poolA.query("SELECT count(*)::int AS n FROM garbage_journal WHERE object_id='message-orphan'")).rows[0].n, 1);
+  assert.equal((await poolA.query("SELECT count(*)::int AS n FROM garbage_journal WHERE object_id='message-kept'")).rows[0].n, 0);
+
+  // Normal saga transition is monotonic and replay-safe.
+  await beginDirectOperation(poolA, {
+    id: 'op-good-live', idempotencyKey: 'op-good-live-key', vaultId: vault.id, operationType: 'replace_asset',
+  });
+  await recordExternalEffect(poolA, { idempotencyKey: 'op-good-live-key', producedObjectIds: ['message-new'] });
+  await markIndexCommitted(poolA, { idempotencyKey: 'op-good-live-key' });
+  const committed = await markOperationCommitted(poolA, { idempotencyKey: 'op-good-live-key' });
+  assert.equal(committed.state, 'COMMITTED');
+  const committedReplay = await markOperationCommitted(poolA, { idempotencyKey: 'op-good-live-key' });
+  assert.equal(committedReplay.state, 'COMMITTED');
+  await assert.rejects(
+    () => recordExternalEffect(poolA, { idempotencyKey: 'op-good-live-key', producedObjectIds: ['message-other'] }),
+    /Illegal Direct operation transition/,
+  );
+
+  // Simulate an authoritative PG write after migration, then prove rollback export retains it and decrypts recoverable secrets.
+  await poolA.query("INSERT INTO users(id,username,email,created_at,updated_at) VALUES('postcut-u2','postcut','postcut@example.com',now(),now())");
+  await poolA.query("INSERT INTO entitlements(id,user_id,plan_id,source,starts_at) VALUES('postcut-ent','postcut-u2','highest_paid','base_plan',now())");
+  const exported = await exportLegacyAccounts(poolA, { decryptSecretFromStorage: unseal });
+  const exportedU1 = exported.users.find(user => user.id === 'live-u1');
+  const exportedU2 = exported.users.find(user => user.id === 'postcut-u2');
+  assert(exportedU1 && exportedU2, 'rollback export must retain pre- and post-cutover users');
+  assert.equal(exportedU1.providers.google.accessToken, 'LIVE-ACCESS-SECRET');
+  assert.equal(exportedU1.providers.google.refreshToken, 'LIVE-REFRESH-SECRET');
+  assert.equal(exportedU1.mfaSecret, 'LIVE-TOTP-SECRET');
+  assert.equal(exportedU2.planState.basePlanId, 'highest_paid');
+  assert.equal(exported.sessions['a'.repeat(64)].userId, 'live-u1');
+  const rollbackRows = buildLegacyRows(exported);
+  assert.equal(rollbackRows.users.length, 2, 'legacy-compatible rollback state must validate through importer mapping');
+
   await poolA.query("INSERT INTO transport_bots(id) VALUES('bot-live-cap')");
   for (let i = 1; i <= 5; i += 1) {
     const userId = `cap-u${i}`;
@@ -140,7 +221,7 @@ async function main() {
     }
   }
 
-  console.log('PASS live PostgreSQL: migrations race/idempotency, encrypted import, garbage leasing, max-4 lease cap');
+  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, saga states, garbage leasing, max-4 cap');
 }
 
 main()
