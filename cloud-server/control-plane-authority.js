@@ -10,6 +10,7 @@ function controlPlaneAuthorityConfig(env = process.env) {
 
   const postgresEnabled = String(env.BEATGALER_POSTGRES_ENABLED || '').toLowerCase() === 'true';
   const expectedSnapshotSha256 = String(env.BEATGALER_POSTGRES_CUTOVER_SNAPSHOT_SHA256 || '').trim().toLowerCase();
+  const expectedRollbackSha256 = String(env.BEATGALER_JSON_ROLLBACK_EXPORT_SHA256 || '').trim().toLowerCase();
 
   if (authority === 'postgres') {
     if (!postgresEnabled) {
@@ -18,12 +19,23 @@ function controlPlaneAuthorityConfig(env = process.env) {
     if (!SNAPSHOT_SHA_RE.test(expectedSnapshotSha256)) {
       throw new Error('PostgreSQL control-plane authority requires BEATGALER_POSTGRES_CUTOVER_SNAPSHOT_SHA256 (64 lowercase hex chars).');
     }
+    if (expectedRollbackSha256) {
+      throw new Error('BEATGALER_JSON_ROLLBACK_EXPORT_SHA256 cannot be set while PostgreSQL is authority.');
+    }
+  }
+
+  if (expectedRollbackSha256 && !SNAPSHOT_SHA_RE.test(expectedRollbackSha256)) {
+    throw new Error('BEATGALER_JSON_ROLLBACK_EXPORT_SHA256 must be 64 lowercase hex chars.');
+  }
+  if (expectedRollbackSha256 && !postgresEnabled) {
+    throw new Error('Validated JSON rollback requires BEATGALER_POSTGRES_ENABLED=true for rollback marker verification.');
   }
 
   return Object.freeze({
     authority,
     postgresEnabled,
     expectedSnapshotSha256: authority === 'postgres' ? expectedSnapshotSha256 : '',
+    expectedRollbackSha256: authority === 'json' ? expectedRollbackSha256 : '',
   });
 }
 
