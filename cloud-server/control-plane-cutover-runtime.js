@@ -5,12 +5,23 @@ const path = require('path');
 const express = require('express');
 const { controlPlaneAuthorityConfig, developmentEnvelopeKeyConfig } = require('./control-plane-authority');
 const { PostgresControlPlaneRuntime } = require('./postgres-control-plane-runtime');
+const { assertJsonRollbackSnapshot } = require('./postgres-rollback-preparation');
 const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('./control-plane-json-compat');
 
 async function prepareControlPlaneCutover({ pool, env = process.env } = {}) {
   const config = controlPlaneAuthorityConfig(env);
+  const authPath = path.join(__dirname, 'accounts-data.json');
+  const persistentPath = path.join(__dirname, 'cloud-data.json');
+
   if (config.authority === 'json') {
-    return Object.freeze({ authority: 'json', runtime: null });
+    if (pool) {
+      const authRaw = fs.existsSync(authPath) ? fs.readFileSync(authPath, 'utf8') : JSON.stringify({ users: [], sessions: {} });
+      const persistentRaw = fs.existsSync(persistentPath)
+        ? fs.readFileSync(persistentPath, 'utf8')
+        : JSON.stringify({ linkedAccounts: {}, uploadedFiles: {}, beatTopics: {}, pendingTopicDeletes: {}, messageRedirects: {} });
+      await assertJsonRollbackSnapshot(pool, config.expectedRollbackSha256, { authRaw, persistentRaw });
+    }
+    return Object.freeze({ authority: 'json', runtime: null, rollbackSha256: config.expectedRollbackSha256 || null });
   }
   if (!pool) throw new Error('PostgreSQL authority requires an initialized PostgreSQL pool.');
 
@@ -22,8 +33,6 @@ async function prepareControlPlaneCutover({ pool, env = process.env } = {}) {
   });
   const initial = await runtime.initialize();
 
-  const authPath = path.join(__dirname, 'accounts-data.json');
-  const persistentPath = path.join(__dirname, 'cloud-data.json');
   installLegacyJsonCompatibility({
     fsModule: fs,
     runtime,
