@@ -15,7 +15,7 @@ const DEFAULT_BASE_RETRY_MS = 5_000;
 const DEFAULT_MAX_RETRY_MS = 15 * 60_000;
 const DEFAULT_MAX_ATTEMPTS = 8;
 const ALREADY_GONE_CODES = new Set(['MESSAGE_ID_INVALID', 'MESSAGE_NOT_FOUND', 'OBJECT_NOT_FOUND']);
-const PERMANENT_BLOCK_CODES = new Set(['MESSAGE_DELETE_FORBIDDEN', 'CHAT_ADMIN_REQUIRED', 'CHANNEL_PRIVATE']);
+const PERMANENT_BLOCK_CODES = new Set(['MESSAGE_DELETE_FORBIDDEN']);
 
 function requireFunction(value, name) {
   if (typeof value !== 'function') throw new Error(`${name} is required`);
