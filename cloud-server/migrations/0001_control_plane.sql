@@ -112,6 +112,36 @@ CREATE UNIQUE INDEX direct_leases_one_active_installation_idx
   ON direct_leases(installation_id)
   WHERE status = 'ACTIVE';
 
+CREATE OR REPLACE FUNCTION enforce_transport_bot_active_lease_cap()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  active_count integer;
+BEGIN
+  IF NEW.status <> 'ACTIVE' THEN
+    RETURN NEW;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.transport_bot_id, 0));
+  SELECT count(*) INTO active_count
+  FROM direct_leases
+  WHERE transport_bot_id = NEW.transport_bot_id
+    AND status = 'ACTIVE'
+    AND id <> NEW.id;
+
+  IF active_count >= 4 THEN
+    RAISE EXCEPTION 'transport bot % already has 4 active vault leases', NEW.transport_bot_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER direct_leases_active_cap_trigger
+BEFORE INSERT OR UPDATE OF transport_bot_id, status ON direct_leases
+FOR EACH ROW EXECUTE FUNCTION enforce_transport_bot_active_lease_cap();
+
 CREATE TABLE direct_operations (
   id text PRIMARY KEY,
   idempotency_key text NOT NULL UNIQUE,
