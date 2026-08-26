@@ -35,7 +35,7 @@
     "test": "npm run test:fast",
     "test:unit:ts": "node scripts/run-unit-tests.mjs",
     "test:unit:rust": "cargo test --locked --manifest-path src-tauri/Cargo.toml --lib",
-    "test:unit:cloud": "node cloud-server/tests/unit.test.cjs && node cloud-server/tests/postgres-schema.test.cjs",
+    "test:unit:cloud": "node cloud-server/tests/unit.test.cjs && node cloud-server/tests/postgres-schema.test.cjs && node cloud-server/tests/postgres-migration-runner.test.cjs && node cloud-server/tests/postgres-runtime-config.test.cjs && node cloud-server/tests/legacy-import-plan.test.cjs && node cloud-server/tests/secret-envelope.test.cjs",
     "test:component:dom": "vitest run tests/component-dom --environment jsdom",
     "test:integration": "vitest run tests/integration --environment jsdom",
     "test:e2e:desktop:build": "npm run build && cargo build --locked --manifest-path src-tauri/Cargo.toml --release",

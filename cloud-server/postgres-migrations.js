@@ -6,6 +6,7 @@ const path = require('path');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const MIGRATION_NAME_RE = /^\d{4}_[a-z0-9_]+\.sql$/;
+const MIGRATION_LOCK_KEY = 'beatgaler:postgres-migrations:v1';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -44,6 +45,13 @@ function listMigrations(dir = MIGRATIONS_DIR) {
   });
 }
 
+function migrationBody(sql) {
+  const withoutBegin = String(sql).replace(/^\s*BEGIN;\s*/i, '');
+  const withoutCommit = withoutBegin.replace(/\s*COMMIT;\s*$/i, '');
+  if (withoutCommit === withoutBegin) throw new Error('Migration is missing terminal COMMIT.');
+  return withoutCommit.trim();
+}
+
 function assertInitialSchemaContract(migrations = listMigrations()) {
   if (migrations.length === 0) throw new Error('No PostgreSQL migrations found.');
   const sql = migrations.map(item => item.sql).join('\n');
@@ -77,8 +85,65 @@ function assertInitialSchemaContract(migrations = listMigrations()) {
   return migrations;
 }
 
+async function ensureMigrationLedger(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version text PRIMARY KEY,
+      checksum_sha256 text NOT NULL CHECK (checksum_sha256 ~ '^[0-9a-f]{64}$'),
+      applied_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+async function applyMigrations(pool, migrations = listMigrations()) {
+  if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool with connect() is required.');
+  const client = await pool.connect();
+  const applied = [];
+  const skipped = [];
+  try {
+    await ensureMigrationLedger(client);
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [MIGRATION_LOCK_KEY]);
+
+    for (const migration of migrations) {
+      const existing = await client.query(
+        'SELECT checksum_sha256 FROM schema_migrations WHERE version = $1',
+        [migration.version],
+      );
+      if (existing.rows.length) {
+        if (existing.rows[0].checksum_sha256 !== migration.checksumSha256) {
+          throw new Error(`Applied migration ${migration.version} checksum mismatch.`);
+        }
+        skipped.push(migration.version);
+        continue;
+      }
+
+      await client.query('BEGIN');
+      try {
+        await client.query(migrationBody(migration.sql));
+        await client.query(
+          'INSERT INTO schema_migrations(version, checksum_sha256) VALUES ($1, $2)',
+          [migration.version, migration.checksumSha256],
+        );
+        await client.query('COMMIT');
+        applied.push(migration.version);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    }
+
+    return Object.freeze({ applied, skipped });
+  } finally {
+    try { await client.query('SELECT pg_advisory_unlock(hashtext($1))', [MIGRATION_LOCK_KEY]); }
+    finally { client.release(); }
+  }
+}
+
 module.exports = {
   MIGRATIONS_DIR,
+  MIGRATION_LOCK_KEY,
   listMigrations,
+  migrationBody,
   assertInitialSchemaContract,
+  applyMigrations,
 };
