@@ -100,9 +100,14 @@ async function applyMigrations(pool, migrations = listMigrations()) {
   const client = await pool.connect();
   const applied = [];
   const skipped = [];
+  let locked = false;
   try {
-    await ensureMigrationLedger(client);
+    // Serialize the very first bootstrap too. CREATE TABLE IF NOT EXISTS is not
+    // sufficient when two fresh server instances concurrently create the same
+    // relation/type in PostgreSQL's catalogs.
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [MIGRATION_LOCK_KEY]);
+    locked = true;
+    await ensureMigrationLedger(client);
 
     for (const migration of migrations) {
       const existing = await client.query(
@@ -134,8 +139,11 @@ async function applyMigrations(pool, migrations = listMigrations()) {
 
     return Object.freeze({ applied, skipped });
   } finally {
-    try { await client.query('SELECT pg_advisory_unlock(hashtext($1))', [MIGRATION_LOCK_KEY]); }
-    finally { client.release(); }
+    try {
+      if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [MIGRATION_LOCK_KEY]);
+    } finally {
+      client.release();
+    }
   }
 }
 
