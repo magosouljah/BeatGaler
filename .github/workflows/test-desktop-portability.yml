@@ -64,12 +64,12 @@ jobs:
         run: npm run test:packaging:static
 
   postgres_integration:
-    name: PostgreSQL live integration gate
+    name: PostgreSQL live integration + recovery gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: beatgaler_ci
@@ -80,8 +80,21 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+      postgres_restore:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_restore
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_restore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_ci
+      RESTORE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5433/beatgaler_restore
       BEATGALER_POSTGRES_ENABLED: "true"
       BEATGALER_POSTGRES_SSL_MODE: disable
     steps:
@@ -98,6 +111,54 @@ jobs:
 
       - name: Execute migrations and adversarial persistence checks on PostgreSQL
         run: node cloud-server/tests/postgres-live.integration.cjs
+
+      - name: Dump, encrypt and restore into an isolated PostgreSQL instance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/recovery
+          START_EPOCH=$(date +%s)
+          PG_IMAGE='postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109'
+          docker run --rm --network host -e PGPASSWORD=postgres "$PG_IMAGE" \
+            pg_dump --no-owner --no-privileges --format=plain \
+            -h 127.0.0.1 -p 5432 -U postgres -d beatgaler_ci > /tmp/beatgaler-control-plane.sql
+          sha256sum /tmp/beatgaler-control-plane.sql > artifacts/recovery/plaintext-dump.sha256
+
+          BACKUP_KEY=$(openssl rand -hex 32)
+          openssl enc -aes-256-cbc -pbkdf2 -salt \
+            -in /tmp/beatgaler-control-plane.sql \
+            -out /tmp/beatgaler-control-plane.sql.enc \
+            -pass pass:"$BACKUP_KEY"
+          rm -f /tmp/beatgaler-control-plane.sql
+          test ! -e /tmp/beatgaler-control-plane.sql
+
+          openssl enc -d -aes-256-cbc -pbkdf2 \
+            -in /tmp/beatgaler-control-plane.sql.enc \
+            -out /tmp/beatgaler-control-plane.restore.sql \
+            -pass pass:"$BACKUP_KEY"
+          sha256sum /tmp/beatgaler-control-plane.sql.enc > artifacts/recovery/encrypted-backup.sha256
+
+          docker run --rm --network host -i -e PGPASSWORD=postgres "$PG_IMAGE" \
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U postgres -d beatgaler_restore \
+            < /tmp/beatgaler-control-plane.restore.sql
+          rm -f /tmp/beatgaler-control-plane.restore.sql /tmp/beatgaler-control-plane.sql.enc
+          unset BACKUP_KEY
+
+          RESTORE_SECONDS=$(( $(date +%s) - START_EPOCH ))
+          test "$RESTORE_SECONDS" -lt 7200
+          printf '{"isolated_restore":true,"backup_encrypted_in_drill":true,"rto_target_seconds":7200,"measured_restore_seconds":%s,"production_pitr_rpo_proven":false}\n' \
+            "$RESTORE_SECONDS" > artifacts/recovery/restore-drill.json
+
+      - name: Verify restored constraints, secrets, reconciliation and rollback state
+        run: node cloud-server/tests/postgres-restore.verify.cjs
+
+      - name: Upload recovery drill evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: postgres-recovery-evidence
+          path: artifacts/recovery/
+          if-no-files-found: error
 
   supply_chain:
     name: Supply chain gate
@@ -334,7 +395,7 @@ jobs:
         shell: bash
         run: |
           echo "Web/shared: $WEB_RESULT"
-          echo "PostgreSQL live: $POSTGRES_RESULT"
+          echo "PostgreSQL live + recovery: $POSTGRES_RESULT"
           echo "Supply chain: $SUPPLY_CHAIN_RESULT"
           echo "Windows: $WINDOWS_RESULT"
           echo "macOS matrix: $MACOS_RESULT"
@@ -342,4 +403,4 @@ jobs:
             echo "Required CI failed because at least one gate did not succeed."
             exit 1
           fi
-          echo "Required CI PASS: Web/shared, live PostgreSQL, supply-chain security, packaging/portability, Windows, and macOS all succeeded."
+          echo "Required CI PASS: Web/shared, live PostgreSQL + isolated recovery, supply-chain security, packaging/portability, Windows, and macOS all succeeded."
