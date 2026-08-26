@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const lockPath = path.resolve("package-lock.json");
-const reportPath = path.resolve("artifacts/supply-chain/npm-licenses.json");
+const lockPath = path.resolve(process.argv[2] || "package-lock.json");
+const reportPath = path.resolve(process.argv[3] || "artifacts/supply-chain/npm-licenses.json");
 const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
 
 // This list is intentionally exact. A new license expression must be reviewed
@@ -61,7 +61,7 @@ for (const [packagePath, metadata] of Object.entries(lock.packages ?? {})) {
 }
 
 fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-fs.writeFileSync(reportPath, `${JSON.stringify({ packages, failures }, null, 2)}\n`);
+fs.writeFileSync(reportPath, `${JSON.stringify({ lockPath, packages, failures }, null, 2)}\n`);
 
 if (failures.length) {
   console.error("NPM license gate failed. Review these packages:");
@@ -69,4 +69,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`PASS npm license gate (${packages.length} packages)`);
+console.log(`PASS npm license gate (${packages.length} packages) for ${path.relative(process.cwd(), lockPath) || path.basename(lockPath)}`);
