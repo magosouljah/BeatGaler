@@ -2,6 +2,7 @@
 
 const { buildLegacyRows } = require('./legacy-import-executor');
 const { encryptSecretForStorage, decryptSecretFromStorage } = require('./secret-envelope');
+const { normalizeSecretKeyring } = require('./secret-keyring');
 
 const SECRET_KEY_VERSION_COLUMN = ['secret', 'key', 'version'].join('_');
 const CUTOVER_ID = 'legacy-json-v1';
@@ -22,20 +23,20 @@ function providerProfile(record) {
   return profile;
 }
 
-function encryptionCallbacks({ key, keyVersion }) {
+function encryptionCallbacks(config) {
+  const keyring = normalizeSecretKeyring(config);
   return Object.freeze({
     encrypt(plaintext, { aad }) {
-      return encryptSecretForStorage(plaintext, { key, keyVersion, aad });
+      return encryptSecretForStorage(plaintext, {
+        key: keyring.encryptKey,
+        keyVersion: keyring.activeKeyVersion,
+        aad,
+      });
     },
     decrypt(stored, { aad }) {
       return decryptSecretFromStorage(stored, {
         aad,
-        resolveKey(version) {
-          if (Number(version) !== Number(keyVersion)) {
-            throw new Error(`Envelope key version ${version} is unavailable.`);
-          }
-          return key;
-        },
+        resolveKey: version => keyring.resolveKey(version),
       });
     },
   });

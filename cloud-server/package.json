@@ -5,17 +5,19 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:containment": "node ../scripts/regression-http-containment.mjs"
+    "test:containment": "node ../scripts/regression-http-containment.mjs",
+    "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "3.1116.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "multer": "^1.4.5-lts.1",
-    "telegram": "^2.26.22",
+    "pg": "8.23.0",
     "qrcode-terminal": "^0.12.0",
-    "pg": "8.23.0"
+    "telegram": "^2.26.22"
   }
 }

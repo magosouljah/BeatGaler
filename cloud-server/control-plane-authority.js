@@ -1,5 +1,7 @@
 'use strict';
 
+const { developmentEnvelopeKeyConfig } = require('./secret-envelope-provider');
+
 const SNAPSHOT_SHA_RE = /^[0-9a-f]{64}$/;
 
 function controlPlaneAuthorityConfig(env = process.env) {
@@ -37,21 +39,6 @@ function controlPlaneAuthorityConfig(env = process.env) {
     expectedSnapshotSha256: authority === 'postgres' ? expectedSnapshotSha256 : '',
     expectedRollbackSha256: authority === 'json' ? expectedRollbackSha256 : '',
   });
-}
-
-function developmentEnvelopeKeyConfig(env = process.env) {
-  const raw = String(env.BEATGALER_SECRET_ENVELOPE_KEY_B64 || '').trim();
-  const keyVersion = Number(env.BEATGALER_SECRET_ENVELOPE_KEY_VERSION || 1);
-  if (!raw) throw new Error('PostgreSQL control-plane authority requires a secret envelope key provider.');
-  if (String(env.NODE_ENV || '').toLowerCase() === 'production') {
-    throw new Error('Production PostgreSQL authority requires a real KMS/Secret Manager integration; BEATGALER_SECRET_ENVELOPE_KEY_B64 is development/CI only.');
-  }
-  if (!Number.isInteger(keyVersion) || keyVersion <= 0) {
-    throw new Error('BEATGALER_SECRET_ENVELOPE_KEY_VERSION must be a positive integer.');
-  }
-  const key = Buffer.from(raw, 'base64');
-  if (key.length !== 32) throw new Error('BEATGALER_SECRET_ENVELOPE_KEY_B64 must decode to exactly 32 bytes.');
-  return Object.freeze({ key, keyVersion });
 }
 
 module.exports = {

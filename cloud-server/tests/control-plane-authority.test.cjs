@@ -61,6 +61,6 @@ assert.deepEqual(devKey.key, Buffer.alloc(32, 9));
 assert.throws(() => developmentEnvelopeKeyConfig({
   NODE_ENV: 'production',
   BEATGALER_SECRET_ENVELOPE_KEY_B64: keyB64,
-}), /real KMS\/Secret Manager/);
+}), /forbidden in production/);
 
 console.log('PASS control-plane authority: explicit, default-off, rollback-guarded, production fail-closed');
