@@ -13,7 +13,7 @@ const unseal = (stored, { aad }) => decryptSecretFromStorage(stored, { resolveKe
 async function main() {
   const started = Date.now();
   const ledger = await pool.query('SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version');
-  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002', '0003']);
+  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002', '0003', '0004']);
   assert(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum_sha256)));
 
   const counts = {};
@@ -27,6 +27,9 @@ async function main() {
   assert(counts.direct_operations >= 2);
   assert.equal(counts.index_observations, 1);
   assert(counts.garbage_journal >= 2);
+
+  const stageTable = await pool.query("SELECT to_regclass('public.control_plane_cutover_stages') AS name");
+  assert.equal(stageTable.rows[0].name, 'control_plane_cutover_stages');
 
   const observation = (await pool.query("SELECT manifest_sha256,revision FROM index_observations WHERE revision='rev-2'")).rows[0];
   assert(observation);
@@ -59,6 +62,7 @@ async function main() {
     post_cutover_write_retained: true,
     recoverable_secret_roundtrip: true,
     index_authority_observation_retained: true,
+    cutover_stage_schema_retained: true,
   }));
 }
 
