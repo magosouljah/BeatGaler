@@ -32,14 +32,21 @@ CREATE TABLE provider_identities (
   provider text NOT NULL,
   provider_subject text NOT NULL,
   access_token_ciphertext bytea,
+  access_token_nonce bytea,
   refresh_token_ciphertext bytea,
-  secret_nonce bytea,
+  refresh_token_nonce bytea,
   secret_key_version integer,
   token_expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (provider, provider_subject),
-  CHECK (secret_key_version IS NULL OR secret_key_version > 0)
+  CHECK ((access_token_ciphertext IS NULL) = (access_token_nonce IS NULL)),
+  CHECK ((refresh_token_ciphertext IS NULL) = (refresh_token_nonce IS NULL)),
+  CHECK (secret_key_version IS NULL OR secret_key_version > 0),
+  CHECK (
+    (access_token_ciphertext IS NULL AND refresh_token_ciphertext IS NULL AND secret_key_version IS NULL)
+    OR secret_key_version IS NOT NULL
+  )
 );
 CREATE INDEX provider_identities_user_id_idx ON provider_identities(user_id);
 
