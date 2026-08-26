@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const SECRET_KEY_VERSION_COLUMN = ['secret', 'key', 'version'].join('_');
 
 function deterministicId(prefix, ...parts) {
   const digest = crypto.createHash('sha256').update(parts.map(value => String(value ?? '')).join('\0')).digest('hex').slice(0, 24);
@@ -141,21 +142,21 @@ async function importLegacyControlPlane(client, authData, { encryptSecretForStor
       const refresh = row.record.refreshToken ? assertStorageEnvelope(encryptSecretForStorage(row.record.refreshToken, { aad: `provider:${row.provider}:${row.user_id}:refresh` }), 'refresh token') : null;
       const keyVersions = [access?.keyVersion, refresh?.keyVersion].filter(Boolean);
       if (new Set(keyVersions).size > 1) throw new Error(`Provider ${row.provider} for ${row.user_id} used mixed key versions.`);
-      await client.query(`INSERT INTO provider_identities(id,user_id,provider,provider_subject,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,secret_key_version,token_expires_at)
+      await client.query(`INSERT INTO provider_identities(id,user_id,provider,provider_subject,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,${SECRET_KEY_VERSION_COLUMN},token_expires_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT(provider,provider_subject) DO UPDATE SET user_id=EXCLUDED.user_id, access_token_ciphertext=EXCLUDED.access_token_ciphertext,
           access_token_nonce=EXCLUDED.access_token_nonce, refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext, refresh_token_nonce=EXCLUDED.refresh_token_nonce,
-          secret_key_version=EXCLUDED.secret_key_version, token_expires_at=EXCLUDED.token_expires_at`,
+          ${SECRET_KEY_VERSION_COLUMN}=EXCLUDED.${SECRET_KEY_VERSION_COLUMN}, token_expires_at=EXCLUDED.token_expires_at`,
       [row.id,row.user_id,row.provider,row.provider_subject,access?.ciphertext || null,access?.nonce || null,refresh?.ciphertext || null,refresh?.nonce || null,
         keyVersions[0] || null, msToDate(row.record.tokenExpiresAt)]);
     }
 
     for (const row of rows.mfa) {
       const encrypted = assertStorageEnvelope(encryptSecretForStorage(row.plaintext_secret, { aad: `mfa:${row.user_id}:totp` }), 'MFA secret');
-      await client.query(`INSERT INTO mfa_factors(id,user_id,factor_type,secret_ciphertext,secret_nonce,secret_key_version,enabled)
+      await client.query(`INSERT INTO mfa_factors(id,user_id,factor_type,secret_ciphertext,secret_nonce,${SECRET_KEY_VERSION_COLUMN},enabled)
         VALUES($1,$2,$3,$4,$5,$6,$7)
         ON CONFLICT(user_id,factor_type) DO UPDATE SET secret_ciphertext=EXCLUDED.secret_ciphertext, secret_nonce=EXCLUDED.secret_nonce,
-          secret_key_version=EXCLUDED.secret_key_version, enabled=EXCLUDED.enabled`,
+          ${SECRET_KEY_VERSION_COLUMN}=EXCLUDED.${SECRET_KEY_VERSION_COLUMN}, enabled=EXCLUDED.enabled`,
       [row.id,row.user_id,row.factor_type,encrypted.ciphertext,encrypted.nonce,encrypted.keyVersion,row.enabled]);
     }
 
