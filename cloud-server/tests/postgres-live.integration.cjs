@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('assert');
+const path = require('path');
+const { execFileSync } = require('child_process');
 const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations.js');
 const { createPostgresPool } = require('../postgres-runtime-config.js');
@@ -41,20 +43,21 @@ async function main() {
   await poolA.query('DROP SCHEMA public CASCADE');
   await poolA.query('CREATE SCHEMA public');
 
+  const migrations = require('../postgres-migrations.js').listMigrations();
   const [raceA, raceB] = await Promise.all([
     applyMigrations(poolA),
     applyMigrations(poolB),
   ]);
   const appliedTotal = raceA.applied.length + raceB.applied.length;
-  assert.equal(appliedTotal, 2, 'exactly two migrations should be applied across racing runners');
-  assert.equal(raceA.skipped.length + raceB.skipped.length, 2, 'the second runner should skip already-applied migrations');
+  assert.equal(appliedTotal, migrations.length, 'each migration must be applied exactly once across racing runners');
+  assert.equal(raceA.skipped.length + raceB.skipped.length, migrations.length, 'the second runner should skip already-applied migrations');
 
   const third = await applyMigrations(poolA);
   assert.deepEqual(third.applied, []);
-  assert.deepEqual(third.skipped, ['0001', '0002']);
+  assert.deepEqual(third.skipped, migrations.map(item => item.version));
 
   const ledger = await poolA.query('SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version');
-  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002']);
+  assert.deepEqual(ledger.rows.map(row => row.version), migrations.map(item => item.version));
   assert(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum_sha256)));
 
   const auth = {
@@ -221,7 +224,14 @@ async function main() {
     }
   }
 
-  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, saga states, garbage leasing, max-4 cap');
+  // Run the new authority cutover against its own isolated PostgreSQL database so
+  // this check cannot mutate the recovery dataset above.
+  execFileSync(process.execPath, [path.join(__dirname, 'postgres-cutover.integration.cjs')], {
+    stdio: 'inherit',
+    env,
+  });
+
+  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, saga states, garbage leasing, max-4 cap, controlled authority cutover');
 }
 
 main()
