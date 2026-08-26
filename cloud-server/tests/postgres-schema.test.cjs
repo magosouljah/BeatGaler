@@ -21,6 +21,11 @@ for (const token of [
   'idempotency_key text NOT NULL UNIQUE',
   'manifest_sha256',
   'secret_key_version',
+  'access_token_nonce',
+  'refresh_token_nonce',
+  'enforce_transport_bot_active_lease_cap',
+  'active_count >= 4',
+  'pg_advisory_xact_lock',
 ]) {
   assert(sql.includes(token), `missing PostgreSQL contract token: ${token}`);
 }
