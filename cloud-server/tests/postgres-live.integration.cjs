@@ -158,6 +158,7 @@ async function main() {
   assert.equal(retryRow.next_attempt_at.toISOString(), '2026-08-26T12:00:05.000Z');
   assert.equal(retryRow.last_error_code, 'ETIMEDOUT');
   assert.equal(retryRow.last_error_redacted, 'ETIMEDOUT');
+  await poolA.query("UPDATE garbage_journal SET next_attempt_at='2030-01-01T00:00:00Z' WHERE id='gc-retry-live'");
 
   // Crash after the external delete but before marking done: the lease expires, a second worker reclaims it,
   // an already-missing object is treated as idempotent success, and the debt ends in done rather than resurrecting.
@@ -169,7 +170,6 @@ async function main() {
   const crashedClaim = await claimGarbageBatch(poolA, { workerId: 'worker-crashed', limit: 1, leaseMs: 1000, now: crashAt });
   assert.equal(crashedClaim.length, 1);
   assert.equal(crashedClaim[0].id, 'gc-crash-live');
-  // external delete happened here; process dies before markGarbageDone
   const recoverySummary = await processGarbageBatch(poolB, {
     workerId: 'worker-recovery', limit: 1, leaseMs: 1000, now: new Date(crashAt.getTime() + 1001),
     deleteObject: async item => {
