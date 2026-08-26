@@ -59,9 +59,52 @@ function decryptSecret(envelope, { resolveKey, aad }) {
   return plaintext.toString('utf8');
 }
 
+function packEnvelopeForStorage(envelope) {
+  if (!envelope || envelope.version !== ENVELOPE_VERSION || envelope.algorithm !== ALGORITHM) {
+    throw new Error('Unsupported BeatGaler secret envelope.');
+  }
+  const nonce = Buffer.from(String(envelope.nonce_b64 || ''), 'base64');
+  const ciphertext = Buffer.from(String(envelope.ciphertext_b64 || ''), 'base64');
+  const tag = Buffer.from(String(envelope.tag_b64 || ''), 'base64');
+  if (nonce.length !== NONCE_BYTES || tag.length !== TAG_BYTES) throw new Error('Malformed BeatGaler secret envelope.');
+  return Object.freeze({
+    ciphertext: Buffer.concat([ciphertext, tag]),
+    nonce,
+    keyVersion: envelope.key_version,
+  });
+}
+
+function unpackEnvelopeFromStorage({ ciphertext, nonce, keyVersion }) {
+  if (!Buffer.isBuffer(ciphertext) || ciphertext.length < TAG_BYTES) throw new Error('Stored ciphertext is malformed.');
+  if (!Buffer.isBuffer(nonce) || nonce.length !== NONCE_BYTES) throw new Error('Stored nonce is malformed.');
+  if (!Number.isInteger(keyVersion) || keyVersion <= 0) throw new Error('Stored key version is malformed.');
+  return Object.freeze({
+    version: ENVELOPE_VERSION,
+    algorithm: ALGORITHM,
+    key_version: keyVersion,
+    nonce_b64: nonce.toString('base64'),
+    ciphertext_b64: ciphertext.subarray(0, ciphertext.length - TAG_BYTES).toString('base64'),
+    tag_b64: ciphertext.subarray(ciphertext.length - TAG_BYTES).toString('base64'),
+  });
+}
+
+function encryptSecretForStorage(plaintext, options) {
+  return packEnvelopeForStorage(encryptSecret(plaintext, options));
+}
+
+function decryptSecretFromStorage(stored, options) {
+  return decryptSecret(unpackEnvelopeFromStorage(stored), options);
+}
+
 module.exports = {
   ALGORITHM,
   ENVELOPE_VERSION,
+  NONCE_BYTES,
+  TAG_BYTES,
   encryptSecret,
   decryptSecret,
+  packEnvelopeForStorage,
+  unpackEnvelopeFromStorage,
+  encryptSecretForStorage,
+  decryptSecretFromStorage,
 };
