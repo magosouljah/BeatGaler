@@ -12,10 +12,12 @@ ALTER TABLE provider_identities
 CREATE TABLE control_plane_cutovers (
   id text PRIMARY KEY,
   snapshot_sha256 text NOT NULL CHECK (snapshot_sha256 ~ '^[0-9a-f]{64}$'),
+  rollback_export_sha256 text NULL CHECK (rollback_export_sha256 IS NULL OR rollback_export_sha256 ~ '^[0-9a-f]{64}$'),
   state text NOT NULL CHECK (state IN ('READY', 'ROLLED_BACK')),
   prepared_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (id = 'legacy-json-v1')
+  CHECK (id = 'legacy-json-v1'),
+  CHECK ((state = 'READY' AND rollback_export_sha256 IS NULL) OR (state = 'ROLLED_BACK' AND rollback_export_sha256 IS NOT NULL))
 );
 
 CREATE TABLE runtime_compat_state (
