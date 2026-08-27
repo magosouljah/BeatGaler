@@ -7,7 +7,7 @@ const TOKEN_KEY = "beatgaler:account-session:v1";
 export function getBeatGalerAuthToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
 const API_KEY = "beatgaler:cloud-api:v1";
 const LOCAL_API = "http://127.0.0.1:4000";
-const REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
+const REMOTE_API = "https://api.beatgaler.com";
 
 export type OAuthProvider = "google" | "x";
 export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";
@@ -82,9 +82,9 @@ async function probe(base: string, timeoutMs: number): Promise<boolean> {
 
 export async function resolveBeatGalerCloudApi(): Promise<string> {
   const remembered = localStorage.getItem(API_KEY);
+  if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
   if (remembered && await probe(remembered, 1200)) return remembered;
   if (await probe(LOCAL_API, 900)) { localStorage.setItem(API_KEY, LOCAL_API); return LOCAL_API; }
-  if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
   throw new Error("Could not reach BeatGaler Cloud.");
 }
 
