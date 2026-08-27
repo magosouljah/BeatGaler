@@ -38,6 +38,18 @@ function developmentEnvelopeKeyConfig(env = process.env) {
   return Object.freeze({ key, keyVersion });
 }
 
+function decodeCanonicalBase64Key(encodedRaw, version) {
+  if (typeof encodedRaw !== 'string' || !encodedRaw) {
+    throw new Error(`AWS envelope key v${version} must be base64 text.`);
+  }
+  const key = Buffer.from(encodedRaw, 'base64');
+  if (key.toString('base64') !== encodedRaw) {
+    throw new Error(`AWS envelope key v${version} must be canonical base64 text.`);
+  }
+  if (key.length !== 32) throw new Error(`AWS envelope key v${version} must decode to exactly 32 bytes.`);
+  return key;
+}
+
 function parseAwsEnvelopeKeyringSecret(secretString) {
   if (typeof secretString !== 'string' || !secretString.trim()) {
     throw new Error('AWS Secrets Manager returned an empty envelope keyring secret.');
@@ -67,11 +79,7 @@ function parseAwsEnvelopeKeyringSecret(secretString) {
     if (!Number.isInteger(version) || version <= 0 || String(version) !== String(versionRaw)) {
       throw new Error(`Invalid AWS envelope key version: ${versionRaw}.`);
     }
-    if (typeof encodedRaw !== 'string' || !encodedRaw.trim()) {
-      throw new Error(`AWS envelope key v${version} must be base64 text.`);
-    }
-    const key = Buffer.from(encodedRaw, 'base64');
-    if (key.length !== 32) throw new Error(`AWS envelope key v${version} must decode to exactly 32 bytes.`);
+    const key = decodeCanonicalBase64Key(encodedRaw, version);
     keys.set(version, key);
   }
   return Object.freeze({ activeKeyVersion, keys });
