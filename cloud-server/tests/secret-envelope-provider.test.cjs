@@ -44,6 +44,21 @@ assert.throws(() => parseAwsEnvelopeKeyringSecret(JSON.stringify({
   activeKeyVersion: 8,
   keys: { 8: Buffer.alloc(31, 8).toString('base64') },
 })), /exactly 32 bytes/);
+assert.throws(() => parseAwsEnvelopeKeyringSecret(JSON.stringify({
+  schema: AWS_SECRET_SCHEMA,
+  activeKeyVersion: 8,
+  keys: { 8: `${key8B64.slice(0, 10)}*${key8B64.slice(11)}` },
+})), /canonical base64/);
+assert.throws(() => parseAwsEnvelopeKeyringSecret(JSON.stringify({
+  schema: AWS_SECRET_SCHEMA,
+  activeKeyVersion: 8,
+  keys: { 8: `${key8B64}=` },
+})), /canonical base64/);
+assert.throws(() => parseAwsEnvelopeKeyringSecret(JSON.stringify({
+  schema: AWS_SECRET_SCHEMA,
+  activeKeyVersion: 8,
+  keys: { 8: `${key8B64}trailing-data` },
+})), /canonical base64/);
 
 (async () => {
   let observedRequest = null;
@@ -97,7 +112,7 @@ assert.throws(() => parseAwsEnvelopeKeyringSecret(JSON.stringify({
     }),
   }), /Active secret key version 9 is unavailable/);
 
-  console.log('PASS secret envelope provider: production fail-closed, AWS keyring contract, rotation-safe runtime');
+  console.log('PASS secret envelope provider: production fail-closed, strict AWS keyring contract, rotation-safe runtime');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;
