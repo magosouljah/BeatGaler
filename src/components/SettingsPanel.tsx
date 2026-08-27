@@ -307,7 +307,7 @@ export default function SettingsPanel(props: Props) {
         <button onClick={() => setActive("privacy")} style={{ width: "100%", textAlign: "left", border: 0, background: "transparent", color: active === "privacy" ? "#bbb" : "#555", padding: "7px 12px", cursor: "pointer", fontSize: 10 }}>Privacy Policy</button>
         <button onClick={() => setActive("terms")} style={{ width: "100%", textAlign: "left", border: 0, background: "transparent", color: active === "terms" ? "#bbb" : "#555", padding: "7px 12px", cursor: "pointer", fontSize: 10 }}>Terms of Service</button>
       </div>
-      <div style={{ padding: "8px 12px 0", color: "#3f3f3f", fontSize: 10 }}>Beat Galer 0.7.4</div>
+      <div style={{ padding: "8px 12px 0", color: "#3f3f3f", fontSize: 10 }}>Beat Galer 0.7.5</div>
     </aside>
 
     <main style={{ flex: 1, overflowY: "auto" }}>
