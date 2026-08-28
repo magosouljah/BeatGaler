@@ -235,6 +235,22 @@ function createHttpContainment(options = {}) {
     next();
   }
 
+  function beatTopicOwner(req, res, next) {
+    const authz = authorizeSessionInstallation(req, res);
+    if (!authz) return;
+    const beatId = String(req.body?.beatId || "").trim();
+    const hintedTopicId = Number(req.body?.telegramTopicId || 0);
+    if (!beatId) return sendJson(res, 400, "beatId is required.");
+    if (Number.isFinite(hintedTopicId) && hintedTopicId > 0) {
+      const cloud = readJson(cloudFile, { beatTopics: {} });
+      const current = cloud.beatTopics?.[`${authz.installationId}:${beatId}`];
+      if (!current || Number(current.messageThreadId || 0) !== hintedTopicId) {
+        return sendJson(res, 403, "This topic does not belong to the requested BeatGaler object.");
+      }
+    }
+    next();
+  }
+
   function registrationGate(_req, res, next) {
     if (String(env.NODE_ENV || "") === "production" && String(env.BEATGALER_PUBLIC_REGISTRATION || "") !== "1") {
       return sendJson(res, 503, "Public registration is temporarily unavailable.");
@@ -262,7 +278,7 @@ function createHttpContainment(options = {}) {
   }
 
   return {
-    preUpload, postUpload, bodyOwner, installationOwner, registrationGate,
+    preUpload, postUpload, bodyOwner, installationOwner, beatTopicOwner, registrationGate,
     bindSessionOnSuccess, legacyLibraryUpsert, authenticate,
     authorizeInstallation: authorizeSessionInstallation,
     authorizeSessionInstallation, bindSessionInstallation,
@@ -287,6 +303,7 @@ function installHttpContainment(express, options = {}) {
       return originalPost.call(this, routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
     }
     if (BODY_OWNER_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.bodyOwner, ...handlers);
+    if (routePath === "/beats/delete-topic") return originalPost.call(this, routePath, containment.beatTopicOwner, ...handlers);
     if (INSTALLATION_POST_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.installationOwner, ...handlers);
     return originalPost.call(this, routePath, ...handlers);
   };
