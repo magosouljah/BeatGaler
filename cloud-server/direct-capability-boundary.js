@@ -74,8 +74,18 @@ function normalizeScope(kindInput, scopeInput) {
   return { object_type: objectType, object_ids: objectIds };
 }
 
+function canonicalScope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const objectType = String(value.object_type || value.objectType || "").trim().toLowerCase();
+  const rawIds = Array.isArray(value.object_ids || value.objectIds) ? (value.object_ids || value.objectIds) : [];
+  return {
+    object_type: objectType,
+    object_ids: [...new Set(rawIds.map(item => String(item ?? "").trim()).filter(Boolean))].sort(),
+  };
+}
+
 function sameScope(left, right) {
-  return JSON.stringify(left || null) === JSON.stringify(right || null);
+  return JSON.stringify(canonicalScope(left)) === JSON.stringify(canonicalScope(right));
 }
 
 function capabilityToken() {
