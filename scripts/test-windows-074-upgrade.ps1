@@ -116,3 +116,10 @@ finally {
     Remove-PathIfPresent $defaultSideBySideDir
   }
 }
+
+# This file is invoked as a CLI probe by GitHub Actions. Native commands used
+# during a successful probe may leave PowerShell's process-global
+# $LASTEXITCODE non-zero even though every assertion above passed. Define the
+# successful script contract explicitly; any terminating error above bypasses
+# this line and remains a failure.
+exit 0
