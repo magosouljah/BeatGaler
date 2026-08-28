@@ -106,6 +106,21 @@ function installAuthAbuseControls(express, options = {}) {
   express.application.__beatgalerAuthAbuseInstalled = true;
   const controls = createAuthAbuseControls(options);
   const originalPost = express.application.post;
+  const originalJson = express.json;
+
+  express.json = function patchedJson(...args) {
+    const parser = originalJson.apply(this, args);
+    return function guardedJson(req, res, next) {
+      parser(req, res, error => {
+        if (!error) return next();
+        const status = Number(error.status || error.statusCode || 400);
+        if (status === 413 || error.type === "entity.too.large") {
+          return res.status(413).json({ error: "Request body is too large." });
+        }
+        return res.status(400).json({ error: "Malformed JSON body." });
+      });
+    };
+  };
 
   express.application.post = function patchedPost(routePath, ...handlers) {
     if (AUTH_ROUTES.has(routePath)) {
