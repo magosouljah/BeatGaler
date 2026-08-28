@@ -105,6 +105,19 @@ pub fn migrate_legacy_app_data(data_dir: &Path) -> io::Result<LegacyMigrationRep
     Ok(report)
 }
 
+/// Only malformed SQLite content is eligible for automatic recovery. Operational
+/// errors (locked/read-only/disk full/etc.) and compatibility failures such as a
+/// future schema must remain fail-closed instead of being mistaken for corruption.
+pub fn is_recoverable_sqlite_corruption(error: &rusqlite::Error) -> bool {
+    match error {
+        rusqlite::Error::SqliteFailure(inner, _) => matches!(
+            inner.code,
+            rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+        ),
+        _ => false,
+    }
+}
+
 fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
@@ -280,6 +293,25 @@ mod tests {
         assert!(partial.source.is_some());
         assert_eq!(fs::read(current.join("settings.json")).unwrap(), b"{}");
         assert!(current.join("offline/partial").is_dir());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corruption_classification_is_narrow_and_keeps_compatibility_fail_closed() {
+        let root = test_root("corruption-classification");
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("beatvault.db");
+        fs::write(&db, b"not-a-database").unwrap();
+        let conn = Connection::open(&db).unwrap();
+        let corruption = conn
+            .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+            .unwrap_err();
+        assert!(is_recoverable_sqlite_corruption(&corruption));
+
+        // migrate_sqlite_schema intentionally uses InvalidQuery for a future
+        // user_version. That compatibility guard must never trigger recovery.
+        assert!(!is_recoverable_sqlite_corruption(&rusqlite::Error::InvalidQuery));
 
         let _ = fs::remove_dir_all(root);
     }
