@@ -3,6 +3,8 @@
 const express = require("express");
 const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
+const { installDirectCapabilityBoundary } = require("./direct-capability-boundary");
+const { installSensitiveAuthCapabilityRevocation } = require("./sensitive-auth-capability-revocation");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
 const { installAuthAbuseControls } = require("./auth-abuse-controls");
@@ -31,9 +33,11 @@ async function start() {
   }
 
   installHttpContainment(express, { dataDir: __dirname, installationClaimCoordinator });
+  const directCapabilities = installDirectCapabilityBoundary(express, { dataDir: __dirname, pool });
+  installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
-  console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"}`);
+  console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"}`);
   require("./server-core");
 }
 

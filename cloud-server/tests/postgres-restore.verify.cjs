@@ -15,11 +15,11 @@ const unseal = (stored, { aad }) => decryptSecretFromStorage(stored, { resolveKe
 async function main() {
   const started = Date.now();
   const ledger = await pool.query('SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version');
-  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002', '0003', '0004']);
+  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002', '0003', '0004', '0005']);
   assert(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum_sha256)));
 
   const counts = {};
-  for (const table of ['users','auth_sessions','provider_identities','mfa_factors','vaults','direct_operations','index_observations','garbage_journal']) {
+  for (const table of ['users','auth_sessions','provider_identities','mfa_factors','vaults','direct_operations','direct_capabilities','index_observations','garbage_journal']) {
     counts[table] = (await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
   }
   assert(counts.users >= 7);
@@ -27,6 +27,7 @@ async function main() {
   assert.equal(counts.provider_identities, 1);
   assert.equal(counts.mfa_factors, 1);
   assert(counts.direct_operations >= 2);
+  assert.equal(counts.direct_capabilities, 0);
   assert.equal(counts.index_observations, 1);
   assert(counts.garbage_journal >= 2);
 
@@ -157,6 +158,7 @@ async function main() {
     failed_rotation_atomic_rollback_proven: true,
     index_authority_observation_retained: true,
     cutover_stage_schema_retained: true,
+    direct_capability_schema_retained: true,
   }));
 }
 

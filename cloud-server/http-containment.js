@@ -16,7 +16,7 @@ const BODY_OWNER_ROUTES = new Set(["/metadata/upsert", "/library/artwork"]);
 const INSTALLATION_POST_ROUTES = new Set([
   "/events/ticket", "/telegram/connect/start", "/telegram/disconnect",
   "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
-  "/transport/session/stop", "/transport/operation/begin", "/transport/operation/end",
+  "/transport/session/stop", "/transport/operation/begin", "/transport/capability/authorize", "/transport/operation/end",
   "/transport/index/commit", "/transport/topic/ensure", "/transport/upload/confirm",
   "/beats/delete-topic", "/beats/delete-topics-batch",
 ]);

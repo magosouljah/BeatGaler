@@ -1,10 +1,12 @@
 import {
   activateWebTransportSession,
+  authorizeWebTransportOperation,
   beginWebTransportOperation,
   endWebTransportOperation,
   heartbeatWebTransportSession,
   prepareWebTransportSession,
   stopWebTransportSession,
+  type WebTransportCapabilityScope,
   type WebTransportSession,
 } from "./webTransportSession";
 
@@ -19,7 +21,8 @@ export interface WebTransportControlApi {
   prepare(): Promise<WebTransportSession>;
   activate(session: WebTransportSession): Promise<void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
-  begin(session: WebTransportSession, kind: string): Promise<{
+  authorize(session: WebTransportSession, operationId: string, kind: string, scope: WebTransportCapabilityScope): Promise<void>;
+  begin(session: WebTransportSession, kind: string, scope: WebTransportCapabilityScope): Promise<{
     expired: boolean;
     waitMs: number | null;
     credentialRefresh: WebTransportSession | null;
@@ -33,11 +36,13 @@ export interface WebTransportOperationLease {
   operationId: string;
   sessionId: string;
   generation: number;
+  scope: WebTransportCapabilityScope;
 }
 
 const defaultApi: WebTransportControlApi = {
   prepare: prepareWebTransportSession,
   activate: activateWebTransportSession,
+  authorize: authorizeWebTransportOperation,
   heartbeat: heartbeatWebTransportSession,
   begin: beginWebTransportOperation,
   end: endWebTransportOperation,
@@ -118,11 +123,11 @@ export class WebTransportController {
     await this.runtime.shutdown().catch(() => {});
   }
 
-  async beginOperation(kind: string): Promise<WebTransportOperationLease> {
+  async beginOperation(kind: string, scope: WebTransportCapabilityScope): Promise<WebTransportOperationLease> {
     const deadline = Date.now() + 120_000;
     while (!this.closed && Date.now() < deadline) {
       const session = await this.connect();
-      const response = await this.api.begin(session, kind);
+      const response = await this.api.begin(session, kind, scope);
       if (response.expired) {
         await this.resetLocalSession();
         continue;
@@ -136,10 +141,17 @@ export class WebTransportController {
         continue;
       }
       if (response.operationId) {
+        try {
+          await this.api.authorize(session, response.operationId, kind, scope);
+        } catch (error) {
+          await this.api.end({ session_id: session.session_id, generation: session.generation }, response.operationId).catch(() => {});
+          throw error;
+        }
         return {
           operationId: response.operationId,
           sessionId: session.session_id,
           generation: session.generation,
+          scope,
         };
       }
       throw new Error("Galer Cloud returned incomplete operation information.");
@@ -151,8 +163,8 @@ export class WebTransportController {
     await this.api.end({ session_id: lease.sessionId, generation: lease.generation }, lease.operationId);
   }
 
-  async withOperation<T>(kind: string, operation: () => Promise<T>): Promise<T> {
-    const lease = await this.beginOperation(kind);
+  async withOperation<T>(kind: string, scope: WebTransportCapabilityScope, operation: () => Promise<T>): Promise<T> {
+    const lease = await this.beginOperation(kind, scope);
     try {
       return await operation();
     } finally {
