@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const passwordKdf = require('../password-kdf');
 const { createAccountLifecycleRuntime, RECOVERY_PREFIX } = require('../account-lifecycle');
+const { installLifecyclePasswordAuthority } = require('../account-lifecycle-password-authority');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
@@ -286,6 +287,54 @@ async function main() {
     assert.equal(providerRes.statusCode, 409);
     assert.equal(providerRes.body.code, 'PROVIDER_REAUTH_REQUIRED');
     fs.rmSync(providerDir, { recursive: true, force: true });
+  }
+
+  {
+    const authorityDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-password-authority-'));
+    const authorityUserId = 'usr_authority';
+    const authorityOldSalt = '11112222333344445555666677778888';
+    const authorityOldHash = await passwordKdf.hashPassword('authority-old', authorityOldSalt);
+    const authoritySession = 'authority-session';
+    const authoritySessionHash = sha256(authoritySession);
+    const authorityUser = {
+      id: authorityUserId,
+      username: 'authority#0001',
+      email: 'authority@example.com',
+      passwordSalt: authorityOldSalt,
+      passwordHash: authorityOldHash,
+    };
+    fs.writeFileSync(path.join(authorityDir, 'accounts-data.json'), JSON.stringify({
+      users: [authorityUser],
+      sessions: { [authoritySessionHash]: { userId: authorityUserId, createdAt: clock - 1, expiresAt: clock + 100000 } },
+    }));
+    const authorityRuntime = createAccountLifecycleRuntime({
+      dataDir: authorityDir,
+      now: () => clock,
+      env: {},
+      getCapabilityStore: () => ({ revokeAuthSession: async () => 1 }),
+    });
+    installLifecyclePasswordAuthority(authorityRuntime);
+    const resetToken = authorityRuntime._test.issueTestToken({ kind: 'password_reset', user: authorityUser, email: authorityUser.email });
+    const resetRes = makeRes();
+    await authorityRuntime._test.completePasswordReset(req({ body: { token: resetToken, newPassword: 'authority-reset' } }), resetRes);
+    assert.equal(resetRes.statusCode, 200);
+    const resetOverride = authorityRuntime.passwordOverrideForUser(authorityUserId);
+    assert.ok(resetOverride?.passwordHash);
+    assert.equal(resetOverride.previousPasswordHash, authorityOldHash);
+
+    const staleWrite = authorityRuntime._test.filterAccountsValue({ users: [{ ...authorityUser }], sessions: {} });
+    assert.equal(staleWrite.users[0].passwordHash, resetOverride.passwordHash, 'stale in-memory password cannot revert a completed reset');
+    assert.ok(authorityRuntime.passwordOverrideForUser(authorityUserId));
+
+    const laterSalt = '99990000aaaabbbbccccddddeeeeffff';
+    const laterHash = await passwordKdf.hashPassword('authority-later', laterSalt);
+    const newerWrite = authorityRuntime._test.filterAccountsValue({
+      users: [{ ...authorityUser, passwordSalt: laterSalt, passwordHash: laterHash }],
+      sessions: {},
+    });
+    assert.equal(newerWrite.users[0].passwordHash, laterHash, 'a later authenticated password change must supersede reset authority');
+    assert.equal(authorityRuntime.passwordOverrideForUser(authorityUserId), null);
+    fs.rmSync(authorityDir, { recursive: true, force: true });
   }
 
   fs.rmSync(dir, { recursive: true, force: true });
