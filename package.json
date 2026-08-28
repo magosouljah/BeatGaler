@@ -22,7 +22,8 @@
     "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
     "test:security-boundary": "node scripts/regression-task-5.1-hardening.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
-    "test:packaging:static": "npm run release:check && npm run test:windows-packaging && npm run test:mac-portability:static",
+    "test:upgrade-matrix": "node scripts/test-upgrade-matrix.mjs",
+    "test:packaging:static": "npm run release:check && npm run test:upgrade-matrix && npm run test:windows-packaging && npm run test:mac-portability:static",
     "test:web:smoke": "wdio run wdio.web.conf.mjs",
     "check": "npm run test:fast && npm run build",
     "version:sync": "node scripts/version.mjs sync",
@@ -71,7 +72,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
     "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.1",
+    "@types/react-dom": "^18.3.3",
     "@vitejs/plugin-react": "^4.7.0",
     "@wdio/cli": "^9.31.2",
     "@wdio/local-runner": "^9.31.2",
