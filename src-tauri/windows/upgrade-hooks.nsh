@@ -14,11 +14,13 @@
 Var GalerLegacyUpgrade
 Var GalerLegacyHadDesktopShortcut
 Var GalerLegacyHadStartMenuShortcut
+Var GalerPreHookInstallDir
 
 !macro NSIS_HOOK_PREINSTALL
   StrCpy $GalerLegacyUpgrade 0
   StrCpy $GalerLegacyHadDesktopShortcut 0
   StrCpy $GalerLegacyHadStartMenuShortcut 0
+  StrCpy $GalerPreHookInstallDir $INSTDIR
 
   ; The manufacturer segment is "beatgaler" in both the old and final bundle
   ; identifiers, so this key contains the exact 0.7.4 install directory without
@@ -33,6 +35,18 @@ Var GalerLegacyHadStartMenuShortcut
 
   StrCpy $GalerLegacyUpgrade 1
   StrCpy $INSTDIR $R8
+
+  ; Tauri executes `SetOutPath $INSTDIR` immediately before PREINSTALL. Merely
+  ; changing $INSTDIR here does not retarget NSIS File extraction, so explicitly
+  ; select the legacy directory again before any application/resource files are
+  ; copied. Remove only the now-empty candidate directory Tauri selected first;
+  ; RMDir is deliberately non-recursive and therefore refuses to delete a real
+  ; pre-existing Galer installation or any directory containing user data.
+  SetOutPath $INSTDIR
+  StrCmp $GalerPreHookInstallDir $INSTDIR galer_legacy_output_ready
+  RMDir "$GalerPreHookInstallDir"
+
+galer_legacy_output_ready:
   DetailPrint "Galer upgrade: reusing Beat Galer install location $INSTDIR"
 
   IfFileExists "$DESKTOP\${GALER_LEGACY_PRODUCTNAME}.lnk" 0 +2
