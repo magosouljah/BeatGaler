@@ -1,0 +1,40 @@
+name: Probe - Task 5.1 Temp Auth Bind
+
+on:
+  pull_request:
+    branches:
+      - task-5.1-temp-auth-network-probe
+    paths:
+      - scripts/telegram-temp-auth-live-bind.mjs
+      - .github/workflows/probe-task-5.1-temp-auth-bind.yml
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task-5-1-temp-auth-bind-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  m0-b1-test-dc-bind:
+    if: github.head_ref == 'task-5.1-temp-auth-live-bind-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+          check-latest: false
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Prove split temporary-auth bind on Telegram test DC
+        run: node scripts/telegram-temp-auth-live-bind.mjs
