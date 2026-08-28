@@ -2,7 +2,13 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizeOperationKind, normalizeScope, createMemoryStore } = require("../direct-capability-boundary");
+const crypto = require("node:crypto");
+const {
+  normalizeOperationKind,
+  normalizeScope,
+  createMemoryStore,
+  installDirectCapabilityBoundary,
+} = require("../direct-capability-boundary");
 
 function record(overrides = {}) {
   return {
@@ -37,6 +43,45 @@ function request(overrides = {}) {
     clockSkewMs: 0,
     ...overrides,
   };
+}
+
+function createFakeExpress() {
+  const routes = new Map();
+  const application = {
+    post(routePath, ...handlers) {
+      routes.set(routePath, handlers);
+      return application;
+    },
+  };
+  return { application, routes };
+}
+
+async function runRoute(handlers, req) {
+  let resolveSent;
+  const sent = new Promise(resolve => { resolveSent = resolve; });
+  const res = {
+    statusCode: 200,
+    status(code) {
+      this.statusCode = Number(code);
+      return this;
+    },
+    json(payload) {
+      resolveSent({ statusCode: this.statusCode, payload });
+      return this;
+    },
+  };
+  let index = 0;
+  const next = async () => {
+    const handler = handlers[index++];
+    if (!handler) return;
+    return handler(req, res, next);
+  };
+  await next();
+  return sent;
+}
+
+function authHash(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 test("operation kinds are deny-by-default", () => {
@@ -133,7 +178,89 @@ test("lease end, auth changes and incident revoke ACTIVE or AUTHORIZED capabilit
   assert.equal(store.__records.get("a".repeat(64)).status, "REVOKED");
   assert.equal(await store.revokeAuthSession({ authSessionHash: "b".repeat(64), reason: "password_change" }), 1);
   assert.equal(store.__records.get("c".repeat(64)).status, "REVOKED");
+  const blockedAfterAuthRevoke = await store.authorize(request({ capabilityHash: "c".repeat(64), sessionId: "session-b" }));
+  assert.equal(blockedAfterAuthRevoke.ok, false);
+  assert.equal(blockedAfterAuthRevoke.reason, "revoked");
   await store.issue(record({ capability_hash: "d".repeat(64), internal_operation_id: "op-3", tenant_id: "tenant-z" }));
   assert.equal(await store.revokeTenant({ tenantId: "tenant-z", reason: "incident" }), 1);
   assert.equal(store.__records.get("d".repeat(64)).status, "REVOKED");
+});
+
+test("sensitive account routes revoke the whole authenticated capability set and ignore body installation hints", async () => {
+  const calls = [];
+  const store = {
+    async revokeAuthSession(input) {
+      calls.push(input);
+      return 2;
+    },
+  };
+  const fakeExpress = createFakeExpress();
+  installDirectCapabilityBoundary(fakeExpress, { store });
+  const cases = [
+    ["/auth/logout", "logout"],
+    ["/auth/password/change", "password_change"],
+    ["/auth/account/delete", "account_delete"],
+  ];
+  for (const [routePath] of cases) {
+    fakeExpress.application.post(routePath, (_req, res) => res.json({ ok: true }));
+  }
+  for (const [routePath, reason] of cases) {
+    const result = await runRoute(fakeExpress.routes.get(routePath), {
+      headers: { authorization: "Bearer session-secret" },
+      body: { beatgalerUserId: "attacker-controlled-installation" },
+    });
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.payload, { ok: true });
+    const call = calls.at(-1);
+    assert.deepEqual(call, { authSessionHash: authHash("session-secret"), reason });
+    assert.equal(Object.hasOwn(call, "installationId"), false);
+  }
+});
+
+test("sensitive account route fails closed when durable capability revocation fails", async () => {
+  const store = {
+    async revokeAuthSession() {
+      throw new Error("injected store failure");
+    },
+  };
+  const fakeExpress = createFakeExpress();
+  installDirectCapabilityBoundary(fakeExpress, { store });
+  fakeExpress.application.post("/auth/password/change", (_req, res) => res.json({ ok: true }));
+  const result = await runRoute(fakeExpress.routes.get("/auth/password/change"), {
+    headers: { authorization: "Bearer session-secret" },
+    body: { beatgalerUserId: "attacker-controlled-installation" },
+  });
+  assert.equal(result.statusCode, 503);
+  assert.equal(result.payload.code, "DIRECT_CAPABILITY_REVOKE_FAILED");
+  assert.match(result.payload.error, /revocation could not be committed/i);
+});
+
+test("lease stop uses only canonical installation state and does not continue on revoke failure", async () => {
+  let revokeInput = null;
+  let downstreamRan = false;
+  const store = {
+    async revokeSession(input) {
+      revokeInput = input;
+      throw new Error("injected store failure");
+    },
+  };
+  const fakeExpress = createFakeExpress();
+  installDirectCapabilityBoundary(fakeExpress, { store });
+  fakeExpress.application.post("/transport/session/stop", (_req, res) => {
+    downstreamRan = true;
+    return res.json({ ok: true });
+  });
+  const result = await runRoute(fakeExpress.routes.get("/transport/session/stop"), {
+    headers: { authorization: "Bearer session-secret" },
+    beatgalerAuthorizedInstallationId: "install-canonical",
+    body: { beatgalerUserId: "install-spoofed", sessionId: "session-a" },
+  });
+  assert.deepEqual(revokeInput, {
+    installationId: "install-canonical",
+    sessionId: "session-a",
+    reason: "lease_end",
+  });
+  assert.equal(downstreamRan, false);
+  assert.equal(result.statusCode, 503);
+  assert.equal(result.payload.code, "DIRECT_CAPABILITY_REVOKE_FAILED");
 });
