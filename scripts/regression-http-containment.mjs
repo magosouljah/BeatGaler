@@ -33,7 +33,7 @@ fs.writeFileSync(path.join(dir, "accounts-data.json"), JSON.stringify({
 }, null, 2));
 fs.writeFileSync(path.join(dir, "cloud-data.json"), JSON.stringify({ linkedAccounts: {
   [installationId]: { beatgalerAccountId: userId }, other_install: { beatgalerAccountId: "usr_other" },
-}}, null, 2));
+}, beatTopics: { [`${installationId}:beat_a`]: { messageThreadId: 101 } } }, null, 2));
 
 try {
   const containment = createHttpContainment({ dataDir: dir, env: { NODE_ENV: "production", BEATGALER_UPLOAD_RATE_MAX: "20", BEATGALER_UPLOAD_CONCURRENCY: "2" } });
@@ -83,6 +83,18 @@ try {
     const req = request({ token: unboundToken, body: { beatgalerUserId: "other_install" } }); const res = responseRecorder(); let nextCalled = false;
     bound.installationOwner(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true); assert.equal(req.body.beatgalerUserId, installationId);
+  }
+  {
+    const req = request({ token, body: { beatId: "beat_a", telegramTopicId: 202, beatgalerUserId: "other_install" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.beatTopicOwner(req, res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "foreign object topic id must not mutate another object");
+  }
+  {
+    const req = request({ token, body: { beatId: "beat_a", telegramTopicId: 101 } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.beatTopicOwner(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true, "owned topic id remains valid");
   }
   {
     const fakeExpress = { application: {} }; const registered = [];
