@@ -1447,7 +1447,7 @@ fn classify_direct_begin_response(response: &Value) -> Result<DirectBeginDisposi
         .ok_or_else(|| "Galer Cloud returned incomplete operation information.".to_string())
 }
 
-fn direct_begin_operation(user_id: &str, kind: &str, scope: &Value) -> Result<String, String> {
+fn direct_begin_operation(user_id: &str, kind: &str, scope: &Value) -> Result<(String, String, i64), String> {
     let started = Instant::now();
     loop {
         ensure_direct_runtime(user_id)?;
@@ -1490,9 +1490,34 @@ fn direct_begin_operation(user_id: &str, kind: &str, scope: &Value) -> Result<St
                 std::thread::sleep(Duration::from_millis(wait_ms));
                 continue;
             }
-            DirectBeginDisposition::Ready(operation_id) => return Ok(operation_id),
+            DirectBeginDisposition::Ready(operation_id) => return Ok((operation_id, session_id, generation)),
         }
     }
+}
+
+fn direct_authorize_operation(
+    user_id: &str,
+    session_id: &str,
+    generation: i64,
+    operation_id: &str,
+    kind: &str,
+    scope: &Value,
+) -> Result<(), String> {
+    let url = format!("{}/transport/capability/authorize", telegram_cloud_api_base());
+    let response = post_json_cloud_auth_timeout(&url, &json!({
+        "beatgalerUserId": user_id,
+        "sessionId": session_id,
+        "generation": generation,
+        "operationId": operation_id,
+        "kind": kind,
+        "scope": scope,
+    }), 10)?;
+    if response.get("authorized").and_then(|v| v.as_bool()) != Some(true)
+        || response.get("operation_id").and_then(|v| v.as_str()) != Some(operation_id)
+    {
+        return Err("Galer Cloud refused the scoped Direct capability.".to_string());
+    }
+    Ok(())
 }
 
 fn direct_end_operation(user_id: &str, session_id: &str, generation: i64, operation_id: &str) {
@@ -1546,15 +1571,27 @@ fn direct_capability_scope(command: &Value) -> Result<Value, String> {
 fn direct_request(user_id: &str, command: Value) -> Result<Value, String> {
     let kind = command.get("op").and_then(|v| v.as_str()).unwrap_or("data").to_string();
     let scope = direct_capability_scope(&command)?;
-    let operation_id = direct_begin_operation(user_id, &kind, &scope)?;
-    let (session_id, generation, result) = {
+    let (operation_id, session_id, generation) = direct_begin_operation(user_id, &kind, &scope)?;
+    if let Err(error) = direct_authorize_operation(user_id, &session_id, generation, &operation_id, &kind, &scope) {
+        direct_end_operation(user_id, &session_id, generation, &operation_id);
+        return Err(error);
+    }
+    let result = {
         let slot = direct_runtime_slot();
         let mut guard = slot.lock().map_err(|e| e.to_string())?;
         let runtime = guard.as_mut().ok_or_else(|| "Galer Storage local runtime is unavailable.".to_string())?;
-        let session_id = runtime.session_id.clone();
-        let generation = runtime.generation;
-        let result = direct_send_helper_command(runtime, command);
-        (session_id, generation, result)
+        if runtime.session_id != session_id || runtime.generation != generation {
+            None
+        } else {
+            Some(direct_send_helper_command(runtime, command))
+        }
+    };
+    let result = match result {
+        Some(result) => result,
+        None => {
+            direct_end_operation(user_id, &session_id, generation, &operation_id);
+            return Err("Galer Storage session changed before the authorized operation could execute.".to_string());
+        }
     };
     direct_end_operation(user_id, &session_id, generation, &operation_id);
     result

@@ -263,6 +263,25 @@ export async function beginWebTransportOperation(
   };
 }
 
+export async function authorizeWebTransportOperation(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+  operationId: string,
+  kind: string,
+  scope: WebTransportCapabilityScope,
+): Promise<void> {
+  const response = await transportRequest<{ authorized?: boolean; operation_id?: string }>("/transport/capability/authorize", {
+    sessionId: session.session_id,
+    generation: session.generation,
+    operationId,
+    kind,
+    scope,
+  });
+  assertNoPermanentCredentials(response);
+  if (response.authorized !== true || response.operation_id !== operationId) {
+    throw new Error("Galer Cloud refused the scoped Direct capability.");
+  }
+}
+
 export async function endWebTransportOperation(
   session: Pick<WebTransportSession, "session_id" | "generation">,
   operationId: string,

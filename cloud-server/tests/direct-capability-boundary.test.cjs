@@ -72,8 +72,10 @@ test("authorize is one-shot and finish consumes only an authorized capability", 
   assert.equal(finished.authorized, true);
   assert.equal(finished.record.internal_operation_id, "op_internal_a");
   const endReplay = await store.finish(request());
-  assert.equal(endReplay.ok, false);
-  assert.equal(endReplay.reason, "consumed");
+  assert.equal(endReplay.ok, true);
+  assert.equal(endReplay.authorized, true);
+  assert.equal(endReplay.replay, true);
+  assert.equal(endReplay.record.status, "CONSUMED");
 });
 
 test("capability A cannot authorize tenant/session/object B", async () => {

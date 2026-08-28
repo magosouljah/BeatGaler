@@ -142,6 +142,7 @@ function createMemoryStore({ now = () => Date.now(), maxActivePerTenant = DEFAUL
         record.revoked_at_ms = now();
         return { ok: true, authorized: false, record: { ...record } };
       }
+      if (record.status === "CONSUMED") return { ok: true, authorized: true, replay: true, record: { ...record } };
       if (record.status !== "AUTHORIZED") return { ok: false, reason: record.status.toLowerCase(), record: { ...record } };
       if (record.expires_at_ms + input.clockSkewMs < now()) {
         record.status = "EXPIRED";
@@ -251,6 +252,7 @@ function createPostgresStore(pool, { maxActivePerTenant = DEFAULT_TENANT_ACTIVE_
       const sameIdentity = String(record.user_id) === input.userId && String(record.tenant_id) === input.tenantId &&
         String(record.installation_id) === input.installationId && String(record.auth_session_hash) === input.authSessionHash &&
         String(record.session_id) === input.sessionId && Number(record.generation) === Number(input.generation);
+      if (sameIdentity && String(record.status) === "CONSUMED") return { ok: true, authorized: true, replay: true, record };
       return { ok: false, reason: sameIdentity ? String(record.status || "denied").toLowerCase() : "scope", record };
     },
     async revokeSession({ installationId, sessionId, reason }) {
@@ -431,8 +433,22 @@ function installDirectCapabilityBoundary(express, options = {}) {
     };
   }
 
+  async function authorizeCapability(req, res) {
+    try {
+      return res.json(await authorizePresentedCapability(req));
+    } catch (error) {
+      return responseError(res, error);
+    }
+  }
+
   express.application.post = function patchedDirectCapabilityPost(routePath, ...handlers) {
-    if (routePath === "/transport/operation/begin") return originalPost.call(this, routePath, beginCapability, ...handlers);
+    if (routePath === "/transport/operation/begin") {
+      if (!this.__beatgalerDirectCapabilityAuthorizeRouteInstalled) {
+        this.__beatgalerDirectCapabilityAuthorizeRouteInstalled = true;
+        originalPost.call(this, "/transport/capability/authorize", authorizeCapability);
+      }
+      return originalPost.call(this, routePath, beginCapability, ...handlers);
+    }
     if (routePath === "/transport/operation/end") return originalPost.call(this, routePath, finishCapability, ...handlers);
     if (routePath === "/transport/session/stop") return originalPost.call(this, routePath, revokeSession, ...handlers);
     if (routePath === "/auth/logout") return originalPost.call(this, routePath, revokeAuthOnSuccess("logout"), ...handlers);

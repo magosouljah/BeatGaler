@@ -1,5 +1,6 @@
 import {
   activateWebTransportSession,
+  authorizeWebTransportOperation,
   beginWebTransportOperation,
   endWebTransportOperation,
   heartbeatWebTransportSession,
@@ -20,6 +21,7 @@ export interface WebTransportControlApi {
   prepare(): Promise<WebTransportSession>;
   activate(session: WebTransportSession): Promise<void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
+  authorize(session: WebTransportSession, operationId: string, kind: string, scope: WebTransportCapabilityScope): Promise<void>;
   begin(session: WebTransportSession, kind: string, scope: WebTransportCapabilityScope): Promise<{
     expired: boolean;
     waitMs: number | null;
@@ -40,6 +42,7 @@ export interface WebTransportOperationLease {
 const defaultApi: WebTransportControlApi = {
   prepare: prepareWebTransportSession,
   activate: activateWebTransportSession,
+  authorize: authorizeWebTransportOperation,
   heartbeat: heartbeatWebTransportSession,
   begin: beginWebTransportOperation,
   end: endWebTransportOperation,
@@ -138,6 +141,12 @@ export class WebTransportController {
         continue;
       }
       if (response.operationId) {
+        try {
+          await this.api.authorize(session, response.operationId, kind, scope);
+        } catch (error) {
+          await this.api.end({ session_id: session.session_id, generation: session.generation }, response.operationId).catch(() => {});
+          throw error;
+        }
         return {
           operationId: response.operationId,
           sessionId: session.session_id,
