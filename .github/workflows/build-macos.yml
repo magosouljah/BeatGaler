@@ -212,7 +212,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run release:check
+          npm run version:check
+          node scripts/release-manifest.mjs check
           npm run test:mac-portability:static
           npm run test:unit:ts
           npm run test:regressions
