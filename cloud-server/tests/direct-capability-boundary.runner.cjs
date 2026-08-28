@@ -14,6 +14,7 @@ Module._load = function(request, parent, isMain) {
 
 try {
   require('./direct-capability-boundary.test.cjs');
+  require('./sensitive-auth-capability-revocation.test.cjs');
 } finally {
   Module._load = originalLoad;
 }
