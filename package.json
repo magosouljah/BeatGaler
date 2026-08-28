@@ -18,7 +18,7 @@
     "version:bump": "node scripts/version.mjs bump-patch",
     "build:release": "npm run version:check && npm run tauri build",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-tauri.ps1",
-    "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
+    "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-task-7.2-transport-isolation.mjs && node scripts/regression-task-7.2-capability-adversarial.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
     "test:security-boundary": "node scripts/regression-task-5.1-hardening.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
     "test:packaging:static": "npm run test:windows-packaging && npm run test:mac-portability:static",
