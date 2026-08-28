@@ -16,7 +16,7 @@ const uploadScope: WebTransportCapabilityScope = {
 
 function session(version = 1): WebTransportSession {
   return {
-    mode: "galer-direct-web-mtproto",
+    mode: "galer-direct-temp-mtproto",
     session_id: "web-session",
     transport_id: "transport-1",
     transport_user_id: null,
@@ -28,9 +28,19 @@ function session(version = 1): WebTransportSession {
     heartbeat_interval_ms: 60_000,
     heartbeat_timeout_ms: 300_000,
     token_rotation_enabled: false,
-    bot_token: `secret-${version}`,
-    telegram_api_id: 123,
-    telegram_api_hash: `hash-${version}`,
+    temp_auth_required: false,
+    temp_auth: {
+      version: 1,
+      dc_id: 2,
+      expected_bot_id: "transport-1",
+      expires_at: 2_000_000_000,
+      binding: {
+        perm_auth_key_id: { low: version, high: 0, unsigned: true },
+        encrypted_message: `binding-${version}`,
+      },
+    },
+    temp_auth_key: new Uint8Array([version, 7, 1]),
+    temp_primary_dcs: { dc: 2 },
   };
 }
 
@@ -67,7 +77,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     await controller.disconnect();
   });
 
-  it("installs encrypted credential refreshes before retrying and authorizing an operation", async () => {
+  it("installs temporary-auth refreshes before retrying and authorizing an operation", async () => {
     const { controller, runtime, api } = harness();
     vi.mocked(api.begin)
       .mockResolvedValueOnce({ expired: false, waitMs: null, credentialRefresh: session(2), operationId: null })
