@@ -75,6 +75,26 @@ try {
     assert.equal(nextCalled, true, "same-account login may resume its own installation");
   }
   {
+    const fresh = "install_claim_race";
+    const reqA = request({ body: { beatgalerUserId: fresh, identifier: "tester#0001" } });
+    const resA = responseRecorder(); let nextA = false;
+    containment.guardLoginInstallation(reqA, resA, () => { nextA = true; });
+    assert.equal(nextA, true, "first unowned installation claim may proceed");
+
+    const reqB = request({ body: { beatgalerUserId: fresh, identifier: "other#0001" } });
+    const resB = responseRecorder(); let nextB = false;
+    containment.guardLoginInstallation(reqB, resB, () => { nextB = true; });
+    assert.equal(resB.statusCode, 403);
+    assert.equal(nextB, false, "concurrent claim must fail before async storage/bind work can race");
+
+    resA.emit("finish");
+    const reqC = request({ body: { beatgalerUserId: fresh, identifier: "other#0001" } });
+    const resC = responseRecorder(); let nextC = false;
+    containment.guardLoginInstallation(reqC, resC, () => { nextC = true; });
+    assert.equal(nextC, true, "claim reservation releases when the owning response finishes");
+    resC.emit("finish");
+  }
+  {
     const req = request({ token, body: { beatgalerUserId: "other_install" } });
     const res = responseRecorder(); let nextCalled = false;
     containment.guardSessionRebind(req, res, () => { nextCalled = true; });
@@ -134,6 +154,12 @@ try {
     assert.equal("beatgalerUserId" in req.body, false, "legacy unbound logout must invalidate token without trusting body installation id");
   }
   {
+    const req = request({ token, headers: { "content-length": String(FILE_UPLOAD_LIMIT_BYTES + 1) } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.preUpload(req, res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 413); assert.equal(nextCalled, false, "limit +1 metadata must be rejected before Multer");
+  }
+  {
     const req = request({ token, headers: { "content-length": String(FILE_UPLOAD_LIMIT_BYTES + 1024 * 1024 + 1) } });
     const res = responseRecorder(); let nextCalled = false;
     containment.preUpload(req, res, () => { nextCalled = true; });
@@ -182,6 +208,9 @@ try {
     assert.equal(uploadRoute.handlers.length, 4);
     assert.notEqual(uploadRoute.handlers[0], multer, "authorization/rate boundary must run before Multer");
     assert.equal(uploadRoute.handlers[1], multer);
+    fakeExpress.application.post("/beats/delete-topics-batch", () => {});
+    const batchDelete = registered.find(x => x.route === "/beats/delete-topics-batch");
+    assert.equal(batchDelete.handlers.length, 2, "batch topic delete must be installation-authorized before mutation");
     fakeExpress.application.get("/telegram/connect/status", () => {});
     const statusRoute = registered.find(x => x.route === "/telegram/connect/status");
     assert.equal(statusRoute.handlers.length, 2, "installation authorization must precede GET handler");
