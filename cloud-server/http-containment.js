@@ -85,6 +85,7 @@ function createHttpContainment(options = {}) {
   const now = options.now || (() => Date.now());
   const accountsFile = path.join(dataDir, "accounts-data.json");
   const cloudFile = path.join(dataDir, "cloud-data.json");
+  const bindingsFile = path.join(dataDir, "authz-session-bindings.json");
   const uploadWindowMs = Math.max(1_000, Number(env.BEATGALER_UPLOAD_RATE_WINDOW_MS || DEFAULT_UPLOAD_WINDOW_MS));
   const uploadRequestsPerWindow = Math.max(1, Number(env.BEATGALER_UPLOAD_RATE_MAX || DEFAULT_UPLOAD_REQUESTS_PER_WINDOW));
   const uploadConcurrency = Math.max(1, Number(env.BEATGALER_UPLOAD_CONCURRENCY || DEFAULT_UPLOAD_CONCURRENCY));
@@ -126,8 +127,9 @@ function createHttpContainment(options = {}) {
     const key = sessionKey(token);
     const session = data.sessions?.[key];
     if (!session || String(session.userId || "") !== String(expectedUserId || "")) return false;
-    data.sessions[key] = { ...session, installationId: id, tenantId: String(expectedUserId) };
-    writeJsonAtomic(accountsFile, data);
+    const bindings = readJson(bindingsFile, {});
+    bindings[key] = { installationId: id, tenantId: String(expectedUserId), boundAt: now(), expiresAt: Number(session.expiresAt || 0) };
+    writeJsonAtomic(bindingsFile, bindings);
     return true;
   }
 
@@ -137,8 +139,13 @@ function createHttpContainment(options = {}) {
       if (upload) cleanupUploadedFile(req);
       return null;
     }
-    const installationId = String(auth.session?.installationId || "").trim();
-    const tenantId = String(auth.session?.tenantId || auth.user.id || "").trim();
+    const binding = readJson(bindingsFile, {})?.[auth.key] || null;
+    const installationId = String(binding?.installationId || auth.session?.installationId || "").trim();
+    const tenantId = String(binding?.tenantId || auth.session?.tenantId || auth.user.id || "").trim();
+    if (binding && Number(binding.expiresAt || 0) > 0 && Number(binding.expiresAt) <= now()) {
+      sendJson(res, 401, "Session expired. Sign in again.");
+      return null;
+    }
     if (!installationId || !tenantId || tenantId !== String(auth.user.id || "")) {
       if (upload) cleanupUploadedFile(req);
       sendJson(res, 403, "This session is not bound to an authorized BeatGaler installation. Sign in again.");
