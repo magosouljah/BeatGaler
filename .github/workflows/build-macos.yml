@@ -11,9 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
   MACOSX_DEPLOYMENT_TARGET: "12.0"
-  BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
   APPLE_SIGNING_IDENTITY: "-"
@@ -23,12 +21,23 @@ jobs:
     name: Build pinned Bot API arm64
     runs-on: macos-15
     steps:
+      - name: Checkout runtime source manifest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load pinned Bot API source
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT_API_COMMIT="$(python3 -c 'import json; print(json.load(open("supply-chain/runtime-sources.json"))["telegramBotApi"]["commit"])')"
+          test -n "$BOT_API_COMMIT"
+          echo "BOT_API_COMMIT=$BOT_API_COMMIT" >> "$GITHUB_ENV"
+
       - name: Restore Bot API arm64 cache
         id: botapi-cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/telegram-bot-api
-          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Build static arm64 runtime
         if: steps.botapi-cache.outputs.cache-hit != 'true'
@@ -79,12 +88,23 @@ jobs:
     name: Build pinned Bot API x86_64
     runs-on: macos-15-intel
     steps:
+      - name: Checkout runtime source manifest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load pinned Bot API source
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT_API_COMMIT="$(python3 -c 'import json; print(json.load(open("supply-chain/runtime-sources.json"))["telegramBotApi"]["commit"])')"
+          test -n "$BOT_API_COMMIT"
+          echo "BOT_API_COMMIT=$BOT_API_COMMIT" >> "$GITHUB_ENV"
+
       - name: Restore Bot API x86_64 cache
         id: botapi-cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/telegram-bot-api
-          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Build static Intel runtime
         if: steps.botapi-cache.outputs.cache-hit != 'true'
@@ -157,6 +177,9 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
+      - name: Load canonical release manifest
+        run: node scripts/release-manifest.mjs github-env
+
       - name: Setup pinned Rust with both macOS targets
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
@@ -180,7 +203,7 @@ jobs:
           path: |
             /tmp/beatgaler-ffmpeg
             /tmp/beatgaler-node
-          key: macos-runtimes-ffmpeg-b6.1.1-node-22.23.2
+          key: macos-runtimes-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Install npm dependencies
         run: npm ci
@@ -189,7 +212,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run version:check
+          npm run release:check
           npm run test:mac-portability:static
           npm run test:unit:ts
           npm run test:regressions
@@ -209,17 +232,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          FFMPEG_TAG="b6.1.1"
-          REPO="eugeneware/ffmpeg-static"
+          FFMPEG_TAG="$BEATGALER_FFMPEG_TAG"
+          REPO="$BEATGALER_FFMPEG_REPOSITORY"
+          ARM_ASSET="$BEATGALER_FFMPEG_MAC_ARM64_ASSET"
+          X64_ASSET="$BEATGALER_FFMPEG_MAC_X64_ASSET"
           BASE_URL="https://github.com/${REPO}/releases/download/${FFMPEG_TAG}"
           mkdir -p src-tauri/resources /tmp/beatgaler-ffmpeg
-          curl --fail --location --retry 3 "${BASE_URL}/ffmpeg-darwin-arm64" -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
-          curl --fail --location --retry 3 "${BASE_URL}/ffmpeg-darwin-x64" -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
+          curl --fail --location --retry 3 "${BASE_URL}/${ARM_ASSET}" -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
+          curl --fail --location --retry 3 "${BASE_URL}/${X64_ASSET}" -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
           chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64
 
           RELEASE_JSON="$(gh api "repos/${REPO}/releases/tags/${FFMPEG_TAG}")"
-          ARM_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-arm64") | .digest // empty' | sed 's/^sha256://')"
-          X64_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-x64") | .digest // empty' | sed 's/^sha256://')"
+          ARM_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r --arg asset "$ARM_ASSET" '.assets[] | select(.name==$asset) | .digest // empty' | sed 's/^sha256://')"
+          X64_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r --arg asset "$X64_ASSET" '.assets[] | select(.name==$asset) | .digest // empty' | sed 's/^sha256://')"
           ARM_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-arm64 | awk '{print $1}')"
           X64_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-x64 | awk '{print $1}')"
           test -n "$ARM_EXPECTED" && test -n "$X64_EXPECTED"
@@ -236,7 +261,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NODE_VERSION="22.23.2"
+          NODE_VERSION="$BEATGALER_NODE_VERSION"
           ROOT="/tmp/beatgaler-node"
           mkdir -p src-tauri/resources "$ROOT"
           ARM_NAME="node-v${NODE_VERSION}-darwin-arm64.tar.gz"
@@ -273,8 +298,8 @@ jobs:
           ARM="$ARM_DIR/telegram-bot-api"
           INTEL="$INTEL_DIR/telegram-bot-api"
           test -x "$ARM" && test -x "$INTEL"
-          test "$(cat "$ARM_DIR/telegram-bot-api.commit")" = "$BOT_API_COMMIT"
-          test "$(cat "$INTEL_DIR/telegram-bot-api.commit")" = "$BOT_API_COMMIT"
+          test "$(cat "$ARM_DIR/telegram-bot-api.commit")" = "$BEATGALER_BOT_API_COMMIT"
+          test "$(cat "$INTEL_DIR/telegram-bot-api.commit")" = "$BEATGALER_BOT_API_COMMIT"
           test "$(cat "$ARM_DIR/telegram-bot-api.sha256")" = "$(shasum -a 256 "$ARM" | awk '{print $1}')"
           test "$(cat "$INTEL_DIR/telegram-bot-api.sha256")" = "$(shasum -a 256 "$INTEL" | awk '{print $1}')"
           test "$(lipo -archs "$ARM")" = "arm64"
