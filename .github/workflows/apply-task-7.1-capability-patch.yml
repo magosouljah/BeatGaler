@@ -1,0 +1,40 @@
+name: Apply Task 7.1 Capability Patch
+
+on:
+  push:
+    branches:
+      - woz/task-7.1-direct-capabilities
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: woz/task-7.1-direct-capabilities
+          fetch-depth: 0
+      - name: Apply narrow source patch
+        shell: bash
+        run: |
+          if grep -q 'MAX_ACTIVE_VAULTS_PER_BOT' cloud-server/direct-transport-control.js \
+             && grep -q 'fn direct_capability_scope' src-tauri/src/commands.rs; then
+            echo 'Task 7.1 source patch already applied.'
+            exit 0
+          fi
+          node scripts/apply-task-7.1-capability-patch.mjs
+      - name: Commit patched production sources
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No source patch changes to commit.'
+            exit 0
+          fi
+          git config user.name 'BeatGaler WOZ'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloud-server/direct-transport-control.js src-tauri/src/commands.rs
+          git commit -m 'security(direct): enforce capability scope and bot ceiling'
+          git push origin HEAD:woz/task-7.1-direct-capabilities
