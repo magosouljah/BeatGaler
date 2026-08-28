@@ -18,6 +18,7 @@ const releaseManifest = json(matrix.target.releaseManifest);
 const tauri = json("src-tauri/tauri.conf.json");
 const windowsRelease = json(matrix.windowsInstaller.releaseConfig);
 const nsisHooks = read(matrix.windowsInstaller.hooks);
+const windowsUpgradeProbe = read("scripts/test-windows-074-upgrade.ps1");
 const upgradeRust = read("src-tauri/src/upgrade.rs");
 const rustLib = read("src-tauri/src/lib.rs");
 const rustCommands = read("src-tauri/src/commands.rs");
@@ -42,11 +43,15 @@ expect(!upgradeRust.includes("remove_dir_all(&legacy_dir"), "rollback source can
 expect(upgradeRust.includes('for suffix in ["", "-wal", "-shm"]'), "SQLite recovery no longer preserves DB/WAL/SHM as a family");
 expect(upgradeRust.includes('parent.join("recovery")'), "corrupt SQLite no longer has a recovery quarantine");
 expect(upgradeRust.includes("real_sqlite_rows_survive_074_identity_migration"), "real SQLite preservation regression test disappeared");
+expect(upgradeRust.includes("is_recoverable_sqlite_corruption"), "narrow SQLite corruption classifier disappeared");
+expect(upgradeRust.includes("DatabaseCorrupt") && upgradeRust.includes("NotADatabase"), "SQLite recovery classifier no longer limits recovery to actual corruption");
+expect(upgradeRust.includes("InvalidQuery"), "future-schema fail-closed regression test disappeared");
 
 const migrateCall = rustLib.indexOf("upgrade::migrate_legacy_app_data(&data_dir)");
 const dbOpen = rustLib.indexOf('let db_path = data_dir.join("beatvault.db")');
 expect(migrateCall >= 0 && dbOpen > migrateCall, "legacy migration must run before SQLite is opened");
-expect(rustLib.includes("upgrade::quarantine_sqlite_family(&db_path)"), "startup no longer recovers an unreadable SQLite file safely");
+expect(rustLib.includes("upgrade::is_recoverable_sqlite_corruption(&first_error)"), "startup may recover non-corrupt/incompatible SQLite errors");
+expect(rustLib.includes("upgrade::quarantine_sqlite_family(&db_path)"), "startup no longer preserves genuinely corrupt SQLite files safely");
 
 expect(rustCommands.includes('data_dir.join("settings.json")'), "settings are no longer rooted in app-data");
 expect(rustCommands.includes('state.data_dir.join("offline")'), "offline packages are no longer rooted in app-data");
@@ -64,10 +69,13 @@ const deleteLegacyRegistration = nsisHooks.indexOf('DeleteRegKey SHCTX "${GALER_
 expect(newRegistrationComment >= 0 && deleteLegacyRegistration > newRegistrationComment, "legacy NSIS registration can be removed before the new install is durable");
 expect(nsisHooks.includes('CreateShortcut "$SMPROGRAMS\\${PRODUCTNAME}.lnk"'), "start-menu shortcut rename continuity disappeared");
 expect(nsisHooks.includes('CreateShortcut "$DESKTOP\\${PRODUCTNAME}.lnk"'), "desktop shortcut choice continuity disappeared");
+expect(windowsUpgradeProbe.includes('@("/S", "/UPDATE")'), "real Windows staging probe no longer exercises updater mode");
+expect(windowsUpgradeProbe.includes("upgrade-sentinel.txt"), "Windows staging probe no longer proves legacy install-location reuse");
+expect(windowsUpgradeProbe.includes("Uninstall\\Beat Galer") && windowsUpgradeProbe.includes("Uninstall\\Galer"), "Windows staging probe no longer verifies registry identity migration");
 
 expect(matrix.staging.sameSourceShaRequired === true, "staging same-SHA requirement must remain enabled");
 expect(releaseGuard.includes("RELEASE_SOURCE_SHA"), "release guard no longer checks the shared source SHA");
 expect(releaseGuard.includes("git checkout --detach"), "release tooling is no longer pinned to the artifact source SHA");
 expect(releaseGuard.includes("runtime provenance"), "release guard no longer validates runtime provenance");
 
-console.log(`PASS upgrade matrix: ${matrix.baseline.version} (${matrix.baseline.sha.slice(0, 12)}) -> ${read(matrix.target.versionSource).trim()} preserves app-data/SQLite/offline/cache, bridges the renamed Windows installer in-place, preserves recovery evidence, and keeps same-SHA staging guards.`);
+console.log(`PASS upgrade matrix: ${matrix.baseline.version} (${matrix.baseline.sha.slice(0, 12)}) -> ${read(matrix.target.versionSource).trim()} preserves app-data/SQLite/offline/cache, keeps future schemas fail-closed, bridges the renamed Windows installer in-place, preserves recovery evidence, and keeps same-SHA staging guards.`);
