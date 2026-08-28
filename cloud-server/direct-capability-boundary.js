@@ -3,7 +3,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const directTransport = require("./direct-transport-control");
+const directTransport = require("./direct-transport-capability-view");
 
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_CLOCK_SKEW_MS = 5 * 1000;
@@ -125,7 +125,6 @@ function createMemoryStore({ now = () => Date.now(), maxActivePerTenant = DEFAUL
       return { ...records.get(record.capability_hash) };
     },
     async authorize(input) {
-      expire();
       const record = records.get(input.capabilityHash);
       if (!record) return { ok: false, reason: "unknown" };
       if (!identityMatches(record, input)) return { ok: false, reason: "scope", record: { ...record } };
@@ -142,7 +141,6 @@ function createMemoryStore({ now = () => Date.now(), maxActivePerTenant = DEFAUL
       return { ok: true, record: { ...record } };
     },
     async finish(input) {
-      expire();
       const record = records.get(input.capabilityHash);
       if (!record) return { ok: false, reason: "unknown" };
       if (!identityMatches(record, input)) return { ok: false, reason: "scope", record: { ...record } };
@@ -319,6 +317,14 @@ async function authorizePresentedCapability(req, fallbackIdentity = null) {
   if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
   const claims = requestIdentity(req, fallbackIdentity);
   const { capability, input } = capabilityInput(req, claims, { requireScope: true });
+  const liveSession = directTransport.validateCapabilitySession({
+    installationId: input.installationId,
+    sessionId: input.sessionId,
+    generation: input.generation,
+  });
+  if (!liveSession?.ok) {
+    throw codedError("DIRECT_CAPABILITY_SESSION_INACTIVE", `Direct session is not live (${liveSession?.reason || "unknown"}).`);
+  }
   const result = await installedRuntime.store.authorize(input);
   if (!result.ok) {
     const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
