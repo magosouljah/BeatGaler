@@ -5,6 +5,7 @@ const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disab
 const { installHttpContainment } = require("./http-containment");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
+const { installAuthAbuseControls } = require("./auth-abuse-controls");
 const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
@@ -30,6 +31,7 @@ async function start() {
   }
 
   installHttpContainment(express, { dataDir: __dirname, installationClaimCoordinator });
+  installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"}`);
   require("./server-core");
