@@ -3,7 +3,13 @@ import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { platform } from "../platform";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
-export function getBeatGalerAuthToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
+const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
+const CSRF_KEY = "beatgaler:web-csrf:v1";
+const BROWSER_SESSION_SENTINEL = "browser-cookie-session";
+export function getBeatGalerAuthToken(): string | null {
+  if (platform.kind === "web") return localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1" ? BROWSER_SESSION_SENTINEL : null;
+  return localStorage.getItem(TOKEN_KEY);
+}
 const API_KEY = "beatgaler:cloud-api:v1";
 const LOCAL_API = "http://127.0.0.1:4000";
 const REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
@@ -12,6 +18,47 @@ function sameOriginProxyApi(): string | null {
   if (typeof window === "undefined") return null;
   return `${window.location.origin}/beatgaler-api`;
 }
+
+function currentWebCsrfToken(): string {
+  if (platform.kind !== "web" || typeof sessionStorage === "undefined") return "";
+  return sessionStorage.getItem(CSRF_KEY) || "";
+}
+
+function trustedWebApiCandidate(value: string | null): value is string {
+  if (!value) return false;
+  const sameOriginProxy = sameOriginProxyApi();
+  if (value === REMOTE_API || (!!sameOriginProxy && value === sameOriginProxy)) return true;
+  return /^http:\/\/127\.0\.0\.1:\d+$/.test(value);
+}
+
+function isBeatGalerApiRequest(input: RequestInfo | URL): boolean {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const remembered = localStorage.getItem(API_KEY);
+  const candidates = [trustedWebApiCandidate(remembered) ? remembered : null, sameOriginProxyApi(), REMOTE_API].filter((value): value is string => Boolean(value));
+  return candidates.some(base => url === base || url.startsWith(`${base}/`));
+}
+
+function installWebCredentialedFetchBoundary(): void {
+  if (platform.kind !== "web" || typeof window === "undefined") return;
+  const taggedWindow = window as Window & { __beatgalerCredentialedFetchInstalled?: boolean };
+  if (taggedWindow.__beatgalerCredentialedFetchInstalled) return;
+  taggedWindow.__beatgalerCredentialedFetchInstalled = true;
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
+    if (!isBeatGalerApiRequest(input)) return nativeFetch(input, init);
+    const requestInput = typeof Request !== "undefined" && input instanceof Request ? input : null;
+    const headers = new Headers(init.headers || requestInput?.headers);
+    headers.set("X-BeatGaler-Client", "web");
+    const method = String(init.method || requestInput?.method || "GET").toUpperCase();
+    if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method)) {
+      const csrf = currentWebCsrfToken();
+      if (csrf) headers.set("X-BeatGaler-CSRF", csrf);
+    }
+    return nativeFetch(input, { ...init, headers, credentials: "include" });
+  }) as typeof window.fetch;
+}
+
+installWebCredentialedFetchBoundary();
 
 export type OAuthProvider = "google" | "x";
 export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";
@@ -60,18 +107,56 @@ export interface BeatGalerAccount {
   };
 }
 
-type AuthResponse = { ok: boolean; token: string; user: BeatGalerAccount; linked?: boolean; pending?: boolean };
+export interface BeatGalerSessionInfo {
+  id: string;
+  current: boolean;
+  created_at: string;
+  expires_at: string;
+  last_seen_at?: string | null;
+  client_kind?: string;
+  installation_id?: string | null;
+}
+
+type AuthResponse = { ok: boolean; token?: string; csrf_token?: string; session_transport?: "cookie"; session_rotated?: boolean; user: BeatGalerAccount; linked?: boolean; pending?: boolean };
+
+type RequestFailureKind = "http" | "offline" | "timeout" | "network";
+type BeatGalerRequestError = Error & { status?: number; code?: string; kind?: RequestFailureKind; mfa_required?: boolean };
+
+function taggedRequestError(message: string, fields: Partial<BeatGalerRequestError>): BeatGalerRequestError {
+  return Object.assign(new Error(message), fields);
+}
+
+function networkFailure(error: unknown): BeatGalerRequestError {
+  const value = error as { name?: string; message?: string } | null;
+  if (value?.name === "AbortError") return taggedRequestError("BeatGaler Cloud request timed out. Your saved session was kept.", { code: "CLOUD_TIMEOUT", kind: "timeout" });
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return taggedRequestError("BeatGaler Cloud is offline. Your saved session was kept.", { code: "CLOUD_OFFLINE", kind: "offline" });
+  return taggedRequestError(value?.message || "Could not reach BeatGaler Cloud. Your saved session was kept.", { code: "CLOUD_UNREACHABLE", kind: "network" });
+}
+
+export function isBeatGalerSessionExpiryError(error: unknown): boolean {
+  const value = error as BeatGalerRequestError | null;
+  return Number(value?.status || 0) === 401 || ["SESSION_EXPIRED", "SESSION_REVOKED", "SESSION_ROTATED", "SESSION_ROTATION_EXPIRED", "SESSION_INVALID"].includes(String(value?.code || ""));
+}
 
 async function fetchJson(url: string, init?: RequestInit, timeoutMs = 10000): Promise<any> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      throw networkFailure(error);
+    }
     const text = await response.text();
     let body: any = {};
     try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text || `HTTP ${response.status}` }; }
     if (!response.ok) {
-      const error: any = new Error(body?.error || `BeatGaler Cloud HTTP ${response.status}`);
+      const error: BeatGalerRequestError = taggedRequestError(body?.error || `BeatGaler Cloud HTTP ${response.status}`, {
+        status: response.status,
+        code: body?.code || `HTTP_${response.status}`,
+        kind: "http",
+      });
       Object.assign(error, body || {});
       throw error;
     }
@@ -103,15 +188,40 @@ export async function getBeatGalerInstallationId(): Promise<string> {
   return platform.account.getInstallationId();
 }
 
+function clearLocalSessionState(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(WEB_SESSION_MARKER_KEY);
+  try { sessionStorage.removeItem(CSRF_KEY); } catch {}
+}
+
 async function authRequest(path: string, body: Record<string, unknown> = {}, token?: string): Promise<any> {
-  const base = await resolveBeatGalerCloudApi();
+  let base: string;
+  try { base = await resolveBeatGalerCloudApi(); }
+  catch (error) { throw networkFailure(error); }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return fetchJson(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) }, path === "/auth/register" ? 45000 : 20000);
+  if (platform.kind === "web") {
+    headers["X-BeatGaler-Client"] = "web";
+    const csrf = currentWebCsrfToken();
+    if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
+  }
+  if (token && !(platform.kind === "web" && token === BROWSER_SESSION_SENTINEL)) headers.Authorization = `Bearer ${token}`;
+  const result = await fetchJson(`${base}${path}`, {
+    method: "POST",
+    headers,
+    credentials: platform.kind === "web" ? "include" : "same-origin",
+    body: JSON.stringify(body),
+  }, path === "/auth/register" ? 45000 : 20000);
+  if (platform.kind === "web" && result?.csrf_token) sessionStorage.setItem(CSRF_KEY, String(result.csrf_token));
+  return result;
 }
 
 async function storeSession(result: AuthResponse) {
-  if (result.token) {
+  if (platform.kind === "web") {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
+    if (result.csrf_token) sessionStorage.setItem(CSRF_KEY, result.csrf_token);
+    await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
+  } else if (result.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
     await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
   }
@@ -130,14 +240,25 @@ export async function loginBeatGalerAccount(identifier: string, password: string
 }
 
 export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const legacyToken = localStorage.getItem(TOKEN_KEY);
+  const hasWebMarker = platform.kind === "web" && localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1";
+  const token = platform.kind === "web" ? (legacyToken || (hasWebMarker ? BROWSER_SESSION_SENTINEL : null)) : legacyToken;
   if (!token) return null;
   try {
     const result = await authRequest("/auth/session", { beatgalerUserId: await getBeatGalerInstallationId() }, token);
-    await platform.cloudAuth.syncSession(token, getResolvedCloudApiBase());
+    if (platform.kind === "web") {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
+      await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
+    } else {
+      const activeToken = result?.token || token;
+      if (result?.token) localStorage.setItem(TOKEN_KEY, result.token);
+      await platform.cloudAuth.syncSession(activeToken, getResolvedCloudApiBase());
+    }
     return result.user;
-  } catch {
-    localStorage.removeItem(TOKEN_KEY);
+  } catch (error) {
+    if (!isBeatGalerSessionExpiryError(error)) throw error;
+    clearLocalSessionState();
     try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
     return null;
   }
@@ -147,6 +268,35 @@ export async function getBeatGalerAccountInfo(): Promise<BeatGalerAccount> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
   return (await authRequest("/auth/account", {}, token)).user;
+}
+
+export async function listBeatGalerSessions(): Promise<BeatGalerSessionInfo[]> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/sessions", {}, token);
+  return Array.isArray(result?.sessions) ? result.sessions : [];
+}
+
+export async function revokeBeatGalerSession(sessionId: string): Promise<{ current_revoked: boolean }> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/sessions/revoke", { session_id: sessionId }, token);
+  if (result?.current_revoked) {
+    clearLocalSessionState();
+    try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+    window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+  }
+  return { current_revoked: result?.current_revoked === true };
+}
+
+export async function revokeAllBeatGalerSessions(): Promise<number> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/sessions/revoke-all", {}, token);
+  clearLocalSessionState();
+  try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+  window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+  return Number(result?.revoked_count || 0);
 }
 
 export async function getBeatGalerPlanCatalog(): Promise<BeatGalerPlanDefinition[]> {
@@ -174,7 +324,11 @@ export async function changeBeatGalerEmail(email: string, confirmEmail: string):
 export async function changeBeatGalerPassword(currentPassword: string, newPassword: string): Promise<void> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
-  await authRequest("/auth/password/change", { currentPassword, newPassword }, token);
+  const result = await authRequest("/auth/password/change", { currentPassword, newPassword }, token);
+  if (platform.kind !== "web" && result?.token) {
+    localStorage.setItem(TOKEN_KEY, result.token);
+    await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
+  }
 }
 
 export async function beginMfaSetup(): Promise<{ secret: string; otpauth_url: string }> {
@@ -220,9 +374,9 @@ export async function disconnectOAuthProvider(provider: OAuthProvider): Promise<
 }
 
 export async function logoutBeatGalerAccount(): Promise<void> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  localStorage.removeItem(TOKEN_KEY);
+  const token = getBeatGalerAuthToken();
   try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getBeatGalerInstallationId() }, token); } catch {}
+  clearLocalSessionState();
   try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
   window.dispatchEvent(new Event("beatgaler:account-logged-out"));
 }
@@ -349,12 +503,15 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     document.getElementById("beatgaler-startup-loader")?.remove();
 
     let cancelled = false;
-    void restoreBeatGalerSession().then(value => { if (!cancelled) setAccount(value); }).finally(() => { if (!cancelled) setChecking(false); });
+    void restoreBeatGalerSession()
+      .then(value => { if (!cancelled) setAccount(value); })
+      .catch(e => { if (!cancelled) setError(String((e as Error)?.message || e)); })
+      .finally(() => { if (!cancelled) setChecking(false); });
     const logout = () => setAccount(null);
     const updated = (event: Event) => {
       const detail = (event as CustomEvent<BeatGalerAccount>).detail;
       if (detail) setAccount(detail);
-      else void restoreBeatGalerSession().then(value => { if (value) setAccount(value); });
+      else void restoreBeatGalerSession().then(value => { if (value) setAccount(value); }).catch(() => {});
     };
     const unlocked = (event: Event) => {
       const detail = (event as CustomEvent<{ username?: string }>).detail;
