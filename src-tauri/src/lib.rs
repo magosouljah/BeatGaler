@@ -4,6 +4,7 @@ mod commands {
 }
 mod versioning;
 mod updater;
+mod upgrade;
 pub use commands::*;
 pub use updater::*;
 
@@ -38,10 +39,57 @@ pub fn run() {
         })
         .setup(|app| {
             let data_dir: PathBuf = app.path().app_data_dir().expect("Failed to get app data dir");
-            std::fs::create_dir_all(&data_dir).ok();
+
+            // 0.7.4 used bundle id `vtm.beatgaler.playground`. Tauri derives
+            // app_data_dir from that identifier, so the final Galer bundle id
+            // needs an explicit non-destructive bridge before SQLite/settings
+            // are opened from the new location.
+            let upgrade_report = upgrade::migrate_legacy_app_data(&data_dir)
+                .unwrap_or_else(|error| panic!("Failed to migrate legacy Galer app data: {error}"));
+            if let Some(source) = upgrade_report.source.as_ref() {
+                eprintln!(
+                    "[upgrade] legacy_app_data source={} copied_files={} created_dirs={} skipped_existing={} skipped_symlinks={} marker_present={}",
+                    source.display(),
+                    upgrade_report.copied_files,
+                    upgrade_report.created_dirs,
+                    upgrade_report.skipped_existing,
+                    upgrade_report.skipped_symlinks,
+                    upgrade_report.marker_already_present,
+                );
+            }
+
+            std::fs::create_dir_all(&data_dir).expect("Failed to create app data dir");
             set_direct_runtime_data_dir(&data_dir);
             let db_path = data_dir.join("beatvault.db");
-            let conn = init_db(&db_path).expect("Failed to open database");
+            let conn = match init_db(&db_path) {
+                Ok(conn) => conn,
+                Err(first_error)
+                    if db_path.is_file()
+                        && upgrade::is_recoverable_sqlite_corruption(&first_error) =>
+                {
+                    let recovery_dir = upgrade::quarantine_sqlite_family(&db_path)
+                        .unwrap_or_else(|quarantine_error| {
+                            panic!(
+                                "Failed to open corrupt database ({first_error}) and could not preserve SQLite state ({quarantine_error})"
+                            )
+                        });
+                    eprintln!(
+                        "[upgrade] sqlite_recovery preserved={} reason={}",
+                        recovery_dir.display(),
+                        first_error,
+                    );
+                    init_db(&db_path).unwrap_or_else(|second_error| {
+                        panic!(
+                            "Failed to create recovery database after preserving corrupt state at {}: {}",
+                            recovery_dir.display(),
+                            second_error,
+                        )
+                    })
+                }
+                // Busy/read-only/I/O failures and a future SQLite schema remain
+                // fail-closed. They are not evidence that the user's DB is corrupt.
+                Err(error) => panic!("Failed to open database: {error}"),
+            };
             let purged = purge_old_trash_internal(&conn, &data_dir, 14);
             if purged > 0 { log_line(&data_dir, "INFO", &format!("Startup: purged {} old trash item(s)", purged)); }
             let purged_templates = purge_old_template_trash_internal(&conn, &data_dir, 14);

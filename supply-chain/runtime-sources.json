@@ -13,7 +13,12 @@
   "ffmpeg": {
     "repository": "eugeneware/ffmpeg-static",
     "tag": "b6.1.1",
-    "checksumSource": "GitHub release asset digest"
+    "checksumSource": "GitHub release asset digest",
+    "assets": {
+      "windows-x64": "ffmpeg-win32-x64",
+      "darwin-aarch64": "ffmpeg-darwin-arm64",
+      "darwin-x86_64": "ffmpeg-darwin-x64"
+    }
   },
   "telegramBotApi": {
     "repository": "tdlib/telegram-bot-api",

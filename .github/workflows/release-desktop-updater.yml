@@ -24,8 +24,6 @@ permissions:
 concurrency:
   group: release-desktop-${{ inputs.release_tag }}
   cancel-in-progress: false
-env:
-  PUBLIC_RELEASE_REPO: magosouljah/galer
 
 jobs:
   release-desktop-updater:
@@ -33,16 +31,12 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout release tools
+      - name: Checkout release verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup pinned Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version-file: .node-version
-          cache: npm
+          fetch-depth: 0
 
-      - name: Verify selected build runs
+      - name: Verify selected build runs and bind source SHA
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,7 +62,27 @@ jobs:
             echo "macOS:   $MAC_SHA"
             exit 1
           fi
+          test -n "$WIN_SHA"
+          echo "RELEASE_SOURCE_SHA=$WIN_SHA" >> "$GITHUB_ENV"
           echo "Verified shared source commit: $WIN_SHA"
+
+      - name: Pin release tools to verified build SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$RELEASE_SOURCE_SHA"
+          git checkout --detach "$RELEASE_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          echo "Release tools pinned to artifact source SHA: $RELEASE_SOURCE_SHA"
+
+      - name: Setup pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Load canonical release manifest
+        run: node scripts/release-manifest.mjs github-env
 
       - name: Download Windows build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -88,7 +102,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.macos_run_id }}
 
-      - name: Verify versions, build checksums and prepare Desktop release
+      - name: Verify versions, provenance and prepare Desktop release
         shell: bash
         run: |
           set -euo pipefail
@@ -100,6 +114,11 @@ jobs:
           fi
           if [ "v$WIN_VERSION" != "${{ inputs.release_tag }}" ]; then
             echo "::error::Build version ($WIN_VERSION) does not match release tag (${{ inputs.release_tag }})."
+            exit 1
+          fi
+          SOURCE_VERSION="$(tr -d '\r\n' < VERSION)"
+          if [ "$SOURCE_VERSION" != "$WIN_VERSION" ]; then
+            echo "::error::Pinned source VERSION ($SOURCE_VERSION) differs from artifacts ($WIN_VERSION)."
             exit 1
           fi
 
@@ -116,6 +135,11 @@ jobs:
           for file in "$WIN_EXE" "$WIN_SIG" "$WIN_PROVENANCE" "$WIN_SUMS" "$MAC_DMG" "$MAC_UPDATER" "$MAC_SIG" "$MAC_PROVENANCE" "$MAC_SUMS"; do
             test -n "$file" && test -s "$file"
           done
+
+          WIN_PROVENANCE_SHA="$(jq -r '.gitSha // empty' "$WIN_PROVENANCE")"
+          MAC_PROVENANCE_SHA="$(jq -r '.gitSha // empty' "$MAC_PROVENANCE")"
+          test "$WIN_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"
+          test "$MAC_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"
 
           verify_digest() {
             local sums="$1"
@@ -144,8 +168,8 @@ jobs:
           cp "$WIN_PROVENANCE" release-assets/runtime-provenance-windows.json
           cp "$MAC_PROVENANCE" release-assets/runtime-provenance-macos.json
 
-          WIN_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$WIN_NAME"
-          MAC_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$MAC_UPDATER_NAME"
+          WIN_URL="https://github.com/${BEATGALER_PUBLIC_RELEASE_REPO}/releases/download/${{ inputs.release_tag }}/$WIN_NAME"
+          MAC_URL="https://github.com/${BEATGALER_PUBLIC_RELEASE_REPO}/releases/download/${{ inputs.release_tag }}/$MAC_UPDATER_NAME"
 
           node scripts/updater-manifest.mjs generate \
             --version "$WIN_VERSION" \
@@ -191,13 +215,13 @@ jobs:
           TAG="${{ inputs.release_tag }}"
           NOTES="${{ inputs.release_notes }}"
           if [ -z "$NOTES" ]; then NOTES="Beat Galer $TAG"; fi
-          if gh release view "$TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$BEATGALER_PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
             echo "::error::Release $TAG already exists. BeatGaler release assets are immutable; use a new version/tag."
             exit 1
           fi
           gh release create "$TAG" \
-            --repo "$PUBLIC_RELEASE_REPO" \
-            --target main \
+            --repo "$BEATGALER_PUBLIC_RELEASE_REPO" \
+            --target "$RELEASE_SOURCE_SHA" \
             --title "Beat Galer $TAG" \
             --notes "$NOTES"
           gh release upload "$TAG" \
@@ -210,4 +234,4 @@ jobs:
             release-assets/runtime-provenance-windows.json \
             release-assets/runtime-provenance-macos.json \
             release-assets/SHA256SUMS \
-            --repo "$PUBLIC_RELEASE_REPO"
+            --repo "$BEATGALER_PUBLIC_RELEASE_REPO"

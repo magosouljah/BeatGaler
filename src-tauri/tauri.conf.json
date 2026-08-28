@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Beat Galer",
+  "productName": "Galer",
   "version": "0.8.0-alpha.1",
-  "identifier": "vtm.beatgaler.playground",
+  "identifier": "com.beatgaler.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Beat Galer",
+        "title": "Galer",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -67,9 +67,6 @@
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEExODA5NzI4MTMwRDdFQjgKUldTNGZnMFRLSmVBb1p5RnVoMEUvdjZKZlZRRHc3b1IyMzJaYnRFeitkNGtPUTRNNTNGZjJnNCsK",
-      "endpoints": [
-        "https://github.com/magosouljah/galer/releases/latest/download/latest.json"
-      ],
       "windows": {
         "installMode": "passive"
       }
