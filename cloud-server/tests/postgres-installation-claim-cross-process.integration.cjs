@@ -42,34 +42,47 @@ function spawnClaim({ installationId, hold = false }) {
   });
 }
 
-function firstLine(child) {
-  return new Promise((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', chunk => {
-      stdout += chunk;
-      const newline = stdout.indexOf('\n');
-      if (newline >= 0) resolve(stdout.slice(0, newline).trim());
+function observe(child) {
+  let stdout = '';
+  let stderr = '';
+  let lineSettled = false;
+  let resolveLine;
+  let rejectLine;
+  const line = new Promise((resolve, reject) => { resolveLine = resolve; rejectLine = reject; });
+  const exit = new Promise((resolve, reject) => {
+    child.once('error', error => {
+      if (!lineSettled) { lineSettled = true; rejectLine(error); }
+      reject(error);
     });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
     child.once('exit', code => {
-      if (code !== 0) reject(new Error(`claim child exited ${code}: ${stderr}`));
-      else if (!stdout.includes('\n')) reject(new Error(`claim child exited without result: ${stderr}`));
+      if (code !== 0) {
+        const error = new Error(`claim child exited ${code}: ${stderr}`);
+        if (!lineSettled) { lineSettled = true; rejectLine(error); }
+        reject(error);
+        return;
+      }
+      if (!lineSettled) {
+        const error = new Error(`claim child exited without result: ${stderr}`);
+        lineSettled = true;
+        rejectLine(error);
+        reject(error);
+        return;
+      }
+      resolve();
     });
   });
-}
-
-function exited(child) {
-  return new Promise((resolve, reject) => {
-    let stderr = '';
-    child.stderr?.setEncoding('utf8');
-    child.stderr?.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('exit', code => code === 0 ? resolve() : reject(new Error(`claim child exited ${code}: ${stderr}`)));
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', chunk => {
+    stdout += chunk;
+    const newline = stdout.indexOf('\n');
+    if (!lineSettled && newline >= 0) {
+      lineSettled = true;
+      resolveLine(stdout.slice(0, newline).trim());
+    }
   });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  return { line, exit };
 }
 
 async function parentMode() {
@@ -77,24 +90,27 @@ async function parentMode() {
   const installationId = `d6-cross-process-${process.pid}`;
 
   const holder = spawnClaim({ installationId, hold: true });
-  assert.equal(await firstLine(holder), 'ACQUIRED', 'process A must acquire the installation claim');
+  const holderObserved = observe(holder);
+  assert.equal(await holderObserved.line, 'ACQUIRED', 'process A must acquire the installation claim');
 
   const contender = spawnClaim({ installationId });
-  assert.equal(await firstLine(contender), 'BLOCKED', 'process B must be denied while process A holds the same DB advisory lock');
-  await exited(contender);
+  const contenderObserved = observe(contender);
+  assert.equal(await contenderObserved.line, 'BLOCKED', 'process B must be denied while process A holds the same DB advisory lock');
+  await contenderObserved.exit;
 
   const independent = spawnClaim({ installationId: `${installationId}-other` });
-  assert.equal(await firstLine(independent), 'ACQUIRED', 'an unrelated installation may proceed concurrently');
-  await exited(independent);
+  const independentObserved = observe(independent);
+  assert.equal(await independentObserved.line, 'ACQUIRED', 'an unrelated installation may proceed concurrently');
+  await independentObserved.exit;
 
-  const holderExit = exited(holder);
   holder.stdin.write('release\n');
   holder.stdin.end();
-  await holderExit;
+  await holderObserved.exit;
 
   const afterRelease = spawnClaim({ installationId });
-  assert.equal(await firstLine(afterRelease), 'ACQUIRED', 'claim must become available to another process after response-scoped release');
-  await exited(afterRelease);
+  const afterReleaseObserved = observe(afterRelease);
+  assert.equal(await afterReleaseObserved.line, 'ACQUIRED', 'claim must become available to another process after response-scoped release');
+  await afterReleaseObserved.exit;
 
   console.log('PASS real PostgreSQL cross-process installation claim atomicity');
 }
