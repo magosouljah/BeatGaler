@@ -8,11 +8,10 @@ const { installSecurityHeaders } = require("./security-headers");
 const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
+const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 
 installSecurityHeaders(express);
 installLegacyMediaUploadDisable(express);
-installHttpContainment(express, { dataDir: __dirname });
-installProductiveTempAuthBoundary(express);
 
 async function start() {
   const pgConfig = postgresConfig(process.env);
@@ -25,7 +24,14 @@ async function start() {
   }
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
-  console.log(`[control-plane] authority=${cutover.authority}`);
+  const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
+  if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
+    throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
+  }
+
+  installHttpContainment(express, { dataDir: __dirname, installationClaimCoordinator });
+  installProductiveTempAuthBoundary(express);
+  console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"}`);
   require("./server-core");
 }
 
