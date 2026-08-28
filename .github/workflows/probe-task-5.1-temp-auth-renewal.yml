@@ -1,0 +1,66 @@
+name: Probe - Task 5.1 Temp Auth Renewal
+
+on:
+  pull_request:
+    branches:
+      - task-5.1-temp-auth-bot-probe
+    paths:
+      - scripts/telegram-temp-auth-renewal-live.mjs
+      - .github/workflows/probe-task-5.1-temp-auth-renewal.yml
+
+permissions:
+  contents: read
+
+jobs:
+  m0-c-temp-auth-renewal:
+    if: github.head_ref == 'task-5.1-temp-auth-renewal-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BEATGALER_M0_C_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_C_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
+      BEATGALER_M0_C_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+          check-latest: false
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Validate M0-C probe syntax without secrets
+        run: node --check scripts/telegram-temp-auth-renewal-live.mjs
+
+      - name: Detect dedicated probe secrets without printing them
+        id: probe-secrets
+        shell: bash
+        run: |
+          if [[ -n "$BEATGALER_M0_C_API_ID" && -n "$BEATGALER_M0_C_API_HASH" && -n "$BEATGALER_M0_C_BOT_TOKEN" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "M0-C dedicated secrets are configured; live proof will run."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "M0-C LIVE PROOF NOT RUN: dedicated repository secrets are not all configured."
+          fi
+
+      - name: Prove temp-auth renewal and simulated early-loss recovery
+        if: steps.probe-secrets.outputs.ready == 'true'
+        run: node scripts/telegram-temp-auth-renewal-live.mjs
+
+      - name: Record live-proof status
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.probe-secrets.outputs.ready }}" == "true" ]]; then
+            echo "M0-C secret-backed execution was attempted; inspect the preceding probe step for PASS/failure evidence."
+          else
+            echo "M0_C_LIVE_PROOF=NOT_RUN"
+            echo "Task 5.1 remains NO-GO; a green harness job is not M0-C evidence."
+          fi
