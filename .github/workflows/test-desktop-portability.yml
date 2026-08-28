@@ -269,6 +269,53 @@ jobs:
       - name: Compile and run locked portable Rust/TS regressions natively on macOS
         run: npm run test:mac-portability:locked
 
+  temp_auth_cross_platform_probe:
+    name: M0-E1 temp auth live (${{ matrix.label }})
+    if: "${{ github.event_name == 'pull_request' && github.head_ref == 'task-5.1-temp-auth-cross-platform-probe' }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x86_64
+            runner: windows-2025
+          - label: macos-arm64
+            runner: macos-15
+          - label: macos-x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    env:
+      BEATGALER_M0_B2_API_ID: ${{ secrets.BEATGALER_M0_B2_API_ID }}
+      BEATGALER_M0_B2_API_HASH: ${{ secrets.BEATGALER_M0_B2_API_HASH }}
+      BEATGALER_M0_B2_BOT_TOKEN: ${{ secrets.BEATGALER_M0_B2_BOT_TOKEN }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          check-latest: false
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Validate existing B2 probe syntax
+        run: node --check scripts/telegram-temp-auth-bot-live.mjs
+
+      - name: Require dedicated probe secrets without printing them
+        run: |
+          node -e "for (const n of ['BEATGALER_M0_B2_API_ID','BEATGALER_M0_B2_API_HASH','BEATGALER_M0_B2_BOT_TOKEN']) { if (!String(process.env[n] || '').trim()) throw new Error('Missing dedicated probe secret: ' + n); } console.log('Dedicated M0-B2 secrets are present; values remain hidden.')"
+
+      - name: Prove bound bot temporary auth live on this OS
+        run: node scripts/telegram-temp-auth-bot-live.mjs
+
+      - name: Record evidence boundary
+        run: |
+          node -e "console.log('M0-E1 platform=${{ matrix.label }} live_temp_auth_attempted=true production_runtime_changed=false web_browser_proven=false')"
+
   required_ci:
     name: Required CI
     if: ${{ always() }}
