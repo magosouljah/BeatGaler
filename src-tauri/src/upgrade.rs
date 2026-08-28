@@ -162,6 +162,7 @@ pub fn quarantine_sqlite_family(db_path: &Path) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::{params, Connection};
 
     fn test_root(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -198,6 +199,51 @@ mod tests {
         let second = migrate_legacy_app_data(&current).unwrap();
         assert!(second.marker_already_present);
         assert_eq!(second.copied_files, 0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn real_sqlite_rows_survive_074_identity_migration() {
+        let root = test_root("sqlite-real");
+        let legacy = root.join(LEGACY_BUNDLE_IDENTIFIER);
+        let current = root.join("com.beatgaler.app");
+        fs::create_dir_all(&legacy).unwrap();
+        let legacy_db = legacy.join("beatvault.db");
+
+        {
+            let conn = Connection::open(&legacy_db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE upgrade_probe (id TEXT PRIMARY KEY, payload TEXT NOT NULL);\n\
+                 PRAGMA user_version = 2;",
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO upgrade_probe (id, payload) VALUES (?1, ?2)",
+                params!["beat-074", "preserve-me"],
+            ).unwrap();
+        }
+
+        migrate_legacy_app_data(&current).unwrap();
+
+        let migrated = Connection::open(current.join("beatvault.db")).unwrap();
+        let payload: String = migrated.query_row(
+            "SELECT payload FROM upgrade_probe WHERE id=?1",
+            params!["beat-074"],
+            |row| row.get(0),
+        ).unwrap();
+        let user_version: i64 = migrated
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(payload, "preserve-me");
+        assert_eq!(user_version, 2);
+
+        let legacy_conn = Connection::open(&legacy_db).unwrap();
+        let legacy_payload: String = legacy_conn.query_row(
+            "SELECT payload FROM upgrade_probe WHERE id=?1",
+            params!["beat-074"],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(legacy_payload, "preserve-me");
 
         let _ = fs::remove_dir_all(root);
     }
