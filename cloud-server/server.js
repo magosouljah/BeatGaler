@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
@@ -9,6 +10,7 @@ const { startPostgresControlPlane, installPostgresShutdown } = require("./postgr
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 
 installSecurityHeaders(express);
+installLegacyMediaUploadDisable(express);
 installHttpContainment(express, { dataDir: __dirname });
 installProductiveTempAuthBoundary(express);
 
