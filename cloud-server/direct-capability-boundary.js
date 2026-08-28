@@ -420,24 +420,43 @@ function installDirectCapabilityBoundary(express, options = {}) {
     } catch (error) { responseError(res, error); }
   }
 
-  async function revokeSession(req, _res, next) {
-    const installationId = String(req.beatgalerAuthorizedInstallationId || req.body?.beatgalerUserId || "");
-    const sessionId = String(req.body?.sessionId || "");
-    if (installationId && sessionId) await store.revokeSession({ installationId, sessionId, reason: "lease_end" }).catch(() => {});
-    next();
+  async function revokeSession(req, res, next) {
+    const installationId = String(req.beatgalerAuthorizedInstallationId || "").trim();
+    const sessionId = String(req.body?.sessionId || "").trim();
+    if (!installationId || !sessionId) {
+      return responseError(res, codedError("DIRECT_CAPABILITY_AUTHZ_REQUIRED", "canonical session binding is required before lease revocation."));
+    }
+    try {
+      await store.revokeSession({ installationId, sessionId, reason: "lease_end" });
+      next();
+    } catch {
+      return responseError(res, codedError("DIRECT_CAPABILITY_REVOKE_FAILED", "lease capability revocation could not be committed.", 503));
+    }
   }
 
   function revokeAuthOnSuccess(reason) {
     return (req, res, next) => {
-      const authSessionHash = sha256(bearerToken(req));
-      const installationId = String(req.body?.beatgalerUserId || req.beatgalerAuthorizedInstallationId || "").trim() || null;
+      const token = bearerToken(req);
+      const authSessionHash = token ? sha256(token) : "";
       const originalJson = res.json.bind(res);
       res.json = payload => {
-        if (Number(res.statusCode || 200) >= 200 && Number(res.statusCode || 200) < 300 && authSessionHash) {
-          void store.revokeAuthSession({ authSessionHash, installationId, reason }).finally(() => originalJson(payload));
-          return res;
+        const status = Number(res.statusCode || 200);
+        if (status < 200 || status >= 300) return originalJson(payload);
+        if (!authSessionHash) {
+          res.status(503);
+          return originalJson({
+            error: "DIRECT_CAPABILITY_REVOKE_FAILED: authenticated session revocation target is unavailable.",
+            code: "DIRECT_CAPABILITY_REVOKE_FAILED",
+          });
         }
-        return originalJson(payload);
+        void store.revokeAuthSession({ authSessionHash, reason }).then(() => originalJson(payload)).catch(() => {
+          res.status(503);
+          originalJson({
+            error: "DIRECT_CAPABILITY_REVOKE_FAILED: session capability revocation could not be committed.",
+            code: "DIRECT_CAPABILITY_REVOKE_FAILED",
+          });
+        });
+        return res;
       };
       next();
     };
