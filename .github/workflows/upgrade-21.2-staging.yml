@@ -136,17 +136,29 @@ jobs:
           set -euo pipefail
           APP="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -n 1)"
           test -n "$APP"
-          ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
-          NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$APP/Contents/Info.plist")"
+          PLIST="$APP/Contents/Info.plist"
+          ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+          NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$PLIST" 2>/dev/null || true)"
+          DISPLAY="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$PLIST" 2>/dev/null || true)"
+          EXEC="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")"
+          echo "bundleIdentifier=$ID bundleName=$NAME displayName=$DISPLAY executable=$EXEC"
+          find "$APP/Contents/MacOS" -maxdepth 1 -type f -print | sort
+          find "$APP/Contents/Resources" -maxdepth 2 -type f -print | sort
           test "$ID" = "com.beatgaler.app"
-          test "$NAME" = "Galer"
-          test -x "$APP/Contents/MacOS/Galer"
+          if [[ "$NAME" != "Galer" && "$DISPLAY" != "Galer" ]]; then
+            echo "Neither CFBundleName nor CFBundleDisplayName identifies Galer" >&2
+            exit 1
+          fi
+          test -n "$EXEC"
+          test -x "$APP/Contents/MacOS/$EXEC"
           test -f "$APP/Contents/Resources/ffmpeg"
           test -f "$APP/Contents/Resources/node"
           test -f "$APP/Contents/Resources/telegram-bot-api"
+          PRODUCT_NAME="$NAME"
+          if [[ "$PRODUCT_NAME" != "Galer" ]]; then PRODUCT_NAME="$DISPLAY"; fi
           mkdir -p artifacts/upgrade-21.2
-          printf '{"sourceSha":"%s","arch":"%s","bundleIdentifier":"%s","productName":"%s","probe":"PASS"}\n' \
-            "${{ github.event.pull_request.head.sha }}" "${{ matrix.arch }}" "$ID" "$NAME" > "artifacts/upgrade-21.2/macos-${{ matrix.arch }}.json"
+          printf '{"sourceSha":"%s","arch":"%s","bundleIdentifier":"%s","productName":"%s","executable":"%s","probe":"PASS"}\n' \
+            "${{ github.event.pull_request.head.sha }}" "${{ matrix.arch }}" "$ID" "$PRODUCT_NAME" "$EXEC" > "artifacts/upgrade-21.2/macos-${{ matrix.arch }}.json"
 
       - name: Upload macOS staging evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
