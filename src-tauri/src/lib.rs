@@ -63,11 +63,14 @@ pub fn run() {
             let db_path = data_dir.join("beatvault.db");
             let conn = match init_db(&db_path) {
                 Ok(conn) => conn,
-                Err(first_error) if db_path.is_file() => {
+                Err(first_error)
+                    if db_path.is_file()
+                        && upgrade::is_recoverable_sqlite_corruption(&first_error) =>
+                {
                     let recovery_dir = upgrade::quarantine_sqlite_family(&db_path)
                         .unwrap_or_else(|quarantine_error| {
                             panic!(
-                                "Failed to open database ({first_error}) and could not preserve corrupt SQLite state ({quarantine_error})"
+                                "Failed to open corrupt database ({first_error}) and could not preserve SQLite state ({quarantine_error})"
                             )
                         });
                     eprintln!(
@@ -83,6 +86,8 @@ pub fn run() {
                         )
                     })
                 }
+                // Busy/read-only/I/O failures and a future SQLite schema remain
+                // fail-closed. They are not evidence that the user's DB is corrupt.
                 Err(error) => panic!("Failed to open database: {error}"),
             };
             let purged = purge_old_trash_internal(&conn, &data_dir, 14);
