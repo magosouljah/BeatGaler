@@ -40,9 +40,7 @@ function createPostgresInstallationClaimCoordinator(pool) {
               [keyA, keyB],
             );
             if (unlock.rows?.[0]?.unlocked !== true) {
-              const error = new Error('PostgreSQL installation claim advisory lock was not held at release.');
-              client.release(error);
-              throw error;
+              throw new Error('PostgreSQL installation claim advisory lock was not held at release.');
             }
             client.release();
           } catch (error) {
