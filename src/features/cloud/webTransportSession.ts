@@ -14,6 +14,23 @@ export interface WebTransportTempAuthPublic {
   binding: TempAuthBinding | null;
 }
 
+export interface WebTransportCapabilityScope {
+  objectType: "beat" | "topic" | "message" | "index" | "trash";
+  objectIds: string[];
+}
+
+export interface WebTransportCapabilityPublic {
+  token: string;
+  user_id: string;
+  tenant_id: string;
+  installation_id: string;
+  vault_scope: string;
+  operation: string;
+  object_scope: { object_type: string; object_ids: string[] };
+  issued_at: string;
+  expires_at: string;
+}
+
 export interface WebTransportSessionPublic {
   ok?: boolean;
   mode: "galer-direct-temp-mtproto";
@@ -59,6 +76,7 @@ export interface WebTransportOperationResponse {
   refresh_required?: boolean;
   temp_auth_required?: boolean;
   operation_id?: string;
+  capability?: WebTransportCapabilityPublic;
   credential_refresh?: WebTransportSessionPublic | null;
 }
 
@@ -209,6 +227,7 @@ export async function heartbeatWebTransportSession(session: WebTransportSession)
 export async function beginWebTransportOperation(
   session: WebTransportSession,
   kind: string,
+  scope: WebTransportCapabilityScope,
 ): Promise<{
   expired: boolean;
   waitMs: number | null;
@@ -218,6 +237,7 @@ export async function beginWebTransportOperation(
   const response = await transportRequest<WebTransportOperationResponse>("/transport/operation/begin", {
     ...sessionIdentity(session),
     kind,
+    scope,
   });
   assertNoPermanentCredentials(response);
   if (response.expired === true) {
@@ -231,11 +251,15 @@ export async function beginWebTransportOperation(
       operationId: null,
     };
   }
+  const operationId = typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null;
+  if (operationId && (!response.capability || response.capability.token !== operationId)) {
+    throw new Error("Galer Cloud returned an unscoped Direct operation.");
+  }
   return {
     expired: false,
     waitMs: response.wait === true ? Math.min(1000, Math.max(100, Number(response.retry_after_ms) || 250)) : null,
     credentialRefresh: null,
-    operationId: typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null,
+    operationId,
   };
 }
 
