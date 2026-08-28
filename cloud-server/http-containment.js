@@ -18,7 +18,7 @@ const INSTALLATION_POST_ROUTES = new Set([
   "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
   "/transport/session/stop", "/transport/operation/begin", "/transport/operation/end",
   "/transport/index/commit", "/transport/topic/ensure", "/transport/upload/confirm",
-  "/beats/delete-topic", "/auth/logout",
+  "/beats/delete-topic",
 ]);
 const INSTALLATION_GET_ROUTES = new Set(["/telegram/connect/status"]);
 
@@ -67,6 +67,8 @@ function createHttpContainment(options = {}) {
 
   function accountsData() { return readJson(accountsFile, { users: [], sessions: {} }); }
   function cloudData() { return readJson(cloudFile, { linkedAccounts: {}, beatTopics: {} }); }
+  function authzData() { return readJson(bindingsFile, {}); }
+  function saveAuthz(data) { writeJsonAtomic(bindingsFile, data); }
 
   function authenticate(req, res) {
     const token = bearerToken(req);
@@ -104,16 +106,16 @@ function createHttpContainment(options = {}) {
     const key = sessionKey(token);
     const session = data.sessions?.[key];
     if (!session || String(session.userId || "") !== String(expectedUserId || "")) return false;
-    const bindings = readJson(bindingsFile, {});
+    const bindings = authzData();
     bindings[key] = { installationId: id, tenantId: String(expectedUserId), boundAt: now(), expiresAt: Number(session.expiresAt || 0) };
-    writeJsonAtomic(bindingsFile, bindings);
+    saveAuthz(bindings);
     return true;
   }
 
   function authorizeSessionInstallation(req, res, { upload = false } = {}) {
     const auth = req.beatgalerPreAuth || authenticate(req, res);
     if (!auth) { if (upload) cleanupUploadedFile(req); return null; }
-    const binding = readJson(bindingsFile, {})?.[auth.key] || null;
+    const binding = authzData()?.[auth.key] || null;
     const installationId = String(binding?.installationId || auth.session?.installationId || "").trim();
     const tenantId = String(binding?.tenantId || auth.session?.tenantId || auth.user.id || "").trim();
     if (binding && Number(binding.expiresAt || 0) > 0 && Number(binding.expiresAt) <= now()) {
@@ -139,9 +141,7 @@ function createHttpContainment(options = {}) {
 
   function guardRegisterInstallation(req, res, next) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
-    if (installationId && linkedAccount(installationId)) {
-      return sendJson(res, 403, "This installation is already owned by another BeatGaler account.");
-    }
+    if (installationId && linkedAccount(installationId)) return sendJson(res, 403, "This installation is already owned by another BeatGaler account.");
     next();
   }
 
@@ -150,9 +150,7 @@ function createHttpContainment(options = {}) {
     const current = linkedAccount(installationId);
     if (!installationId || !current) return next();
     const candidate = findLoginUser(req);
-    if (candidate && String(current.beatgalerAccountId || "") !== String(candidate.id || "")) {
-      return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
-    }
+    if (candidate && String(current.beatgalerAccountId || "") !== String(candidate.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
     next();
   }
 
@@ -161,20 +159,29 @@ function createHttpContainment(options = {}) {
     if (!auth) return;
     const installationId = String(req.body?.beatgalerUserId || req.headers?.["x-beatgaler-installation-id"] || "").trim();
     const current = linkedAccount(installationId);
-    if (current && String(current.beatgalerAccountId || "") !== String(auth.user.id || "")) {
-      return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
-    }
+    if (current && String(current.beatgalerAccountId || "") !== String(auth.user.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
     next();
   }
 
-  function rememberOAuthGuard(state, installationId, expectedOwnerId) {
-    const bindings = readJson(bindingsFile, {});
-    bindings[`oauth:${state}`] = {
+  function rememberOAuthGuard(state, flowId, installationId, expectedOwnerId) {
+    const bindings = authzData();
+    const record = {
       installationId: String(installationId),
       expectedOwnerId: expectedOwnerId ? String(expectedOwnerId) : null,
+      flowId: String(flowId || ""),
+      state: String(state || ""),
       expiresAt: now() + OAUTH_GUARD_TTL_MS,
     };
-    writeJsonAtomic(bindingsFile, bindings);
+    bindings[`oauth:${state}`] = record;
+    if (flowId) bindings[`oauth-flow:${flowId}`] = record;
+    saveAuthz(bindings);
+  }
+
+  function markOAuthFlowBlocked(flowId) {
+    if (!flowId) return;
+    const bindings = authzData();
+    const key = `oauth-flow:${flowId}`;
+    if (bindings[key]) { bindings[key] = { ...bindings[key], blocked: true }; saveAuthz(bindings); }
   }
 
   function guardOAuthStart(req, res, next) {
@@ -186,19 +193,16 @@ function createHttpContainment(options = {}) {
       const auth = authenticate(req, res);
       if (!auth) return;
       expectedOwnerId = String(auth.user.id);
-      if (current && String(current.beatgalerAccountId || "") !== expectedOwnerId) {
-        return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
-      }
+      if (current && String(current.beatgalerAccountId || "") !== expectedOwnerId) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
     } else if (current) {
       return sendJson(res, 403, "This installation is already linked. Resume its authenticated session before changing sign-in providers.");
     }
-
     const originalJson = res.json.bind(res);
     res.json = payload => {
-      if (Number(res.statusCode || 200) < 300 && payload?.authorization_url && installationId) {
+      if (Number(res.statusCode || 200) < 300 && payload?.authorization_url && payload?.flow_id && installationId) {
         try {
           const state = new URL(payload.authorization_url).searchParams.get("state");
-          if (state) rememberOAuthGuard(state, installationId, expectedOwnerId);
+          if (state) rememberOAuthGuard(state, payload.flow_id, installationId, expectedOwnerId);
         } catch {}
       }
       return originalJson(payload);
@@ -208,22 +212,53 @@ function createHttpContainment(options = {}) {
 
   function guardOAuthCallback(req, res, next) {
     const state = String(req.query?.state || "").trim();
-    const bindings = readJson(bindingsFile, {});
+    const bindings = authzData();
     const key = `oauth:${state}`;
     const guard = bindings[key];
-    if (!guard || Number(guard.expiresAt || 0) <= now()) {
-      return res.status(400).send("BeatGaler sign-in request expired. Return to BeatGaler and try again.");
-    }
-    delete bindings[key];
-    writeJsonAtomic(bindingsFile, bindings);
+    if (!guard || Number(guard.expiresAt || 0) <= now()) return res.status(400).send("BeatGaler sign-in request expired. Return to BeatGaler and try again.");
+    delete bindings[key]; saveAuthz(bindings);
     const current = linkedAccount(guard.installationId);
     if (guard.expectedOwnerId) {
       if (current && String(current.beatgalerAccountId || "") !== String(guard.expectedOwnerId)) {
+        markOAuthFlowBlocked(guard.flowId);
         return res.status(403).send("This BeatGaler installation changed ownership during sign-in. Start again.");
       }
     } else if (current) {
+      markOAuthFlowBlocked(guard.flowId);
       return res.status(403).send("This BeatGaler installation was claimed during sign-in. Start again.");
     }
+    next();
+  }
+
+  function guardOAuthPoll(req, res, next) {
+    const flowId = String(req.body?.flowId || "").trim();
+    const key = `oauth-flow:${flowId}`;
+    const bindings = authzData();
+    const guard = bindings[key];
+    if (!guard || Number(guard.expiresAt || 0) <= now()) return sendJson(res, 400, "OAuth sign-in request expired. Start again.");
+    if (guard.blocked) {
+      delete bindings[key]; saveAuthz(bindings);
+      return sendJson(res, 403, "This BeatGaler installation changed ownership during sign-in. Start again.");
+    }
+    req.body = req.body || {};
+    req.body.beatgalerUserId = String(guard.installationId);
+    const originalJson = res.json.bind(res);
+    res.json = payload => {
+      if (!payload?.pending) {
+        const latest = authzData(); delete latest[key]; saveAuthz(latest);
+      }
+      return originalJson(payload);
+    };
+    next();
+  }
+
+  function logoutSession(req, res, next) {
+    const auth = authenticate(req, res);
+    if (!auth) return;
+    const binding = authzData()?.[auth.key] || null;
+    req.body = req.body || {};
+    if (binding?.installationId && String(binding.tenantId || auth.user.id) === String(auth.user.id)) req.body.beatgalerUserId = String(binding.installationId);
+    else delete req.body.beatgalerUserId;
     next();
   }
 
@@ -233,9 +268,7 @@ function createHttpContainment(options = {}) {
     req.beatgalerPreAuth = auth;
     if (!authorizeSessionInstallation(req, res)) return;
     const contentLength = Number(req.headers?.["content-length"] || 0);
-    if (Number.isFinite(contentLength) && contentLength > FILE_UPLOAD_LIMIT_BYTES + MULTIPART_OVERHEAD_BYTES) {
-      return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", { max_bytes: FILE_UPLOAD_LIMIT_BYTES });
-    }
+    if (Number.isFinite(contentLength) && contentLength > FILE_UPLOAD_LIMIT_BYTES + MULTIPART_OVERHEAD_BYTES) return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", { max_bytes: FILE_UPLOAD_LIMIT_BYTES });
     const keys = [`ip:${requestIp(req)}`, `account:${auth.user.id}`, `tenant:${req.beatgalerAuthorizedTenantId}`];
     const stamp = now();
     for (const key of keys) {
@@ -279,17 +312,13 @@ function createHttpContainment(options = {}) {
     if (!beatId) return sendJson(res, 400, "beatId is required.");
     if (Number.isFinite(hintedTopicId) && hintedTopicId > 0) {
       const current = cloudData().beatTopics?.[`${authz.installationId}:${beatId}`];
-      if (!current || Number(current.messageThreadId || 0) !== hintedTopicId) {
-        return sendJson(res, 403, "This topic does not belong to the requested BeatGaler object.");
-      }
+      if (!current || Number(current.messageThreadId || 0) !== hintedTopicId) return sendJson(res, 403, "This topic does not belong to the requested BeatGaler object.");
     }
     next();
   }
 
   function registrationGate(_req, res, next) {
-    if (String(env.NODE_ENV || "") === "production" && String(env.BEATGALER_PUBLIC_REGISTRATION || "") !== "1") {
-      return sendJson(res, 503, "Public registration is temporarily unavailable.");
-    }
+    if (String(env.NODE_ENV || "") === "production" && String(env.BEATGALER_PUBLIC_REGISTRATION || "") !== "1") return sendJson(res, 503, "Public registration is temporarily unavailable.");
     next();
   }
 
@@ -314,7 +343,7 @@ function createHttpContainment(options = {}) {
 
   return {
     preUpload, postUpload, bodyOwner, installationOwner, beatTopicOwner, registrationGate,
-    guardRegisterInstallation, guardLoginInstallation, guardSessionRebind, guardOAuthStart, guardOAuthCallback,
+    guardRegisterInstallation, guardLoginInstallation, guardSessionRebind, guardOAuthStart, guardOAuthCallback, guardOAuthPoll, logoutSession,
     bindSessionOnSuccess, legacyLibraryUpsert, authenticate,
     authorizeInstallation: authorizeSessionInstallation, authorizeSessionInstallation, bindSessionInstallation,
     constants: { FILE_UPLOAD_LIMIT_BYTES, uploadWindowMs, uploadRequestsPerWindow, uploadConcurrency },
@@ -334,7 +363,8 @@ function installHttpContainment(express, options = {}) {
     if (routePath === "/auth/login") return originalPost.call(this, routePath, containment.guardLoginInstallation, containment.bindSessionOnSuccess, ...handlers);
     if (routePath === "/auth/session") return originalPost.call(this, routePath, containment.guardSessionRebind, containment.bindSessionOnSuccess, ...handlers);
     if (routePath === "/auth/oauth/start") return originalPost.call(this, routePath, containment.guardOAuthStart, ...handlers);
-    if (routePath === "/auth/oauth/poll") return originalPost.call(this, routePath, containment.bindSessionOnSuccess, ...handlers);
+    if (routePath === "/auth/oauth/poll") return originalPost.call(this, routePath, containment.guardOAuthPoll, containment.bindSessionOnSuccess, ...handlers);
+    if (routePath === "/auth/logout") return originalPost.call(this, routePath, containment.logoutSession, ...handlers);
     if (UPLOAD_ROUTES.has(routePath) && handlers.length >= 2) return originalPost.call(this, routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
     if (BODY_OWNER_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.bodyOwner, ...handlers);
     if (routePath === "/beats/delete-topic") return originalPost.call(this, routePath, containment.beatTopicOwner, ...handlers);
