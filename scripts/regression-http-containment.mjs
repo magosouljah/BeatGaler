@@ -91,10 +91,11 @@ try {
     const req = request({ body: { beatgalerUserId: fresh, provider: "google" } });
     const res = responseRecorder();
     containment.guardOAuthStart(req, res, () => {
-      res.json({ ok: true, authorization_url: "https://accounts.example/authorize?state=state_fresh" });
+      res.json({ ok: true, flow_id: "flow_fresh", authorization_url: "https://accounts.example/authorize?state=state_fresh" });
     });
     let bindings = JSON.parse(fs.readFileSync(path.join(dir, "authz-session-bindings.json"), "utf8"));
     assert.equal(bindings["oauth:state_fresh"].installationId, fresh);
+    assert.equal(bindings["oauth-flow:flow_fresh"].installationId, fresh);
 
     const cloud = JSON.parse(fs.readFileSync(path.join(dir, "cloud-data.json"), "utf8"));
     cloud.linkedAccounts[fresh] = { beatgalerAccountId: "usr_other" };
@@ -104,8 +105,33 @@ try {
     containment.guardOAuthCallback(cbReq, cbRes, () => { callbackNext = true; });
     assert.equal(cbRes.statusCode, 403); assert.equal(callbackNext, false, "OAuth race cannot overwrite an installation claimed after flow start");
 
+    const pollReq = request({ body: { flowId: "flow_fresh", beatgalerUserId: "other_install" } });
+    const pollRes = responseRecorder(); let pollNext = false;
+    containment.guardOAuthPoll(pollReq, pollRes, () => { pollNext = true; });
+    assert.equal(pollRes.statusCode, 403); assert.equal(pollNext, false, "blocked OAuth flow cannot rebind through poll");
+
     delete cloud.linkedAccounts[fresh];
     fs.writeFileSync(path.join(dir, "cloud-data.json"), JSON.stringify(cloud, null, 2));
+  }
+  {
+    const fresh = "install_oauth_poll";
+    const req = request({ body: { beatgalerUserId: fresh, provider: "google" } });
+    const res = responseRecorder();
+    containment.guardOAuthStart(req, res, () => {
+      res.json({ ok: true, flow_id: "flow_poll", authorization_url: "https://accounts.example/authorize?state=state_poll" });
+    });
+    const pollReq = request({ body: { flowId: "flow_poll", beatgalerUserId: "other_install" } });
+    const pollRes = responseRecorder(); let pollNext = false;
+    containment.guardOAuthPoll(pollReq, pollRes, () => { pollNext = true; pollRes.json({ ok: true, pending: true }); });
+    assert.equal(pollNext, true);
+    assert.equal(pollReq.body.beatgalerUserId, fresh, "OAuth poll installation must come from server-side flow reservation");
+  }
+  {
+    const req = request({ token: unboundToken, body: { beatgalerUserId: "other_install" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.logoutSession(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+    assert.equal("beatgalerUserId" in req.body, false, "legacy unbound logout must invalidate token without trusting body installation id");
   }
   {
     const req = request({ token, headers: { "content-length": String(FILE_UPLOAD_LIMIT_BYTES + 1024 * 1024 + 1) } });
