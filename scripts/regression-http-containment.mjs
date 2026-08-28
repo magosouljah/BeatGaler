@@ -65,39 +65,39 @@ try {
   {
     const req = request({ body: { beatgalerUserId: "other_install", identifier: "tester#0001" } });
     const res = responseRecorder(); let nextCalled = false;
-    containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
+    await containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
     assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "login must not rebind another account's installation");
   }
   {
     const req = request({ body: { beatgalerUserId: "other_install", identifier: "other@example.test" } });
     const res = responseRecorder(); let nextCalled = false;
-    containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
+    await containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true, "same-account login may resume its own installation");
   }
   {
     const fresh = "install_claim_race";
     const reqA = request({ body: { beatgalerUserId: fresh, identifier: "tester#0001" } });
     const resA = responseRecorder(); let nextA = false;
-    containment.guardLoginInstallation(reqA, resA, () => { nextA = true; });
+    await containment.guardLoginInstallation(reqA, resA, () => { nextA = true; });
     assert.equal(nextA, true, "first unowned installation claim may proceed");
 
     const reqB = request({ body: { beatgalerUserId: fresh, identifier: "other#0001" } });
     const resB = responseRecorder(); let nextB = false;
-    containment.guardLoginInstallation(reqB, resB, () => { nextB = true; });
+    await containment.guardLoginInstallation(reqB, resB, () => { nextB = true; });
     assert.equal(resB.statusCode, 403);
     assert.equal(nextB, false, "concurrent claim must fail before async storage/bind work can race");
 
     resA.emit("finish");
     const reqC = request({ body: { beatgalerUserId: fresh, identifier: "other#0001" } });
     const resC = responseRecorder(); let nextC = false;
-    containment.guardLoginInstallation(reqC, resC, () => { nextC = true; });
+    await containment.guardLoginInstallation(reqC, resC, () => { nextC = true; });
     assert.equal(nextC, true, "claim reservation releases when the owning response finishes");
     resC.emit("finish");
   }
   {
     const req = request({ token, body: { beatgalerUserId: "other_install" } });
     const res = responseRecorder(); let nextCalled = false;
-    containment.guardSessionRebind(req, res, () => { nextCalled = true; });
+    await containment.guardSessionRebind(req, res, () => { nextCalled = true; });
     assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "validated session cannot claim foreign installation");
   }
   {
@@ -122,7 +122,7 @@ try {
     fs.writeFileSync(path.join(dir, "cloud-data.json"), JSON.stringify(cloud, null, 2));
     const cbReq = request({ query: { state: "state_fresh" } });
     const cbRes = responseRecorder(); let callbackNext = false;
-    containment.guardOAuthCallback(cbReq, cbRes, () => { callbackNext = true; });
+    await containment.guardOAuthCallback(cbReq, cbRes, () => { callbackNext = true; });
     assert.equal(cbRes.statusCode, 403); assert.equal(callbackNext, false, "OAuth race cannot overwrite an installation claimed after flow start");
 
     const pollReq = request({ body: { flowId: "flow_fresh", beatgalerUserId: "other_install" } });

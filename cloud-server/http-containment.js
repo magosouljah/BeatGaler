@@ -64,6 +64,7 @@ function createHttpContainment(options = {}) {
   const rateBuckets = new Map();
   const activeUploads = new Map();
   const pendingInstallationClaims = new Map();
+  const installationClaimCoordinator = options.installationClaimCoordinator || null;
 
   function accountsData() { return readJson(accountsFile, { users: [], sessions: {} }); }
   function cloudData() { return readJson(cloudFile, { linkedAccounts: {}, beatTopics: {} }); }
@@ -97,9 +98,33 @@ function createHttpContainment(options = {}) {
     ) || null;
   }
 
-  function reserveInstallationClaim(res, installationId, claimant) {
+  async function reserveInstallationClaim(res, installationId, claimant) {
     const id = String(installationId || "").trim();
     if (!id) return true;
+
+    if (installationClaimCoordinator) {
+      let releaseClaim;
+      try {
+        releaseClaim = await installationClaimCoordinator.tryAcquire(id, claimant);
+      } catch {
+        sendJson(res, 503, "Authorization claim coordination is unavailable. Try again shortly.");
+        return false;
+      }
+      if (!releaseClaim) {
+        sendJson(res, 403, "This installation is already being claimed by another authenticated flow. Try again.");
+        return false;
+      }
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        void Promise.resolve(releaseClaim()).catch(() => {});
+      };
+      res.once("finish", release);
+      res.once("close", release);
+      return true;
+    }
+
     const current = pendingInstallationClaims.get(id);
     if (current) {
       sendJson(res, 403, "This installation is already being claimed by another authenticated flow. Try again.");
@@ -160,14 +185,14 @@ function createHttpContainment(options = {}) {
     return { auth, account, installationId, tenantId };
   }
 
-  function guardRegisterInstallation(req, res, next) {
+  async function guardRegisterInstallation(req, res, next) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
     if (installationId && linkedAccount(installationId)) return sendJson(res, 403, "This installation is already owned by another BeatGaler account.");
-    if (!reserveInstallationClaim(res, installationId, `register:${String(req.body?.email || "").trim().toLowerCase()}`)) return;
+    if (!(await reserveInstallationClaim(res, installationId, `register:${String(req.body?.email || "").trim().toLowerCase()}`))) return;
     next();
   }
 
-  function guardLoginInstallation(req, res, next) {
+  async function guardLoginInstallation(req, res, next) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
     const current = linkedAccount(installationId);
     if (!installationId) return next();
@@ -176,17 +201,17 @@ function createHttpContainment(options = {}) {
       if (candidate && String(current.beatgalerAccountId || "") !== String(candidate.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
       return next();
     }
-    if (!reserveInstallationClaim(res, installationId, candidate?.id || `login:${String(req.body?.identifier || req.body?.username || "").trim().toLowerCase()}`)) return;
+    if (!(await reserveInstallationClaim(res, installationId, candidate?.id || `login:${String(req.body?.identifier || req.body?.username || "").trim().toLowerCase()}`))) return;
     next();
   }
 
-  function guardSessionRebind(req, res, next) {
+  async function guardSessionRebind(req, res, next) {
     const auth = authenticate(req, res);
     if (!auth) return;
     const installationId = String(req.body?.beatgalerUserId || req.headers?.["x-beatgaler-installation-id"] || "").trim();
     const current = linkedAccount(installationId);
     if (current && String(current.beatgalerAccountId || "") !== String(auth.user.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
-    if (!current && !reserveInstallationClaim(res, installationId, auth.user.id)) return;
+    if (!current && !(await reserveInstallationClaim(res, installationId, auth.user.id))) return;
     next();
   }
 
@@ -237,7 +262,7 @@ function createHttpContainment(options = {}) {
     next();
   }
 
-  function guardOAuthCallback(req, res, next) {
+  async function guardOAuthCallback(req, res, next) {
     const state = String(req.query?.state || "").trim();
     const bindings = authzData();
     const key = `oauth:${state}`;
@@ -254,7 +279,7 @@ function createHttpContainment(options = {}) {
       markOAuthFlowBlocked(guard.flowId);
       return res.status(403).send("This BeatGaler installation was claimed during sign-in. Start again.");
     }
-    if (!current && !reserveInstallationClaim(res, guard.installationId, guard.expectedOwnerId || `oauth:${guard.flowId}`)) {
+    if (!current && !(await reserveInstallationClaim(res, guard.installationId, guard.expectedOwnerId || `oauth:${guard.flowId}`))) {
       markOAuthFlowBlocked(guard.flowId);
       return;
     }
