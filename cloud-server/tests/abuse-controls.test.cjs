@@ -139,20 +139,29 @@ function uploadRequest({ token = "", headers = {}, body = {}, ip = "127.0.0.1", 
     assert.equal(nextCalled, false);
   }
 
-  // Upload/cross-tenant matrix reuses containment and never allocates a giant payload.
+  // Upload/cross-tenant matrix reuses the session-bound containment model and never allocates a giant payload.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "beatgaler-f1-6.2-"));
   const token = "f1-6.2-session";
+  const foreignToken = "f1-6.2-foreign-session";
   const userId = "usr_a";
   const installationId = "tenant_a";
+  const expiresAt = Date.now() + 60_000;
   fs.writeFileSync(path.join(dir, "accounts-data.json"), JSON.stringify({
     users: [{ id: userId }],
-    sessions: { [sessionKey(token)]: { userId, expiresAt: Date.now() + 60_000 } },
+    sessions: {
+      [sessionKey(token)]: { userId, expiresAt },
+      [sessionKey(foreignToken)]: { userId, expiresAt },
+    },
   }));
   fs.writeFileSync(path.join(dir, "cloud-data.json"), JSON.stringify({
     linkedAccounts: {
       [installationId]: { beatgalerAccountId: userId },
       tenant_b: { beatgalerAccountId: "usr_b" },
     },
+  }));
+  fs.writeFileSync(path.join(dir, "authz-session-bindings.json"), JSON.stringify({
+    [sessionKey(token)]: { installationId, tenantId: userId, boundAt: Date.now(), expiresAt },
+    [sessionKey(foreignToken)]: { installationId: "tenant_b", tenantId: userId, boundAt: Date.now(), expiresAt },
   }));
 
   try {
@@ -171,12 +180,11 @@ function uploadRequest({ token = "", headers = {}, body = {}, ip = "127.0.0.1", 
       assert.equal(nextCalled, false);
     }
 
-    // 403 cross-tenant / foreign installation ID.
+    // 403 cross-tenant: even a stale/forged session binding cannot authorize an installation owned by another account.
     {
-      const req = uploadRequest({ token, headers: { "x-beatgaler-installation-id": "tenant_b" }, body: { beatgalerUserId: "tenant_b" } });
+      const req = uploadRequest({ token: foreignToken, headers: { "x-beatgaler-installation-id": "tenant_b" }, body: { beatgalerUserId: "tenant_b" } });
       const res = responseRecorder();
-      containment.preUpload(req, res, () => {});
-      containment.postUpload(req, res, () => assert.fail("foreign tenant must not continue"));
+      containment.preUpload(req, res, () => assert.fail("foreign tenant must not continue"));
       assert.equal(res.statusCode, 403);
       res.emit("finish");
     }

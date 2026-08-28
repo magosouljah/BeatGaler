@@ -40,6 +40,8 @@ rustup
 !.env.example
 cloud-server/.env
 cloud-server/cloud-data.json
+cloud-server/authz-session-bindings.json
+cloud-server/authz-session-bindings.json.tmp*
 cloud-server/master-session.txt
 cloud-server/uploads-tmp/
 uploads-tmp/
