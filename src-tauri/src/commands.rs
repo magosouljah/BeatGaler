@@ -1576,23 +1576,18 @@ fn direct_request(user_id: &str, command: Value) -> Result<Value, String> {
         direct_end_operation(user_id, &session_id, generation, &operation_id);
         return Err(error);
     }
-    let result = {
+    let result: Result<Value, String> = (|| {
         let slot = direct_runtime_slot();
         let mut guard = slot.lock().map_err(|e| e.to_string())?;
         let runtime = guard.as_mut().ok_or_else(|| "Galer Storage local runtime is unavailable.".to_string())?;
         if runtime.session_id != session_id || runtime.generation != generation {
-            None
-        } else {
-            Some(direct_send_helper_command(runtime, command))
-        }
-    };
-    let result = match result {
-        Some(result) => result,
-        None => {
-            direct_end_operation(user_id, &session_id, generation, &operation_id);
             return Err("Galer Storage session changed before the authorized operation could execute.".to_string());
         }
-    };
+        direct_send_helper_command(runtime, command)
+    })();
+    // Once a capability reaches AUTHORIZED, every local outcome must close the
+    // server-side operation. This includes poisoned locks, vanished runtimes and
+    // helper failures; operation/end is idempotent for retry safety.
     direct_end_operation(user_id, &session_id, generation, &operation_id);
     result
 }
