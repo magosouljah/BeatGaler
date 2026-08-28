@@ -48,39 +48,51 @@ export class WebGalerCloudTransport {
   ): Promise<WebTransportUploadResult> {
     await this.controller.connect();
     const threadId = await ensureWebTransportTopic(input.beatId, input.beatName);
-    return this.controller.withOperation("upload", () => this.worker.upload({
-      file: input.file,
-      filename: input.filename,
-      beatId: input.beatId,
-      kind: input.kind,
-      threadId,
-    }, onProgress));
+    return this.controller.withOperation(
+      "upload",
+      { objectType: "beat", objectIds: [input.beatId] },
+      () => this.worker.upload({
+        file: input.file,
+        filename: input.filename,
+        beatId: input.beatId,
+        kind: input.kind,
+        threadId,
+      }, onProgress),
+    );
   }
 
   async getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
     await this.controller.connect();
-    return this.controller.withOperation("get_index", () => this.worker.getLibraryIndex());
+    return this.controller.withOperation(
+      "get_index",
+      { objectType: "index", objectIds: ["pinned"] },
+      () => this.worker.getLibraryIndex(),
+    );
   }
 
   async downloadFiles(inputs: WebTransportDownloadInput[]): Promise<Array<WebTransportDownloadResult | null>> {
     if (inputs.length === 0) return [];
     await this.controller.connect();
-    return this.controller.withOperation("load_artwork", async () => {
-      const results: Array<WebTransportDownloadResult | null> = new Array(inputs.length).fill(null);
-      let cursor = 0;
-      const workerCount = Math.min(4, inputs.length);
-      await Promise.all(Array.from({ length: workerCount }, async () => {
-        while (cursor < inputs.length) {
-          const index = cursor++;
-          try {
-            results[index] = await this.worker.download(inputs[index]);
-          } catch (error) {
-            console.warn(`[web/library] artwork ${inputs[index].messageId} could not be hydrated`, error);
+    return this.controller.withOperation(
+      "load_artwork",
+      { objectType: "message", objectIds: inputs.map(input => String(input.messageId)) },
+      async () => {
+        const results: Array<WebTransportDownloadResult | null> = new Array(inputs.length).fill(null);
+        let cursor = 0;
+        const workerCount = Math.min(4, inputs.length);
+        await Promise.all(Array.from({ length: workerCount }, async () => {
+          while (cursor < inputs.length) {
+            const index = cursor++;
+            try {
+              results[index] = await this.worker.download(inputs[index]);
+            } catch (error) {
+              console.warn(`[web/library] artwork ${inputs[index].messageId} could not be hydrated`, error);
+            }
           }
-        }
-      }));
-      return results;
-    });
+        }));
+        return results;
+      },
+    );
   }
 
   async streamFile(
@@ -88,7 +100,10 @@ export class WebGalerCloudTransport {
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
   ): Promise<{ completed: Promise<WebTransportStreamResult>; cancel(): void }> {
     await this.controller.connect();
-    const lease = await this.controller.beginOperation("stream_master");
+    const lease = await this.controller.beginOperation(
+      "stream_master",
+      { objectType: "message", objectIds: [String(input.messageId)] },
+    );
     const stream = this.worker.stream(input, onChunk);
     return {
       completed: stream.completed.finally(() => this.controller.endOperation(lease).catch(() => {})),
@@ -103,7 +118,10 @@ export class WebGalerCloudTransport {
     onProgress?: (progress: WebImportCommitProgress) => void,
   ): Promise<Beat> {
     await this.controller.connect();
-    const lease = await this.controller.beginOperation("commit_import");
+    const lease = await this.controller.beginOperation(
+      "commit_import",
+      { objectType: "beat", objectIds: [beat.id] },
+    );
     let topic: Promise<number> | null = null;
     try {
       const result = await commitWebImportedBeat(beat, files, {
@@ -139,7 +157,10 @@ export class WebGalerCloudTransport {
     onProgress?: (progress: WebBeatEditProgress) => void,
   ): Promise<Beat> {
     await this.controller.connect();
-    const lease = await this.controller.beginOperation("commit_edit");
+    const lease = await this.controller.beginOperation(
+      "commit_edit",
+      { objectType: "beat", objectIds: [original.id] },
+    );
     let topic: Promise<number> | null = null;
     try {
       const result = await commitWebBeatEdit(original, updated, files, {
@@ -172,7 +193,10 @@ export class WebGalerCloudTransport {
 
   async moveBeatsToTrash(beatIds: string[], sourceId: string): Promise<string[]> {
     await this.controller.connect();
-    const lease = await this.controller.beginOperation("trash_move");
+    const lease = await this.controller.beginOperation(
+      "trash_move",
+      { objectType: "beat", objectIds: beatIds },
+    );
     try {
       const result = await moveWebBeatsToTrash(beatIds, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
@@ -194,7 +218,10 @@ export class WebGalerCloudTransport {
 
   async restoreBeatFromTrash(trashId: string, sourceId: string): Promise<Beat> {
     await this.controller.connect();
-    const lease = await this.controller.beginOperation("trash_restore");
+    const lease = await this.controller.beginOperation(
+      "trash_restore",
+      { objectType: "trash", objectIds: [trashId] },
+    );
     let restored: Beat;
     try {
       const result = await restoreWebBeatFromTrash(trashId, {
@@ -224,7 +251,10 @@ export class WebGalerCloudTransport {
 
   async purgeTrash(sourceId: string): Promise<number> {
     await this.controller.connect();
-    const lease = await this.controller.beginOperation("trash_purge");
+    const lease = await this.controller.beginOperation(
+      "trash_purge",
+      { objectType: "trash", objectIds: ["all"] },
+    );
     try {
       const result = await purgeWebTrash({
         getLibraryIndex: () => this.worker.getLibraryIndex(),
