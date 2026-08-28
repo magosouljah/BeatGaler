@@ -1,5 +1,10 @@
 {
   "bundle": {
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/upgrade-hooks.nsh"
+      }
+    },
     "resources": {
       "resources/windows/ffmpeg.exe": "ffmpeg.exe",
       "resources/windows/node.exe": "node.exe",
