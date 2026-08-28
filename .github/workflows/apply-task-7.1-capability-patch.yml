@@ -29,6 +29,9 @@ jobs:
       - name: Apply authorize-before-data-plane patch
         shell: bash
         run: node scripts/apply-task-7.1-authorize-patch.mjs
+      - name: Close authorized operations on every local outcome
+        shell: bash
+        run: node scripts/apply-task-7.1-rust-cleanup-patch.mjs
       - name: Commit patched production sources
         shell: bash
         run: |
@@ -46,5 +49,5 @@ jobs:
             src/features/cloud/webTransportSession.ts \
             src/features/cloud/webTransportController.ts \
             src-tauri/src/commands.rs
-          git commit -m 'security(direct): authorize scoped capabilities before data plane'
+          git commit -m 'security(direct): close capabilities on local failure'
           git push origin HEAD:woz/task-7.1-direct-capabilities
