@@ -1447,7 +1447,7 @@ fn classify_direct_begin_response(response: &Value) -> Result<DirectBeginDisposi
         .ok_or_else(|| "Galer Cloud returned incomplete operation information.".to_string())
 }
 
-fn direct_begin_operation(user_id: &str, kind: &str) -> Result<String, String> {
+fn direct_begin_operation(user_id: &str, kind: &str, scope: &Value) -> Result<String, String> {
     let started = Instant::now();
     loop {
         ensure_direct_runtime(user_id)?;
@@ -1463,6 +1463,7 @@ fn direct_begin_operation(user_id: &str, kind: &str) -> Result<String, String> {
             "generation": generation,
             "credentialVersion": credential_version,
             "kind": kind,
+            "scope": scope,
         }), 10)?;
 
         match classify_direct_begin_response(&response)? {
@@ -1516,9 +1517,36 @@ fn direct_end_operation(user_id: &str, session_id: &str, generation: i64, operat
     }
 }
 
+fn direct_capability_scope(command: &Value) -> Result<Value, String> {
+    let op = command.get("op").and_then(|v| v.as_str()).unwrap_or("");
+    if op == "get_index" || op == "replace_index" {
+        return Ok(json!({ "objectType": "index", "objectIds": ["pinned"] }));
+    }
+    if let Some(message_id) = command.get("message_id").and_then(|v| v.as_i64()) {
+        if message_id > 0 {
+            return Ok(json!({ "objectType": "message", "objectIds": [message_id.to_string()] }));
+        }
+    }
+    if let Some(message_ids) = command.get("message_ids").and_then(|v| v.as_array()) {
+        let ids: Vec<String> = message_ids.iter().filter_map(|value| value.as_i64()).filter(|value| *value > 0).map(|value| value.to_string()).collect();
+        if !ids.is_empty() && ids.len() == message_ids.len() {
+            return Ok(json!({ "objectType": "message", "objectIds": ids }));
+        }
+    }
+    if op == "upload" {
+        if let Some(topic_id) = command.get("reply_to").and_then(|v| v.as_i64()) {
+            if topic_id > 0 {
+                return Ok(json!({ "objectType": "topic", "objectIds": [topic_id.to_string()] }));
+            }
+        }
+    }
+    Err(format!("Galer Storage operation {} has no explicit capability object scope.", op))
+}
+
 fn direct_request(user_id: &str, command: Value) -> Result<Value, String> {
     let kind = command.get("op").and_then(|v| v.as_str()).unwrap_or("data").to_string();
-    let operation_id = direct_begin_operation(user_id, &kind)?;
+    let scope = direct_capability_scope(&command)?;
+    let operation_id = direct_begin_operation(user_id, &kind, &scope)?;
     let (session_id, generation, result) = {
         let slot = direct_runtime_slot();
         let mut guard = slot.lock().map_err(|e| e.to_string())?;

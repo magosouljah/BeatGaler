@@ -26,6 +26,7 @@ const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.DIRECT_HEARTBEA
 const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(process.env.DIRECT_TOKEN_ROTATION_ENABLED || 'false').trim().toLowerCase());
 const INDEX_OPERATION_TTL_MS = Math.max(60_000, Number(process.env.DIRECT_INDEX_OPERATION_TTL_MS || 5 * 60_000));
 const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DATA_OPERATION_TTL_MS || 4 * 60 * 60_000));
+const MAX_ACTIVE_VAULTS_PER_BOT = Math.max(1, Math.min(4, Number(process.env.DIRECT_MAX_ACTIVE_VAULTS_PER_BOT || 4)));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
@@ -313,10 +314,14 @@ function leaseExpired(lease) {
 // bot always moves to the back, exactly matching the requested round-robin.
 function leaseNextBot(pool, metadata) {
   return mutateState(pool, state => {
-    const eligible = pool.filter(bot => !state.bots[bot.id].quarantined && !state.bots[bot.id].rotation_pending);
+    const assignable = pool.filter(bot => !state.bots[bot.id].quarantined && !state.bots[bot.id].rotation_pending);
+    const eligible = assignable.filter(bot => leasesForBot(state, bot.id).length < MAX_ACTIVE_VAULTS_PER_BOT);
     if (!eligible.length) {
-      const error = new Error('Every transport bot is temporarily unavailable while token rotation drains or recovery is required.');
-      error.code = 'NO_ASSIGNABLE_TRANSPORT';
+      const atCapacity = assignable.length > 0;
+      const error = new Error(atCapacity
+        ? `Every transport bot is at the ${MAX_ACTIVE_VAULTS_PER_BOT}-vault active ceiling.`
+        : 'Every transport bot is temporarily unavailable while token rotation drains or recovery is required.');
+      error.code = atCapacity ? 'TRANSPORT_CAPACITY_REACHED' : 'NO_ASSIGNABLE_TRANSPORT';
       throw error;
     }
     const loads = new Map(eligible.map(bot => [bot.id, leasesForBot(state, bot.id).length]));
