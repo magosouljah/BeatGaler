@@ -109,22 +109,3 @@ for (const method of ['guardLoginInstallation', 'guardSessionRebind', 'guardOAut
   regression = regression.replaceAll(before, `await containment.${method}(`);
 }
 fs.writeFileSync(regressionPath, regression, 'utf8');
-
-const workflowPath = '.github/workflows/test-desktop-portability.yml';
-let workflow = fs.readFileSync(workflowPath, 'utf8');
-workflow = replaceOnce(
-  workflow,
-  String.raw`      - name: Execute migrations and adversarial persistence checks on PostgreSQL
-        run: node cloud-server/tests/postgres-live.integration.cjs
-`,
-  String.raw`      - name: Execute migrations and adversarial persistence checks on PostgreSQL
-        run: node cloud-server/tests/postgres-live.integration.cjs
-
-      - name: Verify D6 PostgreSQL claim coordinator and real cross-process atomicity
-        run: |
-          node cloud-server/tests/postgres-installation-claim-coordinator.test.cjs
-          node cloud-server/tests/postgres-installation-claim-cross-process.integration.cjs
-`,
-  'Required CI D6 cross-process step',
-);
-fs.writeFileSync(workflowPath, workflow, 'utf8');
