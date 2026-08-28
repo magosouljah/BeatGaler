@@ -1,0 +1,85 @@
+name: D6 Scoped Async Scrypt Fix
+
+on:
+  push:
+    branches:
+      - f1-6.2-abuse-controls
+
+permissions:
+  contents: write
+
+jobs:
+  patch-request-kdf:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f1-6.2-abuse-controls
+          fetch-depth: 0
+      - name: Patch only password request KDF callsites
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const file = 'cloud-server/server-core.js';
+          let source = fs.readFileSync(file, 'utf8');
+
+          function replaceOnce(before, after, label) {
+            const first = source.indexOf(before);
+            if (first < 0) throw new Error(`missing expected source for ${label}`);
+            if (source.indexOf(before, first + before.length) >= 0) throw new Error(`expected exactly one source match for ${label}`);
+            source = source.slice(0, first) + after + source.slice(first + before.length);
+          }
+
+          replaceOnce(
+            'const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");',
+            'const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");\nconst { hashPassword, verifyPassword } = require("./password-kdf");',
+            'password-kdf import',
+          );
+
+          replaceOnce(
+            `function hashPassword(password, saltHex) {\n  return crypto.scryptSync(String(password), Buffer.from(saltHex, "hex"), 64).toString("hex");\n}\n\nfunction verifyPassword(password, user) {\n  try {\n    const actual = Buffer.from(hashPassword(password, user.passwordSalt), "hex");\n    const expected = Buffer.from(user.passwordHash, "hex");\n    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);\n  } catch {\n    return false;\n  }\n}\n\n`,
+            '',
+            'synchronous KDF helpers',
+          );
+
+          replaceOnce(
+            '    passwordHash: hashPassword(password, salt),',
+            '    passwordHash: await hashPassword(password, salt),',
+            'register hash',
+          );
+          replaceOnce(
+            '  if (!user || !user.passwordHash || !verifyPassword(password, user)) {',
+            '  if (!user || !user.passwordHash || !(await verifyPassword(password, user))) {',
+            'login verify',
+          );
+          replaceOnce(
+            'app.post("/auth/password/change", (req, res) => {',
+            'app.post("/auth/password/change", async (req, res) => {',
+            'password-change async handler',
+          );
+          replaceOnce(
+            '  if (user.passwordHash && !verifyPassword(currentPassword, user)) return res.status(401).json({ error: "Current password is incorrect." });',
+            '  if (user.passwordHash && !(await verifyPassword(currentPassword, user))) return res.status(401).json({ error: "Current password is incorrect." });',
+            'password-change verify',
+          );
+          replaceOnce(
+            '  user.passwordHash = hashPassword(newPassword, salt);',
+            '  user.passwordHash = await hashPassword(newPassword, salt);',
+            'password-change hash',
+          );
+
+          if (source.includes('scryptSync')) throw new Error('server-core.js still contains scryptSync');
+          fs.writeFileSync(file, source, 'utf8');
+          NODE
+      - name: Commit scoped patch and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "BeatGaler WOZ"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/d6-scrypt-fix.yml
+          git add cloud-server/server-core.js
+          git diff --cached --check
+          git commit -m "security(auth): make request KDF asynchronous"
+          git push origin HEAD:f1-6.2-abuse-controls
