@@ -18,7 +18,7 @@ const INSTALLATION_POST_ROUTES = new Set([
   "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
   "/transport/session/stop", "/transport/operation/begin", "/transport/operation/end",
   "/transport/index/commit", "/transport/topic/ensure", "/transport/upload/confirm",
-  "/beats/delete-topic",
+  "/beats/delete-topic", "/beats/delete-topics-batch",
 ]);
 const INSTALLATION_GET_ROUTES = new Set(["/telegram/connect/status"]);
 
@@ -63,6 +63,7 @@ function createHttpContainment(options = {}) {
   const uploadConcurrency = Math.max(1, Number(env.BEATGALER_UPLOAD_CONCURRENCY || DEFAULT_UPLOAD_CONCURRENCY));
   const rateBuckets = new Map();
   const activeUploads = new Map();
+  const pendingInstallationClaims = new Map();
 
   function accountsData() { return readJson(accountsFile, { users: [], sessions: {} }); }
   function cloudData() { return readJson(cloudFile, { linkedAccounts: {}, beatTopics: {} }); }
@@ -94,6 +95,27 @@ function createHttpContainment(options = {}) {
       String(user?.username || "").trim().toLowerCase() === identifier ||
       String(user?.email || "").trim().toLowerCase() === identifier
     ) || null;
+  }
+
+  function reserveInstallationClaim(res, installationId, claimant) {
+    const id = String(installationId || "").trim();
+    if (!id) return true;
+    const current = pendingInstallationClaims.get(id);
+    if (current) {
+      sendJson(res, 403, "This installation is already being claimed by another authenticated flow. Try again.");
+      return false;
+    }
+    const marker = { claimant: String(claimant || "unknown"), startedAt: now() };
+    pendingInstallationClaims.set(id, marker);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (pendingInstallationClaims.get(id) === marker) pendingInstallationClaims.delete(id);
+    };
+    res.once("finish", release);
+    res.once("close", release);
+    return true;
   }
 
   function bindSessionInstallation(token, installationId, expectedUserId) {
@@ -141,15 +163,20 @@ function createHttpContainment(options = {}) {
   function guardRegisterInstallation(req, res, next) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
     if (installationId && linkedAccount(installationId)) return sendJson(res, 403, "This installation is already owned by another BeatGaler account.");
+    if (!reserveInstallationClaim(res, installationId, `register:${String(req.body?.email || "").trim().toLowerCase()}`)) return;
     next();
   }
 
   function guardLoginInstallation(req, res, next) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
     const current = linkedAccount(installationId);
-    if (!installationId || !current) return next();
+    if (!installationId) return next();
     const candidate = findLoginUser(req);
-    if (candidate && String(current.beatgalerAccountId || "") !== String(candidate.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
+    if (current) {
+      if (candidate && String(current.beatgalerAccountId || "") !== String(candidate.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
+      return next();
+    }
+    if (!reserveInstallationClaim(res, installationId, candidate?.id || `login:${String(req.body?.identifier || req.body?.username || "").trim().toLowerCase()}`)) return;
     next();
   }
 
@@ -159,6 +186,7 @@ function createHttpContainment(options = {}) {
     const installationId = String(req.body?.beatgalerUserId || req.headers?.["x-beatgaler-installation-id"] || "").trim();
     const current = linkedAccount(installationId);
     if (current && String(current.beatgalerAccountId || "") !== String(auth.user.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
+    if (!current && !reserveInstallationClaim(res, installationId, auth.user.id)) return;
     next();
   }
 
@@ -226,6 +254,10 @@ function createHttpContainment(options = {}) {
       markOAuthFlowBlocked(guard.flowId);
       return res.status(403).send("This BeatGaler installation was claimed during sign-in. Start again.");
     }
+    if (!current && !reserveInstallationClaim(res, guard.installationId, guard.expectedOwnerId || `oauth:${guard.flowId}`)) {
+      markOAuthFlowBlocked(guard.flowId);
+      return;
+    }
     next();
   }
 
@@ -267,7 +299,7 @@ function createHttpContainment(options = {}) {
     req.beatgalerPreAuth = auth;
     if (!authorizeSessionInstallation(req, res)) return;
     const contentLength = Number(req.headers?.["content-length"] || 0);
-    if (Number.isFinite(contentLength) && contentLength > FILE_UPLOAD_LIMIT_BYTES + MULTIPART_OVERHEAD_BYTES) return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", { max_bytes: FILE_UPLOAD_LIMIT_BYTES });
+    if (Number.isFinite(contentLength) && contentLength > FILE_UPLOAD_LIMIT_BYTES) return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", { max_bytes: FILE_UPLOAD_LIMIT_BYTES });
     const keys = [`ip:${requestIp(req)}`, `account:${auth.user.id}`, `tenant:${req.beatgalerAuthorizedTenantId}`];
     const stamp = now();
     for (const key of keys) {
