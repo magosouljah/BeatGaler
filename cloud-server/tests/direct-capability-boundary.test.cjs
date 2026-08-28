@@ -9,6 +9,8 @@ const {
   createMemoryStore,
   installDirectCapabilityBoundary,
 } = require("../direct-capability-boundary");
+const { validateCapabilitySessionState } = require("../direct-transport-capability-view");
+const { installProductiveTempAuthBoundary } = require("../productive-temp-auth-boundary");
 
 function record(overrides = {}) {
   return {
@@ -149,6 +151,16 @@ test("expiry is enforced by server time with bounded skew", async () => {
   assert.equal(expired.reason, "expired");
 });
 
+test("memory capability store honors the same bounded expiry skew as PostgreSQL", async () => {
+  let now = 9_000;
+  const store = createMemoryStore({ now: () => now, maxActivePerTenant: 4 });
+  await store.issue(record({ expires_at_ms: 10_000 }));
+  now = 10_500;
+  const withinSkew = await store.authorize(request({ clockSkewMs: 1_000 }));
+  assert.equal(withinSkew.ok, true);
+  assert.equal(withinSkew.record.status, "AUTHORIZED");
+});
+
 test("tenant ceiling counts authorized operations as live", async () => {
   const store = createMemoryStore({ now: () => 2_000, maxActivePerTenant: 2 });
   await store.issue(record({ capability_hash: "a".repeat(64), internal_operation_id: "op-1" }));
@@ -184,6 +196,63 @@ test("lease end, auth changes and incident revoke ACTIVE or AUTHORIZED capabilit
   await store.issue(record({ capability_hash: "d".repeat(64), internal_operation_id: "op-3", tenant_id: "tenant-z" }));
   assert.equal(await store.revokeTenant({ tenantId: "tenant-z", reason: "incident" }), 1);
   assert.equal(store.__records.get("d".repeat(64)).status, "REVOKED");
+});
+
+test("live Direct capability view rejects expiry, inactive leases and quarantined bots", () => {
+  const nowMs = Date.parse("2026-08-28T18:00:30.000Z");
+  const baseState = {
+    leases: {
+      "session-a": {
+        session_id: "session-a",
+        installation_id: "install-a",
+        bot_id: "bot-a",
+        generation: 1,
+        status: "ACTIVE",
+        last_heartbeat_at: "2026-08-28T18:00:00.000Z",
+      },
+    },
+    bots: { "bot-a": { quarantined: false } },
+  };
+  const input = { installationId: "install-a", sessionId: "session-a", generation: 1 };
+  assert.deepEqual(validateCapabilitySessionState(baseState, input, { nowMs, heartbeatTimeoutMs: 60_000 }), { ok: true });
+  assert.equal(validateCapabilitySessionState(baseState, input, { nowMs: nowMs + 31_000, heartbeatTimeoutMs: 60_000 }).reason, "lease_expired");
+  assert.equal(validateCapabilitySessionState({ ...baseState, leases: { "session-a": { ...baseState.leases["session-a"], status: "QUARANTINED" } } }, input, { nowMs, heartbeatTimeoutMs: 60_000 }).ok, false);
+  assert.equal(validateCapabilitySessionState({ ...baseState, bots: { "bot-a": { quarantined: true } } }, input, { nowMs, heartbeatTimeoutMs: 60_000 }).reason, "bot_quarantined");
+  assert.equal(validateCapabilitySessionState(baseState, { ...input, generation: 2 }, { nowMs, heartbeatTimeoutMs: 60_000 }).reason, "lease_inactive");
+});
+
+test("productive temp-auth strips permanent secrets from error and no-refresh response paths", async () => {
+  const fakeExpress = createFakeExpress();
+  installProductiveTempAuthBoundary(fakeExpress);
+  fakeExpress.application.post("/transport/session/start", (_req, res) => res.json({
+    ok: false,
+    error: "denied",
+    bot_token: "must-not-leak",
+    telegram_api_id: 123,
+    telegram_api_hash: "must-not-leak",
+    credential_envelope: "must-not-leak",
+  }));
+  fakeExpress.application.post("/transport/session/heartbeat", (_req, res) => res.json({
+    ok: true,
+    status: "ACTIVE",
+    bot_token: "must-not-leak",
+    telegram_api_id: 123,
+    telegram_api_hash: "must-not-leak",
+  }));
+
+  const sessionResult = await runRoute(fakeExpress.routes.get("/transport/session/start"), {
+    path: "/transport/session/start",
+    body: {},
+  });
+  assert.equal(sessionResult.statusCode, 200);
+  assert.deepEqual(sessionResult.payload, { ok: false, error: "denied" });
+
+  const heartbeatResult = await runRoute(fakeExpress.routes.get("/transport/session/heartbeat"), {
+    path: "/transport/session/heartbeat",
+    body: {},
+  });
+  assert.equal(heartbeatResult.statusCode, 200);
+  assert.deepEqual(heartbeatResult.payload, { ok: true, status: "ACTIVE" });
 });
 
 test("sensitive account routes revoke the whole authenticated capability set and ignore body installation hints", async () => {
