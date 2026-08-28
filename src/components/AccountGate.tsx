@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { platform } from "../platform";
+import { UiButton, UiFeedback, UiField, UiSpinner } from "./ui/DesignPrimitives";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
 const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
@@ -381,9 +382,6 @@ export async function logoutBeatGalerAccount(): Promise<void> {
   window.dispatchEvent(new Event("beatgaler:account-logged-out"));
 }
 
-const providerButtonStyle: React.CSSProperties = { width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #2b2b2b", background: "#171717", color: "#ddd", cursor: "pointer", fontWeight: 600 };
-const fieldStyle: React.CSSProperties = { boxSizing: "border-box", width: "100%", marginTop: 7, padding: "10px 11px", border: "1px solid #292929", borderRadius: 8, outline: 0, background: "#151515", color: "#eee", fontSize: 13 };
-
 function XUnlockOverlay({ username, onDone }: { username: string; onDone: () => void }) {
   type UnlockStage = "waiting" | "opening" | "revealed" | "docking";
   const [stage, setStage] = useState<UnlockStage>("waiting");
@@ -496,10 +494,6 @@ export default function AccountGate({ children }: { children: React.ReactNode })
   const [unlockUsername, setUnlockUsername] = useState<string | null>(null);
 
   useEffect(() => {
-    // The static loader in index.html exists only to cover the short gap before
-    // React mounts. AccountGate has its own loading UI, so hand off immediately.
-    // Without this, a signed-out/expired macOS session can leave the static
-    // "Loading Beat Galer..." layer above the login screen forever.
     document.getElementById("beatgaler-startup-loader")?.remove();
 
     let cancelled = false;
@@ -541,7 +535,7 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     return () => window.clearInterval(timer);
   }, [account?.id, account?.username, account?.email, account?.providers?.x?.connected]);
 
-  if (checking) return <div style={{ position: "fixed", inset: 0, background: "#090909", display: "grid", placeItems: "center", color: "#555", fontSize: 13 }}>Loading BeatGaler…</div>;
+  if (checking) return <div className="bg-account-loading" aria-live="polite"><div className="bg-account-loading__inner"><UiSpinner label="Loading BeatGaler"/><span>Loading BeatGaler…</span></div></div>;
   if (account) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
 
   const submit = async (event: React.FormEvent) => {
@@ -566,44 +560,50 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     finally { setBusy(false); }
   };
 
-  return <div style={{ position: "fixed", inset: 0, background: "#090909", color: "#ddd", display: "grid", placeItems: "center", fontFamily: "Inter, system-ui, sans-serif" }}>
-    <form onSubmit={submit} style={{ width: 370, padding: 28, border: "1px solid #202020", borderRadius: 14, background: "#101010", boxShadow: "0 24px 80px rgba(0,0,0,.55)" }}>
-      <div style={{ fontSize: 22, fontWeight: 650, letterSpacing: -.4 }}>BeatGaler</div>
-      <div style={{ marginTop: 6, color: "#666", fontSize: 12 }}>{registerMode ? "Create your BeatGaler account" : "Sign in to your BeatGaler account"}</div>
+  return <div className="bg-account-gate">
+    <form className="bg-account-card" onSubmit={submit} autoComplete="on">
+      <h1 className="bg-account-title">BeatGaler</h1>
+      <p className="bg-account-subtitle">{registerMode ? "Create your BeatGaler account" : "Sign in to your BeatGaler account"}</p>
 
       {!registerMode && <>
-        <div style={{ display: "grid", gap: 8, marginTop: 22 }}>
-          <button type="button" disabled={busy} onClick={() => void social("google")} style={providerButtonStyle}>Continue with Google</button>
-          <button type="button" disabled={busy} onClick={() => void social("x")} style={providerButtonStyle}>Continue with X</button>
+        <div className="bg-account-social">
+          <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void social("google")}>Continue with Google</UiButton>
+          <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void social("x")}>Continue with X</UiButton>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0", color: "#444", fontSize: 10 }}><span style={{ height: 1, flex: 1, background: "#222" }}/><span>OR</span><span style={{ height: 1, flex: 1, background: "#222" }}/></div>
+        <div className="bg-account-divider"><span>OR</span></div>
       </>}
 
       {registerMode ? <>
-        <label style={{ display: "block", marginTop: 20, fontSize: 11, color: "#777" }}>USERNAME</label>
-        <div style={{ marginTop: 7, display: "flex", alignItems: "center", border: "1px solid #292929", borderRadius: 8, background: "#151515", overflow: "hidden" }}>
-          <input autoFocus value={usernameBase} onChange={e => setUsernameBase(e.target.value.toLowerCase().replace(/[^a-z0-9._]/g, "").slice(0, 20))} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username" style={{ flex: 1, minWidth: 0, padding: "10px 11px", border: 0, outline: 0, background: "transparent", color: "#eee", fontSize: 13 }}/>
-          <span style={{ paddingRight: 11, color: "#555", fontSize: 12 }}># random</span>
+        <label className="bg-label bg-account-field-first" htmlFor="beatgaler-register-username">USERNAME</label>
+        <div className="bg-account-username-shell">
+          <input
+            id="beatgaler-register-username"
+            className="bg-account-username-input"
+            autoFocus
+            value={usernameBase}
+            onChange={e => setUsernameBase(e.target.value.toLowerCase().replace(/[^a-z0-9._]/g, "").slice(0, 20))}
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="username"
+          />
+          <span className="bg-account-username-suffix"># random</span>
         </div>
-        <div style={{ marginTop: 7, color: "#4e4e4e", fontSize: 10 }}>BeatGaler adds 4 random numbers, for example <span style={{ color: "#777" }}>{usernameBase || "username"}#4821</span>.</div>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>EMAIL</label>
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoCapitalize="none" autoCorrect="off" style={fieldStyle}/>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>PASSWORD</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={fieldStyle}/>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>CONFIRM PASSWORD</label>
-        <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} style={fieldStyle}/>
+        <div className="bg-account-hint">BeatGaler adds 4 random numbers, for example <strong>{usernameBase || "username"}#4821</strong>.</div>
+        <UiField containerClassName="bg-account-field" id="beatgaler-register-email" label="EMAIL" type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" />
+        <UiField id="beatgaler-register-password" label="PASSWORD" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
+        <UiField id="beatgaler-register-password-confirm" label="CONFIRM PASSWORD" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" />
       </> : <>
-        <label style={{ display: "block", fontSize: 11, color: "#777" }}>USERNAME OR EMAIL</label>
-        <input autoFocus value={identifier} onChange={e => setIdentifier(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username#1234 or email@example.com" style={fieldStyle}/>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>PASSWORD</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={fieldStyle}/>
-        {mfaRequired && <><label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>AUTHENTICATOR CODE</label><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={fieldStyle}/></>}
+        <UiField id="beatgaler-login-identifier" label="USERNAME OR EMAIL" autoFocus value={identifier} onChange={e => setIdentifier(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username#1234 or email@example.com" />
+        <UiField id="beatgaler-login-password" label="PASSWORD" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" />
+        {mfaRequired && <UiField id="beatgaler-login-mfa" label="AUTHENTICATOR CODE" inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" />}
       </>}
 
-      {error && <div style={{ marginTop: 14, padding: "9px 10px", border: "1px solid #542020", borderRadius: 8, background: "#241010", color: "#e6a0a0", fontSize: 11, lineHeight: 1.55 }}>{sanitizeUserVisibleText(error)}</div>}
-      <button disabled={busy} type="submit" style={{ width: "100%", marginTop: 18, padding: "10px 12px", border: "1px solid #303030", borderRadius: 8, background: "#e9e9e9", color: "#111", fontWeight: 650, cursor: busy ? "default" : "pointer", opacity: busy ? .55 : 1 }}>{busy ? "Working…" : (registerMode ? "Create account" : "Sign in")}</button>
-      <button type="button" disabled={busy} onClick={() => { setRegisterMode(v => !v); setError(null); setMfaRequired(false); setMfaCode(""); setPassword(""); setConfirmPassword(""); }} style={{ width: "100%", marginTop: 8, padding: 8, border: 0, background: "transparent", color: "#777", cursor: busy ? "default" : "pointer", fontSize: 11 }}>{registerMode ? "Already have an account? Sign in" : "New to BeatGaler? Create account"}</button>
-      <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #1b1b1b", color: "#444", fontSize: 10, lineHeight: 1.55 }}>Normal BeatGaler usernames use username#1234. Claiming X replaces it with your official X username.</div>
+      {error && <UiFeedback tone="error" role="alert" aria-live="assertive">{sanitizeUserVisibleText(error)}</UiFeedback>}
+      <UiButton className="bg-account-submit" variant="primary" fullWidth loading={busy} type="submit">{registerMode ? "Create account" : "Sign in"}</UiButton>
+      <UiButton className="bg-account-switch" variant="ghost" fullWidth type="button" disabled={busy} onClick={() => { setRegisterMode(v => !v); setError(null); setMfaRequired(false); setMfaCode(""); setPassword(""); setConfirmPassword(""); }}>{registerMode ? "Already have an account? Sign in" : "New to BeatGaler? Create account"}</UiButton>
+      <div className="bg-account-footer">Normal BeatGaler usernames use username#1234. Claiming X replaces it with your official X username.</div>
     </form>
     {unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>} 
   </div>;

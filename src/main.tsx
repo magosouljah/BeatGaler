@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { browserId3Reader } from "./lib/id3BrowserParser";
 import { PlatformProvider } from "./platform/react";
+import "./styles/design-foundations.css";
 
 // Browser metadata parsing is bundled with BeatGaler. The legacy fallback in
 // tauri.ts is stripped from productive Vite output by the trust-boundary plugin,
@@ -12,18 +13,6 @@ import { PlatformProvider } from "./platform/react";
 function GlobalStyles() {
   return (
     <style>{`
-      :root {
-        font-family: "SF Pro Text", "Segoe UI", "Helvetica Neue", sans-serif;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      button, input, select {
-        font-family: inherit;
-      }
-
       @keyframes fadeUp {
         from {
           opacity: 0;
