@@ -2,9 +2,11 @@
   "schemaVersion": 1,
   "versionSource": "VERSION",
   "channelSource": "VERSION.prerelease",
+  "productName": "Galer",
   "bundleIdentifier": {
     "source": "src-tauri/tauri.conf.json",
-    "status": "RO_DECISION_REQUIRED"
+    "status": "FINAL",
+    "value": "com.beatgaler.app"
   },
   "updater": {
     "compiledEnv": "BEATGALER_UPDATER_ENDPOINT",
