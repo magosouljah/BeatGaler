@@ -4,7 +4,15 @@ import {
   type WebTransportControlApi,
   type WebTransportRuntime,
 } from "../../src/features/cloud/webTransportController";
-import type { WebTransportSession } from "../../src/features/cloud/webTransportSession";
+import type {
+  WebTransportCapabilityScope,
+  WebTransportSession,
+} from "../../src/features/cloud/webTransportSession";
+
+const uploadScope: WebTransportCapabilityScope = {
+  objectType: "beat",
+  objectIds: ["beat-1"],
+};
 
 function session(version = 1): WebTransportSession {
   return {
@@ -37,6 +45,7 @@ function harness() {
     prepare: vi.fn(async () => session()),
     activate: vi.fn(async () => {}),
     heartbeat: vi.fn(async () => ({ expired: false, credentialRefresh: null })),
+    authorize: vi.fn(async () => {}),
     begin: vi.fn(async () => ({ expired: false, waitMs: null, credentialRefresh: null, operationId: "op-1" })),
     end: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
@@ -58,31 +67,63 @@ describe("Galer Cloud Web transport lifecycle", () => {
     await controller.disconnect();
   });
 
-  it("installs encrypted credential refreshes before retrying an operation", async () => {
+  it("installs encrypted credential refreshes before retrying and authorizing an operation", async () => {
     const { controller, runtime, api } = harness();
     vi.mocked(api.begin)
       .mockResolvedValueOnce({ expired: false, waitMs: null, credentialRefresh: session(2), operationId: null })
       .mockResolvedValueOnce({ expired: false, waitMs: null, credentialRefresh: null, operationId: "op-refreshed" });
 
-    const lease = await controller.beginOperation("upload");
+    const lease = await controller.beginOperation("upload", uploadScope);
 
     expect(runtime.replaceCredentials).toHaveBeenCalledWith(expect.objectContaining({ credential_version: 2 }));
-    expect(lease).toEqual({ operationId: "op-refreshed", sessionId: "web-session", generation: 7 });
+    expect(api.authorize).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: "web-session", credential_version: 2 }),
+      "op-refreshed",
+      "upload",
+      uploadScope,
+    );
+    expect(lease).toEqual({
+      operationId: "op-refreshed",
+      sessionId: "web-session",
+      generation: 7,
+      scope: uploadScope,
+    });
     await controller.disconnect();
   });
 
   it("always releases a control-plane operation when data-plane work fails", async () => {
     const { controller, api } = harness();
 
-    await expect(controller.withOperation("upload", async () => {
+    await expect(controller.withOperation("upload", uploadScope, async () => {
       throw new Error("upload failed");
     })).rejects.toThrow("upload failed");
 
+    expect(api.authorize).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: "web-session" }),
+      "op-1",
+      "upload",
+      uploadScope,
+    );
     expect(api.end).toHaveBeenCalledWith(
       { session_id: "web-session", generation: 7 },
       "op-1",
     );
     await controller.disconnect();
     expect(api.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not execute data-plane work when scoped capability authorization fails", async () => {
+    const { controller, api } = harness();
+    const operation = vi.fn(async () => "should-not-run");
+    vi.mocked(api.authorize).mockRejectedValueOnce(new Error("capability denied"));
+
+    await expect(controller.withOperation("upload", uploadScope, operation)).rejects.toThrow("capability denied");
+
+    expect(operation).not.toHaveBeenCalled();
+    expect(api.end).toHaveBeenCalledWith(
+      { session_id: "web-session", generation: 7 },
+      "op-1",
+    );
+    await controller.disconnect();
   });
 });
