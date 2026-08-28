@@ -34,6 +34,8 @@ const libRs = read("src-tauri/src/lib.rs");
 const cargo = read("src-tauri/Cargo.toml");
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
 const tauriMac = JSON.parse(read("src-tauri/tauri.macos.conf.json"));
+const releaseManifest = JSON.parse(read("release/desktop-manifest.json"));
+const runtimeSources = JSON.parse(read("supply-chain/runtime-sources.json"));
 const macBuildWorkflow = read(".github/workflows/build-macos.yml");
 const windowsBuildWorkflow = read(".github/workflows/build-windows.yml");
 const desktopReleaseWorkflow = read(".github/workflows/release-desktop-updater.yml");
@@ -107,8 +109,8 @@ ok(tauriMac.bundle?.resources?.["direct-transport/runtime-watchdog.cjs"] === "di
 
 ok(!exists(".github/workflows/build-macos-fast.yml") && !exists(".github/workflows/build-macos-cloud-beta.yml") && !exists(".github/workflows/release-windows-updater.yml") && !exists(".github/workflows/test-macos-portability.yml"), "obsolete split/legacy Desktop workflows are removed");
 ok(macBuildWorkflow.includes("name: Build - macOS") && windowsBuildWorkflow.includes("name: Build - Windows") && desktopReleaseWorkflow.includes("name: Release - Desktop Updater") && portabilityWorkflow.includes("name: Test - Desktop Portability"), "Desktop CI uses the canonical four-workflow layout");
-const pinnedCommit = "adfd7f6a8e990272851777eeb3ae0def4216f161";
-ok(macBuildWorkflow.includes(pinnedCommit), "Bot API source is pinned to an exact commit in the canonical Mac build");
+const pinnedCommit = runtimeSources.telegramBotApi?.commit;
+ok(Boolean(pinnedCommit) && macBuildWorkflow.includes("supply-chain/runtime-sources.json") && macBuildWorkflow.includes("BOT_API_COMMIT"), "Bot API source is loaded from the canonical pinned runtime manifest in the Mac build");
 ok(macBuildWorkflow.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"'), "Mac build has an explicit deployment target");
 ok(exists("scripts/check-macos-min-version.mjs") && exists("scripts/test-macos-min-version.mjs"), "Mach-O minimum-version checker has a portable parser regression test");
 ok(macBuildWorkflow.includes("check-macos-min-version.mjs"), "canonical Mac build rejects runtimes requiring a newer macOS than supported");
@@ -122,7 +124,7 @@ ok(macBuildWorkflow.includes("Ad-hoc sign embedded Universal Mach-O runtimes") &
 ok(!macBuildWorkflow.includes("Authority=Developer ID Application:"), "ad-hoc Mac build does not require Developer ID authority");
 ok(macBuildWorkflow.includes("--bundles app,dmg"), "Mac build includes the app target required to generate updater artifacts");
 ok(macBuildWorkflow.includes(".app.tar.gz") && macBuildWorkflow.includes(".app.tar.gz.sig") && macBuildWorkflow.includes("BeatGaler-macOS-Universal"), "Mac build exports a signed updater-ready artifact without publishing it");
-ok(macBuildWorkflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json"), "Mac build compiles the real HTTPS updater endpoint into the app");
+ok(macBuildWorkflow.includes("release-manifest.mjs github-env") && !macBuildWorkflow.includes(releaseManifest.updater.endpoint), "Mac build compiles the canonical HTTPS updater endpoint without duplicating its literal value");
 ok(!macBuildWorkflow.includes("gh release create") && !macBuildWorkflow.includes("gh release upload") && !macBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Mac build does not publish a public GitHub release");
 ok(windowsBuildWorkflow.includes("TAURI_SIGNING_PRIVATE_KEY") && windowsBuildWorkflow.includes("--bundles nsis") && windowsBuildWorkflow.includes("*.exe.sig") && windowsBuildWorkflow.includes("BeatGaler-Windows-x64"), "Windows build exports a signed updater-ready NSIS artifact");
 ok(!windowsBuildWorkflow.includes("gh release create") && !windowsBuildWorkflow.includes("gh release upload") && !windowsBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Windows build does not publish a public GitHub release");
