@@ -6,6 +6,9 @@ const { installHttpContainment } = require("./http-containment");
 const { installDirectCapabilityBoundary } = require("./direct-capability-boundary");
 const { installSensitiveAuthCapabilityRevocation } = require("./sensitive-auth-capability-revocation");
 const { installSessionSecurity } = require("./session-security");
+const { installAccountLifecycle } = require("./account-lifecycle");
+const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
+const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
 const { installAuthAbuseControls } = require("./auth-abuse-controls");
@@ -34,10 +37,17 @@ async function start() {
   }
 
   let directCapabilities = null;
+  const accountLifecycle = installAccountLifecycle(express, {
+    dataDir: __dirname,
+    env: process.env,
+    getCapabilityStore: () => directCapabilities?.store || null,
+  });
+  installLifecyclePasswordAuthority(accountLifecycle);
   installSessionSecurity(express, {
     dataDir: __dirname,
     getCapabilityStore: () => directCapabilities?.store || null,
   });
+  installLifecycleRequestGuard(express, accountLifecycle);
   installHttpContainment(express, { dataDir: __dirname, installationClaimCoordinator });
   directCapabilities = installDirectCapabilityBoundary(express, { dataDir: __dirname, pool });
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
