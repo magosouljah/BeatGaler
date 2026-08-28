@@ -9,10 +9,6 @@ permissions:
 env:
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-  BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
-  NODE_VERSION: 22.23.2
-  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
-  VCPKG_COMMIT: 7f3781e19cc7d4e4882a4caec01668c6f7b5c163
 
 jobs:
   build-windows:
@@ -25,8 +21,11 @@ jobs:
       - name: Setup pinned Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           cache: npm
+
+      - name: Load canonical release manifest
+        run: node scripts/release-manifest.mjs github-env
 
       - name: Setup pinned Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -42,20 +41,20 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/windows-bot-api
-          key: telegram-bot-api-windows-static-${{ env.BOT_API_COMMIT }}-${{ env.VCPKG_COMMIT }}
+          key: telegram-bot-api-windows-static-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Build official pinned Bot API runtime
         if: steps.bot-api-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           git clone https://github.com/tdlib/telegram-bot-api.git runtime/telegram-bot-api-source
-          git -C runtime/telegram-bot-api-source checkout $env:BOT_API_COMMIT
-          if ((git -C runtime/telegram-bot-api-source rev-parse HEAD).Trim() -ne $env:BOT_API_COMMIT) { throw "Bot API source commit mismatch" }
+          git -C runtime/telegram-bot-api-source checkout $env:BEATGALER_BOT_API_COMMIT
+          if ((git -C runtime/telegram-bot-api-source rev-parse HEAD).Trim() -ne $env:BEATGALER_BOT_API_COMMIT) { throw "Bot API source commit mismatch" }
           git -C runtime/telegram-bot-api-source submodule update --init --recursive
 
           git clone https://github.com/microsoft/vcpkg.git runtime/vcpkg
-          git -C runtime/vcpkg checkout $env:VCPKG_COMMIT
-          if ((git -C runtime/vcpkg rev-parse HEAD).Trim() -ne $env:VCPKG_COMMIT) { throw "vcpkg source commit mismatch" }
+          git -C runtime/vcpkg checkout $env:BEATGALER_VCPKG_COMMIT
+          if ((git -C runtime/vcpkg rev-parse HEAD).Trim() -ne $env:BEATGALER_VCPKG_COMMIT) { throw "vcpkg source commit mismatch" }
           & runtime/vcpkg/bootstrap-vcpkg.bat -disableMetrics
           if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed with exit code $LASTEXITCODE" }
           & runtime/vcpkg/vcpkg.exe install gperf:x64-windows-static openssl:x64-windows-static zlib:x64-windows-static --clean-after-build
@@ -80,18 +79,35 @@ jobs:
         run: |
           $resourceDir = "src-tauri/resources/windows"
           New-Item -ItemType Directory -Force $resourceDir | Out-Null
+
           $node = (Get-Command node.exe -ErrorAction Stop).Source
           $actualNodeVersion = (& $node --version).TrimStart('v')
-          if ($actualNodeVersion -ne $env:NODE_VERSION) { throw "Node runtime version mismatch: $actualNodeVersion" }
+          if ($actualNodeVersion -ne $env:BEATGALER_NODE_VERSION) { throw "Node runtime version mismatch: $actualNodeVersion" }
           Copy-Item -LiteralPath $node -Destination "$resourceDir/node.exe"
           Copy-Item -LiteralPath "runtime/windows-bot-api/telegram-bot-api.exe" -Destination "$resourceDir/telegram-bot-api.exe"
 
-          foreach ($runtime in @("$resourceDir/node.exe", "$resourceDir/telegram-bot-api.exe")) {
+          $ffmpegAsset = $env:BEATGALER_FFMPEG_WINDOWS_ASSET
+          $ffmpegRepo = $env:BEATGALER_FFMPEG_REPOSITORY
+          $ffmpegTag = $env:BEATGALER_FFMPEG_TAG
+          $ffmpegDownload = Join-Path $env:RUNNER_TEMP $ffmpegAsset
+          $ffmpegUrl = "https://github.com/$ffmpegRepo/releases/download/$ffmpegTag/$ffmpegAsset"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegDownload -UseBasicParsing
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$ffmpegRepo/releases/tags/$ffmpegTag" -Headers @{ Accept = "application/vnd.github+json" }
+          $asset = $release.assets | Where-Object { $_.name -eq $ffmpegAsset } | Select-Object -First 1
+          if (-not $asset -or -not $asset.digest) { throw "Pinned FFmpeg asset digest is unavailable" }
+          $expectedFfmpegHash = ($asset.digest -replace '^sha256:', '').ToLowerInvariant()
+          $actualFfmpegHash = (Get-FileHash $ffmpegDownload -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expectedFfmpegHash -ne $actualFfmpegHash) { throw "FFmpeg release digest mismatch" }
+          Copy-Item -LiteralPath $ffmpegDownload -Destination "$resourceDir/ffmpeg.exe"
+
+          foreach ($runtime in @("$resourceDir/ffmpeg.exe", "$resourceDir/node.exe", "$resourceDir/telegram-bot-api.exe")) {
             $item = Get-Item -LiteralPath $runtime -ErrorAction Stop
             if ($item.Length -lt 1MB) { throw "$runtime is unexpectedly small: $($item.Length) bytes" }
             $magic = [System.IO.File]::ReadAllBytes($item.FullName)[0..1]
             if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw "$runtime is not a Windows PE executable" }
           }
+          & "$resourceDir/ffmpeg.exe" -version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled ffmpeg.exe is not executable" }
           & "$resourceDir/node.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "Bundled node.exe is not executable" }
           & "$resourceDir/telegram-bot-api.exe" --help
@@ -104,6 +120,7 @@ jobs:
             --output artifacts/runtime-provenance-windows.json `
             --platform windows-x64 `
             --sources supply-chain/runtime-sources.json `
+            ffmpeg=src-tauri/resources/windows/ffmpeg.exe `
             node=src-tauri/resources/windows/node.exe `
             bot-api=src-tauri/resources/windows/telegram-bot-api.exe
 
@@ -126,17 +143,23 @@ jobs:
           $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "NSIS test installation failed with exit code $($process.ExitCode)" }
 
-          foreach ($relative in @("node.exe", "telegram-bot-api.exe", "direct-transport/transport-helper.cjs", "direct-transport/runtime-watchdog.cjs")) {
+          foreach ($relative in @("ffmpeg.exe", "node.exe", "telegram-bot-api.exe", "direct-transport/transport-helper.cjs", "direct-transport/runtime-watchdog.cjs")) {
             $installed = Join-Path $installDir $relative
             if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Installer omitted required runtime: $relative" }
           }
+          $ffmpeg = Join-Path $installDir "ffmpeg.exe"
           $node = Join-Path $installDir "node.exe"
           $bot = Join-Path $installDir "telegram-bot-api.exe"
+          & $ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { throw "Installed ffmpeg.exe is not executable" }
           & $node --version
           if ($LASTEXITCODE -ne 0) { throw "Installed node.exe is not executable" }
           & $bot --help
           if ($LASTEXITCODE -ne 0) { throw "Installed telegram-bot-api.exe is not executable" }
 
+          $stagedFfmpegHash = (Get-FileHash "src-tauri/resources/windows/ffmpeg.exe" -Algorithm SHA256).Hash
+          $installedFfmpegHash = (Get-FileHash $ffmpeg -Algorithm SHA256).Hash
+          if ($stagedFfmpegHash -ne $installedFfmpegHash) { throw "Installed FFmpeg digest differs from staged runtime" }
           $stagedNodeHash = (Get-FileHash "src-tauri/resources/windows/node.exe" -Algorithm SHA256).Hash
           $installedNodeHash = (Get-FileHash $node -Algorithm SHA256).Hash
           if ($stagedNodeHash -ne $installedNodeHash) { throw "Installed Node digest differs from staged runtime" }
