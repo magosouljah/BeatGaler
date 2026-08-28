@@ -17,15 +17,18 @@ jobs:
         with:
           ref: woz/task-7.1-direct-capabilities
           fetch-depth: 0
-      - name: Apply narrow source patch
+      - name: Apply initial scoped capability patch
         shell: bash
         run: |
           if grep -q 'MAX_ACTIVE_VAULTS_PER_BOT' cloud-server/direct-transport-control.js \
              && grep -q 'fn direct_capability_scope' src-tauri/src/commands.rs; then
-            echo 'Task 7.1 source patch already applied.'
-            exit 0
+            echo 'Initial Task 7.1 source patch already applied.'
+          else
+            node scripts/apply-task-7.1-capability-patch.mjs
           fi
-          node scripts/apply-task-7.1-capability-patch.mjs
+      - name: Apply authorize-before-data-plane patch
+        shell: bash
+        run: node scripts/apply-task-7.1-authorize-patch.mjs
       - name: Commit patched production sources
         shell: bash
         run: |
@@ -35,6 +38,13 @@ jobs:
           fi
           git config user.name 'BeatGaler WOZ'
           git config user.email 'actions@users.noreply.github.com'
-          git add cloud-server/direct-transport-control.js src-tauri/src/commands.rs
-          git commit -m 'security(direct): enforce capability scope and bot ceiling'
+          git add \
+            cloud-server/direct-capability-boundary.js \
+            cloud-server/http-containment.js \
+            cloud-server/direct-transport-control.js \
+            cloud-server/tests/direct-capability-boundary.test.cjs \
+            src/features/cloud/webTransportSession.ts \
+            src/features/cloud/webTransportController.ts \
+            src-tauri/src/commands.rs
+          git commit -m 'security(direct): authorize scoped capabilities before data plane'
           git push origin HEAD:woz/task-7.1-direct-capabilities
