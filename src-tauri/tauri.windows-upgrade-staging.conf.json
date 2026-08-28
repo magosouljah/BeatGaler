@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/upgrade-hooks.nsh"
+      }
+    },
+    "resources": {
+      "resources/windows/ffmpeg.exe": "ffmpeg.exe",
+      "resources/windows/node.exe": "node.exe",
+      "resources/windows/telegram-bot-api.exe": "telegram-bot-api.exe",
+      "direct-transport/transport-helper.cjs": "direct-transport/transport-helper.cjs",
+      "direct-transport/runtime-watchdog.cjs": "direct-transport/runtime-watchdog.cjs"
+    }
+  }
+}

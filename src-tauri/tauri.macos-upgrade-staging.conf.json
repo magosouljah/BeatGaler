@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "hardenedRuntime": false
+    },
+    "resources": {
+      "resources/ffmpeg": "ffmpeg",
+      "resources/node": "node",
+      "resources/telegram-bot-api": "telegram-bot-api",
+      "direct-transport/transport-helper.cjs": "direct-transport/transport-helper.cjs",
+      "direct-transport/runtime-watchdog.cjs": "direct-transport/runtime-watchdog.cjs"
+    }
+  }
+}
