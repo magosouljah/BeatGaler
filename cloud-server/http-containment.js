@@ -4,8 +4,6 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-// Product decision: keep the hard single-file ceiling below the upstream 2 GB edge.
-// Decimal GB is intentional so 1.99 GB stays safely below 2,000,000,000 bytes.
 const FILE_UPLOAD_LIMIT_BYTES = 1_990_000_000;
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
 const DEFAULT_UPLOAD_WINDOW_MS = 60_000;
@@ -24,12 +22,42 @@ const BODY_OWNER_ROUTES = new Set([
   "/library/artwork",
 ]);
 
+const SESSION_BIND_ROUTES = new Set([
+  "/auth/register",
+  "/auth/login",
+  "/auth/session",
+  "/auth/oauth/poll",
+]);
+
+const INSTALLATION_POST_ROUTES = new Set([
+  "/events/ticket",
+  "/telegram/connect/start",
+  "/telegram/disconnect",
+  "/transport/session/start",
+  "/transport/session/activate",
+  "/transport/session/heartbeat",
+  "/transport/session/stop",
+  "/transport/operation/begin",
+  "/transport/operation/end",
+  "/transport/index/commit",
+  "/transport/topic/ensure",
+  "/transport/upload/confirm",
+  "/beats/delete-topic",
+]);
+
+const INSTALLATION_GET_ROUTES = new Set([
+  "/telegram/connect/status",
+]);
+
 function readJson(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return fallback;
-  }
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { return fallback; }
+}
+
+function writeJsonAtomic(file, value) {
+  const tmp = `${file}.tmp-authz`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf8");
+  fs.renameSync(tmp, file);
 }
 
 function bearerToken(req) {
@@ -70,7 +98,8 @@ function createHttpContainment(options = {}) {
       return null;
     }
     const data = readJson(accountsFile, { users: [], sessions: {} });
-    const session = data.sessions?.[sessionKey(token)];
+    const key = sessionKey(token);
+    const session = data.sessions?.[key];
     if (!session || Number(session.expiresAt || 0) <= now()) {
       sendJson(res, 401, "Session expired. Sign in again.");
       return null;
@@ -80,45 +109,94 @@ function createHttpContainment(options = {}) {
       sendJson(res, 401, "Session expired. Sign in again.");
       return null;
     }
-    return { token, session, user };
+    return { token, key, session, user };
+  }
+
+  function linkedAccount(installationId) {
+    const cloud = readJson(cloudFile, { linkedAccounts: {} });
+    return cloud.linkedAccounts?.[String(installationId || "")] || null;
+  }
+
+  function bindSessionInstallation(token, installationId, expectedUserId) {
+    const id = String(installationId || "").trim();
+    if (!token || !id) return false;
+    const cloudAccount = linkedAccount(id);
+    if (!cloudAccount || String(cloudAccount.beatgalerAccountId || "") !== String(expectedUserId || "")) return false;
+    const data = readJson(accountsFile, { users: [], sessions: {} });
+    const key = sessionKey(token);
+    const session = data.sessions?.[key];
+    if (!session || String(session.userId || "") !== String(expectedUserId || "")) return false;
+    data.sessions[key] = { ...session, installationId: id, tenantId: String(expectedUserId) };
+    writeJsonAtomic(accountsFile, data);
+    return true;
+  }
+
+  function authorizeSessionInstallation(req, res, { upload = false } = {}) {
+    const auth = req.beatgalerPreAuth || authenticate(req, res);
+    if (!auth) {
+      if (upload) cleanupUploadedFile(req);
+      return null;
+    }
+    const installationId = String(auth.session?.installationId || "").trim();
+    const tenantId = String(auth.session?.tenantId || auth.user.id || "").trim();
+    if (!installationId || !tenantId || tenantId !== String(auth.user.id || "")) {
+      if (upload) cleanupUploadedFile(req);
+      sendJson(res, 403, "This session is not bound to an authorized BeatGaler installation. Sign in again.");
+      return null;
+    }
+    const account = linkedAccount(installationId);
+    if (!account || String(account.beatgalerAccountId || "") !== String(auth.user.id || "")) {
+      if (upload) cleanupUploadedFile(req);
+      sendJson(res, 403, "This installation is not authorized for the signed-in account.");
+      return null;
+    }
+
+    req.body = req.body || {};
+    req.query = req.query || {};
+    req.body.beatgalerUserId = installationId;
+    req.query.beatgalerUserId = installationId;
+    req.beatgalerAuthorizedUserId = String(auth.user.id);
+    req.beatgalerAuthorizedTenantId = tenantId;
+    req.beatgalerAuthorizedInstallationId = installationId;
+    return { auth, account, installationId, tenantId };
   }
 
   function preUpload(req, res, next) {
     const auth = authenticate(req, res);
     if (!auth) return;
     req.beatgalerPreAuth = auth;
+    if (!authorizeSessionInstallation(req, res)) return;
 
     const contentLength = Number(req.headers?.["content-length"] || 0);
     if (Number.isFinite(contentLength) && contentLength > FILE_UPLOAD_LIMIT_BYTES + MULTIPART_OVERHEAD_BYTES) {
-      return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", {
-        max_bytes: FILE_UPLOAD_LIMIT_BYTES,
-      });
+      return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", { max_bytes: FILE_UPLOAD_LIMIT_BYTES });
     }
 
-    const key = sessionKey(auth.token) || requestIp(req);
+    const keys = [
+      `ip:${requestIp(req)}`,
+      `account:${auth.user.id}`,
+      `tenant:${req.beatgalerAuthorizedTenantId}`,
+    ];
     const stamp = now();
-    let bucket = rateBuckets.get(key);
-    if (!bucket || stamp - bucket.startedAt >= uploadWindowMs) {
-      bucket = { startedAt: stamp, count: 0 };
+    for (const key of keys) {
+      let bucket = rateBuckets.get(key);
+      if (!bucket || stamp - bucket.startedAt >= uploadWindowMs) bucket = { startedAt: stamp, count: 0 };
+      bucket.count += 1;
       rateBuckets.set(key, bucket);
-    }
-    bucket.count += 1;
-    if (bucket.count > uploadRequestsPerWindow) {
-      return sendJson(res, 429, "Too many upload requests. Please retry shortly.");
+      if (bucket.count > uploadRequestsPerWindow) return sendJson(res, 429, "Too many upload requests. Please retry shortly.");
     }
 
-    const active = Number(activeUploads.get(key) || 0);
-    if (active >= uploadConcurrency) {
-      return sendJson(res, 429, "Too many uploads are already in progress. Please wait for one to finish.");
-    }
-    activeUploads.set(key, active + 1);
+    const concurrencyKey = `tenant:${req.beatgalerAuthorizedTenantId}`;
+    const active = Number(activeUploads.get(concurrencyKey) || 0);
+    if (active >= uploadConcurrency) return sendJson(res, 429, "Too many uploads are already in progress. Please wait for one to finish.");
+    activeUploads.set(concurrencyKey, active + 1);
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
-      const current = Number(activeUploads.get(key) || 0);
-      if (current <= 1) activeUploads.delete(key);
-      else activeUploads.set(key, current - 1);
+      const current = Number(activeUploads.get(concurrencyKey) || 0);
+      if (current <= 1) activeUploads.delete(concurrencyKey);
+      else activeUploads.set(concurrencyKey, current - 1);
     };
     res.once("finish", release);
     res.once("close", release);
@@ -129,64 +207,46 @@ function createHttpContainment(options = {}) {
     if (req.file?.path) fs.unlink(req.file.path, () => {});
   }
 
-  function authorizeInstallation(req, res, { upload = false } = {}) {
-    const auth = req.beatgalerPreAuth || authenticate(req, res);
-    if (!auth) {
-      if (upload) cleanupUploadedFile(req);
-      return null;
-    }
-
-    const headerInstallation = String(req.headers?.["x-beatgaler-installation-id"] || "").trim();
-    const bodyInstallation = String(req.body?.beatgalerUserId || "").trim();
-    if (headerInstallation && bodyInstallation && headerInstallation !== bodyInstallation) {
-      if (upload) cleanupUploadedFile(req);
-      sendJson(res, 403, "This installation does not match the authenticated request.");
-      return null;
-    }
-    const installationId = headerInstallation || bodyInstallation;
-    if (!installationId) {
-      if (upload) cleanupUploadedFile(req);
-      sendJson(res, 400, "beatgalerUserId is required.");
-      return null;
-    }
-
-    const cloud = readJson(cloudFile, { linkedAccounts: {} });
-    const account = cloud.linkedAccounts?.[installationId];
-    if (!account || String(account.beatgalerAccountId || "") !== String(auth.user.id || "")) {
-      if (upload) cleanupUploadedFile(req);
-      sendJson(res, 403, "This installation is not authorized for the signed-in account.");
-      return null;
-    }
-
-    req.body = req.body || {};
-    req.body.beatgalerUserId = installationId;
-    req.beatgalerAuthorizedUserId = auth.user.id;
-    req.beatgalerAuthorizedInstallationId = installationId;
-    return { auth, account, installationId };
-  }
-
   function postUpload(req, res, next) {
     if (req.file && Number(req.file.size || 0) > FILE_UPLOAD_LIMIT_BYTES) {
       cleanupUploadedFile(req);
-      return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", {
-        max_bytes: FILE_UPLOAD_LIMIT_BYTES,
-      });
+      return sendJson(res, 413, "FILE_TOO_LARGE: BeatGaler single-file limit is 1.99 GB.", { max_bytes: FILE_UPLOAD_LIMIT_BYTES });
     }
-    if (!authorizeInstallation(req, res, { upload: true })) return;
+    if (!req.beatgalerAuthorizedInstallationId && !authorizeSessionInstallation(req, res, { upload: true })) return;
+    req.body = req.body || {};
+    req.body.beatgalerUserId = req.beatgalerAuthorizedInstallationId;
     next();
   }
 
   function bodyOwner(req, res, next) {
-    if (!authorizeInstallation(req, res)) return;
+    if (!authorizeSessionInstallation(req, res)) return;
+    next();
+  }
+
+  function installationOwner(req, res, next) {
+    if (!authorizeSessionInstallation(req, res)) return;
     next();
   }
 
   function registrationGate(_req, res, next) {
-    // Development remains usable by default. Public production signup is closed
-    // until verification + abuse controls are explicitly enabled.
     if (String(env.NODE_ENV || "") === "production" && String(env.BEATGALER_PUBLIC_REGISTRATION || "") !== "1") {
       return sendJson(res, 503, "Public registration is temporarily unavailable.");
     }
+    next();
+  }
+
+  function bindSessionOnSuccess(req, res, next) {
+    const requestedInstallation = String(req.body?.beatgalerUserId || req.headers?.["x-beatgaler-installation-id"] || "").trim();
+    if (!requestedInstallation) return next();
+    const originalJson = res.json.bind(res);
+    res.json = payload => {
+      const status = Number(res.statusCode || 200);
+      if (status >= 200 && status < 300 && payload?.user?.id) {
+        const token = String(payload?.token || bearerToken(req) || "");
+        bindSessionInstallation(token, requestedInstallation, payload.user.id);
+      }
+      return originalJson(payload);
+    };
     next();
   }
 
@@ -195,19 +255,11 @@ function createHttpContainment(options = {}) {
   }
 
   return {
-    preUpload,
-    postUpload,
-    bodyOwner,
-    registrationGate,
-    legacyLibraryUpsert,
-    authenticate,
-    authorizeInstallation,
-    constants: {
-      FILE_UPLOAD_LIMIT_BYTES,
-      uploadWindowMs,
-      uploadRequestsPerWindow,
-      uploadConcurrency,
-    },
+    preUpload, postUpload, bodyOwner, installationOwner, registrationGate,
+    bindSessionOnSuccess, legacyLibraryUpsert, authenticate,
+    authorizeInstallation: authorizeSessionInstallation,
+    authorizeSessionInstallation, bindSessionInstallation,
+    constants: { FILE_UPLOAD_LIMIT_BYTES, uploadWindowMs, uploadRequestsPerWindow, uploadConcurrency },
   };
 }
 
@@ -216,33 +268,26 @@ function installHttpContainment(express, options = {}) {
   express.application.__beatgalerContainmentInstalled = true;
   const containment = createHttpContainment(options);
   const originalPost = express.application.post;
+  const originalGet = express.application.get;
 
   express.application.post = function patchedPost(routePath, ...handlers) {
-    if (routePath === "/library/upsert") {
-      return originalPost.call(this, routePath, containment.legacyLibraryUpsert);
-    }
+    if (routePath === "/library/upsert") return originalPost.call(this, routePath, containment.legacyLibraryUpsert);
     if (routePath === "/auth/register") {
-      return originalPost.call(this, routePath, containment.registrationGate, ...handlers);
+      return originalPost.call(this, routePath, containment.registrationGate, containment.bindSessionOnSuccess, ...handlers);
     }
+    if (SESSION_BIND_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.bindSessionOnSuccess, ...handlers);
     if (UPLOAD_ROUTES.has(routePath) && handlers.length >= 2) {
-      return originalPost.call(
-        this,
-        routePath,
-        containment.preUpload,
-        handlers[0],
-        containment.postUpload,
-        ...handlers.slice(1),
-      );
+      return originalPost.call(this, routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
     }
-    if (BODY_OWNER_ROUTES.has(routePath)) {
-      return originalPost.call(this, routePath, containment.bodyOwner, ...handlers);
-    }
+    if (BODY_OWNER_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.bodyOwner, ...handlers);
+    if (INSTALLATION_POST_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.installationOwner, ...handlers);
     return originalPost.call(this, routePath, ...handlers);
+  };
+
+  express.application.get = function patchedGet(routePath, ...handlers) {
+    if (INSTALLATION_GET_ROUTES.has(routePath)) return originalGet.call(this, routePath, containment.installationOwner, ...handlers);
+    return originalGet.call(this, routePath, ...handlers);
   };
 }
 
-module.exports = {
-  FILE_UPLOAD_LIMIT_BYTES,
-  createHttpContainment,
-  installHttpContainment,
-};
+module.exports = { FILE_UPLOAD_LIMIT_BYTES, createHttpContainment, installHttpContainment };
