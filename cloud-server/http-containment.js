@@ -44,8 +44,7 @@ function sessionKey(token) {
 }
 
 function requestIp(req) {
-  const forwarded = String(req.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.ip || req.socket?.remoteAddress || "unknown";
+  return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
 function sendJson(res, status, error, extra = {}) {
