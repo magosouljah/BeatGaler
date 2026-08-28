@@ -50,8 +50,10 @@ function load() {
   if (manifest.schemaVersion !== 1) fail("desktop manifest schemaVersion must be 1");
   assertEqual(manifest.versionSource, "VERSION", "version source");
   assertEqual(manifest.channelSource, "VERSION.prerelease", "channel source");
+  assertEqual(manifest.productName, "Galer", "product name");
   assertEqual(manifest.bundleIdentifier?.source, "src-tauri/tauri.conf.json", "bundle identifier source");
-  assertEqual(manifest.bundleIdentifier?.status, "RO_DECISION_REQUIRED", "bundle identifier decision state");
+  assertEqual(manifest.bundleIdentifier?.status, "FINAL", "bundle identifier decision state");
+  assertEqual(manifest.bundleIdentifier?.value, "com.beatgaler.app", "bundle identifier value");
   assertEqual(manifest.runtimeSources, "supply-chain/runtime-sources.json", "runtime source manifest");
   assertEqual(manifest.capabilities?.desktop, "src-tauri/capabilities/default.json", "desktop capability source");
   return { manifest, runtimeSources: readJson(manifest.runtimeSources) };
@@ -69,6 +71,15 @@ export function checkReleaseManifest() {
   assertEqual(manifest.updater?.compiledEnv, "BEATGALER_UPDATER_ENDPOINT", "updater compiled env");
 
   const tauri = readJson("src-tauri/tauri.conf.json");
+  assertEqual(tauri.identifier, manifest.bundleIdentifier.value, "Tauri bundle identifier");
+  assertEqual(tauri.productName, manifest.productName, "Tauri product name");
+  for (const [index, window] of (tauri.app?.windows ?? []).entries()) {
+    assertEqual(window.title, manifest.productName, `Tauri window ${index} title`);
+  }
+  const indexHtml = readText("index.html");
+  assertContains(indexHtml, `<title>${manifest.productName}</title>`, "HTML product name");
+  assertContains(indexHtml, `Loading ${manifest.productName}...`, "startup loader product name");
+
   const configuredEndpoints = tauri.plugins?.updater?.endpoints;
   if (Array.isArray(configuredEndpoints) && configuredEndpoints.length > 0) {
     fail("src-tauri/tauri.conf.json must not duplicate the compiled updater endpoint");
@@ -122,8 +133,7 @@ export function checkReleaseManifest() {
   assertContains(releaseWorkflow, '--target "$RELEASE_SOURCE_SHA"', "immutable release target SHA");
   assertContains(releaseWorkflow, "$BEATGALER_PUBLIC_RELEASE_REPO", "canonical public release repository use");
 
-  console.log(`PASS release manifest: version=${version} channel=${channel} endpoint=${manifest.updater.endpoint}`);
-  console.log(`RO_DECISION_REQUIRED bundle identifier: ${tauri.identifier || "MISSING"}`);
+  console.log(`PASS release manifest: product=${manifest.productName} bundle=${manifest.bundleIdentifier.value} version=${version} channel=${channel} endpoint=${manifest.updater.endpoint}`);
   return { manifest, runtimeSources, version, channel };
 }
 
