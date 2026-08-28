@@ -30,6 +30,7 @@ const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
+const { hashPassword, verifyPassword } = require("./password-kdf");
 
 const PORT = process.env.PORT || 4000;
 const MANAGER_BOT_USERNAME = String(process.env.MANAGER_BOT_USERNAME_1 || process.env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim();
@@ -775,20 +776,6 @@ function generateBeatGalerHandle(rawBase) {
   throw new Error("Could not allocate a BeatGaler username. Try another name.");
 }
 
-function hashPassword(password, saltHex) {
-  return crypto.scryptSync(String(password), Buffer.from(saltHex, "hex"), 64).toString("hex");
-}
-
-function verifyPassword(password, user) {
-  try {
-    const actual = Buffer.from(hashPassword(password, user.passwordSalt), "hex");
-    const expected = Buffer.from(user.passwordHash, "hex");
-    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-  } catch {
-    return false;
-  }
-}
-
 function sessionKey(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
@@ -1487,7 +1474,7 @@ app.post("/auth/register", async (req, res) => {
     usernameSource: "beatgaler",
     email,
     passwordSalt: salt,
-    passwordHash: hashPassword(password, salt),
+    passwordHash: await hashPassword(password, salt),
     createdAt: Date.now(),
     storageChatId: null,
     storageChatTitle: null,
@@ -1518,7 +1505,7 @@ app.post("/auth/login", async (req, res) => {
   const normalizedIdentifier = normalizeBeatGalerUsername(identifier);
   const user = identifier.includes("@") ? findUserByEmail(identifier) : (beatGalerUsers.get(normalizedIdentifier) || findUserByEmail(identifier));
 
-  if (!user || !user.passwordHash || !verifyPassword(password, user)) {
+  if (!user || !user.passwordHash || !(await verifyPassword(password, user))) {
     return res.status(401).json({ error: "Invalid username/email or password." });
   }
   if (user.mfaSecret && !verifyTotp(user.mfaSecret, req.body?.mfaCode)) {
@@ -1577,16 +1564,16 @@ app.post("/auth/email/change", (req, res) => {
   res.json(accountPublicPayload(user, bearerToken(req)));
 });
 
-app.post("/auth/password/change", (req, res) => {
+app.post("/auth/password/change", async (req, res) => {
   const user = getAuthUserFromToken(bearerToken(req));
   if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
   const currentPassword = String(req.body?.currentPassword || "");
   const newPassword = String(req.body?.newPassword || "");
-  if (user.passwordHash && !verifyPassword(currentPassword, user)) return res.status(401).json({ error: "Current password is incorrect." });
+  if (user.passwordHash && !(await verifyPassword(currentPassword, user))) return res.status(401).json({ error: "Current password is incorrect." });
   if (newPassword.length < 8 || newPassword.length > 200) return res.status(400).json({ error: "New password must be at least 8 characters." });
   const salt = crypto.randomBytes(16).toString("hex");
   user.passwordSalt = salt;
-  user.passwordHash = hashPassword(newPassword, salt);
+  user.passwordHash = await hashPassword(newPassword, salt);
   saveAuthData();
   res.json({ ok: true });
 });
