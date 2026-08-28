@@ -4,12 +4,14 @@ const express = require("express");
 const { installHttpContainment } = require("./http-containment");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
+const { installAuthAbuseControls } = require("./auth-abuse-controls");
 const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 
 installSecurityHeaders(express);
 installHttpContainment(express, { dataDir: __dirname });
+installAuthAbuseControls(express);
 installProductiveTempAuthBoundary(express);
 
 async function start() {
