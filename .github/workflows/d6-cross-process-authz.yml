@@ -1,0 +1,51 @@
+name: D6 - Cross-Process Authorization
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installation_claim_atomicity:
+    name: PostgreSQL cross-process installation claim atomicity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_d6
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_d6"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_d6
+      BEATGALER_POSTGRES_ENABLED: "true"
+      BEATGALER_POSTGRES_SSL_MODE: disable
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked cloud-server graph
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Verify coordinator semantics
+        run: node cloud-server/tests/postgres-installation-claim-coordinator.test.cjs
+
+      - name: Prove claim atomicity across two Node processes
+        run: node cloud-server/tests/postgres-installation-claim-cross-process.integration.cjs
+
+      - name: Re-run D6 containment adversarial regression
+        run: node scripts/regression-http-containment.mjs
