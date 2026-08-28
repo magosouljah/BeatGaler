@@ -13,8 +13,10 @@ function normalized(value) {
 }
 
 function requestIp(req) {
-  const forwarded = String(req.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.ip || req.socket?.remoteAddress || "unknown";
+  // Use Express' resolved IP identity (or the socket fallback). Do not trust a
+  // client-controlled X-Forwarded-For header unless Express itself is later
+  // configured with an explicit trusted-proxy policy.
+  return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
 function opaque(value) {
