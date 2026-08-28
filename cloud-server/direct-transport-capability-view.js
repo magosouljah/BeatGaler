@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const transport = require('./direct-transport-control');
 
 const ROOT = __dirname;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 5 * 60_000;
@@ -55,8 +54,12 @@ function validateCapabilitySession(input) {
   return validateCapabilitySessionState(state, input);
 }
 
+async function endOperation(input) {
+  return require('./direct-transport-control').endOperation(input);
+}
+
 module.exports = {
-  ...transport,
+  endOperation,
   validateCapabilitySession,
   validateCapabilitySessionState,
 };
