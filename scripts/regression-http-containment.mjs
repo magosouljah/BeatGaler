@@ -13,6 +13,7 @@ function responseRecorder() {
   const res = new EventEmitter(); res.statusCode = 200; res.payload = null;
   res.status = code => { res.statusCode = code; return res; };
   res.json = payload => { res.payload = payload; return res; };
+  res.send = payload => { res.payload = payload; return res; };
   return res;
 }
 function request({ token = "", headers = {}, body = {}, query = {}, ip = "127.0.0.1", file } = {}) {
@@ -25,7 +26,10 @@ const unboundToken = "legacy-unbound-token";
 const userId = "usr_test";
 const installationId = "install_test";
 fs.writeFileSync(path.join(dir, "accounts-data.json"), JSON.stringify({
-  users: [{ id: userId, username: "tester#0001" }, { id: "usr_other", username: "other#0001" }],
+  users: [
+    { id: userId, username: "tester#0001", email: "tester@example.test" },
+    { id: "usr_other", username: "other#0001", email: "other@example.test" },
+  ],
   sessions: {
     [sessionKey(token)]: { userId, installationId, tenantId: userId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 },
     [sessionKey(unboundToken)]: { userId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 },
@@ -57,6 +61,51 @@ try {
     assert.equal(req.body.beatgalerUserId, installationId);
     assert.equal(req.query.beatgalerUserId, installationId);
     assert.equal(req.beatgalerAuthorizedTenantId, userId);
+  }
+  {
+    const req = request({ body: { beatgalerUserId: "other_install", identifier: "tester#0001" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "login must not rebind another account's installation");
+  }
+  {
+    const req = request({ body: { beatgalerUserId: "other_install", identifier: "other@example.test" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true, "same-account login may resume its own installation");
+  }
+  {
+    const req = request({ token, body: { beatgalerUserId: "other_install" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.guardSessionRebind(req, res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "validated session cannot claim foreign installation");
+  }
+  {
+    const req = request({ body: { beatgalerUserId: "other_install", provider: "google" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.guardOAuthStart(req, res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "unauthenticated OAuth cannot target an already-linked installation");
+  }
+  {
+    const fresh = "install_oauth_fresh";
+    const req = request({ body: { beatgalerUserId: fresh, provider: "google" } });
+    const res = responseRecorder();
+    containment.guardOAuthStart(req, res, () => {
+      res.json({ ok: true, authorization_url: "https://accounts.example/authorize?state=state_fresh" });
+    });
+    let bindings = JSON.parse(fs.readFileSync(path.join(dir, "authz-session-bindings.json"), "utf8"));
+    assert.equal(bindings["oauth:state_fresh"].installationId, fresh);
+
+    const cloud = JSON.parse(fs.readFileSync(path.join(dir, "cloud-data.json"), "utf8"));
+    cloud.linkedAccounts[fresh] = { beatgalerAccountId: "usr_other" };
+    fs.writeFileSync(path.join(dir, "cloud-data.json"), JSON.stringify(cloud, null, 2));
+    const cbReq = request({ query: { state: "state_fresh" } });
+    const cbRes = responseRecorder(); let callbackNext = false;
+    containment.guardOAuthCallback(cbReq, cbRes, () => { callbackNext = true; });
+    assert.equal(cbRes.statusCode, 403); assert.equal(callbackNext, false, "OAuth race cannot overwrite an installation claimed after flow start");
+
+    delete cloud.linkedAccounts[fresh];
+    fs.writeFileSync(path.join(dir, "cloud-data.json"), JSON.stringify(cloud, null, 2));
   }
   {
     const req = request({ token, headers: { "content-length": String(FILE_UPLOAD_LIMIT_BYTES + 1024 * 1024 + 1) } });
@@ -110,6 +159,9 @@ try {
     fakeExpress.application.get("/telegram/connect/status", () => {});
     const statusRoute = registered.find(x => x.route === "/telegram/connect/status");
     assert.equal(statusRoute.handlers.length, 2, "installation authorization must precede GET handler");
+    fakeExpress.application.get("/auth/oauth/:provider/callback", () => {});
+    const oauthCallback = registered.find(x => x.route === "/auth/oauth/:provider/callback");
+    assert.equal(oauthCallback.handlers.length, 2, "OAuth ownership guard must precede provider callback work");
   }
 
   console.log("PASS regression-http-containment D6 authz");
