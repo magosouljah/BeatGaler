@@ -210,11 +210,6 @@ async function authorizePermanent(session) {
   const cached = permanentByTransport.get(cacheKey);
   if (cached) return cached;
 
-  // Fresh bot authorization is a control-plane operation with a much tighter
-  // Telegram rate-limit surface than normal bound-temp RPCs. Serialize only
-  // cache misses globally; warm sessions remain concurrent and direct media is
-  // unaffected. This prevents a burst of client starts from importing dozens
-  // of bot authorizations at once.
   const promise = serializePermanentAuthorization(async () => {
     assert.ok(globalThis.WebSocket, "Node runtime must provide WebSocket for productive temporary auth.");
     const m = await loadMtcuteInternals();
@@ -329,8 +324,9 @@ function stripPermanentSecrets(session) {
 }
 
 async function transformSession(session, metadata) {
-  if (!session || typeof session !== "object" || session.ok === false) return session;
+  if (!session || typeof session !== "object") return session;
   const safe = stripPermanentSecrets(session);
+  if (session.ok === false) return safe;
   const state = await authorizePermanent(session);
   const bootstrap = {
     version: 1,
@@ -368,19 +364,19 @@ async function transformTransportBody(req, body) {
     const { credential_refresh: refresh, ...safeBody } = body;
     if (!metadata) {
       return {
-        ...safeBody,
+        ...stripPermanentSecrets(safeBody),
         refresh_required: true,
         temp_auth_required: true,
       };
     }
     return {
-      ...safeBody,
+      ...stripPermanentSecrets(safeBody),
       refresh_required: true,
       credential_refresh: await transformSession(refresh, metadata),
       temp_auth_required: false,
     };
   }
-  return body;
+  return stripPermanentSecrets(body);
 }
 
 function installProductiveTempAuthBoundary(express) {
