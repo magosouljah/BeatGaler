@@ -16,6 +16,17 @@ const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
 const CSRF_KEY = "beatgaler:web-csrf:v1";
 const TRUSTED_REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
 
+async function renderSignedOutGate() {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<AccountGate><div>Authenticated application</div></AccountGate>);
+    await Promise.resolve();
+  });
+  return { host, root };
+}
+
 describe("AccountGate Web adapter", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -31,15 +42,41 @@ describe("AccountGate Web adapter", () => {
     expect(first).toMatch(/^beatgaler-web-/);
   });
 
-  it("renders the real signed-out browser shell", async () => {
-    const host = document.createElement("div");
-    document.body.appendChild(host);
-    const root = createRoot(host);
-    await act(async () => {
-      root.render(<AccountGate><div>Authenticated application</div></AccountGate>);
-      await Promise.resolve();
-    });
+  it("renders the real signed-out browser shell on shared foundation classes", async () => {
+    const { host, root } = await renderSignedOutGate();
     expect(host.textContent).toContain("Sign in to your BeatGaler account");
+    expect(host.querySelector(".bg-account-gate")).not.toBeNull();
+    expect(host.querySelector("form.bg-account-card")).not.toBeNull();
+    expect(host.querySelector("button.bg-button--primary")).not.toBeNull();
+    expect(host.querySelectorAll("button.bg-button--secondary")).toHaveLength(2);
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
+  it("uses labelled login fields and browser autocomplete semantics", async () => {
+    const { host, root } = await renderSignedOutGate();
+    const identifier = host.querySelector<HTMLInputElement>("#beatgaler-login-identifier");
+    const password = host.querySelector<HTMLInputElement>("#beatgaler-login-password");
+    expect(identifier?.getAttribute("autocomplete")).toBe("username");
+    expect(password?.getAttribute("autocomplete")).toBe("current-password");
+    expect(host.querySelector('label[for="beatgaler-login-identifier"]')?.textContent).toBe("USERNAME OR EMAIL");
+    expect(host.querySelector('label[for="beatgaler-login-password"]')?.textContent).toBe("PASSWORD");
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
+  it("uses email/new-password autofill semantics in registration mode", async () => {
+    const { host, root } = await renderSignedOutGate();
+    const switchButton = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("Create account"));
+    expect(switchButton).toBeTruthy();
+    await act(async () => switchButton?.click());
+
+    expect(host.querySelector<HTMLInputElement>("#beatgaler-register-username")?.getAttribute("autocomplete")).toBe("username");
+    expect(host.querySelector<HTMLInputElement>("#beatgaler-register-email")?.getAttribute("autocomplete")).toBe("email");
+    expect(host.querySelector<HTMLInputElement>("#beatgaler-register-password")?.getAttribute("autocomplete")).toBe("new-password");
+    expect(host.querySelector<HTMLInputElement>("#beatgaler-register-password-confirm")?.getAttribute("autocomplete")).toBe("new-password");
+    expect(host.querySelector('label[for="beatgaler-register-email"]')?.textContent).toBe("EMAIL");
+
     await act(async () => root.unmount());
     host.remove();
   });
