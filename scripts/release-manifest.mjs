@@ -27,6 +27,10 @@ function assertContains(text, needle, label) {
   if (!text.includes(needle)) fail(`${label}: missing ${needle}`);
 }
 
+function assertNotContains(text, needle, label) {
+  if (text.includes(needle)) fail(`${label}: duplicated literal ${needle}`);
+}
+
 function versionChannel(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(version).trim());
   if (!match) fail(`VERSION is not semantic version text: ${version}`);
@@ -96,11 +100,27 @@ export function checkReleaseManifest() {
   const windowsWorkflow = readText(".github/workflows/build-windows.yml");
   const macWorkflow = readText(".github/workflows/build-macos.yml");
   for (const [name, workflow] of [["Windows", windowsWorkflow], ["macOS", macWorkflow]]) {
-    if (workflow.includes(expectedEndpoint)) fail(`${name} workflow duplicates updater endpoint literal`);
+    assertNotContains(workflow, expectedEndpoint, `${name} workflow updater endpoint`);
     assertContains(workflow, "release-manifest.mjs github-env", `${name} workflow canonical manifest load`);
   }
   assertContains(windowsWorkflow, "BEATGALER_FFMPEG_WINDOWS_ASSET", "Windows FFmpeg source");
   assertContains(windowsWorkflow, "ffmpeg=src-tauri/resources/windows/ffmpeg.exe", "Windows runtime provenance");
+  assertContains(macWorkflow, "BEATGALER_FFMPEG_MAC_ARM64_ASSET", "macOS arm64 FFmpeg source");
+  assertContains(macWorkflow, "BEATGALER_FFMPEG_MAC_X64_ASSET", "macOS x86_64 FFmpeg source");
+  assertContains(macWorkflow, "ffmpeg=src-tauri/resources/ffmpeg", "macOS runtime provenance");
+
+  const releaseWorkflow = readText(".github/workflows/release-desktop-updater.yml");
+  assertNotContains(releaseWorkflow, `PUBLIC_RELEASE_REPO: ${releaseRepo}`, "release workflow public repository");
+  assertContains(releaseWorkflow, "RELEASE_SOURCE_SHA=$WIN_SHA", "release source SHA capture");
+  assertContains(releaseWorkflow, 'git checkout --detach "$RELEASE_SOURCE_SHA"', "release tools source pin");
+  assertContains(releaseWorkflow, 'test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"', "release tools SHA verification");
+  assertContains(releaseWorkflow, "release-manifest.mjs github-env", "release workflow canonical manifest load");
+  assertContains(releaseWorkflow, 'WIN_PROVENANCE_SHA="$(jq -r', "Windows provenance SHA validation");
+  assertContains(releaseWorkflow, 'MAC_PROVENANCE_SHA="$(jq -r', "macOS provenance SHA validation");
+  assertContains(releaseWorkflow, 'test "$WIN_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"', "Windows provenance same-SHA gate");
+  assertContains(releaseWorkflow, 'test "$MAC_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"', "macOS provenance same-SHA gate");
+  assertContains(releaseWorkflow, '--target "$RELEASE_SOURCE_SHA"', "immutable release target SHA");
+  assertContains(releaseWorkflow, "$BEATGALER_PUBLIC_RELEASE_REPO", "canonical public release repository use");
 
   console.log(`PASS release manifest: version=${version} channel=${channel} endpoint=${manifest.updater.endpoint}`);
   console.log(`RO_DECISION_REQUIRED bundle identifier: ${tauri.identifier || "MISSING"}`);
