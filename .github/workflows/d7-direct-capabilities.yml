@@ -1,0 +1,68 @@
+name: D7 - Direct Capability Authorization
+
+on:
+  pull_request:
+  push:
+    branches:
+      - integration-v0.8.0-alpha.1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d7-direct-capabilities-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capability_unit:
+    name: Capability scope/replay/revoke unit contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Run Direct capability unit contract
+        run: node cloud-server/tests/direct-capability-boundary.runner.cjs
+
+  capability_postgres:
+    name: PostgreSQL capability scope/replay/ceiling contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_ci
+      BEATGALER_POSTGRES_ENABLED: "true"
+      BEATGALER_POSTGRES_SSL_MODE: disable
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked cloud-server graph
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Run PostgreSQL Direct capability contract
+        run: node cloud-server/tests/direct-capability-postgres.integration.cjs
