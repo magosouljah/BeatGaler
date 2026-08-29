@@ -7,6 +7,10 @@ on:
     paths:
       - 'release/f4-25.1-functional-matrix.json'
       - 'scripts/test-f4-25.1-functional-matrix.mjs'
+      - 'scripts/run-trash-e2e.mjs'
+      - 'tests/e2e/trash-flow.e2e.mjs'
+      - 'tests/e2e-harness/E2ETrashHarness.tsx'
+      - 'scripts/run-desktop-e2e-isolated.mjs'
       - '.github/workflows/f4-25.1-functional-matrix.yml'
       - 'package.json'
 
@@ -26,3 +30,19 @@ jobs:
           node-version-file: .node-version
       - name: Validate dependency-safe matrix contract
         run: node scripts/test-f4-25.1-functional-matrix.mjs
+
+  windows-trash-journey:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Execute Windows Trash functional journey
+        run: node scripts/run-trash-e2e.mjs
