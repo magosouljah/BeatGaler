@@ -2,9 +2,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { browserId3Reader } from "./lib/id3BrowserParser";
+import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
+import "./styles/auth-ui.css";
 import "./styles/library-ux.css";
 
 // Browser metadata parsing is bundled with BeatGaler. The legacy fallback in
@@ -117,8 +119,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <GlobalStyles />
     <PlatformProvider>
-      <LibraryUxBridge />
-      <App />
+      <AuthExperienceGate>
+        <LibraryUxBridge />
+        <App />
+      </AuthExperienceGate>
     </PlatformProvider>
   </ErrorBoundary>
 );
