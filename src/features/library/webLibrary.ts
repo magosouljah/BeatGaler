@@ -1,5 +1,6 @@
 import type { Beat } from "../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../domain/beat";
+import { ensureWebLibraryIndex, isMissingWebLibraryIndexError } from "../cloud/webLibraryBootstrap";
 
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
@@ -37,6 +38,16 @@ export function classifyWebLibraryResult(beatCount: number, queryActive = false)
   return queryActive ? "no-results" : "empty";
 }
 
+async function getOrBootstrapLibraryIndex(transport: WebLibraryTransport): Promise<WebTransportLibraryIndexResult> {
+  try {
+    return await transport.getLibraryIndex();
+  } catch (error) {
+    if (!isMissingWebLibraryIndexError(error)) throw error;
+    const bootstrapped = await ensureWebLibraryIndex();
+    return { manifest: bootstrapped.manifest, messageId: bootstrapped.messageId };
+  }
+}
+
 // Initial library load intentionally returns metadata only. Artwork remains represented by
 // assets.artwork and is resolved on demand by the presentation/media path instead of blocking
 // startup on an N-artwork download batch. Timing is emitted around the authoritative metadata
@@ -45,7 +56,7 @@ export async function loadWebLibrary(transport: WebLibraryTransport, options: We
   const now = options.now || (() => typeof performance !== "undefined" ? performance.now() : Date.now());
   const startedAt = now();
   try {
-    const index = await transport.getLibraryIndex();
+    const index = await getOrBootstrapLibraryIndex(transport);
     const manifest = normalizeWebLibraryManifest(index.manifest);
     const beats = manifest.beats.map(beatFromWebLibraryEntry);
     options.onObservation?.({ state: classifyWebLibraryResult(beats.length, options.queryActive), durationMs: Math.max(0, now() - startedAt), beatCount: beats.length });
