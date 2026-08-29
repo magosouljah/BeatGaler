@@ -4,6 +4,7 @@ import App from "./App";
 import { browserId3Reader } from "./lib/id3BrowserParser";
 import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
+import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
@@ -121,6 +122,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <PlatformProvider>
       <AuthExperienceGate>
         <LibraryUxBridge />
+        <WebLibraryPagination />
         <App />
       </AuthExperienceGate>
     </PlatformProvider>
