@@ -22,7 +22,7 @@ describe("BeatGaler Web build smoke", () => {
       hasTauriRuntime: Boolean(window.__TAURI_INTERNALS__),
     }));
 
-    assert.equal(snapshot.title, "Beat Galer");
+    assert.equal(snapshot.title, "Galer");
     assert.ok(snapshot.rootChildren > 0, "BeatGaler Web must render at least one React child");
     assert.equal(snapshot.hasTauriRuntime, false, "BeatGaler Web smoke must run without a Tauri runtime");
   });

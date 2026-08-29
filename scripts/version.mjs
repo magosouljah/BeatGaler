@@ -4,6 +4,7 @@ import path from "node:path";
 const root = process.cwd();
 const paths = {
   version: path.join(root, "VERSION"),
+  releaseManifest: path.join(root, "release", "desktop-manifest.json"),
   packageJson: path.join(root, "package.json"),
   packageLock: path.join(root, "package-lock.json"),
   tauriConf: path.join(root, "src-tauri", "tauri.conf.json"),
@@ -61,9 +62,10 @@ function writeVersionFile(version) {
   fs.writeFileSync(paths.version, `${parseSemver(version).raw}\n`, "utf8");
 }
 
-function productNameFor(version) {
-  const parsed = parseSemver(version);
-  return /^beta(?:\.|$)/i.test(parsed.prerelease) ? "Beat Galer Beta" : "Beat Galer";
+function productNameFor() {
+  const productName = String(readJson(paths.releaseManifest).productName || "").trim();
+  if (!productName) fail("release/desktop-manifest.json is missing productName.");
+  return productName;
 }
 
 function resolveRequestedVersion(input, channel, currentVersion) {
@@ -116,8 +118,8 @@ function updateCargoLock(raw, version) {
 }
 
 function updateSettings(raw, version, productName) {
-  const pattern = /Beat\s*Galer(?:\s+Beta)?\s+\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/;
-  if (!pattern.test(raw)) fail("Could not locate visible BeatGaler version in SettingsPanel.tsx.");
+  const pattern = /(?:Beat\s*)?Galer(?:\s+Beta)?\s+\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/;
+  if (!pattern.test(raw)) fail("Could not locate visible Galer version in SettingsPanel.tsx.");
   return raw.replace(pattern, `${productName} ${version}`);
 }
 
@@ -129,7 +131,7 @@ function updateIndexHtml(raw, productName) {
 
 function sync(version) {
   const nextVersion = parseSemver(version).raw;
-  const productName = productNameFor(nextVersion);
+  const productName = productNameFor();
 
   // Validate/read everything first so a bad source file cannot leave a half-written version update.
   const packageJson = readJson(paths.packageJson);
@@ -180,7 +182,7 @@ function currentVersions() {
 
   const cargoTomlMatch = cargoToml.match(/\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
   const cargoLockMatch = cargoLock.match(/\[\[package\]\]\r?\nname = "beat_galer"\r?\nversion = "([^"]+)"/);
-  const settingsMatch = settings.match(/Beat\s*Galer(?:\s+Beta)?\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
+  const settingsMatch = settings.match(/(?:Beat\s*)?Galer(?:\s+Beta)?\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
 
   return {
     VERSION: readVersionFile(),
@@ -213,7 +215,7 @@ function check() {
 
   for (const key of ["VERSION", ...versionKeys]) console.log(`${key}: ${versions[key] ?? "MISSING"}`);
 
-  const expectedName = productNameFor(expected);
+  const expectedName = productNameFor();
   const nameMismatches = ["productName", "windowTitle", "htmlTitle"].filter((key) => versions[key] !== expectedName);
   console.log(`productName: ${versions.productName ?? "MISSING"}`);
   console.log(`windowTitle: ${versions.windowTitle ?? "MISSING"}`);
@@ -227,11 +229,11 @@ function check() {
     fail(`Version/name mismatch. VERSION is the source of truth (${expected}): ${details.join(", ")}`);
   }
 
-  console.log(`PASS version guard: VERSION is the single source of truth (${expected}).`);
+  console.log(`PASS version guard: VERSION is the single source of truth (${expected}); product name comes from release manifest (${expectedName}).`);
 }
 
 function help() {
-  console.log(`\nBeatGaler version manager — VERSION is the source of truth\n\nCommands:\n  npm run version:show\n  npm run version:check\n  npm run version:sync\n  npm run version:set -- 0.3.1 beta\n  npm run version:set -- 0.3.1 stable\n  npm run version:set -- 0.3.1-beta.2 beta\n  npm run version:bump -- beta\n  npm run version:bump -- stable\n\nExamples:\n  0.3.1 + beta   -> 0.3.1-beta.1 / Beat Galer Beta\n  0.3.1 + stable -> 0.3.1 / Beat Galer\n`);
+  console.log(`\nBeatGaler version manager — VERSION is the source of truth\n\nCommands:\n  npm run version:show\n  npm run version:check\n  npm run version:sync\n  npm run version:set -- 0.3.1 beta\n  npm run version:set -- 0.3.1 stable\n  npm run version:set -- 0.3.1-beta.2 beta\n  npm run version:bump -- beta\n  npm run version:bump -- stable\n\nExamples:\n  0.3.1 + beta   -> 0.3.1-beta.1 / Galer\n  0.3.1 + stable -> 0.3.1 / Galer\n`);
 }
 
 const [mode = "help", ...args] = process.argv.slice(2);

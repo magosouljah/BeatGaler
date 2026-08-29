@@ -7,6 +7,7 @@ const fail = message => { throw new Error(`Phase 12B regression failed: ${messag
 const read = rel => fs.readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
 
 const config = JSON.parse(read("src-tauri/tauri.conf.json"));
+const releaseManifest = JSON.parse(read("release/desktop-manifest.json"));
 if (config.bundle?.createUpdaterArtifacts !== true) fail("bundle.createUpdaterArtifacts must be true.");
 
 const keygen = read("scripts/setup-updater-signing.ps1");
@@ -31,8 +32,10 @@ if (!windowsBuild.includes("npm run updater:verify-artifacts")) fail("Windows Bu
 if (!releaseWorkflow.includes("Download Windows build") || !releaseWorkflow.includes("BeatGaler-Windows-x64")) fail("Desktop Release no longer consumes the prebuilt Windows artifact.");
 if (!releaseWorkflow.includes("Download macOS build") || !releaseWorkflow.includes("BeatGaler-macOS-Universal")) fail("Desktop Release no longer consumes the prebuilt macOS artifact.");
 if (!releaseWorkflow.includes("latest.json")) fail("Desktop Release does not publish a static updater manifest.");
-if (!releaseWorkflow.includes("PUBLIC_RELEASE_REPO: magosouljah/galer")) fail("Desktop Release is no longer bound to the public release repository.");
+if (releaseManifest.updater?.publicReleaseRepo !== "magosouljah/galer") fail("Canonical release manifest is no longer bound to the dedicated public release repository.");
+if (!releaseWorkflow.includes("release-manifest.mjs github-env") || !releaseWorkflow.includes("BEATGALER_PUBLIC_RELEASE_REPO")) fail("Desktop Release no longer consumes the canonical public release repository source.");
+if (!releaseWorkflow.includes("RELEASE_SOURCE_SHA") || !releaseWorkflow.includes('git checkout --detach "$RELEASE_SOURCE_SHA"')) fail("Desktop Release tools are no longer pinned to the verified artifact source SHA.");
 if (!releaseWorkflow.includes("GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}")) fail("Public GitHub Release publishing no longer uses the dedicated cross-repository token.");
 if (!releaseWorkflow.includes("contents: read") || !releaseWorkflow.includes("actions: read")) fail("Desktop Release must keep source contents read-only while allowing artifact reads.");
 
-console.log("PASS Phase 12B updater signing pipeline: signed Windows/macOS builds stay separate from publishing, release consumes verified artifacts, and latest.json is published to the dedicated public release repository");
+console.log("PASS Phase 12B updater signing pipeline: signed Windows/macOS builds stay separate from publishing, release consumes verified same-SHA artifacts, and latest.json targets the canonical dedicated public release repository");
