@@ -1,4 +1,3 @@
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
 import { getWebClientId } from "../../platform/webClientId";
 
 export interface WebLibraryBootstrapResult {
@@ -13,6 +12,10 @@ export function isMissingWebLibraryIndexError(error: unknown): boolean {
 }
 
 export async function ensureWebLibraryIndex(): Promise<WebLibraryBootstrapResult> {
+  // Keep AccountGate out of this module's static dependency graph. webLibrary is loaded by
+  // webAdapter, while AccountGate imports platform; a static import here creates a cycle that
+  // can evaluate platform before webAdapter exists and prevents the Web shell from mounting.
+  const { getBeatGalerAuthToken, getResolvedCloudApiBase } = await import("../../components/AccountGate");
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
   const response = await fetch(`${getResolvedCloudApiBase()}/transport/index/ensure`, {
