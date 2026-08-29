@@ -19,6 +19,7 @@ const { startPostgresControlPlane, installPostgresShutdown } = require("./postgr
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
+const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -60,6 +61,7 @@ async function start() {
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
+  installAtomicLibraryIndexBootstrap(express, { pool, dataDir: __dirname });
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"}`);
   require("./server-core");
 }
