@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "strategy": "immutable-release-withdraw-and-recover",
+  "nMinusOne": {
+    "required": true,
+    "mustBeOlderThanTarget": true,
+    "preserveAppData": true
+  },
+  "failureClasses": [
+    "network",
+    "disk",
+    "signature",
+    "manifest"
+  ],
+  "failureBehavior": {
+    "activatePartialUpdate": false,
+    "deleteInstalledVersion": false,
+    "retryRequiresFreshValidation": true
+  },
+  "badArtifact": {
+    "mutateImmutableRelease": false,
+    "withdrawFromUpdaterDiscovery": true,
+    "requireIncidentNotice": true,
+    "requireBadTag": true,
+    "requireSourceSha": true,
+    "requireArtifactDigest": true
+  },
+  "recovery": {
+    "preferred": "publish-new-fixed-version",
+    "fallback": "reinstall-last-known-good-n-minus-one",
+    "stableLatestMayMoveOnlyWithReleaseAuthorization": true
+  }
+}

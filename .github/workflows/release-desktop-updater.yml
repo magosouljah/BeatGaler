@@ -6,6 +6,15 @@ on:
         description: "Release tag, e.g. v0.8.0"
         required: true
         type: string
+      release_channel:
+        description: "Versioned updater channel policy to consume"
+        required: true
+        type: choice
+        default: alpha
+        options:
+          - alpha
+          - beta
+          - stable
       windows_run_id:
         description: "Successful Build - Windows run ID"
         required: true
@@ -83,6 +92,16 @@ jobs:
 
       - name: Load canonical release manifest
         run: node scripts/release-manifest.mjs github-env
+
+      - name: Generate source dependency SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          mkdir -p release-evidence
+          npm sbom --sbom-format spdx > release-evidence/sbom.spdx.json
+          test -s release-evidence/sbom.spdx.json
+          jq -e '.spdxVersion and .packages' release-evidence/sbom.spdx.json >/dev/null
 
       - name: Download Windows build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -167,6 +186,7 @@ jobs:
           cp "$MAC_SIG" "release-assets/$MAC_UPDATER_NAME.sig"
           cp "$WIN_PROVENANCE" release-assets/runtime-provenance-windows.json
           cp "$MAC_PROVENANCE" release-assets/runtime-provenance-macos.json
+          cp release-evidence/sbom.spdx.json release-assets/sbom.spdx.json
 
           WIN_URL="https://github.com/${BEATGALER_PUBLIC_RELEASE_REPO}/releases/download/${{ inputs.release_tag }}/$WIN_NAME"
           MAC_URL="https://github.com/${BEATGALER_PUBLIC_RELEASE_REPO}/releases/download/${{ inputs.release_tag }}/$MAC_UPDATER_NAME"
@@ -203,8 +223,16 @@ jobs:
           (cd release-assets && sha256sum \
             "$WIN_NAME" "$WIN_NAME.sig" \
             "$MAC_DMG_NAME" "$MAC_UPDATER_NAME" "$MAC_UPDATER_NAME.sig" \
-            latest.json runtime-provenance-windows.json runtime-provenance-macos.json \
+            latest.json runtime-provenance-windows.json runtime-provenance-macos.json sbom.spdx.json \
             | sort > SHA256SUMS)
+
+      - name: Enforce channel minimum version and kill switch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-controls.mjs assert-publish \
+            --channel "${{ inputs.release_channel }}" \
+            --version "$(tr -d '\r\n' < VERSION)"
 
       - name: Create immutable public Desktop Release
         shell: bash
@@ -233,5 +261,6 @@ jobs:
             release-assets/latest.json \
             release-assets/runtime-provenance-windows.json \
             release-assets/runtime-provenance-macos.json \
+            release-assets/sbom.spdx.json \
             release-assets/SHA256SUMS \
             --repo "$BEATGALER_PUBLIC_RELEASE_REPO"
