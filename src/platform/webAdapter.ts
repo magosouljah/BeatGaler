@@ -2,11 +2,12 @@ import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 import { getWebClientId } from "./webClientId";
 import { pickWebSlotFile, webImportPort } from "./webImport";
-import { loadWebLibrary } from "../features/library/webLibrary";
+import { WebLibraryWindowConsumer } from "../features/library/webLibraryWindow";
 import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
 let webCloudTransport: Promise<import("../features/cloud/webGalerCloudTransport").WebGalerCloudTransport> | null = null;
+let webLibraryWindow: WebLibraryWindowConsumer | null = null;
 let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 
@@ -16,6 +17,11 @@ async function resolveWebCloudTransport() {
       .then(({ WebGalerCloudTransport }) => new WebGalerCloudTransport());
   }
   return webCloudTransport;
+}
+
+async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
+  if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport());
+  return webLibraryWindow;
 }
 
 async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
@@ -63,15 +69,22 @@ export const webAdapter: PlatformAdapter = {
   library: {
     async load() {
       try {
-        const transport = await resolveWebCloudTransport();
-        return await loadWebLibrary(transport);
+        const windowConsumer = await resolveWebLibraryWindow();
+        return (await windowConsumer.currentOrFirst()).beats;
       } catch (error) {
         console.error("[web/library] authoritative load failed", error);
         throw new Error("Galer Cloud could not load your library. Please retry.");
       }
     },
     async loadOffline() { return []; },
-    async restoreAuthoritative() {},
+    async restoreAuthoritative() {
+      const windowConsumer = await resolveWebLibraryWindow();
+      const page = await windowConsumer.refresh();
+      console.info(
+        `[web/library-window] refresh offset=${page.offset} materialized=${page.materializedCount}/${page.totalVisible} ` +
+        `max=${page.evidence.maxMaterializedCount} avoided=${page.evidence.avoidedRichMaterializations} ratio=${page.evidence.richMaterializationRatio.toFixed(4)}`,
+      );
+    },
     async commitSnapshot() { return unavailable("Galer Cloud library writes"); },
     async flushOfflineTrashIntents() { return 0; },
   },
@@ -208,6 +221,7 @@ export const webAdapter: PlatformAdapter = {
       webPlaybackSources = null;
       webDownloads?.cancelAll();
       webDownloads = null;
+      webLibraryWindow = null;
       if (!webCloudTransport) return;
       const transport = await webCloudTransport;
       webCloudTransport = null;
