@@ -18,7 +18,9 @@ const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
+const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 
+installRuntimeOperability(express);
 installSecurityHeaders(express);
 installLegacyMediaUploadDisable(express);
 
@@ -31,6 +33,7 @@ async function start() {
     pool = started.pool;
     installPostgresShutdown(pool);
   }
+  configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
