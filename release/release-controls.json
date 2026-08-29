@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "defaultChannel": "alpha",
+  "channels": {
+    "alpha": {
+      "ring": "internal",
+      "minimumVersion": "0.8.0-alpha.1",
+      "publicationEnabled": false
+    },
+    "beta": {
+      "ring": "preview",
+      "minimumVersion": "0.8.0-beta.1",
+      "publicationEnabled": false
+    },
+    "stable": {
+      "ring": "general",
+      "minimumVersion": "0.8.0",
+      "publicationEnabled": false
+    }
+  },
+  "killSwitch": {
+    "engaged": true,
+    "reason": "Public updater publication remains disabled until release gates and RO activation are explicit."
+  }
+}
