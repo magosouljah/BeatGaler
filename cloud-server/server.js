@@ -9,6 +9,8 @@ const { installSessionSecurity } = require("./session-security");
 const { installAccountLifecycle } = require("./account-lifecycle");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
+const { createSesEmailNotifier } = require("./account-email-ses");
+const { applyD8RoResolutions, d8LifecycleEnv } = require("./d8-ro-resolutions");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
 const { installAuthAbuseControls } = require("./auth-abuse-controls");
@@ -39,10 +41,12 @@ async function start() {
   let directCapabilities = null;
   const accountLifecycle = installAccountLifecycle(express, {
     dataDir: __dirname,
-    env: process.env,
+    env: d8LifecycleEnv(process.env),
+    emailNotifier: createSesEmailNotifier({ env: process.env }),
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecyclePasswordAuthority(accountLifecycle);
+  applyD8RoResolutions(express, accountLifecycle, { env: process.env });
   installSessionSecurity(express, {
     dataDir: __dirname,
     getCapabilityStore: () => directCapabilities?.store || null,
