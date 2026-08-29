@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GALER_T_LIBRARY_SCHEMA,
+  WEB_LIBRARY_FIRST_PAGE_SIZE,
   beatFromWebLibraryEntry,
   classifyWebLibraryLoadError,
   classifyWebLibraryResult,
   loadWebLibrary,
+  loadWebLibraryPage,
   normalizeWebLibraryManifest,
   type WebLibraryTransport,
 } from "../../src/features/library/webLibrary";
@@ -56,6 +58,41 @@ describe("BeatGaler Web Galer T-Library", () => {
     expect(beats[0].image_base64).toBeNull();
     expect(beats[0].assets?.artwork).toMatchObject({ object_id: "direct:102" });
     expect(observations).toEqual([{ state: "ready", durationMs: 25, beatCount: 1 }]);
+  });
+
+  it("keeps 10k+ first-load and subsequent pages bounded independently of total library size", async () => {
+    const total = 10_321;
+    const entries = Array.from({ length: total }, (_, index) => ({
+      ...manifestEntry(),
+      id: `beat-${index + 1}`,
+      name: `Beat ${index + 1}`,
+      master: { telegram_file_id: `direct:${index + 101}`, telegram_message_id: index + 101, filename: `Beat ${index + 1}.mp3` },
+    }));
+    const transport: WebLibraryTransport = {
+      getLibraryIndex: vi.fn(async () => ({ messageId: 700, manifest: { schema: GALER_T_LIBRARY_SCHEMA, version: 2, beats: entries, trash: [] } })),
+      downloadFiles: vi.fn(async () => []),
+    };
+
+    const firstLoad = await loadWebLibrary(transport);
+    expect(firstLoad).toHaveLength(WEB_LIBRARY_FIRST_PAGE_SIZE);
+    expect(firstLoad[0].id).toBe("beat-1");
+    expect(firstLoad.at(-1)?.id).toBe(`beat-${WEB_LIBRARY_FIRST_PAGE_SIZE}`);
+    expect(transport.downloadFiles).not.toHaveBeenCalled();
+
+    const secondPage = await loadWebLibraryPage(transport, { offset: WEB_LIBRARY_FIRST_PAGE_SIZE });
+    expect(secondPage.totalVisible).toBe(total);
+    expect(secondPage.materializedCount).toBe(WEB_LIBRARY_FIRST_PAGE_SIZE);
+    expect(secondPage.beats).toHaveLength(WEB_LIBRARY_FIRST_PAGE_SIZE);
+    expect(secondPage.beats[0].id).toBe(`beat-${WEB_LIBRARY_FIRST_PAGE_SIZE + 1}`);
+    expect(secondPage.hasMore).toBe(true);
+    expect(secondPage.nextOffset).toBe(WEB_LIBRARY_FIRST_PAGE_SIZE * 2);
+
+    const lastPage = await loadWebLibraryPage(transport, { offset: total - 11 });
+    expect(lastPage.totalVisible).toBe(total);
+    expect(lastPage.materializedCount).toBe(11);
+    expect(lastPage.beats).toHaveLength(11);
+    expect(lastPage.hasMore).toBe(false);
+    expect(lastPage.nextOffset).toBeNull();
   });
 
   it("exposes the minimum empty/no-results/offline/auth/cloud taxonomy", () => {

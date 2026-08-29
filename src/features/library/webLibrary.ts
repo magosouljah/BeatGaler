@@ -7,12 +7,22 @@ export interface WebTransportDownloadResult { messageId: number; dataUrl: string
 export interface WebTransportLibraryIndexResult { manifest: unknown; messageId: number | null; }
 export const GALER_T_LIBRARY_SCHEMA = "beatgaler.telegram.library";
 export const GALER_T_LIBRARY_VERSION = 2;
+export const WEB_LIBRARY_FIRST_PAGE_SIZE = 240;
 type JsonRecord = Record<string, unknown>;
 export interface WebLibraryManifest { schema: typeof GALER_T_LIBRARY_SCHEMA; version: typeof GALER_T_LIBRARY_VERSION; beats: JsonRecord[]; trash: unknown[]; deleted: unknown[]; updated_at?: number; }
 export interface WebLibraryTransport { getLibraryIndex(): Promise<WebTransportLibraryIndexResult>; downloadFiles(inputs: WebTransportDownloadInput[]): Promise<Array<WebTransportDownloadResult | null>>; }
 export type WebLibraryLoadState = "ready" | "empty" | "no-results" | "offline" | "auth-failure" | "cloud-failure";
 export interface WebLibraryLoadObservation { state: WebLibraryLoadState; durationMs: number; beatCount: number; }
-export interface WebLibraryLoadOptions { online?: boolean; queryActive?: boolean; now?: () => number; onObservation?: (observation: WebLibraryLoadObservation) => void; }
+export interface WebLibraryLoadOptions { online?: boolean; queryActive?: boolean; now?: () => number; onObservation?: (observation: WebLibraryLoadObservation) => void; pageSize?: number; }
+export interface WebLibraryPageOptions extends WebLibraryLoadOptions { offset?: number; }
+export interface WebLibraryPage {
+  beats: Beat[];
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+  totalVisible: number;
+  materializedCount: number;
+}
 function record(value: unknown): JsonRecord | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null; }
 function text(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
 function positiveInteger(value: unknown): number | null { const number = Number(value || 0); return Number.isInteger(number) && number > 0 ? number : null; }
@@ -23,7 +33,9 @@ function objectRef(source: JsonRecord | null, options: { revision?: string | nul
 function projectFlags(project: JsonRecord | null) { const manifest = record(project?.manifest); const flag = (name: string) => project?.[name] === true || manifest?.[name] === true; const hasFlp = flag("has_flp") || flag("openable"); return { hasFlp, hasAls: flag("has_als"), hasSamples: flag("has_samples") }; }
 function filesByType(entry: JsonRecord): Map<string, JsonRecord> { const files = Array.isArray(entry.files) ? entry.files : []; const result = new Map<string, JsonRecord>(); for (const value of files) { const file = record(value); if (!file) continue; const type = text(file.type).trim().toUpperCase(); if (type && !result.has(type)) result.set(type, file); } return result; }
 function assetsFromEntry(entry: JsonRecord): BeatAssets { const files = filesByType(entry); const project = record(entry.project); const projectManifest = record(project?.manifest); return { master: objectRef(record(entry.master)), wav: objectRef(files.get("WAV") || null, { revision: text(files.get("WAV")?.cloud_file_id) || null }), artwork: objectRef(record(entry.artwork)), project: objectRef(projectManifest, { revision: `PROJECT:${text(entry.id)}`, fallbackFilename: `${text(entry.name, "beat")}.zip`, fallbackSize: Number(project?.size || 0) }), samples: null, stems: objectRef(files.get("STEMS") || null, { revision: text(files.get("STEMS")?.cloud_file_id) || null }), loop: objectRef(files.get("LOOP") || null, { revision: text(files.get("LOOP")?.cloud_file_id) || null }) }; }
-export function normalizeWebLibraryManifest(value: unknown): WebLibraryManifest { const source = record(value); if (!source || source.schema !== GALER_T_LIBRARY_SCHEMA) throw new Error("Galer Cloud returned an invalid library index."); const version = Number(source.version ?? 1); if (!Number.isInteger(version) || version < 1) throw new Error("Galer Cloud returned an unsupported library index."); if (version > GALER_T_LIBRARY_VERSION) throw new Error("This library requires a newer BeatGaler version."); const deleted = Array.isArray(source.deleted) ? source.deleted : []; const deletedIds = new Set(deleted.map(record).map(row => text(row?.beat_id ?? row?.id).trim()).filter(Boolean)); const beats = (Array.isArray(source.beats) ? source.beats.map(record).filter((beat): beat is JsonRecord => beat !== null) : []).filter(beat => !deletedIds.has(text(beat.id).trim())); const trash = (Array.isArray(source.trash) ? source.trash : []).filter(value => { const row = record(value); const beat = record(row?.beat) || row; return !deletedIds.has(text(beat?.id).trim()); }); return { schema: GALER_T_LIBRARY_SCHEMA, version: GALER_T_LIBRARY_VERSION, beats, trash, deleted, updated_at: Number.isFinite(Number(source.updated_at)) ? Number(source.updated_at) : undefined }; }
+function validateWebLibrarySource(value: unknown): JsonRecord { const source = record(value); if (!source || source.schema !== GALER_T_LIBRARY_SCHEMA) throw new Error("Galer Cloud returned an invalid library index."); const version = Number(source.version ?? 1); if (!Number.isInteger(version) || version < 1) throw new Error("Galer Cloud returned an unsupported library index."); if (version > GALER_T_LIBRARY_VERSION) throw new Error("This library requires a newer BeatGaler version."); return source; }
+function deletedBeatIds(source: JsonRecord): Set<string> { const deleted = Array.isArray(source.deleted) ? source.deleted : []; return new Set(deleted.map(record).map(row => text(row?.beat_id ?? row?.id).trim()).filter(Boolean)); }
+export function normalizeWebLibraryManifest(value: unknown): WebLibraryManifest { const source = validateWebLibrarySource(value); const deleted = Array.isArray(source.deleted) ? source.deleted : []; const deletedIds = deletedBeatIds(source); const beats = (Array.isArray(source.beats) ? source.beats.map(record).filter((beat): beat is JsonRecord => beat !== null) : []).filter(beat => !deletedIds.has(text(beat.id).trim())); const trash = (Array.isArray(source.trash) ? source.trash : []).filter(value => { const row = record(value); const beat = record(row?.beat) || row; return !deletedIds.has(text(beat?.id).trim()); }); return { schema: GALER_T_LIBRARY_SCHEMA, version: GALER_T_LIBRARY_VERSION, beats, trash, deleted, updated_at: Number.isFinite(Number(source.updated_at)) ? Number(source.updated_at) : undefined }; }
 export function beatFromWebLibraryEntry(entry: JsonRecord): Beat { const id = text(entry.id).trim(); if (!id) throw new Error("Galer Cloud library contains a beat without an ID."); const name = text(entry.name, "Untitled").trim() || "Untitled"; const files = filesByType(entry); const assets = assetsFromEntry(entry); const flags = projectFlags(record(entry.project)); const tags = Array.isArray(entry.tags) ? entry.tags.filter((tag): tag is string => typeof tag === "string") : []; const rating = Math.max(0, Math.min(255, Math.trunc(Number(entry.rating) || 0))); const otherFiles = Array.from(files.entries()).filter(([type]) => type === "OTHER").map(([, file]) => text(file.filename).trim()).filter(Boolean); return { id, name, folder_path: "", mp3_path: "", wav_path: null, playback_path: "", bpm: text(entry.bpm), key: text(entry.key), needs_resolution: false, tags, rating, image_base64: null, image_preview_base64: null, image_crop: null, has_wav: assets.wav !== null, has_stems: assets.stems !== null, has_samples: flags.hasSamples, samples_path: null, has_flp: flags.hasFlp, has_als: flags.hasAls, stems_path: null, flp_path: null, als_path: null, other_files: otherFiles, color: text(entry.color, "#666666"), color2: text(entry.color2, "#999999"), has_loop: assets.loop !== null, loop_path: null, cloud_status: Object.values(assets).some(Boolean) ? "CLOUD_ONLY" : null, telegram_file_id: assets.master?.object_id || null, telegram_message_id: messageIdFromLocator(assets.master?.object_id), offline_available: false, assets }; }
 
 export function classifyWebLibraryLoadError(error: unknown, online = true): WebLibraryLoadState {
@@ -48,21 +60,60 @@ async function getOrBootstrapLibraryIndex(transport: WebLibraryTransport): Promi
   }
 }
 
-// Initial library load intentionally returns metadata only. Artwork remains represented by
-// assets.artwork and is resolved on demand by the presentation/media path instead of blocking
-// startup on an N-artwork download batch. Timing is emitted around the authoritative metadata
-// phase so repeated cold/warm runs can compare the same boundary.
-export async function loadWebLibrary(transport: WebLibraryTransport, options: WebLibraryLoadOptions = {}): Promise<Beat[]> {
+function boundedPageFromManifest(value: unknown, offset: number, pageSize: number): WebLibraryPage {
+  const source = validateWebLibrarySource(value);
+  const deletedIds = deletedBeatIds(source);
+  const rawBeats = Array.isArray(source.beats) ? source.beats : [];
+  const normalizedOffset = Math.max(0, Math.trunc(offset));
+  const normalizedPageSize = Math.max(1, Math.trunc(pageSize));
+  const beats: Beat[] = [];
+  let visibleIndex = 0;
+  let totalVisible = 0;
+
+  for (const value of rawBeats) {
+    const entry = record(value);
+    if (!entry || deletedIds.has(text(entry.id).trim())) continue;
+    if (visibleIndex >= normalizedOffset && beats.length < normalizedPageSize) {
+      beats.push(beatFromWebLibraryEntry(entry));
+    }
+    visibleIndex += 1;
+    totalVisible += 1;
+  }
+
+  const consumed = normalizedOffset + beats.length;
+  const hasMore = consumed < totalVisible;
+  return {
+    beats,
+    offset: normalizedOffset,
+    nextOffset: hasMore ? consumed : null,
+    hasMore,
+    totalVisible,
+    materializedCount: beats.length,
+  };
+}
+
+// Page loading scans the compact INDEX to locate the requested window, but only converts that
+// window into rich Beat objects. This makes resident Beat[] memory bounded by pageSize instead
+// of library cardinality while preserving the authoritative single-index contract.
+export async function loadWebLibraryPage(transport: WebLibraryTransport, options: WebLibraryPageOptions = {}): Promise<WebLibraryPage> {
   const now = options.now || (() => typeof performance !== "undefined" ? performance.now() : Date.now());
   const startedAt = now();
   try {
     const index = await getOrBootstrapLibraryIndex(transport);
-    const manifest = normalizeWebLibraryManifest(index.manifest);
-    const beats = manifest.beats.map(beatFromWebLibraryEntry);
-    options.onObservation?.({ state: classifyWebLibraryResult(beats.length, options.queryActive), durationMs: Math.max(0, now() - startedAt), beatCount: beats.length });
-    return beats;
+    const page = boundedPageFromManifest(index.manifest, options.offset ?? 0, options.pageSize ?? WEB_LIBRARY_FIRST_PAGE_SIZE);
+    options.onObservation?.({ state: classifyWebLibraryResult(page.totalVisible, options.queryActive), durationMs: Math.max(0, now() - startedAt), beatCount: page.beats.length });
+    return page;
   } catch (error) {
     options.onObservation?.({ state: classifyWebLibraryLoadError(error, options.online ?? true), durationMs: Math.max(0, now() - startedAt), beatCount: 0 });
     throw error;
   }
+}
+
+// Initial library load intentionally returns metadata only and only the first bounded page.
+// Artwork remains represented by assets.artwork and is resolved on demand by the presentation/
+// media path instead of blocking startup on an N-artwork download batch. Call loadWebLibraryPage
+// with nextOffset to continue incrementally without ever materializing the complete Beat[] at once.
+export async function loadWebLibrary(transport: WebLibraryTransport, options: WebLibraryLoadOptions = {}): Promise<Beat[]> {
+  const page = await loadWebLibraryPage(transport, { ...options, offset: 0, pageSize: options.pageSize ?? WEB_LIBRARY_FIRST_PAGE_SIZE });
+  return page.beats;
 }
