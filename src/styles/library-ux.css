@@ -1,0 +1,360 @@
+/* F2 / 12.2 — Library-specific composition only.
+   Tokens, focus, buttons and fields come from Design Foundations 11.1. */
+
+.bg-library-shell {
+  background: var(--bg-canvas) !important;
+  color: var(--text-primary);
+}
+
+.bg-library-header {
+  min-height: 58px;
+  height: auto !important;
+  padding: 7px 24px !important;
+  gap: var(--space-4);
+  border-bottom-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--bg-canvas) 94%, transparent);
+}
+
+.bg-library-brand {
+  color: var(--text-secondary) !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.01em !important;
+  white-space: nowrap;
+}
+
+.bg-library-header__controls {
+  min-width: 0;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end;
+  gap: var(--space-1) !important;
+}
+
+.bg-library-compact-button {
+  min-height: 36px !important;
+  padding: 7px 11px !important;
+  font-size: var(--font-sm) !important;
+}
+
+.bg-library-header-action,
+.bg-library-search__trigger,
+.bg-library-sort__trigger {
+  min-width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 9px !important;
+  color: var(--text-secondary) !important;
+}
+
+.bg-library-search {
+  min-width: 0;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.bg-library-search__input {
+  width: min(260px, 34vw) !important;
+  min-height: 36px !important;
+  height: 36px !important;
+  margin-top: 0 !important;
+  padding-top: 7px !important;
+  padding-bottom: 7px !important;
+}
+
+.bg-library-sort__trigger {
+  min-width: 82px !important;
+}
+
+.bg-library-sort__popup {
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--bg-raised) !important;
+  box-shadow: var(--shadow-card) !important;
+}
+
+.bg-library-selection-toolbar {
+  min-height: 48px !important;
+  height: auto !important;
+  padding: 6px 24px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--space-2) !important;
+  background: var(--bg-surface) !important;
+  border-bottom-color: var(--border-subtle) !important;
+}
+
+.bg-library-selection-count {
+  min-width: max-content;
+  color: var(--text-secondary) !important;
+}
+
+.bg-library-tags {
+  min-height: 50px;
+  padding: 8px 24px !important;
+  gap: 7px !important;
+  border-bottom-color: var(--border-subtle) !important;
+  background: var(--bg-canvas);
+}
+
+.bg-library-tag {
+  min-height: 32px;
+  padding: 5px 12px !important;
+  line-height: 1.2;
+  white-space: nowrap;
+  scroll-snap-align: start;
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard);
+}
+
+.bg-library-tag:hover {
+  border-color: var(--border-strong) !important;
+}
+
+.bg-library-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 28px 24px !important;
+}
+
+.bg-library-grid {
+  width: 100% !important;
+  max-width: 1320px !important;
+  margin-inline: auto;
+  display: grid !important;
+  grid-template-columns: repeat(2, 160px);
+  grid-auto-rows: 276px;
+  justify-content: center !important;
+  align-items: start;
+  align-content: start !important;
+  gap: 28px 16px !important;
+}
+
+.bg-library-card {
+  width: 160px !important;
+  height: 276px !important;
+  min-height: 276px;
+  border-radius: var(--radius-md) !important;
+}
+
+.bg-library-artwork {
+  border-radius: 10px;
+}
+
+.bg-library-card__info {
+  height: 107px;
+  min-height: 107px;
+  margin-top: 9px !important;
+  display: grid !important;
+  grid-template-rows: 22px 16px 50px 19px;
+  align-items: start;
+}
+
+.bg-library-card__title-row {
+  grid-row: 1;
+  min-height: 22px;
+}
+
+.bg-library-card__title {
+  min-width: 0;
+}
+
+.bg-library-card__status {
+  grid-row: 2;
+  min-height: 16px !important;
+  margin-top: 0 !important;
+}
+
+.bg-library-card__tags {
+  grid-row: 3;
+  min-height: 50px;
+  max-height: 50px;
+  margin-top: 0 !important;
+  padding-top: 5px;
+  overflow: hidden;
+  align-content: flex-start;
+}
+
+.bg-library-card__meta {
+  grid-row: 4;
+  min-height: 19px;
+  margin-top: 0 !important;
+}
+
+.bg-library-more-actions {
+  opacity: 0 !important;
+}
+
+.bg-library-more-actions:focus-visible,
+.bg-library-more-actions[aria-expanded="true"] {
+  opacity: 1 !important;
+  color: var(--text-primary) !important;
+  background: var(--bg-hover) !important;
+}
+
+.bg-library-card-disclosure:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.bg-library-hq {
+  top: 6px !important;
+}
+
+.bg-library-card--warning .bg-library-hq {
+  top: 34px !important;
+}
+
+.bg-library-menu {
+  min-width: 205px !important;
+  padding: 5px !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--bg-raised) !important;
+  box-shadow: var(--shadow-card) !important;
+}
+
+.bg-library-menu__item {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 9px 12px !important;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.bg-library-menu__item:hover,
+.bg-library-menu__item:focus-visible {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Touch must expose primary actions without requiring a hover state. */
+@media (hover: none), (pointer: coarse) {
+  .bg-library-artwork {
+    touch-action: pan-y pinch-zoom !important;
+  }
+
+  .bg-library-artwork::after {
+    content: "▶";
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    z-index: 2;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(255,255,255,.26);
+    border-radius: 50%;
+    background: rgba(0,0,0,.66);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1;
+    pointer-events: none;
+    backdrop-filter: blur(6px);
+  }
+
+  .bg-library-more-actions {
+    width: 36px !important;
+    height: 36px !important;
+    margin-top: -7px;
+    margin-right: -7px;
+    opacity: 1 !important;
+    color: var(--text-secondary) !important;
+  }
+
+  .bg-library-tag,
+  .bg-library-menu__item {
+    min-height: 44px;
+  }
+}
+
+/* 390: two fixed cards, compact shell, horizontally scrollable tag filters. */
+@media (max-width: 599px) {
+  .bg-library-header {
+    padding: 9px 12px !important;
+    align-items: flex-start !important;
+    flex-wrap: wrap;
+  }
+
+  .bg-library-brand {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .bg-library-header__controls {
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .bg-library-search__input {
+    width: min(220px, calc(100vw - 56px)) !important;
+  }
+
+  .bg-library-selection-toolbar {
+    padding: 7px 12px !important;
+    overflow-x: auto;
+  }
+
+  .bg-library-tags {
+    padding: 7px 12px !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+  }
+
+  .bg-library-scroll {
+    padding: 22px 12px !important;
+  }
+
+  .bg-library-grid {
+    grid-template-columns: repeat(2, 160px);
+    gap: 24px 10px !important;
+  }
+}
+
+@media (max-width: 350px) {
+  .bg-library-grid {
+    grid-template-columns: 160px;
+  }
+}
+
+/* 768 */
+@media (min-width: 600px) {
+  .bg-library-grid {
+    grid-template-columns: repeat(3, 160px);
+  }
+}
+
+@media (min-width: 768px) {
+  .bg-library-grid {
+    grid-template-columns: repeat(4, 160px);
+    gap: 28px 18px !important;
+  }
+}
+
+/* 1024 */
+@media (min-width: 1024px) {
+  .bg-library-grid {
+    grid-template-columns: repeat(5, 160px);
+    gap: 30px 20px !important;
+  }
+}
+
+/* Desktop */
+@media (min-width: 1280px) {
+  .bg-library-grid {
+    grid-template-columns: repeat(6, 160px);
+    gap: 30px 22px !important;
+  }
+}
+
+@media (min-width: 1440px) {
+  .bg-library-grid {
+    grid-template-columns: repeat(7, 160px);
+  }
+}

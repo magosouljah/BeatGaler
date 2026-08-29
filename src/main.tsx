@@ -2,8 +2,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { browserId3Reader } from "./lib/id3BrowserParser";
+import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
+import "./styles/library-ux.css";
 
 // Browser metadata parsing is bundled with BeatGaler. The legacy fallback in
 // tauri.ts is stripped from productive Vite output by the trust-boundary plugin,
@@ -115,6 +117,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <GlobalStyles />
     <PlatformProvider>
+      <LibraryUxBridge />
       <App />
     </PlatformProvider>
   </ErrorBoundary>
