@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createAccountLifecycleRuntime } = require('../account-lifecycle');
 const { installLifecycleRequestGuard } = require('../account-lifecycle-request-guard');
+const { runD8RoResolutionsTests } = require('./d8-ro-resolutions.test.cjs');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
@@ -71,10 +72,14 @@ async function main() {
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const sessionInstall = serverSource.indexOf('installSessionSecurity(express');
   const lifecycleGuardInstall = serverSource.indexOf('installLifecycleRequestGuard(express');
+  const roResolutionInstall = serverSource.indexOf('applyD8RoResolutions(express');
   assert.ok(sessionInstall >= 0 && lifecycleGuardInstall > sessionInstall,
     'lifecycle guard must be installed after SessionSecurity so Web cookies/rotation aliases are normalized first');
+  assert.ok(roResolutionInstall >= 0 && roResolutionInstall < sessionInstall,
+    'D8 RO OAuth route interception must register before server-core while SessionSecurity still normalizes requests at runtime');
 
   fs.rmSync(dir, { recursive: true, force: true });
+  await runD8RoResolutionsTests();
   console.log('account-lifecycle-request-guard: PASS');
 }
 
