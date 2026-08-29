@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const directTransport = require('./direct-transport-control');
 
 const EMPTY_LIBRARY_INDEX = Object.freeze({
   schema: 'beatgaler.telegram.library',
@@ -73,12 +72,13 @@ function linkedVaultId(dataDir, installationId) {
   return vault;
 }
 
-async function createEmptyProviderIndex(vaultId, direct = directTransport) {
+async function createEmptyProviderIndex(vaultId, direct) {
+  const directTransport = direct || require('./direct-transport-control');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-index-'));
   const filePath = path.join(dir, `beatgaler-library-${crypto.randomBytes(6).toString('hex')}.json`);
   try {
     fs.writeFileSync(filePath, JSON.stringify(EMPTY_LIBRARY_INDEX), 'utf8');
-    return await direct.commitIndexCopyOnWrite({
+    return await directTransport.commitIndexCopyOnWrite({
       chatId: vaultId,
       filePath,
       caption: INDEX_CAPTION,
@@ -89,19 +89,20 @@ async function createEmptyProviderIndex(vaultId, direct = directTransport) {
   }
 }
 
-function installAtomicLibraryIndexBootstrap(express, { pool, dataDir = __dirname, direct = directTransport } = {}) {
+function installAtomicLibraryIndexBootstrap(express, { pool, dataDir = __dirname, direct } = {}) {
   const application = express?.application;
   if (!application || application.__beatgalerAtomicIndexPatchInstalled) return;
   application.__beatgalerAtomicIndexPatchInstalled = true;
   const previousPost = application.post;
+  const directTransport = direct || require('./direct-transport-control');
   let coordinator = null;
   if (pool) {
     coordinator = createAtomicLibraryIndexCoordinator({
       pool,
-      getPointer: vaultId => direct.getIndexPointer(vaultId),
-      createIndex: vaultId => createEmptyProviderIndex(vaultId, direct),
-      recordPointer: async (vaultId, messageId) => { direct.recordIndexPointer(vaultId, { messageId, fileId: '' }); },
-      deleteIndex: async (vaultId, messageId) => { await direct.deleteMessages(vaultId, [messageId]); },
+      getPointer: vaultId => directTransport.getIndexPointer(vaultId),
+      createIndex: vaultId => createEmptyProviderIndex(vaultId, directTransport),
+      recordPointer: async (vaultId, messageId) => { directTransport.recordIndexPointer(vaultId, { messageId, fileId: '' }); },
+      deleteIndex: async (vaultId, messageId) => { await directTransport.deleteMessages(vaultId, [messageId]); },
     });
   }
 
