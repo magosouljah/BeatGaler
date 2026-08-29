@@ -53,9 +53,9 @@ export class WebLibraryWindowConsumer {
   private async loadAt(offset: number): Promise<WebLibraryWindowSnapshot> {
     let page = await loadWebLibraryPage(this.transport, { offset, pageSize: this.pageSize });
 
-    // Refresh can shrink the authoritative library while the consumer is on a
-    // later window. Rebase to the last valid window instead of exposing a fake
-    // empty state for a non-empty library.
+    // Refresh or direct cursor navigation can point past the last valid page if
+    // another device shrank the authoritative library. Rebase to the last valid
+    // bounded window instead of exposing a fake empty state.
     if (page.totalVisible > 0 && page.beats.length === 0 && page.offset > 0) {
       const lastOffset = Math.floor((page.totalVisible - 1) / this.pageSize) * this.pageSize;
       page = await loadWebLibraryPage(this.transport, { offset: lastOffset, pageSize: this.pageSize });
@@ -67,6 +67,10 @@ export class WebLibraryWindowConsumer {
 
   async first(): Promise<WebLibraryWindowSnapshot> {
     return this.loadAt(0);
+  }
+
+  async at(offset: number): Promise<WebLibraryWindowSnapshot> {
+    return this.loadAt(offset);
   }
 
   async currentOrFirst(): Promise<WebLibraryWindowSnapshot> {
