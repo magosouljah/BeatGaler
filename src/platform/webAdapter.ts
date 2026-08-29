@@ -2,7 +2,12 @@ import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 import { getWebClientId } from "./webClientId";
 import { pickWebSlotFile, webImportPort } from "./webImport";
-import { WebLibraryWindowConsumer } from "../features/library/webLibraryWindow";
+import { WebLibraryWindowConsumer, type WebLibraryWindowSnapshot } from "../features/library/webLibraryWindow";
+import {
+  clearWebLibraryNavigationState,
+  publishWebLibraryNavigationState,
+  readRequestedWebLibraryOffset,
+} from "../features/library/webLibraryNavigation";
 import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
@@ -22,6 +27,21 @@ async function resolveWebCloudTransport() {
 async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
   if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport());
   return webLibraryWindow;
+}
+
+function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): void {
+  publishWebLibraryNavigationState({
+    offset: page.offset,
+    previousOffset: page.previousOffset,
+    nextOffset: page.nextOffset,
+    pageSize: page.evidence.pageSize,
+    materializedCount: page.materializedCount,
+    totalVisible: page.totalVisible,
+  });
+  console.info(
+    `[web/library-window] ${reason} offset=${page.offset} materialized=${page.materializedCount}/${page.totalVisible} ` +
+    `max=${page.evidence.maxMaterializedCount} avoided=${page.evidence.avoidedRichMaterializations} ratio=${page.evidence.richMaterializationRatio.toFixed(4)}`,
+  );
 }
 
 async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
@@ -70,7 +90,12 @@ export const webAdapter: PlatformAdapter = {
     async load() {
       try {
         const windowConsumer = await resolveWebLibraryWindow();
-        return (await windowConsumer.currentOrFirst()).beats;
+        const requestedOffset = readRequestedWebLibraryOffset();
+        const page = requestedOffset > 0
+          ? await windowConsumer.at(requestedOffset)
+          : await windowConsumer.currentOrFirst();
+        reportLibraryWindow(page, requestedOffset > 0 ? "cursor" : "load");
+        return page.beats;
       } catch (error) {
         console.error("[web/library] authoritative load failed", error);
         throw new Error("Galer Cloud could not load your library. Please retry.");
@@ -80,10 +105,7 @@ export const webAdapter: PlatformAdapter = {
     async restoreAuthoritative() {
       const windowConsumer = await resolveWebLibraryWindow();
       const page = await windowConsumer.refresh();
-      console.info(
-        `[web/library-window] refresh offset=${page.offset} materialized=${page.materializedCount}/${page.totalVisible} ` +
-        `max=${page.evidence.maxMaterializedCount} avoided=${page.evidence.avoidedRichMaterializations} ratio=${page.evidence.richMaterializationRatio.toFixed(4)}`,
-      );
+      reportLibraryWindow(page, "refresh");
     },
     async commitSnapshot() { return unavailable("Galer Cloud library writes"); },
     async flushOfflineTrashIntents() { return 0; },
@@ -124,7 +146,7 @@ export const webAdapter: PlatformAdapter = {
       return transport.purgeTrash(webClientId);
     },
     async listPresets() { return []; },
-    async restorePreset() { return unavailable("Preset restore"); },
+    async restorePreset(id) { void id; return unavailable("Preset restore"); },
     async purgePresets() { return unavailable("Preset deletion"); },
   },
   playbackCache: {
@@ -135,7 +157,7 @@ export const webAdapter: PlatformAdapter = {
   system: {
     async getLogDirectory() { return ""; },
     async getTemplatesDirectory() { return ""; },
-    async revealPath() { return unavailable("Local file reveal"); },
+    async revealPath(path) { void path; return unavailable("Local file reveal"); },
     async checkForUpdate() { return unavailable("Native app updates"); },
     async installUpdate() { return unavailable("Native app updates"); },
   },
@@ -222,6 +244,7 @@ export const webAdapter: PlatformAdapter = {
       webDownloads?.cancelAll();
       webDownloads = null;
       webLibraryWindow = null;
+      clearWebLibraryNavigationState();
       if (!webCloudTransport) return;
       const transport = await webCloudTransport;
       webCloudTransport = null;
