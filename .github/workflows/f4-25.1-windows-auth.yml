@@ -8,6 +8,8 @@ on:
       - '.github/workflows/f4-25.1-windows-auth.yml'
       - 'release/f4-25.1-functional-matrix.json'
       - 'scripts/prepare-f4-25.1-embedded-driver.mjs'
+      - 'scripts/run-auth-e2e.mjs'
+      - 'scripts/run-desktop-e2e-isolated.mjs'
       - 'tests/e2e/auth-flow.e2e.mjs'
       - 'wdio.e2e.conf.mjs'
       - 'package.json'
@@ -51,15 +53,5 @@ jobs:
       - name: Prepare isolated embedded Tauri WebDriver
         run: node scripts/prepare-f4-25.1-embedded-driver.mjs
 
-      - name: Build isolated Windows E2E executable
-        shell: pwsh
-        run: |
-          npm run build
-          cargo build --locked --manifest-path src-tauri/Cargo.toml --release
-
-      - name: Run Windows auth assertions
-        shell: pwsh
-        env:
-          TAURI_WEBDRIVER_PORT: '4445'
-          WDIO_EMBEDDED_PORT: '4445'
-        run: npx wdio run wdio.e2e.conf.mjs --spec tests/e2e/auth-flow.e2e.mjs
+      - name: Run isolated Windows auth assertions
+        run: node scripts/run-auth-e2e.mjs
