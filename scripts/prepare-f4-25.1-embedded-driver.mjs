@@ -15,8 +15,9 @@ config = replaceOnce(
   'driverProvider: process.env.TAURI_WEBDRIVER_PORT ? "embedded" : "official",\n        embeddedPort: Number(process.env.WDIO_EMBEDDED_PORT || 4445),',
   "driver provider",
 );
-config = replaceOnce(config, "autoInstallTauriDriver: true,", "autoInstallTauriDriver: false,", "tauri-driver auto-install");
-config = replaceOnce(config, "autoDownloadEdgeDriver: true,", "autoDownloadEdgeDriver: false,", "EdgeDriver auto-download");
+// Keep the existing launcher provisioning enabled. The effective service path observed in CI
+// still enters TauriLaunchService.onPrepare before a session is created; disabling these
+// options makes that real path fail deterministically before import assertions.
 fs.writeFileSync(configPath, config, "utf8");
 
 let runner = fs.readFileSync(runnerPath, "utf8");
@@ -50,4 +51,4 @@ runner = replaceOnce(
 );
 
 fs.writeFileSync(runnerPath, runner, "utf8");
-console.log("[f4-25.1] Prepared embedded Tauri WebDriver with runtime-bound provider selection and port signals.");
+console.log("[f4-25.1] Prepared embedded Tauri WebDriver with runtime-bound provider selection and effective-launcher fallback provisioning.");
