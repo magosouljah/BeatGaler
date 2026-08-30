@@ -34,6 +34,6 @@ describe("F4 Windows Review functional journey", () => {
     await saved.waitForExist({ timeout: 10000 });
     assert.equal(await $('[data-e2e-review-saved-name]').getText(), "Review Beat Final");
     assert.equal(await $('[data-e2e-review-saved-bpm]').getText(), "128");
-    assert.equal(await $('[data-e2e-review-saved-key]').getText(), "F#m");
+    assert.equal(await $('[data-e2e-review-saved-key]').getText(), "f#m");
   });
 });
