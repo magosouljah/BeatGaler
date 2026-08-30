@@ -12,17 +12,11 @@ let config = fs.readFileSync(configPath, "utf8");
 config = replaceOnce(
   config,
   'driverProvider: "official",',
-  'driverProvider: "embedded",\n        embeddedPort: 4445,',
+  'driverProvider: process.env.TAURI_WEBDRIVER_PORT ? "embedded" : "official",\n        embeddedPort: Number(process.env.WDIO_EMBEDDED_PORT || 4445),',
   "driver provider",
 );
 config = replaceOnce(config, "autoInstallTauriDriver: true,", "autoInstallTauriDriver: false,", "tauri-driver auto-install");
 config = replaceOnce(config, "autoDownloadEdgeDriver: true,", "autoDownloadEdgeDriver: false,", "EdgeDriver auto-download");
-config = replaceOnce(
-  config,
-  '      "tauri:options": {',
-  '      "wdio:tauriServiceOptions": {\n        driverProvider: "embedded",\n        embeddedPort: 4445,\n      },\n      "tauri:options": {',
-  "embedded capability override",
-);
 fs.writeFileSync(configPath, config, "utf8");
 
 let runner = fs.readFileSync(runnerPath, "utf8");
@@ -56,4 +50,4 @@ runner = replaceOnce(
 );
 
 fs.writeFileSync(runnerPath, runner, "utf8");
-console.log("[f4-25.1] Prepared embedded Tauri WebDriver with explicit service, capability, and runtime port signals.");
+console.log("[f4-25.1] Prepared embedded Tauri WebDriver with runtime-bound provider selection and port signals.");
