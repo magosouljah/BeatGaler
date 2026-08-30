@@ -1,0 +1,57 @@
+name: F4 - 25.1 Windows Import Journey
+
+on:
+  pull_request:
+    branches:
+      - integration-v0.8.0-alpha.1
+    paths:
+      - '.github/workflows/f4-25.1-windows-import.yml'
+      - 'release/f4-25.1-functional-matrix.json'
+      - 'scripts/prepare-f4-25.1-embedded-driver.mjs'
+      - 'scripts/run-import-e2e.mjs'
+      - 'scripts/run-desktop-e2e-isolated.mjs'
+      - 'tests/E2EImportHarness.tsx'
+      - 'tests/e2e-harness/**'
+      - 'tests/e2e/**'
+      - 'wdio.e2e.conf.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src-tauri/**'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-import:
+    name: Windows import functional journey
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify exact-head checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Prepare isolated embedded Tauri WebDriver
+        run: node scripts/prepare-f4-25.1-embedded-driver.mjs
+
+      - name: Run existing Windows import E2E harness
+        run: npm run test:e2e:import
