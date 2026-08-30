@@ -5,7 +5,8 @@ import { webAdapter } from "./webAdapter";
 type RuntimeWindow = Pick<Window, "location"> & { __TAURI_INTERNALS__?: unknown };
 
 export function isDesktopRuntime(runtimeWindow?: RuntimeWindow): boolean {
-  const target = runtimeWindow ?? (typeof window !== "undefined" ? window : undefined);
+  const target: RuntimeWindow | undefined = runtimeWindow ??
+    (typeof window !== "undefined" ? (window as RuntimeWindow) : undefined);
   if (!target) return false;
   if (Boolean(target.__TAURI_INTERNALS__)) return true;
 
