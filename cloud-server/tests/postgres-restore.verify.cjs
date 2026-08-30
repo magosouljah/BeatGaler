@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const { Pool } = require('pg');
+const { listMigrations } = require('../postgres-migrations.js');
 const { exportLegacyAccounts } = require('../legacy-exporter.js');
 const { decryptSecretFromStorage } = require('../secret-envelope.js');
 const { rotateStoredControlPlaneSecrets } = require('../postgres-secret-rotation.js');
@@ -15,7 +16,8 @@ const unseal = (stored, { aad }) => decryptSecretFromStorage(stored, { resolveKe
 async function main() {
   const started = Date.now();
   const ledger = await pool.query('SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version');
-  assert.deepEqual(ledger.rows.map(row => row.version), ['0001', '0002', '0003', '0004', '0005']);
+  const expectedVersions = listMigrations().map(item => item.version);
+  assert.deepEqual(ledger.rows.map(row => row.version), expectedVersions);
   assert(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum_sha256)));
 
   const counts = {};
