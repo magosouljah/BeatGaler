@@ -54,10 +54,20 @@ async function processGarbageBatch(client, options = {}) {
     leaseMs: options.leaseMs ?? 60_000,
     now,
   });
-  const summary = { claimed: claimed.length, done: 0, retried: 0, blocked: 0, recoveredAlreadyGone: 0 };
+  const summary = { claimed: claimed.length, done: 0, retried: 0, blocked: 0, recoveredAlreadyGone: 0, protectedValid: 0 };
 
   for (const item of claimed) {
     try {
+      if (item.reason === 'orphan_upload') {
+        requireFunction(options.isObjectStillOrphan, 'isObjectStillOrphan');
+        const stillOrphan = await options.isObjectStillOrphan(item);
+        if (stillOrphan !== true) {
+          await markGarbageDone(client, { id: item.id, workerId, now });
+          summary.done += 1;
+          summary.protectedValid += 1;
+          continue;
+        }
+      }
       await options.deleteObject(item);
       await markGarbageDone(client, { id: item.id, workerId, now });
       summary.done += 1;
