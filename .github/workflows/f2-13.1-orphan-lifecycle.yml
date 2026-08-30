@@ -1,0 +1,28 @@
+name: F2 - 13.1 Orphan Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/orphan-upload-lifecycle.js'
+      - 'cloud-server/garbage-reconciliation-worker.js'
+      - 'cloud-server/tests/orphan-upload-lifecycle.test.cjs'
+      - '.github/workflows/f2-13.1-orphan-lifecycle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  orphan-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - name: Assert exact PR head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Focused orphan lifecycle tests
+        working-directory: cloud-server
+        run: node --test tests/orphan-upload-lifecycle.test.cjs
