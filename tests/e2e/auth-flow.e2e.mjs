@@ -68,7 +68,17 @@ describe("BeatGaler Windows auth functional journey", () => {
           trace({ boundary: "auth-login-response", status: 200, tokenPresent: true });
           return new nativeResponse(JSON.stringify({ ok: true, token: "e2e-session-token", user: fakeAccount }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
-        trace({ boundary: "unexpected-request" });
+        const method = String(init.method || (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")).toUpperCase();
+        let pathname = "unparseable";
+        let requestClass = "relative";
+        try {
+          const parsed = new URL(url, window.location.origin);
+          pathname = parsed.pathname;
+          requestClass = parsed.origin === window.location.origin ? "same-origin" : "cross-origin";
+        } catch {
+          requestClass = "unparseable";
+        }
+        trace({ boundary: "unexpected-request", method, pathname, requestClass });
         return new nativeResponse(JSON.stringify({ error: "unexpected E2E request" }), { status: 500, headers: { "Content-Type": "application/json" } });
       };
     }, account);
