@@ -13,9 +13,10 @@ $ArchivePath = Join-Path ([System.IO.Path]::GetTempPath()) ("beatgaler-web-" + [
 function Invoke-NativeChecked {
   param(
     [Parameter(Mandatory = $true)][string]$Command,
-    [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    [string[]]$ArgumentList = @()
   )
-  & $Command @Arguments
+
+  & $Command @ArgumentList
   if ($LASTEXITCODE -ne 0) {
     throw "$Command failed with exit code $LASTEXITCODE"
   }
@@ -28,30 +29,41 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
 Push-Location $RepoRoot
 try {
   if (-not $SkipNpmCi) {
-    Invoke-NativeChecked npm ci
+    Invoke-NativeChecked -Command "npm" -ArgumentList @("ci")
   }
 
-  Invoke-NativeChecked npm run build:web
+  Invoke-NativeChecked -Command "npm" -ArgumentList @("run", "build:web")
 
-  $IndexPath = Join-Path $RepoRoot "dist\index.html"
+  $DistPath = Join-Path $RepoRoot "dist"
+  $IndexPath = Join-Path $DistPath "index.html"
   if (-not (Test-Path -LiteralPath $IndexPath)) {
     throw "Web build completed without dist/index.html"
   }
 
-  Invoke-NativeChecked tar -czf $ArchivePath -C (Join-Path $RepoRoot "dist") .
+  Invoke-NativeChecked -Command "tar" -ArgumentList @("-czf", $ArchivePath, "-C", $DistPath, ".")
 
   $SshTarget = "${RemoteUser}@${HostName}"
   $CommonSsh = @("-o", "StrictHostKeyChecking=accept-new", "-i", $KeyPath)
 
-  Invoke-NativeChecked scp @CommonSsh $ArchivePath "${SshTarget}:/tmp/beatgaler-web.tgz"
-  Invoke-NativeChecked scp @CommonSsh `
-    (Join-Path $RepoRoot "deploy\web\install-web-production.sh") `
-    (Join-Path $RepoRoot "deploy\web\beatgaler.com.bootstrap.conf") `
-    (Join-Path $RepoRoot "deploy\web\beatgaler.com.conf") `
-    "${SshTarget}:/tmp/"
+  $UploadBundleArgs = @($CommonSsh) + @(
+    $ArchivePath,
+    "${SshTarget}:/tmp/beatgaler-web.tgz"
+  )
+  Invoke-NativeChecked -Command "scp" -ArgumentList $UploadBundleArgs
 
-  Invoke-NativeChecked ssh @CommonSsh $SshTarget `
+  $UploadConfigArgs = @($CommonSsh) + @(
+    (Join-Path $RepoRoot "deploy\web\install-web-production.sh"),
+    (Join-Path $RepoRoot "deploy\web\beatgaler.com.bootstrap.conf"),
+    (Join-Path $RepoRoot "deploy\web\beatgaler.com.conf"),
+    "${SshTarget}:/tmp/"
+  )
+  Invoke-NativeChecked -Command "scp" -ArgumentList $UploadConfigArgs
+
+  $InstallArgs = @($CommonSsh) + @(
+    $SshTarget,
     "sudo bash /tmp/install-web-production.sh /tmp/beatgaler-web.tgz /tmp/beatgaler.com.bootstrap.conf /tmp/beatgaler.com.conf"
+  )
+  Invoke-NativeChecked -Command "ssh" -ArgumentList $InstallArgs
 
   Write-Host "BeatGaler Web deployed: https://beatgaler.com"
 }
