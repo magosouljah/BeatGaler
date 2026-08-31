@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { isDesktopRuntime } from "../../src/platform";
 
-function runtimeWindow(url: string, internals?: unknown) {
+function runtimeWindow(url: string, internals?: unknown, tauriGlobal?: unknown) {
   return {
     location: new URL(url) as unknown as Window["location"],
     __TAURI_INTERNALS__: internals,
+    __TAURI__: tauriGlobal,
   };
 }
 
@@ -14,7 +15,11 @@ describe("platform runtime detection", () => {
     expect(isDesktopRuntime(runtimeWindow("http://localhost:1420", {}))).toBe(true);
   });
 
-  it("detects packaged Windows Tauri by its production origin before internals are observable", () => {
+  it("detects Desktop when the configured Tauri global is injected before internals", () => {
+    expect(isDesktopRuntime(runtimeWindow("http://localhost:1420", undefined, {}))).toBe(true);
+  });
+
+  it("detects packaged Windows Tauri by its production origin before globals are observable", () => {
     expect(isDesktopRuntime(runtimeWindow("http://tauri.localhost"))).toBe(true);
   });
 
