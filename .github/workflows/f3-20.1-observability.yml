@@ -1,0 +1,23 @@
+name: F3 - 20.1 Observability
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/operations-observability.js'
+      - 'cloud-server/tests/operations-observability.test.cjs'
+      - 'cloud-server/OPERATIONS-OBSERVABILITY.md'
+      - '.github/workflows/f3-20.1-observability.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  observability-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - name: Focused observability tests
+        run: node --test cloud-server/tests/operations-observability.test.cjs
