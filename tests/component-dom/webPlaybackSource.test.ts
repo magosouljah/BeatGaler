@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  WEB_PLAYBACK_BLOB_FALLBACK_MAX_BYTES,
   WebPlaybackSourceManager,
   type WebPlaybackTransport,
 } from "../../src/features/playback/webPlaybackSource";
@@ -113,5 +114,31 @@ describe("Web MASTER playback source", () => {
     expect(prepared.url).toBe("blob:fallback-master");
     expect(createObjectURL.mock.calls[0][0]).toBeInstanceOf(Blob);
     expect((createObjectURL.mock.calls[0][0] as Blob).size).toBe(3);
+  });
+
+  it("keeps the non-streaming fallback bounded and cancels oversized media", async () => {
+    vi.stubGlobal("MediaSource", undefined);
+    let cancelled = false;
+    const transport: WebPlaybackTransport = {
+      async streamFile(_input, onChunk) {
+        let rejectCompleted!: (error: unknown) => void;
+        const completed = new Promise<never>((_resolve, reject) => { rejectCompleted = reject; });
+        queueMicrotask(async () => {
+          try {
+            await onChunk(new ArrayBuffer(1024), 1024, WEB_PLAYBACK_BLOB_FALLBACK_MAX_BYTES + 1);
+          } catch (error) {
+            rejectCompleted(error);
+          }
+        });
+        return {
+          completed,
+          cancel() { cancelled = true; },
+        };
+      },
+    };
+
+    const manager = new WebPlaybackSourceManager(transport);
+    await expect(manager.prepare("giant", 1)).rejects.toThrow("too large for safe fallback playback");
+    expect(cancelled).toBe(true);
   });
 });
