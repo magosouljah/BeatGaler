@@ -267,6 +267,68 @@ function isSafeNonDestructiveLibraryTransition(previousManifest, nextManifest) {
   return true;
 }
 
+function collectMasterMessageIdsByBeat(manifest) {
+  const out = new Map();
+  const addBeat = beat => {
+    const beatId = String(beat?.id || '').trim();
+    if (!beatId) return;
+    const messageId = Number(beat?.master?.telegram_message_id ?? beat?.telegram_message_id ?? 0);
+    if (Number.isInteger(messageId) && messageId > 0) out.set(beatId, messageId);
+  };
+  for (const beat of manifest?.beats || []) addBeat(beat);
+  for (const item of manifest?.trash || []) addBeat(item?.beat);
+  return out;
+}
+
+function collectReplacedMasterMessageIds(previousManifest, nextManifest) {
+  const previous = collectMasterMessageIdsByBeat(previousManifest);
+  const next = collectMasterMessageIdsByBeat(nextManifest);
+  const out = new Set();
+  for (const [beatId, oldMessageId] of previous) {
+    const newMessageId = next.get(beatId);
+    if (Number.isInteger(newMessageId) && newMessageId > 0 && newMessageId !== oldMessageId) {
+      out.add(oldMessageId);
+    }
+  }
+  return out;
+}
+
+function isAlreadyDeletedMessageError(error) {
+  return /message to delete not found/i.test(String(error?.message || error || ''));
+}
+
+async function deleteMessageWithRetry(session, messageId, attempts = 1, label = 'MEDIA') {
+  let lastError = null;
+  const maxAttempts = Math.max(1, Number(attempts) || 1);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await botApi(session, 'deleteMessage', { chat_id: session.chatId, message_id: messageId });
+      return { ok: true, already_absent: false, attempts: attempt };
+    } catch (error) {
+      if (isAlreadyDeletedMessageError(error)) {
+        return { ok: true, already_absent: true, attempts: attempt };
+      }
+      lastError = error;
+      if (attempt < maxAttempts) {
+        const waitMs = Math.min(1200, 150 * (2 ** (attempt - 1)));
+        diag(`${label}_DELETE_RETRY`, {
+          message_id: messageId,
+          attempt,
+          retry_ms: waitMs,
+          error: String(error?.message || error),
+        });
+        await sleep(waitMs);
+      }
+    }
+  }
+  return {
+    ok: false,
+    already_absent: false,
+    attempts: maxAttempts,
+    error: String(lastError?.message || lastError || 'deleteMessage failed'),
+  };
+}
+
 async function botApi(session, method, payload = {}, timeoutMs = 30000) {
   // Telegram can rate-limit pin/send bursts. Critical Direct operations should
   // honor retry_after instead of surfacing a false permanent failure while the
@@ -639,6 +701,7 @@ async function replaceIndex(session, command) {
   fs.writeFileSync(filePath, JSON.stringify(nextManifest, null, 2));
   const previousRefs = collectMediaMessageIds(previous?.manifest || null);
   const nextRefs = collectMediaMessageIds(nextManifest);
+  const replacedMasterRefs = collectReplacedMasterMessageIds(previous?.manifest || null, nextManifest);
 
   // Idempotency guard: duplicate observers may request the exact same index.
   // Never create/pin/delete another Telegram document when authoritative data
@@ -672,6 +735,7 @@ async function replaceIndex(session, command) {
   }
 
   let deletedMedia = 0;
+  const cleanupErrors = [];
   // Automatic media cleanup is safe only when no beat identity disappeared
   // from the library (active + trash). This still removes replaced artwork,
   // project/audio versions, etc. Permanent beat deletion is explicit below.
@@ -679,18 +743,39 @@ async function replaceIndex(session, command) {
   if (safeMediaCleanup) {
     for (const id of previousRefs) {
       if (nextRefs.has(id)) continue;
-      try {
-        await botApi(session, 'deleteMessage', { chat_id: session.chatId, message_id: id });
+      const replacedMaster = replacedMasterRefs.has(id);
+      const result = await deleteMessageWithRetry(
+        session,
+        id,
+        replacedMaster ? 4 : 1,
+        replacedMaster ? 'REPLACED_MASTER' : 'OBSOLETE_MEDIA',
+      );
+      if (result.ok) {
         deletedMedia += 1;
-      } catch (error) {
-        diag('OBSOLETE_MEDIA_DELETE_FAILED', { message_id: id, error: error?.message || error });
+        if (replacedMaster && result.attempts > 1) {
+          diag('REPLACED_MASTER_DELETE_RECOVERED', { message_id: id, attempts: result.attempts });
+        }
+      } else {
+        const cleanupError = {
+          message_id: id,
+          kind: replacedMaster ? 'MASTER' : 'MEDIA',
+          error: result.error,
+        };
+        cleanupErrors.push(cleanupError);
+        diag(replacedMaster ? 'REPLACED_MASTER_DELETE_FAILED' : 'OBSOLETE_MEDIA_DELETE_FAILED', cleanupError);
       }
     }
   } else {
     const obsoleteCount = [...previousRefs].filter(id => !nextRefs.has(id)).length;
     if (obsoleteCount > 0) diag('MEDIA_CLEANUP_SKIPPED_DESTRUCTIVE_DIFF', { obsolete_count: obsoleteCount });
   }
-  diag('INDEX_REPLACE_OK', { message_id: sent.message_id, previous_message_id: oldId, beat_count: (nextManifest.beats || []).length, deleted_media: deletedMedia });
+  diag('INDEX_REPLACE_OK', {
+    message_id: sent.message_id,
+    previous_message_id: oldId,
+    beat_count: (nextManifest.beats || []).length,
+    deleted_media: deletedMedia,
+    cleanup_errors: cleanupErrors.length,
+  });
   return {
     ok: true,
     op: 'replace_index',
@@ -700,7 +785,7 @@ async function replaceIndex(session, command) {
     previous_message_id: oldId,
     deleted_indexes: oldId > 0 ? 1 : 0,
     deleted_media: deletedMedia,
-    cleanup_errors: [],
+    cleanup_errors: cleanupErrors,
   };
 }
 

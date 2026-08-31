@@ -26,6 +26,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Run affected Direct runtime regressions
+        run: npm run test:windows-packaging && node scripts/regression-direct-master-cleanup.mjs
+
       - name: Prepare compile-only frontend placeholder
         shell: bash
         run: |

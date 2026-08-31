@@ -41,4 +41,18 @@ for (const [needle, message] of [
   ["& $bot --help", "Installed Telegram Bot API must be executable"],
 ]) requireText(workflow, needle, message);
 
-console.log("PASS Windows packaging guard: pinned Node and Telegram Bot API runtimes are bundled and verified after NSIS installation");
+const devLauncher = read("scripts/run-tauri.ps1");
+const devBootstrap = read("scripts/ensure-windows-direct-runtime.ps1");
+for (const [needle, message] of [
+  ["ensure-windows-direct-runtime.ps1", "Tauri dev launcher must bootstrap the Windows Direct runtime"],
+  ["-BuildIfMissing", "Tauri dev launcher must create a missing runtime without a manual environment override"],
+]) requireText(devLauncher, needle, message);
+for (const [needle, message] of [
+  ["windows-bot-api", "Dev bootstrap must reuse the ignored runtime cache"],
+  ["src-tauri\\resources\\windows", "Dev bootstrap must stage into the Tauri Windows resource directory"],
+  ["x64-windows-static", "Dev bootstrap must build the standalone static Windows runtime"],
+  ["adfd7f6a8e990272851777eeb3ae0def4216f161", "Dev bootstrap must pin the same Bot API source as release CI"],
+  ["7f3781e19cc7d4e4882a4caec01668c6f7b5c163", "Dev bootstrap must pin the same vcpkg source as release CI"],
+]) requireText(devBootstrap, needle, message);
+
+console.log("PASS Windows packaging guard: pinned Node and local data-plane runtimes are bundled for release and bootstrapped for dev");

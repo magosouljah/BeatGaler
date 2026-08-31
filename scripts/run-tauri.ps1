@@ -23,6 +23,15 @@ if (-not (Test-Path $tauriCli)) {
   throw "Tauri CLI was not found. Run npm install first."
 }
 
+# A clean checkout must be able to start Direct development without a manual
+# BEATGALER_BOT_API_RUNTIME override. The bootstrap only writes generated
+# executables into ignored runtime/resource folders and never stores secrets.
+$runtimeBootstrap = Join-Path $PSScriptRoot "ensure-windows-direct-runtime.ps1"
+& $runtimeBootstrap -BuildIfMissing
+if ($LASTEXITCODE -ne 0) {
+  throw "BeatGaler Windows runtime bootstrap failed with exit code $LASTEXITCODE."
+}
+
 # BeatGaler Option 2: patch only WRY's existing WebView2 IDropTarget. This is
 # idempotent and preserves CF_HDROP as the zero-copy local filesystem fast path.
 $wryPatchScript = Join-Path $PSScriptRoot "patch-wry-pinterest.mjs"
