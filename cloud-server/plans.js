@@ -1,14 +1,20 @@
 // BeatGaler Plans architecture v1.
-// Server-side authority for plan capabilities, quotas and time-based access grants.
-// Prices/billing are intentionally out of scope for v0.4.0.
+// Server-side authority for plan capabilities, quotas, Stripe price mapping and time-based access grants.
+// Stripe Price IDs are public identifiers; secret Stripe credentials must remain server-only.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
+
+const STRIPE_PRICE_IDS = Object.freeze({
+  paid_entry: String(process.env.STRIPE_PLUS_PRICE_ID || "price_1UAObc09CQyUMRzw7kUvtpIq").trim(),
+  highest_paid: String(process.env.STRIPE_PRO_PRICE_ID || "price_1UAOfd09CQyUMRzwm672o469").trim(),
+});
 
 const PLAN_CATALOG = Object.freeze({
   free: Object.freeze({
     id: "free",
     label: "Free",
+    billing: null,
     quotas: Object.freeze({
       max_beats: 20,
       max_project_zip_bytes: 500 * MB,
@@ -25,7 +31,13 @@ const PLAN_CATALOG = Object.freeze({
   }),
   paid_entry: Object.freeze({
     id: "paid_entry",
-    label: "Paid Entry",
+    label: "Plus",
+    billing: Object.freeze({
+      provider: "stripe",
+      price_id: STRIPE_PRICE_IDS.paid_entry,
+      currency: "usd",
+      interval: "month",
+    }),
     quotas: Object.freeze({
       max_beats: 100,
       max_project_zip_bytes: 1024 * MB,
@@ -42,7 +54,13 @@ const PLAN_CATALOG = Object.freeze({
   }),
   highest_paid: Object.freeze({
     id: "highest_paid",
-    label: "Highest Paid",
+    label: "Pro",
+    billing: Object.freeze({
+      provider: "stripe",
+      price_id: STRIPE_PRICE_IDS.highest_paid,
+      currency: "usd",
+      interval: "month",
+    }),
     quotas: Object.freeze({
       // null is the API representation of "Unlimited". Enforcement may still
       // apply private anti-abuse hard caps that are not a marketed quota.
@@ -150,6 +168,7 @@ function publicPlanCatalog() {
   return Object.values(PLAN_CATALOG).map(plan => ({
     id: plan.id,
     label: plan.label,
+    billing: plan.billing,
     entitlements: plan.entitlements,
     quotas: plan.quotas,
   }));
@@ -157,6 +176,7 @@ function publicPlanCatalog() {
 
 module.exports = {
   PLAN_CATALOG,
+  STRIPE_PRICE_IDS,
   CODE_POLICY,
   ensurePlanState,
   publicPlanState,
