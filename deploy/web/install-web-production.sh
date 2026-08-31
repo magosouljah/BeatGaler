@@ -85,14 +85,24 @@ CERTBOT_ARGS=(
 )
 
 if [ -f "$CERT_DIR/fullchain.pem" ]; then
-  if openssl x509 -in "$CERT_DIR/fullchain.pem" -noout -text | grep -Fq "DNS:$WWW_HOST"; then
+  CERT_TEXT="$(openssl x509 -in "$CERT_DIR/fullchain.pem" -noout -text)"
+  if printf '%s\n' "$CERT_TEXT" | grep -Fq "DNS:$WEB_HOST" \
+    && printf '%s\n' "$CERT_TEXT" | grep -Fq "DNS:$WWW_HOST"; then
     CERTBOT_ARGS+=(--keep-until-expiring)
   else
-    CERTBOT_ARGS+=(--expand)
+    echo "Existing beatgaler.com certificate does not cover both $WEB_HOST and $WWW_HOST; forcing corrected issuance."
+    CERTBOT_ARGS+=(--force-renewal)
   fi
 fi
 
 certbot "${CERTBOT_ARGS[@]}"
+
+# Fail before installing the TLS vhost if Certbot did not produce coverage for both names.
+CERT_TEXT="$(openssl x509 -in "$CERT_DIR/fullchain.pem" -noout -text)"
+printf '%s\n' "$CERT_TEXT" | grep -Fq "DNS:$WEB_HOST" \
+  || { echo "TLS_CERT_INVALID: certificate does not include $WEB_HOST" >&2; exit 24; }
+printf '%s\n' "$CERT_TEXT" | grep -Fq "DNS:$WWW_HOST" \
+  || { echo "TLS_CERT_INVALID: certificate does not include $WWW_HOST" >&2; exit 25; }
 
 install -m 0644 "$PRODUCTION_CONF" "$NGINX_CONF"
 nginx -t
