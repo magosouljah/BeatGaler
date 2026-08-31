@@ -32,6 +32,8 @@ type PlaybackEntry = {
   failed: boolean;
 };
 
+export const WEB_PLAYBACK_BLOB_FALLBACK_MAX_BYTES = 64 * 1024 * 1024;
+
 function supportsMediaSource(mimeType: string): boolean {
   return typeof MediaSource !== "undefined" &&
     typeof MediaSource.isTypeSupported === "function" &&
@@ -40,6 +42,10 @@ function supportsMediaSource(mimeType: string): boolean {
 
 function abortError(): DOMException {
   return new DOMException("Playback stream cancelled.", "AbortError");
+}
+
+function blobFallbackLimitError(): Error {
+  return new Error("This audio file is too large for safe fallback playback in this browser. Use a browser with streaming media support.");
 }
 
 /** Owns short-lived browser playback URLs. Cloud credentials never enter them. */
@@ -169,9 +175,16 @@ export class WebPlaybackSourceManager {
 
   private async prepareBlobFallback(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
     const chunks: ArrayBuffer[] = [];
+    let bufferedBytes = 0;
     let placeholder: PlaybackEntry | null = null;
-    const stream = await this.transport.streamFile({ messageId, mimeType }, chunk => {
-      if (!placeholder?.released) chunks.push(chunk);
+    const stream = await this.transport.streamFile({ messageId, mimeType }, (chunk, _downloadedBytes, totalBytes) => {
+      if (placeholder?.released) return Promise.reject(abortError());
+      const nextBufferedBytes = bufferedBytes + chunk.byteLength;
+      if (totalBytes > WEB_PLAYBACK_BLOB_FALLBACK_MAX_BYTES || nextBufferedBytes > WEB_PLAYBACK_BLOB_FALLBACK_MAX_BYTES) {
+        return Promise.reject(blobFallbackLimitError());
+      }
+      chunks.push(chunk);
+      bufferedBytes = nextBufferedBytes;
     });
     placeholder = {
       beatId,
@@ -191,11 +204,16 @@ export class WebPlaybackSourceManager {
       const result = await stream.completed;
       if (placeholder.released) throw abortError();
       const url = URL.createObjectURL(new Blob(chunks, { type: result.mimeType || "audio/mpeg" }));
+      chunks.length = 0;
+      bufferedBytes = 0;
       placeholder.url = url;
       placeholder.streamDone = true;
       return { url, completed: Promise.resolve() };
     } catch (error) {
+      chunks.length = 0;
+      bufferedBytes = 0;
       placeholder.failed = true;
+      placeholder.cancel?.();
       this.entries.delete(beatId);
       throw error;
     }
