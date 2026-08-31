@@ -12,6 +12,14 @@ describe("BeatGaler Windows auth functional journey", () => {
     await browser.execute(() => {
       localStorage.removeItem("beatgaler:account-session:v1");
       localStorage.removeItem("beatgaler:cloud-api:v1");
+      window.__beatgalerAuthTrace = [];
+      const nativeSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === "beatgaler:account-session:v1") {
+          window.__beatgalerAuthTrace.push({ boundary: "session-write", value: String(value) });
+        }
+        return nativeSetItem.call(this, key, value);
+      };
     });
     await browser.refresh();
 
@@ -21,10 +29,12 @@ describe("BeatGaler Windows auth functional journey", () => {
     await syncSession.mockReturnValue(null);
 
     await browser.execute((fakeAccount) => {
+      window.__beatgalerAuthTrace = window.__beatgalerAuthTrace || [];
       const nativeResponse = Response;
       window.fetch = async (input, init = {}) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.endsWith("/auth/health")) {
+          window.__beatgalerAuthTrace.push({ boundary: "auth-health", url });
           return new nativeResponse(JSON.stringify({ account_auth: true }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -32,17 +42,21 @@ describe("BeatGaler Windows auth functional journey", () => {
         }
         if (url.endsWith("/auth/login")) {
           const body = JSON.parse(String(init.body || "{}"));
+          window.__beatgalerAuthTrace.push({ boundary: "auth-login-request", identifier: body.identifier });
           if (body.identifier !== "windows-auth" || body.password !== "correct horse battery staple") {
+            window.__beatgalerAuthTrace.push({ boundary: "auth-login-response", status: 401 });
             return new nativeResponse(JSON.stringify({ error: "invalid test credentials" }), {
               status: 401,
               headers: { "Content-Type": "application/json" },
             });
           }
+          window.__beatgalerAuthTrace.push({ boundary: "auth-login-response", status: 200, token: "e2e-session-token" });
           return new nativeResponse(JSON.stringify({ ok: true, token: "e2e-session-token", user: fakeAccount }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
         }
+        window.__beatgalerAuthTrace.push({ boundary: "unexpected-request", url });
         return new nativeResponse(JSON.stringify({ error: `unexpected E2E request: ${url}` }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
@@ -61,10 +75,28 @@ describe("BeatGaler Windows auth functional journey", () => {
     await password.setValue("correct horse battery staple");
     await submit.click();
 
-    await browser.waitUntil(
-      async () => (await browser.execute(() => localStorage.getItem("beatgaler:account-session:v1"))) === "e2e-session-token",
-      { timeout: 15000, interval: 200, timeoutMsg: "Desktop login did not persist the returned session token." },
-    );
+    try {
+      await browser.waitUntil(
+        async () => (await browser.execute(() => localStorage.getItem("beatgaler:account-session:v1"))) === "e2e-session-token",
+        { timeout: 15000, interval: 200, timeoutMsg: "Desktop login did not persist the returned session token." },
+      );
+    } catch (error) {
+      const trace = await browser.execute(() => ({
+        events: window.__beatgalerAuthTrace || [],
+        token: localStorage.getItem("beatgaler:account-session:v1"),
+        gatePresent: Boolean(document.querySelector(".bg-account-gate")),
+        gateText: document.querySelector(".bg-account-gate")?.textContent || "",
+      }));
+      console.error("[auth-e2e] causal-boundary trace", JSON.stringify(trace));
+      throw error;
+    }
+
+    const successTrace = await browser.execute(() => ({
+      events: window.__beatgalerAuthTrace || [],
+      token: localStorage.getItem("beatgaler:account-session:v1"),
+      gatePresent: Boolean(document.querySelector(".bg-account-gate")),
+    }));
+    console.log("[auth-e2e] causal-boundary trace", JSON.stringify(successTrace));
 
     assert.equal(
       await browser.execute(() => localStorage.getItem("beatgaler:account-session:v1")),
