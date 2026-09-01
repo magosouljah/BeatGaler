@@ -5,6 +5,7 @@ import { browserId3Reader } from "./lib/id3BrowserParser";
 import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import WebLibraryPagination from "./features/library/WebLibraryPagination";
+import { PublicLegalLinks, PublicLegalPage } from "./features/legal/PublicLegal";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
@@ -116,15 +117,25 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {error:
   }
 }
 
+const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+const legalKind = pathname === "/privacy" ? "privacy" : pathname === "/terms" ? "terms" : null;
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <GlobalStyles />
-    <PlatformProvider>
-      <AuthExperienceGate>
-        <LibraryUxBridge />
-        <WebLibraryPagination />
-        <App />
-      </AuthExperienceGate>
-    </PlatformProvider>
+    {legalKind ? (
+      <PublicLegalPage kind={legalKind} />
+    ) : (
+      <>
+        <PlatformProvider>
+          <AuthExperienceGate>
+            <LibraryUxBridge />
+            <WebLibraryPagination />
+            <App />
+          </AuthExperienceGate>
+        </PlatformProvider>
+        <PublicLegalLinks />
+      </>
+    )}
   </ErrorBoundary>
 );
