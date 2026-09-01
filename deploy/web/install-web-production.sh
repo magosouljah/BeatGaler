@@ -121,14 +121,14 @@ install -m 0644 "$PRODUCTION_CONF" "$NGINX_CONF"
 nginx -t
 systemctl reload nginx
 
-curl --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/web-health" | grep -Fxq "ok"
-curl --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/beatgaler-api/auth/health" \
+curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/web-health" | grep -Fxq "ok"
+curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/beatgaler-api/auth/health" \
   | grep -Eq '"account_auth"[[:space:]]*:[[:space:]]*true'
 
 SECURITY_HEADERS="$(mktemp)"
 SECURITY_BODY="$(mktemp)"
 trap 'rm -f "$SECURITY_HEADERS" "$SECURITY_BODY"' EXIT
-curl --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" \
+curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" \
   -D "$SECURITY_HEADERS" -o "$SECURITY_BODY" "https://$WEB_HOST/.well-known/security.txt"
 grep -Eiq '^content-type:[[:space:]]*text/plain;[[:space:]]*charset=utf-8([[:space:]]|$)' "$SECURITY_HEADERS"
 grep -Fxq 'Canonical: https://beatgaler.com/.well-known/security.txt' "$SECURITY_BODY"
@@ -138,7 +138,7 @@ if grep -Eiq '<!doctype html|<html[[:space:]>]' "$SECURITY_BODY"; then
 fi
 
 if [ "$STATUS_DNS_READY" -eq 1 ]; then
-  curl --fail --silent --show-error --resolve "$STATUS_HOST:443:127.0.0.1" "https://$STATUS_HOST/" \
+  curl --noproxy '*' --fail --silent --show-error --resolve "$STATUS_HOST:443:127.0.0.1" "https://$STATUS_HOST/" \
     | grep -Fq 'BeatGaler Web'
   echo "STATUS_LOCAL_HTTPS_OK host=$STATUS_HOST"
 else

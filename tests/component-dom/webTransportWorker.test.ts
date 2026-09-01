@@ -10,6 +10,20 @@ const transport = vi.hoisted(() => {
   let missingPinnedReads = 0;
   let clientOptions: any = null;
   const importSession = vi.fn(async () => undefined);
+  const connect = vi.fn(async () => undefined);
+  const boundSession = { initConnectionCalled: false };
+  const boundConnection = { _session: boundSession };
+  const onUsableAdd = vi.fn();
+  const network = {
+    _dcConnections: new Map([
+      [2, {
+        main: {
+          _connections: [boundConnection],
+          onUsable: { add: onUsableAdd },
+        },
+      }],
+    ]),
+  };
   const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
     options.progressCallback?.(2, 5);
     options.progressCallback?.(5, 5);
@@ -20,6 +34,8 @@ const transport = vi.hoisted(() => {
   class TelegramClient {
     constructor(options: unknown) { clientOptions = options; }
     importSession = importSession;
+    connect = connect;
+    mt = { network };
     getMe = vi.fn(async () => ({ id: 4242, isBot: true }));
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
     getFullChat = vi.fn(async () => {
@@ -57,6 +73,9 @@ const transport = vi.hoisted(() => {
   }
   return {
     importSession,
+    connect,
+    boundSession,
+    onUsableAdd,
     sendMedia,
     pinMessage,
     deleteMessagesById,
@@ -130,10 +149,13 @@ describe("Galer Cloud single-file Web Worker", () => {
     transport.deleteMessagesById.mockClear();
   });
 
-  it("imports temporary auth with Vite's explicit WASM asset URL", () => {
+  it("imports temporary auth and suppresses application initConnection without exposing credentials", () => {
     expect(transport.getClientOptions()?.crypto?.options?.wasmInput).toMatch(/mtcute\.wasm/);
     expect(transport.getClientOptions()).toMatchObject({ apiId: 0, apiHash: "" });
     expect(transport.importSession).toHaveBeenCalledOnce();
+    expect(transport.connect).toHaveBeenCalledOnce();
+    expect(transport.boundSession.initConnectionCalled).toBe(true);
+    expect(transport.onUsableAdd).toHaveBeenCalledOnce();
   });
 
   it("sends the original File once and returns one stored-file manifest", async () => {
