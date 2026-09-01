@@ -16,19 +16,34 @@ const transport = vi.hoisted(() => {
   const boundSession: any = {
     initConnectionCalled: false,
     _sessionId: new FakeLong(1, 2, false),
+    _seqNo: 0,
+    _lastMessageId: new FakeLong(0, 0, false),
+    _timeOffset: 0,
+    queuedAcks: [],
+    recentOutgoingMsgIds: new Set(),
+    recentIncomingMsgIds: new Set(),
+    lastSessionCreatedUid: new FakeLong(0, 0, false),
     resetState() {
       this._sessionId = new FakeLong(9, 9, false);
+      this._seqNo = 0;
+      this._lastMessageId = new FakeLong(0, 0, false);
       this.initConnectionCalled = false;
     },
   };
   class SessionConnection {
     params = { isMainConnection: true, isMainDcConnection: true, dc: { id: 2 } };
     _session = boundSession;
+    _salts = { currentSalt: new FakeLong(0, 0, false) };
     connect() {
       connectSnapshot = {
         low: this._session._sessionId.low,
         high: this._session._sessionId.high,
         unsigned: this._session._sessionId.unsigned,
+        seqNo: this._session._seqNo,
+        lastMessageId: this._session._lastMessageId,
+        timeOffset: this._session._timeOffset,
+        serverSalt: this._salts.currentSalt,
+        queuedAcks: [...this._session.queuedAcks],
         initConnectionCalled: this._session.initConnectionCalled,
       };
     }
@@ -99,6 +114,7 @@ const transport = vi.hoisted(() => {
     importSession,
     connect,
     boundSession,
+    boundConnection,
     onUsableAdd,
     sendMedia,
     pinMessage,
@@ -147,8 +163,18 @@ beforeAll(async () => {
       chat_id: "-1001234567890",
       transport_user_id: "4242",
       expected_bot_id: "4242",
+      temp_api_id: 12345,
       temp_auth_key: new Uint8Array(256).fill(7),
       temp_session_id: { low: 123456, high: 789, unsigned: false },
+      temp_session_state: {
+        seqNo: 2,
+        lastMessageId: { low: 333, high: 444, unsigned: false },
+        timeOffset: 5,
+        serverSalt: { low: 55, high: 66, unsigned: false },
+        queuedAcks: [{ low: 77, high: 88, unsigned: false }],
+        bindMsgId: { low: 111, high: 222, unsigned: false },
+        lastSessionCreatedUid: { low: 0, high: 0, unsigned: false },
+      },
       temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
     },
   });
@@ -177,24 +203,31 @@ describe("Galer Cloud single-file Web Worker", () => {
     transport.deleteMessagesById.mockClear();
   });
 
-  it("imports temporary auth and suppresses application initConnection without exposing credentials", () => {
+  it("continues the bound temporary MTProto session and allows post-bind initConnection without exposing permanent credentials", () => {
     expect(transport.getClientOptions()?.crypto?.options?.wasmInput).toMatch(/mtcute\.wasm/);
-    expect(transport.getClientOptions()).toMatchObject({ apiId: 0, apiHash: "" });
+    expect(transport.getClientOptions()).toMatchObject({ apiId: 12345, apiHash: "" });
     expect(transport.importSession).toHaveBeenCalledOnce();
     expect(transport.connect).toHaveBeenCalledOnce();
     expect(transport.getConnectSnapshot()).toEqual({
       low: 123456,
       high: 789,
       unsigned: false,
-      initConnectionCalled: true,
+      seqNo: 2,
+      lastMessageId: expect.objectContaining({ low: 333, high: 444, unsigned: false }),
+      timeOffset: 5,
+      serverSalt: expect.objectContaining({ low: 55, high: 66, unsigned: false }),
+      queuedAcks: [expect.objectContaining({ low: 77, high: 88, unsigned: false })],
+      initConnectionCalled: false,
     });
-    expect(transport.boundSession.initConnectionCalled).toBe(true);
+    expect(transport.boundSession.initConnectionCalled).toBe(false);
     expect(transport.boundSession._sessionId).toMatchObject({ low: 123456, high: 789, unsigned: false });
-    expect(transport.onUsableAdd).toHaveBeenCalledOnce();
+    expect(transport.boundSession._seqNo).toBe(2);
+    expect(transport.boundConnection._salts.currentSalt).toMatchObject({ low: 55, high: 66, unsigned: false });
+    expect(transport.boundSession.recentOutgoingMsgIds.has(expect.objectContaining({ low: 111, high: 222, unsigned: false }))).toBe(false);
 
     transport.boundSession.resetState();
-    expect(transport.boundSession._sessionId).toMatchObject({ low: 123456, high: 789, unsigned: false });
-    expect(transport.boundSession.initConnectionCalled).toBe(true);
+    expect(transport.boundSession._sessionId).toMatchObject({ low: 9, high: 9, unsigned: false });
+    expect(transport.boundSession.initConnectionCalled).toBe(false);
   });
 
   it("sends the original File once and returns one stored-file manifest", async () => {

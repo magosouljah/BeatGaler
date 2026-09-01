@@ -42,8 +42,9 @@ export type WebTransportWorkerCommand =
   | {
       requestId: string;
       op: "initialize";
-      session: Pick<WebTransportSession, "chat_id" | "transport_user_id" | "temp_auth_key" | "temp_session_id" | "temp_primary_dcs"> & {
+      session: Pick<WebTransportSession, "chat_id" | "transport_user_id" | "temp_auth_key" | "temp_session_id" | "temp_session_state" | "temp_primary_dcs"> & {
         expected_bot_id: string;
+        temp_api_id: number;
       };
     }
   | { requestId: string; op: "verify" }

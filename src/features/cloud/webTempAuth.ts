@@ -45,10 +45,28 @@ export interface TempAuthBinding {
   encrypted_message: string;
 }
 
+/**
+ * Minimum MTProto state needed to continue the exact session that performed
+ * auth.bindTempAuthKey after crossing the main-thread/Worker boundary.
+ */
+export interface TempAuthSessionState {
+  seqNo: number;
+  lastMessageId: TempAuthLongJson;
+  timeOffset: number;
+  serverSalt: TempAuthLongJson;
+  queuedAcks: TempAuthLongJson[];
+  bindMsgId: TempAuthLongJson;
+  lastSessionCreatedUid: TempAuthLongJson;
+}
+
 export interface PreparedWebTempAuth {
   dcId: number;
   metadata: TempAuthMetadata;
-  bind(binding: TempAuthBinding): Promise<{ authKey: Uint8Array; primaryDcs: any }>;
+  bind(binding: TempAuthBinding): Promise<{
+    authKey: Uint8Array;
+    primaryDcs: any;
+    sessionState: TempAuthSessionState;
+  }>;
   destroy(): Promise<void>;
 }
 
@@ -231,10 +249,20 @@ export async function prepareWebTempAuth(dcId: number): Promise<PreparedWebTempA
         if (bindResult !== true) throw new Error("Telegram did not accept temporary authorization.");
         const activeAuthKey = authKeyBytes;
         if (!activeAuthKey) throw new Error("Temporary authorization was cleared before it could be imported.");
+        const session = connection._session as any;
         const exported = activeAuthKey.slice();
         return {
           authKey: exported,
           primaryDcs: { main: productionDc(dcId), media: productionDc(dcId) },
+          sessionState: {
+            seqNo: Number(session._seqNo),
+            lastMessageId: longJson(session._lastMessageId),
+            timeOffset: Number(session._timeOffset),
+            serverSalt: longJson(tempServerSalt),
+            queuedAcks: Array.from(session.queuedAcks || [], longJson),
+            bindMsgId: longJson(msgId),
+            lastSessionCreatedUid: longJson(session.lastSessionCreatedUid || Long.ZERO),
+          },
         };
       },
       async destroy() {

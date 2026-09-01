@@ -22,22 +22,33 @@ type WorkerScope = {
 };
 
 type BoundTempLongJson = { low: number; high: number; unsigned: boolean };
+type BoundTempSessionState = {
+  seqNo: number;
+  lastMessageId: BoundTempLongJson;
+  timeOffset: number;
+  serverSalt: BoundTempLongJson;
+  queuedAcks: BoundTempLongJson[];
+  bindMsgId: BoundTempLongJson;
+  lastSessionCreatedUid: BoundTempLongJson;
+};
 type BoundTempSession = {
   initConnectionCalled: boolean;
   _sessionId?: any;
-  resetState?: (...args: any[]) => void;
-  __beatgalerBoundTempSessionIdSeam?: boolean;
+  _seqNo?: number;
+  _lastMessageId?: any;
+  _timeOffset?: number;
+  _salts?: { currentSalt?: any };
+  queuedAcks?: any[];
+  recentOutgoingMsgIds?: { add(value: any): unknown };
+  recentIncomingMsgIds?: { add(value: any): unknown };
+  lastSessionCreatedUid?: any;
 };
 type BoundTempConnection = {
   params?: { isMainConnection?: boolean; isMainDcConnection?: boolean; dc?: { id?: number } };
   _session?: BoundTempSession;
-  reset?: (...args: any[]) => void;
-  __beatgalerBoundTempConnectionSeam?: boolean;
+  _salts?: { currentSalt?: any };
 };
-type BoundTempPool = {
-  _connections?: BoundTempConnection[];
-  onUsable?: { add(handler: (index: number) => void): void };
-};
+type BoundTempPool = { _connections?: BoundTempConnection[] };
 type BoundTempDcManager = { main?: BoundTempPool };
 type BoundTempNetwork = { _dcConnections?: Map<number, BoundTempDcManager> };
 
@@ -49,7 +60,6 @@ const activeStreams = new Map<string, {
   controller: AbortController;
   acknowledge: (() => void) | null;
 }>();
-const boundTempPools = new WeakSet<object>();
 
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
 
@@ -63,55 +73,58 @@ function isBoundTempLongJson(value: unknown): value is BoundTempLongJson {
   );
 }
 
-function applyBoundTempSessionId(session: BoundTempSession, sessionId: BoundTempLongJson): void {
-  const LongCtor = session._sessionId?.constructor;
-  if (typeof LongCtor !== "function") {
+function isBoundTempSessionState(value: unknown): value is BoundTempSessionState {
+  const row = value as Partial<BoundTempSessionState> | null;
+  return Boolean(
+    row &&
+    Number.isInteger(row.seqNo) && Number(row.seqNo) >= 0 &&
+    Number.isFinite(row.timeOffset) &&
+    isBoundTempLongJson(row.lastMessageId) &&
+    isBoundTempLongJson(row.serverSalt) &&
+    Array.isArray(row.queuedAcks) && row.queuedAcks.every(isBoundTempLongJson) &&
+    isBoundTempLongJson(row.bindMsgId) &&
+    isBoundTempLongJson(row.lastSessionCreatedUid)
+  );
+}
+
+function restoreLong(LongCtor: any, value: BoundTempLongJson): any {
+  return new LongCtor(value.low, value.high, value.unsigned);
+}
+
+function applyBoundTempSessionState(
+  connection: BoundTempConnection | undefined,
+  sessionId: BoundTempLongJson,
+  state: BoundTempSessionState,
+): void {
+  const session = connection?._session;
+  const LongCtor = session?._sessionId?.constructor;
+  if (!connection || !session || typeof LongCtor !== "function") {
     throw new Error("Galer Cloud Web transport could not restore its temporary session.");
   }
-  session._sessionId = new LongCtor(sessionId.low, sessionId.high, sessionId.unsigned);
-  session.initConnectionCalled = true;
-}
 
-function markBoundTempConnection(connection: BoundTempConnection | undefined, sessionId: BoundTempLongJson): void {
-  const session = connection?._session;
-  if (!connection || !session) return;
-
-  if (!session.__beatgalerBoundTempSessionIdSeam && typeof session.resetState === "function") {
-    const resetState = session.resetState;
-    session.resetState = (...args: any[]) => {
-      resetState.apply(session, args);
-      applyBoundTempSessionId(session, sessionId);
-    };
-    session.__beatgalerBoundTempSessionIdSeam = true;
+  session._sessionId = restoreLong(LongCtor, sessionId);
+  session._seqNo = state.seqNo;
+  session._lastMessageId = restoreLong(LongCtor, state.lastMessageId);
+  session._timeOffset = state.timeOffset;
+  const salts = connection._salts || session._salts;
+  if (!salts) throw new Error("Galer Cloud Web transport could not restore its temporary server salt.");
+  salts.currentSalt = restoreLong(LongCtor, state.serverSalt);
+  session.queuedAcks = state.queuedAcks.map(value => restoreLong(LongCtor, value));
+  session.recentOutgoingMsgIds?.add(restoreLong(LongCtor, state.bindMsgId));
+  for (const value of state.queuedAcks) {
+    session.recentIncomingMsgIds?.add(restoreLong(LongCtor, value));
   }
+  session.lastSessionCreatedUid = restoreLong(LongCtor, state.lastSessionCreatedUid);
 
-  if (!connection.__beatgalerBoundTempConnectionSeam && typeof connection.reset === "function") {
-    const reset = connection.reset;
-    connection.reset = (...args: any[]) => {
-      const result = reset.apply(connection, args);
-      if (args[0] !== true && connection._session) applyBoundTempSessionId(connection._session, sessionId);
-      return result;
-    };
-    connection.__beatgalerBoundTempConnectionSeam = true;
-  }
-
-  applyBoundTempSessionId(session, sessionId);
-}
-
-function markBoundTempPool(pool: BoundTempPool | undefined, sessionId: BoundTempLongJson): void {
-  if (!pool) return;
-  const mark = () => {
-    for (const connection of pool._connections || []) markBoundTempConnection(connection, sessionId);
-  };
-  mark();
-  if (!boundTempPools.has(pool as object)) {
-    pool.onUsable?.add(() => mark());
-    boundTempPools.add(pool as object);
-  }
+  // Telegram requires initConnection again after auth.bindTempAuthKey. The
+  // browser receives only the numeric application id needed by initConnection;
+  // API hash, bot token and permanent authorization never enter this Worker.
+  session.initConnectionCalled = false;
 }
 
 function installBoundTempConnectHook(
   sessionId: BoundTempLongJson,
+  state: BoundTempSessionState,
   dcId: number,
 ): () => void {
   const prototype = SessionConnection.prototype as any;
@@ -125,7 +138,7 @@ function installBoundTempConnectHook(
       this?.params?.isMainDcConnection === true &&
       Number(this?.params?.dc?.id || 0) === dcId
     ) {
-      markBoundTempConnection(this, sessionId);
+      applyBoundTempSessionState(this, sessionId, state);
     }
     return originalConnect.apply(this, args);
   };
@@ -135,18 +148,23 @@ function installBoundTempConnectHook(
   };
 }
 
-function installBoundTempRpcSeam(
+function assertBoundTempPrimarySession(
   next: TelegramClient,
   sessionId: BoundTempLongJson,
   dcId: number,
 ): void {
   const base = (next as any)._client || next;
   const network = base?.mt?.network as BoundTempNetwork | undefined;
-  const manager = network?._dcConnections?.get(dcId);
-  if (!manager?.main) {
-    throw new Error("Galer Cloud Web transport could not restore its temporary authorization.");
+  const connection = network?._dcConnections?.get(dcId)?.main?._connections?.[0];
+  const current = connection?._session?._sessionId;
+  if (
+    !current ||
+    current.low !== sessionId.low ||
+    current.high !== sessionId.high ||
+    Boolean(current.unsigned) !== sessionId.unsigned
+  ) {
+    throw new Error("Galer Cloud Web transport did not retain the bound temporary session.");
   }
-  markBoundTempPool(manager.main, sessionId);
 }
 
 async function closeClient(): Promise<void> {
@@ -164,14 +182,24 @@ async function closeClient(): Promise<void> {
 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
   await closeClient();
-  const { chat_id, expected_bot_id, temp_auth_key, temp_session_id, temp_primary_dcs } = command.session;
+  const {
+    chat_id,
+    expected_bot_id,
+    temp_api_id,
+    temp_auth_key,
+    temp_session_id,
+    temp_session_state,
+    temp_primary_dcs,
+  } = command.session;
   const primaryDcId = Number((temp_primary_dcs as any)?.main?.id || 0);
   if (
     !chat_id ||
     !expected_bot_id ||
+    !Number.isInteger(temp_api_id) || temp_api_id <= 0 ||
     !(temp_auth_key instanceof Uint8Array) ||
     temp_auth_key.byteLength !== 256 ||
     !isBoundTempLongJson(temp_session_id) ||
+    !isBoundTempSessionState(temp_session_state) ||
     !Number.isInteger(primaryDcId) ||
     primaryDcId < 1 ||
     primaryDcId > 5 ||
@@ -181,10 +209,9 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   }
 
   const next = new TelegramClient({
-    // API credentials are required only for login/importBotAuthorization. This
-    // runtime is already authorized by auth.bindTempAuthKey, so productive
-    // clients intentionally receive neither the real API ID nor API hash.
-    apiId: 0,
+    // initConnection needs the public numeric application id. The API hash is
+    // needed for authorization/login only and intentionally never enters Web.
+    apiId: temp_api_id,
     apiHash: "",
     storage: new MemoryStorage(),
     crypto: new WebCryptoProvider({ wasmInput: mtcuteWasmUrl }),
@@ -201,18 +228,20 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       } as any,
       authKey: temp_auth_key,
     }, true);
-    // auth.bindTempAuthKey binds the temporary key to the exact MTProto
-    // session id that created it. Intercept the primary connection before the
-    // socket opens so mtcute cannot replace that id with a fresh random one.
-    // The same seam also suppresses initConnection(apiId=0); permanent API
-    // credentials remain controlled-side and never enter the browser.
-    const restoreConnect = installBoundTempConnectHook(temp_session_id, primaryDcId);
+
+    // The bind happened on a short-lived SessionConnection in the main thread.
+    // Continue that exact MTProto Session in the primary Worker connection by
+    // restoring its protocol state before the socket opens. Do not monkeypatch
+    // resetState: a genuine reset must create a new id rather than destroy and
+    // then immediately reuse the old bound id.
+    const restoreConnect = installBoundTempConnectHook(temp_session_id, temp_session_state, primaryDcId);
     try {
       await next.connect();
     } finally {
       restoreConnect();
     }
-    installBoundTempRpcSeam(next, temp_session_id, primaryDcId);
+    assertBoundTempPrimarySession(next, temp_session_id, primaryDcId);
+
     const self = await next.getMe();
     if (!self?.isBot || String(self.id) !== String(expected_bot_id)) {
       throw new Error("Temporary authorization resolved to the wrong transport identity.");

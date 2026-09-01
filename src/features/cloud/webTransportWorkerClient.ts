@@ -142,8 +142,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         chat_id: session.chat_id,
         transport_user_id: session.transport_user_id,
         expected_bot_id: session.temp_auth.expected_bot_id,
+        temp_api_id: session.temp_auth.api_id,
         temp_auth_key: session.temp_auth_key,
         temp_session_id: session.temp_session_id,
+        temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);

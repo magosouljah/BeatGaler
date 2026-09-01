@@ -5,11 +5,13 @@ import {
   type TempAuthBinding,
   type TempAuthLongJson,
   type TempAuthMetadata,
+  type TempAuthSessionState,
 } from "./webTempAuth";
 
 export interface WebTransportTempAuthPublic {
   version: 1;
   dc_id: number;
+  api_id: number;
   expected_bot_id: string;
   expires_at: number | null;
   binding: TempAuthBinding | null;
@@ -60,6 +62,8 @@ export interface WebTransportSession extends WebTransportSessionPublic {
   temp_auth_key: Uint8Array;
   /** MTProto session id that the temporary key was cryptographically bound to. */
   temp_session_id: TempAuthLongJson;
+  /** MTProto counters/salt/ACK state needed to continue the bound session in the Worker. */
+  temp_session_state: TempAuthSessionState;
   temp_primary_dcs: unknown;
 }
 
@@ -115,7 +119,12 @@ function validateBootstrap(response: WebTransportSessionPublic): WebTransportSes
     throw new Error("Galer Cloud returned an unsupported Direct transport mode.");
   }
   const dcId = Number(response?.temp_auth?.dc_id || 0);
-  if (!Number.isInteger(dcId) || dcId < 1 || dcId > 5 || !response?.temp_auth?.expected_bot_id) {
+  const apiId = Number(response?.temp_auth?.api_id || 0);
+  if (
+    !Number.isInteger(dcId) || dcId < 1 || dcId > 5 ||
+    !Number.isInteger(apiId) || apiId <= 0 ||
+    !response?.temp_auth?.expected_bot_id
+  ) {
     throw new Error("Galer Cloud returned incomplete temporary authorization metadata.");
   }
   return response;
@@ -144,7 +153,8 @@ async function bindTemporarySession(
     if (
       response.session_id !== safeBootstrap.session_id ||
       response.generation !== safeBootstrap.generation ||
-      response.transport_id !== safeBootstrap.transport_id
+      response.transport_id !== safeBootstrap.transport_id ||
+      response.temp_auth.api_id !== safeBootstrap.temp_auth.api_id
     ) {
       throw new Error("Galer Cloud changed the Direct lease while binding temporary authorization.");
     }
@@ -160,6 +170,7 @@ async function bindTemporarySession(
       temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
       temp_auth_key: imported.authKey,
       temp_session_id: prepared.metadata.tempSessionId,
+      temp_session_state: imported.sessionState,
       temp_primary_dcs: imported.primaryDcs,
     } as WebTransportSession;
   } finally {
@@ -185,7 +196,8 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
     if (
       response.session_id !== session.session_id ||
       response.generation !== session.generation ||
-      response.transport_id !== session.transport_id
+      response.transport_id !== session.transport_id ||
+      response.temp_auth.api_id !== session.temp_auth.api_id
     ) {
       throw new Error("Galer Cloud changed the Direct lease during temporary-auth renewal.");
     }
@@ -201,6 +213,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
       temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
       temp_auth_key: imported.authKey,
       temp_session_id: prepared.metadata.tempSessionId,
+      temp_session_state: imported.sessionState,
       temp_primary_dcs: imported.primaryDcs,
     } as WebTransportSession;
   } finally {
