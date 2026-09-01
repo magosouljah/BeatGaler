@@ -258,7 +258,7 @@ async function authorizePermanent(session) {
     }
     const expected = session.transport_user_id == null ? "" : String(session.transport_user_id);
     if (expected && expected !== authorizedBotId) throw new Error("Controlled temporary-auth binder resolved the wrong transport bot identity.");
-    return { m, crypto, connection, permanentKeyBytes, dcId, authorizedBotId };
+    return { m, crypto, connection, permanentKeyBytes, dcId, apiId, authorizedBotId };
   });
   permanentByTransport.set(cacheKey, promise);
   try {
@@ -331,6 +331,9 @@ async function transformSession(session, metadata) {
   const bootstrap = {
     version: 1,
     dc_id: state.dcId,
+    // initConnection transmits the numeric application id after every temp-key
+    // bind. The API hash/token/permanent key stay controlled-side.
+    api_id: state.apiId,
     expected_bot_id: state.authorizedBotId,
     expires_at: null,
     binding: null,
