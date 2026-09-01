@@ -18,11 +18,14 @@ import type {
   WebTransportWorkerResponse,
 } from "./webTransportWorkerProtocol";
 
+const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
+
 type PendingRequest = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   onProgress?: (progress: WebTransportProgress) => void;
   onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
+  timeoutId: ReturnType<typeof setTimeout> | null;
 };
 
 export interface WebTransportStreamHandle {
@@ -33,6 +36,10 @@ export interface WebTransportStreamHandle {
 export class WebTransportWorkerClient implements WebTransportRuntime {
   private worker: Worker | null = null;
   private pending = new Map<string, PendingRequest>();
+
+  constructor(
+    private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
+  ) {}
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
@@ -47,6 +54,14 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     return worker;
   }
 
+  private takePending(requestId: string): PendingRequest | undefined {
+    const pending = this.pending.get(requestId);
+    if (!pending) return undefined;
+    this.pending.delete(requestId);
+    if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+    return pending;
+  }
+
   private onMessage(message: WebTransportWorkerResponse): void {
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
@@ -56,21 +71,41 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         void Promise.resolve(pending.onChunk?.(message.chunk, message.downloadedBytes, message.totalBytes))
           .then(() => this.sendStreamControl("stream_ack", message.requestId))
           .catch(error => {
-            this.pending.delete(message.requestId);
+            const failed = this.takePending(message.requestId);
             this.sendStreamControl("cancel", message.requestId);
-            pending.reject(error instanceof Error ? error : new Error(String(error)));
+            failed?.reject(error instanceof Error ? error : new Error(String(error)));
           });
       }
       return;
     }
-    this.pending.delete(message.requestId);
-    if (message.ok) pending.resolve(message.result);
-    else pending.reject(new Error(message.error));
+    const completed = this.takePending(message.requestId);
+    if (!completed) return;
+    if (message.ok) completed.resolve(message.result);
+    else completed.reject(new Error(message.error));
   }
 
   private failPending(message: string): void {
-    for (const pending of this.pending.values()) pending.reject(new Error(message));
+    for (const pending of this.pending.values()) {
+      if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+      pending.reject(new Error(message));
+    }
     this.pending.clear();
+  }
+
+  private timeoutRequest(requestId: string, operation: string): void {
+    const timedOut = this.takePending(requestId);
+    if (!timedOut) return;
+
+    timedOut.reject(new Error(`Galer Cloud Web transport timed out during ${operation}.`));
+
+    // A silent worker has unknown internal state. Do not reuse it for retries:
+    // terminate it so the next request gets a fresh data-plane runtime.
+    const worker = this.worker;
+    if (worker) {
+      worker.terminate();
+      if (this.worker === worker) this.worker = null;
+    }
+    this.failPending("Galer Cloud Web transport reset after an unresponsive worker request.");
   }
 
   private request<T>(
@@ -78,10 +113,25 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     onProgress?: (progress: WebTransportProgress) => void,
     onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
     requestId = crypto.randomUUID(),
+    timeoutMs: number | null = null,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(requestId, { resolve: value => resolve(value as T), reject, onProgress, onChunk });
-      this.ensureWorker().postMessage({ ...command, requestId } as WebTransportWorkerCommand);
+      const timeoutId = timeoutMs !== null && timeoutMs > 0
+        ? setTimeout(() => this.timeoutRequest(requestId, command.op), timeoutMs)
+        : null;
+      this.pending.set(requestId, {
+        resolve: value => resolve(value as T),
+        reject,
+        onProgress,
+        onChunk,
+        timeoutId,
+      });
+      try {
+        this.ensureWorker().postMessage({ ...command, requestId } as WebTransportWorkerCommand);
+      } catch (error) {
+        const failed = this.takePending(requestId);
+        failed?.reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -95,7 +145,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_auth_key: session.temp_auth_key,
         temp_primary_dcs: session.temp_primary_dcs,
       },
-    });
+    }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {
@@ -103,11 +153,17 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   async verifyReady(): Promise<void> {
-    await this.request({ op: "verify" });
+    await this.request({ op: "verify" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
-    return this.request<WebTransportLibraryIndexResult>({ op: "get_index" });
+    return this.request<WebTransportLibraryIndexResult>(
+      { op: "get_index" },
+      undefined,
+      undefined,
+      undefined,
+      this.bootstrapRequestTimeoutMs,
+    );
   }
 
   replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promise<WebTransportReplaceIndexResult> {
