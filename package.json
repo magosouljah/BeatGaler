@@ -22,6 +22,7 @@
     "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
     "test:security-boundary": "node scripts/regression-task-5.1-hardening.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
+    "test:windows-authenticode-guard": "node scripts/test-windows-authenticode-guard.mjs",
     "test:upgrade-matrix": "node scripts/test-upgrade-matrix.mjs",
     "test:updater-recovery": "node scripts/test-updater-recovery.mjs",
     "test:packaging:static": "npm run release:check && npm run test:upgrade-matrix && npm run test:updater-recovery && npm run test:windows-packaging && npm run test:mac-portability:static",

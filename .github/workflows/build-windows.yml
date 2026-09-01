@@ -1,14 +1,28 @@
 name: Build - Windows
+run-name: Build Windows [${{ inputs.release_intent }}] @ ${{ github.sha }}
 
 on:
   workflow_dispatch:
+    inputs:
+      release_intent:
+        description: "Artifact intent. Public artifacts require Authenticode + RFC3161."
+        required: true
+        default: internal
+        type: choice
+        options:
+          - internal
+          - public
 
 permissions:
   contents: read
 
 env:
+  # Tauri updater signing protects updater payload integrity. It is NOT Windows Authenticode.
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+  WINDOWS_AUTHENTICODE_PROVIDER: ${{ vars.WINDOWS_AUTHENTICODE_PROVIDER || 'PENDING_OWNER_PROVIDER' }}
+  WINDOWS_RFC3161_TIMESTAMP_URL: ${{ vars.WINDOWS_RFC3161_TIMESTAMP_URL }}
+  WINDOWS_AUTHENTICODE_EXPECTED_SUBJECT: ${{ vars.WINDOWS_AUTHENTICODE_EXPECTED_SUBJECT }}
 
 jobs:
   build-windows:
@@ -124,20 +138,55 @@ jobs:
             node=src-tauri/resources/windows/node.exe `
             bot-api=src-tauri/resources/windows/telegram-bot-api.exe
 
-      - name: Verify Windows packaging contract
-        run: npm run test:windows-packaging
+      - name: Verify Windows packaging and Authenticode seam contracts
+        shell: pwsh
+        run: |
+          npm run test:windows-packaging
+          npm run test:windows-authenticode-guard
+          ./scripts/test-windows-authenticode-seam.ps1
 
       - name: Verify Cargo.lock before build
         shell: pwsh
         run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
 
-      - name: Build Tauri app
+      - name: Prepare Authenticode config for public intent
+        if: ${{ inputs.release_intent == 'public' }}
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_CERT_SHA1: ${{ secrets.WINDOWS_AUTHENTICODE_CERT_SHA1 }}
+        run: |
+          ./scripts/prepare-windows-authenticode-config.ps1 `
+            -BaseConfigPath "src-tauri/tauri.windows-release.conf.json" `
+            -OutputPath "$env:RUNNER_TEMP/tauri.windows-authenticode.conf.json"
+
+      - name: Build Tauri app - internal
+        if: ${{ inputs.release_intent == 'internal' }}
         run: npx tauri build --bundles nsis --config src-tauri/tauri.windows-release.conf.json
+
+      - name: Build Tauri app - public Authenticode
+        if: ${{ inputs.release_intent == 'public' }}
+        run: npx tauri build --bundles nsis --config "${{ runner.temp }}/tauri.windows-authenticode.conf.json"
+
+      - name: Verify Windows Authenticode public release gate
+        if: ${{ inputs.release_intent == 'public' }}
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer; found $($installers.Count)."
+          }
+          $installer = $installers[0]
+          ./scripts/windows-authenticode.ps1 -Path $installer.FullName -RequireExpectedSubject
+
+          $updaterSig = Get-Item -LiteralPath "$($installer.FullName).sig" -ErrorAction Stop
+          if ($updaterSig.LastWriteTimeUtc -lt $installer.LastWriteTimeUtc) {
+            throw "Tauri updater signature is older than the final Authenticode-signed installer."
+          }
 
       - name: Verify installed Windows runtimes by content digest
         shell: pwsh
         run: |
-          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe -File | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer was not produced" }
           $installDir = Join-Path $env:RUNNER_TEMP "BeatGaler-install-check"
           $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
@@ -167,8 +216,42 @@ jobs:
           $installedBotHash = (Get-FileHash $bot -Algorithm SHA256).Hash
           if ($stagedBotHash -ne $installedBotHash) { throw "Installed Bot API digest differs from staged runtime" }
 
+          if ("${{ inputs.release_intent }}" -eq "public") {
+            $appCandidates = @(Get-ChildItem -LiteralPath $installDir -Filter *.exe -File | Where-Object {
+              $_.Name -notin @("ffmpeg.exe", "node.exe", "telegram-bot-api.exe", "uninstall.exe") -and
+              $_.Name -notmatch '^unins\d+\.exe$'
+            })
+            if ($appCandidates.Count -ne 1) {
+              $names = ($appCandidates | ForEach-Object Name) -join ", "
+              throw "Expected exactly one installed application executable; found $($appCandidates.Count): $names"
+            }
+            ./scripts/windows-authenticode.ps1 -Path $appCandidates[0].FullName -RequireExpectedSubject
+          }
+
       - name: Verify updater artifacts
         run: npm run updater:verify-artifacts
+
+      - name: Record Windows release eligibility
+        shell: pwsh
+        run: |
+          $intent = "${{ inputs.release_intent }}"
+          if ($intent -notin @("internal", "public")) { throw "Unknown release_intent '$intent'." }
+          $publicEligible = $intent -eq "public"
+          $record = [ordered]@{
+            schema = 1
+            release_intent = $intent
+            public_release_eligible = $publicEligible
+            authenticode = if ($publicEligible) { "valid" } else { "not-required-internal" }
+            digest = if ($publicEligible) { "SHA256" } else { $null }
+            timestamp = if ($publicEligible) { "RFC3161" } else { $null }
+            provider = $env:WINDOWS_AUTHENTICODE_PROVIDER
+            tauri_updater_signature = "separate-control"
+            note = if ($publicEligible) { "PUBLIC_AUTHENTICODE_VERIFIED" } else { "INTERNAL_NOT_FOR_PUBLIC_RELEASE" }
+          }
+          if (-not $publicEligible -and $record.public_release_eligible -ne $false) {
+            throw "Internal build must remain non-public."
+          }
+          $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "WINDOWS-AUTHENTICODE-STATUS.json" -Encoding utf8
 
       - name: Create Windows artifact checksums
         shell: pwsh
@@ -190,5 +273,6 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe.sig
             artifacts/runtime-provenance-windows.json
             artifacts/SHA256SUMS-Windows.txt
+            WINDOWS-AUTHENTICODE-STATUS.json
             VERSION
           if-no-files-found: error
