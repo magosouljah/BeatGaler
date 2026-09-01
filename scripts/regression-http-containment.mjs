@@ -17,7 +17,11 @@ function responseRecorder() {
   return res;
 }
 function request({ token = "", headers = {}, body = {}, query = {}, ip = "127.0.0.1", file } = {}) {
-  return { headers: { ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body, query, ip, socket: { remoteAddress: ip }, file };
+  const req = { headers: { ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body, ip, socket: { remoteAddress: ip }, file };
+  // Express 5 exposes req.query as a getter with no setter. Model that contract
+  // so containment regressions fail if middleware ever assigns req.query again.
+  Object.defineProperty(req, "query", { configurable: true, enumerable: true, get: () => query });
+  return req;
 }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "beatgaler-containment-"));
@@ -59,7 +63,8 @@ try {
     containment.installationOwner(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
     assert.equal(req.body.beatgalerUserId, installationId);
-    assert.equal(req.query.beatgalerUserId, installationId);
+    assert.equal(req.query.beatgalerUserId, "other_install", "Express query hints remain read-only and are not trusted as canonical authority");
+    assert.equal(req.beatgalerAuthorizedInstallationId, installationId);
     assert.equal(req.beatgalerAuthorizedTenantId, userId);
   }
   {
