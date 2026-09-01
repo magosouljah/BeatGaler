@@ -3,6 +3,7 @@ import { getWebClientId } from "../../platform/webClientId";
 import {
   prepareWebTempAuth,
   type TempAuthBinding,
+  type TempAuthLongJson,
   type TempAuthMetadata,
 } from "./webTempAuth";
 
@@ -57,6 +58,8 @@ export interface WebTransportSession extends WebTransportSessionPublic {
   };
   /** Client-generated temporary key. It is never serialized back to Galer Cloud. */
   temp_auth_key: Uint8Array;
+  /** MTProto session id that the temporary key was cryptographically bound to. */
+  temp_session_id: TempAuthLongJson;
   temp_primary_dcs: unknown;
 }
 
@@ -156,6 +159,7 @@ async function bindTemporarySession(
       temp_auth_required: false,
       temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
       temp_auth_key: imported.authKey,
+      temp_session_id: prepared.metadata.tempSessionId,
       temp_primary_dcs: imported.primaryDcs,
     } as WebTransportSession;
   } finally {
@@ -196,6 +200,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
       temp_auth_required: false,
       temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
       temp_auth_key: imported.authKey,
+      temp_session_id: prepared.metadata.tempSessionId,
       temp_primary_dcs: imported.primaryDcs,
     } as WebTransportSession;
   } finally {
