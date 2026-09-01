@@ -1,0 +1,43 @@
+name: TEMP - Refresh browserslist lock
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lock:
+    if: github.head_ref == 'f2-12.1-web-session-continuity'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR head branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Refresh vulnerable transitive lock entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm update browserslist --package-lock-only
+          npm audit --audit-level=high
+          git diff --check
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore(deps): refresh browserslist lock"
+          git push origin "HEAD:${{ github.head_ref }}"
