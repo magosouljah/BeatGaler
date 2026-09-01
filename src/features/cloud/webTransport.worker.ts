@@ -21,6 +21,24 @@ type WorkerScope = {
   postMessage(message: WebTransportWorkerResponse, transfer?: Transferable[]): void;
 };
 
+type BoundTempConnection = { _session?: { initConnectionCalled: boolean } };
+type BoundTempPool = {
+  _connections?: BoundTempConnection[];
+  onUsable?: { add(handler: (index: number) => void): void };
+};
+type BoundTempDcManager = {
+  main?: BoundTempPool;
+  upload?: BoundTempPool;
+  download?: BoundTempPool;
+  downloadSmall?: BoundTempPool;
+};
+type BoundTempNetwork = {
+  _dcConnections?: Map<number, BoundTempDcManager>;
+  _getOtherDc?: (...args: any[]) => Promise<BoundTempDcManager>;
+  changePrimaryDc?: (...args: any[]) => Promise<unknown>;
+  __beatgalerBoundTempRpcSeam?: boolean;
+};
+
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
 let chatId = 0;
@@ -29,8 +47,68 @@ const activeStreams = new Map<string, {
   controller: AbortController;
   acknowledge: (() => void) | null;
 }>();
+const boundTempPools = new WeakSet<object>();
 
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
+
+function markBoundTempPool(pool?: BoundTempPool): void {
+  if (!pool) return;
+  const mark = () => {
+    for (const connection of pool._connections || []) {
+      if (connection?._session) connection._session.initConnectionCalled = true;
+    }
+  };
+  mark();
+  if (!boundTempPools.has(pool as object)) {
+    pool.onUsable?.add(() => mark());
+    boundTempPools.add(pool as object);
+  }
+}
+
+function markBoundTempDcManager(manager?: BoundTempDcManager): void {
+  if (!manager) return;
+  markBoundTempPool(manager.main);
+  markBoundTempPool(manager.upload);
+  markBoundTempPool(manager.download);
+  markBoundTempPool(manager.downloadSmall);
+}
+
+function installBoundTempRpcSeam(next: TelegramClient): void {
+  const base = (next as any)._client || next;
+  const network = base?.mt?.network as BoundTempNetwork | undefined;
+  if (!network?._dcConnections) {
+    throw new Error("Galer Cloud Web transport could not prepare temporary authorization.");
+  }
+
+  const markAll = () => {
+    for (const manager of network._dcConnections?.values() || []) markBoundTempDcManager(manager);
+  };
+
+  if (!network.__beatgalerBoundTempRpcSeam) {
+    const getOtherDc = network._getOtherDc;
+    if (typeof getOtherDc === "function") {
+      network._getOtherDc = async (...args: any[]) => {
+        const manager = await getOtherDc.apply(network, args);
+        markBoundTempDcManager(manager);
+        return manager;
+      };
+    }
+
+    const changePrimaryDc = network.changePrimaryDc;
+    if (typeof changePrimaryDc === "function") {
+      network.changePrimaryDc = async (...args: any[]) => {
+        const result = await changePrimaryDc.apply(network, args);
+        markAll();
+        return result;
+      };
+    }
+
+    network.__beatgalerBoundTempRpcSeam = true;
+  }
+
+  markAll();
+}
+
 async function closeClient(): Promise<void> {
   for (const stream of activeStreams.values()) {
     stream.controller.abort();
@@ -72,6 +150,13 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       } as any,
       authKey: temp_auth_key,
     }, true);
+    // Task 5.1 proved that a bound temporary key can issue application RPCs
+    // without exposing the permanent application API credentials. mtcute's
+    // high-level client otherwise wraps the first RPC in initConnection using
+    // apiId=0, which the service rejects. Connect first, then mark every bound
+    // temp session as already initialized before any application RPC is sent.
+    await next.connect();
+    installBoundTempRpcSeam(next);
     const self = await next.getMe();
     if (!self?.isBot || String(self.id) !== String(expected_bot_id)) {
       throw new Error("Temporary authorization resolved to the wrong transport identity.");
