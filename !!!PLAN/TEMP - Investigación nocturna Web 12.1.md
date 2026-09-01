@@ -6,211 +6,167 @@
 
 ### Síntoma principal actual
 
-Producción posterior a PR #95 llega a conexión Web MAIN real y después reproduce esta secuencia:
+Producción posterior a PR #95 llega a Web MAIN real y reproduce:
 
 1. `received rpc_result for unknown message <id>: true`
 2. `transport error 404. trying to reconnect`
 3. `transport error 404, reauthorizing`
 4. `Transport error: 404`
-5. `Galer Cloud Web transport timed out during verify`
-
-El ciclo tarda aproximadamente 35–36 s por intento y vuelve a iniciar reload.
+5. verify timeout ~35–36 s y reload/retry.
 
 Task 12.1 sigue NO terminada.
 
+### Baseline y duplicate-check
+
+- Canonical: `integration-v0.8.0-alpha.1` @ `43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`.
+- Tree canónico: `e8e2e19f430e42852fe963645c882f475e7792a6`.
+- HEAD sigue siendo merge de PR #95; no cambió entre el turno 00:58 y el turno 01:45.
+- No se encontró un fix posterior que cierre Task 12.1; no hay trabajo duplicado que deba evitarse.
+- TEMP acumulativo vive en `temp-web-12.1-night-research` porque canonical exige PR y esta investigación prohíbe abrir PR.
+
 ### Hechos confirmados
 
-- Baseline de código investigado: `integration-v0.8.0-alpha.1` @ `43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`.
-- Ese HEAD es el merge de PR #95 (`F2/12.1: preserve bound temporary Web session id`).
-- No se encontró un PR posterior relacionado con Task 12.1 en el preflight de este turno.
-- PR #95 y sus checks relevantes pasaron CI, pero la evidencia de producción posterior demuestra que preservar únicamente `tempSessionId` no resolvió el fallo.
-- PREVIOUS CONCLUSION INVALIDATED: la conclusión de PR #95 de que preservar únicamente el bound temporary session id solucionaría el transport 404 queda invalidada por la ejecución productiva posterior.
-- Lockfile actual fija `@mtcute/web` **0.31.0**. El source upstream exacto corresponde a tag `v0.31.0`, commit `11b1c8894b653139b180c13620692f298bc147fb` de `mtcute/mtcute`.
-- En `packages/core/src/network/transports/intermediate.ts` de mtcute 0.31.0, un frame de transporte de exactamente 4 bytes se interpreta como código MTProto transport y se lanza `TransportError(-code)`. Por tanto el 404 observado no es un HTTP 404.
-- La documentación oficial de MTProto define 404 de transporte principalmente como `auth key not found`, aunque también puede aparecer durante operación normal si existen campos/encapsulado MTProto incorrectos.
-- En `SessionConnection.handleError()` de mtcute 0.31.0, la secuencia productiva coincide exactamente con la rama genérica de 404:
-  - primer 404: `transport error 404. trying to reconnect` -> `_resetSession('-404 reconnect')`;
-  - segundo 404: `transport error 404, reauthorizing` -> `resetAuthKey()` + otro `_resetSession` + señal `onKeyChange(null)`.
-- La ejecución NO está entrando en la rama normal de recuperación PFS (`transport error 404, reauthorizing pfs`). El Web productivo importa la key temporal mediante `TelegramClient.importSession(...)` con `usePfs: false`, por lo que mtcute la trata como key primaria del Session importado.
-- `_resetSession()` en mtcute 0.31.0 primero encola el `sessionId` actual para `mt_destroy_session`, luego ejecuta `session.resetState(true)`, falla/reencola requests pendientes y reconecta.
-- `Session.resetState(true)` crea un sessionId nuevo y reinicia estado como `lastMessageId`, `seqNo`, conjuntos de message IDs y ACK queues, manteniendo ciertos pending messages.
-- PR #95 envuelve `session.resetState()` y vuelve a imponer inmediatamente el sessionId bound anterior. Esto rompe una invariancia interna de `_resetSession()`: el ID viejo queda en la cola de `destroy_session` y, tras el wrapper, ese mismo ID vuelve a ser el Session activo. Por tanto el recovery puede intentar destruir el mismo sessionId que BeatGaler acaba de reactivar. Esto es un defecto concreto del recovery de #95, aunque no explica el **primer** 404.
-- `src/features/cloud/webTempAuth.ts` crea una `ManualSessionConnection`, genera la temporary auth key, prepara un `msgId`, `nonce`, `tempSessionId`, ejecuta manualmente `auth.bindTempAuthKey` y espera un `Bool true`.
-- Ese bind registra `pendingMessages.set(msgId, { _: 'bind', ... })`; tras recibir respuesta, mtcute resuelve el pending y elimina la entrada.
-- En mtcute 0.31.0, la respuesta RPC del bind se ACKea mediante `_sendAck(messageId)`. El ACK se acumula en `queuedAcks`; si es el primer ACK, el flush se programa hasta 30 s después salvo otra actividad que fuerce flush.
-- `src/features/cloud/webTransportSession.ts` llama `prepared.bind(...)` y, en `finally`, ejecuta inmediatamente `prepared.destroy()`. Por tanto existe una ruta real donde el `Bool true` del bind fue recibido pero su ACK todavía no salió antes de destruir la conexión auxiliar.
-- MTProto documenta que una respuesta RPC no recibida/acknowledged puede ser reenviada en una oportunidad posterior y que `rpc_result.req_msg_id` identifica el request original.
-- Luego BeatGaler crea **otro** `TelegramClient` con `MemoryStorage` nuevo, importa únicamente key/DC/self y fuerza el mismo `tempSessionId`. Su `pendingMessages` y `recentOutgoingMsgIds` no contienen el `msgId` del bind de la conexión auxiliar.
-- En mtcute 0.31.0 el warning `received rpc_result for unknown message ...` sólo aparece cuando el `req_msg_id` no corresponde a un pending del Session actual y tampoco está en `recentOutgoingMsgIds`. Una respuesta duplicada de un request reciente se registraría sólo como `debug`.
-- `auth.bindTempAuthKey` devuelve oficialmente `Bool`; por la secuencia de código, el ACK pendiente y la reconstrucción con el mismo key/sessionId, la mejor explicación actual del `...: true` es un `rpc_result` reenviado del bind exitoso original. Confidence actual: **90%**. Falta correlacionar el `req_msg_id` de producción con `prepared.metadata.msgId` para convertirlo en identificación definitiva.
-- La documentación oficial exige ejecutar `initConnection` después de cada `auth.bindTempAuthKey`.
-- PR #94 introdujo explícitamente el seam que marca `session.initConnectionCalled = true` para impedir que mtcute envíe el primer `initConnection` con `apiId=0`; el código actual sigue suprimiendo ese `initConnection`. Por tanto existe una divergencia protocolaria demostrable entre la especificación y Web productivo. Todavía NO está demostrado que sea la causa del transport 404.
-- El warning WASM MIME no impide que el runtime llegue a MAIN ni que reciba un `rpc_result`; por ahora se clasifica como **WASM MIME SECONDARY**, no root cause del 404.
+- Lockfile fija `@mtcute/web`, `@mtcute/core` y `@mtcute/wasm` 0.31.0; source upstream exacto: tag `v0.31.0`, commit `11b1c8894b653139b180c13620692f298bc147fb`.
+- El 404 observado es un **MTProto transport error**, no HTTP. `intermediate.ts` interpreta un frame de 4 bytes como código de transporte.
+- Telegram documenta 404 principalmente como auth key no encontrada, aunque también puede aparecer por estado/campos/encapsulado MTProto incorrectos.
+- La secuencia productiva coincide exactamente con `SessionConnection.handleError()` de mtcute 0.31.0: primer 404 -> reconnect/reset Session; segundo 404 -> reset auth key + reauthorization.
+- Web importa la temporary key como auth key primaria con `usePfs:false`; por ello NO entra en la recuperación PFS nativa de mtcute.
+- `_resetSession()` encola el sessionId viejo para `destroy_session` y luego espera que `resetState(true)` genere uno nuevo.
+- PR #95 envuelve `resetState()` y vuelve a imponer el sessionId bound viejo. Esto deja el mismo ID simultáneamente como candidato a `destroy_session` y como Session activo. Es un defecto concreto posterior al primer 404.
+- `webTempAuth.ts` hace `auth.bindTempAuthKey` manual sobre una `ManualSessionConnection`, con `msgId`, nonce, `tempSessionId`, temporary key y server salt.
+- `auth.bindTempAuthKey` devuelve `Bool`; la respuesta se ACKea en mtcute pero el primer ACK puede permanecer en `queuedAcks` hasta 30 s si no hay otro flush.
+- `webTransportSession.ts` destruye la conexión auxiliar inmediatamente después de terminar el bind. Existe una ruta real donde el bind devolvió `true` pero su ACK todavía no salió.
+- El nuevo `TelegramClient` usa `MemoryStorage`/Session nuevos. Aun reusando key/DC/sessionId, no hereda el pending request ni `recentOutgoingMsgIds` del bind.
+- MTProto puede reenviar un RPC result no reconocido/acknowledged. La mejor explicación de `unknown message ...: true` sigue siendo el `rpc_result` reenviado del `auth.bindTempAuthKey` exitoso. Confidence **90%**; falta correlacionar en runtime el `req_msg_id` con `prepared.metadata.msgId`.
+- Telegram exige `initConnection` después de cada `auth.bindTempAuthKey`.
+- PR #94 suprime deliberadamente ese `initConnection` poniendo `session.initConnectionCalled = true`, para evitar `CONNECTION_API_ID_INVALID` con `apiId:0`.
+- **NUEVO TURNO 01:45:** `.github/workflows/probe-task-5.1-productive-temp-auth-compile.yml` NO es un probe MTProto runtime. Sólo ejecuta `npm run build:web` y `npm run test:typecheck`, sube logs y exige exit 0.
+- **NUEVO TURNO 01:45:** `scripts/regression-web-bound-temp-rpc.mjs` tampoco hace red ni RPC. Es una regresión estática que lee source y exige patrones; entre ellos exige explícitamente `session.initConnectionCalled = true`. Por tanto no puede demostrar que Telegram acepte el seam que está validando.
+- **NUEVO TURNO 01:45:** `scripts/regression-task-5.1-hardening.mjs` es también una regresión local/estática de trust boundaries, CSP/CORS, filesystem scopes y temp-auth boundary; no prueba una RPC real.
+- **NUEVO TURNO 01:45:** el helper Desktop `src-tauri/direct-transport/transport-helper.source.mjs` sí contiene el flujo real de generar temp auth, bindear, crear otro `TelegramClient`, importar la key y ejecutar `getMe()`/`getChat()`. Sin embargo, ese helper NO transfiere `prepared.metadata.tempSessionId` al nuevo cliente y no instala el seam de PR #95. Por tanto no es una réplica equivalente del Web productivo actual.
+- PR #94 afirma textualmente que un “historical Task 5.1 live proof” estableció que una bound temporary key podía emitir RPC productiva marcando la sesión inicializada. En el repositorio canónico inspeccionado en este turno, los artefactos con nombre Task 5.1 encontrados no constituyen esa prueba runtime. La afirmación histórica queda **NO VERIFICADA**, no descartada.
+- Consecuencia: la supuesta evidencia histórica contra H2 era más débil de lo registrado. No debe tratarse como prueba de que omitir `initConnection` es aceptado por Telegram.
+- WASM MIME sigue SECONDARY: el fallback alcanza MAIN y procesa MTProto antes del 404.
 
 ### Hipótesis activas
 
-#### H1 — reconstrucción incompleta de una sesión bound entre dos clientes
+#### H1 — handoff/reconstrucción incompleta de la Session bound
 
-- confidence: **78%**
-- descripción: el bind ocurre en una `ManualSessionConnection`, pero la primera RPC productiva ocurre en otro `TelegramClient`/`Session` creado desde cero. Copiar auth key + DC + self + sessionId no recrea todo el estado semántico de la sesión MTProto que el servidor mantiene para `(auth_key_id, session_id)`.
-- evidencia a favor:
-  - `webTempAuth.ts` y `webTransport.worker.ts` confirman dos objetos Connection/Session distintos;
-  - el servidor puede mantener estado por session y reenviar respuestas no ACKeadas;
-  - el `Bool true` reaparece en el cliente reconstruido sin pending map correspondiente;
-  - `Session.resetState()` trata sessionId, seqNo, message IDs, ACKs y pending state como estado acoplado;
-  - #95 copió sólo sessionId y no resolvió producción;
-  - el wrapper de #95 crea un estado híbrido y puede auto-destruir el ID restaurado tras el primer 404.
-- evidencia en contra:
-  - aún no se ha demostrado cuál de los campos restantes es indispensable para el primer RPC;
-  - MTProto sí soporta reconectar una misma sesión sobre otra conexión física, por lo que la `Connection` física en sí no tiene por qué ser preservada.
-- experimento discriminante: en un probe diagnóstico, mantener mismo key/DC/bind y variar sólo el handoff: A) primer RPC productivo sobre el mismo `SessionConnection` que hizo bind; B) primer RPC sobre `TelegramClient` reconstruido exactamente como Web. Si A funciona y B falla, la reconstrucción queda aislada como causa.
+- confidence: **82%** (antes 78%).
+- descripción: bind ocurre en Session A y la primera RPC productiva en Session B reconstruida. Copiar key/DC/self/sessionId no equivale a continuar coherentemente toda la Session MTProto.
+- a favor: dos Session distintas; ACK/pending/recent message state no transferidos; reaparece probablemente el Bool del bind; PR #95 conservó sólo ID y falló; recovery crea estado híbrido; el supuesto working probe equivalente no quedó demostrado.
+- en contra: MTProto sí permite reemplazar conexión física; todavía no está identificado qué estado adicional causa específicamente el **primer** 404.
+- discriminante: mismo bind, comparar primera RPC en la misma Session A vs handoff a Session B, manteniendo todo lo demás igual.
 
 #### H2 — `initConnection` post-bind suprimido
 
-- confidence: **60%**
-- descripción: después del bind exitoso, Web marca artificialmente `initConnectionCalled=true` y ejecuta `getMe()` sin el `initConnection` que la especificación exige después de cada bind.
-- evidencia a favor:
-  - requisito explícito de la documentación oficial PFS/invoking;
-  - PR #94 introdujo exactamente la supresión para eliminar `CONNECTION_API_ID_INVALID` de mtcute high-level;
-  - el primer tráfico productivo posterior al bind nace bajo esta divergencia.
-- evidencia en contra:
-  - el comentario de PR #94 afirma que probes Task 5.1 habían logrado RPC productiva sin exponer credenciales de aplicación;
-  - todavía no existe una traza que vincule falta de `initConnection` con un transport 404 en este caso concreto.
-- experimento discriminante: comparar dos probes idénticos sobre el mismo bound Session: uno ejecuta el `initConnection` requerido con credenciales válidas de forma segura fuera del browser y otro reproduce el seam `initConnectionCalled=true`; observar si sólo el segundo entra en 404.
+- confidence: **72%** (antes 60%).
+- descripción: Web marca artificialmente `initConnectionCalled=true` y manda la primera RPC sin el `initConnection` exigido por protocolo.
+- a favor: requisito oficial explícito; seam de PR #94; los “tests” Task 5.1 inspeccionados sólo compilan o verifican source y no prueban aceptación server-side.
+- en contra: PR #94 afirma que existió un live proof histórico; no se encontró todavía el artefacto/traza que permita verificar o refutar esa afirmación. Tampoco existe aún una traza que demuestre que esta omisión produce exactamente transport 404.
+- discriminante: bound Session idéntica con A) `initConnection` real y válido después del bind vs B) `initConnectionCalled=true` sin envío; observar el primer mensaje y respuesta.
 
-#### H3 — DC/key mismatch o temporary key inexistente en el DC elegido
+#### H3 — DC/key mismatch o temporary key desaparecida
 
-- confidence: **20%**
-- descripción: el primer 404 podría ser el significado primario `auth key not found` por key en DC incorrecto o key descartada.
-- evidencia a favor:
-  - 404 documentado puede significar auth key no encontrada;
-  - DC 1 todavía no fue auditado contra binding/server metadata en este turno.
-- evidencia en contra:
-  - `prepareWebTempAuth(dcId)` genera y bindea la key en el mismo `dcId` que luego exporta como `primaryDcs`;
-  - la repetición determinista inmediatamente después del bind hace menos probable una expiración aleatoria temprana;
-  - la reaparición probable del `rpc_result` del bind bajo la sesión importada es evidencia de continuidad de key/session, aunque falta correlación de IDs.
-- experimento discriminante: registrar únicamente dcId, hash de auth_key_id y req_msg_id hash en bind e initialize para demostrar igualdad sin exponer key.
+- confidence: **18%** (antes 20%).
+- a favor: 404 puede significar auth key not found.
+- en contra: generación, bind y export usan mismo dcId; fallo es inmediato y determinista; el probable reenvío del Bool del bind sugiere continuidad suficiente de key/session para recibir tráfico.
+- discriminante: correlacionar dcId y hash de auth_key_id a ambos lados sin registrar secretos.
 
-#### H4 — el recovery de PR #95 agrava el primer 404 destruyendo el mismo sessionId restaurado
+#### H4 — recovery de PR #95 auto-destruye el sessionId restaurado
 
-- confidence: **95% como defecto de código; 70% como explicación del segundo 404**
-- descripción: `_resetSession()` encola old sessionId para destrucción y espera que `resetState(true)` genere otro ID; el wrapper de #95 vuelve a poner old ID, por lo que el reconnect puede emitir `destroy_session(oldId)` mientras oldId vuelve a ser el Session activo.
-- evidencia a favor: secuencia directa del source exacto de mtcute + wrapper actual de BeatGaler.
-- evidencia en contra: no puede originar el primer 404 porque sólo se ejecuta después de recibirlo.
-- experimento discriminante: instrumentar hashes del ID en `_queuedDestroySession` y `_session._sessionId` después del primer 404; no cambiar comportamiento.
+- confidence: **95% como defecto; 70% como causa del segundo 404; 0% como causa del primero**.
+- descripción: tras el primer 404, mtcute encola old sessionId para destroy; wrapper lo restaura como activo.
+- discriminante: instrumentar únicamente IDs/hash en queuedDestroySession y Session activa después del primer 404.
 
-### Hipótesis descartadas
+### Hipótesis / conclusiones descartadas o invalidadas
 
-- **“404 es HTTP 404” — DESCARTADA.** Source exacto `intermediate.ts` demuestra frame MTProto de 4 bytes convertido en `TransportError(404)`.
-- **“preservar únicamente tempSessionId es suficiente” — DESCARTADA.** PR #95 lo implementó, pasó CI, se desplegó y producción conserva el mismo fallo.
-- **“WASM MIME es la causa raíz del transport 404” — DESCARTADA por ahora como root cause.** El fallback WebAssembly continúa, abre MAIN y procesa tráfico MTProto antes del 404. Sigue siendo bug secundario.
+- `404 = HTTP 404` — DESCARTADA.
+- `preservar únicamente tempSessionId basta` — INVALIDADA por producción posterior a PR #95.
+- `WASM MIME causa el 404` — DESCARTADA como root cause actual; sigue bug secundario.
+- `el workflow Task 5.1 Productive Temp Auth Compile demuestra una RPC productiva` — DESCARTADA: sólo build/typecheck.
+- `regression-web-bound-temp-rpc.mjs demuestra aceptación server-side` — DESCARTADA: sólo asserts sobre texto source.
+- `la afirmación histórica de live proof de PR #94 está verificada por los artefactos Task 5.1 hoy visibles` — INVALIDADA COMO EVIDENCIA; queda NO VERIFICADA hasta localizar la traza/probe runtime original.
 
-### Preguntas abiertas
+### Diferencias working probe / artefactos históricos vs producción
 
-1. ¿El `req_msg_id` del `Bool true` coincide exactamente con `prepared.metadata.msgId` de `auth.bindTempAuthKey`?
-2. ¿Qué primer mensaje saliente del `TelegramClient` reconstruido provoca el primer transport 404: ACK del bind reenviado, `getMe`, ping, destroy/session control u otro?
-3. ¿La falta de `initConnection` post-bind explica por sí sola el primer 404 o produce otro tipo de error?
-4. ¿Qué estado mínimo de Session debe sobrevivir si se continúa el mismo `(auth_key_id, session_id)`?
-5. ¿Qué working probe histórico de Task 5.1 realizó una RPC real y cuál fue la primera divergencia interna respecto a Web productivo?
-6. ¿DC 1 es el DC correcto para la key de los intentos observados?
-
-### Diferencias working probe vs producción
-
-Comparación todavía incompleta; no declarar conclusión final hasta estudiar los harness históricos reales.
-
-| Dimensión | Working probe histórico | Web productivo actual | Estado |
+| Dimensión | Artefacto histórico inspeccionado | Web productivo | Lectura actual |
 |---|---|---|---|
-| Evidencia disponible | El repo conserva workflow/harness Task 5.1 y PR #94 afirma que una bound temporary key hizo RPC de aplicación | `webTempAuth.ts` hace bind manual y luego `webTransport.worker.ts` crea otro TelegramClient | PARCIAL |
-| Connection que hace bind | pendiente de confirmar probe exacto | `ManualSessionConnection` auxiliar | CONFIRMADO WEB |
-| Connection que hace primer RPC productivo | pendiente | `TelegramClient` nuevo / NetworkManager nuevo | CONFIRMADO WEB |
-| Estado transferido | pendiente | auth key + primaryDcs + self + tempSessionId | CONFIRMADO WEB |
-| Pending bind ACK | pendiente | puede quedar en `queuedAcks` al destruir conexión inmediatamente | CONFIRMADO WEB |
-| `initConnection` después del bind | pendiente | suprimido artificialmente con `initConnectionCalled=true` | CONFIRMADO WEB |
-| PFS handling nativo mtcute | pendiente | no; `usePfs:false` + import de temp key como primary key | CONFIRMADO WEB |
-
-La comparación completa de Task 5.1 queda como investigación prioritaria de un turno posterior; este turno se concentró en la semántica del 404 y el `Bool true` relacionado.
+| Workflow `probe-task-5.1-productive-temp-auth-compile.yml` | build + typecheck, sin red | RPC real falla con 404 | NO prueba runtime |
+| `regression-web-bound-temp-rpc.mjs` | regex/source assertions | red real | NO prueba runtime |
+| `regression-task-5.1-hardening.mjs` | checks locales/estáticos | red real | NO prueba runtime |
+| Desktop helper | bind real -> otro TelegramClient -> `getMe/getChat`; no transfiere tempSessionId | bind real -> otro TelegramClient; PR95 fuerza tempSessionId | parecido, NO equivalente |
+| Session que hace bind | ManualSessionConnection | ManualSessionConnection | igual en helper/Web |
+| Session primera RPC | TelegramClient nuevo | TelegramClient nuevo | igual conceptualmente |
+| tempSessionId transferido | Desktop helper actual: NO | Web PR95: SÍ | diferencia crítica |
+| initConnection post-bind | Desktop helper no instala seam explícito aquí; comportamiento high-level depende de mtcute | Web lo suprime explícitamente | diferencia crítica |
+| evidencia de éxito server-side conservada | NO localizada este turno | producción = FAIL | hueco histórico |
 
 ### Estado transferible entre conexiones
 
-| Estado | REQUIRED | NOT REQUIRED | UNKNOWN | Evidencia |
-|---|---:|---:|---:|---|
-| authKey bytes | ✅ |  |  | Necesaria para cifrado y es lo que el servidor identifica mediante auth_key_id. |
-| authKeyId como campo separado |  | ✅ |  | Se deriva criptográficamente de authKey; no necesita serialización independiente. |
-| auth key type / temporal semantics en el cliente | ✅ |  |  | El servidor ve la key; el cliente necesita saber que es temporal para expiry/recovery PFS. Web actual la instala como key primaria y entra en recovery genérico. |
-| temporary key expiry | ✅ |  |  | Necesaria para renewal correcto; no demuestra el primer 404. |
-| tempSessionId / sessionId bound | ✅ |  |  | `bind_auth_key_inner` incluye `temp_session_id`; cada PFS main session genera/bindea su temp key. |
-| server salt |  |  | ✅ | Forma parte de cada mensaje MTProto; falta demostrar si debe transferirse o puede reaprenderse de forma segura tras handoff. |
-| seqNo |  |  | ✅ | `resetState` lo reinicia; falta prueba de qué exige el servidor al continuar exactamente el mismo sessionId. |
-| lastMessageId / MessageIdGenerator state |  |  | ✅ | `resetState` lo reinicia; continuidad exacta aún no probada. |
-| time offset |  |  | ✅ | Afecta generación válida de msg_id; no hay evidencia todavía de drift en producción. |
-| pending RPC map |  |  | ✅ | El warning prueba que falta al menos el request del resultado reenviado. Puede evitarse transfiriendo estado o completando/ACKeando antes del handoff. |
-| pending acknowledgements | ✅ |  |  | El bind Bool puede quedar ACK-pending; debe flush/transfer/resolverse antes de abandonar la sesión. |
-| recent outgoing request/message map |  |  | ✅ | Su ausencia convierte el Bool reenviado en “unknown”; efecto funcional adicional todavía no demostrado. |
-| physical WebSocket transport |  | ✅ |  | MTProto permite reconectar una sesión en otra conexión física; no es necesario conservar el socket por sí mismo. |
-| Connection object |  |  | ✅ | La conexión física no es necesaria, pero falta probar si el estado encapsulado que no se exporta sí lo es. |
-| Session object |  |  | ✅ | Hipótesis principal: el estado del Session puede ser la unidad mínima correcta; probe A/B pendiente. |
-| `initConnectionCalled=true` |  | ✅ |  | No debe “transferirse” como sustituto de protocolo: la especificación exige `initConnection` después de bind. |
-| DC / primary DC | ✅ |  |  | La key debe usarse en el DC que la conoce. DC exacto de producción aún pendiente de auditoría. |
-| media DC |  |  | ✅ | Fuera del camino crítico de startup MAIN de este turno. |
-| PFS state / expiry / reauthorization mode | ✅ |  |  | Sin ello mtcute interpreta 404 como key primaria y borra auth en segundo 404 en vez de recovery PFS. |
-| reconnect state |  |  | ✅ | `_triedReconnectingOn404` determina primer vs segundo 404. |
-| resetState coupling | ✅ |  |  | #95 rompe el acoplamiento esperado entre `queuedDestroySession` y el nuevo sessionId. |
-| NetworkManager state |  |  | ✅ | No investigado aún de forma suficiente. |
-| connection pool state |  |  | ✅ | MAIN primero; upload/download fuera del problema principal inmediato. |
+| Estado | Clasificación | Nota |
+|---|---|---|
+| authKey bytes | REQUIRED | identidad criptográfica |
+| authKeyId separado | NOT REQUIRED | derivable de authKey |
+| key temporal/PFS semantics cliente | REQUIRED | expiry/recovery correctos; Web hoy la trata como primary |
+| expiry | REQUIRED | renewal |
+| tempSessionId | REQUIRED según bind contract para continuar esa Session | PR95 lo conserva, insuficiente por sí solo |
+| server salt | UNKNOWN | wrong salt suele tener recovery específico; no probado como 404 root |
+| seqNo | UNKNOWN | reset en same session puede ser semánticamente relevante |
+| message-id/time state | UNKNOWN | falta aislar; errores típicos pueden ser distintos de 404 |
+| pending RPC map | UNKNOWN como transferencia; estado perdido confirmado | bind result reaparece sin mapping probable |
+| pending ACKs | MUST be resolved/flush or coherently carried | bind ACK puede quedar pendiente al destruir A |
+| recent outgoing IDs | UNKNOWN | explica warning classification, no probado root 404 |
+| socket física | NOT REQUIRED | MTProto permite reconexión física |
+| Session object/state | LEADING UNKNOWN | unidad semántica que debe probarse A/B |
+| `initConnectionCalled=true` artificial | NOT protocol-required; protocol divergence | reemplaza indebidamente un `initConnection` real |
+| DC | REQUIRED | debe corresponder a key |
+| PFS/recovery state | REQUIRED para lifecycle correcto | actual generic primary-key recovery es incorrecto para intención |
 
-### Mejor explicación actual del unknown rpc_result
+### Mejor explicación actual del `unknown rpc_result true`
 
-**Confidence: 90%.**
+Un `rpc_result` del bind exitoso fue recibido en Session A, su ACK quedó encolado, A se destruyó, y al continuar key/sessionId en B el servidor reenvió la respuesta. B no tiene el pending/recent-outgoing original y la reporta como unknown. Confidence **90%**. Falta correlación numérica/hash de `req_msg_id`.
 
-El `Bool true` es muy probablemente el `rpc_result` de `auth.bindTempAuthKey` que ya fue recibido en la conexión auxiliar pero quedó sin ACK en el servidor cuando BeatGaler destruyó esa conexión. La respuesta de bind es `Bool`; mtcute programa su ACK hasta 30 s; BeatGaler destruye la conexión inmediatamente; después reutiliza la misma key + sessionId en otro Session vacío. El servidor puede reenviar una respuesta RPC pendiente de ACK en una sesión reanudada. El nuevo Session no posee ni el pending bind ni el outgoing msgId original, así que mtcute registra exactamente `received rpc_result for unknown message <req_msg_id>: true`.
+### Mejor explicación actual del primer 404
 
-No se eleva a 100% hasta correlacionar, sin secretos, el `req_msg_id` observado con el `msgId` creado en `prepareWebTempAuth()`.
+No hay todavía una causa única demostrada. El espacio causal se estrechó a dos variantes que pueden además interactuar:
 
-### Mejor explicación actual del transport 404
+1. **H1 (82%)**: el handoff Session A -> Session B deja una continuación incoherente de la Session bound.
+2. **H2 (72%)**: la primera RPC en B viola el requisito post-bind al suprimir `initConnection`.
 
-El 404 es un MTProto transport error, no HTTP. El source exacto de mtcute confirma que el primer 404 provoca reset/reconnect y el segundo borra la auth key/reautoriza.
+El turno 01:45 elimina como contrapeso fuerte la idea de que los checks Task 5.1 existentes ya hubieran probado server-side esa secuencia. PR #94 conserva una afirmación de live proof, pero el artefacto que la sustenta no fue localizado todavía.
 
-La causa del **primer** 404 todavía no está demostrada. La explicación líder es que el primer tráfico productivo sale desde un Session reconstruido que sólo conserva parte del estado de la sesión bound y, además, se salta el `initConnection` post-bind requerido. Una key/DC totalmente incorrecta queda menos probable, pero no descartada.
+### Relación entre `unknown true` y primer 404
 
-Después del primer 404 existe un segundo defecto demostrable: #95 restaura el sessionId que mtcute acaba de encolar para `destroy_session`, de modo que el recovery puede destruir el mismo ID activo y convertir un fallo recuperable en el segundo 404 + reauth.
+Pueden compartir origen —handoff de Session incompleto— sin que el warning sea necesariamente la causa directa del 404. El warning demuestra continuidad parcial y pérdida de bookkeeping. El 404 demuestra que la siguiente continuidad/autorización no es aceptada. No afirmar causalidad directa hasta capturar orden exacto de mensajes salientes.
 
-### Relación probable entre ambos
+### Próximo experimento de máximo valor
 
-1. Bind manual responde `true` en Session A.
-2. Su ACK puede quedar en cola; Session A se destruye.
-3. Web crea Session B, instala misma auth key + mismo sessionId pero no el bookkeeping de A.
-4. El servidor reenvía el `rpc_result(true)` pendiente del bind a la sesión reanudada.
-5. Session B no conoce `req_msg_id` -> warning `unknown message ...: true`.
-6. Session B comienza/continúa tráfico productivo con estado reconstruido y sin `initConnection` post-bind -> primer 404 por una condición aún por aislar.
-7. mtcute intenta reset/reconnect; seam #95 vuelve a poner el ID que `_resetSession` acaba de marcar para destrucción.
-8. El recovery queda contaminado y aparece segundo 404 -> mtcute borra auth key y entra en reauthorization genérica.
+**Probe A/B de un solo factor, con traza segura:**
 
-Esto explica fuertemente por qué unknown Bool y 404 aparecen juntos y por qué PR #95 no bastó, pero el paso 6 sigue siendo el gap causal principal.
+- generar/bindear una temporary key una vez por caso en mismo DC;
+- registrar sólo auth_key_id hash, sessionId hash, bind req_msg_id hash, queued ACK count, seqNo/lastMessageId y tipo del primer objeto MTProto; nunca key/secret;
+- Caso A: después de `bind=true`, completar/flush ACK y ejecutar primera RPC sobre la misma Session que hizo el bind;
+- Caso B: reproducir handoff actual a TelegramClient nuevo;
+- dentro de cada caso registrar si se envía un `initConnection` real.
 
-### Mejor siguiente experimento
+Lectura:
+- A funciona / B 404 -> H1 aislada.
+- A y B 404 cuando se suprime initConnection, pero funcionan con initConnection real -> H2 aislada.
+- ambos fallan incluso con initConnection real -> volver a key/DC/binding.
 
-Probe diagnóstico A/B, una sola variable:
+Antes del probe A/B, el experimento más barato es localizar/correlacionar la supuesta traza runtime de Task 5.1 y el `req_msg_id` productivo del `Bool true`.
 
-- mismos DC, permanent binding, temporary auth key y TTL;
-- **A:** después de `auth.bindTempAuthKey=true`, ejecutar el primer RPC productivo sobre el mismo `SessionConnection`/Session, asegurando además que el ACK del bind se haya flushado;
-- **B:** después del mismo bind, reproducir el handoff actual hacia un `TelegramClient` nuevo con key + DC + sessionId;
-- registrar únicamente hashes no reversibles de `auth_key_id`, sessionId, req_msg_id, pending count, queued ACK count, seqNo/lastMessageId y si `initConnection` fue enviado;
-- señal discriminante: A success + B 404 aísla reconstrucción; A y B 404 desplaza prioridad a key/DC/binding; B sólo funciona cuando se ejecuta `initConnection` aísla H2.
+### Issues secundarios
 
-Antes de tocar producción, agregar correlación del `prepared.metadata.msgId` con el req_msg_id del warning para confirmar definitivamente la identidad del Bool.
+- P0: recovery PR #95 puede intentar destruir el mismo sessionId restaurado.
+- P1: `initConnection` post-bind está suprimido contra el protocolo.
+- P1: timeout/reload ~35 s puede causar retry storm/zombie worker; pendiente auditoría específica.
+- P2: WASM servido como `application/octet-stream` antes del fallback.
+- P2: health-check SSL/SNI ocasionalmente observa SAN interno `ip-172-26-4-45.ec2.internal`.
+- P2: consola/browser expone términos internos Telegram/MTProto/mtcute.
 
-### Problemas secundarios reales
-
-- **P0:** recovery de #95 puede encolar `destroy_session(oldId)` y después restaurar `oldId` como Session activo. Riesgo de auto-destrucción después del primer 404.
-- **P1:** el flujo suprime `initConnection` después del bind pese al requisito protocolario. Debe resolverse sin exponer credenciales permanentes al browser.
-- **P1:** cada fallo de verify consume ~35 s y luego puede reiniciar reload; riesgo de retry storm/zombie worker pendiente de inspección.
-- **P2:** `.wasm` se sirve con MIME incorrecto; `instantiateStreaming` falla y cae a fallback. Funciona, pero degrada startup y ensucia diagnóstico.
-- **P2:** health-check SSL del deploy puede recibir un certificado SAN incorrecto para `beatgaler.com`; separado del transport 404 y pendiente de diagnóstico nginx.
-- **P2:** terminología interna (`Telegram`, `MTProto`, `mtcute`) aparece en logs técnicos/browser console. Debe revisarse antes de alpha si alcanza superficies user-facing.
-
-### READY_FOR_IMPLEMENTATION
-
-NO
+`READY_FOR_IMPLEMENTATION = NO`
 
 # CRONOLOGÍA DE INVESTIGACIÓN
 
@@ -218,178 +174,130 @@ NO
 
 ### Baseline
 
-canonical branch: `integration-v0.8.0-alpha.1`
-canonical HEAD: `43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`
-PRs nuevos: ninguno posterior a PR #95 relacionado con Task 12.1 detectado en el preflight.
-CI relevante: PR #95 pasó Secret Scan, D6 authorization, Productive Temp Auth Compile, Web Production Build, D7 authorization y Desktop Portability; la producción posterior sigue fallando.
-producción conocida: secuencia `unknown rpc_result true` -> 404 reconnect -> 404 reauthorizing -> verify timeout, ~35–36 s.
+`integration-v0.8.0-alpha.1 @ 43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`, merge PR #95. CI de #95 verde; producción posterior falla.
 
-### Duplicate-check
+### Pregunta principal
 
-El archivo TEMP no existía en el baseline, por lo que no había cronología acumulada que repetir. Se tomó como evidencia previa válida PR #92/#94/#95 y la secuencia runtime posterior a #95. No se repitió la hipótesis “sólo preservar tempSessionId”.
-
-### Pregunta de este turno
-
-**¿Qué significa exactamente el 404 en mtcute 0.31.0 y qué revela el `rpc_result ...: true` inmediatamente anterior sobre la sesión reconstruida?**
-
-### Investigación realizada
-
-- fijación de HEAD canónico y PRs recientes;
-- comprobación de CI del HEAD/PR #95;
-- determinación de versión lock exacta de mtcute;
-- lectura de `SessionConnection`, `MtprotoSession` e `intermediate` del commit upstream exacto v0.31.0;
-- lectura de `webTempAuth.ts`, `webTransportSession.ts`, `webTransport.worker.ts` y patch de PR #94/#95;
-- trazado del bind manual, pending map, ACK queue, destroy de la conexión auxiliar y reconstrucción del cliente;
-- contraste con documentación oficial de transport errors, PFS, `auth.bindTempAuthKey`, service messages e `initConnection`.
-
-### Evidencia nueva
-
-- mtcute upstream exacto: `11b1c8894b653139b180c13620692f298bc147fb`.
-- `packages/core/src/network/transports/intermediate.ts`: 404 es frame MTProto transport de 4 bytes.
-- `packages/core/src/network/session-connection.ts`: primer 404 resetea/reconecta; segundo borra auth key y reautoriza; `_resetSession` encola old sessionId para destroy antes de `resetState(true)`.
-- `src/features/cloud/webTransport.worker.ts`: #95 fuerza de nuevo el old bound sessionId después de cada `resetState`, creando posible `destroy_session` contra el ID activo.
-- `src/features/cloud/webTempAuth.ts`: el RPC manual cercano que devuelve exactamente Bool es `auth.bindTempAuthKey`; usa un msgId explícito y pending `{_: 'bind'}`.
-- mtcute ACK del bind se encola y puede esperar hasta 30 s.
-- `webTransportSession.ts`: `prepared.destroy()` ocurre inmediatamente tras retornar del bind.
-- documentación MTProto: resultados RPC pendientes pueden reenviarse en reconexión; session + key identifica instancia y mantiene estado del servidor.
-- PR #94: para evitar `CONNECTION_API_ID_INVALID`, Web marca `initConnectionCalled=true`; especificación oficial exige `initConnection` después de cada bind.
+¿Qué significa exactamente el 404 en mtcute 0.31.0 y qué estado se pierde al pasar del bind manual al TelegramClient productivo?
 
 ### Resultado
 
-El 404 quedó clasificado y el warning anterior dejó de ser “ruido”: hay una explicación concreta de alta confianza para el Bool true como respuesta de bind reenviada a un Session nuevo que carece del request bookkeeping original. Además se descubrió un defecto independiente y concreto en el recovery de #95 que puede explicar la escalada del primer al segundo 404.
+- 404 confirmado como MTProto transport error.
+- Secuencia de recovery de mtcute coincide exactamente con producción.
+- `unknown ...: true` explicado con 90% de confidence como replay del Bool de `auth.bindTempAuthKey` no ACKeado antes de destruir Session A.
+- PR #95 crea un self-destroy hazard después del primer 404.
+- Se confirmó divergencia: Web suprime el `initConnection` exigido después del bind.
 
-Aún NO se demostró qué campo/acción exacta origina el **primer** 404. Las dos causas líderes son la reconstrucción incompleta del Session y la supresión de `initConnection` post-bind.
+### Hipótesis al cierre
 
-### Impacto sobre hipótesis
+- H1 reconstrucción incompleta: 78%.
+- H2 initConnection suprimido: 60%.
+- H3 DC/key mismatch: 20%.
+- H4 self-destroy: 95% defecto / ~70% segundo 404.
 
-- H1 SUBE: 55% → 78%
-- H2 NUEVA: 60%
-- H3 BAJA: 40% → 20%
-- H4 NUEVA: 95% como defecto / 70% como causa del segundo 404
-- “404 HTTP” DESCARTADA
-- “tempSessionId solamente” DESCARTADA
+### Próxima pregunta
 
-### Qué se puede afirmar ahora
+¿Qué request exacto creó el `req_msg_id` del Bool true y cuál es la primera diferencia real entre el working probe Task 5.1 y Web productivo?
 
-- 404 no es HTTP.
-- La secuencia exacta de logs coincide con el recovery genérico de mtcute 0.31.0.
-- El cliente que ve el `rpc_result true` no tiene el request correspondiente en su pending/recent map.
-- Existe una ruta concreta por la que el Bool del bind queda sin ACK antes de destruir la conexión auxiliar.
-- Reutilizar key + sessionId en un Session nuevo explica por qué ese resultado puede aparecer como unknown.
-- #95 puede restaurar el mismo sessionId que mtcute ya marcó para destrucción después del primer 404.
-- `initConnection` requerido post-bind está siendo suprimido deliberadamente.
+`READY_FOR_IMPLEMENTATION = NO`
 
-### Qué todavía NO se puede afirmar
+## TURNO 2026-09-01 01:45
 
-- Que el `req_msg_id` runtime sea 100% el msgId del bind sin correlación explícita.
-- Que el primer 404 sea causado específicamente por seqNo, salt, msgId state, DC o `initConnection`.
-- Que mantener el mismo objeto Connection sea obligatorio; el protocolo permite nueva conexión física para una misma sesión.
-- Que DC 1 sea incorrecto.
-- Que el fix correcto sea “copiar campo X”.
+### Baseline / duplicate-check
 
-### Próxima pregunta recomendada
+Canonical sigue exactamente en `43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`; no hubo avance de GitHub que invalide el análisis ni fix posterior de Task 12.1.
 
-**¿Qué request exacto creó el `req_msg_id` del Bool true y cuál es el primer mensaje saliente que provoca el primer 404?**
+### Pregunta técnica única
 
-Prioridad práctica: correlacionar `prepared.metadata.msgId` con el warning y luego separar reconstrucción de Session vs `initConnection` con un probe A/B.
+**¿El “historical Task 5.1 live proof” que PR #94 usa para justificar suprimir `initConnection` realmente probó una RPC MTProto server-side equivalente al Web productivo?**
 
-### READY_FOR_IMPLEMENTATION
+### Investigación realizada
 
-NO
+Se inspeccionaron, sin modificar producto:
+
+- `.github/workflows/probe-task-5.1-productive-temp-auth-compile.yml`;
+- `scripts/regression-web-bound-temp-rpc.mjs`;
+- `scripts/regression-task-5.1-hardening.mjs`;
+- `src-tauri/direct-transport/transport-helper.source.mjs`;
+- body de PR #94.
+
+### Evidencia decisiva
+
+1. El workflow con nombre “Productive Temp Auth Compile” sólo hace build Web y typecheck. No abre conexión MTProto ni ejecuta RPC.
+2. `regression-web-bound-temp-rpc.mjs` sólo lee archivos y usa regex/asserts. Incluso exige el seam `session.initConnectionCalled = true`; por construcción no puede detectar que ese seam sea rechazado por servidor.
+3. `regression-task-5.1-hardening.mjs` tampoco hace prueba de red.
+4. El helper Desktop sí tiene un flujo runtime real parecido, pero el source canónico actual no copia `tempSessionId` al cliente importado y no representa exactamente PR #95.
+5. PR #94 afirma que existió un live proof histórico, pero su evidencia runtime no quedó localizada en los artefactos Task 5.1 inspeccionados. Por lo tanto, para el diagnóstico actual esa afirmación debe clasificarse como **NO VERIFICADA**, no como evidencia contra H2.
+
+### Resultado / impacto
+
+- Se elimina una falsa sensación de cobertura: los checks existentes prueban compilación/contrato estático, no aceptación MTProto server-side.
+- H1 sube 78% -> **82%** porque el supuesto precedente equivalente no está demostrado y el handoff sigue siendo la diferencia estructural fuerte.
+- H2 sube 60% -> **72%** porque el principal contraargumento registrado era la supuesta prueba histórica; los artefactos encontrados no la sostienen.
+- H3 baja 20% -> **18%** por comparación relativa, no por nueva prueba directa.
+- H4 sin cambio.
+
+### Qué sí puede afirmarse
+
+Los tests/CI que pasaron alrededor de #94/#95 no podían demostrar que Telegram aceptara la secuencia bound-temp -> suppress initConnection -> RPC. Por eso CI verde y producción 404 no son contradictorios: existe un hueco de test runtime real.
+
+### Qué NO puede afirmarse todavía
+
+- No se puede afirmar que el live proof histórico jamás ocurrió; sólo que no quedó verificado por los artefactos inspeccionados.
+- No se puede elegir todavía H1 o H2 como causa raíz única.
+- No se debe implementar un fix basándose sólo en esta comparación.
+
+### Siguiente pregunta de máximo valor
+
+¿Puede localizarse la traza/probe runtime original de Task 5.1 y, si no, un A/B mínimo demuestra si el primer 404 desaparece al mantener la misma Session o al ejecutar el `initConnection` real post-bind?
+
+`READY_FOR_IMPLEMENTATION = NO`
 
 # RESUMEN PARA LA MAÑANA
 
-## Diagnóstico principal
+### Diagnóstico actual
 
-Web está intentando continuar una temporary bound session en un `TelegramClient`/Session nuevo transfiriendo sólo key + DC + self + sessionId. La evidencia nueva muestra que el Session viejo todavía puede tener estado real pendiente: en particular, el `rpc_result(true)` del bind puede no haber sido ACKeado antes de destruir la conexión y reaparece en el Session reconstruido sin su pending request. El primer 404 sigue sin aislarse totalmente, pero el handoff de Session y la supresión de `initConnection` son ahora las dos causas líderes.
+El problema no es HTTP, WASM ni simplemente “faltaba tempSessionId”. Web completa un bind temporal, pierde/abandona estado de Session al hacer handoff y luego manda tráfico con una Session reconstruida mientras además suprime el `initConnection` requerido. El primer 404 está concentrado entre esas dos divergencias; el recovery de PR #95 añade un segundo defecto después del primer 404.
 
-Además, PR #95 contiene un recovery defectuoso demostrable: después del primer 404, mtcute encola el old sessionId para `destroy_session` y genera uno nuevo; el seam vuelve a imponer oldId, dejando posible `destroy_session(oldId)` contra el propio Session reactivado.
+### Confidence
 
-## Confidence
+- H1 handoff Session incompleto: **82%**.
+- H2 initConnection post-bind suprimido: **72%**.
+- H3 key/DC mismatch: **18%**.
+- H4 recovery self-destroy: **95% defecto / 70% segundo 404**.
+- `unknown true = replay del bind Bool`: **90%**.
 
-78%
+### Evidencia nueva más importante de 01:45
 
-## Evidencia decisiva
+Los artefactos Task 5.1 que parecían un precedente de “RPC productiva” no son una prueba server-side: el workflow es sólo build/typecheck y la regresión Web sólo inspecciona texto. PR #94 afirma que existió otro live proof histórico, pero aún no fue localizado. Esto aumenta materialmente la probabilidad de que el seam que suprime `initConnection` nunca haya sido validado bajo el flujo Web real.
 
-- Exact source mtcute 0.31.0 para 404/reconnect/reset.
-- Bind manual en BeatGaler devuelve Bool y usa pending msgId explícito.
-- ACK del bind puede esperar 30 s.
-- BeatGaler destruye la conexión auxiliar inmediatamente después del bind.
-- El cliente productivo es un Session nuevo con same key/sessionId pero pending/recent maps nuevos.
-- MTProto permite reenviar una respuesta RPC pendiente en una sesión reanudada.
-- PR #94 suprime `initConnection` pese al requisito oficial post-bind.
-- PR #95 restaura un sessionId que mtcute acaba de encolar para destrucción.
+### Cambios de conclusión
 
-## Qué cambió durante la noche
+- No usar “Task 5.1 ya probó que suppress-initConnection funciona” como hecho.
+- Mantenerlo como claim histórico NO VERIFICADO hasta hallar la traza real.
+- H2 sube a 72%; H1 sube a 82%.
 
-Primer turno del TEMP. Se descartó que 404 sea HTTP, se invalidó “tempSessionId solamente”, se encontró una explicación concreta del unknown Bool y se descubrió el conflicto `queuedDestroySession` vs restore de #95.
+### Fix
 
-## Hipótesis descartadas
+Aún NO autorizado ni suficientemente aislado. No se modificó código, no se abrió PR, no hubo merge ni deploy.
 
-- HTTP 404.
-- WASM MIME como root cause del 404.
-- Preservar únicamente tempSessionId como solución suficiente.
-
-## Alternativas todavía posibles
-
-- `initConnection` post-bind suprimido como causa primaria.
-- DC/key mismatch.
-- estado Session específico (seqNo/messageId/salt/ACK/pending) como primera causa.
-- expiración/evicción temprana de temp key, actualmente de menor probabilidad.
-
-## Fix recomendado actualmente
-
-**Ningún fix productivo todavía.**
-
-La dirección arquitectónica más prometedora es evitar el handoff artificial entre Session bound y Session productivo, o demostrar exactamente qué estado debe conservarse antes de decidir. No parchear “otro campo” sin probe discriminante. También deberá eliminarse el recovery de #95 que reutiliza un ID ya marcado para destroy.
-
-## Archivos que probablemente requerirían cambio
+### Archivos probablemente involucrados cuando READY sea YES
 
 - `src/features/cloud/webTempAuth.ts`
 - `src/features/cloud/webTransportSession.ts`
 - `src/features/cloud/webTransport.worker.ts`
-- regresiones/harness Task 5.1 correspondientes
+- pruebas/regresión runtime Web que hoy falta
 
-No cambiar todavía.
+### Regression test que falta
 
-## Regression tests necesarios
+Un test/probe real que haga bind temporal y primera RPC contra MTProto, variando Session handoff e initConnection; los asserts de source actuales no cubren el fallo productivo.
 
-- bind exitoso -> ACK confirmado -> primera RPC productiva;
-- same Session vs reconstructed Session A/B;
-- correlación req_msg_id bind/unknown;
-- primer 404 no puede activar destroy del mismo active sessionId;
-- second 404 recovery correcto para temporary key;
-- `initConnection` post-bind conforme al protocolo sin filtrar secretos al browser;
-- cold/warm reload y retry sin worker zombie.
+### Validación productiva futura
 
-## Experimento productivo de validación
+Después de un fix sustentado: login -> runtime config -> bind -> primera RPC -> library browse, sin `unknown rpc_result`, sin transport 404, sin reconnect/reauthorize loop y sin verify timeout.
 
-Después de resolver en probe local, un único intento productivo con logging seguro debe demostrar:
+### No tocar todavía
 
-- same DC esperado;
-- bind req_msg_id hash conocido;
-- ningún `unknown rpc_result` no explicado;
-- `initConnection`/primera RPC en orden esperado;
-- cero transport 404;
-- `getMe`/verify exitoso;
-- Library termina en ready/empty autoritativo;
-- sin secretos en console.
+No corregir a ciegas WASM MIME, SSL/SNI o copy interno como si fueran root cause del primer 404. No eliminar TEMP hasta cerrar el bloqueo.
 
-## Problemas secundarios
-
-- WASM MIME incorrecto.
-- SSL/SNI health-check de deploy separado.
-- ~35 s por intento + retry/reload potencialmente excesivo.
-- logs internos browser-visible a revisar antes de alpha.
-
-## Qué NO tocar todavía
-
-- Plan Maestro y status oficial de Task 12.1.
-- infraestructura/nginx en este turno.
-- provider/credenciales permanentes.
-- upload/download pools hasta resolver MAIN.
-- parches especulativos de salt/seqNo/timeOffset/DC sin evidencia.
-
-## Estado
-
-CONTINUE_INVESTIGATION
+State: `CONTINUE_INVESTIGATION`
