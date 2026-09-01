@@ -176,9 +176,12 @@ function createHttpContainment(options = {}) {
       if (upload) cleanupUploadedFile(req);
       sendJson(res, 403, "This installation is not authorized for the signed-in account."); return null;
     }
-    req.body = req.body || {}; req.query = req.query || {};
+    // Express 5 exposes req.query through a getter. Do not assign or mutate it.
+    // Canonicalize the installation through req.body, which server-core checks
+    // first for both POST and guarded GET routes, and preserve explicit authz
+    // fields for downstream middleware that should not trust client hints.
+    req.body = req.body || {};
     req.body.beatgalerUserId = installationId;
-    req.query.beatgalerUserId = installationId;
     req.beatgalerAuthorizedUserId = String(auth.user.id);
     req.beatgalerAuthorizedTenantId = tenantId;
     req.beatgalerAuthorizedInstallationId = installationId;
