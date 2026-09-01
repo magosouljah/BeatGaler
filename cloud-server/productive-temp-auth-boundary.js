@@ -326,7 +326,7 @@ function stripPermanentSecrets(session) {
 async function transformSession(session, metadata) {
   if (!session || typeof session !== "object") return session;
   const safe = stripPermanentSecrets(session);
-  if (session.ok === false) return safe;
+  if (session.ok !== true) return safe;
   const state = await authorizePermanent(session);
   const bootstrap = {
     version: 1,
