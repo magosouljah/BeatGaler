@@ -1,0 +1,5 @@
+Contact: mailto:security@beatgaler.com
+Contact: mailto:abuse@beatgaler.com
+Expires: 2027-02-28T23:59:59Z
+Preferred-Languages: en, es
+Canonical: https://beatgaler.com/.well-known/security.txt

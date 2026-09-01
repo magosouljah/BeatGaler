@@ -11,6 +11,7 @@ on:
       - 'vite.config.ts'
       - 'deploy/web/**'
       - 'scripts/deploy-web-production.ps1'
+      - 'scripts/test-public-operations-pages.mjs'
       - '.github/workflows/web-production-build.yml'
   workflow_dispatch:
 
@@ -28,6 +29,8 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Validate public operations source
+        run: node scripts/test-public-operations-pages.mjs
       - name: Build browser Web
         run: npm run build:web
       - name: Validate static package
@@ -35,6 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s dist/index.html
+          node scripts/test-public-operations-pages.mjs --dist
           find dist -maxdepth 2 -type f -print | head -100
           grep -R --include='*.js' -q '/beatgaler-api' dist
       - name: Validate EC2 installer syntax
