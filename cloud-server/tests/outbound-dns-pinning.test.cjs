@@ -79,20 +79,70 @@ test("validated public DNS result is pinned through the outbound connection", as
   }
 });
 
-test("private or reserved validation results are never pinned", async () => {
+test("blocked DNS results fail during validation instead of reaching the transport", async () => {
   const runtime = fakeRuntime();
   runtime.setRows([{ address: "127.0.0.1", family: 4 }]);
   const installation = installOutboundDnsPinning(runtime);
   try {
+    await assert.rejects(
+      runtime.dnsModule.promises.lookup("example.com", { all: true }),
+      error => error?.code === "ESECURITY",
+    );
+    assert.equal(runtime.calls.length, 0);
+  } finally {
+    installation.restore();
+  }
+});
+
+test("concurrent blocked validation cannot erase another request's public pin", async () => {
+  const runtime = fakeRuntime();
+  const installation = installOutboundDnsPinning(runtime);
+  try {
+    runtime.setRows([{ address: "93.184.216.34", family: 4 }]);
     await runtime.dnsModule.promises.lookup("example.com", { all: true });
+
+    runtime.setRows([{ address: "127.0.0.1", family: 4 }]);
+    await assert.rejects(
+      runtime.dnsModule.promises.lookup("example.com", { all: true }),
+      error => error?.code === "ESECURITY",
+    );
+
     runtime.httpModule.get("http://example.com/artwork.png", () => {});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(runtime.calls.length, 1);
+    assert.equal(runtime.calls[0].resolved.address, "93.184.216.34");
+  } finally {
+    installation.restore();
+  }
+});
+
+test("expired validated pin fails closed instead of re-resolving", async () => {
+  const runtime = fakeRuntime();
+  const installation = installOutboundDnsPinning({ ...runtime, ttlMs: 0 });
+  try {
+    await runtime.dnsModule.promises.lookup("example.com", { all: true });
+    const request = runtime.httpModule.get("http://example.com/artwork.png", () => {});
+    const error = await new Promise(resolve => request.on("error", resolve));
+    assert.equal(error.code, "ESECURITY");
+    assert.equal(runtime.calls.length, 0);
+  } finally {
+    installation.restore();
+  }
+});
+
+test("unvalidated unrelated HTTP requests keep the original transport behavior", () => {
+  const runtime = fakeRuntime();
+  const installation = installOutboundDnsPinning(runtime);
+  try {
+    runtime.httpModule.get("http://example.net/api", () => {});
+    assert.equal(runtime.calls.length, 1);
     assert.equal(runtime.calls[0].options.lookup, undefined);
   } finally {
     installation.restore();
   }
 });
 
-test("blocked address classifier covers local, private, mapped, and documentation networks", () => {
+test("blocked address classifier covers local, private, translated, mapped, and documentation networks", () => {
   for (const address of [
     "127.0.0.1",
     "10.0.0.1",
@@ -106,6 +156,8 @@ test("blocked address classifier covers local, private, mapped, and documentatio
     "fc00::1",
     "fe80::1",
     "::ffff:127.0.0.1",
+    "::ffff:7f00:1",
+    "64:ff9b::7f00:1",
   ]) {
     assert.equal(isBlockedAddress(address), true, address);
   }
