@@ -130,7 +130,14 @@ export function checkReleaseManifest() {
   assertContains(releaseWorkflow, 'MAC_PROVENANCE_SHA="$(jq -r', "macOS provenance SHA validation");
   assertContains(releaseWorkflow, 'test "$WIN_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"', "Windows provenance same-SHA gate");
   assertContains(releaseWorkflow, 'test "$MAC_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"', "macOS provenance same-SHA gate");
-  assertContains(releaseWorkflow, '--target "$RELEASE_SOURCE_SHA"', "immutable release target SHA");
+  assertContains(releaseWorkflow, "release-assets/provenance.json", "release-level provenance asset");
+  assertContains(releaseWorkflow, '--arg source_sha "$RELEASE_SOURCE_SHA"', "release-level source SHA provenance");
+  assertContains(releaseWorkflow, '"draft": true', "draft-first immutable release");
+  assertContains(releaseWorkflow, '"make_latest": "false"', "draft latest suppression");
+  assertContains(releaseWorkflow, 'MAKE_LATEST="true"', "stable latest policy");
+  assertContains(releaseWorkflow, 'MAKE_LATEST="false"', "prerelease latest policy");
+  assertNotContains(releaseWorkflow, '--target "$RELEASE_SOURCE_SHA"', "cross-repository source SHA release target");
+  assertNotContains(releaseWorkflow, "--clobber", "immutable release asset overwrite");
   assertContains(releaseWorkflow, "$BEATGALER_PUBLIC_RELEASE_REPO", "canonical public release repository use");
 
   console.log(`PASS release manifest: product=${manifest.productName} bundle=${manifest.bundleIdentifier.value} version=${version} channel=${channel} endpoint=${manifest.updater.endpoint}`);
