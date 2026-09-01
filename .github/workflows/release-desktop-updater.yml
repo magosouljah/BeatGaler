@@ -36,8 +36,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-windows-authenticode:
+    name: Verify Windows OS signing gate
+    runs-on: windows-2025
+    env:
+      WINDOWS_AUTHENTICODE_PROVIDER: ${{ vars.WINDOWS_AUTHENTICODE_PROVIDER || 'PENDING_OWNER_PROVIDER' }}
+      WINDOWS_AUTHENTICODE_EXPECTED_SUBJECT: ${{ vars.WINDOWS_AUTHENTICODE_EXPECTED_SUBJECT }}
+
+    steps:
+      - name: Verify selected Windows run is a successful public build
+        id: selected-run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_RUN_ID: ${{ inputs.windows_run_id }}
+        run: |
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:WINDOWS_RUN_ID"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read selected Windows workflow run." }
+          $run = $json | ConvertFrom-Json
+          if ($run.name -ne "Build - Windows") { throw "Selected Windows run is '$($run.name)', not Build - Windows." }
+          if ($run.conclusion -ne "success") { throw "Selected Windows build conclusion is '$($run.conclusion)', not success." }
+          if ($run.event -ne "workflow_dispatch") { throw "Selected Windows build was not an explicit workflow_dispatch run." }
+          if ($run.display_title -notmatch '\[public\]') { throw "Selected Windows build is not marked as release_intent=public by the source workflow run-name." }
+          if ([string]::IsNullOrWhiteSpace($run.head_sha)) { throw "Selected Windows build has no source SHA." }
+          "source_sha=$($run.head_sha)" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout verifier at exact Windows build source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.selected-run.outputs.source_sha }}
+
+      - name: Download selected Windows build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: BeatGaler-Windows-x64
+          path: release-input/windows
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.windows_run_id }}
+
+      - name: Reject internal, deferred, or unverifiable Windows artifacts
+        shell: pwsh
+        run: |
+          $statusPath = "release-input/windows/WINDOWS-AUTHENTICODE-STATUS.json"
+          if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+            throw "Windows build is missing Authenticode release eligibility evidence."
+          }
+
+          $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+          if ($status.note -eq "INTERNAL_NOT_FOR_PUBLIC_RELEASE") {
+            throw "INTERNAL_NOT_FOR_PUBLIC_RELEASE artifacts cannot enter publication."
+          }
+          if ($status.release_intent -ne "public") {
+            throw "Windows artifact was built for '$($status.release_intent)', not public release."
+          }
+          if ($status.public_release_eligible -ne $true) {
+            throw "Windows artifact is not public_release_eligible."
+          }
+          if ($status.authenticode -ne "valid" -or $status.digest -ne "SHA256" -or $status.timestamp -ne "RFC3161") {
+            throw "Windows build evidence does not claim Authenticode SHA-256 + RFC3161 verification."
+          }
+          if (-not $status.provider -or $status.provider -eq "PENDING_OWNER_PROVIDER") {
+            throw "Windows build provider is still PENDING_OWNER_PROVIDER."
+          }
+          if ($env:WINDOWS_AUTHENTICODE_PROVIDER -eq "PENDING_OWNER_PROVIDER") {
+            throw "Current Windows signing provider is still PENDING_OWNER_PROVIDER."
+          }
+          if ($status.provider -ne $env:WINDOWS_AUTHENTICODE_PROVIDER) {
+            throw "Windows artifact provider '$($status.provider)' differs from current approved provider '$env:WINDOWS_AUTHENTICODE_PROVIDER'."
+          }
+
+          $installers = @(Get-ChildItem release-input/windows -Filter *.exe -Recurse -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer executable; found $($installers.Count)."
+          }
+
+          # Metadata is only a preliminary rejection signal. The real installer is
+          # independently re-verified under Windows trust policy before publication.
+          ./scripts/windows-authenticode.ps1 -Path $installers[0].FullName -RequireExpectedSubject
+
   release-desktop-updater:
     name: Publish verified Desktop release
+    needs: verify-windows-authenticode
     runs-on: ubuntu-24.04
 
     steps:
