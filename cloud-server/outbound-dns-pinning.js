@@ -2,6 +2,7 @@ const dns = require("dns");
 const http = require("http");
 const https = require("https");
 const net = require("net");
+const { EventEmitter } = require("events");
 
 const INSTALLED = Symbol.for("beatgaler.outboundDnsPinning.installed");
 
@@ -48,12 +49,11 @@ function isBlockedAddress(value) {
   if (family !== 6) return true;
 
   if (address === "::" || address === "::1") return true;
+  if (address.startsWith("::ffff:")) return true;
+  if (address.startsWith("64:ff9b:")) return true;
   if (address.startsWith("fc") || address.startsWith("fd")) return true;
   if (/^fe[89ab]/.test(address)) return true;
   if (address.startsWith("2001:db8:")) return true;
-
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(address);
-  if (mapped) return isBlockedIpv4(mapped[1]);
   return false;
 }
 
@@ -70,6 +70,18 @@ function normalizeLookupRows(result) {
     .filter(Boolean);
 }
 
+function blockedRequest(message) {
+  const request = new EventEmitter();
+  request.destroy = () => request;
+  request.setTimeout = () => request;
+  process.nextTick(() => {
+    const error = new Error(message);
+    error.code = "ESECURITY";
+    request.emit("error", error);
+  });
+  return request;
+}
+
 function installOutboundDnsPinning({
   dnsModule = dns,
   httpModule = http,
@@ -78,6 +90,9 @@ function installOutboundDnsPinning({
 } = {}) {
   if (dnsModule[INSTALLED]) return dnsModule[INSTALLED];
 
+  // A FIFO per hostname keeps concurrent validated requests independent. Every
+  // outbound connection consumes exactly one public resolution. Blocked DNS
+  // results throw before server-core can reach http(s).get().
   const pins = new Map();
   const originalPromiseLookup = dnsModule.promises.lookup.bind(dnsModule.promises);
   const originalDnsLookup = dnsModule.lookup.bind(dnsModule);
@@ -89,10 +104,13 @@ function installOutboundDnsPinning({
     const key = normalizeHostname(hostname);
     const rows = normalizeLookupRows(result);
     if (!key || rows.length === 0 || rows.some(row => isBlockedAddress(row.address))) {
-      pins.delete(key);
-      return;
+      const error = new Error("Private, local, translated, or reserved DNS targets are not allowed.");
+      error.code = "ESECURITY";
+      throw error;
     }
-    pins.set(key, { rows, expiresAt: Date.now() + ttlMs });
+    const queue = pins.get(key) || [];
+    queue.push({ rows, expiresAt: Date.now() + ttlMs });
+    pins.set(key, queue);
   }
 
   dnsModule.promises.lookup = async function beatGalerPinnedValidationLookup(hostname, options) {
@@ -103,11 +121,13 @@ function installOutboundDnsPinning({
 
   function consumePin(hostname) {
     const key = normalizeHostname(hostname);
-    const entry = pins.get(key);
-    if (!entry) return null;
-    pins.delete(key);
-    if (entry.expiresAt <= Date.now()) return null;
-    return { key, rows: entry.rows };
+    const queue = pins.get(key);
+    if (!queue || queue.length === 0) return { state: "none", key };
+    const entry = queue.shift();
+    if (queue.length === 0) pins.delete(key);
+    else pins.set(key, queue);
+    if (entry.expiresAt <= Date.now()) return { state: "expired", key };
+    return { state: "pinned", key, rows: entry.rows };
   }
 
   function pinnedLookup(pin) {
@@ -151,8 +171,12 @@ function installOutboundDnsPinning({
       } catch {
         return originalGet(input, options, callback);
       }
+
       const pin = consumePin(parsed.hostname);
-      if (!pin) return originalGet(input, options, callback);
+      if (pin.state === "none") return originalGet(input, options, callback);
+      if (pin.state === "expired") {
+        return blockedRequest("Validated DNS resolution expired before the outbound connection; refusing to re-resolve.");
+      }
 
       let requestOptions = options;
       let requestCallback = callback;
