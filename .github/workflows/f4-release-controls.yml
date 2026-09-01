@@ -5,6 +5,10 @@ on:
     paths:
       - "release/release-controls.json"
       - "scripts/release-controls.mjs"
+      - "scripts/release-governance.mjs"
+      - "scripts/test-release-governance.mjs"
+      - "scripts/release-manifest.mjs"
+      - ".github/workflows/release-desktop-updater.yml"
       - ".github/workflows/f4-release-controls.yml"
   workflow_dispatch:
 
@@ -24,6 +28,10 @@ jobs:
           node-version-file: .node-version
       - name: Validate channels, rings, minimum versions and kill switch
         run: node scripts/release-controls.mjs validate
+      - name: Validate release tag governance and immutable publication ordering
+        run: node scripts/test-release-governance.mjs
+      - name: Validate updater/release manifest contract
+        run: node scripts/release-manifest.mjs check
       - name: Prove current policy blocks publication
         shell: bash
         run: |

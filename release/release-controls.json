@@ -3,7 +3,7 @@
   "defaultChannel": "alpha",
   "channels": {
     "alpha": {
-      "ring": "internal",
+      "ring": "internal-alpha",
       "minimumVersion": "0.8.0-alpha.1",
       "publicationEnabled": false
     },
@@ -12,14 +12,19 @@
       "minimumVersion": "0.8.0-beta.1",
       "publicationEnabled": false
     },
+    "candidate": {
+      "ring": "candidate",
+      "minimumVersion": "0.8.0-rc.1",
+      "publicationEnabled": false
+    },
     "stable": {
-      "ring": "general",
+      "ring": "stable",
       "minimumVersion": "0.8.0",
       "publicationEnabled": false
     }
   },
   "killSwitch": {
     "engaged": true,
-    "reason": "Public updater publication remains disabled until release gates and RO activation are explicit."
+    "reason": "Public updater publication remains disabled until signing, rollback, canary, and owner approval gates are complete."
   }
 }
