@@ -1,4 +1,4 @@
-import { InputMedia, MemoryStorage, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
+import { InputMedia, MemoryStorage, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import {
   WEB_DIRECT_MAX_FILE_BYTES,
@@ -21,23 +21,25 @@ type WorkerScope = {
   postMessage(message: WebTransportWorkerResponse, transfer?: Transferable[]): void;
 };
 
-type BoundTempConnection = { _session?: { initConnectionCalled: boolean } };
+type BoundTempLongJson = { low: number; high: number; unsigned: boolean };
+type BoundTempSession = {
+  initConnectionCalled: boolean;
+  _sessionId?: any;
+  resetState?: (...args: any[]) => void;
+  __beatgalerBoundTempSessionIdSeam?: boolean;
+};
+type BoundTempConnection = {
+  params?: { isMainConnection?: boolean; isMainDcConnection?: boolean; dc?: { id?: number } };
+  _session?: BoundTempSession;
+  reset?: (...args: any[]) => void;
+  __beatgalerBoundTempConnectionSeam?: boolean;
+};
 type BoundTempPool = {
   _connections?: BoundTempConnection[];
   onUsable?: { add(handler: (index: number) => void): void };
 };
-type BoundTempDcManager = {
-  main?: BoundTempPool;
-  upload?: BoundTempPool;
-  download?: BoundTempPool;
-  downloadSmall?: BoundTempPool;
-};
-type BoundTempNetwork = {
-  _dcConnections?: Map<number, BoundTempDcManager>;
-  _getOtherDc?: (...args: any[]) => Promise<BoundTempDcManager>;
-  changePrimaryDc?: (...args: any[]) => Promise<unknown>;
-  __beatgalerBoundTempRpcSeam?: boolean;
-};
+type BoundTempDcManager = { main?: BoundTempPool };
+type BoundTempNetwork = { _dcConnections?: Map<number, BoundTempDcManager> };
 
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
@@ -51,12 +53,55 @@ const boundTempPools = new WeakSet<object>();
 
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
 
-function markBoundTempPool(pool?: BoundTempPool): void {
+function isBoundTempLongJson(value: unknown): value is BoundTempLongJson {
+  const row = value as Partial<BoundTempLongJson> | null;
+  return Boolean(
+    row &&
+    Number.isInteger(row.low) &&
+    Number.isInteger(row.high) &&
+    typeof row.unsigned === "boolean"
+  );
+}
+
+function applyBoundTempSessionId(session: BoundTempSession, sessionId: BoundTempLongJson): void {
+  const LongCtor = session._sessionId?.constructor;
+  if (typeof LongCtor !== "function") {
+    throw new Error("Galer Cloud Web transport could not restore its temporary session.");
+  }
+  session._sessionId = new LongCtor(sessionId.low, sessionId.high, sessionId.unsigned);
+  session.initConnectionCalled = true;
+}
+
+function markBoundTempConnection(connection: BoundTempConnection | undefined, sessionId: BoundTempLongJson): void {
+  const session = connection?._session;
+  if (!connection || !session) return;
+
+  if (!session.__beatgalerBoundTempSessionIdSeam && typeof session.resetState === "function") {
+    const resetState = session.resetState;
+    session.resetState = (...args: any[]) => {
+      resetState.apply(session, args);
+      applyBoundTempSessionId(session, sessionId);
+    };
+    session.__beatgalerBoundTempSessionIdSeam = true;
+  }
+
+  if (!connection.__beatgalerBoundTempConnectionSeam && typeof connection.reset === "function") {
+    const reset = connection.reset;
+    connection.reset = (...args: any[]) => {
+      const result = reset.apply(connection, args);
+      if (args[0] !== true && connection._session) applyBoundTempSessionId(connection._session, sessionId);
+      return result;
+    };
+    connection.__beatgalerBoundTempConnectionSeam = true;
+  }
+
+  applyBoundTempSessionId(session, sessionId);
+}
+
+function markBoundTempPool(pool: BoundTempPool | undefined, sessionId: BoundTempLongJson): void {
   if (!pool) return;
   const mark = () => {
-    for (const connection of pool._connections || []) {
-      if (connection?._session) connection._session.initConnectionCalled = true;
-    }
+    for (const connection of pool._connections || []) markBoundTempConnection(connection, sessionId);
   };
   mark();
   if (!boundTempPools.has(pool as object)) {
@@ -65,48 +110,43 @@ function markBoundTempPool(pool?: BoundTempPool): void {
   }
 }
 
-function markBoundTempDcManager(manager?: BoundTempDcManager): void {
-  if (!manager) return;
-  markBoundTempPool(manager.main);
-  markBoundTempPool(manager.upload);
-  markBoundTempPool(manager.download);
-  markBoundTempPool(manager.downloadSmall);
+function installBoundTempConnectHook(
+  sessionId: BoundTempLongJson,
+  dcId: number,
+): () => void {
+  const prototype = SessionConnection.prototype as any;
+  const originalConnect = prototype.connect;
+  if (typeof originalConnect !== "function") {
+    throw new Error("Galer Cloud Web transport could not prepare its temporary session.");
+  }
+  const wrappedConnect = function (this: BoundTempConnection, ...args: any[]) {
+    if (
+      this?.params?.isMainConnection === true &&
+      this?.params?.isMainDcConnection === true &&
+      Number(this?.params?.dc?.id || 0) === dcId
+    ) {
+      markBoundTempConnection(this, sessionId);
+    }
+    return originalConnect.apply(this, args);
+  };
+  prototype.connect = wrappedConnect;
+  return () => {
+    if (prototype.connect === wrappedConnect) prototype.connect = originalConnect;
+  };
 }
 
-function installBoundTempRpcSeam(next: TelegramClient): void {
+function installBoundTempRpcSeam(
+  next: TelegramClient,
+  sessionId: BoundTempLongJson,
+  dcId: number,
+): void {
   const base = (next as any)._client || next;
   const network = base?.mt?.network as BoundTempNetwork | undefined;
-  if (!network?._dcConnections) {
-    throw new Error("Galer Cloud Web transport could not prepare temporary authorization.");
+  const manager = network?._dcConnections?.get(dcId);
+  if (!manager?.main) {
+    throw new Error("Galer Cloud Web transport could not restore its temporary authorization.");
   }
-
-  const markAll = () => {
-    for (const manager of network._dcConnections?.values() || []) markBoundTempDcManager(manager);
-  };
-
-  if (!network.__beatgalerBoundTempRpcSeam) {
-    const getOtherDc = network._getOtherDc;
-    if (typeof getOtherDc === "function") {
-      network._getOtherDc = async (...args: any[]) => {
-        const manager = await getOtherDc.apply(network, args);
-        markBoundTempDcManager(manager);
-        return manager;
-      };
-    }
-
-    const changePrimaryDc = network.changePrimaryDc;
-    if (typeof changePrimaryDc === "function") {
-      network.changePrimaryDc = async (...args: any[]) => {
-        const result = await changePrimaryDc.apply(network, args);
-        markAll();
-        return result;
-      };
-    }
-
-    network.__beatgalerBoundTempRpcSeam = true;
-  }
-
-  markAll();
+  markBoundTempPool(manager.main, sessionId);
 }
 
 async function closeClient(): Promise<void> {
@@ -124,8 +164,19 @@ async function closeClient(): Promise<void> {
 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
   await closeClient();
-  const { chat_id, expected_bot_id, temp_auth_key, temp_primary_dcs } = command.session;
-  if (!chat_id || !expected_bot_id || !(temp_auth_key instanceof Uint8Array) || temp_auth_key.byteLength !== 256 || !temp_primary_dcs) {
+  const { chat_id, expected_bot_id, temp_auth_key, temp_session_id, temp_primary_dcs } = command.session;
+  const primaryDcId = Number((temp_primary_dcs as any)?.main?.id || 0);
+  if (
+    !chat_id ||
+    !expected_bot_id ||
+    !(temp_auth_key instanceof Uint8Array) ||
+    temp_auth_key.byteLength !== 256 ||
+    !isBoundTempLongJson(temp_session_id) ||
+    !Number.isInteger(primaryDcId) ||
+    primaryDcId < 1 ||
+    primaryDcId > 5 ||
+    !temp_primary_dcs
+  ) {
     throw new Error("Galer Cloud returned incomplete temporary transport authorization.");
   }
 
@@ -150,13 +201,18 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       } as any,
       authKey: temp_auth_key,
     }, true);
-    // Task 5.1 proved that a bound temporary key can issue application RPCs
-    // without exposing the permanent application API credentials. mtcute's
-    // high-level client otherwise wraps the first RPC in initConnection using
-    // apiId=0, which the service rejects. Connect first, then mark every bound
-    // temp session as already initialized before any application RPC is sent.
-    await next.connect();
-    installBoundTempRpcSeam(next);
+    // auth.bindTempAuthKey binds the temporary key to the exact MTProto
+    // session id that created it. Intercept the primary connection before the
+    // socket opens so mtcute cannot replace that id with a fresh random one.
+    // The same seam also suppresses initConnection(apiId=0); permanent API
+    // credentials remain controlled-side and never enter the browser.
+    const restoreConnect = installBoundTempConnectHook(temp_session_id, primaryDcId);
+    try {
+      await next.connect();
+    } finally {
+      restoreConnect();
+    }
+    installBoundTempRpcSeam(next, temp_session_id, primaryDcId);
     const self = await next.getMe();
     if (!self?.isBot || String(self.id) !== String(expected_bot_id)) {
       throw new Error("Temporary authorization resolved to the wrong transport identity.");

@@ -10,9 +10,33 @@ const transport = vi.hoisted(() => {
   let missingPinnedReads = 0;
   let clientOptions: any = null;
   const importSession = vi.fn(async () => undefined);
-  const connect = vi.fn(async () => undefined);
-  const boundSession = { initConnectionCalled: false };
-  const boundConnection = { _session: boundSession };
+  class FakeLong {
+    constructor(public low: number, public high: number, public unsigned = false) {}
+  }
+  const boundSession: any = {
+    initConnectionCalled: false,
+    _sessionId: new FakeLong(1, 2, false),
+    resetState() {
+      this._sessionId = new FakeLong(9, 9, false);
+      this.initConnectionCalled = false;
+    },
+  };
+  class SessionConnection {
+    params = { isMainConnection: true, isMainDcConnection: true, dc: { id: 2 } };
+    _session = boundSession;
+    connect() {
+      connectSnapshot = {
+        low: this._session._sessionId.low,
+        high: this._session._sessionId.high,
+        unsigned: this._session._sessionId.unsigned,
+        initConnectionCalled: this._session.initConnectionCalled,
+      };
+    }
+    reset() { this._session.initConnectionCalled = false; }
+  }
+  const boundConnection = new SessionConnection();
+  let connectSnapshot: any = null;
+  const connect = vi.fn(async () => { boundConnection.connect(); });
   const onUsableAdd = vi.fn();
   const network = {
     _dcConnections: new Map([
@@ -82,6 +106,8 @@ const transport = vi.hoisted(() => {
     resetPinned: () => { pinnedId = 501; missingPinnedReads = 0; },
     delayPinnedReads: (count: number) => { missingPinnedReads = Math.max(0, count); },
     TelegramClient,
+    SessionConnection,
+    getConnectSnapshot: () => connectSnapshot,
     WebCryptoProvider: class {
       constructor(public readonly options: unknown) {}
     },
@@ -91,6 +117,7 @@ const transport = vi.hoisted(() => {
 
 vi.mock("@mtcute/web", () => ({
   TelegramClient: transport.TelegramClient,
+  SessionConnection: transport.SessionConnection,
   WebCryptoProvider: transport.WebCryptoProvider,
   MemoryStorage: class {},
   InputMedia: {
@@ -121,6 +148,7 @@ beforeAll(async () => {
       transport_user_id: "4242",
       expected_bot_id: "4242",
       temp_auth_key: new Uint8Array(256).fill(7),
+      temp_session_id: { low: 123456, high: 789, unsigned: false },
       temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
     },
   });
@@ -154,8 +182,19 @@ describe("Galer Cloud single-file Web Worker", () => {
     expect(transport.getClientOptions()).toMatchObject({ apiId: 0, apiHash: "" });
     expect(transport.importSession).toHaveBeenCalledOnce();
     expect(transport.connect).toHaveBeenCalledOnce();
+    expect(transport.getConnectSnapshot()).toEqual({
+      low: 123456,
+      high: 789,
+      unsigned: false,
+      initConnectionCalled: true,
+    });
     expect(transport.boundSession.initConnectionCalled).toBe(true);
+    expect(transport.boundSession._sessionId).toMatchObject({ low: 123456, high: 789, unsigned: false });
     expect(transport.onUsableAdd).toHaveBeenCalledOnce();
+
+    transport.boundSession.resetState();
+    expect(transport.boundSession._sessionId).toMatchObject({ low: 123456, high: 789, unsigned: false });
+    expect(transport.boundSession.initConnectionCalled).toBe(true);
   });
 
   it("sends the original File once and returns one stored-file manifest", async () => {
