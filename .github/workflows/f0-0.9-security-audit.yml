@@ -15,7 +15,7 @@ jobs:
   security_audit:
     name: Security audit regression gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,14 +43,17 @@ jobs:
       - name: Run security boundary suite
         run: npm run test:security-boundary
 
+      - name: Run TypeScript unit and adversarial fuzz tests
+        run: npm run test:unit:ts
+
       - name: Run cloud security unit contracts
-        run: npm run test:cloud:unit
+        run: npm run test:unit:cloud
 
-      - name: Run containment regression
-        run: node scripts/regression-http-containment.mjs
+      - name: Run Rust unit contracts
+        run: npm run test:unit:rust
 
-      - name: Run web and desktop hardening regression
-        run: node scripts/regression-task-5.1-hardening.mjs
+      - name: Run containment, trust-boundary, path and legacy regressions
+        run: npm run test:regressions
 
       - name: Verify immutable GitHub Action pins
         run: node scripts/check-workflow-action-pins.mjs
