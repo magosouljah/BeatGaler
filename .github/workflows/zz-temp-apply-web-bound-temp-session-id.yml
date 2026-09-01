@@ -27,7 +27,9 @@ jobs:
           cache: npm
 
       - name: Apply exact source patch
-        run: node scripts/zz-apply-web-bound-temp-session-id.mjs
+        run: |
+          node scripts/zz-apply-web-bound-temp-session-id.mjs
+          node scripts/zz-apply-worker-client-session-id.mjs
 
       - name: Install locked graph
         run: npm ci
@@ -47,6 +49,7 @@ jobs:
           HEAD_BRANCH: ${{ github.head_ref }}
         run: |
           rm -f scripts/zz-apply-web-bound-temp-session-id.mjs
+          rm -f scripts/zz-apply-worker-client-session-id.mjs
           rm -f .github/workflows/zz-temp-apply-web-bound-temp-session-id.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
