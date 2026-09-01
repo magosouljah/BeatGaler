@@ -4115,6 +4115,8 @@ function BeatGalerApp() {
   }, [cloudFilesBeat, cloudFilesBusyId, transitionRuntime]);
 
   useEffect(() => {
+    if (!isTauriAvailable) return;
+
     let unlisten: (() => void) | undefined;
     let disposed = false;
 

@@ -12,6 +12,7 @@ on:
       - 'deploy/web/**'
       - 'scripts/deploy-web-production.ps1'
       - 'scripts/test-public-operations-pages.mjs'
+      - 'scripts/regression-web-startup-bridge.mjs'
       - '.github/workflows/web-production-build.yml'
   workflow_dispatch:
 
@@ -31,6 +32,8 @@ jobs:
         run: npm ci
       - name: Validate public operations source
         run: node scripts/test-public-operations-pages.mjs
+      - name: Guard browser startup bridge
+        run: node scripts/regression-web-startup-bridge.mjs
       - name: Build browser Web
         run: npm run build:web
       - name: Validate static package
