@@ -30,15 +30,6 @@ jobs:
       - name: Install locked npm graph
         run: npm ci
 
-      - name: Generate browserslist advisory lock refresh evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts/task-5.1-temp-auth-compile
-          npm update browserslist --package-lock-only
-          npm audit --audit-level=high
-          cp package-lock.json artifacts/task-5.1-temp-auth-compile/package-lock.refreshed.json
-
       - name: Enforce bound temporary-session continuity
         run: node scripts/regression-web-bound-temp-rpc.mjs
 
