@@ -10,6 +10,7 @@ assert.match(worker, /apiHash:\s*""/, 'Web worker must not receive a permanent a
 assert.doesNotMatch(worker, /telegram_api_id|telegram_api_hash/i, 'Permanent application credentials must not enter the Web worker contract.');
 assert.doesNotMatch(protocol, /telegram_api_id|telegram_api_hash|api_hash/i, 'Permanent application credentials must not enter the browser worker protocol.');
 
+// A bound temporary key is valid only with the exact MTProto session id used by its bind operation.
 assert.match(protocol, /temp_session_id/, 'Worker protocol must preserve the bound temporary MTProto session id.');
 assert.match(session, /temp_session_id:\s*prepared\.metadata\.tempSessionId/, 'Session bridge must retain the exact id used by auth.bindTempAuthKey.');
 assert.match(worker, /installBoundTempConnectHook\(temp_session_id, primaryDcId\);[\s\S]*await next\.connect\(\);/, 'Bound session id hook must be installed before opening the socket.');
