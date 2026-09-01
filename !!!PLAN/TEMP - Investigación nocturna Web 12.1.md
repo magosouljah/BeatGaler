@@ -20,8 +20,8 @@ Task 12.1 sigue NO terminada.
 
 - Canonical: `integration-v0.8.0-alpha.1` @ `43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`.
 - Tree canónico: `e8e2e19f430e42852fe963645c882f475e7792a6`.
-- HEAD sigue siendo merge de PR #95 y no cambió en los turnos 00:58, 01:45, 02:42 y 03:45.
-- No se encontró fix posterior de Task 12.1; no hay trabajo duplicado que deba evitarse.
+- HEAD sigue siendo merge de PR #95 y no cambió en los turnos 00:58, 01:45, 02:42, 03:45 y 04:43.
+- Open PR #93 existe contra la rama pero es un harness Windows F4/25.1 no relacionado con Web 12.1; no se encontró fix posterior ni trabajo duplicado relevante.
 - TEMP acumulativo vive en `temp-web-12.1-night-research` porque canonical exige PR y esta investigación prohíbe abrir PR.
 
 ### Hechos confirmados
@@ -32,7 +32,7 @@ Task 12.1 sigue NO terminada.
 - Web importa la temporary key como auth key primaria y no usa el lifecycle PFS nativo de mtcute.
 - `_resetSession()` encola el sessionId viejo para `destroy_session`; PR #95 vuelve a imponer ese mismo ID como activo. Es un defecto concreto posterior al primer 404.
 - `webTempAuth.ts` genera una temp key y hace `auth.bindTempAuthKey` manual usando `tempServerSalt`, `tempSessionId`, `msgId` y `seqNo` de la Session A.
-- `auth.bindTempAuthKey` devuelve Bool. La respuesta puede quedar sin ACK antes de destruir A; Session B no hereda pending/recent state. Mejor explicación de `unknown ...: true`: replay del Bool del bind. Confidence **92%**.
+- `auth.bindTempAuthKey` devuelve Bool. La respuesta puede quedar sin ACK antes de destruir A; Session B no hereda pending/recent state. Mejor explicación de `unknown ...: true`: replay del Bool de bind. Confidence **92%**.
 - El hecho de que Session B pueda descifrar ese `rpc_result true` es evidencia fuerte de continuidad parcial: el auth key ID importado y el sessionId restaurado son compatibles con ese tráfico entrante.
 - Telegram exige `initConnection` después de cada `auth.bindTempAuthKey`.
 - PR #94/PR #95 fuerzan `session.initConnectionCalled = true`, suprimiendo el `initConnection` real para no exponer API credentials y evitar `CONNECTION_API_ID_INVALID` con `apiId:0`.
@@ -43,35 +43,39 @@ Task 12.1 sigue NO terminada.
 - El PFS nativo de mtcute después de bind exitoso conserva la Session, mueve la temporary key secundaria a `_authKeyTemp`, copia `tempServerSalt` y pone `initConnectionCalled=false`. BeatGaler no ejecuta esa transición nativa; exporta key y reconstruye otra Session.
 - El bind manual de Session A usa `getSeqNo()` para una RPC content-related y avanza el contador. Session B es un `MtprotoSession` nuevo con `_seqNo=0`; PR #95 restaura el mismo `sessionId` pero no `_seqNo`. Por tanto la primera RPC content-related en B reutiliza un seqNo ya consumido dentro de ese sessionId.
 - Telegram documenta `bad_msg_notification` code 32 para seqNo demasiado bajo cuando el paquete se decodifica correctamente. Time/msg_id incorrecto tiene codes 16/17 y server salt incorrecto code 48. Por ello seqNo/salt/time son defectos reales de continuidad, pero no encajan por sí solos como explicación directa de un **transport 404** si el servidor logra decodificar el mensaje.
-- **NUEVO TURNO 03:45:** `SessionConnection.destroy()` de mtcute no ejecuta `destroyAuthKey()`. Hace `super.destroy()` y después `reset(true)` local. `destroyAuthKey()` es una operación separada que activa `_needDestroyAuthKey` y fuerza un flush explícito. Por tanto `prepared.destroy()` no contiene una ruta normal que invalide server-side la temporary auth key.
-- **NUEVO TURNO 03:45:** en `MtprotoSession.encryptMessage()`, mtcute usa `_authKeyTemp` sólo si está ready; de lo contrario usa `_authKey`. En Session B `_authKeyTemp` está vacío y la key exportada se importó como `_authKey`, así que el primer paquete productivo se cifra con **exactamente la key importada**, no con otra ranura accidental.
-- **NUEVO TURNO 03:45:** el PFS nativo mantiene la permanent key y la temp key en ranuras distintas porque necesita lifecycle/recovery, pero la posición de la key en la estructura cliente no cambia su auth_key_id criptográfico. Importar la temp key como primary es incorrecto para lifecycle, pero no demuestra por sí mismo que el primer paquete use una key distinta.
-- **NUEVO TURNO 03:45:** el conjunto de divergencias con errores tipados queda más acotado: seqNo bajo -> bad_msg 32; msg_id/time -> bad_msg 16/17; salt -> bad_server_salt 48; falta de initConnection tiene recovery explícito `CONNECTION_NOT_INITED` en mtcute. Ninguna de esas rutas, aislada y correctamente decodificada, es la firma natural de un transport 404.
+- **TURNO 03:45:** `SessionConnection.destroy()` de mtcute no ejecuta `destroyAuthKey()`. Hace `super.destroy()` y después `reset(true)` local. `destroyAuthKey()` es una operación separada que activa `_needDestroyAuthKey` y fuerza un flush explícito. Por tanto `prepared.destroy()` no contiene una ruta normal que invalide server-side la temporary auth key.
+- **TURNO 03:45:** en `MtprotoSession.encryptMessage()`, mtcute usa `_authKeyTemp` sólo si está ready; de lo contrario usa `_authKey`. En Session B `_authKeyTemp` está vacío y la key exportada se importó como `_authKey`, así que el primer paquete productivo se cifra con **exactamente la key importada**, no con otra ranura accidental.
+- **TURNO 03:45:** el PFS nativo mantiene la permanent key y la temp key en ranuras distintas porque necesita lifecycle/recovery, pero la posición de la key en la estructura cliente no cambia su auth_key_id criptográfico. Importar la temp key como primary es incorrecto para lifecycle, pero no demuestra por sí mismo que el primer paquete use una key distinta.
+- **TURNO 03:45:** el conjunto de divergencias con errores tipados queda más acotado: seqNo bajo -> bad_msg 32; msg_id/time -> bad_msg 16/17; salt -> bad_server_salt 48; falta de initConnection tiene recovery explícito `CONNECTION_NOT_INITED` en mtcute. Ninguna de esas rutas, aislada y correctamente decodificada, es la firma natural de un transport 404.
+- **NUEVO TURNO 04:43:** Telegram documenta que `(auth_key_id, session_id)` identifica una Session con espacio propio de message IDs, seqNo, salt y acknowledgements. Con PFS, para abrir una Session concurrente nueva no basta cambiar `session_id`: el cliente debe generar y bindear una **temporary auth key nueva**; cada Session PFS usa su propia temp key.
+- **NUEVO TURNO 04:43:** `auth.bindTempAuthKey` define `temp_session_id` como el Session ID usado para invocar el bind. Esto confirma que la temp key generada por BeatGaler no es un credential genérico reutilizable libremente entre Sessions; la bind está ligada a la Session que la invoca.
+- **NUEVO TURNO 04:43:** el upstream mtcute 0.31.0 confirma la misma semántica: genera temp key, envía bind con `tempSessionId: this._session._sessionId`, espera Bool, y después **no crea ni resetea Session**. En la misma `MtprotoSession`, promueve la key temporal, instala `tempServerSalt`, conserva counters/bookkeeping existentes y únicamente fuerza `initConnectionCalled=false`.
+- **NUEVO TURNO 04:43:** por tanto PR #95 acertó en que no podía inventar un sessionId nuevo para reutilizar esa temp key, pero su solución es incompleta: restaurar el ID viejo sobre un `MtprotoSession` recién creado fabrica una “continuación” cuyo identificador dice Session A mientras sus counters/ACK/salt/bookkeeping dicen Session nueva.
 - WASM MIME sigue SECONDARY: fallback alcanza MAIN y procesa MTProto antes del 404.
 
 ### Hipótesis activas
 
 #### H1 — handoff/reconstrucción incoherente de la Session bound
 
-- confidence: **96% como defecto estructural**; **80% como causa o prerrequisito directo del primer 404**.
-- descripción: bind ocurre en Session A y la primera RPC en Session B. PR #95 conserva sessionId pero no conserva estado monotónico/bookkeeping de esa misma Session.
-- evidencia: A consume seqNo/messageId durante bind; B reinicia `_seqNo`, `_lastMessageId`, pending/recent/ACK state y salta el post-bind initConnection.
-- matiz nuevo: los campos secuenciales aislados tienen errores MTProto específicos; el 404 probablemente ocurre en un nivel anterior o combinado de aceptación de la sesión/key/envelope, no simplemente por `_seqNo=0`.
-- discriminante: mantener la misma `MtprotoSession` A para primera RPC y comparar contra B.
+- confidence: **99% como defecto estructural**; **87% como causa o prerrequisito directo del primer 404**.
+- descripción: bind ocurre en Session A y la primera RPC en Session B. La temp key PFS es session-scoped: no puede tratarse como una auth key genérica para una Session nueva. PR #95 mantiene el `sessionId` correcto pero lo monta sobre estado nuevo, creando una continuación internamente contradictoria.
+- evidencia: Telegram define estado por `(auth_key_id, session_id)` y exige nueva temp key para nueva Session PFS; upstream mantiene la misma `MtprotoSession` tras bind; BeatGaler reinicia `_seqNo`, `_lastMessageId`, pending/recent/ACK/salt/lifecycle y sólo restaura `_sessionId`.
+- matiz: todavía no está demostrado cuál de esos componentes produce exactamente el primer transport 404; algunos campos aislados tendrían errores MTProto más específicos.
+- discriminante: primera RPC ejecutada en la misma `MtprotoSession` A vs handoff B.
 
 #### H2 — `initConnection` post-bind suprimido
 
-- confidence: **100% como divergencia de protocolo**; **58% como causa directa del primer 404**.
+- confidence: **100% como divergencia de protocolo**; **55% como causa directa del primer 404**.
 - a favor: requisito oficial y upstream pone `initConnectionCalled=false` tras bind PFS.
-- en contra como 404 exacto: mtcute maneja explícitamente `CONNECTION_NOT_INITED` como RPC error/retry, por lo que una omisión aislada y decodificable tiene una firma más específica que transport 404.
+- en contra como 404 exacto: mtcute maneja explícitamente `CONNECTION_NOT_INITED` como RPC error/retry, por lo que una omisión aislada y decodificable tiene firma más específica que transport 404.
 - discriminante: misma Session/estado, comparar initConnection real vs seam artificial.
 
 #### H3 — DC/key mismatch, key destruida o temporary key desaparecida
 
-- confidence: **4% para mismatch/destrucción cliente; 10% agregado incluyendo desaparición server-side**.
+- confidence: **3% para mismatch/destrucción cliente; 8% agregado incluyendo desaparición server-side**.
 - contra mismatch/destrucción cliente: mismo DC en generación/bind/export; B descifra replay Bool; `destroy()` no llama `destroyAuthKey()`; outbound B usa la key importada en `_authKey`.
-- todavía posible: Telegram puede olvidar temp keys o rechazar el envelope/sesión aunque auth_key_id sea correcto.
-- discriminante: correlacionar hash de auth_key_id/DC del bind y del primer paquete saliente y timestamp exacto del primer 404.
+- todavía posible: Telegram puede olvidar temp keys antes de expiry, pero la reproducibilidad inmediata y la continuidad parcial lo hacen menos probable.
+- discriminante: correlacionar auth_key_id/DC y timestamp exacto del primer 404.
 
 #### H4 — recovery de PR #95 auto-destruye el sessionId restaurado
 
@@ -87,38 +91,43 @@ Task 12.1 sigue NO terminada.
 - `regression-web-bound-temp-rpc.mjs demuestra aceptación server-side` — DESCARTADA.
 - `Task 5.1 ya demuestra que suppress-initConnection funciona server-side` — NO VERIFICADA.
 - `salt/time/seqNo son intercambiables como causas genéricas de 404` — INVALIDADA; tienen respuestas MTProto específicas si el paquete se decodifica.
-- **`prepared.destroy()` destruye server-side la temporary auth key** — DESCARTADA para la ruta normal de mtcute 0.31.0; `destroyAuthKey()` es explícito y separado.
-- **Session B puede estar cifrando accidentalmente con otra key local** — MUY IMPROBABLE; `encryptMessage()` elige `_authKey` porque `_authKeyTemp` no está ready y `_authKey` contiene la key exportada.
+- `prepared.destroy()` destruye server-side la temporary auth key — DESCARTADA para la ruta normal de mtcute 0.31.0.
+- `Session B puede estar cifrando accidentalmente con otra key local` — MUY IMPROBABLE.
+- **NUEVO:** `una temporary auth key bound puede reutilizarse como auth key genérica en cualquier Session nueva del mismo DC` — INVALIDADA por documentación PFS: cada Session PFS tiene su propia temporary auth key.
+- **NUEVO:** `si se conserva el mismo sessionId, una MtprotoSession recién creada equivale protocolariamente a continuar la Session anterior` — INVALIDADA; el estado server-side de esa pareja incluye msg IDs, seqNo, salts y ACK state.
 
 ### Primera secuencia productiva identificada
 
 1. Session A abre socket y genera temp key.
 2. A manda `auth.bindTempAuthKey` bajo `tempSessionId`; consume estado content-related.
 3. A recibe `Bool true`; ACK puede quedar pendiente.
-4. `prepared.destroy()` cierra/destruye el objeto conexión y resetea estado local; no llama `destroyAuthKey()`.
-5. Session B se crea desde cero e importa la misma temp key como `_authKey`.
-6. PR #95 restaura sólo el `sessionId`.
-7. B puede recibir replay del `Bool true`, pero no reconoce su `req_msg_id`.
-8. B mantiene `_seqNo=0` y `initConnectionCalled=true` artificial.
-9. Primera RPC productiva: `users.getUsers(inputUserSelf)`; `encryptMessage()` usa la key importada en `_authKey`.
-10. Producción reporta después transport 404.
+4. Upstream correcto seguiría usando esa misma `MtprotoSession` A, promovería la temp key, instalaría temp salt y forzaría initConnection real.
+5. BeatGaler, en cambio, destruye A localmente y crea Session B desde cero.
+6. B importa la misma temp key como `_authKey`.
+7. PR #95 restaura el `sessionId` de A sobre B, pero no el resto de estado de A.
+8. B puede recibir replay del `Bool true`, pero no reconoce su `req_msg_id`.
+9. B mantiene `_seqNo=0`, `_lastMessageId` nuevo, ACK/pending/recent state vacío, salt/lifecycle reconstruido y `initConnectionCalled=true` artificial.
+10. Primera RPC productiva: `users.getUsers(inputUserSelf)`.
+11. Producción reporta después transport 404.
 
 ### Estado transferible entre conexiones — clasificación actualizada
 
 | Estado | Clasificación | Nota |
 |---|---|---|
 | authKey bytes | REQUIRED | presente y usada por B |
-| authKey slot `_authKey` vs `_authKeyTemp` | lifecycle REQUIRED; no cambia por sí sola key bytes/id | diseño actual rompe PFS recovery |
-| tempSessionId | REQUIRED | presente por PR95 |
-| `_seqNo` | REQUIRED si se conserva mismo sessionId | B lo reinicia |
-| `_lastMessageId` / monotonic msg state | REQUIRED o debe iniciarse Session nueva coherente | B lo reinicia |
+| authKey slot `_authKey` vs `_authKeyTemp` | lifecycle REQUIRED | diseño actual rompe PFS recovery |
+| tempSessionId | REQUIRED para continuar esa temp key/session | presente por PR95 |
+| `_seqNo` | REQUIRED al conservar mismo sessionId | B lo reinicia |
+| `_lastMessageId` / monotonic msg state | REQUIRED al continuar misma Session | B lo reinicia |
 | pending bind request / recent outgoing | debe resolverse o continuarse coherentemente | perdido; explica unknown Bool |
 | pending ACK del bind | debe flush/resolverse o continuarse | puede perderse |
-| temp server salt | REQUIRED para transición limpia; bad_server_salt permite recuperación | no transferido explícitamente |
-| time offset | relevante; tiene recovery propio | no transferido explícitamente |
+| temp server salt | REQUIRED para transición limpia | upstream lo instala en misma Session; BeatGaler no lo transfiere explícitamente |
+| time offset | relevante | no transferido explícitamente |
 | key temporal/PFS semantics | REQUIRED para expiry/recovery | hoy temp key se trata como primary |
 | `initConnectionCalled` | debe quedar false post-bind hasta initConnection real | hoy se fuerza true |
-| socket física | NOT REQUIRED | puede reemplazarse |
+| socket física | NOT REQUIRED | puede reemplazarse sin crear nueva Session lógica |
+| `MtprotoSession` lógica | **DE FACTO REQUIRED para este bind**, salvo serialización completa del estado | upstream la conserva; BeatGaler la reemplaza |
+| nueva Session con misma temp key | **NOT VALID PFS MODEL** | Telegram exige nueva temp key por nueva Session |
 | server-side key destruction al cerrar A | NOT EXPECTED | `destroy()` no llama `destroyAuthKey()` |
 
 ### Mejor explicación actual del `unknown rpc_result true`
@@ -127,37 +136,41 @@ Replay del `rpc_result` del `auth.bindTempAuthKey` exitoso cuyo ACK/pending book
 
 ### Mejor explicación actual del primer 404
 
-El primer 404 ya no se explica bien como “B eligió una key equivocada” ni como “cerrar A destruyó la key”. La evidencia apunta a que B usa la key correcta pero presenta al servidor una continuación de Session protocolariamente incoherente y sin la transición PFS/post-bind esperada.
+La evidencia ya permite afirmar con alta confianza que el modelo de handoff actual es protocolariamente incorrecto: BeatGaler conserva el identificador de la Session PFS bound, pero reemplaza el objeto Session y reinicia casi todo el estado que el servidor asocia a esa pareja `(auth_key_id, session_id)`.
 
-Lo más importante del turno 03:45 es separar dos capas:
+Esto estrecha el 404 a una contradicción concreta: **B se presenta como continuación de A porque usa la misma temp key + mismo sessionId, pero genera el siguiente envelope como una Session recién nacida.** Telegram no contempla reutilizar esa temp key creando una Session PFS distinta; si se quiere una Session nueva debe tener una temp key nueva y su propio bind.
 
-1. **Errores internos de Session decodificable** (`seqNo`, `msg_id`, salt, `initConnection`) tienen respuestas MTProto/RPC específicas.
-2. **Transport 404** indica que el servidor no está aceptando el paquete en un nivel más temprano o más fundamental (key recognition / envelope / estado de temporary key / combinación de campos de la Session), aunque mtcute documenta que también puede aparecer por campos MTProto incorrectos.
+Aun así, no debe implementarse todavía porque falta decidir con una prueba runtime si la reparación correcta es:
 
-Por tanto H1 sigue siendo la explicación estructural dominante, pero todavía falta una traza runtime que diga cuál es el **primer paquete saliente** asociado al 404 y si el servidor lo reconoce bajo el mismo auth_key_id.
+1. mantener la misma `MtprotoSession`/Connection lógica después del bind y convertirla en productiva; o
+2. serializar/restaurar de forma completa el estado de A antes del primer RPC.
+
+La opción 1 coincide con el lifecycle upstream y actualmente es la candidata arquitectónica más fuerte, pero todavía no se ha probado live en el flujo Web real.
 
 ### Próximo experimento de máximo valor
 
-**Capturar una traza segura y mínima del primer paquete post-bind, sin cambiar comportamiento.**
+**A/B de continuidad lógica, una sola variable:**
 
-Para A y B registrar únicamente metadatos no secretos:
+- A: bind manual y primera `users.getUsers(inputUserSelf)` en la **misma `MtprotoSession`** que hizo el bind, tras promover temp key/salt y ejecutar el post-bind initConnection apropiado.
+- B: flujo actual, creando nueva `MtprotoSession` y restaurando sólo datos exportados.
 
-- hash corto de auth_key_id;
-- hash corto de sessionId;
-- DC id;
+Registrar sólo metadatos no secretos:
+
+- auth_key_id hash;
+- sessionId hash;
+- DC;
 - bind req_msg_id;
-- `_seqNo` y `_lastMessageId` antes/después del bind y antes de primera RPC;
-- queued ACK count;
-- nombre TL del primer objeto/inner message que sale después de recibir el Bool (`msgs_ack`, `users.getUsers`, container, etc.);
-- si `initConnection` está realmente presente;
-- primer error/respuesta exacto y timestamp relativo.
+- seqNo/lastMessageId;
+- queued ACKs;
+- primer TL outbound;
+- presencia de initConnection;
+- respuesta/error exacto.
 
 Discriminantes:
 
-- mismo auth_key_id + misma Session A funciona / B 404 -> H1 queda aislada.
-- mismo auth_key_id + B con continuidad seqNo/salt pero sin initConnection devuelve `CONNECTION_NOT_INITED` -> H2 no era 404 directo.
-- B 404 antes de cualquier RPC productiva y al enviar sólo ACK/control -> investigar envelope/session continuity antes de API wrapper.
-- auth_key_id cambia entre bind y primer paquete -> revisar importación; hoy el source hace esto improbable.
+- A funciona y B 404 -> H1 queda causalmente aislada y `READY_FOR_IMPLEMENTATION` puede pasar a YES para eliminar el handoff incompleto.
+- A también 404 -> revisar bind/key/DC/initConnection antes de tocar arquitectura.
+- A funciona sólo con initConnection real -> H1 + H2 deben corregirse juntas.
 
 No registrar auth keys, nonces permanentes ni credenciales.
 
@@ -303,33 +316,96 @@ Se inspeccionó source exacto mtcute v0.31.0:
 
 `READY_FOR_IMPLEMENTATION = NO`
 
+## TURNO 2026-09-01 04:43
+
+### Baseline / duplicate-check
+
+Canonical sigue exactamente `43fdf70efe6d12f47f0cd08f6eaaf6440e32f1d3`, tree `e8e2e19f430e42852fe963645c882f475e7792a6`. El único PR abierto detectado contra la rama es #93 y corresponde a un harness Windows F4/25.1, no a Task 12.1. Sin fix duplicado.
+
+### Pregunta técnica única
+
+**¿La temporary auth key bound puede continuar en una `MtprotoSession` nueva, o el protocolo exige conservar la misma Session lógica que ejecutó `auth.bindTempAuthKey`?**
+
+### Investigación realizada
+
+Se contrastó documentación oficial de Telegram PFS / data centers / bind con el source exacto mtcute v0.31.0 de `_authorizePfs()` y `MtprotoSession`.
+
+### Evidencia decisiva
+
+1. Telegram define cada Session por la pareja `(auth_key_id, session_id)` y le asigna su propio espacio de message IDs, seqNo, salts y acknowledgements.
+2. Sin PFS se puede abrir otra Session reutilizando auth key con otro sessionId; **con PFS no**: para una nueva Session concurrente se debe generar una nueva temporary auth key.
+3. La documentación PFS dice explícitamente que cada Session genera y bindea su propia temp key.
+4. `bind_auth_key_inner.temp_session_id` es el Session ID usado para invocar `auth.bindTempAuthKey`.
+5. Upstream mtcute implementa exactamente esa semántica: bind en `this._session._sessionId`, y tras Bool exitoso conserva la misma `MtprotoSession`; promueve temp key, instala temp salt y fuerza `initConnectionCalled=false`. No resetea `_seqNo`, `_lastMessageId`, ACKs ni pending/recent state.
+6. BeatGaler hace lo contrario: destruye A, crea B desde cero y restaura sólo el ID de A. Por eso B dice ser la Session bound aunque su estado interno sea de Session nueva.
+
+### Resultado
+
+H1 deja de ser una hipótesis genérica de “quizá falta estado” y pasa a una incompatibilidad concreta con el modelo PFS: **la temp key es session-scoped y el handoff actual no conserva la Session lógica que la bindió**.
+
+PR #95 corrigió sólo la identidad externa de la Session, pero no su continuidad protocolaria.
+
+### Impacto en hipótesis
+
+- H1: **99% defecto estructural / 87% causa-prerrequisito primer 404**.
+- H2: 100% divergencia / **55% causa directa**.
+- H3: **3% mismatch/destrucción cliente; 8% incluyendo desaparición server-side**.
+- H4: sin cambio.
+
+### Conclusiones invalidadas este turno
+
+- “La temp key se puede reutilizar como key genérica en una Session nueva si el DC es el mismo” — INVALIDADA.
+- “Restaurar el mismo sessionId sobre una MtprotoSession nueva equivale a reanudar la Session bound” — INVALIDADA.
+- “PR95 resolvió la parte de Session y queda sólo un campo auxiliar” — INVALIDADA; resolvió sólo el identificador.
+
+### Qué NO puede afirmarse todavía
+
+Todavía no está causalmente probado qué campo del envelope provoca el **primer** 404 concreto ni si una corrección que mantenga A también necesita resolver simultáneamente el initConnection post-bind con credenciales válidas.
+
+### Próximo experimento
+
+A/B runtime mínimo: misma Session A para bind + primera RPC vs reconstrucción B actual, manteniendo todo lo demás igual. Si A funciona y B falla, H1 queda causalmente aislada y puede declararse READY_FOR_IMPLEMENTATION.
+
+`READY_FOR_IMPLEMENTATION = NO`
+
 # RESUMEN PARA LA MAÑANA
 
 ### Diagnóstico actual
 
-PR #95 corrigió una sola pieza —la identidad `sessionId`— pero el flujo sigue rompiendo la continuidad real de la Session: el bind ocurre en A; luego B reconstruye key+sessionId sin seqNo/message bookkeeping/salt/PFS lifecycle y además suprime el initConnection post-bind.
+La evidencia ahora es más específica: el problema no es simplemente que PR #95 “olvidó unos campos”. El modelo actual viola la continuidad PFS de la Session.
 
-El turno 03:45 elimina dos explicaciones fáciles que podían distraer: `prepared.destroy()` no borra la auth key server-side y Session B no parece cifrar con una key local distinta. El 404 se concentra ahora en la **aceptación del envelope/session/temp-key como conjunto**, no en un simple bug de selección o destrucción de key.
+Telegram trata `(auth_key_id, session_id)` como una Session con estado propio. Bajo PFS, una Session nueva necesita su propia temporary auth key y su propio bind. La temp key que BeatGaler genera y bindea pertenece a la Session A que hizo `auth.bindTempAuthKey`.
+
+Upstream mtcute conserva esa misma `MtprotoSession` después del bind. BeatGaler destruye A, crea B y luego restaura sólo el sessionId de A. B se presenta como la Session bound pero con seqNo/msgId/ACK/salt/bookkeeping reiniciados. Esa contradicción es ahora la explicación estructural dominante del fallo.
 
 ### Confidence
 
-- H1 handoff incoherente: **96% defecto estructural / 80% causa-prerrequisito primer 404**.
-- H2 initConnection suprimido: **100% divergencia / 58% causa directa**.
-- H3 mismatch/destrucción cliente: **4%**; incluyendo desaparición server-side: ~10%.
+- H1 handoff incoherente / temp key session-scoped: **99% defecto estructural / 87% causa-prerrequisito primer 404**.
+- H2 initConnection suprimido: **100% divergencia / 55% causa directa**.
+- H3 mismatch/destrucción cliente: **3%**; incluyendo desaparición server-side: ~8%.
 - H4 recovery self-destroy: **95% defecto / ~70% segundo 404**.
 - unknown Bool = replay bind: **92%**.
 
-### Evidencia nueva más importante de 03:45
+### Evidencia nueva más importante de 04:43
 
-`SessionConnection.destroy()` no llama `destroyAuthKey()`, y `MtprotoSession.encryptMessage()` en B usa la key importada en `_authKey`. Esto descarta que el cierre normal de A destruya la key y hace muy improbable que B esté enviando con una key diferente.
+Telegram documenta explícitamente que, con PFS, cada Session usa su propia temporary auth key. El upstream mtcute confirma la implementación esperada: después del bind mantiene la misma `MtprotoSession`; no recrea Session ni restaura sólo el ID.
+
+Esto invalida la idea de que PR #95 haya reconstruido una Session válida sólo por conservar `tempSessionId`.
 
 ### Fix
 
-Aún NO autorizado ni suficientemente aislado. No se modificó producto, no se abrió PR, no hubo merge ni deploy.
+Aún NO autorizado: todavía falta un A/B runtime real que confirme que mantener la misma Session A elimina el primer 404 y determine si `initConnection` debe corregirse en el mismo cambio.
+
+No se modificó producto, no se abrió PR, no hubo merge ni deploy.
 
 ### Próximo paso decisivo
 
-Observar, sin cambiar comportamiento, el primer paquete post-bind que precede al 404 y correlacionar de forma segura auth_key_id/sessionId/DC/seqNo/tipo TL. Eso separará definitivamente “handoff Session incoherente” de “temporary key no aceptada por servidor” y permitirá decidir si la corrección debe mantener la misma Session A o reconstruir una Session B completa.
+Ejecutar un probe runtime de una sola variable:
+
+- flujo A: bind y primera RPC en la misma `MtprotoSession`;
+- flujo B: handoff actual a Session nueva restaurando IDs.
+
+Si A funciona y B falla, el fix queda suficientemente aislado para implementación.
 
 ### Archivos probablemente involucrados cuando READY sea YES
 
@@ -340,7 +416,7 @@ Observar, sin cambiar comportamiento, el primer paquete post-bind que precede al
 
 ### Validación futura mínima
 
-bind -> primera RPC real -> `getMe` correcto -> `getChat`/library browse, sin unknown bind replay, sin bad_msg, sin transport 404 y sin reconnect/reauthorize loop.
+bind -> misma Session lógica -> initConnection post-bind válido -> `getMe` correcto -> `getChat`/library browse, sin unknown bind replay, sin bad_msg, sin transport 404 y sin reconnect/reauthorize loop.
 
 ### No tocar todavía
 
