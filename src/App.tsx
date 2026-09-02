@@ -5316,7 +5316,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     beat={beat}
                     visible={revealedBeatIds.has(beat.id)}
                     interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}
-                    playbackInteractive={connectionState === "online" || Boolean(beat.offline_available)}
+                    playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}
                     openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}
                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}

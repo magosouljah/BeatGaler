@@ -167,6 +167,37 @@ function topicKey(userId, beatId) {
   return `${String(userId)}:${String(beatId)}`;
 }
 
+function storedBeatTopicCandidates(chatId, userId, beatId) {
+  const exactKey = topicKey(userId, beatId);
+  const suffix = `:${String(beatId)}`;
+  return [...beatTopics.entries()]
+    .filter(([key, current]) => {
+      const threadId = Number(current?.messageThreadId);
+      return (key === exactKey || key.endsWith(suffix)) &&
+        Number(current?.chatId) === Number(chatId) &&
+        Number.isFinite(threadId) && threadId > 0;
+    })
+    .sort(([, a], [, b]) => Number(a.messageThreadId) - Number(b.messageThreadId));
+}
+
+function adoptCanonicalBeatTopic(chatId, userId, beatId, beatName, current) {
+  const suffix = `:${String(beatId)}`;
+  const canonical = {
+    chatId: Number(chatId),
+    messageThreadId: Number(current.messageThreadId),
+    beatName,
+    updatedAt: Date.now(),
+  };
+  for (const [key, candidate] of beatTopics.entries()) {
+    if (key.endsWith(suffix) && Number(candidate?.chatId) === Number(chatId)) {
+      beatTopics.set(key, { ...canonical });
+    }
+  }
+  beatTopics.set(topicKey(userId, beatId), { ...canonical });
+  savePersistentData();
+  return canonical.messageThreadId;
+}
+
 function storageChatId(account) {
   const value = Number(account?.storageChatId);
   if (!Number.isFinite(value) || value === 0) {
@@ -194,24 +225,20 @@ async function ensureBeatTopic(account, userId, beatId, beatName) {
   const chatId = storageChatId(account);
   const key = topicKey(userId, beatId);
   const name = topicName(beatName || beatId);
-  const current = beatTopics.get(key);
 
-  if (current && Number(current.chatId) === chatId && Number(current.messageThreadId) > 0) {
-    if (String(current.beatName || "") === name) return Number(current.messageThreadId);
+  const candidates = storedBeatTopicCandidates(chatId, userId, beatId);
+  for (const [candidateKey, current] of candidates) {
+    const messageThreadId = Number(current.messageThreadId);
     try {
-      await directTransport.editForumTopic(chatId, Number(current.messageThreadId), name);
-      current.beatName = name;
-      current.updatedAt = Date.now();
-      beatTopics.set(key, current);
-      savePersistentData();
-      return Number(current.messageThreadId);
+      await directTransport.editForumTopic(chatId, messageThreadId, name);
+      return adoptCanonicalBeatTopic(chatId, userId, beatId, name, current);
     } catch (error) {
       if (!isMissingTopicError(error)) {
-        console.warn("[topics] MASTER rename failed:", error?.message || error);
-        return Number(current.messageThreadId);
+        console.warn("[topics] canonical topic verification/rename failed:", error?.message || error);
+        return adoptCanonicalBeatTopic(chatId, userId, beatId, name, current);
       }
-      console.warn("[topics] stored topic no longer exists; recreating:", error?.message || error);
-      forgetBeatTopic(userId, beatId);
+      console.warn("[topics] stored topic no longer exists; forgetting candidate:", error?.message || error);
+      beatTopics.delete(candidateKey);
     }
   }
 

@@ -18,7 +18,7 @@ describe("Issue #97 startup reveal architecture", () => {
     expect(app).toContain("<SortableContext items={filteredBeats.map((b) => b.id)}");
     expect(app).toContain("visible={revealedBeatIds.has(beat.id)}");
     expect(app).toContain('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}');
-    expect(app).toContain('playbackInteractive={connectionState === "online" || Boolean(beat.offline_available)}');
+    expect(app).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
     expect(beatCard).toContain('visibility: visible ? "visible" : "hidden"');
     expect(beatCard).toContain('pointerEvents: visible ? "auto" : "none"');
     expect(beatCard).toContain("if (!visible || !playbackInteractive || !hasEnteredViewport || !beat.telegram_file_id) return;");

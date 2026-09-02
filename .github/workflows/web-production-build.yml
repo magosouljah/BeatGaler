@@ -18,32 +18,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  issue97-regression-root-patch:
-    if: github.event_name == 'pull_request' && github.head_ref == 'issue-97-regression-root-fix' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: issue-97-regression-root-fix
-          fetch-depth: 0
-      - name: Apply root regression fix
-        run: python scripts/issue97_regression_root_patch.py
-      - name: Restore canonical workflow and commit real patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin integration-v0.8.0-alpha.1 --depth=1
-          git show origin/integration-v0.8.0-alpha.1:.github/workflows/web-production-build.yml > .github/workflows/web-production-build.yml
-          rm -f scripts/issue97_regression_root_patch.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "F2/97: fix playback gate and vault topic regression"
-          git push origin HEAD:issue-97-regression-root-fix
-
   web-production-build:
     runs-on: ubuntu-latest
     steps:

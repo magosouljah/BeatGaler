@@ -20,7 +20,7 @@ export interface WebBeatEditProgress extends WebTransportProgress {
 export interface WebBeatEditRuntime {
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult>;
   upload(
-    input: { file: File; filename: string; beatId: string; beatName: string; threadId?: number | null; kind: EditUploadKind },
+    input: { file: File; filename: string; beatId: string; beatName: string; kind: EditUploadKind },
     onProgress?: (progress: WebTransportProgress) => void,
   ): Promise<WebTransportUploadResult>;
   replaceLibraryIndex(input: { manifest: unknown; expectedMessageId: number | null }): Promise<WebTransportReplaceIndexResult>;
@@ -99,8 +99,6 @@ export async function commitWebBeatEdit(
   if (existingIndex < 0) throw new Error("This beat is no longer in your Galer Cloud library. Refresh and try again.");
 
   const existing = manifest.beats[existingIndex];
-  const topicCandidate = Number(existing.telegram_topic_id || 0);
-  const existingThreadId = Number.isInteger(topicCandidate) && topicCandidate > 0 ? topicCandidate : null;
 
   const artworkChanged = (updated.image_base64 || null) !== (original.image_base64 || null);
   const artworkAsset = artworkChanged && updated.image_base64 ? dataUrlFile(updated.image_base64, updated.name) : null;
@@ -117,6 +115,7 @@ export async function commitWebBeatEdit(
   onProgress?.({ stage: "preparing", uploadedBytes: 0, totalBytes });
 
   const uploads = new Map<EditUploadKind, WebTransportUploadResult>();
+  let resolvedThreadId: number | null = null;
   let completedBytes = 0;
   for (const item of queued) {
     const upload = await runtime.upload({
@@ -124,7 +123,6 @@ export async function commitWebBeatEdit(
       filename: item.file.name,
       beatId: original.id,
       beatName: updated.name,
-      threadId: existingThreadId,
       kind: item.kind,
     }, progress => onProgress?.({
       stage: item.stage,
@@ -132,6 +130,8 @@ export async function commitWebBeatEdit(
       totalBytes,
     }));
     uploads.set(item.kind, upload);
+    const uploadThreadId = Number((upload as WebTransportUploadResult & { thread_id?: number }).thread_id || 0);
+    if (Number.isInteger(uploadThreadId) && uploadThreadId > 0) resolvedThreadId = uploadThreadId;
     completedBytes += item.file.size;
   }
 
@@ -146,6 +146,7 @@ export async function commitWebBeatEdit(
     color: updated.color,
     color2: updated.color2,
   };
+  if (resolvedThreadId) next.telegram_topic_id = resolvedThreadId;
 
   const master = uploads.get("MASTER");
   if (master && files.MASTER) {
