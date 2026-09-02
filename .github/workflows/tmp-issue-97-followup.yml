@@ -23,6 +23,21 @@ jobs:
           cache: npm
       - name: Apply follow-up patch
         run: node .github/tmp-issue-97-followup.mjs
+      - name: Align cached playback and mutation regression guard
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/run-regressions.mjs')
+          source = path.read_text()
+          before = '''  if (!beatCard.includes('pointerEvents: visible && interactive ? "auto" : "none"')) fail("Presentation-only cached cards can receive pointer input before authority verification.");'''
+          after = '''  if (!beatCard.includes('pointerEvents: visible ? "auto" : "none"')) fail("Visible cached cards lost the pointer path required for progressive playback.");
+          if (!app.includes('playbackInteractive={connectionState === "online" || Boolean(beat.offline_available)}')) fail("Cached cards lost the non-destructive playback gate while cloud authority is verifying.");
+          if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (interactive && selectMode)') || !beatCard.includes('dragEnabled && interactive')) fail("Cached presentation can mutate before authority verification.");'''
+          if before not in source:
+              raise SystemExit('cached-card pointer regression guard pattern not found')
+          path.write_text(source.replace(before, after))
+          PY
       - name: Install locked npm graph
         run: npm ci
       - name: Typecheck
