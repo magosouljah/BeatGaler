@@ -304,7 +304,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         }
         return;
       }
-      if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk) {
+      if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk && !onCloudMutationCommit) {
         const committed = await platform.editor.commit(
           beat,
           validatedData,

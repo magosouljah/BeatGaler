@@ -5315,7 +5315,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}
           onBulkSaved={applyBulkUpdate}
           mutationAllowed={connectionState === "online"}
-          onCloudMutationCommit={commitDrawerCloudMutation}
+          onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}
         />
       )}
 
@@ -5353,7 +5353,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
               existing.name.trim().toLocaleLowerCase() === normalized
             );
           }}
-          onCloudMutationCommit={commitDrawerCloudMutation}
+          onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}
           onSaved={handleReviewedBeatSaved}
           onReleaseAudio={() => {
             if (audio.playingId === reviewQueue.beats[reviewQueue.index].id) releaseFile();
