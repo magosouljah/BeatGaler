@@ -109,5 +109,10 @@ replace_once(
     '''    expect(app).toContain("visible={revealedBeatIds.has(beat.id)}");\n    expect(beatCard).toContain('visibility: visible ? "visible" : "hidden"');\n''',
     '''    expect(app).toContain("visible={revealedBeatIds.has(beat.id)}");\n    expect(app).toContain('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}');\n    expect(beatCard).toContain('visibility: visible ? "visible" : "hidden"');\n    expect(beatCard).toContain('pointerEvents: visible && interactive ? "auto" : "none"');\n''',
 )
+replace_once(
+    "tests/component-dom/startupRevealArchitecture.test.ts",
+    '''    expect(beatCard).toContain("if (!visible || !hasEnteredViewport || !beat.telegram_file_id) return;");\n''',
+    '''    expect(beatCard).toContain("if (!visible || !interactive || !hasEnteredViewport || !beat.telegram_file_id) return;");\n''',
+)
 
 print("Issue #97 hardening patch applied")
