@@ -226,7 +226,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
         isPremium: false,
         usernames: [],
       } as any,
-      authKey: temp_auth_key,
+      authKey: temp_auth_key.slice(),
     }, true);
 
     // The bind happened on a short-lived SessionConnection in the main thread.

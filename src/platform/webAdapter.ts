@@ -186,6 +186,19 @@ export const webAdapter: PlatformAdapter = {
       const sources = await resolveWebPlaybackSources();
       return sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
     },
+    async loadArtwork(beat) {
+      const artwork = beat.assets?.artwork;
+      const messageId = directMessageId(artwork?.object_id);
+      if (!messageId) return null;
+
+      const transport = await resolveWebCloudTransport();
+      const [result] = await transport.downloadFiles([{
+        messageId,
+        mimeType: artwork?.mime_type || "image/jpeg",
+      }]);
+
+      return result?.dataUrl ?? null;
+    },
     releasePlayback(beatId) {
       webPlaybackSources?.release(beatId);
     },

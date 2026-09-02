@@ -87,6 +87,7 @@ export interface PlatformStartupPort {
 export interface PlatformMediaPort {
   resolveUrl(source: string): string;
   preparePlayback(beat: Beat): Promise<{ url: string; completed: Promise<void> }>;
+  loadArtwork(beat: Beat): Promise<string | null>;
   releasePlayback(beatId: string | null): void;
 }
 
