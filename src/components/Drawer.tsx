@@ -94,7 +94,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const refreshCloudFiles = useCallback(async () => {
     // Web's editable file surface is backed by the library manifest + platform.editor.
     // Do not probe the legacy Desktop cloud-file bridge just because Drawer opened.
-    if (platform.kind === "web") {
+    if (platform.capabilities.browserCloudEditing) {
       setCloudFiles([]);
       setCloudError(null);
       return;

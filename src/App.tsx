@@ -3050,7 +3050,7 @@ function BeatGalerApp() {
   useEffect(() => {
     // Web edits are explicit durable transactions through platform.editor.
     // Never let the legacy Desktop metadata observer invoke Tauri from Web.
-    if (platform.kind === "web") return;
+    if (platform.capabilities.browserCloudEditing) return;
     if (connectionState !== "online" || !cloudSessionVerified) return;
     const next = new Map<string, string>();
     for (const beat of beats) {
@@ -3332,7 +3332,7 @@ function BeatGalerApp() {
 
     const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
 
-    if (platform.kind === "web") {
+    if (platform.capabilities.browserCloudEditing) {
       // Publish the browser-decoded artwork immediately, then commit it through
       // the Web editor/Direct transport. No Tauri metadata path participates.
       updateBeat(updated);
