@@ -14,7 +14,7 @@ const API_KEY = "beatgaler:cloud-api:v1";
 const TOKEN_KEY = "beatgaler:account-session:v1";
 const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
 const CSRF_KEY = "beatgaler:web-csrf:v1";
-const TRUSTED_REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
+const SAME_ORIGIN_API = `${window.location.origin}/beatgaler-api`;
 
 async function renderSignedOutGate() {
   const host = document.createElement("div");
@@ -31,7 +31,7 @@ describe("AccountGate Web adapter", () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
-    localStorage.setItem(API_KEY, TRUSTED_REMOTE_API);
+    localStorage.setItem(API_KEY, SAME_ORIGIN_API);
     vi.restoreAllMocks();
   });
 
@@ -84,10 +84,10 @@ describe("AccountGate Web adapter", () => {
   it("uses credentialed cookie transport and never persists the Web bearer", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === `${TRUSTED_REMOTE_API}/auth/health`) {
+      if (url === `${SAME_ORIGIN_API}/auth/health`) {
         return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
       }
-      if (url === `${TRUSTED_REMOTE_API}/auth/login`) {
+      if (url === `${SAME_ORIGIN_API}/auth/login`) {
         const body = JSON.parse(String(init?.body || "{}"));
         const headers = new Headers(init?.headers);
         expect(body.beatgalerUserId).toMatch(/^beatgaler-web-/);
@@ -117,10 +117,10 @@ describe("AccountGate Web adapter", () => {
     localStorage.setItem(TOKEN_KEY, "legacy-web-token");
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === `${TRUSTED_REMOTE_API}/auth/health`) {
+      if (url === `${SAME_ORIGIN_API}/auth/health`) {
         return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
       }
-      if (url === `${TRUSTED_REMOTE_API}/auth/session`) {
+      if (url === `${SAME_ORIGIN_API}/auth/session`) {
         return new Response(JSON.stringify({ error: "Session expired. Sign in again.", code: "SESSION_EXPIRED" }), { status: 401 });
       }
       throw new Error(`Unexpected request: ${url}`);
