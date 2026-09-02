@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const drawer = readFileSync(new URL("../../src/components/Drawer.tsx", import.meta.url), "utf8");
 
 describe("Issue #97 Drawer Web routing contracts", () => {
-  it("uses the browser editor commit for supported single-beat Web edits", () => {
+  it("uses the browser editor commit for supported single-beat Web edits even when App supplies the Desktop cloud commit prop", () => {
     expect(drawer).toContain('if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk) {');
     expect(drawer).toContain("platform.editor.commit(");
     expect(drawer).not.toContain('platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk && !onCloudMutationCommit');
@@ -17,6 +17,7 @@ describe("Issue #97 Drawer Web routing contracts", () => {
     expect(end).toBeGreaterThan(start);
     const refresh = drawer.slice(start, end);
     expect(refresh).toContain('if (platform.kind === "web")');
+    expect(refresh).toContain("setCloudError(null)");
     expect(refresh.indexOf('if (platform.kind === "web")')).toBeLessThan(refresh.indexOf("listCloudFilesForBeat"));
   });
 });
