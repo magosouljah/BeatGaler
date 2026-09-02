@@ -246,11 +246,13 @@ export const webAdapter: PlatformAdapter = {
       if (!master) throw new Error("Add a MASTER MP3 before saving this beat.");
       const transport = await resolveWebCloudTransport();
       try {
-        return await transport.commitImportedBeat(beat, {
+        const committed = await transport.commitImportedBeat(beat, {
           master,
           wav: slots.WAV,
           project: slots.PROJECT,
         }, webClientId, onProgress);
+        webImportPort.releaseBeat(beat.id);
+        return committed;
       } catch (error) {
         console.error("[web/import] durable commit failed", error);
         const message = error instanceof Error ? error.message : String(error);
