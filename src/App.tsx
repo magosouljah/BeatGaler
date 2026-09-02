@@ -15,7 +15,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, loadCloudArtworkForBeat, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
@@ -1694,7 +1694,7 @@ function BeatGalerApp() {
       }
 
       try {
-        const artwork = await loadCloudArtworkForBeat(beat.id);
+        const artwork = await platform.media.loadArtwork(beat);
         if (!artwork) return true; // This beat genuinely has no artwork; gradient fallback is ready.
         const decoded = await decodeArtworkDataUrl(artwork);
         if (!decoded) return false;
@@ -1804,6 +1804,36 @@ function BeatGalerApp() {
       return;
     }
     beat = latestBeat;
+
+    // Web playback uses the browser MTProto streaming adapter.
+    // Never fall through to the native Tauri playback/cache path.
+    if (!isTauriAvailable) {
+      try {
+        if (audio.playingId && audio.playingId !== beat.id) {
+          platform.media.releasePlayback(audio.playingId);
+        }
+
+        const prepared = await platform.media.preparePlayback(beat);
+
+        void prepared.completed.catch(error => {
+          console.warn(`[web/playback] stream failed beat_id=${beat.id}`, error);
+          platform.media.releasePlayback(beat.id);
+        });
+
+        play(beat.id, [prepared.url]);
+      } catch (error) {
+        platform.media.releasePlayback(beat.id);
+        await appAlert({
+          title: "Beat unavailable",
+          message: sanitizeUserVisibleText(
+            error instanceof Error ? error.message : String(error),
+            "Cloud audio unavailable."
+          ),
+          danger: true,
+        });
+      }
+      return;
+    }
 
     const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
     // Sync and playback are independent state machines. In V7 a beat can stay in
@@ -4592,7 +4622,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
       return;
     }
 
-    if (connectionState !== "online" || !settings.telegram_cloud_connected || filteredBeats.length === 0) {
+    if (connectionState !== "online" || !settings.telegram_cloud_connected) {
       startupCookingResolvedRef.current = true;
       setRevealedBeatIds(new Set(filteredBeats.map(beat => beat.id)));
       setStartupCookingGate(false);
@@ -4600,11 +4630,51 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
       return;
     }
 
-    // Do not use the instant-paint cache as proof that a cloud beat is ready.
-    // Wait until the pinned Telegram index has been restored into SQLite first.
+    // Do not conclude that the cloud library is empty before the authoritative
+    // Telegram INDEX has finished loading.
     if (!cloudSessionVerified) {
       setStartupCookingGate(true);
       return;
+    }
+
+    if (filteredBeats.length === 0) {
+      startupCookingResolvedRef.current = true;
+      setRevealedBeatIds(new Set());
+      setStartupCookingGate(false);
+      dismissBeatGalerStartupLoader();
+      return;
+    }
+
+    // Web preserves BeatGaler's normal reveal behavior: artwork first, card second.
+    // Native Tauri Download Cooking does not apply in the browser.
+    if (!isTauriAvailable) {
+      startupPipelineStartedRef.current = true;
+      let cancelled = false;
+      const priority = filteredBeats.slice(0, STARTUP_PRIORITY_BEATS);
+
+      setStartupCookingGate(true);
+
+      void (async () => {
+        await Promise.all(priority.map(beat => ensureArtworkReady(beat)));
+        if (cancelled) return;
+
+        setRevealedBeatIds(new Set(priority.map(beat => beat.id)));
+        startupCookingResolvedRef.current = true;
+
+        requestAnimationFrame(() => {
+          if (!cancelled) {
+            setStartupCookingGate(false);
+            dismissBeatGalerStartupLoader();
+          }
+        });
+      })();
+
+      return () => {
+        cancelled = true;
+        if (!startupCookingResolvedRef.current) {
+          startupPipelineStartedRef.current = false;
+        }
+      };
     }
 
     startupPipelineStartedRef.current = true;
@@ -4757,7 +4827,9 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           ensureWarmPlaybackUrl(beat),
         ]);
         if (progressiveRevealRunRef.current !== runId) return;
-        const audioReady = await waitForCookingReady(beat);
+        const audioReady = isTauriAvailable
+          ? await waitForCookingReady(beat)
+          : true;
         if (progressiveRevealRunRef.current !== runId) return;
         if (!audioReady) continue;
 

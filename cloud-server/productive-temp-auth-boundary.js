@@ -105,7 +105,11 @@ async function loadMtcuteInternals() {
     const corePkg = await findPackageRoot(coreEntry, "@mtcute/core");
     assert.equal(corePkg.manifest.version, "0.31.0", "Productive temp-auth seam is pinned to @mtcute/core 0.31.0.");
     const requireFromCore = createRequire(pathToFileURL(path.join(corePkg.root, "package.json")));
+    const Long = requireFromCore("long");
     const web = await import(pathToFileURL(webEntry).href);
+    const apiSchemaPath = requireFromWeb.resolve("@mtcute/core/tl/api-schema.json");
+    const apiSchema = JSON.parse(await readFile(apiSchemaPath, "utf8"));
+    assert.ok(Number.isInteger(apiSchema.l) && apiSchema.l > 0, "Could not resolve MTProto API layer.");
     const { SessionConnection } = requireFromCore(path.join(corePkg.root, "network/session-connection.cjs"));
     const { doAuthorization } = requireFromCore(path.join(corePkg.root, "network/authorization.cjs"));
     const { ServerSaltManager } = requireFromCore(path.join(corePkg.root, "network/server-salt.cjs"));
@@ -120,6 +124,7 @@ async function loadMtcuteInternals() {
     const wasmBytes = await readFile(await findFirstWasm(wasmPkg.root));
     return {
       ...web,
+      Long,
       SessionConnection,
       doAuthorization,
       ServerSaltManager,
@@ -130,6 +135,7 @@ async function loadMtcuteInternals() {
       defaultReconnectionStrategy,
       TlBinaryWriter,
       wasmBytes,
+      apiLayer: apiSchema.l,
     };
   })();
   return mtcutePromise;
@@ -169,7 +175,7 @@ async function makeManualConnection(m, crypto, apiId, dcId) {
     dc: productionDc(dcId),
     testMode: false,
     reconnectionStrategy: m.defaultReconnectionStrategy,
-    layer: m.tl.LAYER,
+    layer: m.apiLayer,
     disableUpdates: true,
     readerMap: m.__tlReaderMap,
     writerMap: m.__tlWriterMap,

@@ -73,6 +73,10 @@ export const desktopAdapter: PlatformAdapter = {
     async preparePlayback(beat) {
       return { url: filePathToUrl(beat.playback_path), completed: Promise.resolve() };
     },
+    async loadArtwork(beat) {
+      const { loadCloudArtworkForBeat } = await import("../lib/tauri");
+      return loadCloudArtworkForBeat(beat.id);
+    },
     releasePlayback() {},
   },
   events: {
