@@ -27,6 +27,19 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
 
 Push-Location $RepoRoot
 try {
+  $SourceSha = (& git rev-parse HEAD).Trim()
+  if ($LASTEXITCODE -ne 0 -or $SourceSha -notmatch '^[0-9a-f]{40}$') {
+    throw "Unable to resolve an exact Git source SHA for production deployment."
+  }
+
+  $DirtyLines = @(& git status --porcelain --untracked-files=all)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to verify Git working-tree cleanliness before production deployment."
+  }
+  if ($DirtyLines.Count -gt 0) {
+    throw "Refusing production Web deployment from a dirty working tree. Commit or remove local changes first."
+  }
+
   if (-not $SkipNpmCi) {
     Invoke-NativeChecked -Command "npm" -Arguments @("ci")
   }
@@ -38,6 +51,11 @@ try {
   if (-not (Test-Path -LiteralPath $IndexPath)) {
     throw "Web build completed without dist/index.html"
   }
+
+  $WellKnownPath = Join-Path $DistPath ".well-known"
+  New-Item -ItemType Directory -Path $WellKnownPath -Force | Out-Null
+  $SourceMarkerPath = Join-Path $WellKnownPath "source-sha.txt"
+  [System.IO.File]::WriteAllText($SourceMarkerPath, "$SourceSha`n", [System.Text.Encoding]::ASCII)
 
   Invoke-NativeChecked -Command "tar" -Arguments @("-czf", $ArchivePath, "-C", $DistPath, ".")
 
@@ -58,9 +76,15 @@ try {
 
   Invoke-NativeChecked -Command "ssh" -Arguments ($CommonSsh + @(
     $SshTarget,
-    "sudo bash /tmp/install-web-production.sh /tmp/beatgaler-web.tgz /tmp/beatgaler.com.bootstrap.conf /tmp/beatgaler.com.conf"
+    "sudo bash /tmp/install-web-production.sh /tmp/beatgaler-web.tgz /tmp/beatgaler.com.bootstrap.conf /tmp/beatgaler.com.conf $SourceSha"
   ))
 
+  $PublicSourceSha = (Invoke-RestMethod -Uri "https://beatgaler.com/.well-known/source-sha.txt" -Method Get -Headers @{ "Cache-Control" = "no-cache" }).ToString().Trim()
+  if ($PublicSourceSha -ne $SourceSha) {
+    throw "Production source proof mismatch: expected $SourceSha but public runtime reports $PublicSourceSha"
+  }
+
+  Write-Host "WEB_RUNTIME_SOURCE_PROOF_OK source=$SourceSha url=https://beatgaler.com/.well-known/source-sha.txt"
   Write-Host "BeatGaler Web deployed: https://beatgaler.com"
 }
 finally {

@@ -10,6 +10,7 @@ const securityPath = 'public/.well-known/security.txt';
 const statusPath = 'public/status/index.html';
 const productionNginxPath = 'deploy/web/beatgaler.com.conf';
 const installerPath = 'deploy/web/install-web-production.sh';
+const deployScriptPath = 'scripts/deploy-web-production.ps1';
 
 assert.ok(existsSync(resolve(root, securityPath)), `${securityPath} must exist`);
 const security = read(securityPath);
@@ -33,6 +34,13 @@ assert.ok(securityLocation, 'Nginx must define an exact security.txt location');
 assert.match(securityLocation[1], /try_files\s+\$uri\s+=404;/, 'security.txt must return 404 instead of SPA fallback when absent');
 assert.match(securityLocation[1], /default_type\s+"text\/plain; charset=utf-8";/, 'security.txt must use text/plain; charset=utf-8');
 assert.doesNotMatch(securityLocation[1], /index\.html/, 'security.txt route must not use SPA index fallback');
+
+const sourceLocation = nginx.match(/location\s*=\s*\/\.well-known\/source-sha\.txt\s*\{([\s\S]*?)\n\s*\}/);
+assert.ok(sourceLocation, 'Nginx must define an exact deployment source SHA location');
+assert.match(sourceLocation[1], /try_files\s+\$uri\s+=404;/, 'source SHA route must return 404 instead of SPA fallback when absent');
+assert.match(sourceLocation[1], /no-cache, no-store, must-revalidate/, 'source SHA route must not be cached');
+assert.doesNotMatch(sourceLocation[1], /index\.html/, 'source SHA route must not use SPA index fallback');
+
 assert.match(nginx, /server_name\s+status\.beatgaler\.com;/, 'Nginx must support status.beatgaler.com');
 assert.match(nginx, /try_files\s+\/status\/index\.html\s+=404;/, 'status host must serve the static status document directly');
 
@@ -67,6 +75,22 @@ const installer = read(installerPath);
 assert.match(installer, /STATUS_HOST="status\.beatgaler\.com"/);
 assert.match(installer, /shares_ip_with_api "\$STATUS_HOST"/);
 assert.match(installer, /CERTBOT_ARGS\+\=\(-d "\$STATUS_HOST"\)/, 'TLS SAN for status must be conditional on DNS readiness');
+assert.match(installer, /EXPECTED_SOURCE_SHA="\$\{4:-\}"/, 'installer must receive the expected source SHA separately from the archive');
+assert.match(installer, /source-sha\.txt/, 'installer must require a packaged source SHA marker');
+assert.match(installer, /ACTUAL_SOURCE_SHA=.*tr -d/, 'installer must read the packaged source SHA marker');
+assert.match(installer, /ACTUAL_SOURCE_SHA" != "\$EXPECTED_SOURCE_SHA/, 'installer must fail closed when archive SHA and expected SHA differ');
+assert.match(installer, /\.well-known\/source-sha\.txt" \| grep -Fxq "\$EXPECTED_SOURCE_SHA"/, 'installer must verify the active local HTTPS source marker');
+assert.match(installer, /WEB_RUNTIME_SOURCE_PROOF_OK source=\$EXPECTED_SOURCE_SHA/, 'installer must emit explicit runtime/source proof');
+
+const deployScript = read(deployScriptPath);
+assert.match(deployScript, /git rev-parse HEAD/, 'production deploy must derive an exact Git HEAD');
+assert.match(deployScript, /git status --porcelain --untracked-files=all/, 'production deploy must reject an unclean working tree');
+assert.match(deployScript, /Refusing production Web deployment from a dirty working tree/, 'production deploy must fail closed on local modifications');
+assert.match(deployScript, /source-sha\.txt/, 'production deploy must package the source SHA marker');
+assert.match(deployScript, /install-web-production\.sh[^\r\n]*\$SourceSha/, 'production deploy must pass the expected SHA to the EC2 installer');
+assert.match(deployScript, /https:\/\/beatgaler\.com\/\.well-known\/source-sha\.txt/, 'production deploy must read back the public source marker');
+assert.match(deployScript, /Production source proof mismatch/, 'production deploy must fail closed when public runtime reports another SHA');
+assert.match(deployScript, /WEB_RUNTIME_SOURCE_PROOF_OK source=\$SourceSha/, 'production deploy must emit explicit public runtime/source proof');
 
 if (checkDist) {
   const builtSecurityPath = 'dist/.well-known/security.txt';

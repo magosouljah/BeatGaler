@@ -4,6 +4,7 @@ set -euo pipefail
 ARCHIVE="${1:-/tmp/beatgaler-web.tgz}"
 BOOTSTRAP_CONF="${2:-/tmp/beatgaler.com.bootstrap.conf}"
 PRODUCTION_CONF="${3:-/tmp/beatgaler.com.conf}"
+EXPECTED_SOURCE_SHA="${4:-}"
 
 WEB_HOST="beatgaler.com"
 WWW_HOST="www.beatgaler.com"
@@ -18,13 +19,18 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }
 }
 
-for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp; do
+for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp tr; do
   require_command "$command_name"
 done
 
 for file_path in "$ARCHIVE" "$BOOTSTRAP_CONF" "$PRODUCTION_CONF"; do
   [ -f "$file_path" ] || { echo "Missing deployment input: $file_path" >&2; exit 3; }
 done
+
+if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Missing or invalid expected source SHA; production deployment requires an exact 40-character lowercase Git SHA." >&2
+  exit 4
+fi
 
 dns_ips() {
   getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u || true
@@ -70,13 +76,21 @@ if tar -tzf "$ARCHIVE" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   exit 22
 fi
 
-RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)-${EXPECTED_SOURCE_SHA:0:12}"
 RELEASE_DIR="$WEB_ROOT/releases/$RELEASE_ID"
 install -d -m 0755 "$WEB_ROOT/releases" "$RELEASE_DIR"
 tar -xzf "$ARCHIVE" -C "$RELEASE_DIR"
 [ -f "$RELEASE_DIR/index.html" ] || { echo "Built Web archive is missing index.html" >&2; rm -rf "$RELEASE_DIR"; exit 23; }
 [ -f "$RELEASE_DIR/.well-known/security.txt" ] || { echo "Built Web archive is missing .well-known/security.txt" >&2; rm -rf "$RELEASE_DIR"; exit 24; }
 [ -f "$RELEASE_DIR/status/index.html" ] || { echo "Built Web archive is missing status/index.html" >&2; rm -rf "$RELEASE_DIR"; exit 25; }
+SOURCE_SHA_FILE="$RELEASE_DIR/.well-known/source-sha.txt"
+[ -f "$SOURCE_SHA_FILE" ] || { echo "Built Web archive is missing .well-known/source-sha.txt" >&2; rm -rf "$RELEASE_DIR"; exit 28; }
+ACTUAL_SOURCE_SHA="$(tr -d '\r\n' < "$SOURCE_SHA_FILE")"
+if [ "$ACTUAL_SOURCE_SHA" != "$EXPECTED_SOURCE_SHA" ]; then
+  echo "Built Web archive source SHA mismatch: expected $EXPECTED_SOURCE_SHA but archive contains $ACTUAL_SOURCE_SHA" >&2
+  rm -rf "$RELEASE_DIR"
+  exit 29
+fi
 
 # Switch static files atomically. If later TLS/nginx validation fails, the files are
 # still complete and the previous release remains available under releases/.
@@ -122,6 +136,7 @@ nginx -t
 systemctl reload nginx
 
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/web-health" | grep -Fxq "ok"
+curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/.well-known/source-sha.txt" | grep -Fxq "$EXPECTED_SOURCE_SHA"
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/beatgaler-api/auth/health" \
   | grep -Eq '"account_auth"[[:space:]]*:[[:space:]]*true'
 
@@ -151,4 +166,5 @@ for old_release in "${OLD_RELEASES[@]:-}"; do
   [ -n "$old_release" ] && rm -rf -- "$old_release"
 done
 
-echo "WEB_DEPLOY_OK release=$RELEASE_ID url=https://$WEB_HOST api_proxy=https://$WEB_HOST/beatgaler-api"
+echo "WEB_RUNTIME_SOURCE_PROOF_OK source=$EXPECTED_SOURCE_SHA release=$RELEASE_ID"
+echo "WEB_DEPLOY_OK release=$RELEASE_ID source=$EXPECTED_SOURCE_SHA url=https://$WEB_HOST api_proxy=https://$WEB_HOST/beatgaler-api"
