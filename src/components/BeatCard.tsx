@@ -14,6 +14,7 @@ import { beatCardIncompleteReasons, beatCardPlaybackBlocked, shouldShowIncomplet
 import BeatGalerIcon from "./BeatGalerIcon";
 interface Props {
   beat: Beat;
+  visible?: boolean;
   cloudUploadErrorDetail?: string;
   tagFrequency: ReadonlyMap<string, number>;
   showIncompleteWarnings: boolean;
@@ -172,7 +173,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, canUseLoc
 }
 
 export default function BeatCard({
-  beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
+  beat, visible = true, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
   onPlay, onWarm, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect,
   animDelay = 0, dragEnabled, networkOnline, offlineBusy, canUseOfflinePackage, canUseLocalHelper, canInspectNativeProject, onToggleOffline, onRetryUpload
@@ -248,7 +249,7 @@ export default function BeatCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: beat.id, disabled: !dragEnabled });
+  } = useSortable({ id: beat.id, disabled: !dragEnabled || !visible });
 
   const cookingNodeRef = useRef<HTMLDivElement | null>(null);
   const cookingRequestedRef = useRef<string | null>(null);
@@ -259,7 +260,7 @@ export default function BeatCard({
 
   useEffect(() => {
     const node = cookingNodeRef.current;
-    if (!node || hasEnteredViewport) return;
+    if (!visible || !node || hasEnteredViewport) return;
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some(entry => entry.isIntersecting && entry.intersectionRatio > 0)) return;
       setHasEnteredViewport(true);
@@ -267,20 +268,20 @@ export default function BeatCard({
     }, { threshold: 0.01 });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasEnteredViewport]);
+  }, [visible, hasEnteredViewport]);
 
   useEffect(() => {
-    if (!hasEnteredViewport || !beat.telegram_file_id) return;
+    if (!visible || !hasEnteredViewport || !beat.telegram_file_id) return;
     const fileId = beat.telegram_file_id;
     if (cookingRequestedRef.current === fileId) return;
     cookingRequestedRef.current = fileId;
     onWarm(beat);
-  }, [hasEnteredViewport, beat.id, beat.telegram_file_id, onWarm]);
+  }, [visible, hasEnteredViewport, beat.id, beat.telegram_file_id, onWarm]);
 
   // PROJECT validation is useful only when the card can actually be seen/used.
   // Avoid one Tauri invoke (and possible ZIP validation) for every offscreen card.
   useEffect(() => {
-    if (!hasEnteredViewport) return;
+    if (!visible || !hasEnteredViewport) return;
     if (!canInspectNativeProject) {
       setProjectCloud(null);
       return;
@@ -305,7 +306,7 @@ export default function BeatCard({
       cancelled = true;
       window.removeEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
     };
-  }, [hasEnteredViewport, beat.id, beat.flp_path, beat.folder_path, beat.cloud_status, canInspectNativeProject]);
+  }, [visible, hasEnteredViewport, beat.id, beat.flp_path, beat.folder_path, beat.cloud_status, canInspectNativeProject]);
 
   const incompleteReasons = useMemo(() => beatCardIncompleteReasons(projectCloud), [projectCloud]);
   const cloudUploading = beat.cloud_status === "UPLOADING";
@@ -365,7 +366,8 @@ export default function BeatCard({
   return (
     <div
       ref={setCardNodeRef}
-      data-beat-card-id={beat.id}
+      data-beat-slot-id={beat.id}
+      data-beat-card-id={visible ? beat.id : undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={e => { if (selectMode) onToggleSelect(beat, e); }}
@@ -376,9 +378,9 @@ export default function BeatCard({
         // Raise the whole card while a tooltip is open so neighboring artwork
         // can never paint over the diagnostic/warning panel.
         zIndex: uploadErrorOpen || warningInfoOpen ? 1000 : undefined,
-        cursor: selectMode ? "pointer" : "default",
-        animation: "fadeUp 0.36s cubic-bezier(0.22, 1, 0.36, 1)",
-        animationDelay: `${animDelay}s`,
+        cursor: visible && selectMode ? "pointer" : "default",
+        visibility: visible ? "visible" : "hidden",
+        pointerEvents: visible ? "auto" : "none",
         borderRadius: 12,
         transform: composedTransform,
         opacity: isDragging ? 0.72 : 1,

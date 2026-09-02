@@ -101,6 +101,29 @@ describe("LibraryStateManager ↔ platform integration", () => {
     expect(libraryStateManager.verifiedSnapshot()?.map(beat => beat.id)).toEqual(["beat-1"]);
   });
 
+  it("coalesces concurrent authoritative reloads instead of queueing the same startup read twice", async () => {
+    const gate = deferred<void>();
+    const restore = vi.fn(() => gate.promise);
+    const load = vi.fn(async () => [makeBeat()]);
+    const { libraryStateManager } = await loadLibraryManager({ restore, load });
+
+    const first = libraryStateManager.reloadAuthoritative();
+    const second = libraryStateManager.reloadAuthoritative();
+
+    await waitForCondition(() => restore.mock.calls.length === 1, "authoritative reload never started");
+    expect(restore).toHaveBeenCalledTimes(1);
+
+    gate.resolve(undefined);
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.map(beat => beat.id)).toEqual(["beat-1"]);
+    expect(two.map(beat => beat.id)).toEqual(["beat-1"]);
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await libraryStateManager.reloadAuthoritative();
+    expect(restore).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it("serializes competing commits so the second INDEX transaction cannot overtake the first", async () => {
     const first = deferred<{ ok: boolean }>();
     const second = deferred<{ ok: boolean }>();

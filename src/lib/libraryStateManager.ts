@@ -24,6 +24,7 @@ class LibraryStateManager {
   private tail: Promise<void> = Promise.resolve();
   private sequence = 0;
   private lastVerified: Beat[] | null = null;
+  private reloadInFlight: Promise<Beat[]> | null = null;
 
   private async exclusive<T>(kind: LibraryOperationKind, fn: () => Promise<T>): Promise<T> {
     const seq = ++this.sequence;
@@ -47,13 +48,20 @@ class LibraryStateManager {
     }
   }
 
-  async reloadAuthoritative(): Promise<Beat[]> {
-    return this.exclusive("reload", async () => {
+  reloadAuthoritative(): Promise<Beat[]> {
+    if (this.reloadInFlight) return this.reloadInFlight;
+
+    const pending = this.exclusive("reload", async () => {
       await platform.library.restoreAuthoritative();
       const restored = await platform.library.load();
       this.lastVerified = restored.slice();
       return restored;
     });
+    this.reloadInFlight = pending;
+    void pending.finally(() => {
+      if (this.reloadInFlight === pending) this.reloadInFlight = null;
+    }).catch(() => {});
+    return pending;
   }
 
   async commitSnapshot(beats: Beat[], reason = "unspecified"): Promise<PlatformLibrarySyncResult> {
