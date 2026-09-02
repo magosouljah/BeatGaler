@@ -8,6 +8,7 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
+// Production runtime regression coverage for the follow-up observed on beatgaler.com.
 describe("Issue #97 production runtime follow-up", () => {
   it("reuses the authoritative existing topic for an existing-beat upload", async () => {
     const original = {
