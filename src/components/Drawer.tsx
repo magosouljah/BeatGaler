@@ -92,6 +92,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const keyValidation = validateMusicKey(data.key);
 
   const refreshCloudFiles = useCallback(async () => {
+    // Web's editable file surface is backed by the library manifest + platform.editor.
+    // Do not probe the legacy Desktop cloud-file bridge just because Drawer opened.
+    if (platform.capabilities.browserCloudEditing) {
+      setCloudFiles([]);
+      setCloudError(null);
+      return;
+    }
     if (!beat.telegram_file_id) {
       setCloudFiles([]);
       return;

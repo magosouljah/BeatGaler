@@ -19,6 +19,8 @@ function libraryDiagnostic(event: string, detail: string): void {
  *  - Only one INDEX read/commit transaction may be in flight from this renderer.
  *  - Refresh replaces local state from the authority; it never merges a stale render snapshot.
  *  - Callers may update React/local cache only after this manager resolves.
+ *  - A failed authority read never erases the last verified snapshot, but it still
+ *    rejects so callers cannot mistake stale/reproducible presentation for fresh authority.
  */
 class LibraryStateManager {
   private tail: Promise<void> = Promise.resolve();

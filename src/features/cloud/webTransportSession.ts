@@ -87,6 +87,13 @@ export interface WebTransportOperationResponse {
   credential_refresh?: WebTransportSessionPublic | null;
 }
 
+const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
+
+export function isTransientWebTempAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid nonce hash from server/i.test(message);
+}
+
 async function transportRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
@@ -143,42 +150,54 @@ async function bindTemporarySession(
   metadata?: TempAuthMetadata,
 ): Promise<WebTransportSession> {
   const safeBootstrap = validateBootstrap(bootstrap);
-  const prepared = await prepareWebTempAuth(safeBootstrap.temp_auth.dc_id);
-  try {
-    if (metadata) throw new Error("Unexpected prebuilt temporary-auth metadata.");
-    const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
-      browserClientId: getWebClientId(),
-      tempAuthMetadata: prepared.metadata,
-    }));
-    if (
-      response.session_id !== safeBootstrap.session_id ||
-      response.generation !== safeBootstrap.generation ||
-      response.transport_id !== safeBootstrap.transport_id ||
-      response.temp_auth.api_id !== safeBootstrap.temp_auth.api_id
-    ) {
-      throw new Error("Galer Cloud changed the Direct lease while binding temporary authorization.");
+  if (metadata) throw new Error("Unexpected prebuilt temporary-auth metadata.");
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
+    let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
+    try {
+      // Every attempt gets a brand-new MTProto connection and temporary auth key.
+      // The server-side lease remains the same installation/browser + vault lease.
+      prepared = await prepareWebTempAuth(safeBootstrap.temp_auth.dc_id);
+      const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+        browserClientId: getWebClientId(),
+        tempAuthMetadata: prepared.metadata,
+      }));
+      if (
+        response.session_id !== safeBootstrap.session_id ||
+        response.generation !== safeBootstrap.generation ||
+        response.transport_id !== safeBootstrap.transport_id ||
+        response.temp_auth.api_id !== safeBootstrap.temp_auth.api_id
+      ) {
+        throw new Error("Galer Cloud changed the Direct lease while binding temporary authorization.");
+      }
+      const binding = response.temp_auth.binding;
+      const expiresAt = Number(response.temp_auth.expires_at || 0);
+      if (!binding || expiresAt !== prepared.metadata.expiresAt) {
+        throw new Error("Galer Cloud returned an incomplete temporary authorization binding.");
+      }
+      const imported = await prepared.bind(binding);
+      return {
+        ...response,
+        temp_auth_required: false,
+        temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
+        temp_auth_key: imported.authKey,
+        temp_session_id: prepared.metadata.tempSessionId,
+        temp_session_state: imported.sessionState,
+        temp_primary_dcs: imported.primaryDcs,
+      } as WebTransportSession;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWebTempAuthError(error) || attempt >= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS) throw error;
+      console.warn(`[web/temp-auth] transient handshake failure; retrying with fresh temp auth attempt=${attempt + 1}`);
+    } finally {
+      await prepared?.destroy().catch(() => {});
     }
-    const binding = response.temp_auth.binding;
-    const expiresAt = Number(response.temp_auth.expires_at || 0);
-    if (!binding || expiresAt !== prepared.metadata.expiresAt) {
-      throw new Error("Galer Cloud returned an incomplete temporary authorization binding.");
-    }
-    const imported = await prepared.bind(binding);
-    return {
-      ...response,
-      temp_auth_required: false,
-      temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
-      temp_auth_key: imported.authKey,
-      temp_session_id: prepared.metadata.tempSessionId,
-      temp_session_state: imported.sessionState,
-      temp_primary_dcs: imported.primaryDcs,
-    } as WebTransportSession;
-  } finally {
-    await prepared.destroy().catch(() => {});
   }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-/** Opens a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
+/** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
 export async function prepareWebTransportSession(): Promise<WebTransportSession> {
   const bootstrap = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
     browserClientId: getWebClientId(),
@@ -187,38 +206,47 @@ export async function prepareWebTransportSession(): Promise<WebTransportSession>
 }
 
 export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
-  const prepared = await prepareWebTempAuth(session.temp_auth.dc_id);
-  try {
-    const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
-      browserClientId: getWebClientId(),
-      tempAuthMetadata: prepared.metadata,
-    }));
-    if (
-      response.session_id !== session.session_id ||
-      response.generation !== session.generation ||
-      response.transport_id !== session.transport_id ||
-      response.temp_auth.api_id !== session.temp_auth.api_id
-    ) {
-      throw new Error("Galer Cloud changed the Direct lease during temporary-auth renewal.");
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
+    let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
+    try {
+      prepared = await prepareWebTempAuth(session.temp_auth.dc_id);
+      const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+        browserClientId: getWebClientId(),
+        tempAuthMetadata: prepared.metadata,
+      }));
+      if (
+        response.session_id !== session.session_id ||
+        response.generation !== session.generation ||
+        response.transport_id !== session.transport_id ||
+        response.temp_auth.api_id !== session.temp_auth.api_id
+      ) {
+        throw new Error("Galer Cloud changed the Direct lease during temporary-auth renewal.");
+      }
+      const binding = response.temp_auth.binding;
+      const expiresAt = Number(response.temp_auth.expires_at || 0);
+      if (!binding || expiresAt !== prepared.metadata.expiresAt) {
+        throw new Error("Galer Cloud returned an incomplete renewal binding.");
+      }
+      const imported = await prepared.bind(binding);
+      return {
+        ...response,
+        temp_auth_required: false,
+        temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
+        temp_auth_key: imported.authKey,
+        temp_session_id: prepared.metadata.tempSessionId,
+        temp_session_state: imported.sessionState,
+        temp_primary_dcs: imported.primaryDcs,
+      } as WebTransportSession;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWebTempAuthError(error) || attempt >= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS) throw error;
+      console.warn(`[web/temp-auth] transient renewal failure; retrying with fresh temp auth attempt=${attempt + 1}`);
+    } finally {
+      await prepared?.destroy().catch(() => {});
     }
-    const binding = response.temp_auth.binding;
-    const expiresAt = Number(response.temp_auth.expires_at || 0);
-    if (!binding || expiresAt !== prepared.metadata.expiresAt) {
-      throw new Error("Galer Cloud returned an incomplete renewal binding.");
-    }
-    const imported = await prepared.bind(binding);
-    return {
-      ...response,
-      temp_auth_required: false,
-      temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
-      temp_auth_key: imported.authKey,
-      temp_session_id: prepared.metadata.tempSessionId,
-      temp_session_state: imported.sessionState,
-      temp_primary_dcs: imported.primaryDcs,
-    } as WebTransportSession;
-  } finally {
-    await prepared.destroy().catch(() => {});
   }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 export async function activateWebTransportSession(session: WebTransportSession): Promise<void> {
