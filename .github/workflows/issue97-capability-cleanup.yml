@@ -1,0 +1,25 @@
+name: Issue 97 capability cleanup
+
+on: push
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-97-temp-auth-artwork-resilience-v2
+          fetch-depth: 0
+      - name: Apply platform capability cleanup
+        run: python scripts/issue97-capability-cleanup.py
+      - name: Commit bounded cleanup
+        run: |
+          rm .github/workflows/issue97-capability-cleanup.yml scripts/issue97-capability-cleanup.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.tsx src/components/Drawer.tsx .github/workflows/issue97-capability-cleanup.yml scripts/issue97-capability-cleanup.py
+          git commit -m "refactor(web): route Issue 97 fixes through platform capability"
+          git push origin HEAD:issue-97-temp-auth-artwork-resilience-v2
