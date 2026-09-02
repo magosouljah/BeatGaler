@@ -315,7 +315,10 @@ try {
   if (!app.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
   if (!app.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
   if (!app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
-  if (!app.includes('const [beats, setBeats] = useState<Beat[]>([]);')) fail("Cold Offline startup can render ordinary cached cloud cards before verification again.");
+  if (!app.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
+  if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
+  if (!beatCard.includes('pointerEvents: visible && interactive ? "auto" : "none"')) fail("Presentation-only cached cards can receive pointer input before authority verification.");
+  if (!app.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");
   if (!app.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
   if (!app.includes('BeatGaler does not import new beats while offline')) fail("Offline mode re-enabled beat imports.");
   if (!app.includes('const delays = [0, 1000, 2000, 5000, 10000, 30000, 60000]')) fail("Reconnect/upload preflight lost the bounded 1s→60s backoff sequence.");
