@@ -11,12 +11,12 @@ function section(startMarker: string, endMarker: string): string {
 }
 
 describe("Issue #97 Web routing contracts", () => {
-  it("routes browser artwork through the Web editor adapter before any Desktop-only metadata path", () => {
+  it("routes browser artwork through the browser-editing capability before any Desktop-only metadata path", () => {
     const artwork = section(
       "const handleDropArtwork = useCallback",
       "const runBeatCloudUpdate = useCallback",
     );
-    const webBranch = artwork.indexOf('if (platform.kind === "web")');
+    const webBranch = artwork.indexOf("if (platform.capabilities.browserCloudEditing)");
     const webCommit = artwork.indexOf("platform.editor.commit(beat, updated, {})");
     const desktopMeta = artwork.indexOf("saveBeatMeta({");
     const desktopTelegram = artwork.indexOf("syncBeatMetadataToTelegram(updated)");
@@ -27,12 +27,12 @@ describe("Issue #97 Web routing contracts", () => {
     expect(desktopTelegram).toBeGreaterThan(desktopMeta);
   });
 
-  it("does not install the legacy metadata-to-Tauri observer in Web runtime", () => {
+  it("does not install the legacy metadata-to-Tauri observer when browser cloud editing owns commits", () => {
     const observer = section(
       "// Web edits are explicit durable transactions through platform.editor.",
       "useEffect(() => () => {",
     );
-    expect(observer).toContain('if (platform.kind === "web") return;');
+    expect(observer).toContain("if (platform.capabilities.browserCloudEditing) return;");
     expect(observer).toContain("syncBeatMetadataToTelegram(latestBeat)");
   });
 
