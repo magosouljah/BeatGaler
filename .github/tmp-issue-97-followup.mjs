@@ -115,4 +115,12 @@ replaceExact(
   `  it("keeps Web auth to one gate while preserving Desktop AccountGate", () => {\n    expect(app).toContain('return platform.kind === "web"');\n    expect(app).toContain('? <BeatGalerApp />');\n    expect(app).toContain(': <AccountGate><BeatGalerApp /></AccountGate>');\n  });\n\n  it("keeps online reveal monotonic across transport refreshes", () => {\n    expect(app).toContain("for (const beat of visible) next.add(beat.id)");\n  });\n\n  it("serves WebAssembly with the streaming MIME type", () => {\n    expect(nginx).toContain("types { application/wasm wasm; }");\n    expect(nginx).toContain("default_type application/wasm;");\n  });`,
 );
 
+// Preserve the existing playback-preparation safety guard while allowing cached
+// cards to use the non-destructive progressive playback path before mutations unlock.
+replaceExact(
+  'scripts/run-regressions.mjs',
+  `  if (!beatCard.includes("if (playbackBlocked) return;")) fail("BeatCard must ignore Play clicks while upload/playback preparation is active.");`,
+  `  if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) return;")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");`,
+);
+
 console.log('Issue #97 startup interaction follow-up patch applied.');
