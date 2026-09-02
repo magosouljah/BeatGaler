@@ -210,15 +210,26 @@ export function useAudio() {
 
   const play = useCallback((beatId: string, paths: string[]) => {
     const audio = getAudio();
-    if (state.playingId === beatId) {
-      audio.paused ? audio.play().catch(console.error) : audio.pause();
-      return;
-    }
     const sources = Array.from(new Set(paths.filter(Boolean).map(path => platform.media.resolveUrl(path))));
     if (sources.length === 0) {
       console.error("No audio sources available for beat", beatId);
       return;
     }
+
+    // React state can lag a rapid second Play click by one render. The ref is
+    // updated synchronously below, so use it as the immediate playback owner.
+    // Re-loading the same MediaSource while it is still attaching can detach
+    // the source and surface ERR_FILE_NOT_FOUND / play() interrupted by pause().
+    const samePendingSource = currentBeatIdRef.current === beatId && sourceUrlsRef.current[0] === sources[0];
+    if (samePendingSource && audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA && !audio.error) {
+      void platform.diagnostics.audioEvent("AUDIO_DUPLICATE_PLAY_IGNORED", beatId, null, `readyState=${audio.readyState}`).catch(() => {});
+      return;
+    }
+    if (samePendingSource || state.playingId === beatId) {
+      audio.paused ? audio.play().catch(console.error) : audio.pause();
+      return;
+    }
+
     const previousBeatId = currentBeatIdRef.current;
     audio.pause();
     currentBeatIdRef.current = beatId;
