@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const app = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
-const drawer = readFileSync(new URL("../../src/components/Drawer.tsx", import.meta.url), "utf8");
+const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const drawer = readFileSync(resolve(process.cwd(), "src/components/Drawer.tsx"), "utf8");
 
 describe("Issue #97 Drawer Web routing contracts", () => {
   it("uses the browser editor when no explicit Desktop cloud commit owner is supplied", () => {
