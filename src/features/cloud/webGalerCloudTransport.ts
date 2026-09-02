@@ -166,13 +166,10 @@ export class WebGalerCloudTransport {
       const result = await commitWebBeatEdit(original, updated, files, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
         upload: async (input, progress) => {
-          const hintedThreadId = Number(input.threadId || 0);
-          let threadId = Number.isInteger(hintedThreadId) && hintedThreadId > 0 ? hintedThreadId : 0;
-          if (!threadId) {
-            topic ||= ensureWebTransportTopic(input.beatId, input.beatName);
-            threadId = await topic;
-          }
-          return this.uploadOnce({ ...input, threadId }, progress);
+          topic ||= ensureWebTransportTopic(input.beatId, input.beatName);
+          const threadId = await topic;
+          const uploaded = await this.uploadOnce({ ...input, threadId }, progress);
+          return { ...uploaded, thread_id: threadId };
         },
         replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
       }, onProgress);

@@ -8,9 +8,8 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
-// Production runtime regression coverage for the follow-up observed on beatgaler.com.
 describe("Issue #97 production runtime follow-up", () => {
-  it("reuses the authoritative existing topic for an existing-beat upload", async () => {
+  it("replaces a stale installation topic id with the vault-resolved topic after artwork upload", async () => {
     const original = {
       id: "beat-1",
       name: "Same Beat",
@@ -24,8 +23,9 @@ describe("Issue #97 production runtime follow-up", () => {
       telegram_message_id: 101,
       image_base64: null,
     } as unknown as Beat;
-    const updated = { ...original, bpm: "121" };
+    const updated = { ...original, image_base64: "data:image/png;base64,YQ==" };
     const uploadedInputs: Array<Record<string, unknown>> = [];
+    let publishedManifest: any = null;
     const runtime = {
       getLibraryIndex: vi.fn(async () => ({
         messageId: 500,
@@ -52,18 +52,42 @@ describe("Issue #97 production runtime follow-up", () => {
         return {
           telegram_file_id: "file-new",
           telegram_message_id: 202,
-          filename: "new.mp3",
-          original_size: 3,
+          filename: "cover.png",
+          original_size: 1,
           parts: [],
           transport: "direct-web" as const,
+          thread_id: 3131,
         };
       }),
-      replaceLibraryIndex: vi.fn(async () => ({ messageId: 501, beatCount: 1, updated: true })),
+      replaceLibraryIndex: vi.fn(async (input: { manifest: unknown }) => {
+        publishedManifest = input.manifest;
+        return { messageId: 501, beatCount: 1, updated: true };
+      }),
     };
 
-    await commitWebBeatEdit(original, updated, { MASTER: new File(["abc"], "new.mp3", { type: "audio/mpeg" }) }, runtime);
+    await commitWebBeatEdit(original, updated, {}, runtime);
     expect(uploadedInputs).toHaveLength(1);
-    expect(uploadedInputs[0].threadId).toBe(4242);
+    expect(uploadedInputs[0]).not.toHaveProperty("threadId");
+    expect(publishedManifest.beats[0].telegram_topic_id).toBe(3131);
+  });
+
+  it("keeps visible cloud cards playable while authority is still checking", () => {
+    const app = source("src/App.tsx");
+    const card = source("src/components/BeatCard.tsx");
+    expect(app).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
+    expect(card).toContain("if (!playbackInteractive || playbackBlocked) return;");
+  });
+
+  it("resolves an existing beat topic by vault rather than installation", () => {
+    const server = source("cloud-server/server-core.js");
+    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
+    expect(server).toContain("function storedBeatTopicCandidates(chatId, userId, beatId)");
+    expect(server).toContain("key.endsWith(suffix)");
+    expect(server).toContain("Number(current?.chatId) === Number(chatId)");
+    expect(server).toContain("Number(a.messageThreadId) - Number(b.messageThreadId)");
+    expect(server).toContain("adoptCanonicalBeatTopic(chatId, userId, beatId, name, current)");
+    expect(transport).not.toContain("hintedThreadId");
+    expect(transport).toContain("return { ...uploaded, thread_id: threadId };");
   });
 
   it("routes browser drops through browser File owners, not Desktop path staging", () => {
@@ -79,11 +103,5 @@ describe("Issue #97 production runtime follow-up", () => {
     const app = source("src/App.tsx");
     expect(app).toContain("if (!platform.capabilities.playbackCache) return;");
     expect(app).toContain("Math.min(isTauriAvailable ? 6 : 1, queue.length)");
-  });
-
-  it("existing Web edit transport prefers the manifest thread hint", () => {
-    const edit = source("src/features/cloud/webGalerCloudTransport.ts");
-    expect(edit).toContain("const hintedThreadId = Number(input.threadId || 0)");
-    expect(edit).toContain("if (!threadId)");
   });
 });
