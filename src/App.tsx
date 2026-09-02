@@ -1149,10 +1149,16 @@ function BeatGalerApp() {
         if (!cancelled) {
           setSetupDone(true);
           setLoading(false);
-          await showOfflineLibrary(
-            typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor"
-          );
-          dismissBeatGalerStartupLoader();
+          setCloudSessionVerified(false);
+          if (typeof navigator !== "undefined" && navigator.onLine === false) {
+            await showOfflineLibrary("offline");
+          } else {
+            // Authority is temporarily unknown, not empty. Keep the verified/cache
+            // presentation already on screen, but make it read-only until a later
+            // authoritative reload succeeds. This prevents 60 -> 0 -> 60 flashes.
+            setConnectionState("poor");
+            dismissBeatGalerStartupLoader();
+          }
         }
       }
     })();
