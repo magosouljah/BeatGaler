@@ -1,19 +1,78 @@
-name: Issue 97 regression patch
+name: Web - Production Build
 
 on:
-  push:
-    branches:
-      - issue-97-regression-root-fix
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'deploy/web/**'
+      - 'scripts/deploy-web-production.ps1'
+      - 'scripts/test-public-operations-pages.mjs'
+      - 'scripts/regression-web-startup-bridge.mjs'
+      - 'scripts/regression-web-bound-temp-rpc.mjs'
+      - '.github/workflows/web-production-build.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  patch:
+  issue97-regression-root-patch:
+    if: github.event_name == 'pull_request' && github.head_ref == 'issue-97-regression-root-fix' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 2
-      - name: Sanity
-        run: echo "runner-ok"
+          ref: issue-97-regression-root-fix
+          fetch-depth: 0
+      - name: Apply root regression fix
+        run: python scripts/issue97_regression_root_patch.py
+      - name: Restore canonical workflow and commit real patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin integration-v0.8.0-alpha.1 --depth=1
+          git show origin/integration-v0.8.0-alpha.1:.github/workflows/web-production-build.yml > .github/workflows/web-production-build.yml
+          rm -f scripts/issue97_regression_root_patch.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "F2/97: fix playback gate and vault topic regression"
+          git push origin HEAD:issue-97-regression-root-fix
+
+  web-production-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.2'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate public operations source
+        run: node scripts/test-public-operations-pages.mjs
+      - name: Guard browser startup bridge
+        run: node scripts/regression-web-startup-bridge.mjs
+      - name: Guard bound-temp Web RPC seam
+        run: node scripts/regression-web-bound-temp-rpc.mjs
+      - name: Build browser Web
+        run: npm run build:web
+      - name: Validate static package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          node scripts/test-public-operations-pages.mjs --dist
+          find dist -maxdepth 2 -type f -print | head -100
+          grep -R --include='*.js' -q '/beatgaler-api' dist
+      - name: Validate EC2 installer syntax
+        run: bash -n deploy/web/install-web-production.sh
+      - name: Validate PowerShell deploy script syntax
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create((Get-Content -Raw scripts/deploy-web-production.ps1))
