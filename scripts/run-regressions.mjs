@@ -231,7 +231,7 @@ try {
 
   const playbackReadiness = readFileSync(path.join(root, "src", "features", "playback", "playbackReadiness.ts"), "utf8");
   if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
-  if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) return;")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
+  if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) {") || !beatCard.includes("CARD_PLAY_REJECTED") || !beatCard.includes("onPlay(beat);")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
   if (!app.includes('PLAY_BLOCKED_LOADING')) fail("App handlePlay lost its defensive loading-state guard.");
   if (!app.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
   if (app.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
