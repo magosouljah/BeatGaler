@@ -18,34 +18,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  issue97-playback-trace-patch:
-    if: github.event_name == 'pull_request' && github.head_ref == 'issue-97-playback-trace' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: issue-97-playback-trace
-          fetch-depth: 0
-      - name: Apply playback trace instrumentation
-        run: |
-          python scripts/fix_issue97_playback_trace_patch.py
-          python scripts/issue97_playback_trace_patch.py
-      - name: Restore canonical workflow and commit diagnostic patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin integration-v0.8.0-alpha.1 --depth=1
-          git show origin/integration-v0.8.0-alpha.1:.github/workflows/web-production-build.yml > .github/workflows/web-production-build.yml
-          rm -f scripts/issue97_playback_trace_patch.py scripts/fix_issue97_playback_trace_patch.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "diag(web): trace Issue 97 playback critical path"
-          git push origin HEAD:issue-97-playback-trace
-
   web-production-build:
     runs-on: ubuntu-latest
     steps:

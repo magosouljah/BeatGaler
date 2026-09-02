@@ -1,4 +1,5 @@
 import type { WebTransportStreamInput, WebTransportStreamResult } from "../cloud/webTransportWorkerProtocol";
+import { playTrace } from "./playTrace";
 
 export interface WebPlaybackTransport {
   streamFile(
@@ -50,13 +51,15 @@ export class WebPlaybackSourceManager {
   constructor(private readonly transport: WebPlaybackTransport) {}
 
   prepare(beatId: string, messageId: number, mimeType = "audio/mpeg"): Promise<PreparedWebPlayback> {
+    const mediaSourceSupported = supportsMediaSource(mimeType);
+    playTrace("SOURCE_PREPARE", { beat_id: beatId, mime_type: mimeType, mode: mediaSourceSupported ? "mse" : "blob" });
     const existing = this.entries.get(beatId);
     if (existing && !existing.released && !existing.failed) {
       return Promise.resolve({ url: existing.url, completed: existing.completed });
     }
     const pending = this.pending.get(beatId);
     if (pending) return pending;
-    const preparation = (supportsMediaSource(mimeType)
+    const preparation = (mediaSourceSupported
       ? this.prepareMediaSource(beatId, messageId, mimeType)
       : this.prepareBlobFallback(beatId, messageId, mimeType)
     ).finally(() => this.pending.delete(beatId));
@@ -65,6 +68,7 @@ export class WebPlaybackSourceManager {
   }
 
   private async prepareMediaSource(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
+    playTrace("SOURCE_MSE_BEGIN", { beat_id: beatId });
     const mediaSource = new MediaSource();
     const url = URL.createObjectURL(mediaSource);
     let resolveCompleted!: () => void;
@@ -120,6 +124,7 @@ export class WebPlaybackSourceManager {
     };
 
     mediaSource.addEventListener("sourceopen", () => {
+      playTrace("SOURCE_MSE_SOURCEOPEN", { beat_id: beatId });
       if (entry.released || entry.sourceBuffer) return;
       if (entry.failed) {
         try { mediaSource.endOfStream("network"); } catch {}
@@ -141,7 +146,13 @@ export class WebPlaybackSourceManager {
     }, { once: true });
 
     try {
+      let firstChunkLogged = false;
+      playTrace("SOURCE_STREAM_REQUEST", { beat_id: beatId });
       const stream = await this.transport.streamFile({ messageId, mimeType }, chunk => {
+        if (!firstChunkLogged) {
+          firstChunkLogged = true;
+          playTrace("SOURCE_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength });
+        }
         if (entry.released) return Promise.reject(abortError());
         if (entry.failed) return Promise.reject(new Error("Cloud audio stream failed."));
         return new Promise<void>((resolve, reject) => {
@@ -149,6 +160,7 @@ export class WebPlaybackSourceManager {
           pump();
         });
       });
+      playTrace("SOURCE_STREAM_HANDLE_READY", { beat_id: beatId });
       entry.cancel = stream.cancel;
       if (entry.released) {
         stream.cancel();
@@ -159,6 +171,7 @@ export class WebPlaybackSourceManager {
         pump();
         finishIfReady();
       }, fail);
+      playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });
       return { url, completed };
     } catch (error) {
       fail(error);
@@ -168,11 +181,18 @@ export class WebPlaybackSourceManager {
   }
 
   private async prepareBlobFallback(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
+    playTrace("SOURCE_BLOB_BEGIN", { beat_id: beatId });
     const chunks: ArrayBuffer[] = [];
+    let firstChunkLogged = false;
     let placeholder: PlaybackEntry | null = null;
     const stream = await this.transport.streamFile({ messageId, mimeType }, chunk => {
+      if (!firstChunkLogged) {
+        firstChunkLogged = true;
+        playTrace("SOURCE_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength });
+      }
       if (!placeholder?.released) chunks.push(chunk);
     });
+    playTrace("SOURCE_STREAM_HANDLE_READY", { beat_id: beatId });
     placeholder = {
       beatId,
       url: "",
@@ -189,10 +209,12 @@ export class WebPlaybackSourceManager {
     this.entries.set(beatId, placeholder);
     try {
       const result = await stream.completed;
+      playTrace("SOURCE_BLOB_DOWNLOAD_DONE", { beat_id: beatId, chunks: chunks.length });
       if (placeholder.released) throw abortError();
       const url = URL.createObjectURL(new Blob(chunks, { type: result.mimeType || "audio/mpeg" }));
       placeholder.url = url;
       placeholder.streamDone = true;
+      playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "blob" });
       return { url, completed: Promise.resolve() };
     } catch (error) {
       placeholder.failed = true;

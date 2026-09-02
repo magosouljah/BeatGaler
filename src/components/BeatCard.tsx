@@ -10,6 +10,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useTagColors } from "../lib/tagColors";
 import { getProjectCloudStatus, type ProjectCloudStatus } from "../lib/tauri";
 import { beatCardIncompleteReasons, beatCardPlaybackBlocked, shouldShowIncompleteWarning, sortBeatCardTags } from "../features/components/componentLogic";
+import { playTrace } from "../features/playback/playTrace";
 
 import BeatGalerIcon from "./BeatGalerIcon";
 interface Props {
@@ -441,7 +442,18 @@ export default function BeatCard({
             e.stopPropagation(); onToggleSelect(beat, e); return;
           }
           e.stopPropagation();
-          if (!playbackInteractive || playbackBlocked) return;
+          playTrace("CARD_PLAY_CLICK", {
+            beat_id: beat.id,
+            playback_interactive: playbackInteractive,
+            playback_blocked: playbackBlocked,
+            interactive,
+            cloud_status: beat.cloud_status || null,
+          });
+          if (!playbackInteractive || playbackBlocked) {
+            playTrace("CARD_PLAY_REJECTED", { beat_id: beat.id });
+            return;
+          }
+          playTrace("CARD_PLAY_ACCEPTED", { beat_id: beat.id });
           onPlay(beat);
         }}
       >
