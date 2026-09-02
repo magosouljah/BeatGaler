@@ -1,0 +1,47 @@
+name: TMP Issue 97 startup interaction follow-up
+
+on:
+  push:
+    branches:
+      - issue-97-startup-interaction-followup
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up pinned Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Apply follow-up patch
+        run: node .github/tmp-issue-97-followup.mjs
+      - name: Install locked npm graph
+        run: npm ci
+      - name: Typecheck
+        run: npm run test:typecheck
+      - name: Component DOM tests
+        run: npm run test:component:dom
+      - name: Integration tests
+        run: npm run test:integration
+      - name: Regression guards
+        run: npm run test:regressions
+      - name: Web production build
+        run: npm run build:web
+      - name: Commit validated follow-up and remove temporary runner
+        env:
+          BRANCH: issue-97-startup-interaction-followup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/tmp-issue-97-followup.mjs .github/workflows/tmp-issue-97-followup.yml
+          git add src/App.tsx src/components/BeatCard.tsx index.html deploy/web/beatgaler.com.conf tests/component-dom/startupRevealArchitecture.test.ts
+          git commit -m "F2/97: make cached library playable during verification"
+          git push origin HEAD:${BRANCH}
