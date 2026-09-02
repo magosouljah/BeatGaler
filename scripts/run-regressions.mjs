@@ -231,7 +231,7 @@ try {
 
   const playbackReadiness = readFileSync(path.join(root, "src", "features", "playback", "playbackReadiness.ts"), "utf8");
   if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
-  if (!beatCard.includes("if (playbackBlocked) return;")) fail("BeatCard must ignore Play clicks while upload/playback preparation is active.");
+  if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) return;")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
   if (!app.includes('PLAY_BLOCKED_LOADING')) fail("App handlePlay lost its defensive loading-state guard.");
   if (!app.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
   if (app.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
@@ -317,7 +317,9 @@ try {
   if (!app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!app.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
   if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
-  if (!beatCard.includes('pointerEvents: visible && interactive ? "auto" : "none"')) fail("Presentation-only cached cards can receive pointer input before authority verification.");
+  if (!beatCard.includes('pointerEvents: visible ? "auto" : "none"')) fail("Visible cached cards lost the pointer path required for progressive playback.");
+if (!app.includes('playbackInteractive={connectionState === "online" || Boolean(beat.offline_available)}')) fail("Cached cards lost the non-destructive playback gate while cloud authority is verifying.");
+if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (interactive && selectMode)') || !beatCard.includes('dragEnabled && interactive')) fail("Cached presentation can mutate before authority verification.");
   if (!app.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");
   if (!app.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
   if (!app.includes('BeatGaler does not import new beats while offline')) fail("Offline mode re-enabled beat imports.");
