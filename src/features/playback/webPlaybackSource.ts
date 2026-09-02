@@ -67,7 +67,7 @@ export class WebPlaybackSourceManager {
     return preparation;
   }
 
-  private async prepareMediaSource(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
+  private prepareMediaSource(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
     playTrace("SOURCE_MSE_BEGIN", { beat_id: beatId });
     const mediaSource = new MediaSource();
     const url = URL.createObjectURL(mediaSource);
@@ -145,39 +145,45 @@ export class WebPlaybackSourceManager {
       }
     }, { once: true });
 
-    try {
-      let firstChunkLogged = false;
-      playTrace("SOURCE_STREAM_REQUEST", { beat_id: beatId });
-      const stream = await this.transport.streamFile({ messageId, mimeType }, chunk => {
-        if (!firstChunkLogged) {
-          firstChunkLogged = true;
-          playTrace("SOURCE_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength });
-        }
-        if (entry.released) return Promise.reject(abortError());
-        if (entry.failed) return Promise.reject(new Error("Cloud audio stream failed."));
-        return new Promise<void>((resolve, reject) => {
-          entry.queue.push({ chunk, resolve, reject });
-          pump();
+    // The MediaSource URL is usable immediately. Do not hold the first user
+    // click behind the cold Direct lease/MTProto handshake. The stream fills the
+    // same MediaSource asynchronously; the audio element can enter its waiting
+    // state now and begin as soon as the first MASTER chunk arrives.
+    playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });
+    void (async () => {
+      try {
+        let firstChunkLogged = false;
+        playTrace("SOURCE_STREAM_REQUEST", { beat_id: beatId });
+        const stream = await this.transport.streamFile({ messageId, mimeType }, chunk => {
+          if (!firstChunkLogged) {
+            firstChunkLogged = true;
+            playTrace("SOURCE_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength });
+          }
+          if (entry.released) return Promise.reject(abortError());
+          if (entry.failed) return Promise.reject(new Error("Cloud audio stream failed."));
+          return new Promise<void>((resolve, reject) => {
+            entry.queue.push({ chunk, resolve, reject });
+            pump();
+          });
         });
-      });
-      playTrace("SOURCE_STREAM_HANDLE_READY", { beat_id: beatId });
-      entry.cancel = stream.cancel;
-      if (entry.released) {
-        stream.cancel();
-        throw abortError();
+        playTrace("SOURCE_STREAM_HANDLE_READY", { beat_id: beatId });
+        entry.cancel = stream.cancel;
+        if (entry.released) {
+          stream.cancel();
+          return;
+        }
+        void stream.completed.then(() => {
+          entry.streamDone = true;
+          pump();
+          finishIfReady();
+        }, fail);
+      } catch (error) {
+        fail(error);
+        this.release(beatId);
       }
-      void stream.completed.then(() => {
-        entry.streamDone = true;
-        pump();
-        finishIfReady();
-      }, fail);
-      playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });
-      return { url, completed };
-    } catch (error) {
-      fail(error);
-      this.release(beatId);
-      throw error;
-    }
+    })();
+
+    return Promise.resolve({ url, completed });
   }
 
   private async prepareBlobFallback(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
