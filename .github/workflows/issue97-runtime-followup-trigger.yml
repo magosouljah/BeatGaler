@@ -1,0 +1,33 @@
+name: Issue 97 runtime follow-up trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - integration-v0.8.0-alpha.1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'issue-97-runtime-web-followup' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: issue-97-runtime-web-followup
+      - name: Apply runtime patch
+        run: python scripts/issue97_runtime_followup_patch.py
+      - name: Commit real patch and remove one-shot helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/issue97-runtime-followup-patch.yml
+          rm -f .github/workflows/issue97-runtime-followup-trigger.yml
+          rm -f scripts/issue97_runtime_followup_patch.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(web): route runtime edits and imports through browser transport"
+          git push origin HEAD:issue-97-runtime-web-followup
