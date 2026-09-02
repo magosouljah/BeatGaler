@@ -75,7 +75,8 @@ describe("Issue #97 production runtime follow-up", () => {
     const app = source("src/App.tsx");
     const card = source("src/components/BeatCard.tsx");
     expect(app).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
-    expect(card).toContain("if (!playbackInteractive || playbackBlocked) return;");
+    expect(card).toContain("if (!playbackInteractive || playbackBlocked) {");
+    expect(card).toContain("onPlay(beat);");
   });
 
   it("resolves an existing beat topic by vault rather than installation", () => {
