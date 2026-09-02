@@ -19,6 +19,9 @@ function libraryDiagnostic(event: string, detail: string): void {
  *  - Only one INDEX read/commit transaction may be in flight from this renderer.
  *  - Refresh replaces local state from the authority; it never merges a stale render snapshot.
  *  - Callers may update React/local cache only after this manager resolves.
+ *  - Once this renderer has a verified snapshot, a transient authority failure never
+ *    turns that verified surface into an empty library. The verified snapshot stays
+ *    reproducible/read-only until a later authoritative reload succeeds.
  */
 class LibraryStateManager {
   private tail: Promise<void> = Promise.resolve();
@@ -52,10 +55,19 @@ class LibraryStateManager {
     if (this.reloadInFlight) return this.reloadInFlight;
 
     const pending = this.exclusive("reload", async () => {
-      await platform.library.restoreAuthoritative();
-      const restored = await platform.library.load();
-      this.lastVerified = restored.slice();
-      return restored;
+      try {
+        await platform.library.restoreAuthoritative();
+        const restored = await platform.library.load();
+        this.lastVerified = restored.slice();
+        return restored;
+      } catch (error) {
+        if (this.lastVerified !== null) {
+          console.warn("[library-tx] transient authority failure; preserving last verified library surface", error);
+          libraryDiagnostic("PRESERVE_VERIFIED", `beats=${this.lastVerified.length} error=${String(error)}`);
+          return this.lastVerified.slice();
+        }
+        throw error;
+      }
     });
     this.reloadInFlight = pending;
     void pending.finally(() => {
