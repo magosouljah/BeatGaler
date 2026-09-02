@@ -177,14 +177,21 @@ export const webAdapter: PlatformAdapter = {
   media: {
     resolveUrl(source) { return source; },
     async preparePlayback(beat) {
+      const master = beat.assets?.master;
+      const messageId = beat.telegram_message_id || directMessageId(master?.object_id) || directMessageId(beat.telegram_file_id);
+      // A blob: URL is valid only for the document that created it. Cached Web
+      // manifests can outlive that document, so cloud-backed beats must always
+      // obtain a fresh session-owned playback URL from WebPlaybackSourceManager.
+      if (messageId) {
+        const sources = await resolveWebPlaybackSources();
+        return sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
+      }
+      // Keep the direct blob path only for a browser-local import that has not
+      // been committed to Galer Cloud yet.
       if (beat.playback_path.startsWith("blob:")) {
         return { url: beat.playback_path, completed: Promise.resolve() };
       }
-      const master = beat.assets?.master;
-      const messageId = beat.telegram_message_id || directMessageId(master?.object_id) || directMessageId(beat.telegram_file_id);
-      if (!messageId) throw new Error("This MASTER must be migrated before it can play on Web.");
-      const sources = await resolveWebPlaybackSources();
-      return sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
+      throw new Error("This MASTER must be migrated before it can play on Web.");
     },
     async loadArtwork(beat) {
       const artwork = beat.assets?.artwork;

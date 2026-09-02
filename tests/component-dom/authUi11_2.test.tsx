@@ -6,7 +6,7 @@ import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const API_KEY = "beatgaler:cloud-api:v1";
-const TRUSTED_REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
+const SAME_ORIGIN_API = `${window.location.origin}/beatgaler-api`;
 
 async function renderGate() {
   const host = document.createElement("div");
@@ -27,7 +27,7 @@ describe("F2 11.2 complete Auth UI", () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
-    localStorage.setItem(API_KEY, TRUSTED_REMOTE_API);
+    localStorage.setItem(API_KEY, SAME_ORIGIN_API);
     vi.restoreAllMocks();
   });
 
@@ -60,8 +60,8 @@ describe("F2 11.2 complete Auth UI", () => {
   it("moves a login that requires MFA into an accessible authenticator/recovery flow", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === `${TRUSTED_REMOTE_API}/auth/health`) return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
-      if (url === `${TRUSTED_REMOTE_API}/auth/login`) {
+      if (url === `${SAME_ORIGIN_API}/auth/health`) return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
+      if (url === `${SAME_ORIGIN_API}/auth/login`) {
         return new Response(JSON.stringify({ error: "Two-step verification required.", code: "MFA_REQUIRED", mfa_required: true }), { status: 401 });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -92,10 +92,10 @@ describe("F2 11.2 complete Auth UI", () => {
   it("offers popup blocked recovery, redirect/new-tab fallback, cancel and retry semantics for OAuth", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === `${TRUSTED_REMOTE_API}/auth/oauth/start`) {
+      if (url === `${SAME_ORIGIN_API}/auth/oauth/start`) {
         return new Response(JSON.stringify({ flow_id: "flow-1", authorization_url: "https://accounts.example.test/oauth" }), { status: 200 });
       }
-      if (url === `${TRUSTED_REMOTE_API}/auth/health`) return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
+      if (url === `${SAME_ORIGIN_API}/auth/health`) return new Response(JSON.stringify({ account_auth: true }), { status: 200 });
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
