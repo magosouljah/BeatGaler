@@ -3042,6 +3042,9 @@ function BeatGalerApp() {
   }, [refreshOpenableCloudProjects, rejectOfflineMutation, transitionRuntime]);
 
   useEffect(() => {
+    // Web edits are explicit durable transactions through platform.editor.
+    // Never let the legacy Desktop metadata observer invoke Tauri from Web.
+    if (platform.kind === "web") return;
     if (connectionState !== "online" || !cloudSessionVerified) return;
     const next = new Map<string, string>();
     for (const beat of beats) {
@@ -3320,10 +3323,32 @@ function BeatGalerApp() {
 
   const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {
     if (rejectOfflineMutation("Changing artwork")) return;
-    // Artwork is an explicit cloud transaction. Decoding/loading artwork is no
-    // longer part of cloudBeatFingerprint, so only a real user artwork change
-    // reaches Telegram here. Order is intentionally:
-    //   upload new artwork -> commit new INDEX -> helper deletes old artwork.
+
+    const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
+
+    if (platform.kind === "web") {
+      // Publish the browser-decoded artwork immediately, then commit it through
+      // the Web editor/Direct transport. No Tauri metadata path participates.
+      updateBeat(updated);
+      transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);
+      try {
+        const committed = await platform.editor.commit(beat, updated, {});
+        setBeats(current => {
+          const next = current.map(item => item.id === committed.id ? committed : item);
+          beatsLatestRef.current = next;
+          return next;
+        });
+        setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);
+        transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);
+      } catch (error) {
+        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+        transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);
+        throw error;
+      }
+      return;
+    }
+
+    // Desktop keeps its existing native metadata/artwork transaction.
     await saveBeatMeta({
       mp3_path: beat.mp3_path,
       wav_path: beat.wav_path,
@@ -3335,7 +3360,6 @@ function BeatGalerApp() {
       update_filename: false,
     });
 
-    const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
     updateBeat(updated);
 
     if (updated.telegram_file_id && connectionState === "online") {
@@ -3346,9 +3370,6 @@ function BeatGalerApp() {
         await syncBeatMetadataToTelegram(updated);
         const indexSnapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
         await libraryStateManager.commitSnapshot(indexSnapshot, "upload-batch");
-
-        // This explicit transaction owns the INDEX commit. Prevent the generic
-        // library observer/cloud-file event from immediately writing it again.
         if (cloudLibraryTimerRef.current) {
           window.clearTimeout(cloudLibraryTimerRef.current);
           cloudLibraryTimerRef.current = null;
