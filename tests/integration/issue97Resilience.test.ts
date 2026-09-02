@@ -62,7 +62,7 @@ describe("Issue #97 reload/temp-auth resilience", () => {
     vi.resetModules();
   });
 
-  it("keeps the last verified library visible when a later authority reload fails", async () => {
+  it("keeps the last verified snapshot reproducible but does not report a failed reload as authoritative", async () => {
     const beat = makeBeat();
     const restore = vi.fn()
       .mockResolvedValueOnce(undefined)
@@ -71,7 +71,8 @@ describe("Issue #97 reload/temp-auth resilience", () => {
     const { libraryStateManager } = await loadLibraryManager(restore, load);
 
     expect((await libraryStateManager.reloadAuthoritative()).map(item => item.id)).toEqual([beat.id]);
-    expect((await libraryStateManager.reloadAuthoritative()).map(item => item.id)).toEqual([beat.id]);
+    await expect(libraryStateManager.reloadAuthoritative()).rejects.toThrow("invalid nonce hash");
+    expect(libraryStateManager.verifiedSnapshot()?.map(item => item.id)).toEqual([beat.id]);
     expect(load).toHaveBeenCalledTimes(1);
   });
 
