@@ -1,3 +1,4 @@
+import { playTrace } from "../playback/playTrace";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
 import type {
@@ -21,6 +22,7 @@ import type {
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
 
 type PendingRequest = {
+  operation: WebTransportWorkerRequest["op"];
   resolve(value: unknown): void;
   reject(error: Error): void;
   onProgress?: (progress: WebTransportProgress) => void;
@@ -43,9 +45,12 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
+    playTrace("WORKER_CREATE_BEGIN");
     const worker = new Worker(new URL("./webTransport.worker.ts", import.meta.url), { type: "module", name: "galer-cloud-data-plane" });
+    playTrace("WORKER_CREATED");
     worker.onmessage = event => this.onMessage(event.data as WebTransportWorkerResponse);
     worker.onerror = () => {
+      playTrace("WORKER_ERROR");
       this.failPending("Galer Cloud Web Worker stopped unexpectedly.");
       worker.terminate();
       if (this.worker === worker) this.worker = null;
@@ -80,6 +85,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
     const completed = this.takePending(message.requestId);
     if (!completed) return;
+    if (completed.operation === "initialize" || completed.operation === "verify") {
+      playTrace("WORKER_RESPONSE_RECEIVED", { request_id: message.requestId, operation: completed.operation, ok: message.ok });
+    }
     if (message.ok) completed.resolve(message.result);
     else completed.reject(new Error(message.error));
   }
@@ -96,6 +104,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     const timedOut = this.takePending(requestId);
     if (!timedOut) return;
 
+    playTrace("WORKER_REQUEST_TIMEOUT", { request_id: requestId, operation });
     timedOut.reject(new Error(`Galer Cloud Web transport timed out during ${operation}.`));
 
     // A silent worker has unknown internal state. Do not reuse it for retries:
@@ -120,6 +129,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         ? setTimeout(() => this.timeoutRequest(requestId, command.op), timeoutMs)
         : null;
       this.pending.set(requestId, {
+        operation: command.op,
         resolve: value => resolve(value as T),
         reject,
         onProgress,
@@ -127,7 +137,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         timeoutId,
       });
       try {
-        this.ensureWorker().postMessage({ ...command, requestId } as WebTransportWorkerCommand);
+        const worker = this.ensureWorker();
+        if (command.op === "initialize" || command.op === "verify") {
+          playTrace("WORKER_REQUEST_POSTED", { request_id: requestId, operation: command.op });
+        }
+        worker.postMessage({ ...command, requestId } as WebTransportWorkerCommand);
       } catch (error) {
         const failed = this.takePending(requestId);
         failed?.reject(error instanceof Error ? error : new Error(String(error)));

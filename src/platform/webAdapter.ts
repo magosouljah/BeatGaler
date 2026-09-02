@@ -9,7 +9,7 @@ import {
   readRequestedWebLibraryOffset,
 } from "../features/library/webLibraryNavigation";
 import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
-import { playTrace } from "../features/playback/playTrace";
+import { playTrace, observePlayStep } from "../features/playback/playTrace";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
 let webCloudTransport: Promise<import("../features/cloud/webGalerCloudTransport").WebGalerCloudTransport> | null = null;
@@ -19,7 +19,7 @@ let webDownloads: WebDownloadsManager | null = null;
 
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
-    webCloudTransport = import("../features/cloud/webGalerCloudTransport")
+    webCloudTransport = observePlayStep("DIRECT_CODE_IMPORT", () => import("../features/cloud/webGalerCloudTransport"))
       .then(({ WebGalerCloudTransport }) => new WebGalerCloudTransport());
   }
   return webCloudTransport;

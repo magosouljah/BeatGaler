@@ -1910,17 +1910,23 @@ app.get("/transport/status", (req, res) => {
   }
 });
 
+const { createDirectStartupTrace } = require("./direct-startup-trace");
+
 app.post("/transport/session/start", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId, account } = auth;
+  const startupTrace = createDirectStartupTrace();
   try {
     const session = await directTransport.startSession({
+      startupTrace,
       installationId: beatgalerUserId,
       chatId: storageChatId(account),
     });
+    startupTrace.publish(res, "done");
     res.json(wrapWebTransportSession(session, req.body?.webTransportPublicKey));
   } catch (error) {
+    startupTrace.publish(res, "error");
     console.error("[direct] session start failed:", error?.message || error);
     res.status(503).json({ error: "Galer Cloud session unavailable. Please try again." });
   }
@@ -1930,13 +1936,18 @@ app.post("/transport/session/activate", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId } = auth;
+  const startupTrace = createDirectStartupTrace();
   try {
-    res.json(await directTransport.activateSession({
+    const result = await directTransport.activateSession({
+      startupTrace,
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
-    }));
+    });
+    startupTrace.publish(res, "done");
+    res.json(result);
   } catch (error) {
+    startupTrace.publish(res, "error");
     console.error("[direct] session activation failed:", error?.message || error);
     res.status(409).json({ error: "Galer Cloud could not activate this storage session. Please try again." });
   }

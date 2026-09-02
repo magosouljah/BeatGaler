@@ -1,3 +1,6 @@
+import { traceClock } from "./traceClock";
+import { playTrace } from "../playback/playTrace";
+
 export type StartupSurface =
   | "startup_loader"
   | "auth_restore"
@@ -11,6 +14,10 @@ export type StartupSurface =
 export type StartupTraceEvent = {
   seq: number;
   t_ms: number;
+  nav_t_ms?: number;
+  ts_ms?: number;
+  time_origin_ms?: number;
+  context_id?: string;
   kind: "lifecycle" | "surface" | "card_count";
   surface?: StartupSurface;
   card_count?: number;
@@ -51,7 +58,10 @@ function safeDetail(value: string | undefined): string | undefined {
 
 function record(event: Omit<StartupTraceEvent, "seq" | "t_ms">): void {
   if (typeof window === "undefined") return;
+  const clock = traceClock();
   const entry: StartupTraceEvent = {
+    ...clock,
+    nav_t_ms: clock.t_ms,
     seq: ++sequence,
     t_ms: elapsedMs(),
     ...event,
@@ -159,6 +169,12 @@ export function installStartupTrace(): void {
   const navigation = typeof performance !== "undefined"
     ? performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined
     : undefined;
+  let sessionMarker: boolean | null = null;
+  try { sessionMarker = window.localStorage.getItem("beatgaler:web-session-present:v1") === "1"; } catch {}
+  playTrace("APP_START", {
+    runtime: runtimeKind(), navigation_type: navigation?.type ?? "unknown",
+    remembered_session_marker: sessionMarker,
+  });
   record({
     kind: "lifecycle",
     reason: "app_entry",

@@ -9,7 +9,7 @@ import {
   type WebTransportCapabilityScope,
   type WebTransportSession,
 } from "./webTransportSession";
-import { playTrace } from "../playback/playTrace";
+import { playTrace, observePlayStep } from "../playback/playTrace";
 
 export interface WebTransportRuntime {
   initialize(session: WebTransportSession): Promise<void>;
@@ -82,17 +82,17 @@ export class WebTransportController {
   private async openSession(): Promise<WebTransportSession> {
     const started = Date.now();
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN");
-    const session = await this.api.prepare();
+    const session = await observePlayStep("DIRECT_PREPARE", () => this.api.prepare());
     playTrace("CONTROLLER_SESSION_PREPARE_DONE", { elapsed_ms: Date.now() - started });
     try {
       const initializeStarted = Date.now();
-      await this.runtime.initialize(session);
+      await observePlayStep("DIRECT_INITIALIZE", () => this.runtime.initialize(session));
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
       const activateStarted = Date.now();
-      await this.api.activate(session);
+      await observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(session));
       playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
       const verifyStarted = Date.now();
-      await this.runtime.verifyReady(session);
+      await observePlayStep("DIRECT_VERIFY", () => this.runtime.verifyReady(session));
       playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
       this.session = session;
       playTrace("CONTROLLER_SESSION_READY", { total_ms: Date.now() - started });
