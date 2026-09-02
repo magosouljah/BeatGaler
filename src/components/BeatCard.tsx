@@ -16,6 +16,7 @@ interface Props {
   beat: Beat;
   visible?: boolean;
   interactive?: boolean;
+  playbackInteractive?: boolean;
   cloudUploadErrorDetail?: string;
   tagFrequency: ReadonlyMap<string, number>;
   showIncompleteWarnings: boolean;
@@ -174,7 +175,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, canUseLoc
 }
 
 export default function BeatCard({
-  beat, visible = true, interactive = true, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
+  beat, visible = true, interactive = true, playbackInteractive = interactive, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
   onPlay, onWarm, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect,
   animDelay = 0, dragEnabled, networkOnline, offlineBusy, canUseOfflinePackage, canUseLocalHelper, canInspectNativeProject, onToggleOffline, onRetryUpload
@@ -261,7 +262,7 @@ export default function BeatCard({
 
   useEffect(() => {
     const node = cookingNodeRef.current;
-    if (!visible || !interactive || !node || hasEnteredViewport) return;
+    if (!visible || !playbackInteractive || !node || hasEnteredViewport) return;
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some(entry => entry.isIntersecting && entry.intersectionRatio > 0)) return;
       setHasEnteredViewport(true);
@@ -269,15 +270,15 @@ export default function BeatCard({
     }, { threshold: 0.01 });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [visible, interactive, hasEnteredViewport]);
+  }, [visible, playbackInteractive, hasEnteredViewport]);
 
   useEffect(() => {
-    if (!visible || !interactive || !hasEnteredViewport || !beat.telegram_file_id) return;
+    if (!visible || !playbackInteractive || !hasEnteredViewport || !beat.telegram_file_id) return;
     const fileId = beat.telegram_file_id;
     if (cookingRequestedRef.current === fileId) return;
     cookingRequestedRef.current = fileId;
     onWarm(beat);
-  }, [visible, interactive, hasEnteredViewport, beat.id, beat.telegram_file_id, onWarm]);
+  }, [visible, playbackInteractive, hasEnteredViewport, beat.id, beat.telegram_file_id, onWarm]);
 
   // PROJECT validation is useful only when the card can actually be seen/used.
   // Avoid one Tauri invoke (and possible ZIP validation) for every offscreen card.
@@ -354,6 +355,7 @@ export default function BeatCard({
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    if (!interactive) return;
     if (selectMode) {
       // Only open the bulk menu when right-clicking one of multiple selected cards.
       if (!selected || selectedCount <= 1) return;
@@ -371,7 +373,7 @@ export default function BeatCard({
       data-beat-card-id={visible ? beat.id : undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onClick={e => { if (selectMode) onToggleSelect(beat, e); }}
+      onClick={e => { if (interactive && selectMode) onToggleSelect(beat, e); }}
       onContextMenu={handleContextMenu}
       style={{
         width: 160, position: "relative",
@@ -381,7 +383,7 @@ export default function BeatCard({
         zIndex: uploadErrorOpen || warningInfoOpen ? 1000 : undefined,
         cursor: visible && interactive && selectMode ? "pointer" : "default",
         visibility: visible ? "visible" : "hidden",
-        pointerEvents: visible && interactive ? "auto" : "none",
+        pointerEvents: visible ? "auto" : "none",
         borderRadius: 12,
         transform: composedTransform,
         opacity: isDragging ? 0.72 : 1,
@@ -418,11 +420,11 @@ export default function BeatCard({
       <div
         data-beat-artwork-id={beat.id}
         ref={setActivatorNodeRef}
-        {...(dragEnabled ? attributes : {})}
-        {...(dragEnabled ? listeners : {})}
-        aria-disabled={playbackBlocked}
+        {...(dragEnabled && interactive ? attributes : {})}
+        {...(dragEnabled && interactive ? listeners : {})}
+        aria-disabled={playbackBlocked || !playbackInteractive}
         style={{
-          position: "relative", cursor: playbackBlocked ? "default" : (dragEnabled ? "grab" : "pointer"),
+          position: "relative", cursor: playbackBlocked || !playbackInteractive ? "default" : (dragEnabled && interactive ? "grab" : "pointer"),
           touchAction: "none",
           opacity: selectMode && selected ? 0.7 : 1,
           transition: "opacity 0.15s, box-shadow 0.15s",
@@ -434,9 +436,12 @@ export default function BeatCard({
         }}
         onClick={e => {
           if (isDragging) { e.preventDefault(); return; }
-          if (selectMode) { e.stopPropagation(); onToggleSelect(beat, e); return; }
+          if (selectMode) {
+            if (!interactive) return;
+            e.stopPropagation(); onToggleSelect(beat, e); return;
+          }
           e.stopPropagation();
-          if (playbackBlocked) return;
+          if (!playbackInteractive || playbackBlocked) return;
           onPlay(beat);
         }}
       >

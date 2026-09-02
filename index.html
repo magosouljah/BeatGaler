@@ -58,7 +58,9 @@
         if (!root) return;
 
         const dismissWhenSignedOutGateRenders = () => {
-          if (!root.querySelector(".bg-account-gate")) return false;
+          const readyAuth = root.querySelector('.bg-auth-shell:not([aria-busy="true"])');
+          const legacyDesktopAuth = root.querySelector(".bg-account-gate");
+          if (!readyAuth && !legacyDesktopAuth) return false;
           document.getElementById("beatgaler-startup-loader")?.remove();
           return true;
         };
