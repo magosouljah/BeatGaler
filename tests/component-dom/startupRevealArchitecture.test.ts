@@ -50,7 +50,7 @@ describe("Issue #97 startup reveal architecture", () => {
     expect(messageLookup).toBeGreaterThan(-1);
     expect(cloudPrepare).toBeGreaterThan(messageLookup);
     expect(localBlobFallback).toBeGreaterThan(cloudPrepare);
-    expect(webAdapter).toContain("return sources.prepare(beat.id, messageId, master?.mime_type || \"audio/mpeg\")");
+    expect(webAdapter).toContain('sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg")');
   });
 
   it("keeps productive Web auth on the same-origin proxy and clears remembered legacy endpoints", () => {
