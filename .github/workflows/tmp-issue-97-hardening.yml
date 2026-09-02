@@ -48,7 +48,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.tsx src/components/BeatCard.tsx src/features/artwork/artworkThumbnailCache.ts tests/component-dom/artworkThumbnailCache.test.ts tests/component-dom/startupRevealArchitecture.test.ts
+          git add src/App.tsx src/components/BeatCard.tsx src/features/artwork/artworkThumbnailCache.ts scripts/run-regressions.mjs tests/component-dom/artworkThumbnailCache.test.ts tests/component-dom/startupRevealArchitecture.test.ts
           git rm scripts/tmp-issue-97-hardening.py .github/workflows/tmp-issue-97-hardening.yml
           git commit -m "F2/97: harden cached reveal across Web and Desktop"
           git push origin HEAD:issue-97-instant-stable-library-reveal
