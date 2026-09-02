@@ -108,8 +108,6 @@ type BeatRuntimeSeed = { telegram_file_id?: string | null; offline_available?: b
 
 export function createBeatRuntimeState(beat?: BeatRuntimeSeed | null): BeatRuntimeState {
   return {
-    // A cloud-backed beat loaded on a fresh app session is stable/synced.
-    // A local import candidate has no Telegram MASTER yet and is waiting to upload.
     sync_state: beat?.telegram_file_id ? "synced" : "pending_upload",
     download_state: "idle",
     playback_state: "idle",
@@ -121,7 +119,6 @@ export function createBeatRuntimeState(beat?: BeatRuntimeSeed | null): BeatRunti
   };
 }
 
-/** Keep transient machine phases, but re-hydrate the durable Offline bit from native BeatMeta. */
 export function hydrateBeatRuntimeState(current: BeatRuntimeState | undefined, beat: BeatRuntimeSeed): BeatRuntimeState {
   if (!current) return createBeatRuntimeState(beat);
   return current.offline_available === Boolean(beat.offline_available)
@@ -157,6 +154,9 @@ export function transitionBeatRuntimeState(state: BeatRuntimeState, event: BeatR
       return { ...state, sync_state: "synced", error: clearSubsystemError(state, "sync"), conflict: null };
 
     case "SYNC_QUEUE_UPDATE":
+      // Multiple observers may notice the same optimistic edit before its queued
+      // update starts. Queueing the same logical update again is idempotent.
+      if (state.sync_state === "pending_update") return state;
       if (state.sync_state !== "synced" && state.sync_state !== "error") return fail("sync", state.sync_state, event.type);
       if (state.sync_state === "error" && state.error?.subsystem === "sync") {
         const previous = state.error.previous_state;
