@@ -42,6 +42,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/tmp-issue-97-followup.mjs .github/workflows/tmp-issue-97-followup.yml
-          git add src/App.tsx src/components/BeatCard.tsx index.html deploy/web/beatgaler.com.conf tests/component-dom/startupRevealArchitecture.test.ts
+          git add src/App.tsx src/components/BeatCard.tsx index.html deploy/web/beatgaler.com.conf tests/component-dom/startupRevealArchitecture.test.ts scripts/run-regressions.mjs
           git commit -m "F2/97: make cached library playable during verification"
           git push origin HEAD:${BRANCH}
