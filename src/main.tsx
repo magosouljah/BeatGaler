@@ -5,6 +5,7 @@ import { browserId3Reader } from "./lib/id3BrowserParser";
 import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import WebLibraryPagination from "./features/library/WebLibraryPagination";
+import { installStartupTrace } from "./features/perf/startupTrace";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
@@ -14,6 +15,10 @@ import "./styles/library-ux.css";
 // tauri.ts is stripped from productive Vite output by the trust-boundary plugin,
 // so no runtime JavaScript is loaded from a CDN.
 (window as any).jsmediatags = browserId3Reader;
+
+// Issue #97 startup instrumentation is intentionally observational. Install it
+// before React mounts so Web and Desktop record the same visible startup path.
+installStartupTrace();
 
 function GlobalStyles() {
   return (
