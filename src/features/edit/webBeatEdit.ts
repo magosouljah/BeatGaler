@@ -20,7 +20,7 @@ export interface WebBeatEditProgress extends WebTransportProgress {
 export interface WebBeatEditRuntime {
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult>;
   upload(
-    input: { file: File; filename: string; beatId: string; beatName: string; kind: EditUploadKind },
+    input: { file: File; filename: string; beatId: string; beatName: string; threadId?: number | null; kind: EditUploadKind },
     onProgress?: (progress: WebTransportProgress) => void,
   ): Promise<WebTransportUploadResult>;
   replaceLibraryIndex(input: { manifest: unknown; expectedMessageId: number | null }): Promise<WebTransportReplaceIndexResult>;
@@ -98,6 +98,10 @@ export async function commitWebBeatEdit(
   const existingIndex = manifest.beats.findIndex(row => String(row.id || "") === original.id);
   if (existingIndex < 0) throw new Error("This beat is no longer in your Galer Cloud library. Refresh and try again.");
 
+  const existing = manifest.beats[existingIndex];
+  const topicCandidate = Number(existing.telegram_topic_id || 0);
+  const existingThreadId = Number.isInteger(topicCandidate) && topicCandidate > 0 ? topicCandidate : null;
+
   const artworkChanged = (updated.image_base64 || null) !== (original.image_base64 || null);
   const artworkAsset = artworkChanged && updated.image_base64 ? dataUrlFile(updated.image_base64, updated.name) : null;
   if (artworkChanged && updated.image_base64 && !artworkAsset) {
@@ -120,6 +124,7 @@ export async function commitWebBeatEdit(
       filename: item.file.name,
       beatId: original.id,
       beatName: updated.name,
+      threadId: existingThreadId,
       kind: item.kind,
     }, progress => onProgress?.({
       stage: item.stage,
@@ -130,7 +135,6 @@ export async function commitWebBeatEdit(
     completedBytes += item.file.size;
   }
 
-  const existing = manifest.beats[existingIndex];
   const next: JsonRecord = {
     ...existing,
     id: original.id,

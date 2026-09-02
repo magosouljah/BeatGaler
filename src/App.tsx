@@ -1781,6 +1781,7 @@ function BeatGalerApp() {
   }, [waitForCookingReady]);
 
   const handleWarm = useCallback((beat: Beat) => {
+    if (!platform.capabilities.playbackCache) return;
     void ensureWarmPlaybackUrl(beat);
   }, [ensureWarmPlaybackUrl]);
 
@@ -2154,6 +2155,58 @@ function BeatGalerApp() {
 
   const cloudifyImportedBeats = useCallback((newBeats: Beat[]) => {
     if (newBeats.length === 0) return;
+
+    if (platform.capabilities.reviewBeatCloudCommit) {
+      for (const beat of newBeats) {
+        if (autoCloudUploadRef.current.has(beat.id)) continue;
+        autoCloudUploadRef.current.add(beat.id);
+        transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPLOAD" }, beat);
+        transitionRuntime(beat.id, { type: "SYNC_UPLOAD_STARTED" }, beat);
+        setBackgroundUploadErrors(current => {
+          if (!(beat.id in current)) return current;
+          const next = { ...current };
+          delete next[beat.id];
+          return next;
+        });
+        setBeats(current => {
+          const next = current.map(item => item.id === beat.id ? { ...item, cloud_status: "UPLOADING" } : item);
+          beatsLatestRef.current = next;
+          return next;
+        });
+
+        void platform.cloudData.commitImportedBeat(beat).then(committed => {
+          transitionRuntime(committed.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, committed);
+          setBackgroundUploadErrors(current => {
+            if (!(committed.id in current)) return current;
+            const next = { ...current };
+            delete next[committed.id];
+            return next;
+          });
+          setBeats(current => {
+            const next = current.map(item => item.id === committed.id ? committed : item);
+            beatsLatestRef.current = next;
+            return next;
+          });
+        }).catch(error => {
+          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+          transitionRuntime(beat.id, {
+            type: "SYNC_FAILED",
+            code: "WEB_IMPORT_FAILED",
+            message,
+            retryable: true,
+          }, beat);
+          setBackgroundUploadErrors(current => ({ ...current, [beat.id]: message }));
+          setBeats(current => {
+            const next = current.map(item => item.id === beat.id ? { ...item, cloud_status: "ERROR" } : item);
+            beatsLatestRef.current = next;
+            return next;
+          });
+        }).finally(() => {
+          autoCloudUploadRef.current.delete(beat.id);
+        });
+      }
+      return;
+    }
 
     // Do not trust the React settings snapshot here. On macOS the Telegram
     // callback/SSE can complete before this closure receives the updated
@@ -2561,6 +2614,7 @@ function BeatGalerApp() {
       const currentBeat = q.beats[q.index];
       const sourceKey = currentBeat ? reviewSourceKey(currentBeat) : "";
       if (sourceKey) skippedReviewSourceKeysRef.current.add(sourceKey);
+      if (platform.capabilities.reviewBeatCloudCommit && currentBeat) platform.importer.releaseBeat(currentBeat.id);
 
       const knownLast = q.total !== null && q.index >= q.total - 1;
       if (knownLast && !q.preparing) {
@@ -2597,6 +2651,9 @@ function BeatGalerApp() {
     // the current + remaining unsaved review candidates are removed.
     setReviewQueue(q => {
       if (!q) return null;
+      if (platform.capabilities.reviewBeatCloudCommit) {
+        for (const beat of q.beats.slice(q.index)) platform.importer.releaseBeat(beat.id);
+      }
       if (q.batchId) void discardImportReviewBatch(q.batchId);
       window.setTimeout(() => {
         const protectedBeats = [
@@ -3593,6 +3650,91 @@ function BeatGalerApp() {
   }, [beatFileDrop, hasStoredProject, runBeatCloudUpdate, startProjectAssetUpdate, waitForUploadedBeatPlaybackReady]);
 
 
+  const importDroppedBrowserFiles = useCallback(async (files: File[]) => {
+    if (rejectOfflineMutation("Importing beats")) return;
+    if (dropImporting) return;
+
+    const supported = files.filter(file =>
+      /\.(mp3|wav)$/i.test(file.name) ||
+      file.type === "audio/mpeg" ||
+      file.type === "audio/wav" ||
+      file.type === "audio/x-wav"
+    );
+    if (supported.length === 0) {
+      await appAlert({ title: "Nothing to import", message: "Drop an MP3 or WAV file to add a beat." });
+      return;
+    }
+    if (supported.length > 1) {
+      await appAlert({ title: "Drop one beat at a time", message: "BeatGaler Web imports one beat per drag action." });
+      return;
+    }
+
+    setDropImporting(true);
+    setDropActive(false);
+    try {
+      const candidate = platform.importer.fromFile(supported[0]);
+      const hydrated = await candidate.hydrated.catch(() => candidate.beat);
+      const beat = { ...hydrated, tags: cleanTags(hydrated.tags || []).tags };
+      setShowAdd(false);
+      setReviewPreparationDone(true);
+      setReviewBootstrap(null);
+      setDeferredImportBatch(null);
+      setAudioConflictBatch(null);
+      setDropImportBatch(null);
+      setReviewQueue({ beats: [beat], index: 0, total: 1, batchId: null, preparing: false });
+    } catch (error) {
+      await appAlert({ title: "Import failed", message: String(error), danger: true });
+    } finally {
+      setDropImporting(false);
+    }
+  }, [dropImporting, rejectOfflineMutation]);
+
+  const handleBrowserBeatFileDrop = useCallback(async (beatId: string, files: File[]): Promise<boolean> => {
+    const beat = beatsLatestRef.current.find(item => item.id === beatId);
+    if (!beat) throw new Error(`Dropped file target beat was not found: ${beatId}`);
+    if (files.length !== 1) {
+      await appAlert({ title: "Drop one file at a time", message: "Drop one MP3, WAV, or PROJECT ZIP on a beat." });
+      return false;
+    }
+
+    const file = files[0];
+    const name = file.name.toLowerCase();
+    const kind = name.endsWith(".mp3") ? "MASTER" : name.endsWith(".wav") ? "WAV" : name.endsWith(".zip") ? "PROJECT" : null;
+    if (!kind) {
+      await appAlert({ title: "Unsupported file", message: "BeatGaler Web accepts MP3, WAV, or PROJECT ZIP files on an existing beat." });
+      return false;
+    }
+
+    if (kind === "MASTER" && beat.telegram_file_id) {
+      const replace = await appConfirm({
+        title: "Replace MASTER?",
+        message: `Replace the current MASTER for "${beat.name}" with ${file.name}?`,
+        confirmLabel: "Replace",
+        cancelLabel: "Cancel",
+        danger: true,
+      });
+      if (!replace) return false;
+    }
+
+    transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
+    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
+    try {
+      const committed = await platform.editor.commit(beat, beat, { [kind]: file });
+      setBeats(current => {
+        const next = current.map(item => item.id === committed.id ? committed : item);
+        beatsLatestRef.current = next;
+        return next;
+      });
+      setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);
+      transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);
+      return false;
+    } catch (error) {
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+      transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "WEB_FILE_UPDATE_FAILED", message, retryable: true }, beat);
+      throw error;
+    }
+  }, [transitionRuntime]);
+
   // Browser/Pinterest controller. Windows desktop keeps the existing single native
   // owner. macOS keeps HTML enabled for browser artwork while local Finder drops
   // are claimed by the native-path fast path before staging can begin.
@@ -3683,6 +3825,8 @@ function BeatGalerApp() {
         if (!REVIEW_SKELETON_ENABLED) return;
         setLibraryDropStaging(active);
       },
+      onBrowserBeatFileDrop: platform.capabilities.browserFileImport ? handleBrowserBeatFileDrop : undefined,
+      onBrowserLibraryFileDrop: platform.capabilities.browserFileImport ? importDroppedBrowserFiles : undefined,
       onLibraryFileDrop: async roots => {
         await importDroppedPaths(roots.map(root => root.path));
       },
@@ -3697,7 +3841,7 @@ function BeatGalerApp() {
         await appAlert({ title: "Drag & drop failed", message: String(error), danger: true });
       },
     });
-  }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]);
+  }, [handleAutoProjectDrop, handleBrowserBeatFileDrop, handleDropArtwork, importDroppedBrowserFiles, importDroppedPaths]);
 
   useEffect(() => {
     if (!isTauriAvailable) return;
@@ -4696,7 +4840,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     const runId = ++progressiveRevealRunRef.current;
     const queue = filteredBeats.filter(beat => !revealedBeatIds.has(beat.id));
     let cursor = 0;
-    const workerCount = Math.min(isTauriAvailable ? 6 : 3, queue.length);
+    const workerCount = Math.min(isTauriAvailable ? 6 : 1, queue.length);
 
     const worker = async () => {
       while (cursor < queue.length) {
@@ -5341,7 +5485,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           onClose={skipCurrentReviewBeat}
           onSkipCurrent={skipCurrentReviewBeat}
           onSkipAll={skipAllReviewQueue}
-          onSaveAll={handleReviewedSaveAll}
+          onSaveAll={platform.capabilities.reviewBeatCloudCommit ? undefined : handleReviewedSaveAll}
           mutationAllowed={connectionState === "online"}
           isReviewNameTaken={(candidateName, _currentBeatId) => {
             const normalized = candidateName.trim().toLocaleLowerCase();
