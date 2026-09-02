@@ -29,8 +29,32 @@ jobs:
         with:
           ref: issue-97-runtime-web-followup
           fetch-depth: 0
+      - name: Disambiguate native dependency occurrence
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("src/App.tsx")
+          text = p.read_text()
+          needle = '  }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]);'
+          first = text.find(needle)
+          second = text.find(needle, first + len(needle))
+          if first < 0 or second < 0 or text.find(needle, second + len(needle)) >= 0:
+              raise SystemExit("Expected exactly two App dependency occurrences before Issue #97 patch")
+          sentinel = '  }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]); // ISSUE97_NATIVE_DEP_SENTINEL'
+          text = text[:second] + sentinel + text[second + len(needle):]
+          p.write_text(text)
       - name: Apply production runtime follow-up
         run: python scripts/issue97_runtime_followup_patch.py
+      - name: Restore native dependency sentinel
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("src/App.tsx")
+          text = p.read_text()
+          sentinel = '  }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]); // ISSUE97_NATIVE_DEP_SENTINEL'
+          if text.count(sentinel) != 1:
+              raise SystemExit("Missing Issue #97 native dependency sentinel after patch")
+          p.write_text(text.replace(sentinel, '  }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]);', 1))
       - name: Restore canonical workflow and commit real patch
         shell: bash
         run: |
