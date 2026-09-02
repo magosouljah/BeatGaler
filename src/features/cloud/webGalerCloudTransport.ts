@@ -24,6 +24,18 @@ export class WebGalerCloudTransport {
   private readonly controller = new WebTransportController(this.worker);
   private readonly uploadCheckpoints = new Map<string, Promise<WebTransportUploadResult>>();
 
+  constructor() {
+    const started = Date.now();
+    playTrace("TRANSPORT_PRECONNECT_ENTER");
+    void this.controller.connect().then(
+      () => playTrace("TRANSPORT_PRECONNECT_READY", { elapsed_ms: Date.now() - started }),
+      error => playTrace("TRANSPORT_PRECONNECT_DEFERRED", {
+        elapsed_ms: Date.now() - started,
+        error_name: error instanceof Error ? error.name : "unknown",
+      }),
+    );
+  }
+
   private checkpointKey(input: { file: File; beatId: string; kind: string }): string {
     return `${input.beatId}:${input.kind}:${input.file.name}:${input.file.size}:${input.file.lastModified}`;
   }

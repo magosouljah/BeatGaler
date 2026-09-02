@@ -79,6 +79,23 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
+  it("returns the first MSE URL before cold Direct stream admission and prewarms the saved Web session", () => {
+    const playback = source("src/features/playback/webPlaybackSource.ts");
+    const adapter = source("src/platform/webAdapter.ts");
+    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
+
+    expect(playback).toContain('playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });');
+    expect(playback).toContain("void (async () => {");
+    expect(playback).toContain("return Promise.resolve({ url, completed });");
+    expect(playback).not.toContain("private async prepareMediaSource");
+
+    expect(adapter).toContain("function scheduleWebTransportPrewarm(): void");
+    expect(adapter).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
+    expect(adapter).toContain("scheduleWebTransportPrewarm();");
+    expect(transport).toContain('playTrace("TRANSPORT_PRECONNECT_ENTER")');
+    expect(transport).toContain("void this.controller.connect().then(");
+  });
+
   it("resolves an existing beat topic by vault rather than installation", () => {
     const server = source("cloud-server/server-core.js");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
