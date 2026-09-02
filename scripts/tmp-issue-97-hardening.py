@@ -115,4 +115,14 @@ replace_once(
     '''    expect(beatCard).toContain("if (!visible || !interactive || !hasEnteredViewport || !beat.telegram_file_id) return;");\n''',
 )
 
+# The old regression guard banned all cached cloud presentation before authority.
+# Issue #97 intentionally allows that presentation, but makes it non-interactive
+# and prevents it from becoming authority. Preserve the important Offline guard:
+# native durable Offline data must replace the transient cached cloud view.
+replace_once(
+    "scripts/run-regressions.mjs",
+    '''  if (!app.includes('const [beats, setBeats] = useState<Beat[]>([]);')) fail("Cold Offline startup can render ordinary cached cloud cards before verification again.");\n''',
+    '''  if (!app.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");\n  if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");\n  if (!beatCard.includes('pointerEvents: visible && interactive ? "auto" : "none"')) fail("Presentation-only cached cards can receive pointer input before authority verification.");\n  if (!app.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");\n''',
+)
+
 print("Issue #97 hardening patch applied")
