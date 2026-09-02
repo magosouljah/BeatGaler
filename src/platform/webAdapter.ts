@@ -9,6 +9,7 @@ import {
   readRequestedWebLibraryOffset,
 } from "../features/library/webLibraryNavigation";
 import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
+import { playTrace } from "../features/playback/playTrace";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
 let webCloudTransport: Promise<import("../features/cloud/webGalerCloudTransport").WebGalerCloudTransport> | null = null;
@@ -183,12 +184,17 @@ export const webAdapter: PlatformAdapter = {
       // manifests can outlive that document, so cloud-backed beats must always
       // obtain a fresh session-owned playback URL from WebPlaybackSourceManager.
       if (messageId) {
+        playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, mime_type: master?.mime_type || "audio/mpeg" });
         const sources = await resolveWebPlaybackSources();
-        return sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
+        playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id });
+        const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
+        playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id });
+        return prepared;
       }
       // Keep the direct blob path only for a browser-local import that has not
       // been committed to Galer Cloud yet.
       if (beat.playback_path.startsWith("blob:")) {
+        playTrace("ADAPTER_LOCAL_BLOB", { beat_id: beat.id });
         return { url: beat.playback_path, completed: Promise.resolve() };
       }
       throw new Error("This MASTER must be migrated before it can play on Web.");

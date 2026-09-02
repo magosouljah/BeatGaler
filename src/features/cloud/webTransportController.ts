@@ -9,6 +9,7 @@ import {
   type WebTransportCapabilityScope,
   type WebTransportSession,
 } from "./webTransportSession";
+import { playTrace } from "../playback/playTrace";
 
 export interface WebTransportRuntime {
   initialize(session: WebTransportSession): Promise<void>;
@@ -65,19 +66,36 @@ export class WebTransportController {
 
   async connect(): Promise<WebTransportSession> {
     if (this.closed) throw new Error("Galer Cloud Web transport is closed.");
-    if (this.session) return this.session;
-    if (this.connectPromise) return this.connectPromise;
+    if (this.session) {
+      playTrace("CONTROLLER_CONNECT_REUSE");
+      return this.session;
+    }
+    if (this.connectPromise) {
+      playTrace("CONTROLLER_CONNECT_JOIN");
+      return this.connectPromise;
+    }
+    playTrace("CONTROLLER_CONNECT_NEW");
     this.connectPromise = this.openSession().finally(() => { this.connectPromise = null; });
     return this.connectPromise;
   }
 
   private async openSession(): Promise<WebTransportSession> {
+    const started = Date.now();
+    playTrace("CONTROLLER_SESSION_PREPARE_BEGIN");
     const session = await this.api.prepare();
+    playTrace("CONTROLLER_SESSION_PREPARE_DONE", { elapsed_ms: Date.now() - started });
     try {
+      const initializeStarted = Date.now();
       await this.runtime.initialize(session);
+      playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
+      const activateStarted = Date.now();
       await this.api.activate(session);
+      playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
+      const verifyStarted = Date.now();
       await this.runtime.verifyReady(session);
+      playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
       this.session = session;
+      playTrace("CONTROLLER_SESSION_READY", { total_ms: Date.now() - started });
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
       return session;
     } catch (error) {
@@ -137,6 +155,7 @@ export class WebTransportController {
         continue;
       }
       if (response.waitMs !== null) {
+        playTrace("CONTROLLER_OPERATION_WAIT", { kind, wait_ms: response.waitMs });
         await wait(response.waitMs);
         continue;
       }

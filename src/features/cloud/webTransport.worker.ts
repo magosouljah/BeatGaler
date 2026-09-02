@@ -1,5 +1,6 @@
 import { InputMedia, MemoryStorage, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
+import { playTrace } from "../playback/playTrace";
 import {
   WEB_DIRECT_MAX_FILE_BYTES,
   type WebTransportDownloadInput,
@@ -181,6 +182,8 @@ async function closeClient(): Promise<void> {
 }
 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
+  const started = Date.now();
+  playTrace("WORKER_INITIALIZE_BEGIN");
   await closeClient();
   const {
     chat_id,
@@ -260,12 +263,16 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   }
   client = next;
   chatId = numericChatId;
+  playTrace("WORKER_INITIALIZE_DONE", { elapsed_ms: Date.now() - started });
 }
 
 async function verifyReady(): Promise<void> {
   if (!client || !chatId) throw new Error("Galer Cloud Web transport is not initialized.");
+  const started = Date.now();
+  playTrace("WORKER_VERIFY_BEGIN");
   await client.getChat(chatId);
   vaultVerified = true;
+  playTrace("WORKER_VERIFY_DONE", { elapsed_ms: Date.now() - started });
 }
 
 function requireReady(): TelegramClient {
@@ -282,25 +289,32 @@ function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessag
 }
 
 async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+  const started = Date.now();
+  playTrace("WORKER_GET_INDEX_BEGIN");
   const active = requireReady();
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const fullChat = await active.getFullChat(chatId);
+      playTrace("WORKER_GET_INDEX_FULL_CHAT", { attempt: attempt + 1 });
       const pinnedId = Number(fullChat.pinnedMsgId || 0);
       if (!Number.isInteger(pinnedId) || pinnedId <= 0) {
         throw new Error("Galer Cloud library index is still synchronizing.");
       }
       const [message] = await active.getMessages(chatId, [pinnedId]);
+      playTrace("WORKER_GET_INDEX_MESSAGE", { attempt: attempt + 1 });
       if (!message || !message.text.startsWith(LIBRARY_INDEX_CAPTION)) {
         throw new Error("Galer Cloud library index is not available.");
       }
       const bytes = await active.downloadAsBuffer(downloadableMedia(message), { stallTimeout: 20_000 });
+      playTrace("WORKER_GET_INDEX_BYTES", { attempt: attempt + 1, bytes: bytes.byteLength });
       if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) {
         throw new Error("Galer Cloud library index has an invalid size.");
       }
+      playTrace("WORKER_GET_INDEX_DONE", { attempt: attempt + 1, elapsed_ms: Date.now() - started });
       return { manifest: JSON.parse(new TextDecoder().decode(bytes)), messageId: pinnedId };
     } catch (error) {
+      playTrace("WORKER_GET_INDEX_RETRY", { attempt: attempt + 1, error_name: error instanceof Error ? error.name : "unknown" });
       lastError = error;
       if (attempt < 4) await new Promise(resolve => setTimeout(resolve, Math.min(1000, 80 * (2 ** attempt))));
     }
@@ -429,10 +443,13 @@ function downloadMime(value: unknown): string {
 }
 
 async function stream(requestId: string, input: WebTransportStreamInput): Promise<WebTransportStreamResult> {
+  const started = Date.now();
+  playTrace("WORKER_STREAM_BEGIN");
   const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
   const [message] = await active.getMessages(chatId, [messageId]);
+  playTrace("WORKER_STREAM_MESSAGE_READY", { elapsed_ms: Date.now() - started });
   if (!message) throw new Error("Galer Cloud object no longer exists.");
   const media = downloadableMedia(message);
   const totalBytes = Math.max(0, Number((media as { fileSize?: number }).fileSize || 0));
@@ -441,10 +458,15 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
   const state = { controller, acknowledge: null as (() => void) | null };
   activeStreams.set(requestId, state);
   let downloadedBytes = 0;
+  let firstChunkLogged = false;
   try {
     for await (const chunk of active.downloadAsIterable(media, { abortSignal: controller.signal, stallTimeout: 20_000, partSize: 256 })) {
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
       downloadedBytes += chunk.byteLength;
+      if (!firstChunkLogged) {
+        firstChunkLogged = true;
+        playTrace("WORKER_STREAM_FIRST_CHUNK", { elapsed_ms: Date.now() - started, bytes: chunk.byteLength });
+      }
       const transferable = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
       scope.postMessage({ requestId, event: "download-chunk", chunk: transferable, downloadedBytes, totalBytes: totalBytes || downloadedBytes }, [transferable]);
       await new Promise<void>(resolve => { state.acknowledge = resolve; });
@@ -452,6 +474,7 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
     }
     if (downloadedBytes <= 0) throw new Error("Galer Cloud returned an empty object.");
+    playTrace("WORKER_STREAM_DONE", { elapsed_ms: Date.now() - started, bytes: downloadedBytes });
     return { messageId, totalBytes: totalBytes || downloadedBytes, mimeType };
   } finally {
     activeStreams.delete(requestId);

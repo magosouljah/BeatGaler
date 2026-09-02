@@ -6,6 +6,7 @@ import { commitWebImportedBeat, type WebImportCommitProgress, type WebImportFile
 import { commitWebBeatEdit, type WebBeatEditProgress } from "../edit/webBeatEdit";
 import type { PlatformBeatEditFiles } from "../../platform/contracts";
 import type { PlatformTrashItem } from "../../platform/contracts";
+import { playTrace } from "../playback/playTrace";
 import { listWebTrashItems, moveWebBeatsToTrash, purgeWebTrash, restoreWebBeatFromTrash } from "../trash/webTrash";
 import type {
   WebTransportDownloadInput,
@@ -62,12 +63,19 @@ export class WebGalerCloudTransport {
   }
 
   async getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+    const started = Date.now();
+    playTrace("TRANSPORT_GET_INDEX_ENTER");
+    const connectStarted = Date.now();
     await this.controller.connect();
-    return this.controller.withOperation(
+    playTrace("TRANSPORT_GET_INDEX_CONNECTED", { wait_ms: Date.now() - connectStarted });
+    const operationStarted = Date.now();
+    const result = await this.controller.withOperation(
       "get_index",
       { objectType: "index", objectIds: ["pinned"] },
       () => this.worker.getLibraryIndex(),
     );
+    playTrace("TRANSPORT_GET_INDEX_DONE", { operation_ms: Date.now() - operationStarted, total_ms: Date.now() - started });
+    return result;
   }
 
   async downloadFiles(inputs: WebTransportDownloadInput[]): Promise<Array<WebTransportDownloadResult | null>> {
@@ -99,14 +107,24 @@ export class WebGalerCloudTransport {
     input: WebTransportStreamInput,
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
   ): Promise<{ completed: Promise<WebTransportStreamResult>; cancel(): void }> {
+    const started = Date.now();
+    playTrace("TRANSPORT_STREAM_ENTER");
+    const connectStarted = Date.now();
     await this.controller.connect();
+    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
+    const operationStarted = Date.now();
     const lease = await this.controller.beginOperation(
       "stream_master",
       { objectType: "message", objectIds: [String(input.messageId)] },
     );
+    playTrace("TRANSPORT_STREAM_ADMITTED", { wait_ms: Date.now() - operationStarted });
     const stream = this.worker.stream(input, onChunk);
+    playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started });
     return {
-      completed: stream.completed.finally(() => this.controller.endOperation(lease).catch(() => {})),
+      completed: stream.completed.finally(() => {
+        playTrace("TRANSPORT_STREAM_DONE", { total_ms: Date.now() - started });
+        return this.controller.endOperation(lease).catch(() => {});
+      }),
       cancel: stream.cancel,
     };
   }

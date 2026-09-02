@@ -35,6 +35,7 @@ import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
 import { installHtmlDropController } from "./features/dragdrop/htmlDropController";
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
+import { playTrace } from "./features/playback/playTrace";
 import { createBeatRuntimeState, hydrateBeatRuntimeState, transitionBeatRuntimeState, type BeatRuntimeEvent, type BeatRuntimeState } from "./features/state/beatRuntimeState";
 import { reviewPerfMark } from "./features/perf/reviewPerf";
 
@@ -1790,9 +1791,16 @@ function BeatGalerApp() {
     // Read the latest Beat object because upload state can change after the
     // caller captured its render-time object.
     const latestBeat = beatsLatestRef.current.find(item => item.id === beat.id) ?? beat;
+    playTrace("APP_HANDLE_PLAY_ENTER", {
+      beat_id: beat.id,
+      render_status: beat.cloud_status || null,
+      latest_status: latestBeat.cloud_status || null,
+      slot_busy: beatCloudUpdateBusyIds.has(beat.id),
+    });
     if (beatCloudUpdateBusyIds.has(beat.id) || isBeatPlaybackBlocked(beat) || isBeatPlaybackBlocked(latestBeat)) {
       const blocked = isBeatPlaybackBlocked(latestBeat) ? latestBeat : beat;
       const reason = beatCloudUpdateBusyIds.has(beat.id) ? "SLOT_UPDATE" : String(blocked.cloud_status || "");
+      playTrace("APP_HANDLE_PLAY_BLOCKED", { beat_id: blocked.id, reason });
       void downloadCookingDiagnosticEvent("PLAY_BLOCKED_LOADING", blocked.id, blocked.name, reason).catch(() => {});
       return;
     }
@@ -1806,15 +1814,19 @@ function BeatGalerApp() {
           platform.media.releasePlayback(audio.playingId);
         }
 
+        playTrace("APP_PREPARE_BEGIN", { beat_id: beat.id });
         const prepared = await platform.media.preparePlayback(beat);
+        playTrace("APP_PREPARE_READY", { beat_id: beat.id, url_scheme: String(prepared.url || "").split(":")[0] || null });
 
         void prepared.completed.catch(error => {
           console.warn(`[web/playback] stream failed beat_id=${beat.id}`, error);
           platform.media.releasePlayback(beat.id);
         });
 
+        playTrace("APP_AUDIO_PLAY_CALL", { beat_id: beat.id });
         play(beat.id, [prepared.url]);
       } catch (error) {
+        playTrace("APP_PREPARE_ERROR", { beat_id: beat.id, error_name: error instanceof Error ? error.name : "unknown" });
         platform.media.releasePlayback(beat.id);
         await appAlert({
           title: "Beat unavailable",
