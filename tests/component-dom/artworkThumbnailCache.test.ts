@@ -14,7 +14,7 @@ describe("artwork thumbnail cache contract", () => {
     } as any)).toBe("beat-1:direct:42");
   });
 
-  it("does not invent a cache identity when the beat has no durable artwork reference", () => {
-    expect(artworkThumbnailCacheKey({ id: "beat-1", assets: undefined } as any)).toBeNull();
+  it("uses a stable local key when Desktop has no cloud artwork object id", () => {
+    expect(artworkThumbnailCacheKey({ id: "beat-1", assets: undefined } as any)).toBe("beat-1:local");
   });
 });

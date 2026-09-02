@@ -15,8 +15,10 @@ describe("Issue #97 startup reveal architecture", () => {
   it("reserves every filtered beat slot while revealing only artwork-ready cards", () => {
     expect(app).toContain("<SortableContext items={filteredBeats.map((b) => b.id)}");
     expect(app).toContain("visible={revealedBeatIds.has(beat.id)}");
+    expect(app).toContain('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}');
     expect(beatCard).toContain('visibility: visible ? "visible" : "hidden"');
-    expect(beatCard).toContain("if (!visible || !hasEnteredViewport || !beat.telegram_file_id) return;");
+    expect(beatCard).toContain('pointerEvents: visible && interactive ? "auto" : "none"');
+    expect(beatCard).toContain("if (!visible || !interactive || !hasEnteredViewport || !beat.telegram_file_id) return;");
   });
 
   it("does not gate card reveal on audio cooking", () => {

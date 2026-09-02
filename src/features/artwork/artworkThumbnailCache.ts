@@ -6,10 +6,9 @@ const activeObjectUrls = new Map<string, string>();
 
 type ArtworkIdentity = Pick<Beat, "id" | "assets">;
 
-export function artworkThumbnailCacheKey(beat: ArtworkIdentity): string | null {
+export function artworkThumbnailCacheKey(beat: ArtworkIdentity): string {
   const objectId = beat.assets?.artwork?.object_id?.trim();
-  if (!objectId) return null;
-  return `${beat.id}:${objectId}`;
+  return objectId ? `${beat.id}:${objectId}` : `${beat.id}:local`;
 }
 
 function cacheSupported(): boolean {
@@ -72,7 +71,7 @@ async function compressArtwork(blob: Blob): Promise<Blob | null> {
 
 export async function readCachedArtworkThumbnail(beat: ArtworkIdentity): Promise<string | null> {
   const key = artworkThumbnailCacheKey(beat);
-  if (!key || !cacheSupported()) return null;
+  if (!cacheSupported()) return null;
 
   const active = activeObjectUrls.get(key);
   if (active) return active;
@@ -94,7 +93,7 @@ export async function readCachedArtworkThumbnail(beat: ArtworkIdentity): Promise
 
 export async function cacheArtworkThumbnail(beat: ArtworkIdentity, source: string): Promise<string> {
   const key = artworkThumbnailCacheKey(beat);
-  if (!key || !cacheSupported()) return source;
+  if (!cacheSupported()) return source;
 
   try {
     const original = await fetch(source).then(response => response.blob());

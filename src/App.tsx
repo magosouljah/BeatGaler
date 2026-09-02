@@ -757,10 +757,9 @@ function decodeArtworkDataUrl(src: string): Promise<boolean> {
 }
 
 function BeatGalerApp() {
-  // Browser/localStorage library data is only an instant-paint helper AFTER the
-  // cloud/offline source has been verified. Never render it as a cold-start
-  // library by itself: navigator.onLine and a localhost SSE connection can both
-  // look healthy while Telegram is actually unreachable.
+  // Browser/localStorage library data is an instant-paint presentation cache.
+  // It may render before cloud authority resolves, but remains read-only until
+  // verification and is never allowed to overwrite the authoritative library.
   const startupCachedBeatsRef = useRef<Beat[] | null>(null);
   if (startupCachedBeatsRef.current === null) {
     const cached = loadCachedBeats() ?? [];
@@ -875,7 +874,7 @@ function BeatGalerApp() {
   const [startupCookingGate, setStartupCookingGate] = useState(() => (startupCachedBeatsRef.current ?? []).length === 0);
   const [revealedBeatIds, setRevealedBeatIds] = useState<Set<string>>(() => new Set(
     (startupCachedBeatsRef.current ?? [])
-      .filter(beat => Boolean(beat.image_preview_base64 || beat.image_base64) || !beat.assets?.artwork?.object_id)
+      .filter(beat => Boolean(beat.image_preview_base64 || beat.image_base64))
       .map(beat => beat.id)
   ));
   const startupCookingResolvedRef = useRef(false);
@@ -5141,6 +5140,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     key={beat.id}
                     beat={beat}
                     visible={revealedBeatIds.has(beat.id)}
+                    interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}
                     openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}
                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}
