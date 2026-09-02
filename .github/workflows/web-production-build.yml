@@ -1,6 +1,9 @@
 name: Web - Production Build
 
 on:
+  push:
+    branches:
+      - issue-97-regression-root-fix
   pull_request:
     paths:
       - 'src/**'
@@ -18,10 +21,248 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  issue-97-regression-root-patch:
+    if: github.event_name == 'push' && github.ref_name == 'issue-97-regression-root-fix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.2'
+          cache: npm
+      - name: Apply root regression fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_exact(path, before, after, expected=1):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(before)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrence(s), found {count}: {before[:120]!r}")
+              p.write_text(text.replace(before, after))
+
+          # PLAY regression: cd808a7 intended to allow cached playback during verification,
+          # but accidentally gated Play on connectionState === online. Visible cloud cards
+          # must remain playable while authority is still checking; true offline still
+          # requires a prepared offline copy.
+          replace_exact(
+              'src/App.tsx',
+              'playbackInteractive={connectionState === "online" || Boolean(beat.offline_available)}',
+              'playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}',
+          )
+
+          # Artwork/edit regression: do not trust a telegram_topic_id copied from a
+          # manifest written by another installation. Resolve the canonical topic through
+          # the vault-aware server and write the resolved id back into the next INDEX.
+          replace_exact(
+              'src/features/edit/webBeatEdit.ts',
+              'input: { file: File; filename: string; beatId: string; beatName: string; threadId?: number | null; kind: EditUploadKind },',
+              'input: { file: File; filename: string; beatId: string; beatName: string; kind: EditUploadKind },',
+          )
+          replace_exact(
+              'src/features/edit/webBeatEdit.ts',
+              '''  const existing = manifest.beats[existingIndex];\n  const topicCandidate = Number(existing.telegram_topic_id || 0);\n  const existingThreadId = Number.isInteger(topicCandidate) && topicCandidate > 0 ? topicCandidate : null;\n''',
+              '''  const existing = manifest.beats[existingIndex];\n''',
+          )
+          replace_exact(
+              'src/features/edit/webBeatEdit.ts',
+              '''  const uploads = new Map<EditUploadKind, WebTransportUploadResult>();\n  let completedBytes = 0;''',
+              '''  const uploads = new Map<EditUploadKind, WebTransportUploadResult>();\n  let resolvedThreadId: number | null = null;\n  let completedBytes = 0;''',
+          )
+          replace_exact(
+              'src/features/edit/webBeatEdit.ts',
+              '''      beatId: original.id,\n      beatName: updated.name,\n      threadId: existingThreadId,\n      kind: item.kind,''',
+              '''      beatId: original.id,\n      beatName: updated.name,\n      kind: item.kind,''',
+          )
+          replace_exact(
+              'src/features/edit/webBeatEdit.ts',
+              '''    uploads.set(item.kind, upload);\n    completedBytes += item.file.size;''',
+              '''    uploads.set(item.kind, upload);\n    const uploadThreadId = Number((upload as WebTransportUploadResult & { thread_id?: number }).thread_id || 0);\n    if (Number.isInteger(uploadThreadId) && uploadThreadId > 0) resolvedThreadId = uploadThreadId;\n    completedBytes += item.file.size;''',
+          )
+          replace_exact(
+              'src/features/edit/webBeatEdit.ts',
+              '''    color: updated.color,\n    color2: updated.color2,\n  };\n\n  const master''',
+              '''    color: updated.color,\n    color2: updated.color2,\n  };\n  if (resolvedThreadId) next.telegram_topic_id = resolvedThreadId;\n\n  const master''',
+          )
+
+          transport_path = Path('src/features/cloud/webGalerCloudTransport.ts')
+          transport = transport_path.read_text()
+          before_transport = '''        upload: async (input, progress) => {\n          const hintedThreadId = Number(input.threadId || 0);\n          let threadId = Number.isInteger(hintedThreadId) && hintedThreadId > 0 ? hintedThreadId : 0;\n          if (!threadId) {\n            topic ||= ensureWebTransportTopic(input.beatId, input.beatName);\n            threadId = await topic;\n          }\n          return this.uploadOnce({ ...input, threadId }, progress);\n        },'''
+          after_transport = '''        upload: async (input, progress) => {\n          topic ||= ensureWebTransportTopic(input.beatId, input.beatName);\n          const threadId = await topic;\n          const uploaded = await this.uploadOnce({ ...input, threadId }, progress);\n          return { ...uploaded, thread_id: threadId };\n        },'''
+          if transport.count(before_transport) != 1:
+              raise SystemExit('webGalerCloudTransport.ts: expected exact #107 hinted-thread block once')
+          transport_path.write_text(transport.replace(before_transport, after_transport))
+
+          server_path = Path('cloud-server/server-core.js')
+          server = server_path.read_text()
+          topic_key = '''function topicKey(userId, beatId) {\n  return `${String(userId)}:${String(beatId)}`;\n}\n'''
+          if server.count(topic_key) != 1:
+              raise SystemExit('server-core.js: topicKey anchor not unique')
+          helpers = topic_key + '''\nfunction storedBeatTopicCandidates(chatId, userId, beatId) {\n  const exactKey = topicKey(userId, beatId);\n  const suffix = `:${String(beatId)}`;\n  return [...beatTopics.entries()]\n    .filter(([key, current]) => {\n      const threadId = Number(current?.messageThreadId);\n      return (key === exactKey || key.endsWith(suffix)) &&\n        Number(current?.chatId) === Number(chatId) &&\n        Number.isFinite(threadId) && threadId > 0;\n    })\n    // Forum topic ids are Telegram message ids. The oldest surviving id is the\n    // pre-regression canonical topic; Web-created duplicates necessarily sort later.\n    .sort(([, a], [, b]) => Number(a.messageThreadId) - Number(b.messageThreadId));\n}\n\nfunction adoptCanonicalBeatTopic(chatId, userId, beatId, beatName, current) {\n  const suffix = `:${String(beatId)}`;\n  const canonical = {\n    chatId: Number(chatId),\n    messageThreadId: Number(current.messageThreadId),\n    beatName,\n    updatedAt: Date.now(),\n  };\n  for (const [key, candidate] of beatTopics.entries()) {\n    if (key.endsWith(suffix) && Number(candidate?.chatId) === Number(chatId)) {\n      beatTopics.set(key, { ...canonical });\n    }\n  }\n  beatTopics.set(topicKey(userId, beatId), { ...canonical });\n  savePersistentData();\n  return canonical.messageThreadId;\n}\n'''
+          server = server.replace(topic_key, helpers)
+
+          pattern = re.compile(r'''async function ensureBeatTopic\(account, userId, beatId, beatName\) \{.*?\n\}\n\nfunction injectTopicIds''', re.S)
+          match = pattern.search(server)
+          if not match:
+              raise SystemExit('server-core.js: ensureBeatTopic function not found')
+          if len(pattern.findall(server)) != 1:
+              raise SystemExit('server-core.js: ensureBeatTopic function not unique')
+          ensure = '''async function ensureBeatTopic(account, userId, beatId, beatName) {\n  if (!beatId) throw new Error("beatId is required for Telegram Topic storage.");\n  const chatId = storageChatId(account);\n  const key = topicKey(userId, beatId);\n  const name = topicName(beatName || beatId);\n\n  // Topic ownership belongs to the vault, not to one Desktop/Web installation.\n  // Before #106 only Desktop used this path; once Web began calling ensure, the\n  // installation-scoped key could not see Desktop's existing topic and created a\n  // duplicate. Reuse the oldest surviving mapping for this beat in the same chat\n  // and alias every installation mapping to it.\n  const candidates = storedBeatTopicCandidates(chatId, userId, beatId);\n  for (const [candidateKey, current] of candidates) {\n    const messageThreadId = Number(current.messageThreadId);\n    try {\n      // This also verifies that a persisted mapping still exists. Renaming to the\n      // current beat title is the same behavior the old exact-key path used.\n      await directTransport.editForumTopic(chatId, messageThreadId, name);\n      return adoptCanonicalBeatTopic(chatId, userId, beatId, name, current);\n    } catch (error) {\n      if (!isMissingTopicError(error)) {\n        console.warn("[topics] canonical topic verification/rename failed:", error?.message || error);\n        return adoptCanonicalBeatTopic(chatId, userId, beatId, name, current);\n      }\n      console.warn("[topics] stored topic no longer exists; forgetting candidate:", error?.message || error);\n      beatTopics.delete(candidateKey);\n    }\n  }\n\n  const messageThreadId = await directTransport.createForumTopic(chatId, name);\n  if (!Number.isFinite(messageThreadId) || messageThreadId <= 0) throw new Error("MASTER returned no forum topic id.");\n  beatTopics.set(key, { chatId, messageThreadId, beatName: name, updatedAt: Date.now() });\n  savePersistentData();\n  return messageThreadId;\n}\n\nfunction injectTopicIds'''
+          server = pattern.sub(ensure, server, count=1)
+          server_path.write_text(server)
+
+          # Align permanent regression guards with the corrected semantics.
+          for path in ['tests/component-dom/startupRevealArchitecture.test.ts', 'scripts/run-regressions.mjs']:
+              p = Path(path)
+              text = p.read_text()
+              text = text.replace(
+                  'playbackInteractive={connectionState === "online" || Boolean(beat.offline_available)}',
+                  'playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}',
+              )
+              p.write_text(text)
+
+          Path('tests/integration/issue97RuntimeWebFollowup.test.ts').write_text(r'''import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import type { Beat } from "../../src/types";
+import { commitWebBeatEdit } from "../../src/features/edit/webBeatEdit";
+
+function source(path: string): string {
+  return readFileSync(resolve(process.cwd(), path), "utf8");
+}
+
+describe("Issue #97 production runtime follow-up", () => {
+  it("replaces a stale installation topic id with the vault-resolved topic after artwork upload", async () => {
+    const original = {
+      id: "beat-1",
+      name: "Same Beat",
+      bpm: "120",
+      key: "Cm",
+      tags: [],
+      rating: 0,
+      color: "#111111",
+      color2: "#222222",
+      telegram_file_id: "direct:101",
+      telegram_message_id: 101,
+      image_base64: null,
+    } as unknown as Beat;
+    const updated = { ...original, image_base64: "data:image/png;base64,YQ==" };
+    const uploadedInputs: Array<Record<string, unknown>> = [];
+    let publishedManifest: any = null;
+    const runtime = {
+      getLibraryIndex: vi.fn(async () => ({
+        messageId: 500,
+        manifest: {
+          schema: "beatgaler.telegram.library",
+          version: 2,
+          beats: [{
+            id: "beat-1",
+            name: "Same Beat",
+            bpm: "120",
+            key: "Cm",
+            tags: [],
+            rating: 0,
+            color: "#111111",
+            color2: "#222222",
+            telegram_topic_id: 4242,
+            master: { telegram_message_id: 101, filename: "old.mp3", mime: "audio/mpeg", size: 10 },
+          }],
+          trash: [],
+        },
+      })),
+      upload: vi.fn(async (input: Record<string, unknown>) => {
+        uploadedInputs.push(input);
+        return {
+          telegram_file_id: "file-new",
+          telegram_message_id: 202,
+          filename: "cover.png",
+          original_size: 1,
+          parts: [],
+          transport: "direct-web" as const,
+          thread_id: 3131,
+        };
+      }),
+      replaceLibraryIndex: vi.fn(async (input: { manifest: unknown }) => {
+        publishedManifest = input.manifest;
+        return { messageId: 501, beatCount: 1, updated: true };
+      }),
+    };
+
+    await commitWebBeatEdit(original, updated, {}, runtime);
+    expect(uploadedInputs).toHaveLength(1);
+    expect(uploadedInputs[0]).not.toHaveProperty("threadId");
+    expect(publishedManifest.beats[0].telegram_topic_id).toBe(3131);
+  });
+
+  it("keeps visible cloud cards playable while authority is still checking", () => {
+    const app = source("src/App.tsx");
+    const card = source("src/components/BeatCard.tsx");
+    expect(app).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
+    expect(card).toContain("if (!playbackInteractive || playbackBlocked) return;");
+  });
+
+  it("resolves an existing beat topic by vault rather than installation", () => {
+    const server = source("cloud-server/server-core.js");
+    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
+    expect(server).toContain("function storedBeatTopicCandidates(chatId, userId, beatId)");
+    expect(server).toContain("key.endsWith(suffix)");
+    expect(server).toContain("Number(current?.chatId) === Number(chatId)");
+    expect(server).toContain("Number(a.messageThreadId) - Number(b.messageThreadId)");
+    expect(server).toContain("adoptCanonicalBeatTopic(chatId, userId, beatId, name, current)");
+    expect(transport).not.toContain("hintedThreadId");
+    expect(transport).toContain("return { ...uploaded, thread_id: threadId };");
+  });
+
+  it("routes browser drops through browser File owners, not Desktop path staging", () => {
+    const app = source("src/App.tsx");
+    const controller = source("src/features/dragdrop/htmlDropController.ts");
+    expect(app).toContain("onBrowserLibraryFileDrop: platform.capabilities.browserFileImport ? importDroppedBrowserFiles : undefined");
+    expect(app).toContain("onBrowserBeatFileDrop: platform.capabilities.browserFileImport ? handleBrowserBeatFileDrop : undefined");
+    expect(app).toContain("platform.cloudData.commitImportedBeat(beat)");
+    expect(controller).toContain("options.onBrowserBeatFileDrop");
+  });
+
+  it("does not let Web card warming queue native cooking ahead of Play", () => {
+    const app = source("src/App.tsx");
+    expect(app).toContain("if (!platform.capabilities.playbackCache) return;");
+    expect(app).toContain("Math.min(isTauriAvailable ? 6 : 1, queue.length)");
+  });
+});
+''')
+          PY
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate root regression fix
+        run: |
+          npm run test:typecheck
+          npm run test:integration
+          npm run test:component:dom
+          npm run test:regressions
+          npm run build:web
+          node --check cloud-server/server-core.js
+      - name: Commit validated patch and restore workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout HEAD^ -- .github/workflows/web-production-build.yml
+          git add src/App.tsx src/features/edit/webBeatEdit.ts src/features/cloud/webGalerCloudTransport.ts cloud-server/server-core.js tests/integration/issue97RuntimeWebFollowup.test.ts tests/component-dom/startupRevealArchitecture.test.ts scripts/run-regressions.mjs .github/workflows/web-production-build.yml
+          git commit -m "F2/97: fix playback verification gate and vault topic regression"
+          git push origin HEAD:${GITHUB_REF_NAME}
+
   web-production-build:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
