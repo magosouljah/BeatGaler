@@ -1,6 +1,7 @@
 import { observePlayStep } from "../playback/playTrace";
 import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { readWebCsrfToken } from "../auth/webSessionBootstrap";
 import { getWebClientId } from "../../platform/webClientId";
 import {
   prepareWebTempAuth,
@@ -103,9 +104,16 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
   const request = async () => {
     const token = getBeatGalerAuthToken();
     if (!token) throw new Error("Session expired. Sign in again.");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
+    const csrf = readWebCsrfToken();
+    if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
     const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers,
+      credentials: "include",
       body: JSON.stringify(webTransportRequestBody(body)),
     });
     const payload = await response.json().catch(() => ({}));
