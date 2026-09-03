@@ -131,7 +131,12 @@ function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): vo
 }
 
 async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
-  if (!webPlaybackSources) webPlaybackSources = new WebPlaybackSourceManager(await resolveWebCloudTransport());
+  if (webPlaybackSources) return webPlaybackSources;
+  const transport = await resolveWebCloudTransport();
+  // Multiple fully-visible cards can resolve in the same microtask while the
+  // Direct import is still pending. Re-check after the await so those callbacks
+  // all share one manager, one prefix cache, and one 2-wide prefetch queue.
+  if (!webPlaybackSources) webPlaybackSources = new WebPlaybackSourceManager(transport);
   return webPlaybackSources;
 }
 
