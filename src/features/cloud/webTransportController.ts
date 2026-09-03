@@ -73,6 +73,7 @@ async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchRe
 export class WebTransportController {
   private session: WebTransportSession | null = null;
   private connectPromise: Promise<WebTransportSession> | null = null;
+  private refreshPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
 
@@ -83,6 +84,10 @@ export class WebTransportController {
 
   async connect(): Promise<WebTransportSession> {
     if (this.closed) throw new Error("Galer Cloud Web transport is closed.");
+    if (this.refreshPromise) {
+      playTrace("CONTROLLER_CONNECT_REFRESH_WAIT");
+      await this.refreshPromise;
+    }
     if (this.session) {
       playTrace("CONTROLLER_CONNECT_REUSE");
       return this.session;
@@ -189,8 +194,33 @@ export class WebTransportController {
   }
 
   private async applyCredentialRefresh(session: WebTransportSession): Promise<void> {
-    await this.runtime.replaceCredentials(session);
-    this.session = session;
+    if (this.refreshPromise) return this.refreshPromise;
+    const refresh = (async () => {
+      playTrace("CONTROLLER_CREDENTIAL_REFRESH_BEGIN");
+      try {
+        // initialize()/replaceCredentials() intentionally clears Worker readiness.
+        // Re-verify the vault before publishing the replacement session. Otherwise
+        // connect() can reuse a control-plane lease whose Worker still reports
+        // "Galer Cloud Web transport is not ready" after an idle heartbeat.
+        await this.runtime.replaceCredentials(session);
+        await this.runtime.verifyReady(session);
+        this.session = session;
+        playTrace("CONTROLLER_CREDENTIAL_REFRESH_READY");
+      } catch (error) {
+        playTrace("CONTROLLER_CREDENTIAL_REFRESH_FAILED", {
+          error_name: error instanceof Error ? error.name : "unknown",
+        });
+        if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+        this.heartbeatTimer = null;
+        this.session = null;
+        await this.runtime.shutdown().catch(() => {});
+        throw error;
+      }
+    })();
+    this.refreshPromise = refresh.finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
   }
 
   private async resetLocalSession(): Promise<void> {
@@ -204,6 +234,10 @@ export class WebTransportController {
     const deadline = Date.now() + 120_000;
     while (!this.closed && Date.now() < deadline) {
       const session = await this.connect();
+      if (this.refreshPromise) {
+        await this.refreshPromise;
+        continue;
+      }
       const response = await this.api.begin(session, kind, scope);
       if (response.expired) {
         await this.resetLocalSession();
@@ -255,6 +289,8 @@ export class WebTransportController {
     this.closed = true;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
+    const refresh = this.refreshPromise;
+    if (refresh) await refresh.catch(() => {});
     const session = this.session;
     this.session = null;
     await this.runtime.shutdown().catch(() => {});
