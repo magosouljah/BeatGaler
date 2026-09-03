@@ -79,9 +79,10 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
-  it("returns the first MSE URL before cold Direct stream admission and prewarms the saved Web session", () => {
+  it("returns the first MSE URL before Direct stream admission and prewarms Direct only after authenticated Web session sync", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const adapter = source("src/platform/webAdapter.ts");
+    const accountGate = source("src/components/AccountGate.tsx");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
     expect(playback).toContain('playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });');
@@ -89,9 +90,12 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(playback).toContain("return Promise.resolve({ url, completed });");
     expect(playback).not.toContain("private async prepareMediaSource");
 
-    expect(adapter).toContain("function scheduleWebTransportPrewarm(): void");
+    expect(adapter).toContain("function prewarmAuthenticatedWebTransport(): void");
     expect(adapter).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
-    expect(adapter).toContain("scheduleWebTransportPrewarm();");
+    expect(adapter).toContain("async syncSession() {");
+    expect(adapter).toContain("prewarmAuthenticatedWebTransport();");
+    expect(adapter).not.toContain("scheduleWebTransportPrewarm");
+    expect(accountGate).toContain("await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());");
     expect(transport).toContain('playTrace("TRANSPORT_PRECONNECT_ENTER")');
     expect(transport).toContain("void this.controller.connect().then(");
   });

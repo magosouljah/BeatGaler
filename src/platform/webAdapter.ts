@@ -25,31 +25,25 @@ async function resolveWebCloudTransport() {
   return webCloudTransport;
 }
 
-function scheduleWebTransportPrewarm(): void {
+function prewarmAuthenticatedWebTransport(): void {
   if (typeof window === "undefined") return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
 
-  const start = () => {
-    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-    // Keep the large Direct chunk lazy for signed-out visitors. AccountGate uses
-    // the same durable marker for a remembered browser-cookie session.
-    try {
-      if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
-    } catch {
-      return;
-    }
+  // Authentication owns this trigger. The durable marker is only a final guard
+  // so session-expiry/logout syncs cannot import Direct for a signed-out page.
+  try {
+    if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
+  } catch {
+    return;
+  }
 
-    playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
-    void resolveWebCloudTransport().then(
-      () => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"),
-      error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
-        error_name: error instanceof Error ? error.name : "unknown",
-      }),
-    );
-  };
-
-  const schedule = () => window.setTimeout(start, 250);
-  if (document.readyState === "complete") schedule();
-  else window.addEventListener("load", schedule, { once: true });
+  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
+  void resolveWebCloudTransport().then(
+    () => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"),
+    error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
+      error_name: error instanceof Error ? error.name : "unknown",
+    }),
+  );
 }
 
 async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
@@ -109,7 +103,6 @@ function unavailable(feature: string): never {
 }
 
 const webClientId = getWebClientId();
-scheduleWebTransportPrewarm();
 
 export const webAdapter: PlatformAdapter = {
   kind: "web",
@@ -330,7 +323,9 @@ export const webAdapter: PlatformAdapter = {
     },
   },
   cloudAuth: {
-    async syncSession() {},
+    async syncSession() {
+      prewarmAuthenticatedWebTransport();
+    },
   },
   diagnostics: {
     reviewPerformance() {},
