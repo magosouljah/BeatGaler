@@ -79,7 +79,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
-  it("returns the first MSE URL before Direct stream admission, preloads code/Worker, and overlaps activation with temp auth", () => {
+  it("returns the first MSE URL before Direct stream admission and overlaps remembered auth, Direct startup, and activation", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
     const adapter = source("src/platform/webAdapter.ts");
@@ -88,6 +88,7 @@ describe("Issue #97 production runtime follow-up", () => {
     const workerClient = source("src/features/cloud/webTransportWorkerClient.ts");
     const controller = source("src/features/cloud/webTransportController.ts");
     const sessionControl = source("src/features/cloud/webTransportSession.ts");
+    const sessionBootstrap = source("src/features/auth/webSessionBootstrap.ts");
 
     expect(playback).toContain('playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });');
     expect(playback).toContain("void (async () => {");
@@ -95,11 +96,20 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(playback).not.toContain("private async prepareMediaSource");
 
     expect(main).toContain("function preloadRememberedWebDirectCode(): void");
-    expect(main).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
+    expect(main).toContain("hasRememberedWebSessionMarker()");
     expect(main).toContain('playTrace("DIRECT_CODE_PRELOAD_BEGIN")');
     expect(main).toContain('void import("./features/cloud/webGalerCloudTransport").then(');
-    expect(main).toContain("preloadRememberedWebDirectCode();");
+    expect(main).toContain("function preconnectRememberedWebDirect(): void");
+    expect(main).toContain("if (!readWebCsrfToken()) {");
+    expect(main).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
+    expect(main).toContain('void platform.cloudAuth.syncSession(null, "").then(');
+    expect(main).toContain("preloadRememberedWebDirectCode();\npreconnectRememberedWebDirect();");
+    expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
     expect(main).not.toContain("new WebGalerCloudTransport");
+
+    expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
+    expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
+    expect(sessionBootstrap).toContain("readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME)");
 
     expect(adapter).toContain("function prewarmAuthenticatedWebTransport(): void");
     expect(adapter).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
@@ -115,6 +125,9 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(transport).toContain("this.worker.prewarm();");
     expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("void this.controller.connect().then("));
 
+    expect(sessionControl).toContain("const csrf = readWebCsrfToken();");
+    expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
+    expect(sessionControl).toContain('credentials: "include"');
     expect(sessionControl).toContain("export async function reserveWebTransportSession()");
     expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
     expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession());");
