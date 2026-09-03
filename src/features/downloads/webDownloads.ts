@@ -5,6 +5,7 @@ import type {
   PlatformDownloadProgress,
   PlatformDownloadTask,
 } from "../../platform/contracts";
+import { buildBeatGalerId3Tag, type Mp3Artwork } from "../audio/mp3Metadata";
 import type { WebTransportStreamInput, WebTransportStreamResult } from "../cloud/webTransportWorkerProtocol";
 
 type SingleKind = Exclude<PlatformDownloadKind, "ALL">;
@@ -41,6 +42,8 @@ type DownloadAsset = {
   size: number;
   inlineDataUrl: string | null;
 };
+
+type CachedArtwork = Mp3Artwork & { messageId: number | null };
 
 function safeName(value: string, fallback: string): string {
   return value
@@ -98,6 +101,10 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 async function uniqueDirectory(root: BrowserDirectoryHandle, base: string): Promise<BrowserDirectoryHandle> {
   for (let index = 0; index < 1000; index += 1) {
     const name = index === 0 ? base : `${base} (${index + 1})`;
@@ -128,6 +135,7 @@ export class WebDownloadsManager {
     const controller = new AbortController();
     let activeCancel: (() => void) | null = null;
     let activeWritable: BrowserWritable | null = null;
+    let cachedCloudArtwork: CachedArtwork | null | undefined;
     const browser = window as DownloadWindow;
     const singleHandle = kind !== "ALL" && browser.showSaveFilePicker
       ? browser.showSaveFilePicker({ suggestedName: assets[0].filename })
@@ -145,6 +153,37 @@ export class WebDownloadsManager {
     this.tasks.set(id, { cancel });
 
     const completed = (async (): Promise<{ cancelled: boolean }> => {
+      const loadArtworkForMp3 = async (): Promise<Mp3Artwork | null> => {
+        if (beat.image_base64) {
+          const blob = await (await fetch(beat.image_base64)).blob();
+          if (controller.signal.aborted) throw abortError();
+          return { mimeType: blob.type || "image/png", bytes: await blob.arrayBuffer() };
+        }
+        if (cachedCloudArtwork !== undefined) return cachedCloudArtwork;
+        const artworkRef = beat.assets?.artwork || null;
+        const artworkMessageId = messageId(artworkRef);
+        if (!artworkMessageId) {
+          cachedCloudArtwork = null;
+          return null;
+        }
+        const chunks: ArrayBuffer[] = [];
+        const transport = await this.transport;
+        const stream = await transport.streamFile({ messageId: artworkMessageId, mimeType: artworkRef?.mime_type || "image/png" }, chunk => {
+          if (controller.signal.aborted) throw abortError();
+          chunks.push(chunk);
+        });
+        activeCancel = stream.cancel;
+        await stream.completed;
+        activeCancel = null;
+        if (controller.signal.aborted) throw abortError();
+        cachedCloudArtwork = {
+          mimeType: artworkRef?.mime_type || "image/png",
+          bytes: await new Blob(chunks).arrayBuffer(),
+          messageId: artworkMessageId,
+        };
+        return cachedCloudArtwork;
+      };
+
       try {
         const totalBytes = assets.reduce((sum, asset) => sum + Math.max(0, asset.size), 0);
         let completedBytes = 0;
@@ -168,6 +207,22 @@ export class WebDownloadsManager {
           const chunks: ArrayBuffer[] = [];
           let assetBytes = 0;
 
+          // Cloud MASTER intentionally has no ID3. Rehydrate BeatGaler INDEX metadata and
+          // the dedicated artwork slot only at export/download time.
+          if (asset.kind === "MP3") {
+            const artwork = await loadArtworkForMp3();
+            const id3 = buildBeatGalerId3Tag({
+              name: beat.name,
+              bpm: beat.bpm,
+              key: beat.key,
+              tags: beat.tags,
+              rating: beat.rating,
+            }, artwork);
+            const id3Buffer = exactArrayBuffer(id3);
+            if (writable) await writable.write(id3Buffer);
+            else chunks.push(id3Buffer);
+          }
+
           if (asset.inlineDataUrl) {
             const blob = await (await fetch(asset.inlineDataUrl)).blob();
             const buffer = await blob.arrayBuffer();
@@ -178,21 +233,34 @@ export class WebDownloadsManager {
           } else {
             const objectMessageId = messageId(asset.ref);
             if (!objectMessageId) throw new Error(`${asset.kind} is not available for this beat.`);
-            const transport = await this.transport;
-            const stream = await transport.streamFile({ messageId: objectMessageId, mimeType: asset.mimeType }, async (chunk, downloadedBytes, streamTotal) => {
-              if (controller.signal.aborted) throw abortError();
-              if (writable) await writable.write(chunk);
-              else chunks.push(chunk);
-              assetBytes = downloadedBytes;
-              onProgress?.({
-                currentKind: asset.kind,
-                downloadedBytes: completedBytes + downloadedBytes,
-                totalBytes: Math.max(totalBytes, completedBytes + streamTotal),
+
+            // When Everything is exported, reuse the artwork bytes already fetched for APIC
+            // instead of downloading the same Cloud object a second time.
+            if (asset.kind === "ARTWORK" && cachedCloudArtwork?.messageId === objectMessageId) {
+              const buffer = cachedCloudArtwork.bytes instanceof Uint8Array
+                ? exactArrayBuffer(cachedCloudArtwork.bytes)
+                : cachedCloudArtwork.bytes;
+              if (writable) await writable.write(buffer);
+              else chunks.push(buffer);
+              assetBytes = buffer.byteLength;
+              onProgress?.({ currentKind: asset.kind, downloadedBytes: completedBytes + assetBytes, totalBytes: Math.max(totalBytes, completedBytes + assetBytes) });
+            } else {
+              const transport = await this.transport;
+              const stream = await transport.streamFile({ messageId: objectMessageId, mimeType: asset.mimeType }, async (chunk, downloadedBytes, streamTotal) => {
+                if (controller.signal.aborted) throw abortError();
+                if (writable) await writable.write(chunk);
+                else chunks.push(chunk);
+                assetBytes = downloadedBytes;
+                onProgress?.({
+                  currentKind: asset.kind,
+                  downloadedBytes: completedBytes + downloadedBytes,
+                  totalBytes: Math.max(totalBytes, completedBytes + streamTotal),
+                });
               });
-            });
-            activeCancel = stream.cancel;
-            const result = await stream.completed;
-            assetBytes = result.totalBytes;
+              activeCancel = stream.cancel;
+              const result = await stream.completed;
+              assetBytes = result.totalBytes;
+            }
           }
 
           if (controller.signal.aborted) throw abortError();
