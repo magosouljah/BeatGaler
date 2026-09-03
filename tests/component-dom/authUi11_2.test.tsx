@@ -115,16 +115,15 @@ describe("F2 11.2 complete Auth UI", () => {
     host.remove();
   });
 
-  it("keeps an offline state recoverable with explicit retry and an assertive error region", async () => {
+  it("keeps a remembered local shell visible when auth restore is transiently offline", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     localStorage.setItem("beatgaler:web-session-present:v1", "1");
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("network unavailable"); }));
 
     const { host, root } = await renderGate();
-    expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("BeatGaler Cloud is unavailable");
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("offline");
-    expect(button(host, "Retry connection")).toBeTruthy();
-    expect(button(host, "Use another account")).toBeTruthy();
+    expect(host.querySelector('[data-testid="app"]')?.textContent).toBe("Authenticated application");
+    expect(host.querySelector("#beatgaler-auth-title")).toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
 
     await act(async () => root.unmount());
     host.remove();

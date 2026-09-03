@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { platform } from "../platform";
+import { hasRememberedWebSessionMarker } from "../features/auth/webSessionBootstrap";
 import { UiButton, UiFeedback, UiField, UiSpinner } from "./ui/DesignPrimitives";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
@@ -240,29 +241,45 @@ export async function loginBeatGalerAccount(identifier: string, password: string
   return await storeSession(result);
 }
 
-export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
-  const legacyToken = localStorage.getItem(TOKEN_KEY);
-  const hasWebMarker = platform.kind === "web" && localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1";
-  const token = platform.kind === "web" ? (legacyToken || (hasWebMarker ? BROWSER_SESSION_SENTINEL : null)) : legacyToken;
-  if (!token) return null;
-  try {
-    const result = await authRequest("/auth/session", { beatgalerUserId: await getBeatGalerInstallationId() }, token);
-    if (platform.kind === "web") {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
-      await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
-    } else {
-      const activeToken = result?.token || token;
-      if (result?.token) localStorage.setItem(TOKEN_KEY, result.token);
-      await platform.cloudAuth.syncSession(activeToken, getResolvedCloudApiBase());
+let restoreBeatGalerSessionInFlight: Promise<BeatGalerAccount | null> | null = null;
+
+export function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
+  // AuthExperienceGate and the legacy AccountGate can mount in the same Web
+  // tree. Share one restore request so optimistic cache reveal does not turn
+  // into duplicate /auth/session round trips.
+  if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;
+
+  const pending = (async (): Promise<BeatGalerAccount | null> => {
+    const legacyToken = localStorage.getItem(TOKEN_KEY);
+    const hasWebMarker = platform.kind === "web" && localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1";
+    const token = platform.kind === "web" ? (legacyToken || (hasWebMarker ? BROWSER_SESSION_SENTINEL : null)) : legacyToken;
+    if (!token) return null;
+    try {
+      const result = await authRequest("/auth/session", { beatgalerUserId: await getBeatGalerInstallationId() }, token);
+      if (platform.kind === "web") {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
+        await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
+      } else {
+        const activeToken = result?.token || token;
+        if (result?.token) localStorage.setItem(TOKEN_KEY, result.token);
+        await platform.cloudAuth.syncSession(activeToken, getResolvedCloudApiBase());
+      }
+      return result.user;
+    } catch (error) {
+      if (!isBeatGalerSessionExpiryError(error)) throw error;
+      clearLocalSessionState();
+      try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+      return null;
     }
-    return result.user;
-  } catch (error) {
-    if (!isBeatGalerSessionExpiryError(error)) throw error;
-    clearLocalSessionState();
-    try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
-    return null;
-  }
+  })();
+
+  restoreBeatGalerSessionInFlight = pending;
+  const clear = () => {
+    if (restoreBeatGalerSessionInFlight === pending) restoreBeatGalerSessionInFlight = null;
+  };
+  pending.then(clear, clear);
+  return pending;
 }
 
 export async function getBeatGalerAccountInfo(): Promise<BeatGalerAccount> {
@@ -480,6 +497,11 @@ function XUnlockOverlay({ username, onDone }: { username: string; onDone: () => 
 
 export default function AccountGate({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<BeatGalerAccount | null>(null);
+  // A remembered Web profile owns its local presentation cache. Reveal that
+  // shell immediately while the shared session restore verifies cloud authority.
+  const [optimisticRememberedSession, setOptimisticRememberedSession] = useState(
+    () => platform.kind === "web" && hasRememberedWebSessionMarker(),
+  );
   const [checking, setChecking] = useState(true);
   const [registerMode, setRegisterMode] = useState(false);
   const [identifier, setIdentifier] = useState("");
@@ -498,14 +520,24 @@ export default function AccountGate({ children }: { children: React.ReactNode })
 
     let cancelled = false;
     void restoreBeatGalerSession()
-      .then(value => { if (!cancelled) setAccount(value); })
+      .then(value => {
+        if (cancelled) return;
+        setAccount(value);
+        if (!value) setOptimisticRememberedSession(false);
+      })
       .catch(e => { if (!cancelled) setError(String((e as Error)?.message || e)); })
       .finally(() => { if (!cancelled) setChecking(false); });
-    const logout = () => setAccount(null);
+    const logout = () => {
+      setAccount(null);
+      setOptimisticRememberedSession(false);
+    };
     const updated = (event: Event) => {
       const detail = (event as CustomEvent<BeatGalerAccount>).detail;
       if (detail) setAccount(detail);
-      else void restoreBeatGalerSession().then(value => { if (value) setAccount(value); }).catch(() => {});
+      else void restoreBeatGalerSession().then(value => {
+        if (value) setAccount(value);
+        else setOptimisticRememberedSession(false);
+      }).catch(() => {});
     };
     const unlocked = (event: Event) => {
       const detail = (event as CustomEvent<{ username?: string }>).detail;
@@ -535,8 +567,8 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     return () => window.clearInterval(timer);
   }, [account?.id, account?.username, account?.email, account?.providers?.x?.connected]);
 
+  if (account || optimisticRememberedSession) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
   if (checking) return <div className="bg-account-loading" aria-live="polite"><div className="bg-account-loading__inner"><UiSpinner label="Loading BeatGaler"/><span>Loading BeatGaler…</span></div></div>;
-  if (account) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); if (busy) return; setError(null);
