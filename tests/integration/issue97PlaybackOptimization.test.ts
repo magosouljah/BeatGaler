@@ -44,16 +44,34 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(worker).toContain("limit,");
     expect(transport).toContain("async prefetchFile(input: WebTransportPrefetchInput)");
     expect(playback).toContain("const MAX_PREFETCH_CONCURRENCY = 2;");
+    expect(playback).toContain("const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;");
     expect(playback).toContain('playTrace("SOURCE_PREFETCH_CONSUMED"');
     expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
     expect(playback).toContain("this.transport.streamFile({ messageId, mimeType, offsetBytes }");
   });
 
-  it("keeps completed playback in a bounded session-only RAM cache", () => {
+  it("uses exactly one playback manager after the async Direct import race", () => {
+    const adapter = source("src/platform/webAdapter.ts");
+    const resolverStart = adapter.indexOf("async function resolveWebPlaybackSources");
+    const firstGuard = adapter.indexOf("if (webPlaybackSources) return webPlaybackSources;", resolverStart);
+    const awaitTransport = adapter.indexOf("const transport = await resolveWebCloudTransport();", firstGuard);
+    const secondGuard = adapter.indexOf("if (!webPlaybackSources) webPlaybackSources = new WebPlaybackSourceManager(transport);", awaitTransport);
+
+    expect(resolverStart).toBeGreaterThanOrEqual(0);
+    expect(firstGuard).toBeGreaterThan(resolverStart);
+    expect(awaitTransport).toBeGreaterThan(firstGuard);
+    expect(secondGuard).toBeGreaterThan(awaitTransport);
+    expect(adapter).not.toContain("new WebPlaybackSourceManager(await resolveWebCloudTransport())");
+  });
+
+  it("keeps completed playback bytes in a bounded session-only RAM cache", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const adapter = source("src/platform/webAdapter.ts");
 
     expect(playback).toContain("const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;");
+    expect(playback).toContain("cachedChunks: ArrayBuffer[];");
+    expect(playback).toContain("entry.cachedChunks.push(chunk);");
+    expect(playback).toContain("new Blob(reusable.cachedChunks");
     expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_HIT"');
     expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_RETAINED"');
     expect(playback).toContain("if (entry.streamDone && !entry.failed)");
