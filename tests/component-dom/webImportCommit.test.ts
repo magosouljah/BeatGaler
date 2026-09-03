@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
+import { readBlobAsArrayBuffer } from "../../src/features/audio/mp3Metadata";
 import { commitWebImportedBeat, type WebImportCommitRuntime } from "../../src/features/import/webImportCommit";
 
 function beat(overrides: Partial<Beat> = {}): Beat {
@@ -135,7 +136,7 @@ describe("Review Beat Web durable commit", () => {
     expect(upload.mock.calls[0][0].kind).toBe("MASTER");
     expect(uploadedMaster.name).toBe("Tagged.mp3");
     expect(uploadedMaster.lastModified).toBe(77);
-    expect(Array.from(new Uint8Array(await uploadedMaster.arrayBuffer()))).toEqual(Array.from(mpeg));
+    expect(Array.from(new Uint8Array(await readBlobAsArrayBuffer(uploadedMaster)))).toEqual(Array.from(mpeg));
     const candidate: any = (runtime.replaceLibraryIndex as any).mock.calls[0][0].manifest;
     expect(candidate.beats[0].master.size).toBe(mpeg.byteLength);
   });
