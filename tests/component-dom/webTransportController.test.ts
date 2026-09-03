@@ -186,7 +186,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
   });
 
-  it("skips Worker initialization when activation has already failed before temp auth binding finishes", async () => {
+  it("cleans up safely when activation fails while temp auth binding is still in flight", async () => {
     const { controller, runtime, api } = harness();
     let finishBind!: () => void;
     vi.mocked(api.bind).mockImplementationOnce(async () => {
@@ -198,11 +198,13 @@ describe("Galer Cloud Web transport lifecycle", () => {
     const failure = controller.connect().catch(error => error as Error);
     await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
+    expect(api.stop).not.toHaveBeenCalled();
     finishBind();
 
     expect((await failure).message).toBe("activation failed");
-    expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.initialize).toHaveBeenCalledOnce();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
+    expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledOnce();
   });
 
