@@ -52,9 +52,7 @@ async function publicAuthRequest(path: string, body: Record<string, unknown>) {
   let payload: any = {};
   try { payload = text ? JSON.parse(text) : {}; } catch { payload = { error: text }; }
   if (!response.ok) {
-    throw Object.assign(new Error(payload?.error || `BeatGaler Cloud HTTP ${response.status}`, {
-      cause: payload,
-    }), {
+    throw Object.assign(new Error(payload?.error || `BeatGaler Cloud HTTP ${response.status}`), {
       status: response.status,
       code: payload?.code || `HTTP_${response.status}`,
       ...payload,
