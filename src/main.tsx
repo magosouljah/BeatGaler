@@ -6,6 +6,7 @@ import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
+import { playTrace } from "./features/playback/playTrace";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
@@ -19,6 +20,34 @@ import "./styles/library-ux.css";
 // Issue #97 startup instrumentation is intentionally observational. Install it
 // before React mounts so Web and Desktop record the same visible startup path.
 installStartupTrace();
+
+function preloadRememberedWebDirectCode(): void {
+  if (typeof window === "undefined") return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+
+  // Phase 3 / P2 preloads code only. A remembered marker is enough to justify
+  // fetching the lazy chunk, but the transport constructor still remains owned
+  // by authenticated session sync in webAdapter, so this cannot start Direct.
+  try {
+    if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
+  } catch {
+    return;
+  }
+
+  const started = performance.now();
+  playTrace("DIRECT_CODE_PRELOAD_BEGIN");
+  void import("./features/cloud/webGalerCloudTransport").then(
+    () => playTrace("DIRECT_CODE_PRELOAD_DONE", { elapsed_ms: Math.round(performance.now() - started) }),
+    error => playTrace("DIRECT_CODE_PRELOAD_DEFERRED", {
+      elapsed_ms: Math.round(performance.now() - started),
+      error_name: error instanceof Error ? error.name : "unknown",
+    }),
+  );
+}
+
+// Start the code-only preload before React effects restore the browser session.
+// The existing authenticated sync still controls construction/connect.
+preloadRememberedWebDirectCode();
 
 function GlobalStyles() {
   return (
