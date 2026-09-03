@@ -8,6 +8,7 @@ import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
 import { playTrace } from "./features/playback/playTrace";
 import { hasRememberedWebSessionMarker, readWebCsrfToken } from "./features/auth/webSessionBootstrap";
+import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
 import { platform } from "./platform";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
@@ -22,6 +23,12 @@ import "./styles/library-ux.css";
 // Issue #97 startup instrumentation is intentionally observational. Install it
 // before React mounts so Web and Desktop record the same visible startup path.
 installStartupTrace();
+
+// AccountGate installs the credentialed BeatGaler fetch boundary while App's
+// module graph is evaluated. Wrap that boundary before any remembered-session
+// preconnect so unsafe requests stay coherent with the browser CSRF cookie even
+// while /auth/session is restoring in parallel.
+installWebCsrfFetchCoordinator();
 
 function preloadRememberedWebDirectCode(): void {
   if (typeof window === "undefined") return;
