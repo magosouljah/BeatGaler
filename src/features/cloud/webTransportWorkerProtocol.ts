@@ -9,6 +9,8 @@ export interface WebTransportUploadInput {
 }
 
 export const WEB_DIRECT_MAX_FILE_BYTES = 1900 * 1024 * 1024;
+export const WEB_PLAYBACK_FIRST_CHUNK_KB = 64;
+export const WEB_PLAYBACK_FIRST_CHUNK_BYTES = WEB_PLAYBACK_FIRST_CHUNK_KB * 1024;
 
 export interface WebTransportStoredFile {
   telegram_file_id: string;
@@ -35,7 +37,18 @@ export interface WebTransportDeleteMessagesInput { messageIds: number[]; }
 export interface WebTransportDeleteMessagesResult { deleted: number; }
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
-export interface WebTransportStreamInput { messageId: number; mimeType?: string | null; }
+export interface WebTransportPrefetchInput { messageId: number; mimeType?: string | null; }
+export interface WebTransportPrefetchResult {
+  messageId: number;
+  totalBytes: number;
+  mimeType: string;
+  prefix: ArrayBuffer;
+}
+export interface WebTransportStreamInput {
+  messageId: number;
+  mimeType?: string | null;
+  offsetBytes?: number;
+}
 export interface WebTransportStreamResult { messageId: number; totalBytes: number; mimeType: string; }
 
 export type WebTransportWorkerCommand =
@@ -52,6 +65,7 @@ export type WebTransportWorkerCommand =
   | { requestId: string; op: "replace_index"; input: WebTransportReplaceIndexInput }
   | { requestId: string; op: "delete_messages"; input: WebTransportDeleteMessagesInput }
   | { requestId: string; op: "download"; input: WebTransportDownloadInput }
+  | { requestId: string; op: "prefetch"; input: WebTransportPrefetchInput }
   | { requestId: string; op: "stream"; input: WebTransportStreamInput }
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }

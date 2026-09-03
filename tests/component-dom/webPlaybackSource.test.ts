@@ -44,6 +44,12 @@ class FakeMediaSource extends EventTarget {
   }
 }
 
+function unusedPrefetch(): WebPlaybackTransport["prefetchFile"] {
+  return vi.fn(async () => {
+    throw new Error("prefetch not expected in this test");
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -51,7 +57,7 @@ afterEach(() => {
 });
 
 describe("Web MASTER playback source", () => {
-  it("feeds authorized chunks into MediaSource and revokes the temporary URL", async () => {
+  it("feeds authorized chunks into MediaSource and retains completed audio for same-session replay", async () => {
     vi.stubGlobal("MediaSource", FakeMediaSource);
     const createObjectURL = vi.fn(() => "blob:cloud-master");
     const revokeObjectURL = vi.fn();
@@ -60,6 +66,7 @@ describe("Web MASTER playback source", () => {
     let finish!: (value: { messageId: number; totalBytes: number; mimeType: string }) => void;
     const cancel = vi.fn();
     const transport: WebPlaybackTransport = {
+      prefetchFile: unusedPrefetch(),
       streamFile: vi.fn(async (_input, onChunk) => {
         emitChunk = onChunk;
         return {
@@ -73,14 +80,14 @@ describe("Web MASTER playback source", () => {
     const prepared = await manager.prepare("beat-1", 91);
     expect(prepared.url).toBe("blob:cloud-master");
     expect(transport.streamFile).toHaveBeenCalledWith(
-      { messageId: 91, mimeType: "audio/mpeg" },
+      { messageId: 91, mimeType: "audio/mpeg", offsetBytes: 0 },
       expect.any(Function),
     );
 
     const mediaSource = FakeMediaSource.instances[0];
     mediaSource.open();
-    emitChunk(new Uint8Array([1, 2]).buffer, 2, 4);
-    emitChunk(new Uint8Array([3, 4]).buffer, 4, 4);
+    await emitChunk(new Uint8Array([1, 2]).buffer, 2, 4);
+    await emitChunk(new Uint8Array([3, 4]).buffer, 4, 4);
     finish({ messageId: 91, totalBytes: 4, mimeType: "audio/mpeg" });
     await prepared.completed;
 
@@ -90,6 +97,14 @@ describe("Web MASTER playback source", () => {
     expect(createObjectURL).toHaveBeenCalledWith(mediaSource);
 
     manager.release("beat-1");
+    expect(cancel).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    const replay = await manager.prepare("beat-1", 91);
+    expect(replay.url).toBe("blob:cloud-master");
+    expect(transport.streamFile).toHaveBeenCalledTimes(1);
+
+    manager.clearCache();
     expect(cancel).toHaveBeenCalledOnce();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:cloud-master");
   });
@@ -99,8 +114,9 @@ describe("Web MASTER playback source", () => {
     const createObjectURL = vi.fn(() => "blob:fallback-master");
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     const transport: WebPlaybackTransport = {
+      prefetchFile: unusedPrefetch(),
       streamFile: vi.fn(async (_input, onChunk) => {
-        onChunk(new Uint8Array([1, 2, 3]).buffer, 3, 3);
+        await onChunk(new Uint8Array([1, 2, 3]).buffer, 3, 3);
         return {
           completed: Promise.resolve({ messageId: 92, totalBytes: 3, mimeType: "audio/mpeg" }),
           cancel: vi.fn(),

@@ -1,5 +1,6 @@
 import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
+import type { Beat } from "../types";
 import { getWebClientId } from "./webClientId";
 import { pickWebSlotFile, webImportPort } from "./webImport";
 import { WebLibraryWindowConsumer, type WebLibraryWindowSnapshot } from "../features/library/webLibraryWindow";
@@ -9,6 +10,7 @@ import {
   readRequestedWebLibraryOffset,
 } from "../features/library/webLibraryNavigation";
 import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
+import { installFullyVisibleBeatCardObserver } from "../features/playback/webVisiblePlaybackPrefetch";
 import { playTrace, observePlayStep } from "../features/playback/playTrace";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
@@ -16,6 +18,8 @@ let webCloudTransport: Promise<import("../features/cloud/webGalerCloudTransport"
 let webLibraryWindow: WebLibraryWindowConsumer | null = null;
 let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
+const webBeatRegistry = new Map<string, Beat>();
+let stopVisiblePlaybackObserver: (() => void) | null = null;
 
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
@@ -51,7 +55,67 @@ async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
   return webLibraryWindow;
 }
 
+function directMessageId(value: string | null | undefined): number | null {
+  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
+  const messageId = Number(match?.[1] || 0);
+  return Number.isInteger(messageId) && messageId > 0 ? messageId : null;
+}
+
+function webBeatMessageId(beat: Beat): number | null {
+  const explicit = Number(beat.telegram_message_id || 0);
+  if (Number.isInteger(explicit) && explicit > 0) return explicit;
+  return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
+}
+
+async function prefetchVisibleBeat(beatId: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  const beat = webBeatRegistry.get(beatId);
+  if (!beat) return;
+  const messageId = webBeatMessageId(beat);
+  if (!messageId) return;
+  const mimeType = beat.assets?.master?.mime_type || "audio/mpeg";
+  try {
+    const sources = await resolveWebPlaybackSources();
+    await sources.prefetch(beat.id, messageId, mimeType);
+  } catch (error) {
+    playTrace("ADAPTER_VISIBLE_PREFETCH_DEFERRED", {
+      beat_id: beat.id,
+      message_id: messageId,
+      error_name: error instanceof Error ? error.name : "unknown",
+    });
+  }
+}
+
+function ensureVisiblePlaybackObserver(): void {
+  if (stopVisiblePlaybackObserver || typeof window === "undefined") return;
+  stopVisiblePlaybackObserver = installFullyVisibleBeatCardObserver(beatId => {
+    playTrace("ADAPTER_VISIBLE_CARD_PREFETCH", { beat_id: beatId });
+    void prefetchVisibleBeat(beatId);
+  });
+}
+
+function rememberWebBeats(beats: readonly Beat[]): void {
+  for (const beat of beats) webBeatRegistry.set(beat.id, beat);
+  // IntersectionObserver's initial callback may already have fired when a fast
+  // Play seeded only one cached beat. Reinstall after registry growth so every
+  // currently full-card-visible beat is reconsidered once metadata is known.
+  stopVisiblePlaybackObserver?.();
+  stopVisiblePlaybackObserver = null;
+  ensureVisiblePlaybackObserver();
+}
+
+function forgetWebBeats(ids: readonly string[]): void {
+  for (const id of ids) webBeatRegistry.delete(id);
+}
+
+function resetVisiblePlaybackPrefetch(): void {
+  stopVisiblePlaybackObserver?.();
+  stopVisiblePlaybackObserver = null;
+  webBeatRegistry.clear();
+}
+
 function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): void {
+  rememberWebBeats(page.beats);
   publishWebLibraryNavigationState({
     offset: page.offset,
     previousOffset: page.previousOffset,
@@ -74,12 +138,6 @@ async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
 function resolveWebDownloads(): WebDownloadsManager {
   if (!webDownloads) webDownloads = new WebDownloadsManager(resolveWebCloudTransport());
   return webDownloads;
-}
-
-function directMessageId(value: string | null | undefined): number | null {
-  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
-  const messageId = Number(match?.[1] || 0);
-  return Number.isInteger(messageId) && messageId > 0 ? messageId : null;
 }
 
 const WEB_INCOMPLETE_WARNINGS_KEY = "beatgaler:web-incomplete-warnings:v1";
@@ -153,7 +211,9 @@ export const webAdapter: PlatformAdapter = {
   trash: {
     async moveBeats(ids) {
       const transport = await resolveWebCloudTransport();
-      return transport.moveBeatsToTrash(ids, webClientId);
+      const moved = await transport.moveBeatsToTrash(ids, webClientId);
+      forgetWebBeats(moved);
+      return moved;
     },
     async listBeats() {
       const transport = await resolveWebCloudTransport();
@@ -161,7 +221,9 @@ export const webAdapter: PlatformAdapter = {
     },
     async restoreBeat(id) {
       const transport = await resolveWebCloudTransport();
-      return transport.restoreBeatFromTrash(id, webClientId);
+      const restored = await transport.restoreBeatFromTrash(id, webClientId);
+      rememberWebBeats([restored]);
+      return restored;
     },
     async purgeBeats() {
       const transport = await resolveWebCloudTransport();
@@ -200,7 +262,8 @@ export const webAdapter: PlatformAdapter = {
     resolveUrl(source) { return source; },
     async preparePlayback(beat) {
       const master = beat.assets?.master;
-      const messageId = beat.telegram_message_id || directMessageId(master?.object_id) || directMessageId(beat.telegram_file_id);
+      const messageId = webBeatMessageId(beat);
+      rememberWebBeats([beat]);
       // A blob: URL is valid only for the document that created it. Cached Web
       // manifests can outlive that document, so cloud-backed beats must always
       // obtain a fresh session-owned playback URL from WebPlaybackSourceManager.
@@ -278,6 +341,7 @@ export const webAdapter: PlatformAdapter = {
           wav: slots.WAV,
           project: slots.PROJECT,
         }, webClientId, onProgress);
+        rememberWebBeats([committed]);
         webImportPort.releaseBeat(beat.id);
         return committed;
       } catch (error) {
@@ -288,6 +352,7 @@ export const webAdapter: PlatformAdapter = {
       }
     },
     async disconnect() {
+      resetVisiblePlaybackPrefetch();
       webPlaybackSources?.releaseAll();
       webPlaybackSources = null;
       webDownloads?.cancelAll();
@@ -313,7 +378,9 @@ export const webAdapter: PlatformAdapter = {
     async commit(original, updated, files, onProgress) {
       const transport = await resolveWebCloudTransport();
       try {
-        return await transport.commitBeatEdit(original, updated, files, webClientId, onProgress);
+        const committed = await transport.commitBeatEdit(original, updated, files, webClientId, onProgress);
+        rememberWebBeats([committed]);
+        return committed;
       } catch (error) {
         console.error("[web/edit] durable commit failed", error);
         const message = error instanceof Error ? error.message : String(error);

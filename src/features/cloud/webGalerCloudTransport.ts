@@ -12,6 +12,8 @@ import type {
   WebTransportDownloadInput,
   WebTransportDownloadResult,
   WebTransportLibraryIndexResult,
+  WebTransportPrefetchInput,
+  WebTransportPrefetchResult,
   WebTransportProgress,
   WebTransportStreamInput,
   WebTransportStreamResult,
@@ -116,6 +118,23 @@ export class WebGalerCloudTransport {
         return results;
       },
     );
+  }
+
+  async prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+    const started = Date.now();
+    playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId });
+    await this.controller.connect();
+    const result = await this.controller.withOperation(
+      "stream_master",
+      { objectType: "message", objectIds: [String(input.messageId)] },
+      () => this.worker.prefetch(input),
+    );
+    playTrace("TRANSPORT_PREFETCH_READY", {
+      message_id: input.messageId,
+      bytes: result.prefix.byteLength,
+      total_ms: Date.now() - started,
+    });
+    return result;
   }
 
   async streamFile(
@@ -318,6 +337,8 @@ export type {
   WebTransportDownloadInput,
   WebTransportDownloadResult,
   WebTransportLibraryIndexResult,
+  WebTransportPrefetchInput,
+  WebTransportPrefetchResult,
   WebTransportProgress,
   WebTransportStreamInput,
   WebTransportStreamResult,
