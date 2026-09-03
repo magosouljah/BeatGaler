@@ -96,6 +96,11 @@ function ensureVisiblePlaybackObserver(): void {
 
 function rememberWebBeats(beats: readonly Beat[]): void {
   for (const beat of beats) webBeatRegistry.set(beat.id, beat);
+  // IntersectionObserver's initial callback may already have fired when a fast
+  // Play seeded only one cached beat. Reinstall after registry growth so every
+  // currently full-card-visible beat is reconsidered once metadata is known.
+  stopVisiblePlaybackObserver?.();
+  stopVisiblePlaybackObserver = null;
   ensureVisiblePlaybackObserver();
 }
 
