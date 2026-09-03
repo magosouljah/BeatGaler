@@ -79,7 +79,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
-  it("returns the first MSE URL before Direct stream admission and preloads Phase 3 code/Worker without reordering Direct", () => {
+  it("returns the first MSE URL before Direct stream admission, preloads code/Worker, and overlaps activation with temp auth", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
     const adapter = source("src/platform/webAdapter.ts");
@@ -87,6 +87,7 @@ describe("Issue #97 production runtime follow-up", () => {
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
     const workerClient = source("src/features/cloud/webTransportWorkerClient.ts");
     const controller = source("src/features/cloud/webTransportController.ts");
+    const sessionControl = source("src/features/cloud/webTransportSession.ts");
 
     expect(playback).toContain('playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });');
     expect(playback).toContain("void (async () => {");
@@ -114,14 +115,24 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(transport).toContain("this.worker.prewarm();");
     expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("void this.controller.connect().then("));
 
-    const prepareIndex = controller.indexOf('observePlayStep("DIRECT_PREPARE"');
-    const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
+    expect(sessionControl).toContain("export async function reserveWebTransportSession()");
+    expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
+    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession());");
+
+    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve();");
     const activateIndex = controller.indexOf('observePlayStep("DIRECT_ACTIVATE"');
+    const bindIndex = controller.indexOf("return this.api.bind(bootstrap);");
+    const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
+    const joinIndex = controller.indexOf("const [activationResult, initializeResult] = await Promise.all([");
     const verifyIndex = controller.indexOf('observePlayStep("DIRECT_VERIFY"');
-    expect(prepareIndex).toBeGreaterThanOrEqual(0);
-    expect(prepareIndex).toBeLessThan(initializeIndex);
-    expect(initializeIndex).toBeLessThan(activateIndex);
-    expect(activateIndex).toBeLessThan(verifyIndex);
+    expect(reserveIndex).toBeGreaterThanOrEqual(0);
+    expect(reserveIndex).toBeLessThan(activateIndex);
+    expect(activateIndex).toBeLessThan(bindIndex);
+    expect(bindIndex).toBeLessThan(initializeIndex);
+    expect(initializeIndex).toBeLessThan(joinIndex);
+    expect(joinIndex).toBeLessThan(verifyIndex);
+    expect(controller).toContain("if (activationResultPromise) await activationResultPromise;");
+    expect(controller).toContain("if (bootstrap) await this.api.stop(bootstrap).catch(() => {});");
   });
 
   it("resolves an existing beat topic by vault rather than installation", () => {
