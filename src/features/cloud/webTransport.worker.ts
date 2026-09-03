@@ -1,6 +1,6 @@
 import { InputMedia, MemoryStorage, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
-import { playTrace, observePlayStep } from "../playback/playTrace";
+import { playTrace, playTraceSpan, observePlayStep } from "../playback/playTrace";
 import {
   WEB_DIRECT_MAX_FILE_BYTES,
   type WebTransportDownloadInput,
@@ -240,8 +240,13 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     // resetState: a genuine reset must create a new id rather than destroy and
     // then immediately reuse the old bound id.
     const restoreConnect = installBoundTempConnectHook(temp_session_id, temp_session_state, primaryDcId);
+    const endConnectTrace = playTraceSpan("WORKER_MTPROTO_CONNECT");
     try {
-      await observePlayStep("WORKER_MTPROTO_CONNECT", () => next.connect());
+      await next.connect();
+      endConnectTrace();
+    } catch (error) {
+      endConnectTrace("error");
+      throw error;
     } finally {
       restoreConnect();
     }
