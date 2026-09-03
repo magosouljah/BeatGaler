@@ -42,6 +42,25 @@ export function looksLikeMp3(file: Pick<File, "name" | "type">): boolean {
 }
 
 /**
+ * Reads a Blob without assuming Blob.arrayBuffer() exists. Real browsers use the
+ * native fast path; jsdom and older embedded WebViews fall back to FileReader.
+ */
+export function readBlobAsArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  const nativeArrayBuffer = (blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
+  if (typeof nativeArrayBuffer === "function") return nativeArrayBuffer.call(blob);
+
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) resolve(reader.result);
+      else reject(new Error("Could not read binary Blob data."));
+    };
+    reader.onerror = () => reject(reader.error || new Error("Could not read binary Blob data."));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+/**
  * Removes only container-level ID3 metadata from an MP3 cloud payload.
  * MPEG audio bytes (including Xing/VBRI/LAME technical frames) are preserved byte-for-byte.
  */
@@ -50,11 +69,11 @@ export async function stripId3MetadataForCloud(file: File): Promise<StrippedMp3F
     return { file, prefixBytesRemoved: 0, suffixBytesRemoved: 0 };
   }
 
-  const header = new Uint8Array(await file.slice(0, Math.min(10, file.size)).arrayBuffer());
+  const header = new Uint8Array(await readBlobAsArrayBuffer(file.slice(0, Math.min(10, file.size))));
   const prefixBytesRemoved = id3v2PrefixLength(header, file.size);
   let suffixBytesRemoved = 0;
   if (file.size - prefixBytesRemoved > 128) {
-    const tail = new Uint8Array(await file.slice(file.size - 128).arrayBuffer());
+    const tail = new Uint8Array(await readBlobAsArrayBuffer(file.slice(file.size - 128)));
     if (hasId3v1Tag(tail)) suffixBytesRemoved = 128;
   }
 
