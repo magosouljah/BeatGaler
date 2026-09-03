@@ -7,6 +7,8 @@ import type {
   WebTransportDeleteMessagesInput,
   WebTransportDeleteMessagesResult,
   WebTransportLibraryIndexResult,
+  WebTransportPrefetchInput,
+  WebTransportPrefetchResult,
   WebTransportReplaceIndexInput,
   WebTransportReplaceIndexResult,
   WebTransportProgress,
@@ -205,6 +207,16 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   download(input: WebTransportDownloadInput): Promise<WebTransportDownloadResult> {
     return this.request<WebTransportDownloadResult>({ op: "download", input });
+  }
+
+  prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+    return this.request<WebTransportPrefetchResult>(
+      { op: "prefetch", input },
+      undefined,
+      undefined,
+      undefined,
+      this.bootstrapRequestTimeoutMs,
+    );
   }
 
   stream(
