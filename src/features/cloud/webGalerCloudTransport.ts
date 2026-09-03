@@ -27,6 +27,9 @@ export class WebGalerCloudTransport {
   constructor() {
     const started = Date.now();
     playTrace("TRANSPORT_PRECONNECT_ENTER");
+    // Phase 3 / P2: load/evaluate the Worker module while control-plane prepare
+    // is running. This does not initialize MTProto or change session ordering.
+    this.worker.prewarm();
     void this.controller.connect().then(
       () => playTrace("TRANSPORT_PRECONNECT_READY", { elapsed_ms: Date.now() - started }),
       error => playTrace("TRANSPORT_PRECONNECT_DEFERRED", {
