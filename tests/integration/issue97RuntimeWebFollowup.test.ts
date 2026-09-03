@@ -79,6 +79,29 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
+  it("reveals a remembered local cache before auth restore and singleflights the duplicated gate restore", () => {
+    const experienceGate = source("src/features/auth/AuthExperienceGate.tsx");
+    const accountGate = source("src/components/AccountGate.tsx");
+
+    expect(experienceGate).toContain("hasRememberedWebSessionMarker");
+    expect(experienceGate).toContain("optimisticRememberedSession");
+    expect(experienceGate).toContain('playTrace("AUTH_CACHE_REVEAL_OPTIMISTIC")');
+    expect(experienceGate.indexOf("if (account || optimisticRememberedSession) return <>{children}</>;")).toBeLessThan(
+      experienceGate.indexOf('if (checking) return <main className="bg-auth-shell"'),
+    );
+    expect(experienceGate).toContain("if (!value) setOptimisticRememberedSession(false);");
+
+    expect(accountGate).toContain("hasRememberedWebSessionMarker");
+    expect(accountGate).toContain("let restoreBeatGalerSessionInFlight: Promise<BeatGalerAccount | null> | null = null;");
+    expect(accountGate).toContain("if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;");
+    expect(accountGate).toContain("restoreBeatGalerSessionInFlight = pending;");
+    expect(accountGate).toContain("pending.then(clear, clear);");
+    expect(accountGate.indexOf("if (account || optimisticRememberedSession) return <>{children}")).toBeLessThan(
+      accountGate.indexOf('if (checking) return <div className="bg-account-loading"'),
+    );
+    expect(accountGate).toContain("setOptimisticRememberedSession(false);");
+  });
+
   it("returns the first MSE URL before Direct stream admission and overlaps remembered auth, Direct startup, and activation", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
