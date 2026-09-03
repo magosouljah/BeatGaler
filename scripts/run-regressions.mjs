@@ -312,7 +312,7 @@ try {
   // per-user desktop pin, never ordinary playback cache and never web metadata.
   // Cold offline starts may expose only validated pins; ordinary cached cards
   // are allowed to survive only until the current app process closes.
-  if (!app.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
+  if (!app.includes('platform.library.loadOffline()')) fail("Cold Offline startup lost platform durable-library validation.");
   if (!app.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
   if (!app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!app.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
