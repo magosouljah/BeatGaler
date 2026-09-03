@@ -11,7 +11,9 @@
   "scripts": {
     "dev": "vite",
     "dev:web": "vite --mode web",
+    "prebuild": "node scripts/build-direct-temp-helper.mjs",
     "build": "node scripts/patch-wry-pinterest.mjs && tsc && vite build",
+    "prebuild:web": "node scripts/build-direct-temp-helper.mjs",
     "build:web": "tsc && vite build --mode web",
     "preview": "vite preview",
     "version:set": "node scripts/version.mjs set",
@@ -19,6 +21,7 @@
     "release:check": "npm run version:check && node scripts/release-manifest.mjs check",
     "build:release": "npm run release:check && npm run tauri build",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-tauri.ps1",
+    "pretest:regressions": "node scripts/build-direct-temp-helper.mjs",
     "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
     "test:security-boundary": "node scripts/regression-task-5.1-hardening.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
@@ -96,7 +99,7 @@
     "nanoid": "3.3.18",
     "postcss": "8.5.26",
     "serialize-javascript": "7.1.0",
-    "webdriver": "9.31.2",
+    "webdriver": "9.1.0",
     "webdriverio": "9.31.2"
   }
 }
