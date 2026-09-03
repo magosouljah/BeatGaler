@@ -20,7 +20,6 @@ let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 const webBeatRegistry = new Map<string, Beat>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
-const DEFAULT_WEB_SESSION_CACHE_LIMIT_MB = 100;
 
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
@@ -230,16 +229,9 @@ export const webAdapter: PlatformAdapter = {
     async purgePresets() { return unavailable("Preset deletion"); },
   },
   playbackCache: {
-    async status() {
-      return webPlaybackSources?.cacheStatus() ?? { used_bytes: 0, limit_mb: DEFAULT_WEB_SESSION_CACHE_LIMIT_MB };
-    },
-    async setLimitMb(limitMb) {
-      const sources = await resolveWebPlaybackSources();
-      return sources.setCacheLimitMb(limitMb);
-    },
-    async clear() {
-      return webPlaybackSources?.clearCache() ?? { used_bytes: 0, limit_mb: DEFAULT_WEB_SESSION_CACHE_LIMIT_MB };
-    },
+    async status() { return { used_bytes: 0, limit_mb: 0 }; },
+    async setLimitMb(limitMb) { return { used_bytes: 0, limit_mb: Math.max(0, limitMb) }; },
+    async clear() { return { used_bytes: 0, limit_mb: 0 }; },
   },
   system: {
     async getLogDirectory() { return ""; },
