@@ -27,32 +27,23 @@ jobs:
           master = Path('cloud-server/master-storage.js')
           text = master.read_text(encoding='utf-8')
           marker = '\nasync function ensurePrivateUserStorageBotAbsent({ botApiChatId, botUsername }) {'
-          addition = '''
-async function verifyPrivateUserStorageGroup({ botApiChatId }) {
-  const { client } = await openMasterClient();
-  try {
-    await findStorageChannelByBotApiId(client, botApiChatId);
-    return true;
-  } finally {
-    await client.disconnect();
-  }
-}
-'''
+          addition = (
+              '\nasync function verifyPrivateUserStorageGroup({ botApiChatId }) {\n'
+              '  const { client } = await openMasterClient();\n'
+              '  try {\n'
+              '    await findStorageChannelByBotApiId(client, botApiChatId);\n'
+              '    return true;\n'
+              '  } finally {\n'
+              '    await client.disconnect();\n'
+              '  }\n'
+              '}\n'
+          )
           if 'async function verifyPrivateUserStorageGroup' not in text:
               if marker not in text:
                   raise SystemExit('master-storage insertion marker not found')
               text = text.replace(marker, addition + marker, 1)
-          old_exports = '''module.exports = {
-  createPrivateUserStorageGroup,
-  ensurePrivateUserStorageBotAbsent,
-  masterStorageReady,
-};'''
-          new_exports = '''module.exports = {
-  createPrivateUserStorageGroup,
-  ensurePrivateUserStorageBotAbsent,
-  verifyPrivateUserStorageGroup,
-  masterStorageReady,
-};'''
+          old_exports = 'module.exports = {\n  createPrivateUserStorageGroup,\n  ensurePrivateUserStorageBotAbsent,\n  masterStorageReady,\n};'
+          new_exports = 'module.exports = {\n  createPrivateUserStorageGroup,\n  ensurePrivateUserStorageBotAbsent,\n  verifyPrivateUserStorageGroup,\n  masterStorageReady,\n};'
           if old_exports not in text and new_exports not in text:
               raise SystemExit('master-storage export block not found')
           text = text.replace(old_exports, new_exports, 1)
@@ -66,41 +57,42 @@ async function verifyPrivateUserStorageGroup({ botApiChatId }) {
               raise SystemExit('server-core master-storage import not found')
           text = text.replace(old_import, new_import, 1)
 
-          account_marker = '''    const account = {
-      telegramUserId: botApiChatIdFromStored(user.storageChatId),
-      storageChatId: botApiChatIdFromStored(user.storageChatId),
-      storageChatTitle: user.storageChatTitle,
-    };
-
-    // Migration invariant: the manager bot (001BeatGaler) never belongs to a'''
-          verification = '''    const account = {
-      telegramUserId: botApiChatIdFromStored(user.storageChatId),
-      storageChatId: botApiChatIdFromStored(user.storageChatId),
-      storageChatTitle: user.storageChatTitle,
-    };
-
-    // The Direct index bootstrap no longer touches MASTER, so it cannot prove
-    // that a persisted vault still exists. Verify the stored chat explicitly
-    // with MASTER before reusing it. Only a definitive missing-vault signal
-    // reprovisions; transient Telegram/network failures keep the current vault.
-    if (masterStorageReady()) {
-      try {
-        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });
-      } catch (error) {
-        const message = String(error?.errorMessage || error?.message || error);
-        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
-          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
-          user.storageChatId = null;
-          user.storageChatTitle = null;
-          user.storageCreatedAt = null;
-          saveAuthData();
-          return ensureUserStorage(user);
-        }
-        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
-      }
-    }
-
-    // Migration invariant: the manager bot (001BeatGaler) never belongs to a'''
+          account_marker = (
+              '    const account = {\n'
+              '      telegramUserId: botApiChatIdFromStored(user.storageChatId),\n'
+              '      storageChatId: botApiChatIdFromStored(user.storageChatId),\n'
+              '      storageChatTitle: user.storageChatTitle,\n'
+              '    };\n\n'
+              '    // Migration invariant: the manager bot (001BeatGaler) never belongs to a'
+          )
+          verification = (
+              '    const account = {\n'
+              '      telegramUserId: botApiChatIdFromStored(user.storageChatId),\n'
+              '      storageChatId: botApiChatIdFromStored(user.storageChatId),\n'
+              '      storageChatTitle: user.storageChatTitle,\n'
+              '    };\n\n'
+              '    // Direct index bootstrap no longer touches MASTER, so it cannot prove\n'
+              '    // that a persisted vault still exists. Verify the stored chat explicitly.\n'
+              '    // Only a definitive missing-vault signal reprovisions; transient failures\n'
+              '    // keep the current vault and retry on a later auth/session restore.\n'
+              '    if (masterStorageReady()) {\n'
+              '      try {\n'
+              '        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });\n'
+              '      } catch (error) {\n'
+              '        const message = String(error?.errorMessage || error?.message || error);\n'
+              '        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {\n'
+              '          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);\n'
+              '          user.storageChatId = null;\n'
+              '          user.storageChatTitle = null;\n'
+              '          user.storageCreatedAt = null;\n'
+              '          saveAuthData();\n'
+              '          return ensureUserStorage(user);\n'
+              '        }\n'
+              '        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);\n'
+              '      }\n'
+              '    }\n\n'
+              '    // Migration invariant: the manager bot (001BeatGaler) never belongs to a'
+          )
           if 'await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId })' not in text:
               if account_marker not in text:
                   raise SystemExit('ensureUserStorage account marker not found')
