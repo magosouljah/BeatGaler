@@ -79,16 +79,26 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
-  it("returns the first MSE URL before Direct stream admission and prewarms Direct only after authenticated Web session sync", () => {
+  it("returns the first MSE URL before Direct stream admission and preloads Phase 3 code/Worker without reordering Direct", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
+    const main = source("src/main.tsx");
     const adapter = source("src/platform/webAdapter.ts");
     const accountGate = source("src/components/AccountGate.tsx");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
+    const workerClient = source("src/features/cloud/webTransportWorkerClient.ts");
+    const controller = source("src/features/cloud/webTransportController.ts");
 
     expect(playback).toContain('playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });');
     expect(playback).toContain("void (async () => {");
     expect(playback).toContain("return Promise.resolve({ url, completed });");
     expect(playback).not.toContain("private async prepareMediaSource");
+
+    expect(main).toContain("function preloadRememberedWebDirectCode(): void");
+    expect(main).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
+    expect(main).toContain('playTrace("DIRECT_CODE_PRELOAD_BEGIN")');
+    expect(main).toContain('void import("./features/cloud/webGalerCloudTransport").then(');
+    expect(main).toContain("preloadRememberedWebDirectCode();");
+    expect(main).not.toContain("new WebGalerCloudTransport");
 
     expect(adapter).toContain("function prewarmAuthenticatedWebTransport(): void");
     expect(adapter).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
@@ -96,8 +106,22 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(adapter).toContain("prewarmAuthenticatedWebTransport();");
     expect(adapter).not.toContain("scheduleWebTransportPrewarm");
     expect(accountGate).toContain("await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());");
+
+    expect(workerClient).toContain("prewarm(): void {");
+    expect(workerClient).toContain('playTrace("WORKER_PREWARM_BEGIN")');
+    expect(workerClient).toContain("this.ensureWorker();");
     expect(transport).toContain('playTrace("TRANSPORT_PRECONNECT_ENTER")');
-    expect(transport).toContain("void this.controller.connect().then(");
+    expect(transport).toContain("this.worker.prewarm();");
+    expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("void this.controller.connect().then("));
+
+    const prepareIndex = controller.indexOf('observePlayStep("DIRECT_PREPARE"');
+    const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
+    const activateIndex = controller.indexOf('observePlayStep("DIRECT_ACTIVATE"');
+    const verifyIndex = controller.indexOf('observePlayStep("DIRECT_VERIFY"');
+    expect(prepareIndex).toBeGreaterThanOrEqual(0);
+    expect(prepareIndex).toBeLessThan(initializeIndex);
+    expect(initializeIndex).toBeLessThan(activateIndex);
+    expect(activateIndex).toBeLessThan(verifyIndex);
   });
 
   it("resolves an existing beat topic by vault rather than installation", () => {
