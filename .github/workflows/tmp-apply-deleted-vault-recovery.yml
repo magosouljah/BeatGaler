@@ -1,0 +1,133 @@
+name: Temporary apply deleted-vault recovery
+
+on:
+  push:
+    branches:
+      - issue-97-recover-deleted-vault
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: issue-97-recover-deleted-vault
+          fetch-depth: 0
+
+      - name: Apply recovery patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          master = Path('cloud-server/master-storage.js')
+          text = master.read_text(encoding='utf-8')
+          marker = '\nasync function ensurePrivateUserStorageBotAbsent({ botApiChatId, botUsername }) {'
+          addition = '''
+async function verifyPrivateUserStorageGroup({ botApiChatId }) {
+  const { client } = await openMasterClient();
+  try {
+    await findStorageChannelByBotApiId(client, botApiChatId);
+    return true;
+  } finally {
+    await client.disconnect();
+  }
+}
+'''
+          if 'async function verifyPrivateUserStorageGroup' not in text:
+              if marker not in text:
+                  raise SystemExit('master-storage insertion marker not found')
+              text = text.replace(marker, addition + marker, 1)
+          old_exports = '''module.exports = {
+  createPrivateUserStorageGroup,
+  ensurePrivateUserStorageBotAbsent,
+  masterStorageReady,
+};'''
+          new_exports = '''module.exports = {
+  createPrivateUserStorageGroup,
+  ensurePrivateUserStorageBotAbsent,
+  verifyPrivateUserStorageGroup,
+  masterStorageReady,
+};'''
+          if old_exports not in text and new_exports not in text:
+              raise SystemExit('master-storage export block not found')
+          text = text.replace(old_exports, new_exports, 1)
+          master.write_text(text, encoding='utf-8')
+
+          core = Path('cloud-server/server-core.js')
+          text = core.read_text(encoding='utf-8')
+          old_import = 'const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, masterStorageReady } = require("./master-storage");'
+          new_import = 'const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verifyPrivateUserStorageGroup, masterStorageReady } = require("./master-storage");'
+          if old_import not in text and new_import not in text:
+              raise SystemExit('server-core master-storage import not found')
+          text = text.replace(old_import, new_import, 1)
+
+          account_marker = '''    const account = {
+      telegramUserId: botApiChatIdFromStored(user.storageChatId),
+      storageChatId: botApiChatIdFromStored(user.storageChatId),
+      storageChatTitle: user.storageChatTitle,
+    };
+
+    // Migration invariant: the manager bot (001BeatGaler) never belongs to a'''
+          verification = '''    const account = {
+      telegramUserId: botApiChatIdFromStored(user.storageChatId),
+      storageChatId: botApiChatIdFromStored(user.storageChatId),
+      storageChatTitle: user.storageChatTitle,
+    };
+
+    // The Direct index bootstrap no longer touches MASTER, so it cannot prove
+    // that a persisted vault still exists. Verify the stored chat explicitly
+    // with MASTER before reusing it. Only a definitive missing-vault signal
+    // reprovisions; transient Telegram/network failures keep the current vault.
+    if (masterStorageReady()) {
+      try {
+        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });
+      } catch (error) {
+        const message = String(error?.errorMessage || error?.message || error);
+        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
+          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
+          user.storageChatId = null;
+          user.storageChatTitle = null;
+          user.storageCreatedAt = null;
+          saveAuthData();
+          return ensureUserStorage(user);
+        }
+        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
+      }
+    }
+
+    // Migration invariant: the manager bot (001BeatGaler) never belongs to a'''
+          if 'await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId })' not in text:
+              if account_marker not in text:
+                  raise SystemExit('ensureUserStorage account marker not found')
+              text = text.replace(account_marker, verification, 1)
+          core.write_text(text, encoding='utf-8')
+
+          pkg = Path('package.json')
+          text = pkg.read_text(encoding='utf-8')
+          old = '"test:unit:cloud": "node cloud-server/tests/direct-startup-trace.test.cjs'
+          new = '"test:unit:cloud": "node cloud-server/tests/master-storage-recovery.test.cjs && node cloud-server/tests/direct-startup-trace.test.cjs'
+          if 'master-storage-recovery.test.cjs && node cloud-server/tests/direct-startup-trace.test.cjs' not in text:
+              if old not in text:
+                  raise SystemExit('package test:unit:cloud marker not found')
+              text = text.replace(old, new, 1)
+          pkg.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify focused recovery test
+        run: |
+          node cloud-server/tests/master-storage-recovery.test.cjs
+          git diff --check
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud-server/master-storage.js cloud-server/server-core.js cloud-server/tests/master-storage-recovery.test.cjs package.json
+          git commit -m "fix(storage): reprovision deleted user vaults"
+          git push origin HEAD:issue-97-recover-deleted-vault
