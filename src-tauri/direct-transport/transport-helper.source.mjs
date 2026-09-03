@@ -22,6 +22,7 @@ import {
   randomLong,
 } from "__beatgaler_mtcute_utils__";
 import { doAuthorization } from "__beatgaler_mtcute_authorization__";
+import { prepareCleanMp3CloudUpload } from "./clean-mp3-cloud.mjs";
 
 const PREFIX = "__BEATGALER_DIRECT_JSON__";
 const BOOT = "__BEATGALER_DIRECT_BOOTSTRAP__";
@@ -287,10 +288,26 @@ function collectMediaIds(manifest) {
 async function upload(command) {
   const filePath = path.resolve(String(command.path || ""));
   const stat = fs.statSync(filePath); if (!stat.isFile() || stat.size <= 0) throw new Error("Upload source is missing or empty.");
-  const sent = await sendDocument(filePath, String(command.filename || path.basename(filePath)), String(command.caption || ""), Number(command.reply_to || 0));
-  const message = await getMessage(Number(sent.id));
-  const fileId = String(message?.media?.fileId || `direct:${sent.id}`);
-  return { ok: true, op: "upload", message_id: Number(sent.id), telegram_file_id: fileId, file_id: fileId, filename: String(command.filename || path.basename(filePath)), bytes: stat.size };
+  const filename = String(command.filename || path.basename(filePath));
+  const clean = prepareCleanMp3CloudUpload(filePath, filename);
+  try {
+    const sent = await sendDocument(clean.path, filename, String(command.caption || ""), Number(command.reply_to || 0));
+    const message = await getMessage(Number(sent.id));
+    const fileId = String(message?.media?.fileId || `direct:${sent.id}`);
+    return {
+      ok: true,
+      op: "upload",
+      message_id: Number(sent.id),
+      telegram_file_id: fileId,
+      file_id: fileId,
+      filename,
+      bytes: clean.bytes,
+      source_bytes: stat.size,
+      stripped_id3_bytes: clean.removedBytes,
+    };
+  } finally {
+    clean.cleanup();
+  }
 }
 async function downloadToPath(messageId, output) {
   const active = await ensureFreshTemporarySession();

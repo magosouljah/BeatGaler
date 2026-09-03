@@ -1,4 +1,5 @@
 import type { Beat } from "../../types";
+import { stripId3MetadataForCloud } from "../audio/mp3Metadata";
 import { beatFromWebLibraryEntry, normalizeWebLibraryManifest } from "../library/webLibrary";
 import type {
   WebTransportLibraryIndexResult,
@@ -119,22 +120,28 @@ export async function commitWebImportedBeat(
     return { beat: resultBeat(existing, beat.image_base64), index: null };
   }
 
+  // Cloud MASTER is intentionally metadata-free. BeatGaler INDEX owns title/BPM/key/tags/rating
+  // and artwork is stored in its own slot. Removing only ID3v2/ID3v1 keeps MPEG/Xing/VBRI/LAME
+  // audio/seek structures byte-for-byte while making the prefetched byte 0 useful for playback.
+  const strippedMaster = await stripId3MetadataForCloud(master);
+  const cloudMaster = strippedMaster.file;
+
   const artworkAsset = beat.image_base64 ? dataUrlFile(beat.image_base64, beat.name) : null;
   const artworkFile = artworkAsset?.file || null;
-  const totalBytes = master.size + (wav?.size || 0) + (project?.size || 0) + (artworkFile?.size || 0);
+  const totalBytes = cloudMaster.size + (wav?.size || 0) + (project?.size || 0) + (artworkFile?.size || 0);
   const primary = await runtime.upload({
-    file: master,
+    file: cloudMaster,
     filename: master.name,
     beatId: beat.id,
     beatName: beat.name,
     kind: "MASTER",
   }, progress => onProgress?.({
     stage: "master",
-    uploadedBytes: Math.min(master.size, progress.uploadedBytes),
+    uploadedBytes: Math.min(cloudMaster.size, progress.uploadedBytes),
     totalBytes,
   }));
 
-  let uploadedBytes = master.size;
+  let uploadedBytes = cloudMaster.size;
   let uploadedWav: WebTransportUploadResult | null = null;
   if (wav) {
     uploadedWav = await runtime.upload({

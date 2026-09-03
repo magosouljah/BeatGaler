@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
+import { readBlobAsArrayBuffer } from "../../src/features/audio/mp3Metadata";
 import { commitWebImportedBeat, type WebImportCommitRuntime } from "../../src/features/import/webImportCommit";
 
 function beat(overrides: Partial<Beat> = {}): Beat {
@@ -49,6 +50,17 @@ function uploaded(messageId: number, file: File) {
       filename: file.name,
     }] as [any],
     transport: "direct-web" as const,
+  };
+}
+
+function emptyRuntime(upload: ReturnType<typeof vi.fn>): WebImportCommitRuntime {
+  return {
+    getLibraryIndex: vi.fn(async () => ({
+      messageId: 500,
+      manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] },
+    })),
+    upload,
+    replaceLibraryIndex: vi.fn(async () => ({ messageId: 900, previousMessageId: 500, beatCount: 1 })),
   };
 }
 
@@ -106,6 +118,27 @@ describe("Review Beat Web durable commit", () => {
       image_base64: "data:image/png;base64,iVBORw==",
     });
     expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ stage: "library" }));
+  });
+
+  it("strips ID3v2 and ID3v1 from the Web MASTER without touching MPEG bytes", async () => {
+    const id3v2 = new Uint8Array([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 4, 0x4d, 0x45, 0x54, 0x41]);
+    const mpeg = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 1, 2, 3, 4]);
+    const id3v1 = new Uint8Array(128);
+    id3v1.set([0x54, 0x41, 0x47]);
+    const source = new File([id3v2, mpeg, id3v1], "Tagged.mp3", { type: "audio/mpeg", lastModified: 77 });
+    const upload = vi.fn(async (input: any) => uploaded(700, input.file));
+    const runtime = emptyRuntime(upload);
+
+    await commitWebImportedBeat(beat({ id: "clean-web-master", image_base64: null }), { master: source }, runtime);
+
+    expect(upload).toHaveBeenCalledOnce();
+    const uploadedMaster: File = upload.mock.calls[0][0].file;
+    expect(upload.mock.calls[0][0].kind).toBe("MASTER");
+    expect(uploadedMaster.name).toBe("Tagged.mp3");
+    expect(uploadedMaster.lastModified).toBe(77);
+    expect(Array.from(new Uint8Array(await readBlobAsArrayBuffer(uploadedMaster)))).toEqual(Array.from(mpeg));
+    const candidate: any = (runtime.replaceLibraryIndex as any).mock.calls[0][0].manifest;
+    expect(candidate.beats[0].master.size).toBe(mpeg.byteLength);
   });
 
   it("treats an already committed beat ID as an idempotent retry", async () => {

@@ -14,8 +14,8 @@ function beat(): Beat {
     bpm: "140",
     key: "C#m",
     needs_resolution: false,
-    tags: [],
-    rating: 0,
+    tags: ["dark", "trap"],
+    rating: 4,
     image_base64: null,
     has_wav: true,
     has_stems: false,
@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 describe("BeatGaler Web downloads", () => {
-  it("streams a single MP3 directly into the native browser file writer with progress", async () => {
+  it("rebuilds MP3 ID3 metadata + cover before streaming the clean Cloud MASTER", async () => {
     const writable = { write: vi.fn(async () => undefined), close: vi.fn(async () => undefined), abort: vi.fn(async () => undefined) };
     const showSaveFilePicker = vi.fn(async () => ({ createWritable: async () => writable }));
     (window as any).showSaveFilePicker = showSaveFilePicker;
@@ -84,13 +84,24 @@ describe("BeatGaler Web downloads", () => {
 
     expect(result).toEqual({ cancelled: false });
     expect(showSaveFilePicker).toHaveBeenCalledWith({ suggestedName: "Night_Drive [140 C#m].mp3" });
-    expect(transport.streamFile).toHaveBeenCalledWith({ messageId: 11, mimeType: "audio/mpeg" }, expect.any(Function));
-    expect(writable.write).toHaveBeenCalledOnce();
+    expect(transport.streamFile.mock.calls.map(call => call[0].messageId)).toEqual([13, 11]);
+    expect(writable.write).toHaveBeenCalledTimes(2);
+    const id3 = new Uint8Array(writable.write.mock.calls[0][0] as ArrayBuffer);
+    expect(Array.from(id3.slice(0, 3))).toEqual([0x49, 0x44, 0x33]);
+    const frameText = String.fromCharCode(...id3);
+    expect(frameText).toContain("TIT2");
+    expect(frameText).toContain("TBPM");
+    expect(frameText).toContain("TKEY");
+    expect(frameText).toContain("TCON");
+    expect(frameText).toContain("POPM");
+    expect(frameText).toContain("APIC");
+    expect(Array.from(id3.slice(-3))).toEqual([13, 2, 3]);
+    expect(Array.from(new Uint8Array(writable.write.mock.calls[1][0] as ArrayBuffer))).toEqual([11, 2, 3]);
     expect(writable.close).toHaveBeenCalledOnce();
     expect(progress).toHaveBeenLastCalledWith({ currentKind: "MP3", downloadedBytes: 3, totalBytes: 3 });
   });
 
-  it("creates one unique Everything folder and writes every available slot once", async () => {
+  it("creates one unique Everything folder, reuses artwork for APIC, and writes every slot once", async () => {
     const writes = new Map<string, ReturnType<typeof vi.fn>>();
     const directory = {
       getFileHandle: vi.fn(async (name: string) => ({
@@ -121,8 +132,12 @@ describe("BeatGaler Web downloads", () => {
       "Night_Drive-artwork.png",
       "Night_Drive.zip",
     ]);
-    expect(transport.streamFile).toHaveBeenCalledTimes(4);
-    expect(Array.from(writes.values()).every(write => write.mock.calls.length === 1)).toBe(true);
+    expect(transport.streamFile.mock.calls.map(call => call[0].messageId)).toEqual([13, 11, 12, 14]);
+    expect(writes.get("Night_Drive [140 C#m].mp3")?.mock.calls).toHaveLength(2);
+    expect(writes.get("Night_Drive [140 C#m].wav")?.mock.calls).toHaveLength(1);
+    expect(writes.get("Night_Drive-artwork.png")?.mock.calls).toHaveLength(1);
+    expect(writes.get("Night_Drive.zip")?.mock.calls).toHaveLength(1);
+    expect(Array.from(new Uint8Array(writes.get("Night_Drive-artwork.png")!.mock.calls[0][0] as ArrayBuffer))).toEqual([13, 2, 3]);
   });
 
   it("cancels the active Cloud stream and aborts the partial native file", async () => {
