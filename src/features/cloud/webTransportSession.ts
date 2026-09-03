@@ -146,7 +146,9 @@ function validateBootstrap(response: WebTransportSessionPublic): WebTransportSes
   return response;
 }
 
-function sessionIdentity(session: WebTransportSession) {
+function sessionIdentity(
+  session: Pick<WebTransportSessionPublic, "session_id" | "generation" | "credential_version">,
+) {
   return {
     sessionId: session.session_id,
     generation: session.generation,
@@ -206,12 +208,21 @@ async function bindTemporarySession(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-/** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
-export async function prepareWebTransportSession(): Promise<WebTransportSession> {
-  const bootstrap = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+/** Reserves/reuses the control-plane lease without creating browser MTProto credentials yet. */
+export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic> {
+  return validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
     browserClientId: getWebClientId(),
   }));
+}
+
+/** Creates and binds a fresh, memory-only temporary MTProto authorization to an already reserved lease. */
+export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession> {
   return bindTemporarySession(bootstrap);
+}
+
+/** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
+export async function prepareWebTransportSession(): Promise<WebTransportSession> {
+  return bindWebTransportSession(await reserveWebTransportSession());
 }
 
 export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
@@ -258,7 +269,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-export async function activateWebTransportSession(session: WebTransportSession): Promise<void> {
+export async function activateWebTransportSession(session: WebTransportSessionPublic): Promise<void> {
   const response = await transportRequest<{ activated?: boolean }>("/transport/session/activate", sessionIdentity(session));
   if (response.activated !== true) throw new Error("Galer Cloud could not activate this Web storage session.");
 }
@@ -349,7 +360,7 @@ export async function endWebTransportOperation(
 }
 
 export async function stopWebTransportSession(
-  session: Pick<WebTransportSession, "session_id" | "generation">,
+  session: Pick<WebTransportSessionPublic, "session_id" | "generation">,
 ): Promise<void> {
   await transportRequest("/transport/session/stop", {
     sessionId: session.session_id,

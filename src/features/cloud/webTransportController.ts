@@ -2,12 +2,14 @@ import {
   activateWebTransportSession,
   authorizeWebTransportOperation,
   beginWebTransportOperation,
+  bindWebTransportSession,
   endWebTransportOperation,
   heartbeatWebTransportSession,
-  prepareWebTransportSession,
+  reserveWebTransportSession,
   stopWebTransportSession,
   type WebTransportCapabilityScope,
   type WebTransportSession,
+  type WebTransportSessionPublic,
 } from "./webTransportSession";
 import { playTrace, observePlayStep } from "../playback/playTrace";
 
@@ -19,8 +21,9 @@ export interface WebTransportRuntime {
 }
 
 export interface WebTransportControlApi {
-  prepare(): Promise<WebTransportSession>;
-  activate(session: WebTransportSession): Promise<void>;
+  reserve(): Promise<WebTransportSessionPublic>;
+  bind(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession>;
+  activate(session: WebTransportSessionPublic): Promise<void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
   authorize(session: WebTransportSession, operationId: string, kind: string, scope: WebTransportCapabilityScope): Promise<void>;
   begin(session: WebTransportSession, kind: string, scope: WebTransportCapabilityScope): Promise<{
@@ -30,7 +33,7 @@ export interface WebTransportControlApi {
     operationId: string | null;
   }>;
   end(session: Pick<WebTransportSession, "session_id" | "generation">, operationId: string): Promise<void>;
-  stop(session: Pick<WebTransportSession, "session_id" | "generation">): Promise<void>;
+  stop(session: Pick<WebTransportSessionPublic, "session_id" | "generation">): Promise<void>;
 }
 
 export interface WebTransportOperationLease {
@@ -41,7 +44,8 @@ export interface WebTransportOperationLease {
 }
 
 const defaultApi: WebTransportControlApi = {
-  prepare: prepareWebTransportSession,
+  reserve: reserveWebTransportSession,
+  bind: bindWebTransportSession,
   activate: activateWebTransportSession,
   authorize: authorizeWebTransportOperation,
   heartbeat: heartbeatWebTransportSession,
@@ -51,6 +55,19 @@ const defaultApi: WebTransportControlApi = {
 };
 
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds));
+
+type StartupBranchResult =
+  | { ok: true }
+  | { ok: false; error: unknown };
+
+async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchResult> {
+  try {
+    await work;
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
 
 /** Owns the Web lease. Credentials remain in memory and are handed only to the data-plane runtime. */
 export class WebTransportController {
@@ -81,16 +98,54 @@ export class WebTransportController {
 
   private async openSession(): Promise<WebTransportSession> {
     const started = Date.now();
+    let bootstrap: WebTransportSessionPublic | null = null;
+    let activationResultPromise: Promise<StartupBranchResult> | null = null;
+
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN");
-    const session = await observePlayStep("DIRECT_PREPARE", () => this.api.prepare());
-    playTrace("CONTROLLER_SESSION_PREPARE_DONE", { elapsed_ms: Date.now() - started });
     try {
+      const session = await observePlayStep("DIRECT_PREPARE", async () => {
+        bootstrap = await this.api.reserve();
+
+        // Activation only needs the reserved lease identity. Start MASTER/vault
+        // membership work immediately while the browser creates and binds its
+        // fresh temporary MTProto authorization. Capture rejection now so a
+        // temp-auth failure can wait for activation to settle before cleanup.
+        const activateStarted = Date.now();
+        activationResultPromise = settleStartupBranch(
+          observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
+        ).then(result => {
+          if (result.ok) {
+            playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
+          }
+          return result;
+        });
+
+        return this.api.bind(bootstrap);
+      });
+      playTrace("CONTROLLER_SESSION_PREPARE_DONE", { elapsed_ms: Date.now() - started });
+
+      if (!activationResultPromise) throw new Error("Galer Cloud Web activation did not start after lease reservation.");
+
       const initializeStarted = Date.now();
-      await observePlayStep("DIRECT_INITIALIZE", () => this.runtime.initialize(session));
-      playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
-      const activateStarted = Date.now();
-      await observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(session));
-      playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
+      const initializeResultPromise = settleStartupBranch(
+        observePlayStep("DIRECT_INITIALIZE", () => this.runtime.initialize(session)),
+      ).then(result => {
+        if (result.ok) {
+          playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
+        }
+        return result;
+      });
+
+      // Do not use a rejecting Promise.all here. Waiting for both branches is a
+      // teardown invariant: if either side fails, the other must finish/fail
+      // before stop() is allowed to remove the bot and release the lease.
+      const [activationResult, initializeResult] = await Promise.all([
+        activationResultPromise,
+        initializeResultPromise,
+      ]);
+      const failed = [activationResult, initializeResult].find(result => !result.ok);
+      if (failed && !failed.ok) throw failed.error;
+
       const verifyStarted = Date.now();
       await observePlayStep("DIRECT_VERIFY", () => this.runtime.verifyReady(session));
       playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
@@ -99,8 +154,12 @@ export class WebTransportController {
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
       return session;
     } catch (error) {
+      // bind() can fail while activation is still mutating Telegram membership.
+      // Never stop/release first: activation could otherwise re-add the bot after
+      // cleanup. Its result is already rejection-safe via settleStartupBranch().
+      if (activationResultPromise) await activationResultPromise;
       await this.runtime.shutdown().catch(() => {});
-      await this.api.stop(session).catch(() => {});
+      if (bootstrap) await this.api.stop(bootstrap).catch(() => {});
       throw error;
     }
   }

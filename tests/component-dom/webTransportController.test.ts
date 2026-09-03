@@ -7,6 +7,7 @@ import {
 import type {
   WebTransportCapabilityScope,
   WebTransportSession,
+  WebTransportSessionPublic,
 } from "../../src/features/cloud/webTransportSession";
 
 const uploadScope: WebTransportCapabilityScope = {
@@ -14,33 +15,51 @@ const uploadScope: WebTransportCapabilityScope = {
   objectIds: ["beat-1"],
 };
 
-function session(version = 1): WebTransportSession {
+function bootstrap(version = 1): WebTransportSessionPublic {
   return {
     mode: "galer-direct-temp-mtproto",
     session_id: "web-session",
     transport_id: "transport-1",
-    transport_user_id: null,
-    transport_username: null,
-    chat_id: "vault-1",
+    transport_user_id: "101",
+    transport_username: "transport_1_bot",
+    chat_id: "-100123",
     resolver_chat_id: null,
     generation: 7,
     credential_version: version,
     heartbeat_interval_ms: 60_000,
     heartbeat_timeout_ms: 300_000,
     token_rotation_enabled: false,
+    temp_auth_required: true,
+    temp_auth: {
+      version: 1,
+      dc_id: 2,
+      api_id: 12345,
+      expected_bot_id: "101",
+      expires_at: null,
+      binding: null,
+    },
+  };
+}
+
+function session(version = 1): WebTransportSession {
+  return {
+    ...bootstrap(version),
     temp_auth_required: false,
     temp_auth: {
       version: 1,
       dc_id: 2,
-      expected_bot_id: "transport-1",
+      api_id: 12345,
+      expected_bot_id: "101",
       expires_at: 2_000_000_000,
       binding: {
         perm_auth_key_id: { low: version, high: 0, unsigned: true },
         encrypted_message: `binding-${version}`,
       },
     },
-    temp_auth_key: new Uint8Array([version, 7, 1]),
-    temp_primary_dcs: { dc: 2 },
+    temp_auth_key: new Uint8Array(256).fill(version),
+    temp_session_id: { low: version, high: 0, unsigned: true },
+    temp_session_state: {} as WebTransportSession["temp_session_state"],
+    temp_primary_dcs: { main: { id: 2 } },
   };
 }
 
@@ -52,7 +71,8 @@ function harness() {
     shutdown: vi.fn(async () => {}),
   };
   const api: WebTransportControlApi = {
-    prepare: vi.fn(async () => session()),
+    reserve: vi.fn(async () => bootstrap()),
+    bind: vi.fn(async () => session()),
     activate: vi.fn(async () => {}),
     heartbeat: vi.fn(async () => ({ expired: false, credentialRefresh: null })),
     authorize: vi.fn(async () => {}),
@@ -64,37 +84,128 @@ function harness() {
 }
 
 describe("Galer Cloud Web transport lifecycle", () => {
-  it("keeps callers joined while initialize is pending and never activates early", async () => {
+  it("starts activation after reservation while temp auth is still binding, then verifies only after both branches", async () => {
     const { controller, runtime, api } = harness();
-    let finishInitialize!: () => void;
-    const waiting = new Promise<void>(resolve => { finishInitialize = resolve; });
-    vi.mocked(runtime.initialize).mockReturnValueOnce(waiting);
+    let finishBind!: () => void;
+    let finishActivate!: () => void;
+    const bindWaiting = new Promise<void>(resolve => { finishBind = resolve; });
+    const activateWaiting = new Promise<void>(resolve => { finishActivate = resolve; });
+    vi.mocked(api.bind).mockImplementationOnce(async () => {
+      await bindWaiting;
+      return session();
+    });
+    vi.mocked(api.activate).mockReturnValueOnce(activateWaiting);
+
     const first = controller.connect();
     const second = controller.connect();
-    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce());
-    expect(api.prepare).toHaveBeenCalledOnce();
-    expect(api.activate).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
+    expect(api.reserve).toHaveBeenCalledOnce();
+    expect(api.activate).toHaveBeenCalledOnce();
+    expect(runtime.initialize).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
-    finishInitialize();
+    expect(vi.mocked(api.reserve).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.activate).mock.invocationCallOrder[0]);
+    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.bind).mock.invocationCallOrder[0]);
+
+    finishBind();
+    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce());
+    expect(runtime.verifyReady).not.toHaveBeenCalled();
+
+    finishActivate();
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b);
-    expect(api.activate).toHaveBeenCalledOnce();
     expect(runtime.verifyReady).toHaveBeenCalledOnce();
+    expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
     expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
     await controller.disconnect();
   });
 
-  it("singleflights concurrent session startup and activates only after the runtime listens", async () => {
+  it("singleflights concurrent session startup across reserve, bind, activation and verify", async () => {
     const { controller, runtime, api } = harness();
     const [first, second] = await Promise.all([controller.connect(), controller.connect()]);
 
     expect(first).toBe(second);
-    expect(api.prepare).toHaveBeenCalledOnce();
+    expect(api.reserve).toHaveBeenCalledOnce();
+    expect(api.bind).toHaveBeenCalledOnce();
     expect(runtime.initialize).toHaveBeenCalledWith(first);
-    expect(api.activate).toHaveBeenCalledWith(first);
+    expect(api.activate).toHaveBeenCalledWith(expect.objectContaining({ session_id: "web-session", generation: 7 }));
     expect(runtime.verifyReady).toHaveBeenCalledWith(first);
 
     await controller.disconnect();
+  });
+
+  it("waits for in-flight activation before stopping when temp auth binding fails", async () => {
+    const { controller, runtime, api } = harness();
+    let finishActivate!: () => void;
+    const activationFinished = vi.fn();
+    const activateWaiting = new Promise<void>(resolve => {
+      finishActivate = () => {
+        activationFinished();
+        resolve();
+      };
+    });
+    vi.mocked(api.activate).mockReturnValueOnce(activateWaiting);
+    vi.mocked(api.bind).mockRejectedValueOnce(new Error("temp auth failed"));
+
+    const failure = controller.connect().catch(error => error as Error);
+    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
+    expect(api.stop).not.toHaveBeenCalled();
+    expect(runtime.shutdown).not.toHaveBeenCalled();
+
+    finishActivate();
+    expect((await failure).message).toBe("temp auth failed");
+    expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.verifyReady).not.toHaveBeenCalled();
+    expect(runtime.shutdown).toHaveBeenCalledOnce();
+    expect(api.stop).toHaveBeenCalledWith(expect.objectContaining({ session_id: "web-session", generation: 7 }));
+    expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
+  });
+
+  it("waits for in-flight activation before cleanup when Worker initialization fails", async () => {
+    const { controller, runtime, api } = harness();
+    let finishActivate!: () => void;
+    const activationFinished = vi.fn();
+    vi.mocked(api.activate).mockReturnValueOnce(new Promise<void>(resolve => {
+      finishActivate = () => {
+        activationFinished();
+        resolve();
+      };
+    }));
+    vi.mocked(runtime.initialize).mockRejectedValueOnce(new Error("worker init failed"));
+
+    const failure = controller.connect().catch(error => error as Error);
+    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce());
+    expect(api.stop).not.toHaveBeenCalled();
+
+    finishActivate();
+    expect((await failure).message).toBe("worker init failed");
+    expect(runtime.verifyReady).not.toHaveBeenCalled();
+    expect(runtime.shutdown).toHaveBeenCalledOnce();
+    expect(api.stop).toHaveBeenCalledOnce();
+    expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
+  });
+
+  it("cleans up safely when activation fails while temp auth binding is still in flight", async () => {
+    const { controller, runtime, api } = harness();
+    let finishBind!: () => void;
+    vi.mocked(api.bind).mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { finishBind = resolve; });
+      return session();
+    });
+    vi.mocked(api.activate).mockRejectedValueOnce(new Error("activation failed"));
+
+    const failure = controller.connect().catch(error => error as Error);
+    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
+    expect(api.stop).not.toHaveBeenCalled();
+    finishBind();
+
+    expect((await failure).message).toBe("activation failed");
+    expect(runtime.initialize).toHaveBeenCalledOnce();
+    expect(runtime.verifyReady).not.toHaveBeenCalled();
+    expect(runtime.shutdown).toHaveBeenCalledOnce();
+    expect(api.stop).toHaveBeenCalledOnce();
   });
 
   it("installs temporary-auth refreshes before retrying and authorizing an operation", async () => {
