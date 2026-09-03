@@ -5,7 +5,7 @@ import type {
   PlatformDownloadProgress,
   PlatformDownloadTask,
 } from "../../platform/contracts";
-import { buildBeatGalerId3Tag, type Mp3Artwork } from "../audio/mp3Metadata";
+import { buildBeatGalerId3Tag, readBlobAsArrayBuffer, type Mp3Artwork } from "../audio/mp3Metadata";
 import type { WebTransportStreamInput, WebTransportStreamResult } from "../cloud/webTransportWorkerProtocol";
 
 type SingleKind = Exclude<PlatformDownloadKind, "ALL">;
@@ -157,7 +157,7 @@ export class WebDownloadsManager {
         if (beat.image_base64) {
           const blob = await (await fetch(beat.image_base64)).blob();
           if (controller.signal.aborted) throw abortError();
-          return { mimeType: blob.type || "image/png", bytes: await blob.arrayBuffer() };
+          return { mimeType: blob.type || "image/png", bytes: await readBlobAsArrayBuffer(blob) };
         }
         if (cachedCloudArtwork !== undefined) return cachedCloudArtwork;
         const artworkRef = beat.assets?.artwork || null;
@@ -178,7 +178,7 @@ export class WebDownloadsManager {
         if (controller.signal.aborted) throw abortError();
         cachedCloudArtwork = {
           mimeType: artworkRef?.mime_type || "image/png",
-          bytes: await new Blob(chunks).arrayBuffer(),
+          bytes: await readBlobAsArrayBuffer(new Blob(chunks)),
           messageId: artworkMessageId,
         };
         return cachedCloudArtwork;
@@ -225,7 +225,7 @@ export class WebDownloadsManager {
 
           if (asset.inlineDataUrl) {
             const blob = await (await fetch(asset.inlineDataUrl)).blob();
-            const buffer = await blob.arrayBuffer();
+            const buffer = await readBlobAsArrayBuffer(blob);
             if (writable) await writable.write(buffer);
             else chunks.push(buffer);
             assetBytes = buffer.byteLength;
