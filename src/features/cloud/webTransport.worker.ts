@@ -3,11 +3,15 @@ import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import { playTrace, playTraceSpan, observePlayStep } from "../playback/playTrace";
 import {
   WEB_DIRECT_MAX_FILE_BYTES,
+  WEB_PLAYBACK_FIRST_CHUNK_BYTES,
+  WEB_PLAYBACK_FIRST_CHUNK_KB,
   type WebTransportDownloadInput,
   type WebTransportDownloadResult,
   type WebTransportDeleteMessagesInput,
   type WebTransportDeleteMessagesResult,
   type WebTransportLibraryIndexResult,
+  type WebTransportPrefetchInput,
+  type WebTransportPrefetchResult,
   type WebTransportReplaceIndexInput,
   type WebTransportReplaceIndexResult,
   type WebTransportStreamInput,
@@ -55,6 +59,12 @@ type BoundTempPool = { _connections?: BoundTempConnection[] };
 type BoundTempDcManager = { main?: BoundTempPool };
 type BoundTempNetwork = { _dcConnections?: Map<number, BoundTempDcManager> };
 
+type CachedPlaybackMedia = {
+  media: FileDownloadLocation;
+  totalBytes: number;
+  mimeType: string | null;
+};
+
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
 let chatId = 0;
@@ -63,6 +73,8 @@ const activeStreams = new Map<string, {
   controller: AbortController;
   acknowledge: (() => void) | null;
 }>();
+const playbackMediaCache = new Map<number, CachedPlaybackMedia>();
+const MAX_PLAYBACK_MEDIA_CACHE_ENTRIES = 256;
 
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
 
@@ -176,6 +188,7 @@ async function closeClient(): Promise<void> {
     stream.acknowledge?.();
   }
   activeStreams.clear();
+  playbackMediaCache.clear();
   const current = client;
   client = null;
   vaultVerified = false;
@@ -293,6 +306,36 @@ function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessag
     throw new Error("Galer Cloud stored object is not downloadable.");
   }
   return media as FileDownloadLocation;
+}
+
+function touchPlaybackMedia(messageId: number, value: CachedPlaybackMedia): void {
+  playbackMediaCache.delete(messageId);
+  playbackMediaCache.set(messageId, value);
+  while (playbackMediaCache.size > MAX_PLAYBACK_MEDIA_CACHE_ENTRIES) {
+    const oldest = playbackMediaCache.keys().next().value as number | undefined;
+    if (oldest === undefined) break;
+    playbackMediaCache.delete(oldest);
+  }
+}
+
+async function resolvePlaybackMedia(
+  active: TelegramClient,
+  messageId: number,
+): Promise<{ media: FileDownloadLocation; totalBytes: number; sourceMime: string | null; cacheHit: boolean }> {
+  const cached = playbackMediaCache.get(messageId);
+  if (cached) {
+    touchPlaybackMedia(messageId, cached);
+    playTrace("WORKER_PLAYBACK_MEDIA_CACHE_HIT", { message_id: messageId });
+    return { media: cached.media, totalBytes: cached.totalBytes, sourceMime: cached.mimeType, cacheHit: true };
+  }
+  playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId });
+  const [message] = await active.getMessages(chatId, [messageId]);
+  if (!message) throw new Error("Galer Cloud object no longer exists.");
+  const media = downloadableMedia(message);
+  const totalBytes = Math.max(0, Number((media as { fileSize?: number }).fileSize || 0));
+  const sourceMime = String((media as { mimeType?: string }).mimeType || "").trim() || null;
+  touchPlaybackMedia(messageId, { media, totalBytes, mimeType: sourceMime });
+  return { media, totalBytes, sourceMime, cacheHit: false };
 }
 
 async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
@@ -449,30 +492,82 @@ function downloadMime(value: unknown): string {
   return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i.test(mime) ? mime : "application/octet-stream";
 }
 
+async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+  const started = Date.now();
+  playTrace("WORKER_PREFETCH_BEGIN", { message_id: input.messageId });
+  const active = requireReady();
+  const messageId = Number(input.messageId || 0);
+  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
+  const resolved = await resolvePlaybackMedia(active, messageId);
+  const limit = resolved.totalBytes > 0
+    ? Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, resolved.totalBytes)
+    : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
+  const bytes = await active.downloadChunk({
+    location: resolved.media,
+    offset: 0,
+    limit,
+  });
+  if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty playback prefix.");
+  const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
+  playTrace("WORKER_PREFETCH_READY", {
+    message_id: messageId,
+    bytes: prefix.byteLength,
+    elapsed_ms: Date.now() - started,
+    media_cache_hit: resolved.cacheHit,
+  });
+  return {
+    messageId,
+    totalBytes: resolved.totalBytes || prefix.byteLength,
+    mimeType,
+    prefix,
+  };
+}
+
 async function stream(requestId: string, input: WebTransportStreamInput): Promise<WebTransportStreamResult> {
   const started = Date.now();
   playTrace("WORKER_STREAM_BEGIN");
   const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
-  const [message] = await active.getMessages(chatId, [messageId]);
-  playTrace("WORKER_STREAM_MESSAGE_READY", { elapsed_ms: Date.now() - started });
-  if (!message) throw new Error("Galer Cloud object no longer exists.");
-  const media = downloadableMedia(message);
-  const totalBytes = Math.max(0, Number((media as { fileSize?: number }).fileSize || 0));
-  const mimeType = downloadMime(input.mimeType || (media as { mimeType?: string }).mimeType);
+  const resolved = await resolvePlaybackMedia(active, messageId);
+  playTrace("WORKER_STREAM_MESSAGE_READY", {
+    elapsed_ms: Date.now() - started,
+    media_cache_hit: resolved.cacheHit,
+  });
+  const media = resolved.media;
+  const totalBytes = resolved.totalBytes;
+  const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
+  const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+  if (offsetBytes % 4096 !== 0) throw new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+  if (totalBytes > 0 && offsetBytes >= totalBytes) {
+    playTrace("WORKER_STREAM_DONE", { elapsed_ms: Date.now() - started, bytes: offsetBytes, prefetched_only: true });
+    return { messageId, totalBytes, mimeType };
+  }
   const controller = new AbortController();
   const state = { controller, acknowledge: null as (() => void) | null };
   activeStreams.set(requestId, state);
-  let downloadedBytes = 0;
+  let downloadedBytes = offsetBytes;
+  let transferredBytes = 0;
   let firstChunkLogged = false;
   try {
-    for await (const chunk of active.downloadAsIterable(media, { abortSignal: controller.signal, stallTimeout: 20_000, partSize: 256 })) {
+    for await (const chunk of active.downloadAsIterable(media, {
+      abortSignal: controller.signal,
+      stallTimeout: 20_000,
+      partSize: WEB_PLAYBACK_FIRST_CHUNK_KB,
+      offset: offsetBytes,
+    })) {
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
       downloadedBytes += chunk.byteLength;
+      transferredBytes += chunk.byteLength;
       if (!firstChunkLogged) {
         firstChunkLogged = true;
-        playTrace("WORKER_STREAM_FIRST_CHUNK", { elapsed_ms: Date.now() - started, bytes: chunk.byteLength });
+        playTrace("WORKER_STREAM_FIRST_CHUNK", {
+          elapsed_ms: Date.now() - started,
+          bytes: chunk.byteLength,
+          offset_bytes: offsetBytes,
+          part_kb: WEB_PLAYBACK_FIRST_CHUNK_KB,
+        });
       }
       const transferable = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
       scope.postMessage({ requestId, event: "download-chunk", chunk: transferable, downloadedBytes, totalBytes: totalBytes || downloadedBytes }, [transferable]);
@@ -480,8 +575,10 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
       state.acknowledge = null;
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
     }
-    if (downloadedBytes <= 0) throw new Error("Galer Cloud returned an empty object.");
-    playTrace("WORKER_STREAM_DONE", { elapsed_ms: Date.now() - started, bytes: downloadedBytes });
+    if (transferredBytes <= 0 && !(totalBytes > 0 && offsetBytes >= totalBytes)) {
+      throw new Error("Galer Cloud returned an empty object.");
+    }
+    playTrace("WORKER_STREAM_DONE", { elapsed_ms: Date.now() - started, bytes: downloadedBytes, offset_bytes: offsetBytes });
     return { messageId, totalBytes: totalBytes || downloadedBytes, mimeType };
   } finally {
     activeStreams.delete(requestId);
@@ -545,6 +642,7 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "replace_index": return replaceLibraryIndex(command.input);
     case "delete_messages": return deleteMessages(command.input);
     case "download": return download(command.input);
+    case "prefetch": return prefetch(command.input);
     case "stream": return stream(command.requestId, command.input);
     case "stream_ack": return acknowledgeStream(command.targetRequestId);
     case "cancel": return cancelStream(command.targetRequestId);
