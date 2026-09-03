@@ -16,6 +16,8 @@ import {
 } from "__beatgaler_mtcute_utils__";
 import { doAuthorization } from "__beatgaler_mtcute_authorization__";
 
+import { observePlayStep } from "../playback/playTrace";
+
 export const PRODUCTIVE_TEMP_AUTH_TTL_SECONDS = 10 * 60;
 const TIMEOUT_MS = 60_000;
 const PROD_DC_SUBDOMAINS: Record<number, string> = {
@@ -188,14 +190,14 @@ async function makeConnection(provider: WebCryptoProvider, dcId: number): Promis
 export async function prepareWebTempAuth(dcId: number): Promise<PreparedWebTempAuth> {
   if (typeof globalThis.WebSocket !== "function") throw new Error("Temporary transport requires WebSocket support.");
   const provider = new WebCryptoProvider({ wasmInput: mtcuteWasmUrl });
-  await provider.initialize();
-  const connection = await makeConnection(provider, dcId);
+  await observePlayStep("TEMP_AUTH_CRYPTO_INIT", () => provider.initialize());
+  const connection = await observePlayStep("TEMP_AUTH_SOCKET_OPEN", () => makeConnection(provider, dcId));
   let authKeyBytes: Uint8Array | null = null;
   try {
-    const [generatedTempKey, tempServerSalt] = await timeout(
+    const [generatedTempKey, tempServerSalt] = await observePlayStep("TEMP_AUTH_AUTHORIZATION", () => timeout(
       doAuthorization(connection, provider, PRODUCTIVE_TEMP_AUTH_TTL_SECONDS),
       "temporary auth generation",
-    );
+    ));
     authKeyBytes = generatedTempKey;
     // mtcute 0.31.0 checks the primary key slot while decoding the manual bind.
     // This random sentinel is never authorized and never leaves this Worker.

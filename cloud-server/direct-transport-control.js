@@ -7,6 +7,8 @@ const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 
+const { noDirectStartupTrace } = require('./direct-startup-trace');
+
 const ROOT = __dirname;
 function backendPath(value, fallbackName) {
   const raw = String(value || '').trim();
@@ -763,7 +765,7 @@ async function waitForAssignableTransport(pool, timeoutMs = 120_000) {
   }
 }
 
-async function startSession({ installationId, chatId }) {
+async function startSession({ installationId, chatId, startupTrace = noDirectStartupTrace }) {
   if (!enabled()) throw new Error('Telegram Direct transport is not configured on this server.');
   startMaintenance();
   const installation = String(installationId || '').trim();
@@ -775,7 +777,8 @@ async function startSession({ installationId, chatId }) {
   const existing = findLeaseByInstallation(snapshot, installation);
   if (existing) {
     if (!leaseExpired(existing) && existing.chat_id === vaultId && existing.status !== 'STOPPING') {
-      const runtime = await runtimeForLease(existing);
+      startupTrace.mark("LEASE_SELECTED", { server_lease: "reused", lease_state: existing.status });
+      const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(existing));
       mutateState(pool, state => {
         if (state.leases[existing.session_id]) {
           // The desktop helper will call /activate only after its raw Telegram
@@ -798,7 +801,8 @@ async function startSession({ installationId, chatId }) {
     chat_id: vaultId,
   });
   try {
-    const runtime = await runtimeForLease(lease);
+    startupTrace.mark("LEASE_SELECTED", { server_lease: "new", lease_state: lease.status });
+    const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(lease));
     console.log(`[direct] SESSION_RESERVED installation=${installation.slice(0, 8)}… transport=${bot.id} load=${loadBefore}->${loadAfter}`);
     diag('SESSION_RESERVED', { installation: installation.slice(0, 8), session_id: lease.session_id, transport_id: bot.id, vault: vaultId, load_before: loadBefore, load_after: loadAfter, mode: 'botapi-local' });
     return sessionPublic(runtime);
@@ -809,21 +813,23 @@ async function startSession({ installationId, chatId }) {
   }
 }
 
-async function activateSession({ installationId, sessionId, generation }) {
+async function activateSession({ installationId, sessionId, generation, startupTrace = noDirectStartupTrace }) {
   const checked = getLeaseChecked({ installationId, sessionId, generation });
   if (!checked) throw new Error('Direct transport session is not active.');
-  const runtime = await runtimeForLease(checked.lease);
-  const masterInfo = await masterForVault(checked.lease.chat_id);
+  startupTrace.mark("ACTIVATE_LEASE", { lease_state: checked.lease.status });
+  const runtime = await startupTrace.step("ACTIVATE_RUNTIME", () => runtimeForLease(checked.lease));
+  const masterInfo = await startupTrace.step("ACTIVATE_MASTER", () => masterForVault(checked.lease.chat_id));
   try {
-    const botEntity = runtime.bot.telegram_username
-      ? await masterInfo.client.getEntity(`@${runtime.bot.telegram_username}`)
-      : await masterInfo.client.getEntity(runtime.bot.telegram_user_id);
+    const botEntity = await startupTrace.step("ACTIVATE_GET_ENTITY", () => runtime.bot.telegram_username
+      ? masterInfo.client.getEntity(`@${runtime.bot.telegram_username}`)
+      : masterInfo.client.getEntity(runtime.bot.telegram_user_id));
 
     // IMPORTANT: no Telegram handshake message is sent. The desktop BOT client
     // starts a raw-update listener first; only then MASTER adds/promotes the bot.
     // Telegram's participant/service update contains the Channel entity as seen
     // by THIS bot account, including its own access_hash.
-    await inviteAndPromote(masterInfo.client, masterInfo.vault, botEntity);
+    startupTrace.mark("ACTIVATE_INVITE_PROMOTE", { invite_promote_executed: true });
+    await startupTrace.step("ACTIVATE_INVITE_PROMOTE", () => inviteAndPromote(masterInfo.client, masterInfo.vault, botEntity));
 
     // Do not tell Desktop that activation is complete until MASTER can read the
     // bot back as a real participant of this exact vault. Telegram may still
@@ -835,11 +841,12 @@ async function activateSession({ installationId, sessionId, generation }) {
       while (true) {
         attempt += 1;
         try {
-          const participant = await masterInfo.client.invoke(new Api.channels.GetParticipant({
+          const participant = await startupTrace.step("ACTIVATE_GET_PARTICIPANT", () => masterInfo.client.invoke(new Api.channels.GetParticipant({
             channel: masterInfo.vault,
             participant: botEntity,
-          }));
+          })));
           if (participant?.participant) {
+            startupTrace.mark("ACTIVATE_MEMBERSHIP", { membership_confirmed: true, attempt });
             diag('SESSION_MEMBERSHIP_CONFIRMED', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started });
             break letConfirmed;
           }
@@ -853,14 +860,14 @@ async function activateSession({ installationId, sessionId, generation }) {
       }
     }
 
-    await cleanupLegacyVisibleHandshakes(masterInfo.client, masterInfo.vault);
+    await startupTrace.step("ACTIVATE_CLEANUP", () => cleanupLegacyVisibleHandshakes(masterInfo.client, masterInfo.vault));
     runtime.masterId = masterInfo.config?.id || 'Master01';
     const finalized = finalizeLease(checked.lease.session_id);
     console.log(`[direct] SESSION_READY installation=${String(installationId).slice(0, 8)}… transport=${runtime.bot.id} master=${runtime.masterId}`);
     diag('SESSION_READY', { installation: String(installationId).slice(0, 8), session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, master: runtime.masterId });
     return { ok: true, activated: true, status: finalized?.status || 'ACTIVE' };
   } finally {
-    try { await masterInfo.client.disconnect(); } catch (_) {}
+    try { await startupTrace.step("ACTIVATE_DISCONNECT", () => masterInfo.client.disconnect()); } catch (_) {}
   }
 }
 

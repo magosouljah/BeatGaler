@@ -1,3 +1,4 @@
+import { playTrace, playTraceSpan } from "../playback/playTrace";
 import React, { useEffect, useRef, useState } from "react";
 import {
   getBeatGalerInstallationId,
@@ -110,9 +111,14 @@ export default function AuthExperienceGate({ children }: { children: React.React
   useEffect(() => {
     if (platform.kind !== "web") return;
     let cancelled = false;
+    const endRestore = playTraceSpan("AUTH_RESTORE");
     void restoreBeatGalerSession()
-      .then(value => { if (!cancelled) setAccount(value); })
+      .then(value => {
+        endRestore("done", { auth_session: value ? "restored" : "signed_out", cancelled });
+        if (!cancelled) setAccount(value);
+      })
       .catch(errorValue => {
+        endRestore("error", { auth_session: "unknown", cancelled });
         if (cancelled) return;
         const code = String((errorValue as { code?: string })?.code || "");
         if (["CLOUD_OFFLINE", "CLOUD_UNREACHABLE", "CLOUD_TIMEOUT"].includes(code)) {
@@ -125,6 +131,10 @@ export default function AuthExperienceGate({ children }: { children: React.React
       .finally(() => { if (!cancelled) setChecking(false); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (platform.kind === "web" && account) playTrace("AUTH_SESSION_CONFIRMED");
+  }, [account]);
 
   useEffect(() => {
     headingRef.current?.focus();

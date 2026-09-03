@@ -64,6 +64,26 @@ function harness() {
 }
 
 describe("Galer Cloud Web transport lifecycle", () => {
+  it("keeps callers joined while initialize is pending and never activates early", async () => {
+    const { controller, runtime, api } = harness();
+    let finishInitialize!: () => void;
+    const waiting = new Promise<void>(resolve => { finishInitialize = resolve; });
+    vi.mocked(runtime.initialize).mockReturnValueOnce(waiting);
+    const first = controller.connect();
+    const second = controller.connect();
+    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce());
+    expect(api.prepare).toHaveBeenCalledOnce();
+    expect(api.activate).not.toHaveBeenCalled();
+    expect(runtime.verifyReady).not.toHaveBeenCalled();
+    finishInitialize();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toBe(b);
+    expect(api.activate).toHaveBeenCalledOnce();
+    expect(runtime.verifyReady).toHaveBeenCalledOnce();
+    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
+    await controller.disconnect();
+  });
+
   it("singleflights concurrent session startup and activates only after the runtime listens", async () => {
     const { controller, runtime, api } = harness();
     const [first, second] = await Promise.all([controller.connect(), controller.connect()]);

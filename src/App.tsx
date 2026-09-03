@@ -1,3 +1,4 @@
+import { startupCacheContext } from "./features/perf/directStartupDiagnostics";
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import uploadCompleteWav from "./assets/status/upload-complete.wav";
 import downloadCompleteWav from "./assets/status/download-complete.wav";
@@ -636,10 +637,19 @@ async function rollbackInterruptedCloudUploads(beatgalerUserId: string, authorit
 function loadCachedBeats(): Beat[] | null {
   try {
     const raw = localStorage.getItem(LIBRARY_CACHE_KEY);
-    if (!raw) return null;
+    if (!raw) {
+      playTrace("LIBRARY_CACHE_READ", { library_cache: "miss", ...startupCacheContext("miss") });
+      return null;
+    }
     const parsed = JSON.parse(raw);
+    playTrace("LIBRARY_CACHE_READ", {
+      library_cache: Array.isArray(parsed) ? "hit" : "invalid",
+      ...startupCacheContext(Array.isArray(parsed) ? "hit" : "invalid"),
+      cached_card_count: Array.isArray(parsed) ? parsed.length : 0,
+    });
     return Array.isArray(parsed) ? parsed : null;
   } catch {
+    playTrace("LIBRARY_CACHE_READ", { library_cache: "unavailable_or_invalid", ...startupCacheContext("unavailable_or_invalid") });
     return null;
   }
 }

@@ -1,3 +1,5 @@
+import { observePlayStep } from "../playback/playTrace";
+import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
 import { getWebClientId } from "../../platform/webClientId";
 import {
@@ -95,16 +97,23 @@ export function isTransientWebTempAuthError(error: unknown): boolean {
 }
 
 async function transportRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
-  const token = getBeatGalerAuthToken();
-  if (!token) throw new Error("Session expired. Sign in again.");
-  const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify(webTransportRequestBody(body)),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error || `Galer Cloud HTTP ${response.status}`);
-  return payload as T;
+  const stage = path === "/transport/session/start"
+    ? body.tempAuthMetadata ? "SESSION_START_BIND" : "SESSION_START_BOOTSTRAP"
+    : path === "/transport/session/activate" ? "SESSION_ACTIVATE_HTTP" : null;
+  const request = async () => {
+    const token = getBeatGalerAuthToken();
+    if (!token) throw new Error("Session expired. Sign in again.");
+    const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(webTransportRequestBody(body)),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (stage) reportDirectStartupDiagnostics(response, stage);
+    if (!response.ok) throw new Error(payload?.error || `Galer Cloud HTTP ${response.status}`);
+    return payload as T;
+  };
+  return stage ? observePlayStep(stage, request) : request();
 }
 
 export function webTransportRequestBody(body: Record<string, unknown>): Record<string, unknown> {
@@ -158,7 +167,7 @@ async function bindTemporarySession(
     try {
       // Every attempt gets a brand-new MTProto connection and temporary auth key.
       // The server-side lease remains the same installation/browser + vault lease.
-      prepared = await prepareWebTempAuth(safeBootstrap.temp_auth.dc_id);
+      prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(safeBootstrap.temp_auth.dc_id), { attempt });
       const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
@@ -176,7 +185,7 @@ async function bindTemporarySession(
       if (!binding || expiresAt !== prepared.metadata.expiresAt) {
         throw new Error("Galer Cloud returned an incomplete temporary authorization binding.");
       }
-      const imported = await prepared.bind(binding);
+      const imported = await observePlayStep("TEMP_AUTH_BIND", () => prepared!.bind(binding), { attempt });
       return {
         ...response,
         temp_auth_required: false,
@@ -191,7 +200,7 @@ async function bindTemporarySession(
       if (!isTransientWebTempAuthError(error) || attempt >= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS) throw error;
       console.warn(`[web/temp-auth] transient handshake failure; retrying with fresh temp auth attempt=${attempt + 1}`);
     } finally {
-      await prepared?.destroy().catch(() => {});
+      if (prepared) await observePlayStep("TEMP_AUTH_DESTROY", () => prepared!.destroy(), { attempt }).catch(() => {});
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -210,7 +219,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
   for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
     let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
     try {
-      prepared = await prepareWebTempAuth(session.temp_auth.dc_id);
+      prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(session.temp_auth.dc_id), { attempt, renewal: true });
       const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
@@ -228,7 +237,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
       if (!binding || expiresAt !== prepared.metadata.expiresAt) {
         throw new Error("Galer Cloud returned an incomplete renewal binding.");
       }
-      const imported = await prepared.bind(binding);
+      const imported = await observePlayStep("TEMP_AUTH_BIND", () => prepared!.bind(binding), { attempt });
       return {
         ...response,
         temp_auth_required: false,
@@ -243,7 +252,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
       if (!isTransientWebTempAuthError(error) || attempt >= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS) throw error;
       console.warn(`[web/temp-auth] transient renewal failure; retrying with fresh temp auth attempt=${attempt + 1}`);
     } finally {
-      await prepared?.destroy().catch(() => {});
+      if (prepared) await observePlayStep("TEMP_AUTH_DESTROY", () => prepared!.destroy(), { attempt }).catch(() => {});
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
