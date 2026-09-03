@@ -21,6 +21,9 @@ export interface PreparedWebPlayback {
 
 type QueuedChunk = {
   chunk: ArrayBuffer;
+  origin: "prefetch" | "stream";
+  appendSequence?: number;
+  appendStartedAtMs?: number;
   resolve(): void;
   reject(error: Error): void;
 };
@@ -79,6 +82,51 @@ function abortError(): DOMException {
 
 function chunkBytes(chunks: readonly ArrayBuffer[]): number {
   return chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+}
+
+function traceNowMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function roundTraceSeconds(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function sourceBufferSnapshot(sourceBuffer: SourceBuffer | null): {
+  buffered_ranges: number;
+  buffered_start_s: number | null;
+  buffered_end_s: number | null;
+  buffered_duration_s: number;
+} {
+  if (!sourceBuffer) {
+    return { buffered_ranges: 0, buffered_start_s: null, buffered_end_s: null, buffered_duration_s: 0 };
+  }
+  try {
+    const buffered = sourceBuffer.buffered;
+    if (!buffered || buffered.length <= 0) {
+      return { buffered_ranges: 0, buffered_start_s: null, buffered_end_s: null, buffered_duration_s: 0 };
+    }
+    let totalDuration = 0;
+    let firstStart: number | null = null;
+    let lastEnd: number | null = null;
+    for (let index = 0; index < buffered.length; index += 1) {
+      const start = buffered.start(index);
+      const end = buffered.end(index);
+      if (firstStart === null) firstStart = start;
+      lastEnd = end;
+      totalDuration += Math.max(0, end - start);
+    }
+    return {
+      buffered_ranges: buffered.length,
+      buffered_start_s: firstStart === null ? null : roundTraceSeconds(firstStart),
+      buffered_end_s: lastEnd === null ? null : roundTraceSeconds(lastEnd),
+      buffered_duration_s: roundTraceSeconds(totalDuration),
+    };
+  } catch {
+    return { buffered_ranges: 0, buffered_start_s: null, buffered_end_s: null, buffered_duration_s: 0 };
+  }
 }
 
 /** Owns short-lived browser playback URLs. Cloud credentials never enter them. */
@@ -271,6 +319,7 @@ export class WebPlaybackSourceManager {
     const url = URL.createObjectURL(mediaSource);
     let resolveCompleted!: () => void;
     let rejectCompleted!: (error: Error) => void;
+    let appendSequence = 0;
     const completed = new Promise<void>((resolve, reject) => {
       resolveCompleted = resolve;
       rejectCompleted = reject;
@@ -296,7 +345,7 @@ export class WebPlaybackSourceManager {
     };
     if (usablePrefix) {
       entry.cachedBytes = usablePrefix.prefix.byteLength;
-      entry.queue.push({ chunk: usablePrefix.prefix, resolve: () => {}, reject: () => {} });
+      entry.queue.push({ chunk: usablePrefix.prefix, origin: "prefetch", resolve: () => {}, reject: () => {} });
       playTrace("SOURCE_PREFETCH_CONSUMED", {
         beat_id: beatId,
         message_id: messageId,
@@ -331,7 +380,17 @@ export class WebPlaybackSourceManager {
         finishIfReady();
         return;
       }
+      next.appendSequence = ++appendSequence;
+      next.appendStartedAtMs = traceNowMs();
       entry.appending = next;
+      playTrace("SOURCE_MSE_APPEND_BEGIN", {
+        beat_id: beatId,
+        message_id: messageId,
+        append_seq: next.appendSequence,
+        origin: next.origin,
+        bytes: next.chunk.byteLength,
+        queue_depth: entry.queue.length,
+      });
       try { entry.sourceBuffer.appendBuffer(next.chunk); } catch (error) { fail(error); }
     };
 
@@ -346,7 +405,32 @@ export class WebPlaybackSourceManager {
         entry.sourceBuffer = mediaSource.addSourceBuffer(mimeType);
         entry.sourceBuffer.mode = "sequence";
         entry.sourceBuffer.addEventListener("updateend", () => {
-          entry.appending?.resolve();
+          const appended = entry.appending;
+          if (appended) {
+            const snapshot = sourceBufferSnapshot(entry.sourceBuffer);
+            playTrace("SOURCE_MSE_APPEND_DONE", {
+              beat_id: beatId,
+              message_id: messageId,
+              append_seq: appended.appendSequence ?? null,
+              origin: appended.origin,
+              bytes: appended.chunk.byteLength,
+              append_ms: appended.appendStartedAtMs === undefined
+                ? null
+                : Math.round((traceNowMs() - appended.appendStartedAtMs) * 10) / 10,
+              queue_depth: entry.queue.length,
+              media_source_state: mediaSource.readyState,
+              ...snapshot,
+            });
+            if (appended.origin === "prefetch") {
+              playTrace("SOURCE_MSE_PREFETCH_BUFFERED", {
+                beat_id: beatId,
+                message_id: messageId,
+                bytes: appended.chunk.byteLength,
+                ...snapshot,
+              });
+            }
+            appended.resolve();
+          }
           entry.appending = null;
           pump();
         });
@@ -385,7 +469,7 @@ export class WebPlaybackSourceManager {
           entry.cachedChunks.push(chunk);
           entry.cachedBytes += chunk.byteLength;
           return new Promise<void>((resolve, reject) => {
-            entry.queue.push({ chunk, resolve, reject });
+            entry.queue.push({ chunk, origin: "stream", resolve, reject });
             pump();
           });
         });
