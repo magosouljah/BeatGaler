@@ -100,7 +100,6 @@ export class WebTransportController {
     const started = Date.now();
     let bootstrap: WebTransportSessionPublic | null = null;
     let activationResultPromise: Promise<StartupBranchResult> | null = null;
-    let activationSnapshot: StartupBranchResult | null = null;
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN");
     try {
@@ -115,7 +114,6 @@ export class WebTransportController {
         activationResultPromise = settleStartupBranch(
           observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
         ).then(result => {
-          activationSnapshot = result;
           if (result.ok) {
             playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
           }
@@ -126,10 +124,6 @@ export class WebTransportController {
       });
       playTrace("CONTROLLER_SESSION_PREPARE_DONE", { elapsed_ms: Date.now() - started });
 
-      // If activation already failed while temp auth was binding, do not start
-      // a Worker that can never become ready. Otherwise initialize overlaps the
-      // remainder of activation and both branches are joined below.
-      if (activationSnapshot && !activationSnapshot.ok) throw activationSnapshot.error;
       if (!activationResultPromise) throw new Error("Galer Cloud Web activation did not start after lease reservation.");
 
       const initializeStarted = Date.now();
