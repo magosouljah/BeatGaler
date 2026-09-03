@@ -28,6 +28,7 @@ type QueuedChunk = {
 type PlaybackEntry = {
   beatId: string;
   messageId: number;
+  mimeType: string;
   url: string;
   cancel: (() => void) | null;
   released: boolean;
@@ -39,6 +40,7 @@ type PlaybackEntry = {
   streamDone: boolean;
   failed: boolean;
   cachedBytes: number;
+  cachedChunks: ArrayBuffer[];
   lastUsedAt: number;
 };
 
@@ -63,6 +65,7 @@ type PrefetchJob = {
 const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;
 const MAX_PREFETCH_CONCURRENCY = 2;
 const FOREGROUND_PREFETCH_PAUSE_MS = 1200;
+const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;
 
 function supportsMediaSource(mimeType: string): boolean {
   return typeof MediaSource !== "undefined" &&
@@ -74,6 +77,10 @@ function abortError(): DOMException {
   return new DOMException("Playback stream cancelled.", "AbortError");
 }
 
+function chunkBytes(chunks: readonly ArrayBuffer[]): number {
+  return chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+}
+
 /** Owns short-lived browser playback URLs. Cloud credentials never enter them. */
 export class WebPlaybackSourceManager {
   private entries = new Map<string, PlaybackEntry>();
@@ -81,6 +88,7 @@ export class WebPlaybackSourceManager {
   private prefixes = new Map<string, PrefetchedPrefix>();
   private prefetchPending = new Map<string, Promise<void>>();
   private prefetchQueue: PrefetchJob[] = [];
+  private prefetchRetryAfter = new Map<string, number>();
   private activePrefetches = 0;
   private prefetchPausedUntil = 0;
   private prefetchWakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -102,6 +110,18 @@ export class WebPlaybackSourceManager {
     if (existingPrefix && existingPrefix.messageId !== messageId) this.prefixes.delete(beatId);
     const pending = this.prefetchPending.get(key);
     if (pending) return pending;
+
+    const retryAfter = this.prefetchRetryAfter.get(key) || 0;
+    const now = Date.now();
+    if (retryAfter > now) {
+      playTrace("SOURCE_PREFETCH_COOLDOWN", {
+        beat_id: beatId,
+        message_id: messageId,
+        retry_in_ms: retryAfter - now,
+      });
+      return Promise.resolve();
+    }
+    if (retryAfter) this.prefetchRetryAfter.delete(key);
 
     let resolveJob!: () => void;
     let rejectJob!: (error: Error) => void;
@@ -144,6 +164,7 @@ export class WebPlaybackSourceManager {
       this.activePrefetches += 1;
       playTrace("SOURCE_PREFETCH_BEGIN", { beat_id: job.beatId, message_id: job.messageId });
       void this.transport.prefetchFile({ messageId: job.messageId, mimeType: job.mimeType }).then(result => {
+        this.prefetchRetryAfter.delete(job.key);
         this.prefixes.set(job.beatId, {
           beatId: job.beatId,
           messageId: job.messageId,
@@ -160,6 +181,7 @@ export class WebPlaybackSourceManager {
         this.enforceCacheBudget(job.beatId);
         job.resolve();
       }, error => {
+        this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
         playTrace("SOURCE_PREFETCH_ERROR", {
           beat_id: job.beatId,
           message_id: job.messageId,
@@ -182,13 +204,40 @@ export class WebPlaybackSourceManager {
     const reusable = this.entries.get(beatId);
     if (reusable && !reusable.released && !reusable.failed) {
       reusable.lastUsedAt = Date.now();
-      playTrace("SOURCE_SESSION_CACHE_HIT", {
+      if (!reusable.streamDone) {
+        playTrace("SOURCE_ACTIVE_PLAYBACK_HIT", {
+          beat_id: beatId,
+          message_id: messageId,
+          bytes: reusable.cachedBytes,
+        });
+        return Promise.resolve({ url: reusable.url, completed: reusable.completed });
+      }
+
+      const availableBytes = chunkBytes(reusable.cachedChunks);
+      if (availableBytes > 0 && availableBytes >= reusable.cachedBytes) {
+        const previousUrl = reusable.url;
+        const url = URL.createObjectURL(new Blob(reusable.cachedChunks, { type: reusable.mimeType || mimeType }));
+        reusable.url = url;
+        reusable.mediaSource = null;
+        reusable.sourceBuffer = null;
+        if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
+        playTrace("SOURCE_SESSION_CACHE_HIT", {
+          beat_id: beatId,
+          message_id: messageId,
+          complete: true,
+          bytes: availableBytes,
+          fresh_blob_url: true,
+        });
+        return Promise.resolve({ url, completed: reusable.completed });
+      }
+
+      playTrace("SOURCE_SESSION_CACHE_INVALID", {
         beat_id: beatId,
         message_id: messageId,
-        complete: reusable.streamDone,
-        bytes: reusable.cachedBytes,
+        expected_bytes: reusable.cachedBytes,
+        available_bytes: availableBytes,
       });
-      return Promise.resolve({ url: reusable.url, completed: reusable.completed });
+      this.hardRelease(beatId);
     }
     const pending = this.pending.get(beatId);
     if (pending) return pending;
@@ -230,6 +279,7 @@ export class WebPlaybackSourceManager {
     const entry: PlaybackEntry = {
       beatId,
       messageId,
+      mimeType: usablePrefix?.mimeType || mimeType,
       url,
       cancel: null,
       released: false,
@@ -241,6 +291,7 @@ export class WebPlaybackSourceManager {
       streamDone: false,
       failed: false,
       cachedBytes: 0,
+      cachedChunks: usablePrefix ? [usablePrefix.prefix] : [],
       lastUsedAt: Date.now(),
     };
     if (usablePrefix) {
@@ -331,6 +382,7 @@ export class WebPlaybackSourceManager {
           }
           if (entry.released) return Promise.reject(abortError());
           if (entry.failed) return Promise.reject(new Error("Cloud audio stream failed."));
+          entry.cachedChunks.push(chunk);
           entry.cachedBytes += chunk.byteLength;
           return new Promise<void>((resolve, reject) => {
             entry.queue.push({ chunk, resolve, reject });
@@ -345,6 +397,7 @@ export class WebPlaybackSourceManager {
         }
         void stream.completed.then(result => {
           entry.streamDone = true;
+          entry.mimeType = result.mimeType || entry.mimeType;
           entry.cachedBytes = Math.max(entry.cachedBytes, result.totalBytes || entry.cachedBytes);
           entry.lastUsedAt = Date.now();
           playTrace("SOURCE_SESSION_CACHE_READY", {
@@ -384,6 +437,7 @@ export class WebPlaybackSourceManager {
       placeholder = {
         beatId,
         messageId,
+        mimeType: usablePrefix.mimeType || mimeType,
         url,
         cancel: null,
         released: false,
@@ -395,10 +449,16 @@ export class WebPlaybackSourceManager {
         streamDone: true,
         failed: false,
         cachedBytes: usablePrefix.totalBytes || offsetBytes,
+        cachedChunks: chunks,
         lastUsedAt: Date.now(),
       };
       this.entries.set(beatId, placeholder);
       this.enforceCacheBudget(beatId);
+      playTrace("SOURCE_SESSION_CACHE_READY", {
+        beat_id: beatId,
+        message_id: messageId,
+        bytes: placeholder.cachedBytes,
+      });
       playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "blob", prefetched_only: true });
       return { url, completed };
     }
@@ -413,6 +473,7 @@ export class WebPlaybackSourceManager {
     placeholder = {
       beatId,
       messageId,
+      mimeType,
       url: "",
       cancel: stream.cancel,
       released: false,
@@ -424,6 +485,7 @@ export class WebPlaybackSourceManager {
       streamDone: false,
       failed: false,
       cachedBytes: offsetBytes,
+      cachedChunks: chunks,
       lastUsedAt: Date.now(),
     };
     this.entries.set(beatId, placeholder);
@@ -433,8 +495,9 @@ export class WebPlaybackSourceManager {
       if (placeholder.released) throw abortError();
       const url = URL.createObjectURL(new Blob(chunks, { type: result.mimeType || "audio/mpeg" }));
       placeholder.url = url;
+      placeholder.mimeType = result.mimeType || placeholder.mimeType;
       placeholder.streamDone = true;
-      placeholder.cachedBytes = result.totalBytes || chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      placeholder.cachedBytes = result.totalBytes || chunkBytes(chunks);
       placeholder.lastUsedAt = Date.now();
       this.enforceCacheBudget(beatId);
       playTrace("SOURCE_SESSION_CACHE_READY", {
@@ -480,6 +543,7 @@ export class WebPlaybackSourceManager {
       try { entry.sourceBuffer.abort(); } catch {}
     }
     if (entry.url) URL.revokeObjectURL(entry.url);
+    entry.cachedChunks.length = 0;
     this.entries.delete(beatId);
   }
 
@@ -540,6 +604,7 @@ export class WebPlaybackSourceManager {
 
   clearCache(): { used_bytes: number; limit_mb: number } {
     this.prefixes.clear();
+    this.prefetchRetryAfter.clear();
     for (const beatId of Array.from(this.entries.keys())) this.hardRelease(beatId);
     return this.cacheStatus();
   }
@@ -548,6 +613,7 @@ export class WebPlaybackSourceManager {
     if (this.prefetchWakeTimer) clearTimeout(this.prefetchWakeTimer);
     this.prefetchWakeTimer = null;
     this.prefetchQueue.splice(0).forEach(job => job.reject(abortError()));
+    this.prefetchRetryAfter.clear();
     this.prefixes.clear();
     for (const beatId of Array.from(this.entries.keys())) this.hardRelease(beatId);
   }
