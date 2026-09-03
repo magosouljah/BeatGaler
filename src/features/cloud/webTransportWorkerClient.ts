@@ -59,6 +59,18 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     return worker;
   }
 
+  prewarm(): void {
+    playTrace("WORKER_PREWARM_BEGIN");
+    try {
+      this.ensureWorker();
+      playTrace("WORKER_PREWARM_DISPATCHED");
+    } catch (error) {
+      playTrace("WORKER_PREWARM_DEFERRED", {
+        error_name: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+
   private takePending(requestId: string): PendingRequest | undefined {
     const pending = this.pending.get(requestId);
     if (!pending) return undefined;
