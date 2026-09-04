@@ -46,6 +46,7 @@ export function useAudio() {
   const currentBeatIdRef = useRef<string | null>(null);
   const errorNotifiedRef = useRef(false);
   const primingRef = useRef(false);
+  const waitingRef = useRef(false);
   const [state, setState] = useState<AudioState>({
     playingId: null,
     isPlaying: false,
@@ -65,44 +66,71 @@ export function useAudio() {
 
   useEffect(() => {
     const audio = getAudio();
+    const publishPlaybackState = () => {
+      const beatId = currentBeatIdRef.current;
+      if (!beatId) return;
+      window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", {
+        detail: {
+          beatId,
+          currentTime: Math.max(0, Number(audio.currentTime) || 0),
+          playing: !audio.paused && !audio.ended,
+          waiting: waitingRef.current,
+        },
+      }));
+    };
 
     const onTimeUpdate = () => {
       if (audio.duration > 0) {
         setState((s) => ({ ...s, progress: audio.currentTime / audio.duration }));
       }
+      publishPlaybackState();
     };
     const onLoadedMeta = () => setState((s) => ({ ...s, duration: audio.duration }));
     const onEnded = () => {
       const beatId = currentBeatIdRef.current;
+      waitingRef.current = false;
       setState((s) => ({ ...s, isPlaying: false, progress: 0, endedSeq: s.endedSeq + 1 }));
+      publishPlaybackState();
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } }));
     };
     const onPlay = () => {
+      waitingRef.current = false;
       playTrace("AUDIO_EVENT_PLAY", { beat_id: currentBeatIdRef.current, ready_state: audio.readyState });
       setState((s) => ({ ...s, isPlaying: true }));
+      publishPlaybackState();
     };
     const onPlaying = () => {
       const beatId = currentBeatIdRef.current;
+      waitingRef.current = false;
       playTrace("AUDIO_EVENT_PLAYING", { beat_id: beatId, ready_state: audio.readyState, current_time: audio.currentTime });
       setState((s) => ({ ...s, isPlaying: true }));
+      publishPlaybackState();
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-playing", { detail: { beatId } }));
       void platform.diagnostics.audioEvent("AUDIO_PLAYING", beatId, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
     };
     const onWaiting = () => {
+      waitingRef.current = true;
       playTrace("AUDIO_EVENT_WAITING", { beat_id: currentBeatIdRef.current, ready_state: audio.readyState, current_time: audio.currentTime });
+      publishPlaybackState();
       void platform.diagnostics.audioEvent("AUDIO_WAITING", currentBeatIdRef.current, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
     };
     const onCanPlay = () => {
+      waitingRef.current = false;
       playTrace("AUDIO_EVENT_CANPLAY", { beat_id: currentBeatIdRef.current, ready_state: audio.readyState });
+      publishPlaybackState();
       void platform.diagnostics.audioEvent("AUDIO_CANPLAY", currentBeatIdRef.current, null, `readyState=${audio.readyState}`).catch(() => {});
     };
     const onPause = () => {
       const beatId = currentBeatIdRef.current;
+      waitingRef.current = false;
       setState((s) => ({ ...s, isPlaying: false }));
+      publishPlaybackState();
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } }));
     };
     const onError = () => {
+      waitingRef.current = false;
       playTrace("AUDIO_EVENT_ERROR", { beat_id: currentBeatIdRef.current, media_error: audio.error?.code || null, priming: primingRef.current });
+      publishPlaybackState();
       if (primingRef.current) return;
       const nextIndex = sourceIndexRef.current + 1;
       if (nextIndex >= sourceUrlsRef.current.length) {
@@ -163,6 +191,7 @@ export function useAudio() {
     audio.preload = "auto";
     audio.muted = true;
     currentBeatIdRef.current = null;
+    waitingRef.current = false;
     void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_BEGIN", null, null, source).catch(() => {});
 
     return await new Promise<boolean>((resolve) => {
@@ -192,10 +221,6 @@ export function useAudio() {
     });
   }, [getAudio]);
 
-  // iOS Safari requires play() to be called in the synchronous user-gesture
-  // stack. Cloud playback must first lease a transport and download/stream the
-  // MASTER, so arm the same HTMLAudioElement with a muted local sample at click
-  // time and reuse that authorized element once the real source is ready.
   const armPlaybackGesture = useCallback((): Promise<boolean> => {
     const audio = getAudio();
     const silentUrl = getSilentGestureUrl();
@@ -225,10 +250,6 @@ export function useAudio() {
       return;
     }
 
-    // React state can lag a rapid second Play click by one render. The ref is
-    // updated synchronously below, so use it as the immediate playback owner.
-    // Re-loading the same MediaSource while it is still attaching can detach
-    // the source and surface ERR_FILE_NOT_FOUND / play() interrupted by pause().
     const samePendingSource = currentBeatIdRef.current === beatId && sourceUrlsRef.current[0] === sources[0];
     if (samePendingSource && audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA && !audio.error) {
       void platform.diagnostics.audioEvent("AUDIO_DUPLICATE_PLAY_IGNORED", beatId, null, `readyState=${audio.readyState}`).catch(() => {});
@@ -244,6 +265,7 @@ export function useAudio() {
     currentBeatIdRef.current = beatId;
     errorNotifiedRef.current = false;
     primingRef.current = false;
+    waitingRef.current = false;
     audio.muted = false;
     audio.loop = false;
     sourceUrlsRef.current = sources;
@@ -281,6 +303,12 @@ export function useAudio() {
     if (audio.duration > 0) {
       audio.currentTime = ratio * audio.duration;
       setState((s) => ({ ...s, progress: ratio }));
+      const beatId = currentBeatIdRef.current;
+      if (beatId) {
+        window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", {
+          detail: { beatId, currentTime: audio.currentTime, playing: !audio.paused, waiting: waitingRef.current },
+        }));
+      }
     }
   }, [getAudio]);
 
@@ -291,17 +319,17 @@ export function useAudio() {
     setState((s) => ({ ...s, volume: next }));
   }, [getAudio]);
 
-  /** Fully releases the file handle — MUST call before renaming on Windows */
   const releaseFile = useCallback(() => {
     const audio = getAudio();
     const releasedBeatId = currentBeatIdRef.current;
     audio.pause();
     audio.removeAttribute("src");
-    audio.load(); // this forces the browser to release the file handle
+    audio.load();
     sourceUrlsRef.current = [];
     sourceIndexRef.current = 0;
     currentBeatIdRef.current = null;
     errorNotifiedRef.current = false;
+    waitingRef.current = false;
     platform.media.releasePlayback(releasedBeatId);
     setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
   }, [getAudio]);
