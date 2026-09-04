@@ -25,7 +25,7 @@ const http = require("http");
 const net = require("net");
 const dns = require("dns").promises;
 const multer = require("multer");
-const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, masterStorageReady } = require("./master-storage");
+const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verifyPrivateUserStorageGroup, masterStorageReady } = require("./master-storage");
 const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
@@ -1151,6 +1151,27 @@ async function ensureUserStorage(user) {
       storageChatId: botApiChatIdFromStored(user.storageChatId),
       storageChatTitle: user.storageChatTitle,
     };
+
+    // Direct index bootstrap no longer touches MASTER, so it cannot prove
+    // that a persisted vault still exists. Verify the stored chat explicitly.
+    // Only a definitive missing-vault signal reprovisions; transient failures
+    // keep the current vault and retry on a later auth/session restore.
+    if (masterStorageReady()) {
+      try {
+        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });
+      } catch (error) {
+        const message = String(error?.errorMessage || error?.message || error);
+        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
+          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
+          user.storageChatId = null;
+          user.storageChatTitle = null;
+          user.storageCreatedAt = null;
+          saveAuthData();
+          return ensureUserStorage(user);
+        }
+        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
+      }
+    }
 
     // Migration invariant: the manager bot (001BeatGaler) never belongs to a
     // user vault. If an older BeatGaler build left it there, MASTER removes it.

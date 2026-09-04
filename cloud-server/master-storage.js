@@ -111,6 +111,16 @@ async function findStorageChannelByBotApiId(client, botApiChatId) {
   return dialog.entity;
 }
 
+async function verifyPrivateUserStorageGroup({ botApiChatId }) {
+  const { client } = await openMasterClient();
+  try {
+    await findStorageChannelByBotApiId(client, botApiChatId);
+    return true;
+  } finally {
+    await client.disconnect();
+  }
+}
+
 async function ensurePrivateUserStorageBotAbsent({ botApiChatId, botUsername }) {
   const username = String(botUsername || "").replace(/^@/, "").trim();
   if (!username) return false;
@@ -169,5 +179,6 @@ async function ensurePrivateUserStorageBotAbsent({ botApiChatId, botUsername }) 
 module.exports = {
   createPrivateUserStorageGroup,
   ensurePrivateUserStorageBotAbsent,
+  verifyPrivateUserStorageGroup,
   masterStorageReady,
 };
