@@ -4,6 +4,24 @@ export type PlayTraceDetail = Record<string, unknown>;
 
 let spanSequence = 0;
 
+function publishWebPrefixTiming(stage: string, detail: PlayTraceDetail): void {
+  if (typeof window === "undefined") return;
+  const eligible = stage === "SOURCE_PREFETCH_PROGRESS" ||
+    stage === "SOURCE_PREFETCH_READY" ||
+    stage === "SOURCE_PREFETCH_CONSUMED" ||
+    (stage === "SOURCE_MSE_APPEND_DONE" && Number(detail.append_seq || 0) === 1);
+  if (!eligible) return;
+
+  const beatId = String(detail.beat_id || "").trim();
+  const bytes = Math.max(0, Number(detail.bytes || 0));
+  const playableSeconds = Math.max(0, Number(detail.playable_seconds || detail.buffered_duration_s || 0));
+  if (!beatId || bytes <= 0 || playableSeconds <= 0) return;
+
+  window.dispatchEvent(new CustomEvent("beatgaler:web-playback-prefix-timing", {
+    detail: { beatId, bytes, playableSeconds },
+  }));
+}
+
 /**
  * Temporary Issue #97 runtime trace. Keep payloads free of credentials/chat ids.
  * Epoch time lets main-thread and Worker events be correlated in one console log.
@@ -11,6 +29,7 @@ let spanSequence = 0;
 export function playTrace(stage: string, detail: PlayTraceDetail = {}): void {
   try {
     console.info(`[play-trace] ${JSON.stringify({ ...detail, ...traceClock(), stage })}`);
+    publishWebPrefixTiming(stage, detail);
   } catch { /* Diagnostics must never break the operation being measured. */ }
 }
 

@@ -3,6 +3,7 @@ import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
 
 let silentGestureUrl: string | null = null;
+const WEB_PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";
 
 function getSilentGestureUrl(): string {
   if (silentGestureUrl) return silentGestureUrl;
@@ -30,6 +31,19 @@ function getSilentGestureUrl(): string {
   return silentGestureUrl;
 }
 
+function cachedWebMasterSize(beatId: string): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(WEB_PRESENTATION_LIBRARY_CACHE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return 0;
+    const beat = parsed.find(value => String(value?.id || "") === beatId);
+    const bytes = Number(beat?.assets?.master?.size_bytes || 0);
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export interface AudioState {
   playingId: string | null;
   isPlaying: boolean;
@@ -47,6 +61,7 @@ export function useAudio() {
   const errorNotifiedRef = useRef(false);
   const primingRef = useRef(false);
   const waitingRef = useRef(false);
+  const durationHintsRef = useRef(new Map<string, number>());
   const [state, setState] = useState<AudioState>({
     playingId: null,
     isPlaying: false,
@@ -64,6 +79,12 @@ export function useAudio() {
     return audioRef.current;
   }, []);
 
+  const effectiveDuration = useCallback((audio: HTMLAudioElement): number => {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration;
+    const beatId = currentBeatIdRef.current;
+    return beatId ? Math.max(0, durationHintsRef.current.get(beatId) || 0) : 0;
+  }, []);
+
   useEffect(() => {
     const audio = getAudio();
     const publishPlaybackState = () => {
@@ -79,13 +100,63 @@ export function useAudio() {
       }));
     };
 
+    const storeDurationHint = (beatId: string, duration: number) => {
+      if (!beatId || !Number.isFinite(duration) || duration <= 0) return;
+      durationHintsRef.current.set(beatId, duration);
+      if (currentBeatIdRef.current === beatId && !Number.isFinite(audio.duration)) {
+        setState((s) => ({
+          ...s,
+          duration,
+          progress: Math.max(0, Math.min(1, audio.currentTime / duration)),
+        }));
+      }
+    };
+
+    const onDurationHint = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId?: string; duration?: number }>).detail;
+      storeDurationHint(String(detail?.beatId || "").trim(), Number(detail?.duration || 0));
+    };
+
+    const onPrefixTiming = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId?: string; bytes?: number; playableSeconds?: number }>).detail;
+      const beatId = String(detail?.beatId || "").trim();
+      const prefixBytes = Math.max(0, Number(detail?.bytes || 0));
+      const playableSeconds = Math.max(0, Number(detail?.playableSeconds || 0));
+      const totalBytes = cachedWebMasterSize(beatId);
+      if (!beatId || prefixBytes < 4096 || playableSeconds <= 0 || totalBytes <= 0) return;
+
+      // The Web masters are metadata-free audio in the current architecture.
+      // Estimate duration from measured MPEG-frame time/bytes without mutating
+      // MediaSource.duration. VBR can make this approximate; the native finite
+      // duration replaces the hint automatically once endOfStream() completes.
+      const estimated = playableSeconds * (Math.max(prefixBytes, totalBytes) / prefixBytes);
+      if (!Number.isFinite(estimated) || estimated <= 0) return;
+      const duration = Math.max(playableSeconds, estimated);
+      storeDurationHint(beatId, duration);
+      playTrace("AUDIO_DURATION_HINT", {
+        beat_id: beatId,
+        prefix_bytes: prefixBytes,
+        total_bytes: totalBytes,
+        prefix_seconds: Math.round(playableSeconds * 1000) / 1000,
+        duration_s: Math.round(duration * 1000) / 1000,
+      });
+    };
+
     const onTimeUpdate = () => {
-      if (audio.duration > 0) {
-        setState((s) => ({ ...s, progress: audio.currentTime / audio.duration }));
+      const duration = effectiveDuration(audio);
+      if (duration > 0) {
+        setState((s) => ({
+          ...s,
+          duration,
+          progress: Math.max(0, Math.min(1, audio.currentTime / duration)),
+        }));
       }
       publishPlaybackState();
     };
-    const onLoadedMeta = () => setState((s) => ({ ...s, duration: audio.duration }));
+    const onLoadedMeta = () => {
+      const duration = effectiveDuration(audio);
+      if (duration > 0) setState((s) => ({ ...s, duration }));
+    };
     const onEnded = () => {
       const beatId = currentBeatIdRef.current;
       waitingRef.current = false;
@@ -166,6 +237,8 @@ export function useAudio() {
     audio.addEventListener("canplay", onCanPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("error", onError);
+    window.addEventListener("beatgaler:web-playback-duration", onDurationHint);
+    window.addEventListener("beatgaler:web-playback-prefix-timing", onPrefixTiming);
 
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
@@ -177,8 +250,10 @@ export function useAudio() {
       audio.removeEventListener("canplay", onCanPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("error", onError);
+      window.removeEventListener("beatgaler:web-playback-duration", onDurationHint);
+      window.removeEventListener("beatgaler:web-playback-prefix-timing", onPrefixTiming);
     };
-  }, []);
+  }, [effectiveDuration, getAudio]);
 
   const primeAudioEngine = useCallback(async (path: string): Promise<boolean> => {
     const source = platform.media.resolveUrl(path);
@@ -282,7 +357,8 @@ export function useAudio() {
     if (previousBeatId && previousBeatId !== beatId) platform.media.releasePlayback(previousBeatId);
     void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {});
     playTrace("AUDIO_SRC_SET", { beat_id: beatId, ready_state: audio.readyState, url_scheme: String(sources[0] || "").split(":")[0] || null });
-    setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
+    const hintedDuration = Math.max(0, durationHintsRef.current.get(beatId) || 0);
+    setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: hintedDuration }));
     playTrace("AUDIO_PLAY_PROMISE_BEGIN", { beat_id: beatId });
     audio.play().then(
       () => playTrace("AUDIO_PLAY_PROMISE_RESOLVED", { beat_id: beatId }),
@@ -300,7 +376,7 @@ export function useAudio() {
 
   const seek = useCallback((ratio: number) => {
     const audio = getAudio();
-    if (audio.duration > 0) {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
       audio.currentTime = ratio * audio.duration;
       setState((s) => ({ ...s, progress: ratio }));
       const beatId = currentBeatIdRef.current;
