@@ -9,8 +9,14 @@ import {
   publishWebLibraryNavigationState,
   readRequestedWebLibraryOffset,
 } from "../features/library/webLibraryNavigation";
-import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
-import { installFullyVisibleBeatCardObserver } from "../features/playback/webVisiblePlaybackPrefetch";
+import {
+  WebPlaybackSourceManager,
+  type WebPlaybackPrefetchCandidate,
+} from "../features/playback/webPlaybackSource";
+import {
+  installVisibleAndNearbyBeatCardObserver,
+  type BeatCardPrefetchSnapshot,
+} from "../features/playback/webVisiblePlaybackPrefetch";
 import { playTrace, observePlayStep } from "../features/playback/playTrace";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
@@ -67,20 +73,32 @@ function webBeatMessageId(beat: Beat): number | null {
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
 }
 
-async function prefetchVisibleBeat(beatId: string): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+function playbackCandidate(beatId: string): WebPlaybackPrefetchCandidate | null {
   const beat = webBeatRegistry.get(beatId);
-  if (!beat) return;
+  if (!beat) return null;
   const messageId = webBeatMessageId(beat);
-  if (!messageId) return;
-  const mimeType = beat.assets?.master?.mime_type || "audio/mpeg";
+  if (!messageId) return null;
+  return {
+    beatId: beat.id,
+    messageId,
+    mimeType: beat.assets?.master?.mime_type || "audio/mpeg",
+  };
+}
+
+async function prefetchViewportSnapshot(snapshot: BeatCardPrefetchSnapshot): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  const visible = snapshot.visible.map(playbackCandidate).filter((value): value is WebPlaybackPrefetchCandidate => Boolean(value));
+  const visibleIds = new Set(visible.map(candidate => candidate.beatId));
+  const nearby = snapshot.nearby
+    .map(playbackCandidate)
+    .filter((value): value is WebPlaybackPrefetchCandidate => Boolean(value) && !visibleIds.has(value.beatId));
   try {
     const sources = await resolveWebPlaybackSources();
-    await sources.prefetch(beat.id, messageId, mimeType);
+    await sources.setPrefetchSnapshot({ visible, nearby });
   } catch (error) {
-    playTrace("ADAPTER_VISIBLE_PREFETCH_DEFERRED", {
-      beat_id: beat.id,
-      message_id: messageId,
+    playTrace("ADAPTER_VIEWPORT_PREFETCH_DEFERRED", {
+      visible_candidates: visible.length,
+      nearby_candidates: nearby.length,
       error_name: error instanceof Error ? error.name : "unknown",
     });
   }
@@ -88,17 +106,20 @@ async function prefetchVisibleBeat(beatId: string): Promise<void> {
 
 function ensureVisiblePlaybackObserver(): void {
   if (stopVisiblePlaybackObserver || typeof window === "undefined") return;
-  stopVisiblePlaybackObserver = installFullyVisibleBeatCardObserver(beatId => {
-    playTrace("ADAPTER_VISIBLE_CARD_PREFETCH", { beat_id: beatId });
-    void prefetchVisibleBeat(beatId);
+  stopVisiblePlaybackObserver = installVisibleAndNearbyBeatCardObserver(snapshot => {
+    playTrace("ADAPTER_VIEWPORT_PREFETCH_SNAPSHOT", {
+      visible_candidates: snapshot.visible.length,
+      nearby_candidates: snapshot.nearby.length,
+    });
+    void prefetchViewportSnapshot(snapshot);
   });
 }
 
 function rememberWebBeats(beats: readonly Beat[]): void {
   for (const beat of beats) webBeatRegistry.set(beat.id, beat);
-  // IntersectionObserver's initial callback may already have fired when a fast
-  // Play seeded only one cached beat. Reinstall after registry growth so every
-  // currently full-card-visible beat is reconsidered once metadata is known.
+  // Observation can happen before a fast library load has populated metadata.
+  // Reinstall after registry growth so the current viewport snapshot is emitted
+  // again with resolvable MASTER message ids.
   stopVisiblePlaybackObserver?.();
   stopVisiblePlaybackObserver = null;
   ensureVisiblePlaybackObserver();
@@ -133,9 +154,8 @@ function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): vo
 async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
   if (webPlaybackSources) return webPlaybackSources;
   const transport = await resolveWebCloudTransport();
-  // Multiple fully-visible cards can resolve in the same microtask while the
-  // Direct import is still pending. Re-check after the await so those callbacks
-  // all share one manager, one prefix cache, and one 2-wide prefetch queue.
+  // Re-check after the await so all viewport snapshots share one manager, one
+  // prefix cache and one visible-before-nearby scheduler.
   if (!webPlaybackSources) webPlaybackSources = new WebPlaybackSourceManager(transport);
   return webPlaybackSources;
 }
