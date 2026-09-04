@@ -36,7 +36,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     const normalize = library.indexOf("normalizeWebLibraryManifest(index.manifest)");
     const updateRouting = library.indexOf("updatePlaybackRoutingCacheFromManifest(manifest)", normalize);
-    const materialize = library.indexOf("boundedPageFromNormalizedManifest(manifest", updateRouting);
+    const materialize = library.indexOf("const page = boundedPageFromNormalizedManifest(", updateRouting);
     expect(normalize).toBeGreaterThanOrEqual(0);
     expect(updateRouting).toBeGreaterThan(normalize);
     expect(materialize).toBeGreaterThan(updateRouting);
@@ -63,7 +63,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(main).toContain('import("./features/playback/webStartupPlaybackCoordinator")');
     expect(main).toContain("getWebStartupPlaybackCoordinator().start()");
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
-    expect(coordinator).toContain("await transport.connectPlaybackDataPlane()");
+    expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
 
   it("makes late startup candidate configuration impossible", () => {
@@ -128,9 +128,10 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
 
     expect(playback).toContain("promotePrefetchForPlayback");
+    expect(playback).toContain("const existingWarm = this.prefetchPending.get(key)");
     expect(playback).toContain("await existingWarm");
-    expect(playback).toContain('playTrace("PLAY_WARM_ADOPTED"');
-    expect(playback).toContain('playTrace("PLAY_WARM_PROMOTED"');
+    expect(playback).toContain('playTrace(active ? "PLAY_WARM_ADOPTED" : "PLAY_WARM_PROMOTED"');
+    expect(playback).toContain("promoteMessage?.(messageId)");
     expect(playback).not.toContain("cancelPrefetchForPlayback");
   });
 
@@ -164,8 +165,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain("activeIndexAbortController");
     expect(worker).toContain("waitUntilIndexPriorityAllowed");
     expect(worker).toContain("abortSignal: controller.signal");
-    expect(worker).toContain('playTrace("INDEX_PREEMPTED_PLAY"');
-    expect(worker).toContain('playTrace("INDEX_RESUMED"');
+    expect(worker).toContain('playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM")');
+    expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN")');
   });
 
   it("publishes the playback data plane before getMe/getChat background verification", () => {
