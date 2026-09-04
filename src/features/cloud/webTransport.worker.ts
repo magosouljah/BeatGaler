@@ -1,15 +1,22 @@
 import { InputMedia, MemoryStorage, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
+import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
 import { playTrace, playTraceSpan, observePlayStep } from "../playback/playTrace";
 import {
   WEB_DIRECT_MAX_FILE_BYTES,
+  WEB_PLAYBACK_DATA_LANES,
   WEB_PLAYBACK_FIRST_CHUNK_BYTES,
   WEB_PLAYBACK_FIRST_CHUNK_KB,
+  WEB_PLAYBACK_PREFETCH_MAX_BYTES,
+  WEB_PLAYBACK_PREFETCH_TARGET_SECONDS,
   type WebTransportDownloadInput,
   type WebTransportDownloadResult,
   type WebTransportDeleteMessagesInput,
   type WebTransportDeleteMessagesResult,
   type WebTransportLibraryIndexResult,
+  type WebTransportPrefetchBatchInput,
+  type WebTransportPrefetchBatchItemResult,
+  type WebTransportPrefetchBatchResult,
   type WebTransportPrefetchInput,
   type WebTransportPrefetchResult,
   type WebTransportReplaceIndexInput,
@@ -65,6 +72,26 @@ type CachedPlaybackMedia = {
   mimeType: string | null;
 };
 
+type PrefetchBatchControl = {
+  cancelAll: boolean;
+  cancelledMessageIds: Set<number>;
+};
+
+type BatchPrefetchState = {
+  messageId: number;
+  requestedMimeType: string | null;
+  offsetBytes: number;
+  media: FileDownloadLocation | null;
+  totalBytes: number;
+  mimeType: string;
+  chunks: Uint8Array[];
+  downloadedBytes: number;
+  playableSeconds: number;
+  targetMet: boolean;
+  done: boolean;
+  error: Error | null;
+};
+
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
 let chatId = 0;
@@ -73,10 +100,41 @@ const activeStreams = new Map<string, {
   controller: AbortController;
   acknowledge: (() => void) | null;
 }>();
+const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
 const playbackMediaCache = new Map<number, CachedPlaybackMedia>();
 const MAX_PLAYBACK_MEDIA_CACHE_ENTRIES = 256;
-
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
+
+let activeDataLanes = 0;
+const dataLaneWaiters: Array<() => void> = [];
+
+async function withDataLane<T>(operation: () => Promise<T>): Promise<T> {
+  if (activeDataLanes >= WEB_PLAYBACK_DATA_LANES) {
+    await new Promise<void>(resolve => dataLaneWaiters.push(resolve));
+  }
+  activeDataLanes += 1;
+  try {
+    return await operation();
+  } finally {
+    activeDataLanes -= 1;
+    dataLaneWaiters.shift()?.();
+  }
+}
+
+function schedulerYield(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const size = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const output = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.byteLength;
+  }
+  return output;
+}
 
 function isBoundTempLongJson(value: unknown): value is BoundTempLongJson {
   const row = value as Partial<BoundTempLongJson> | null;
@@ -126,14 +184,8 @@ function applyBoundTempSessionState(
   salts.currentSalt = restoreLong(LongCtor, state.serverSalt);
   session.queuedAcks = state.queuedAcks.map(value => restoreLong(LongCtor, value));
   session.recentOutgoingMsgIds?.add(restoreLong(LongCtor, state.bindMsgId));
-  for (const value of state.queuedAcks) {
-    session.recentIncomingMsgIds?.add(restoreLong(LongCtor, value));
-  }
+  for (const value of state.queuedAcks) session.recentIncomingMsgIds?.add(restoreLong(LongCtor, value));
   session.lastSessionCreatedUid = restoreLong(LongCtor, state.lastSessionCreatedUid);
-
-  // Telegram requires initConnection again after auth.bindTempAuthKey. The
-  // browser receives only the numeric application id needed by initConnection;
-  // API hash, bot token and permanent authorization never enter this Worker.
   session.initConnectionCalled = false;
 }
 
@@ -188,6 +240,8 @@ async function closeClient(): Promise<void> {
     stream.acknowledge?.();
   }
   activeStreams.clear();
+  for (const control of activePrefetchBatches.values()) control.cancelAll = true;
+  activePrefetchBatches.clear();
   playbackMediaCache.clear();
   const current = client;
   client = null;
@@ -227,8 +281,6 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   }
 
   const next = new TelegramClient({
-    // initConnection needs the public numeric application id. The API hash is
-    // needed for authorization/login only and intentionally never enters Web.
     apiId: temp_api_id,
     apiHash: "",
     storage: new MemoryStorage(),
@@ -247,11 +299,6 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       authKey: temp_auth_key.slice(),
     }, true);
 
-    // The bind happened on a short-lived SessionConnection in the main thread.
-    // Continue that exact MTProto Session in the primary Worker connection by
-    // restoring its protocol state before the socket opens. Do not monkeypatch
-    // resetState: a genuine reset must create a new id rather than destroy and
-    // then immediately reuse the old bound id.
     const restoreConnect = installBoundTempConnectHook(temp_session_id, temp_session_state, primaryDcId);
     const endConnectTrace = playTraceSpan("WORKER_MTPROTO_CONNECT");
     try {
@@ -273,7 +320,6 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     await next.destroy().catch(() => {});
     throw error;
   } finally {
-    // Worker owns a structured-cloned copy. mtcute has imported it into MemoryStorage.
     temp_auth_key.fill(0);
   }
   const numericChatId = Number(chat_id);
@@ -499,17 +545,19 @@ async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportP
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
   const resolved = await resolvePlaybackMedia(active, messageId);
-  const limit = resolved.totalBytes > 0
-    ? Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, resolved.totalBytes)
-    : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
-  const bytes = await active.downloadChunk({
+  const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+  if (offsetBytes % 4096 !== 0) throw new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+  const remaining = resolved.totalBytes > 0 ? Math.max(0, resolved.totalBytes - offsetBytes) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
+  const limit = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+  const bytes = await withDataLane(() => active.downloadChunk({
     location: resolved.media,
-    offset: 0,
+    offset: offsetBytes,
     limit,
-  });
+  }));
   if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty playback prefix.");
   const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
+  const measurement = offsetBytes === 0 ? measureMp3PlayablePrefix(prefix) : null;
   playTrace("WORKER_PREFETCH_READY", {
     message_id: messageId,
     bytes: prefix.byteLength,
@@ -518,10 +566,217 @@ async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportP
   });
   return {
     messageId,
-    totalBytes: resolved.totalBytes || prefix.byteLength,
+    totalBytes: resolved.totalBytes || offsetBytes + prefix.byteLength,
     mimeType,
     prefix,
+    playableSeconds: measurement?.playableSeconds || 0,
+    targetMet: (measurement?.playableSeconds || 0) >= WEB_PLAYBACK_PREFETCH_TARGET_SECONDS,
   };
+}
+
+function normalizeBatchState(input: WebTransportPrefetchInput): BatchPrefetchState {
+  const messageId = Number(input.messageId || 0);
+  const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+  return {
+    messageId,
+    requestedMimeType: String(input.mimeType || "").trim() || null,
+    offsetBytes,
+    media: null,
+    totalBytes: 0,
+    mimeType: downloadMime(input.mimeType),
+    chunks: [],
+    downloadedBytes: 0,
+    playableSeconds: 0,
+    targetMet: false,
+    done: false,
+    error: null,
+  };
+}
+
+async function resolveBatchState(active: TelegramClient, state: BatchPrefetchState): Promise<void> {
+  try {
+    if (!Number.isInteger(state.messageId) || state.messageId <= 0) {
+      throw new Error("Galer Cloud object reference is invalid.");
+    }
+    if (state.offsetBytes % 4096 !== 0) {
+      throw new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+    }
+    const resolved = await withDataLane(() => resolvePlaybackMedia(active, state.messageId));
+    state.media = resolved.media;
+    state.totalBytes = resolved.totalBytes;
+    state.mimeType = downloadMime(state.requestedMimeType || resolved.sourceMime);
+    if (state.totalBytes > 0 && state.offsetBytes >= state.totalBytes) state.done = true;
+  } catch (error) {
+    state.error = error instanceof Error ? error : new Error(String(error));
+    state.done = true;
+  }
+}
+
+async function downloadBatchRound(
+  requestId: string,
+  state: BatchPrefetchState,
+  targetPlayableSeconds: number,
+  maxBytesPerFile: number,
+): Promise<void> {
+  if (state.done || state.error || !state.media) return;
+  const absoluteOffset = state.offsetBytes + state.downloadedBytes;
+  if (absoluteOffset >= maxBytesPerFile) {
+    state.done = true;
+    return;
+  }
+  if (state.totalBytes > 0 && absoluteOffset >= state.totalBytes) {
+    state.done = true;
+    return;
+  }
+
+  const remainingBudget = Math.max(0, maxBytesPerFile - absoluteOffset);
+  const remainingFile = state.totalBytes > 0 ? Math.max(0, state.totalBytes - absoluteOffset) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
+  const limit = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remainingBudget, remainingFile || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+  if (limit <= 0) {
+    state.done = true;
+    return;
+  }
+
+  try {
+    const active = requireReady();
+    const bytes = await withDataLane(() => active.downloadChunk({
+      location: state.media!,
+      offset: absoluteOffset,
+      limit,
+    }));
+    if (bytes.byteLength <= 0) {
+      state.done = true;
+      return;
+    }
+
+    const stored = bytes.slice();
+    state.chunks.push(stored);
+    state.downloadedBytes += stored.byteLength;
+    if (state.offsetBytes === 0) {
+      state.playableSeconds = measureMp3PlayablePrefix(concatBytes(state.chunks)).playableSeconds;
+      state.targetMet = state.playableSeconds >= targetPlayableSeconds;
+    }
+    const downloadedAbsolute = state.offsetBytes + state.downloadedBytes;
+    const eof = (state.totalBytes > 0 && downloadedAbsolute >= state.totalBytes) || stored.byteLength < limit;
+    if (state.targetMet || eof || downloadedAbsolute >= maxBytesPerFile) state.done = true;
+
+    const transferable = stored.buffer.slice(stored.byteOffset, stored.byteOffset + stored.byteLength) as ArrayBuffer;
+    scope.postMessage({
+      requestId,
+      event: "prefetch-chunk",
+      progress: {
+        messageId: state.messageId,
+        totalBytes: state.totalBytes || downloadedAbsolute,
+        mimeType: state.mimeType,
+        offsetBytes: absoluteOffset,
+        chunk: transferable,
+        downloadedBytes: downloadedAbsolute,
+        playableSeconds: state.playableSeconds,
+        targetMet: state.targetMet,
+      },
+    }, [transferable]);
+  } catch (error) {
+    state.error = error instanceof Error ? error : new Error(String(error));
+    state.done = true;
+  }
+}
+
+async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatchInput): Promise<WebTransportPrefetchBatchResult> {
+  const started = Date.now();
+  const active = requireReady();
+  const deduped = new Map<number, WebTransportPrefetchInput>();
+  for (const candidate of Array.isArray(input.inputs) ? input.inputs : []) {
+    const messageId = Number(candidate?.messageId || 0);
+    if (!deduped.has(messageId)) deduped.set(messageId, candidate);
+  }
+  const states = Array.from(deduped.values(), normalizeBatchState);
+  const targetPlayableSeconds = Number.isFinite(input.targetPlayableSeconds)
+    ? Math.max(0.1, Number(input.targetPlayableSeconds))
+    : WEB_PLAYBACK_PREFETCH_TARGET_SECONDS;
+  const maxBytesPerFile = Number.isFinite(input.maxBytesPerFile)
+    ? Math.max(WEB_PLAYBACK_FIRST_CHUNK_BYTES, Math.floor(Number(input.maxBytesPerFile)))
+    : WEB_PLAYBACK_PREFETCH_MAX_BYTES;
+  const maxConcurrency = Number.isFinite(input.maxConcurrency)
+    ? Math.max(1, Math.min(WEB_PLAYBACK_DATA_LANES, Math.floor(Number(input.maxConcurrency))))
+    : WEB_PLAYBACK_DATA_LANES;
+  const control: PrefetchBatchControl = { cancelAll: false, cancelledMessageIds: new Set() };
+  activePrefetchBatches.set(requestId, control);
+
+  playTrace("WORKER_PREFETCH_BATCH_BEGIN", {
+    count: states.length,
+    target_seconds: targetPlayableSeconds,
+    lanes: maxConcurrency,
+  });
+
+  try {
+    for (let start = 0; start < states.length; start += maxConcurrency) {
+      if (control.cancelAll) break;
+      const slice = states.slice(start, start + maxConcurrency)
+        .filter(state => !control.cancelledMessageIds.has(state.messageId));
+      await Promise.all(slice.map(state => resolveBatchState(active, state)));
+      await schedulerYield();
+    }
+
+    let round = 0;
+    while (!control.cancelAll) {
+      const candidates = states.filter(state =>
+        !state.done &&
+        !state.error &&
+        !control.cancelledMessageIds.has(state.messageId)
+      );
+      if (candidates.length === 0) break;
+      round += 1;
+      playTrace("WORKER_PREFETCH_BATCH_ROUND", { round, candidates: candidates.length });
+
+      for (let start = 0; start < candidates.length; start += maxConcurrency) {
+        if (control.cancelAll) break;
+        const slice = candidates.slice(start, start + maxConcurrency)
+          .filter(state => !control.cancelledMessageIds.has(state.messageId));
+        await Promise.all(slice.map(state => downloadBatchRound(
+          requestId,
+          state,
+          targetPlayableSeconds,
+          maxBytesPerFile,
+        )));
+        await schedulerYield();
+      }
+    }
+
+    const results: WebTransportPrefetchBatchItemResult[] = states.map(state => {
+      if (state.error) {
+        return { ok: false as const, messageId: state.messageId, error: state.error.message };
+      }
+      const prefixBytes = concatBytes(state.chunks);
+      const prefix = prefixBytes.buffer.slice(prefixBytes.byteOffset, prefixBytes.byteOffset + prefixBytes.byteLength) as ArrayBuffer;
+      return {
+        ok: true as const,
+        result: {
+          messageId: state.messageId,
+          totalBytes: state.totalBytes || state.offsetBytes + state.downloadedBytes,
+          mimeType: state.mimeType,
+          prefix,
+          playableSeconds: state.playableSeconds,
+          targetMet: state.targetMet,
+        },
+      };
+    });
+    playTrace("WORKER_PREFETCH_BATCH_DONE", {
+      count: states.length,
+      elapsed_ms: Date.now() - started,
+      failures: results.filter(result => !result.ok).length,
+    });
+    return { results };
+  } finally {
+    activePrefetchBatches.delete(requestId);
+  }
+}
+
+function cancelPrefetchBatch(targetRequestId: string, messageId?: number): { cancelled: boolean } {
+  const control = activePrefetchBatches.get(String(targetRequestId || ""));
+  if (!control) return { cancelled: false };
+  if (Number.isInteger(messageId) && Number(messageId) > 0) control.cancelledMessageIds.add(Number(messageId));
+  else control.cancelAll = true;
+  return { cancelled: true };
 }
 
 async function stream(requestId: string, input: WebTransportStreamInput): Promise<WebTransportStreamResult> {
@@ -550,13 +805,18 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
   let downloadedBytes = offsetBytes;
   let transferredBytes = 0;
   let firstChunkLogged = false;
+  const iterator = active.downloadAsIterable(media, {
+    abortSignal: controller.signal,
+    stallTimeout: 20_000,
+    partSize: WEB_PLAYBACK_FIRST_CHUNK_KB,
+    offset: offsetBytes,
+  })[Symbol.asyncIterator]();
   try {
-    for await (const chunk of active.downloadAsIterable(media, {
-      abortSignal: controller.signal,
-      stallTimeout: 20_000,
-      partSize: WEB_PLAYBACK_FIRST_CHUNK_KB,
-      offset: offsetBytes,
-    })) {
+    while (true) {
+      if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
+      const next = await withDataLane(() => iterator.next());
+      if (next.done) break;
+      const chunk = next.value;
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
       downloadedBytes += chunk.byteLength;
       transferredBytes += chunk.byteLength;
@@ -582,6 +842,7 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
     return { messageId, totalBytes: totalBytes || downloadedBytes, mimeType };
   } finally {
     activeStreams.delete(requestId);
+    if (typeof iterator.return === "function") await iterator.return().catch(() => {});
   }
 }
 
@@ -643,6 +904,8 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "delete_messages": return deleteMessages(command.input);
     case "download": return download(command.input);
     case "prefetch": return prefetch(command.input);
+    case "prefetch_batch": return prefetchBatch(command.requestId, command.input);
+    case "prefetch_batch_cancel": return cancelPrefetchBatch(command.targetRequestId, command.messageId);
     case "stream": return stream(command.requestId, command.input);
     case "stream_ack": return acknowledgeStream(command.targetRequestId);
     case "cancel": return cancelStream(command.targetRequestId);
