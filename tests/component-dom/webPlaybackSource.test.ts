@@ -166,7 +166,7 @@ describe("Web MASTER playback source", () => {
     expect(prefetchFiles.mock.calls[0][0].every((input: any) => input.offsetBytes === 0)).toBe(true);
   });
 
-  it("hands any aligned partial prefix to Play and resumes at its exact byte length", async () => {
+  it("adopts any aligned partial prefix for Play and resumes at its exact byte length", async () => {
     vi.stubGlobal("MediaSource", FakeMediaSource);
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:cloud-master"), revokeObjectURL: vi.fn() });
     let reportChunk!: (progress: WebTransportPrefetchChunk) => void;
@@ -202,7 +202,7 @@ describe("Web MASTER playback source", () => {
     const prepared = await manager.prepare("beat-partial", 77);
     await warm;
     expect(prepared.url).toBe("blob:cloud-master");
-    expect(cancelMessage).toHaveBeenCalledWith(77);
+    expect(cancelMessage).not.toHaveBeenCalled();
     expect(streamFile).toHaveBeenCalledWith(
       { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536 },
       expect.any(Function),
