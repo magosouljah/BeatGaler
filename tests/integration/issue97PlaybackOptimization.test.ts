@@ -22,13 +22,24 @@ describe("Issue #97 optimized Web startup + playback", () => {
     expect(controller).toContain('playTrace("CONTROLLER_CREDENTIAL_REFRESH_FAILED"');
   });
 
+  it("does not resolve startup Telegram media before vault activation completes", () => {
+    const controller = source("src/features/cloud/webTransportController.ts");
+    const activationGate = controller.indexOf("const activationResult = await activationResultPromise;");
+    const initialize = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"', activationGate);
+
+    expect(activationGate).toBeGreaterThanOrEqual(0);
+    expect(initialize).toBeGreaterThan(activationGate);
+    expect(controller).toContain('playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN")');
+    expect(controller).toContain("Do not race that RPC against vault membership.");
+  });
+
   it("uses seven configurable data lanes and exactly one 64 KiB startup chunk", () => {
     const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
     expect(protocol).toContain("export const DEFAULT_PLAYBACK_DATA_LANES = 7;");
     expect(protocol).toContain("export const STARTUP_PREFIX_BYTES = 64 * 1024;");
-    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 0;");
+    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;");
     expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;");
     expect(worker).toContain("const MAX_CONFIGURABLE_DATA_LANES = 16;");
     expect(worker).toContain("configureDataLaneLimit(input.maxConcurrency)");
@@ -97,6 +108,16 @@ describe("Issue #97 optimized Web startup + playback", () => {
     expect(adapter).toContain("ratingDiff");
     expect(adapter).toContain("transport.startStartupWarm(");
     expect(adapter).toContain('sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")');
+  });
+
+  it("uses Cloud startup MASTER overrides consistently until Telegram reconcile replaces them", () => {
+    const adapter = source("src/platform/webAdapter.ts");
+
+    expect(adapter).toContain("const webStartupRouteOverrides = new Map<string, number>();");
+    expect(adapter).toContain("const startupRoute = webStartupRouteOverrides.get(beat.id);");
+    expect(adapter).toContain("webStartupRouteOverrides.set(candidate.beatId, candidate.messageId);");
+    expect(adapter).toContain("for (const beat of page.beats) webStartupRouteOverrides.delete(beat.id);");
+    expect(adapter).toContain("webStartupRouteOverrides.clear();");
   });
 
   it("returns only requested Cloud startup routes and repairs them from Telegram authority later", () => {
