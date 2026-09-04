@@ -7,6 +7,9 @@ import type {
   WebTransportDeleteMessagesInput,
   WebTransportDeleteMessagesResult,
   WebTransportLibraryIndexResult,
+  WebTransportPrefetchBatchInput,
+  WebTransportPrefetchBatchResult,
+  WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
   WebTransportReplaceIndexInput,
@@ -29,11 +32,18 @@ type PendingRequest = {
   reject(error: Error): void;
   onProgress?: (progress: WebTransportProgress) => void;
   onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
+  onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void;
   timeoutId: ReturnType<typeof setTimeout> | null;
 };
 
 export interface WebTransportStreamHandle {
   completed: Promise<WebTransportStreamResult>;
+  cancel(): void;
+}
+
+export interface WebTransportPrefetchBatchHandle {
+  completed: Promise<WebTransportPrefetchBatchResult>;
+  cancelMessage(messageId: number): void;
   cancel(): void;
 }
 
@@ -85,8 +95,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
     if ("event" in message) {
-      if (message.event === "progress") pending.onProgress?.(message.progress);
-      else {
+      if (message.event === "progress") {
+        pending.onProgress?.(message.progress);
+      } else if (message.event === "prefetch-chunk") {
+        pending.onPrefetchChunk?.(message.progress);
+      } else {
         void Promise.resolve(pending.onChunk?.(message.chunk, message.downloadedBytes, message.totalBytes))
           .then(() => this.sendStreamControl("stream_ack", message.requestId))
           .catch(error => {
@@ -121,8 +134,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     playTrace("WORKER_REQUEST_TIMEOUT", { request_id: requestId, operation });
     timedOut.reject(new Error(`Galer Cloud Web transport timed out during ${operation}.`));
 
-    // A silent worker has unknown internal state. Do not reuse it for retries:
-    // terminate it so the next request gets a fresh data-plane runtime.
     const worker = this.worker;
     if (worker) {
       worker.terminate();
@@ -137,6 +148,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
     requestId = crypto.randomUUID(),
     timeoutMs: number | null = null,
+    onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timeoutId = timeoutMs !== null && timeoutMs > 0
@@ -148,6 +160,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         reject,
         onProgress,
         onChunk,
+        onPrefetchChunk,
         timeoutId,
       });
       try {
@@ -219,6 +232,25 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     );
   }
 
+  prefetchBatch(
+    input: WebTransportPrefetchBatchInput,
+    onChunk?: (progress: WebTransportPrefetchChunk) => void,
+  ): WebTransportPrefetchBatchHandle {
+    const requestId = crypto.randomUUID();
+    return {
+      completed: this.request<WebTransportPrefetchBatchResult>(
+        { op: "prefetch_batch", input },
+        undefined,
+        undefined,
+        requestId,
+        null,
+        onChunk,
+      ),
+      cancelMessage: messageId => this.sendPrefetchControl(requestId, messageId),
+      cancel: () => this.sendPrefetchControl(requestId),
+    };
+  }
+
   stream(
     input: WebTransportStreamInput,
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
@@ -232,6 +264,15 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   private sendStreamControl(op: "stream_ack" | "cancel", targetRequestId: string): void {
     this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op, targetRequestId } as WebTransportWorkerCommand);
+  }
+
+  private sendPrefetchControl(targetRequestId: string, messageId?: number): void {
+    this.ensureWorker().postMessage({
+      requestId: crypto.randomUUID(),
+      op: "prefetch_batch_cancel",
+      targetRequestId,
+      ...(Number.isInteger(messageId) ? { messageId } : {}),
+    } as WebTransportWorkerCommand);
   }
 
   upload(input: WebTransportUploadInput, onProgress?: (progress: WebTransportProgress) => void): Promise<WebTransportUploadResult> {
