@@ -21,7 +21,7 @@ export interface WebTransportRuntime {
 }
 
 export interface WebTransportControlApi {
-  reserve(): Promise<WebTransportSessionPublic>;
+  reserve(startupBeatIds?: readonly string[]): Promise<WebTransportSessionPublic>;
   bind(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession>;
   activate(session: WebTransportSessionPublic): Promise<void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
@@ -55,6 +55,7 @@ const defaultApi: WebTransportControlApi = {
 };
 
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds));
+const MAX_STARTUP_BEATS = 14;
 
 type StartupBranchResult =
   | { ok: true }
@@ -69,6 +70,19 @@ async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchRe
   }
 }
 
+function normalizeStartupBeatIds(values: readonly string[]): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const id = String(value || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    output.push(id);
+    if (output.length >= MAX_STARTUP_BEATS) break;
+  }
+  return output;
+}
+
 /** Owns the Web lease. Credentials remain in memory and are handed only to the data-plane runtime. */
 export class WebTransportController {
   private session: WebTransportSession | null = null;
@@ -76,11 +90,21 @@ export class WebTransportController {
   private refreshPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private startupBeatIds: string[] = [];
 
   constructor(
     private readonly runtime: WebTransportRuntime,
     private readonly api: WebTransportControlApi = defaultApi,
   ) {}
+
+  configureStartupBeatIds(beatIds: readonly string[]): void {
+    if (this.session || this.connectPromise) {
+      playTrace("CONTROLLER_STARTUP_IDS_LATE", { count: beatIds.length });
+      return;
+    }
+    this.startupBeatIds = normalizeStartupBeatIds(beatIds);
+    playTrace("CONTROLLER_STARTUP_IDS_CONFIGURED", { count: this.startupBeatIds.length });
+  }
 
   async connect(): Promise<WebTransportSession> {
     if (this.closed) throw new Error("Galer Cloud Web transport is closed.");
@@ -96,7 +120,7 @@ export class WebTransportController {
       playTrace("CONTROLLER_CONNECT_JOIN");
       return this.connectPromise;
     }
-    playTrace("CONTROLLER_CONNECT_NEW");
+    playTrace("CONTROLLER_CONNECT_NEW", { startup_beat_count: this.startupBeatIds.length });
     this.connectPromise = this.openSession().finally(() => { this.connectPromise = null; });
     return this.connectPromise;
   }
@@ -106,10 +130,10 @@ export class WebTransportController {
     let bootstrap: WebTransportSessionPublic | null = null;
     let activationResultPromise: Promise<StartupBranchResult> | null = null;
 
-    playTrace("CONTROLLER_SESSION_PREPARE_BEGIN");
+    playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupBeatIds.length });
     try {
       const session = await observePlayStep("DIRECT_PREPARE", async () => {
-        bootstrap = await this.api.reserve();
+        bootstrap = await this.api.reserve(this.startupBeatIds);
 
         // Activation only needs the reserved lease identity. Start MASTER/vault
         // membership work immediately while the browser creates and binds its
@@ -127,7 +151,11 @@ export class WebTransportController {
 
         return this.api.bind(bootstrap);
       });
-      playTrace("CONTROLLER_SESSION_PREPARE_DONE", { elapsed_ms: Date.now() - started });
+      playTrace("CONTROLLER_SESSION_PREPARE_DONE", {
+        elapsed_ms: Date.now() - started,
+        startup_routes: Object.keys(session.startup_routes || {}).length,
+        routing_revision: Math.max(0, Number(session.routing_revision) || 0),
+      });
 
       if (!activationResultPromise) throw new Error("Galer Cloud Web activation did not start after lease reservation.");
 
@@ -151,6 +179,8 @@ export class WebTransportController {
       const failed = [activationResult, initializeResult].find(result => !result.ok);
       if (failed && !failed.ok) throw failed.error;
 
+      // getChat remains the explicit vault-membership check until the negative
+      // getMessages-without-membership probe proves Telegram's error is unambiguous.
       const verifyStarted = Date.now();
       await observePlayStep("DIRECT_VERIFY", () => this.runtime.verifyReady(session));
       playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
@@ -159,9 +189,6 @@ export class WebTransportController {
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
       return session;
     } catch (error) {
-      // bind() can fail while activation is still mutating Telegram membership.
-      // Never stop/release first: activation could otherwise re-add the bot after
-      // cleanup. Its result is already rejection-safe via settleStartupBranch().
       if (activationResultPromise) await activationResultPromise;
       await this.runtime.shutdown().catch(() => {});
       if (bootstrap) await this.api.stop(bootstrap).catch(() => {});
@@ -188,7 +215,6 @@ export class WebTransportController {
       if (response.credentialRefresh) await this.applyCredentialRefresh(response.credentialRefresh);
       this.scheduleHeartbeat(this.session?.heartbeat_interval_ms || session.heartbeat_interval_ms);
     } catch {
-      // The control plane owns expiry. A short outage must not discard a valid lease.
       this.scheduleHeartbeat(Math.min(5000, session.heartbeat_interval_ms));
     }
   }
@@ -198,10 +224,6 @@ export class WebTransportController {
     const refresh = (async () => {
       playTrace("CONTROLLER_CREDENTIAL_REFRESH_BEGIN");
       try {
-        // initialize()/replaceCredentials() intentionally clears Worker readiness.
-        // Re-verify the vault before publishing the replacement session. Otherwise
-        // connect() can reuse a control-plane lease whose Worker still reports
-        // "Galer Cloud Web transport is not ready" after an idle heartbeat.
         await this.runtime.replaceCredentials(session);
         await this.runtime.verifyReady(session);
         this.session = session;
