@@ -55,6 +55,39 @@ describe("Web playback prefetch batching", () => {
     expect(outcomes.every(outcome => outcome.result && outcome.targetMet && !outcome.error)).toBe(true);
   });
 
+  it("stops future speculative rounds for a foreground-selected beat while the rest of the batch continues", async () => {
+    const source = makeId3PrefixedMp3();
+    const calls = new Map<number, number[]>();
+    let selectedBeatBecameForeground = false;
+
+    const outcomes = await runWebPrefetchBatch(
+      [
+        { messageId: 1, mimeType: "audio/mpeg" },
+        { messageId: 2, mimeType: "audio/mpeg" },
+      ],
+      async (input, offsetBytes) => {
+        const offsets = calls.get(input.messageId) || [];
+        offsets.push(offsetBytes);
+        calls.set(input.messageId, offsets);
+        const chunk = source.slice(offsetBytes, Math.min(source.byteLength, offsetBytes + 64 * 1024));
+        return { chunk: chunk.buffer, totalBytes: source.byteLength, mimeType: "audio/mpeg" };
+      },
+      {
+        shouldContinue: input => input.messageId !== 1 || !selectedBeatBecameForeground,
+        onProgress: progress => {
+          if (progress.input.messageId === 1) selectedBeatBecameForeground = true;
+        },
+      },
+    );
+
+    expect(calls.get(1)).toEqual([0]);
+    expect(calls.get(2)).toEqual([0, 64 * 1024]);
+    expect(outcomes[0].result?.prefix.byteLength).toBe(64 * 1024);
+    expect(outcomes[0].targetMet).toBe(false);
+    expect(outcomes[0].error).toBeNull();
+    expect(outcomes[1].targetMet).toBe(true);
+  });
+
   it("keeps the rest of a batch progressing when one candidate fails", async () => {
     const source = makeId3PrefixedMp3(0);
     const outcomes = await runWebPrefetchBatch(
