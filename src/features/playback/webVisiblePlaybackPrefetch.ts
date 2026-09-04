@@ -69,11 +69,11 @@ export function installVisibleAndNearbyBeatCardObserver(
 
   const emit = () => {
     if (stopped) return;
-    const visible = Array.from(visibleNodes).map(beatIdFor).filter((value): value is string => Boolean(value));
+    const visible = Array.from(visibleNodes).map(beatIdFor).filter((value): value is string => value !== null);
     const visibleSet = new Set(visible);
     const nearby = Array.from(nearbyNodes)
       .map(beatIdFor)
-      .filter((value): value is string => Boolean(value) && !visibleSet.has(value));
+      .filter((value): value is string => value !== null && !visibleSet.has(value));
     onSnapshot({ visible, nearby });
   };
 
