@@ -22,6 +22,10 @@ let webLibraryWindow: WebLibraryWindowConsumer | null = null;
 let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 const webBeatRegistry = new Map<string, Beat>();
+// Cloud routing is a startup hint that may be newer than the presentation cache.
+// Keep it separate from Beat metadata and discard it as soon as Telegram's
+// authoritative manifest materializes the beat again.
+const webStartupRouteOverrides = new Map<string, number>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
 let stopPlaybackRuntimeObserver: (() => void) | null = null;
 
@@ -51,6 +55,8 @@ function directMessageId(value: string | null | undefined): number | null {
 }
 
 function webBeatMessageId(beat: Beat): number | null {
+  const startupRoute = webStartupRouteOverrides.get(beat.id);
+  if (startupRoute) return startupRoute;
   const explicit = Number(beat.telegram_message_id || 0);
   if (Number.isInteger(explicit) && explicit > 0) return explicit;
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
@@ -112,6 +118,12 @@ function prewarmAuthenticatedWebTransport(): void {
     await transport.startStartupWarm(
       candidates.map(({ beatId, messageId, mimeType }) => ({ beatId, messageId, mimeType })),
       async routed => {
+        // Cloud may know a newer MASTER than the presentation cache. Every
+        // startup playback/warm lookup must use the same routed id until the
+        // Telegram reconcile replaces the cached Beat objects.
+        for (const candidate of routed) {
+          webStartupRouteOverrides.set(candidate.beatId, candidate.messageId);
+        }
         const sources = await resolveWebPlaybackSources();
         const results = await Promise.allSettled(routed.map(candidate =>
           sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")
@@ -192,7 +204,10 @@ function rememberWebBeats(beats: readonly Beat[]): void {
 }
 
 function forgetWebBeats(ids: readonly string[]): void {
-  for (const id of ids) webBeatRegistry.delete(id);
+  for (const id of ids) {
+    webBeatRegistry.delete(id);
+    webStartupRouteOverrides.delete(id);
+  }
 }
 
 function resetVisiblePlaybackPrefetch(): void {
@@ -201,9 +216,13 @@ function resetVisiblePlaybackPrefetch(): void {
   stopPlaybackRuntimeObserver?.();
   stopPlaybackRuntimeObserver = null;
   webBeatRegistry.clear();
+  webStartupRouteOverrides.clear();
 }
 
 function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): void {
+  // This page came from the Telegram authoritative INDEX, so its MASTER ids
+  // supersede any temporary Cloud startup routing hints.
+  for (const beat of page.beats) webStartupRouteOverrides.delete(beat.id);
   rememberWebBeats(page.beats);
   publishWebLibraryNavigationState({
     offset: page.offset,
@@ -316,6 +335,7 @@ export const webAdapter: PlatformAdapter = {
     async restoreBeat(id) {
       const transport = await resolveWebCloudTransport();
       const restored = await transport.restoreBeatFromTrash(id, webClientId);
+      webStartupRouteOverrides.delete(restored.id);
       rememberWebBeats([restored]);
       return restored;
     },
@@ -362,7 +382,7 @@ export const webAdapter: PlatformAdapter = {
       const messageId = webBeatMessageId(beat);
       rememberWebBeats([beat]);
       if (messageId) {
-        playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, mime_type: master?.mime_type || "audio/mpeg" });
+        playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, message_id: messageId, mime_type: master?.mime_type || "audio/mpeg" });
         const sources = await resolveWebPlaybackSources();
         playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id });
         const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
@@ -433,6 +453,7 @@ export const webAdapter: PlatformAdapter = {
           wav: slots.WAV,
           project: slots.PROJECT,
         }, webClientId, onProgress);
+        webStartupRouteOverrides.delete(committed.id);
         rememberWebBeats([committed]);
         webImportPort.releaseBeat(beat.id);
         return committed;
@@ -471,6 +492,7 @@ export const webAdapter: PlatformAdapter = {
       const transport = await resolveWebCloudTransport();
       try {
         const committed = await transport.commitBeatEdit(original, updated, files, webClientId, onProgress);
+        webStartupRouteOverrides.delete(committed.id);
         rememberWebBeats([committed]);
         return committed;
       } catch (error) {
