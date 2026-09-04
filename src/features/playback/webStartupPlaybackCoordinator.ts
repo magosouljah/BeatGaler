@@ -1,6 +1,6 @@
 import type { Beat } from "../../types";
 import { WebGalerCloudTransport, type WebStartupWarmCandidate } from "../cloud/webGalerCloudTransport";
-import { WebPlaybackSourceManager } from "./webPlaybackSource";
+import { WebPlaybackSourceManager, type WebPlaybackTransport } from "./webPlaybackSource";
 import { playTrace } from "./playTrace";
 import {
   readWebPlaybackRoutingCache,
@@ -44,14 +44,11 @@ function startupCandidates(): WebStartupWarmCandidate[] {
   }));
 }
 
-/**
- * Single authority for the remembered-session Web startup path. It is created
- * before React needs Direct and owns the transport, warm manager and INDEX gate.
- */
+/** Single authority for the remembered-session Web startup path. */
 export class WebStartupPlaybackCoordinator {
   private readonly candidates = startupCandidates();
   private readonly transport = new WebGalerCloudTransport(this.candidates);
-  private readonly sources = new WebPlaybackSourceManager(this.transport);
+  private readonly sources: WebPlaybackSourceManager;
   private startPromise: Promise<void> | null = null;
   private warmSettled = false;
   private resolveIndexBarrier!: () => void;
@@ -61,6 +58,15 @@ export class WebStartupPlaybackCoordinator {
 
   constructor() {
     this.transport.setIndexBarrier(() => this.waitUntilIndexAllowed());
+    const coordinatedTransport: WebPlaybackTransport = {
+      prefetchFile: input => this.transport.prefetchFile(input),
+      prefetchFiles: (inputs, onChunk) => this.transport.prefetchFiles(inputs, onChunk),
+      focusPlayback: messageId => this.beginPlayback(messageId),
+      markPlaybackStable: messageId => this.markPlaybackStable(messageId),
+      releasePlaybackFocus: messageId => this.endPlayback(messageId),
+      streamFile: (input, onChunk) => this.transport.streamFile(input, onChunk),
+    };
+    this.sources = new WebPlaybackSourceManager(coordinatedTransport);
     playTrace("STARTUP_LOCAL_ROUTING_READY", { count: this.candidates.length });
   }
 
@@ -96,8 +102,6 @@ export class WebStartupPlaybackCoordinator {
 
   async waitUntilIndexAllowed(): Promise<void> {
     if (!this.warmSettled) playTrace("INDEX_WAIT_STARTUP", { count: this.candidates.length });
-    // Ensure Direct has at least been dispatched even if library.load raced the
-    // remembered-session preconnect in main.tsx.
     void this.start();
     await this.indexBarrierPromise;
   }
