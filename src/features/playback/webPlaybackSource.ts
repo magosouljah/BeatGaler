@@ -4,10 +4,15 @@ import type {
   WebTransportStreamInput,
   WebTransportStreamResult,
 } from "../cloud/webTransportWorkerProtocol";
+import type { WebPrefetchBatchOutcome } from "../cloud/webPrefetchBatch";
 import { playTrace } from "./playTrace";
 
 export interface WebPlaybackTransport {
   prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult>;
+  prefetchFiles?(
+    inputs: readonly WebTransportPrefetchInput[],
+    maxLanes?: number,
+  ): Promise<WebPrefetchBatchOutcome[]>;
   streamFile(
     input: WebTransportStreamInput,
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
@@ -17,6 +22,17 @@ export interface WebPlaybackTransport {
 export interface PreparedWebPlayback {
   url: string;
   completed: Promise<void>;
+}
+
+export interface WebPlaybackPrefetchCandidate {
+  beatId: string;
+  messageId: number;
+  mimeType?: string | null;
+}
+
+export interface WebPlaybackPrefetchSnapshot {
+  visible: readonly WebPlaybackPrefetchCandidate[];
+  nearby: readonly WebPlaybackPrefetchCandidate[];
 }
 
 type QueuedChunk = {
@@ -61,12 +77,14 @@ type PrefetchJob = {
   beatId: string;
   messageId: number;
   mimeType: string;
+  zone: "visible" | "nearby";
   resolve(): void;
   reject(error: Error): void;
 };
 
 const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;
-const MAX_PREFETCH_CONCURRENCY = 2;
+const MAX_VISIBLE_PREFETCH_BATCH_CANDIDATES = 64;
+const NEARBY_PREFETCH_BATCH_SIZE = 2;
 const FOREGROUND_PREFETCH_PAUSE_MS = 1200;
 const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;
 
@@ -137,14 +155,62 @@ export class WebPlaybackSourceManager {
   private prefetchPending = new Map<string, Promise<void>>();
   private prefetchQueue: PrefetchJob[] = [];
   private prefetchRetryAfter = new Map<string, number>();
-  private activePrefetches = 0;
+  private prefetchBatchActive = false;
+  private prefetchDrainScheduled = false;
   private prefetchPausedUntil = 0;
   private prefetchWakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private visiblePrefetchBeatIds = new Set<string>();
+  private nearbyPrefetchBeatIds = new Set<string>();
   private sessionCacheLimitBytes = DEFAULT_SESSION_CACHE_LIMIT_MB * 1024 * 1024;
 
   constructor(private readonly transport: WebPlaybackTransport) {}
 
-  prefetch(beatId: string, messageId: number, mimeType = "audio/mpeg"): Promise<void> {
+  setPrefetchSnapshot(snapshot: WebPlaybackPrefetchSnapshot): Promise<void> {
+    this.visiblePrefetchBeatIds = new Set(snapshot.visible.map(candidate => candidate.beatId));
+    this.nearbyPrefetchBeatIds = new Set(
+      snapshot.nearby
+        .map(candidate => candidate.beatId)
+        .filter(beatId => !this.visiblePrefetchBeatIds.has(beatId)),
+    );
+
+    const retained: PrefetchJob[] = [];
+    for (const job of this.prefetchQueue) {
+      if (this.visiblePrefetchBeatIds.has(job.beatId)) {
+        job.zone = "visible";
+        retained.push(job);
+      } else if (this.nearbyPrefetchBeatIds.has(job.beatId)) {
+        job.zone = "nearby";
+        retained.push(job);
+      } else {
+        job.resolve();
+      }
+    }
+    this.prefetchQueue = retained;
+
+    const work = [
+      ...snapshot.visible.map(candidate => this.prefetch(
+        candidate.beatId,
+        candidate.messageId,
+        candidate.mimeType || "audio/mpeg",
+        "visible",
+      )),
+      ...snapshot.nearby.map(candidate => this.prefetch(
+        candidate.beatId,
+        candidate.messageId,
+        candidate.mimeType || "audio/mpeg",
+        "nearby",
+      )),
+    ];
+    this.schedulePrefetchDrain();
+    return Promise.allSettled(work).then(() => undefined);
+  }
+
+  prefetch(
+    beatId: string,
+    messageId: number,
+    mimeType = "audio/mpeg",
+    zone: "visible" | "nearby" = "visible",
+  ): Promise<void> {
     const key = `${beatId}:${messageId}`;
     const existingEntry = this.entries.get(beatId);
     if (existingEntry?.messageId === messageId && !existingEntry.released && !existingEntry.failed) {
@@ -157,7 +223,13 @@ export class WebPlaybackSourceManager {
     }
     if (existingPrefix && existingPrefix.messageId !== messageId) this.prefixes.delete(beatId);
     const pending = this.prefetchPending.get(key);
-    if (pending) return pending;
+    if (pending) {
+      if (zone === "visible") {
+        const queued = this.prefetchQueue.find(job => job.key === key);
+        if (queued) queued.zone = "visible";
+      }
+      return pending;
+    }
 
     const retryAfter = this.prefetchRetryAfter.get(key) || 0;
     const now = Date.now();
@@ -178,13 +250,40 @@ export class WebPlaybackSourceManager {
       rejectJob = reject;
     }).finally(() => this.prefetchPending.delete(key));
     this.prefetchPending.set(key, promise);
-    this.prefetchQueue.push({ key, beatId, messageId, mimeType, resolve: resolveJob, reject: rejectJob });
-    playTrace("SOURCE_PREFETCH_QUEUED", { beat_id: beatId, message_id: messageId });
-    this.drainPrefetchQueue();
+    this.prefetchQueue.push({ key, beatId, messageId, mimeType, zone, resolve: resolveJob, reject: rejectJob });
+    playTrace("SOURCE_PREFETCH_QUEUED", { beat_id: beatId, message_id: messageId, zone });
+    this.schedulePrefetchDrain();
     return promise;
   }
 
+  private schedulePrefetchDrain(): void {
+    if (this.prefetchDrainScheduled) return;
+    this.prefetchDrainScheduled = true;
+    queueMicrotask(() => {
+      this.prefetchDrainScheduled = false;
+      this.drainPrefetchQueue();
+    });
+  }
+
+  private pruneReadyPrefetchJobs(): void {
+    const retained: PrefetchJob[] = [];
+    for (const job of this.prefetchQueue) {
+      const entry = this.entries.get(job.beatId);
+      const prefix = this.prefixes.get(job.beatId);
+      if (
+        (entry?.messageId === job.messageId && !entry.released && !entry.failed) ||
+        prefix?.messageId === job.messageId
+      ) {
+        job.resolve();
+      } else {
+        retained.push(job);
+      }
+    }
+    this.prefetchQueue = retained;
+  }
+
   private drainPrefetchQueue(): void {
+    if (this.prefetchBatchActive) return;
     if (this.prefetchWakeTimer) {
       clearTimeout(this.prefetchWakeTimer);
       this.prefetchWakeTimer = null;
@@ -193,25 +292,73 @@ export class WebPlaybackSourceManager {
     if (now < this.prefetchPausedUntil) {
       this.prefetchWakeTimer = setTimeout(() => {
         this.prefetchWakeTimer = null;
-        this.drainPrefetchQueue();
+        this.schedulePrefetchDrain();
       }, this.prefetchPausedUntil - now);
       return;
     }
-    while (this.activePrefetches < MAX_PREFETCH_CONCURRENCY && this.prefetchQueue.length > 0) {
-      const job = this.prefetchQueue.shift()!;
-      const entry = this.entries.get(job.beatId);
-      if (entry?.messageId === job.messageId && !entry.released && !entry.failed) {
-        job.resolve();
-        continue;
-      }
-      const existingPrefix = this.prefixes.get(job.beatId);
-      if (existingPrefix?.messageId === job.messageId) {
-        job.resolve();
-        continue;
-      }
-      this.activePrefetches += 1;
-      playTrace("SOURCE_PREFETCH_BEGIN", { beat_id: job.beatId, message_id: job.messageId });
-      void this.transport.prefetchFile({ messageId: job.messageId, mimeType: job.mimeType }).then(result => {
+
+    this.pruneReadyPrefetchJobs();
+    if (this.prefetchQueue.length <= 0) return;
+    const visible = this.prefetchQueue.filter(job => job.zone === "visible");
+    const selected = visible.length > 0
+      ? visible.slice(0, MAX_VISIBLE_PREFETCH_BATCH_CANDIDATES)
+      : this.prefetchQueue.filter(job => job.zone === "nearby").slice(0, NEARBY_PREFETCH_BATCH_SIZE);
+    if (selected.length <= 0) return;
+    const selectedKeys = new Set(selected.map(job => job.key));
+    this.prefetchQueue = this.prefetchQueue.filter(job => !selectedKeys.has(job.key));
+    this.prefetchBatchActive = true;
+    void this.executePrefetchBatch(selected).finally(() => {
+      this.prefetchBatchActive = false;
+      this.schedulePrefetchDrain();
+    });
+  }
+
+  private async executePrefetchBatch(jobs: readonly PrefetchJob[]): Promise<void> {
+    for (const job of jobs) {
+      playTrace("SOURCE_PREFETCH_BEGIN", { beat_id: job.beatId, message_id: job.messageId, zone: job.zone });
+    }
+    try {
+      const outcomes = this.transport.prefetchFiles
+        ? await this.transport.prefetchFiles(
+            jobs.map(job => ({ messageId: job.messageId, mimeType: job.mimeType })),
+          )
+        : await Promise.all(jobs.map(async job => {
+            try {
+              const result = await this.transport.prefetchFile({ messageId: job.messageId, mimeType: job.mimeType });
+              return {
+                input: { messageId: job.messageId, mimeType: job.mimeType },
+                result,
+                playableSeconds: 0,
+                targetMet: true,
+                error: null,
+              } satisfies WebPrefetchBatchOutcome;
+            } catch (error) {
+              return {
+                input: { messageId: job.messageId, mimeType: job.mimeType },
+                result: null,
+                playableSeconds: 0,
+                targetMet: false,
+                error: error instanceof Error ? error : new Error(String(error)),
+              } satisfies WebPrefetchBatchOutcome;
+            }
+          }));
+
+      for (let index = 0; index < jobs.length; index += 1) {
+        const job = jobs[index];
+        const outcome = outcomes[index];
+        if (!outcome || outcome.error || !outcome.result) {
+          const failure = outcome?.error || new Error("Galer Cloud returned an empty playback prefix.");
+          this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
+          playTrace("SOURCE_PREFETCH_ERROR", {
+            beat_id: job.beatId,
+            message_id: job.messageId,
+            zone: job.zone,
+            error_name: failure.name,
+          });
+          job.reject(failure);
+          continue;
+        }
+        const result = outcome.result;
         this.prefetchRetryAfter.delete(job.key);
         this.prefixes.set(job.beatId, {
           beatId: job.beatId,
@@ -224,22 +371,26 @@ export class WebPlaybackSourceManager {
         playTrace("SOURCE_PREFETCH_READY", {
           beat_id: job.beatId,
           message_id: job.messageId,
+          zone: job.zone,
           bytes: result.prefix.byteLength,
+          playable_seconds: roundTraceSeconds(outcome.playableSeconds),
+          target_met: outcome.targetMet,
         });
         this.enforceCacheBudget(job.beatId);
         job.resolve();
-      }, error => {
+      }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      for (const job of jobs) {
         this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
         playTrace("SOURCE_PREFETCH_ERROR", {
           beat_id: job.beatId,
           message_id: job.messageId,
-          error_name: error instanceof Error ? error.name : "unknown",
+          zone: job.zone,
+          error_name: failure.name,
         });
-        job.reject(error instanceof Error ? error : new Error(String(error)));
-      }).finally(() => {
-        this.activePrefetches -= 1;
-        this.drainPrefetchQueue();
-      });
+        job.reject(failure);
+      }
     }
   }
 
@@ -294,7 +445,7 @@ export class WebPlaybackSourceManager {
       : this.prepareBlobFallback(beatId, messageId, mimeType)
     ).finally(() => this.pending.delete(beatId));
     this.pending.set(beatId, preparation);
-    this.drainPrefetchQueue();
+    this.schedulePrefetchDrain();
     return preparation;
   }
 
@@ -441,10 +592,6 @@ export class WebPlaybackSourceManager {
       }
     }, { once: true });
 
-    // The MediaSource URL is usable immediately. Do not hold the first user
-    // click behind the cold Direct lease/MTProto handshake. The stream fills the
-    // same MediaSource asynchronously; the audio element can enter its waiting
-    // state now and begin as soon as the first MASTER bytes arrive.
     playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });
     void (async () => {
       try {
@@ -699,6 +846,8 @@ export class WebPlaybackSourceManager {
     this.prefetchQueue.splice(0).forEach(job => job.reject(abortError()));
     this.prefetchRetryAfter.clear();
     this.prefixes.clear();
+    this.visiblePrefetchBeatIds.clear();
+    this.nearbyPrefetchBeatIds.clear();
     for (const beatId of Array.from(this.entries.keys())) this.hardRelease(beatId);
   }
 }
