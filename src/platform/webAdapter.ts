@@ -22,8 +22,23 @@ let webLibraryWindow: WebLibraryWindowConsumer | null = null;
 let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 const webBeatRegistry = new Map<string, Beat>();
+// Cloud routing is a startup hint that may be newer than the presentation cache.
+// Keep it separate from Beat metadata and discard it as soon as Telegram's
+// authoritative manifest materializes the beat again.
+const webStartupRouteOverrides = new Map<string, number>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
 let stopPlaybackRuntimeObserver: (() => void) | null = null;
+
+const WEB_PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";
+const WEB_PRESENTATION_SORT_CACHE_KEY = "beatvault:sort:v2";
+const WEB_STARTUP_WARM_BEATS = 14;
+
+type StartupPresentationCandidate = {
+  beat: Beat;
+  beatId: string;
+  messageId: number;
+  mimeType: string;
+};
 
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
@@ -31,6 +46,55 @@ async function resolveWebCloudTransport() {
       .then(({ WebGalerCloudTransport }) => new WebGalerCloudTransport());
   }
   return webCloudTransport;
+}
+
+function directMessageId(value: string | null | undefined): number | null {
+  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
+  const messageId = Number(match?.[1] || 0);
+  return Number.isInteger(messageId) && messageId > 0 ? messageId : null;
+}
+
+function webBeatMessageId(beat: Beat): number | null {
+  const startupRoute = webStartupRouteOverrides.get(beat.id);
+  if (startupRoute) return startupRoute;
+  const explicit = Number(beat.telegram_message_id || 0);
+  if (Number.isInteger(explicit) && explicit > 0) return explicit;
+  return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
+}
+
+function readStartupPresentationCandidates(): StartupPresentationCandidate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(WEB_PRESENTATION_LIBRARY_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const beats = parsed.filter((value): value is Beat => Boolean(value && typeof value === "object" && String(value.id || "").trim()));
+    const manualIndex = new Map(beats.map((beat, index) => [beat.id, index]));
+    const sortBy = String(window.localStorage.getItem(WEB_PRESENTATION_SORT_CACHE_KEY) || "rating");
+    const ordered = beats.slice().sort((a, b) => {
+      if (sortBy === "manual") return (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
+      if (sortBy === "bpm") return Number(a.bpm || 0) - Number(b.bpm || 0);
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      const ratingDiff = Number(b.rating || 0) - Number(a.rating || 0);
+      return ratingDiff || (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
+    });
+    const output: StartupPresentationCandidate[] = [];
+    for (const beat of ordered) {
+      const messageId = webBeatMessageId(beat);
+      if (!messageId) continue;
+      output.push({
+        beat,
+        beatId: beat.id,
+        messageId,
+        mimeType: beat.assets?.master?.mime_type || "audio/mpeg",
+      });
+      if (output.length >= WEB_STARTUP_WARM_BEATS) break;
+    }
+    return output;
+  } catch {
+    return [];
+  }
 }
 
 function prewarmAuthenticatedWebTransport(): void {
@@ -43,30 +107,42 @@ function prewarmAuthenticatedWebTransport(): void {
     return;
   }
 
-  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
-  void resolveWebCloudTransport().then(
-    () => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"),
-    error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
+  const candidates = readStartupPresentationCandidates();
+  rememberWebBeats(candidates.map(candidate => candidate.beat));
+  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN", { startup_beat_count: candidates.length });
+  void resolveWebCloudTransport().then(async transport => {
+    if (candidates.length === 0) {
+      playTrace("ADAPTER_TRANSPORT_CODE_PREWARM_ONLY");
+      return;
+    }
+    await transport.startStartupWarm(
+      candidates.map(({ beatId, messageId, mimeType }) => ({ beatId, messageId, mimeType })),
+      async routed => {
+        // Cloud may know a newer MASTER than the presentation cache. Every
+        // startup playback/warm lookup must use the same routed id until the
+        // Telegram reconcile replaces the cached Beat objects.
+        for (const candidate of routed) {
+          webStartupRouteOverrides.set(candidate.beatId, candidate.messageId);
+        }
+        const sources = await resolveWebPlaybackSources();
+        const results = await Promise.allSettled(routed.map(candidate =>
+          sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")
+        ));
+        playTrace("ADAPTER_STARTUP_WARM_SETTLED", {
+          count: routed.length,
+          failures: results.filter(result => result.status === "rejected").length,
+        });
+      },
+    );
+    playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED", { startup_beat_count: candidates.length });
+  }).catch(error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
+    error_name: error instanceof Error ? error.name : "unknown",
+  }));
 }
 
 async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
   if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport());
   return webLibraryWindow;
-}
-
-function directMessageId(value: string | null | undefined): number | null {
-  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
-  const messageId = Number(match?.[1] || 0);
-  return Number.isInteger(messageId) && messageId > 0 ? messageId : null;
-}
-
-function webBeatMessageId(beat: Beat): number | null {
-  const explicit = Number(beat.telegram_message_id || 0);
-  if (Number.isInteger(explicit) && explicit > 0) return explicit;
-  return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
 }
 
 async function updateBeatWarmPriority(beatId: string, priority: BeatCardWarmPriority): Promise<void> {
@@ -128,7 +204,10 @@ function rememberWebBeats(beats: readonly Beat[]): void {
 }
 
 function forgetWebBeats(ids: readonly string[]): void {
-  for (const id of ids) webBeatRegistry.delete(id);
+  for (const id of ids) {
+    webBeatRegistry.delete(id);
+    webStartupRouteOverrides.delete(id);
+  }
 }
 
 function resetVisiblePlaybackPrefetch(): void {
@@ -137,9 +216,13 @@ function resetVisiblePlaybackPrefetch(): void {
   stopPlaybackRuntimeObserver?.();
   stopPlaybackRuntimeObserver = null;
   webBeatRegistry.clear();
+  webStartupRouteOverrides.clear();
 }
 
 function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): void {
+  // This page came from the Telegram authoritative INDEX, so its MASTER ids
+  // supersede any temporary Cloud startup routing hints.
+  for (const beat of page.beats) webStartupRouteOverrides.delete(beat.id);
   rememberWebBeats(page.beats);
   publishWebLibraryNavigationState({
     offset: page.offset,
@@ -252,6 +335,7 @@ export const webAdapter: PlatformAdapter = {
     async restoreBeat(id) {
       const transport = await resolveWebCloudTransport();
       const restored = await transport.restoreBeatFromTrash(id, webClientId);
+      webStartupRouteOverrides.delete(restored.id);
       rememberWebBeats([restored]);
       return restored;
     },
@@ -298,7 +382,7 @@ export const webAdapter: PlatformAdapter = {
       const messageId = webBeatMessageId(beat);
       rememberWebBeats([beat]);
       if (messageId) {
-        playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, mime_type: master?.mime_type || "audio/mpeg" });
+        playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, message_id: messageId, mime_type: master?.mime_type || "audio/mpeg" });
         const sources = await resolveWebPlaybackSources();
         playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id });
         const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
@@ -369,6 +453,7 @@ export const webAdapter: PlatformAdapter = {
           wav: slots.WAV,
           project: slots.PROJECT,
         }, webClientId, onProgress);
+        webStartupRouteOverrides.delete(committed.id);
         rememberWebBeats([committed]);
         webImportPort.releaseBeat(beat.id);
         return committed;
@@ -407,6 +492,7 @@ export const webAdapter: PlatformAdapter = {
       const transport = await resolveWebCloudTransport();
       try {
         const committed = await transport.commitBeatEdit(original, updated, files, webClientId, onProgress);
+        webStartupRouteOverrides.delete(committed.id);
         rememberWebBeats([committed]);
         return committed;
       } catch (error) {

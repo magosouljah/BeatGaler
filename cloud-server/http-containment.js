@@ -17,7 +17,7 @@ const INSTALLATION_POST_ROUTES = new Set([
   "/events/ticket", "/telegram/connect/start", "/telegram/disconnect",
   "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
   "/transport/session/stop", "/transport/operation/begin", "/transport/capability/authorize", "/transport/operation/end",
-  "/transport/index/commit", "/transport/topic/ensure", "/transport/upload/confirm",
+  "/transport/index/commit", "/transport/routing/reconcile", "/transport/topic/ensure", "/transport/upload/confirm",
   "/beats/delete-topic", "/beats/delete-topics-batch",
 ]);
 const INSTALLATION_GET_ROUTES = new Set(["/telegram/connect/status"]);
@@ -176,10 +176,6 @@ function createHttpContainment(options = {}) {
       if (upload) cleanupUploadedFile(req);
       sendJson(res, 403, "This installation is not authorized for the signed-in account."); return null;
     }
-    // Express 5 exposes req.query through a getter. Do not assign or mutate it.
-    // Canonicalize the installation through req.body, which server-core checks
-    // first for both POST and guarded GET routes, and preserve explicit authz
-    // fields for downstream middleware that should not trust client hints.
     req.body = req.body || {};
     req.body.beatgalerUserId = installationId;
     req.beatgalerAuthorizedUserId = String(auth.user.id);

@@ -130,10 +130,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private timeoutRequest(requestId: string, operation: string): void {
     const timedOut = this.takePending(requestId);
     if (!timedOut) return;
-
     playTrace("WORKER_REQUEST_TIMEOUT", { request_id: requestId, operation });
     timedOut.reject(new Error(`Galer Cloud Web transport timed out during ${operation}.`));
-
     const worker = this.worker;
     if (worker) {
       worker.terminate();
@@ -188,6 +186,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_session_id: session.temp_session_id,
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
+        startup_routes: session.startup_routes || {},
+        routing_revision: Math.max(0, Number(session.routing_revision) || 0),
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }

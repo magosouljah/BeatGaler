@@ -1,5 +1,9 @@
 import { WebTransportController } from "./webTransportController";
-import { commitWebTransportIndexPointer, ensureWebTransportTopic } from "./webTransportSession";
+import {
+  commitWebTransportIndexPointer,
+  ensureWebTransportTopic,
+  reconcileWebTransportRouting,
+} from "./webTransportSession";
 import { WebTransportWorkerClient } from "./webTransportWorkerClient";
 import type { Beat } from "../../types";
 import { commitWebImportedBeat, type WebImportCommitProgress, type WebImportFiles } from "../import/webImportCommit";
@@ -8,19 +12,20 @@ import type { PlatformBeatEditFiles } from "../../platform/contracts";
 import type { PlatformTrashItem } from "../../platform/contracts";
 import { playTrace } from "../playback/playTrace";
 import { listWebTrashItems, moveWebBeatsToTrash, purgeWebTrash, restoreWebBeatFromTrash } from "../trash/webTrash";
-import type {
-  WebTransportDownloadInput,
-  WebTransportDownloadResult,
-  WebTransportLibraryIndexResult,
-  WebTransportPrefetchBatchResult,
-  WebTransportPrefetchChunk,
-  WebTransportPrefetchInput,
-  WebTransportPrefetchResult,
-  WebTransportProgress,
-  WebTransportStreamInput,
-  WebTransportStreamResult,
-  WebTransportUploadInput,
-  WebTransportUploadResult,
+import {
+  DEFAULT_PLAYBACK_DATA_LANES,
+  type WebTransportDownloadInput,
+  type WebTransportDownloadResult,
+  type WebTransportLibraryIndexResult,
+  type WebTransportPrefetchBatchResult,
+  type WebTransportPrefetchChunk,
+  type WebTransportPrefetchInput,
+  type WebTransportPrefetchResult,
+  type WebTransportProgress,
+  type WebTransportStreamInput,
+  type WebTransportStreamResult,
+  type WebTransportUploadInput,
+  type WebTransportUploadResult,
 } from "./webTransportWorkerProtocol";
 
 export interface WebTransportPrefetchFilesHandle {
@@ -29,22 +34,90 @@ export interface WebTransportPrefetchFilesHandle {
   cancel(): void;
 }
 
+export interface WebStartupWarmCandidate {
+  beatId: string;
+  messageId: number;
+  mimeType: string;
+}
+
+function positiveMessageId(value: unknown): number | null {
+  const id = Number(value || 0);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function directMessageId(value: string | null | undefined): number | null {
+  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
+  return positiveMessageId(match?.[1]);
+}
+
+function beatMasterMessageId(beat: Beat): number | null {
+  return positiveMessageId(beat.telegram_message_id)
+    || directMessageId(beat.assets?.master?.object_id)
+    || directMessageId(beat.telegram_file_id);
+}
+
+function routingChangeForBeat(beat: Beat): Record<string, number | null> {
+  return { [beat.id]: beatMasterMessageId(beat) };
+}
+
 export class WebGalerCloudTransport {
   private readonly worker = new WebTransportWorkerClient();
   private readonly controller = new WebTransportController(this.worker);
   private readonly uploadCheckpoints = new Map<string, Promise<WebTransportUploadResult>>();
+  private startupWarmPromise: Promise<void> | null = null;
+  private playbackDataLanes = DEFAULT_PLAYBACK_DATA_LANES;
 
   constructor() {
-    const started = Date.now();
-    playTrace("TRANSPORT_PRECONNECT_ENTER");
+    // Preload Worker code/wasm immediately, but do not reserve the Direct lease
+    // until presentation-cache startupBeatIds have been selected locally.
+    playTrace("TRANSPORT_CODE_PREWARM_ENTER");
     this.worker.prewarm();
-    void this.controller.connect().then(
-      () => playTrace("TRANSPORT_PRECONNECT_READY", { elapsed_ms: Date.now() - started }),
-      error => playTrace("TRANSPORT_PRECONNECT_DEFERRED", {
+  }
+
+  setPlaybackDataLanes(lanes: number): void {
+    this.playbackDataLanes = Math.max(1, Math.min(16, Math.trunc(Number(lanes) || DEFAULT_PLAYBACK_DATA_LANES)));
+  }
+
+  startStartupWarm(
+    candidates: readonly WebStartupWarmCandidate[],
+    warm: (routed: WebStartupWarmCandidate[]) => Promise<void>,
+  ): Promise<void> {
+    if (this.startupWarmPromise) return this.startupWarmPromise;
+    const normalized = candidates
+      .filter(candidate => candidate.beatId && positiveMessageId(candidate.messageId))
+      .slice(0, 14);
+    this.controller.configureStartupBeatIds(normalized.map(candidate => candidate.beatId));
+    if (normalized.length === 0) return Promise.resolve();
+
+    const started = Date.now();
+    this.startupWarmPromise = (async () => {
+      const session = await this.controller.connect();
+      const routed = normalized.map(candidate => {
+        const cloudRoute = positiveMessageId(session.startup_routes?.[candidate.beatId]);
+        if (!cloudRoute) {
+          playTrace("TRANSPORT_STARTUP_ROUTE_FALLBACK", {
+            beat_id: candidate.beatId,
+            cached_message_id: candidate.messageId,
+            routing_revision: Math.max(0, Number(session.routing_revision) || 0),
+          });
+        }
+        return { ...candidate, messageId: cloudRoute || candidate.messageId };
+      });
+      playTrace("TRANSPORT_STARTUP_ROUTES_READY", {
+        count: routed.length,
+        cloud_routes: routed.filter((candidate, index) => candidate.messageId !== normalized[index].messageId).length,
+        routing_revision: Math.max(0, Number(session.routing_revision) || 0),
+      });
+      await warm(routed);
+      playTrace("TRANSPORT_STARTUP_WARM_READY", { count: routed.length, elapsed_ms: Date.now() - started });
+    })().catch(error => {
+      playTrace("TRANSPORT_STARTUP_WARM_DEFERRED", {
         elapsed_ms: Date.now() - started,
         error_name: error instanceof Error ? error.name : "unknown",
-      }),
-    );
+      });
+      throw error;
+    });
+    return this.startupWarmPromise;
   }
 
   private checkpointKey(input: { file: File; beatId: string; kind: string }): string {
@@ -88,6 +161,10 @@ export class WebGalerCloudTransport {
   async getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
     const started = Date.now();
     playTrace("TRANSPORT_GET_INDEX_ENTER");
+    if (this.startupWarmPromise) {
+      await this.startupWarmPromise.catch(() => {});
+      playTrace("TRANSPORT_GET_INDEX_AFTER_STARTUP_WARM");
+    }
     const connectStarted = Date.now();
     await this.controller.connect();
     playTrace("TRANSPORT_GET_INDEX_CONNECTED", { wait_ms: Date.now() - connectStarted });
@@ -97,6 +174,11 @@ export class WebGalerCloudTransport {
       { objectType: "index", objectIds: ["pinned"] },
       () => this.worker.getLibraryIndex(),
     );
+    // Telegram is authoritative; repair the tiny Cloud routing map without
+    // delaying the caller/UI that just received the authoritative manifest.
+    void reconcileWebTransportRouting(result.manifest).catch(error => {
+      playTrace("TRANSPORT_ROUTING_RECONCILE_DEFERRED", { error_name: error instanceof Error ? error.name : "unknown" });
+    });
     playTrace("TRANSPORT_GET_INDEX_DONE", { operation_ms: Date.now() - operationStarted, total_ms: Date.now() - started });
     return result;
   }
@@ -156,13 +238,18 @@ export class WebGalerCloudTransport {
     }
     const started = Date.now();
     const ids = Array.from(new Set(inputs.map(input => Number(input.messageId)).filter(id => Number.isInteger(id) && id > 0)));
-    playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length });
+    playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length, lanes: this.playbackDataLanes });
     await this.controller.connect();
+    // One scoped WARM operation covers every startup candidate. Playback uses
+    // streamFile(), which acquires an independent operation for the active beat.
     const lease = await this.controller.beginOperation(
       "stream_master",
       { objectType: "message", objectIds: ids.map(String) },
     );
-    const workerBatch = this.worker.prefetchBatch({ inputs }, onChunk);
+    const workerBatch = this.worker.prefetchBatch({
+      inputs,
+      maxConcurrency: this.playbackDataLanes,
+    }, onChunk);
     const completed = workerBatch.completed.finally(() => {
       playTrace("TRANSPORT_PREFETCH_BATCH_DONE", { count: ids.length, total_ms: Date.now() - started });
       return this.controller.endOperation(lease).catch(() => {});
@@ -184,6 +271,7 @@ export class WebGalerCloudTransport {
     await this.controller.connect();
     playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
     const operationStarted = Date.now();
+    // Foreground playback deliberately owns a separate authorization from warm.
     const lease = await this.controller.beginOperation(
       "stream_master",
       { objectType: "message", objectIds: [String(input.messageId)] },
@@ -227,6 +315,7 @@ export class WebGalerCloudTransport {
           messageId: result.index.messageId,
           sourceId,
           beatCount: result.index.beatCount,
+          routingChanges: routingChangeForBeat(result.beat),
         }).catch(() => {});
       }
       for (const key of Array.from(this.uploadCheckpoints.keys())) {
@@ -266,6 +355,7 @@ export class WebGalerCloudTransport {
         messageId: result.index.messageId,
         sourceId,
         beatCount: result.index.beatCount,
+        routingChanges: routingChangeForBeat(result.beat),
       }).catch(() => {});
       for (const key of Array.from(this.uploadCheckpoints.keys())) {
         if (key.startsWith(`${original.id}:`)) this.uploadCheckpoints.delete(key);
@@ -298,6 +388,7 @@ export class WebGalerCloudTransport {
           messageId: result.index.messageId,
           sourceId,
           beatCount: result.index.beatCount,
+          routingChanges: Object.fromEntries(beatIds.map(id => [id, null])),
         }).catch(() => {});
       }
       return result.value;
@@ -325,6 +416,7 @@ export class WebGalerCloudTransport {
           messageId: result.index.messageId,
           sourceId,
           beatCount: result.index.beatCount,
+          routingChanges: routingChangeForBeat(restored),
         }).catch(() => {});
       }
     } finally {

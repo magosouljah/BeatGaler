@@ -3,12 +3,11 @@ import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
 import { playTrace, playTraceSpan, observePlayStep } from "../playback/playTrace";
 import {
+  STARTUP_PREFIX_BYTES,
   WEB_DIRECT_MAX_FILE_BYTES,
   WEB_PLAYBACK_DATA_LANES,
   WEB_PLAYBACK_FIRST_CHUNK_BYTES,
   WEB_PLAYBACK_FIRST_CHUNK_KB,
-  WEB_PLAYBACK_PREFETCH_MAX_BYTES,
-  WEB_PLAYBACK_PREFETCH_TARGET_SECONDS,
   type WebTransportDownloadInput,
   type WebTransportDownloadResult,
   type WebTransportDeleteMessagesInput,
@@ -72,6 +71,18 @@ type CachedPlaybackMedia = {
   mimeType: string | null;
 };
 
+type ResolvedPlaybackMedia = {
+  media: FileDownloadLocation;
+  totalBytes: number;
+  sourceMime: string | null;
+  cacheHit: boolean;
+};
+
+type PlaybackMediaBatchResolution = {
+  resolved: Map<number, ResolvedPlaybackMedia>;
+  missing: Map<number, Error>;
+};
+
 type PrefetchBatchControl = {
   cancelAll: boolean;
   cancelledMessageIds: Set<number>;
@@ -92,6 +103,8 @@ type BatchPrefetchState = {
   error: Error | null;
 };
 
+type DataLanePriority = "foreground" | "warm";
+
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
 let chatId = 0;
@@ -104,20 +117,37 @@ const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
 const playbackMediaCache = new Map<number, CachedPlaybackMedia>();
 const MAX_PLAYBACK_MEDIA_CACHE_ENTRIES = 256;
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
+const MAX_CONFIGURABLE_DATA_LANES = 16;
+const STARTUP_MEDIA_BATCH_RETRY_DELAY_MS = 70;
 
 let activeDataLanes = 0;
-const dataLaneWaiters: Array<() => void> = [];
+let dataLaneLimit = WEB_PLAYBACK_DATA_LANES;
+const foregroundLaneWaiters: Array<() => void> = [];
+const warmLaneWaiters: Array<() => void> = [];
 
-async function withDataLane<T>(operation: () => Promise<T>): Promise<T> {
-  if (activeDataLanes >= WEB_PLAYBACK_DATA_LANES) {
-    await new Promise<void>(resolve => dataLaneWaiters.push(resolve));
+function configureDataLaneLimit(value: unknown): number {
+  const next = Math.max(1, Math.min(MAX_CONFIGURABLE_DATA_LANES, Math.trunc(Number(value) || WEB_PLAYBACK_DATA_LANES)));
+  dataLaneLimit = next;
+  return next;
+}
+
+function wakeNextDataLane(): void {
+  const next = foregroundLaneWaiters.shift() || warmLaneWaiters.shift();
+  next?.();
+}
+
+async function withDataLane<T>(operation: () => Promise<T>, priority: DataLanePriority = "foreground"): Promise<T> {
+  if (activeDataLanes >= dataLaneLimit) {
+    await new Promise<void>(resolve => {
+      (priority === "foreground" ? foregroundLaneWaiters : warmLaneWaiters).push(resolve);
+    });
   }
   activeDataLanes += 1;
   try {
     return await operation();
   } finally {
     activeDataLanes -= 1;
-    dataLaneWaiters.shift()?.();
+    wakeNextDataLane();
   }
 }
 
@@ -243,11 +273,154 @@ async function closeClient(): Promise<void> {
   for (const control of activePrefetchBatches.values()) control.cancelAll = true;
   activePrefetchBatches.clear();
   playbackMediaCache.clear();
+  foregroundLaneWaiters.splice(0).forEach(resolve => resolve());
+  warmLaneWaiters.splice(0).forEach(resolve => resolve());
+  activeDataLanes = 0;
+  dataLaneLimit = WEB_PLAYBACK_DATA_LANES;
   const current = client;
   client = null;
   vaultVerified = false;
   chatId = 0;
   if (current) await current.destroy().catch(() => {});
+}
+
+function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number]): FileDownloadLocation {
+  const media = message?.media;
+  if (!media || !["document", "audio", "video", "voice", "photo", "sticker"].includes(media.type)) {
+    throw new Error("Galer Cloud stored object is not downloadable.");
+  }
+  return media as FileDownloadLocation;
+}
+
+function cachedPlaybackMedia(messageId: number): ResolvedPlaybackMedia | null {
+  const cached = playbackMediaCache.get(messageId);
+  if (!cached) return null;
+  touchPlaybackMedia(messageId, cached);
+  return { media: cached.media, totalBytes: cached.totalBytes, sourceMime: cached.mimeType, cacheHit: true };
+}
+
+function touchPlaybackMedia(messageId: number, value: CachedPlaybackMedia): void {
+  playbackMediaCache.delete(messageId);
+  playbackMediaCache.set(messageId, value);
+  while (playbackMediaCache.size > MAX_PLAYBACK_MEDIA_CACHE_ENTRIES) {
+    const oldest = playbackMediaCache.keys().next().value as number | undefined;
+    if (oldest === undefined) break;
+    playbackMediaCache.delete(oldest);
+  }
+}
+
+function resolvedMediaFromMessage(
+  message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number],
+): ResolvedPlaybackMedia {
+  const media = downloadableMedia(message);
+  const totalBytes = Math.max(0, Number((media as { fileSize?: number }).fileSize || 0));
+  const sourceMime = String((media as { mimeType?: string }).mimeType || "").trim() || null;
+  return { media, totalBytes, sourceMime, cacheHit: false };
+}
+
+function nonRetryableMediaResolutionError(error: unknown): boolean {
+  const message = String((error as any)?.message || error || "");
+  return /AUTH_KEY|SESSION_REVOKED|CHANNEL_PRIVATE|CHAT_ADMIN_REQUIRED|PEER_ID_INVALID|FORBIDDEN|not a member|USER_DEACTIVATED/i.test(message);
+}
+
+async function getMessagesBatchWithRetry(
+  active: TelegramClient,
+  targetChatId: number,
+  messageIds: number[],
+): Promise<Awaited<ReturnType<TelegramClient["getMessages"]>>> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      playTrace("WORKER_PLAYBACK_MEDIA_BATCH_RPC", { count: messageIds.length, attempt });
+      return await active.getMessages(targetChatId, messageIds);
+    } catch (error) {
+      lastError = error;
+      playTrace("WORKER_PLAYBACK_MEDIA_BATCH_RETRY", {
+        count: messageIds.length,
+        attempt,
+        error_name: error instanceof Error ? error.name : "unknown",
+      });
+      if (attempt >= 2 || nonRetryableMediaResolutionError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, STARTUP_MEDIA_BATCH_RETRY_DELAY_MS));
+    }
+  }
+  throw lastError || new Error("Galer Cloud could not resolve playback media.");
+}
+
+async function resolvePlaybackMediaBatch(
+  active: TelegramClient,
+  targetChatId: number,
+  rawMessageIds: readonly number[],
+  publishCache = true,
+): Promise<PlaybackMediaBatchResolution> {
+  const messageIds = Array.from(new Set(rawMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0)));
+  const resolved = new Map<number, ResolvedPlaybackMedia>();
+  const missing = new Map<number, Error>();
+  const misses: number[] = [];
+
+  for (const messageId of messageIds) {
+    const cached = cachedPlaybackMedia(messageId);
+    if (cached) {
+      resolved.set(messageId, cached);
+      playTrace("WORKER_PLAYBACK_MEDIA_CACHE_HIT", { message_id: messageId });
+    } else {
+      misses.push(messageId);
+    }
+  }
+  if (misses.length === 0) return { resolved, missing };
+
+  const messages = await getMessagesBatchWithRetry(active, targetChatId, misses);
+  const byId = new Map<number, Awaited<ReturnType<TelegramClient["getMessages"]>>[number]>();
+  for (const message of messages) {
+    const id = Number(message?.id || 0);
+    if (Number.isSafeInteger(id) && id > 0) byId.set(id, message);
+  }
+
+  for (const messageId of misses) {
+    const message = byId.get(messageId);
+    if (!message) {
+      missing.set(messageId, new Error("Galer Cloud object no longer exists."));
+      continue;
+    }
+    try {
+      const value = resolvedMediaFromMessage(message);
+      resolved.set(messageId, value);
+      if (publishCache) {
+        touchPlaybackMedia(messageId, {
+          media: value.media,
+          totalBytes: value.totalBytes,
+          mimeType: value.sourceMime,
+        });
+      }
+    } catch (error) {
+      missing.set(messageId, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  return { resolved, missing };
+}
+
+async function resolvePlaybackMedia(
+  active: TelegramClient,
+  messageId: number,
+): Promise<ResolvedPlaybackMedia> {
+  const cached = cachedPlaybackMedia(messageId);
+  if (cached) {
+    playTrace("WORKER_PLAYBACK_MEDIA_CACHE_HIT", { message_id: messageId });
+    return cached;
+  }
+  playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId });
+  const batch = await resolvePlaybackMediaBatch(active, chatId, [messageId]);
+  const resolved = batch.resolved.get(messageId);
+  if (resolved) return resolved;
+  throw batch.missing.get(messageId) || new Error("Galer Cloud object no longer exists.");
+}
+
+function startupRouteMessageIds(routes: Record<string, number> | undefined): number[] {
+  return Array.from(new Set(Object.values(routes || {})
+    .map(Number)
+    .filter(id => Number.isSafeInteger(id) && id > 0)))
+    .slice(0, 14);
 }
 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
@@ -262,10 +435,13 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     temp_session_id,
     temp_session_state,
     temp_primary_dcs,
+    startup_routes,
   } = command.session;
   const primaryDcId = Number((temp_primary_dcs as any)?.main?.id || 0);
+  const numericChatId = Number(chat_id);
   if (
     !chat_id ||
+    !Number.isSafeInteger(numericChatId) || numericChatId === 0 ||
     !expected_bot_id ||
     !Number.isInteger(temp_api_id) || temp_api_id <= 0 ||
     !(temp_auth_key instanceof Uint8Array) ||
@@ -312,9 +488,42 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     }
     assertBoundTempPrimarySession(next, temp_session_id, primaryDcId);
 
-    const self = await observePlayStep("WORKER_GET_ME", () => next.getMe());
+    const startupMessageIds = startupRouteMessageIds(startup_routes);
+    playTrace("WORKER_POST_CONNECT_PARALLEL_BEGIN", { startup_messages: startupMessageIds.length });
+    const identityPromise = observePlayStep("WORKER_GET_ME", () => next.getMe());
+    const startupMediaPromise = startupMessageIds.length > 0
+      ? resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)
+      : Promise.resolve<PlaybackMediaBatchResolution>({ resolved: new Map(), missing: new Map() });
+
+    const [identityResult, mediaResult] = await Promise.allSettled([identityPromise, startupMediaPromise]);
+    if (identityResult.status === "rejected") throw identityResult.reason;
+    const self = identityResult.value;
     if (!self?.isBot || String(self.id) !== String(expected_bot_id)) {
       throw new Error("Temporary authorization resolved to the wrong transport identity.");
+    }
+
+    // Fail closed: media resolved in parallel is not published until getMe has
+    // proven that the temporary key belongs to the expected transport bot.
+    if (mediaResult.status === "fulfilled") {
+      for (const [messageId, value] of mediaResult.value.resolved) {
+        touchPlaybackMedia(messageId, {
+          media: value.media,
+          totalBytes: value.totalBytes,
+          mimeType: value.sourceMime,
+        });
+      }
+      playTrace("WORKER_STARTUP_MEDIA_BATCH_READY", {
+        requested: startupMessageIds.length,
+        resolved: mediaResult.value.resolved.size,
+        missing: mediaResult.value.missing.size,
+      });
+    } else {
+      // A media-resolution failure is not allowed to invalidate the Direct
+      // identity/session; the warm request can retry the batch after verify.
+      playTrace("WORKER_STARTUP_MEDIA_BATCH_DEFERRED", {
+        requested: startupMessageIds.length,
+        error_name: mediaResult.reason instanceof Error ? mediaResult.reason.name : "unknown",
+      });
     }
   } catch (error) {
     await next.destroy().catch(() => {});
@@ -322,11 +531,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   } finally {
     temp_auth_key.fill(0);
   }
-  const numericChatId = Number(chat_id);
-  if (!Number.isSafeInteger(numericChatId) || numericChatId === 0) {
-    await next.destroy().catch(() => {});
-    throw new Error("Galer Cloud returned an invalid vault identifier.");
-  }
+
   client = next;
   chatId = numericChatId;
   playTrace("WORKER_INITIALIZE_DONE", { elapsed_ms: Date.now() - started });
@@ -336,6 +541,8 @@ async function verifyReady(): Promise<void> {
   if (!client || !chatId) throw new Error("Galer Cloud Web transport is not initialized.");
   const started = Date.now();
   playTrace("WORKER_VERIFY_BEGIN");
+  // Deliberately retained until a real negative-membership probe demonstrates
+  // that getMessages(vault,[knownMessage]) fails with an unambiguous no-access error.
   await client.getChat(chatId);
   vaultVerified = true;
   playTrace("WORKER_VERIFY_DONE", { elapsed_ms: Date.now() - started });
@@ -344,44 +551,6 @@ async function verifyReady(): Promise<void> {
 function requireReady(): TelegramClient {
   if (!client || !vaultVerified || !chatId) throw new Error("Galer Cloud Web transport is not ready.");
   return client;
-}
-
-function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number]): FileDownloadLocation {
-  const media = message?.media;
-  if (!media || !["document", "audio", "video", "voice", "photo", "sticker"].includes(media.type)) {
-    throw new Error("Galer Cloud stored object is not downloadable.");
-  }
-  return media as FileDownloadLocation;
-}
-
-function touchPlaybackMedia(messageId: number, value: CachedPlaybackMedia): void {
-  playbackMediaCache.delete(messageId);
-  playbackMediaCache.set(messageId, value);
-  while (playbackMediaCache.size > MAX_PLAYBACK_MEDIA_CACHE_ENTRIES) {
-    const oldest = playbackMediaCache.keys().next().value as number | undefined;
-    if (oldest === undefined) break;
-    playbackMediaCache.delete(oldest);
-  }
-}
-
-async function resolvePlaybackMedia(
-  active: TelegramClient,
-  messageId: number,
-): Promise<{ media: FileDownloadLocation; totalBytes: number; sourceMime: string | null; cacheHit: boolean }> {
-  const cached = playbackMediaCache.get(messageId);
-  if (cached) {
-    touchPlaybackMedia(messageId, cached);
-    playTrace("WORKER_PLAYBACK_MEDIA_CACHE_HIT", { message_id: messageId });
-    return { media: cached.media, totalBytes: cached.totalBytes, sourceMime: cached.mimeType, cacheHit: true };
-  }
-  playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId });
-  const [message] = await active.getMessages(chatId, [messageId]);
-  if (!message) throw new Error("Galer Cloud object no longer exists.");
-  const media = downloadableMedia(message);
-  const totalBytes = Math.max(0, Number((media as { fileSize?: number }).fileSize || 0));
-  const sourceMime = String((media as { mimeType?: string }).mimeType || "").trim() || null;
-  touchPlaybackMedia(messageId, { media, totalBytes, mimeType: sourceMime });
-  return { media, totalBytes, sourceMime, cacheHit: false };
 }
 
 async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
@@ -553,7 +722,7 @@ async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportP
     location: resolved.media,
     offset: offsetBytes,
     limit,
-  }));
+  }), "foreground");
   if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty playback prefix.");
   const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
@@ -570,7 +739,7 @@ async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportP
     mimeType,
     prefix,
     playableSeconds: measurement?.playableSeconds || 0,
-    targetMet: (measurement?.playableSeconds || 0) >= WEB_PLAYBACK_PREFETCH_TARGET_SECONDS,
+    targetMet: true,
   };
 }
 
@@ -593,47 +762,68 @@ function normalizeBatchState(input: WebTransportPrefetchInput): BatchPrefetchSta
   };
 }
 
-async function resolveBatchState(active: TelegramClient, state: BatchPrefetchState): Promise<void> {
-  try {
+async function resolveBatchStates(active: TelegramClient, states: BatchPrefetchState[]): Promise<void> {
+  const valid: BatchPrefetchState[] = [];
+  for (const state of states) {
     if (!Number.isInteger(state.messageId) || state.messageId <= 0) {
-      throw new Error("Galer Cloud object reference is invalid.");
+      state.error = new Error("Galer Cloud object reference is invalid.");
+      state.done = true;
+      continue;
     }
     if (state.offsetBytes % 4096 !== 0) {
-      throw new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+      state.error = new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+      state.done = true;
+      continue;
     }
-    const resolved = await withDataLane(() => resolvePlaybackMedia(active, state.messageId));
+    valid.push(state);
+  }
+  if (valid.length === 0) return;
+
+  let batch: PlaybackMediaBatchResolution;
+  try {
+    batch = await resolvePlaybackMediaBatch(active, chatId, valid.map(state => state.messageId));
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    for (const state of valid) {
+      state.error = failure;
+      state.done = true;
+    }
+    return;
+  }
+
+  for (const state of valid) {
+    const resolved = batch.resolved.get(state.messageId);
+    if (!resolved) {
+      state.error = batch.missing.get(state.messageId) || new Error("Galer Cloud object no longer exists.");
+      state.done = true;
+      continue;
+    }
     state.media = resolved.media;
     state.totalBytes = resolved.totalBytes;
     state.mimeType = downloadMime(state.requestedMimeType || resolved.sourceMime);
-    if (state.totalBytes > 0 && state.offsetBytes >= state.totalBytes) state.done = true;
-  } catch (error) {
-    state.error = error instanceof Error ? error : new Error(String(error));
-    state.done = true;
+    if (state.totalBytes > 0 && state.offsetBytes >= state.totalBytes) {
+      state.done = true;
+      state.targetMet = true;
+    }
   }
 }
 
-async function downloadBatchRound(
+async function downloadStartupPrefix(
   requestId: string,
   state: BatchPrefetchState,
-  targetPlayableSeconds: number,
-  maxBytesPerFile: number,
 ): Promise<void> {
   if (state.done || state.error || !state.media) return;
-  const absoluteOffset = state.offsetBytes + state.downloadedBytes;
-  if (absoluteOffset >= maxBytesPerFile) {
-    state.done = true;
-    return;
-  }
+  const absoluteOffset = state.offsetBytes;
   if (state.totalBytes > 0 && absoluteOffset >= state.totalBytes) {
     state.done = true;
+    state.targetMet = true;
     return;
   }
-
-  const remainingBudget = Math.max(0, maxBytesPerFile - absoluteOffset);
-  const remainingFile = state.totalBytes > 0 ? Math.max(0, state.totalBytes - absoluteOffset) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
-  const limit = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remainingBudget, remainingFile || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+  const remainingFile = state.totalBytes > 0 ? Math.max(0, state.totalBytes - absoluteOffset) : STARTUP_PREFIX_BYTES;
+  const limit = Math.min(STARTUP_PREFIX_BYTES, remainingFile || STARTUP_PREFIX_BYTES);
   if (limit <= 0) {
     state.done = true;
+    state.targetMet = true;
     return;
   }
 
@@ -643,23 +833,15 @@ async function downloadBatchRound(
       location: state.media!,
       offset: absoluteOffset,
       limit,
-    }));
-    if (bytes.byteLength <= 0) {
-      state.done = true;
-      return;
-    }
+    }), "warm");
+    if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty playback prefix.");
 
     const stored = bytes.slice();
-    state.chunks.push(stored);
-    state.downloadedBytes += stored.byteLength;
-    if (state.offsetBytes === 0) {
-      state.playableSeconds = measureMp3PlayablePrefix(concatBytes(state.chunks)).playableSeconds;
-      state.targetMet = state.playableSeconds >= targetPlayableSeconds;
-    }
-    const downloadedAbsolute = state.offsetBytes + state.downloadedBytes;
-    const eof = (state.totalBytes > 0 && downloadedAbsolute >= state.totalBytes) || stored.byteLength < limit;
-    if (state.targetMet || eof || downloadedAbsolute >= maxBytesPerFile) state.done = true;
-
+    state.chunks = [stored];
+    state.downloadedBytes = stored.byteLength;
+    state.targetMet = true;
+    state.done = true;
+    const downloadedAbsolute = absoluteOffset + stored.byteLength;
     const transferable = stored.buffer.slice(stored.byteOffset, stored.byteOffset + stored.byteLength) as ArrayBuffer;
     scope.postMessage({
       requestId,
@@ -671,10 +853,15 @@ async function downloadBatchRound(
         offsetBytes: absoluteOffset,
         chunk: transferable,
         downloadedBytes: downloadedAbsolute,
-        playableSeconds: state.playableSeconds,
-        targetMet: state.targetMet,
+        playableSeconds: 0,
+        targetMet: true,
       },
     }, [transferable]);
+    playTrace("WORKER_PREFETCH_PREFIX_READY", {
+      message_id: state.messageId,
+      bytes: stored.byteLength,
+      offset_bytes: absoluteOffset,
+    });
   } catch (error) {
     state.error = error instanceof Error ? error : new Error(String(error));
     state.done = true;
@@ -690,57 +877,39 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
     if (!deduped.has(messageId)) deduped.set(messageId, candidate);
   }
   const states = Array.from(deduped.values(), normalizeBatchState);
-  const targetPlayableSeconds = Number.isFinite(input.targetPlayableSeconds)
-    ? Math.max(0.1, Number(input.targetPlayableSeconds))
-    : WEB_PLAYBACK_PREFETCH_TARGET_SECONDS;
-  const maxBytesPerFile = Number.isFinite(input.maxBytesPerFile)
-    ? Math.max(WEB_PLAYBACK_FIRST_CHUNK_BYTES, Math.floor(Number(input.maxBytesPerFile)))
-    : WEB_PLAYBACK_PREFETCH_MAX_BYTES;
-  const maxConcurrency = Number.isFinite(input.maxConcurrency)
-    ? Math.max(1, Math.min(WEB_PLAYBACK_DATA_LANES, Math.floor(Number(input.maxConcurrency))))
-    : WEB_PLAYBACK_DATA_LANES;
+  const maxConcurrency = configureDataLaneLimit(input.maxConcurrency);
   const control: PrefetchBatchControl = { cancelAll: false, cancelledMessageIds: new Set() };
   activePrefetchBatches.set(requestId, control);
 
   playTrace("WORKER_PREFETCH_BATCH_BEGIN", {
     count: states.length,
-    target_seconds: targetPlayableSeconds,
+    prefix_bytes: STARTUP_PREFIX_BYTES,
     lanes: maxConcurrency,
   });
 
   try {
-    for (let start = 0; start < states.length; start += maxConcurrency) {
-      if (control.cancelAll) break;
-      const slice = states.slice(start, start + maxConcurrency)
-        .filter(state => !control.cancelledMessageIds.has(state.messageId));
-      await Promise.all(slice.map(state => resolveBatchState(active, state)));
-      await schedulerYield();
-    }
+    // One real Telegram RPC resolves all uncached MASTER messages. A missing or
+    // invalid individual message is recorded on only that state.
+    await resolveBatchStates(active, states);
 
-    let round = 0;
-    while (!control.cancelAll) {
-      const candidates = states.filter(state =>
-        !state.done &&
-        !state.error &&
-        !control.cancelledMessageIds.has(state.messageId)
-      );
-      if (candidates.length === 0) break;
-      round += 1;
-      playTrace("WORKER_PREFETCH_BATCH_ROUND", { round, candidates: candidates.length });
-
-      for (let start = 0; start < candidates.length; start += maxConcurrency) {
-        if (control.cancelAll) break;
-        const slice = candidates.slice(start, start + maxConcurrency)
-          .filter(state => !control.cancelledMessageIds.has(state.messageId));
-        await Promise.all(slice.map(state => downloadBatchRound(
-          requestId,
-          state,
-          targetPlayableSeconds,
-          maxBytesPerFile,
-        )));
+    const queue = states.filter(state => !state.done && !state.error);
+    let cursor = 0;
+    const laneLoop = async (lane: number) => {
+      while (!control.cancelAll) {
+        let state: BatchPrefetchState | undefined;
+        while (cursor < queue.length && !state) {
+          const candidate = queue[cursor++];
+          if (!control.cancelledMessageIds.has(candidate.messageId)) state = candidate;
+        }
+        if (!state) return;
+        playTrace("WORKER_PREFETCH_LANE_TAKE", { lane, message_id: state.messageId });
+        await downloadStartupPrefix(requestId, state);
         await schedulerYield();
       }
-    }
+    };
+
+    const laneCount = Math.min(maxConcurrency, Math.max(1, queue.length));
+    await Promise.all(Array.from({ length: laneCount }, (_, index) => laneLoop(index + 1)));
 
     const results: WebTransportPrefetchBatchItemResult[] = states.map(state => {
       if (state.error) {
@@ -755,7 +924,7 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
           totalBytes: state.totalBytes || state.offsetBytes + state.downloadedBytes,
           mimeType: state.mimeType,
           prefix,
-          playableSeconds: state.playableSeconds,
+          playableSeconds: 0,
           targetMet: state.targetMet,
         },
       };
@@ -814,7 +983,7 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
   try {
     while (true) {
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
-      const next = await withDataLane(() => iterator.next());
+      const next = await withDataLane(() => iterator.next(), "foreground");
       if (next.done) break;
       const chunk = next.value;
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");

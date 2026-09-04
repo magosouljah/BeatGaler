@@ -11,9 +11,13 @@ export interface WebTransportUploadInput {
 export const WEB_DIRECT_MAX_FILE_BYTES = 1900 * 1024 * 1024;
 export const WEB_PLAYBACK_FIRST_CHUNK_KB = 64;
 export const WEB_PLAYBACK_FIRST_CHUNK_BYTES = WEB_PLAYBACK_FIRST_CHUNK_KB * 1024;
-export const WEB_PLAYBACK_DATA_LANES = 6;
-export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 1;
-export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = 1024 * 1024;
+export const DEFAULT_PLAYBACK_DATA_LANES = 7;
+export const WEB_PLAYBACK_DATA_LANES = DEFAULT_PLAYBACK_DATA_LANES;
+export const STARTUP_PREFIX_BYTES = 64 * 1024;
+// Startup readiness is byte-based now. Infinity explicitly disables the old
+// playable-seconds threshold so a 64 KiB prefix never delays Play admission.
+export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;
+export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;
 
 export interface WebTransportStoredFile {
   telegram_file_id: string;
@@ -80,7 +84,16 @@ export type WebTransportWorkerCommand =
   | {
       requestId: string;
       op: "initialize";
-      session: Pick<WebTransportSession, "chat_id" | "transport_user_id" | "temp_auth_key" | "temp_session_id" | "temp_session_state" | "temp_primary_dcs"> & {
+      session: Pick<WebTransportSession,
+        | "chat_id"
+        | "transport_user_id"
+        | "temp_auth_key"
+        | "temp_session_id"
+        | "temp_session_state"
+        | "temp_primary_dcs"
+        | "startup_routes"
+        | "routing_revision"
+      > & {
         expected_bot_id: string;
         temp_api_id: number;
       };

@@ -84,7 +84,7 @@ function harness() {
 }
 
 describe("Galer Cloud Web transport lifecycle", () => {
-  it("starts activation after reservation while temp auth is still binding, then verifies only after both branches", async () => {
+  it("overlaps activation with temp-auth binding but gates Worker media initialization on confirmed vault membership", async () => {
     const { controller, runtime, api } = harness();
     let finishBind!: () => void;
     let finishActivate!: () => void;
@@ -108,15 +108,17 @@ describe("Galer Cloud Web transport lifecycle", () => {
     expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.bind).mock.invocationCallOrder[0]);
 
     finishBind();
-    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(runtime.initialize).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
 
     finishActivate();
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b);
+    expect(runtime.initialize).toHaveBeenCalledOnce();
     expect(runtime.verifyReady).toHaveBeenCalledOnce();
+    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
-    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
     await controller.disconnect();
   });
 
@@ -162,7 +164,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
   });
 
-  it("waits for in-flight activation before cleanup when Worker initialization fails", async () => {
+  it("waits for vault activation before running Worker initialization and then cleans up an initialization failure", async () => {
     const { controller, runtime, api } = harness();
     let finishActivate!: () => void;
     const activationFinished = vi.fn();
@@ -175,18 +177,22 @@ describe("Galer Cloud Web transport lifecycle", () => {
     vi.mocked(runtime.initialize).mockRejectedValueOnce(new Error("worker init failed"));
 
     const failure = controller.connect().catch(error => error as Error);
-    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
+    expect(runtime.initialize).not.toHaveBeenCalled();
     expect(api.stop).not.toHaveBeenCalled();
 
     finishActivate();
     expect((await failure).message).toBe("worker init failed");
+    expect(runtime.initialize).toHaveBeenCalledOnce();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledOnce();
+    expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]);
     expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
   });
 
-  it("cleans up safely when activation fails while temp auth binding is still in flight", async () => {
+  it("does not initialize Telegram media when activation fails while temp auth binding is still in flight", async () => {
     const { controller, runtime, api } = harness();
     let finishBind!: () => void;
     vi.mocked(api.bind).mockImplementationOnce(async () => {
@@ -202,7 +208,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     finishBind();
 
     expect((await failure).message).toBe("activation failed");
-    expect(runtime.initialize).toHaveBeenCalledOnce();
+    expect(runtime.initialize).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledOnce();
