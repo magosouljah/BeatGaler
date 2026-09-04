@@ -145,7 +145,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(workerClient).toContain("prewarm(): void {");
     expect(workerClient).toContain('playTrace("WORKER_PREWARM_BEGIN")');
     expect(workerClient).toContain("this.ensureWorker();");
-    expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER")');
+    expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER", { startup_beat_count: candidates.length });');
     expect(transport).toContain("this.worker.prewarm();");
     expect(transport).toContain("async connectPlaybackDataPlane(): Promise<void>");
 
