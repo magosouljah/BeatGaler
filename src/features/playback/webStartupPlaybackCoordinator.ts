@@ -72,6 +72,7 @@ export class WebStartupPlaybackCoordinator {
 
   start(): Promise<void> {
     if (this.startPromise) return this.startPromise;
+    playTrace("DIRECT_START_DISPATCHED", { startup_candidate_count: this.candidates.length });
     this.startPromise = (async () => {
       await this.transport.connectPlaybackDataPlane();
       if (this.candidates.length === 0) {
