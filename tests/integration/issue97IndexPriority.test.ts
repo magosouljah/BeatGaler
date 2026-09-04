@@ -28,7 +28,8 @@ describe("Issue #97 INDEX priority", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
     expect(worker).toContain("activeIndexAbortController");
-    expect(worker).toContain("activeIndexAbortController?.abort()");
+    expect(worker).toContain("const controller = activeIndexAbortController;");
+    expect(worker).toContain("controller.abort();");
     expect(worker).toContain("abortSignal: controller.signal");
     expect(worker).toContain('preemptActiveIndex("play")');
     expect(worker).toContain('preemptActiveIndex("warm")');
@@ -39,7 +40,7 @@ describe("Issue #97 INDEX priority", () => {
   it("never interprets an INDEX preemption as an authoritative deletion or warm failure", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
-    expect(worker).toContain("controller.signal.aborted || isAbortError(error)");
+    expect(worker).toContain("controller?.signal.aborted || isAbortError(error)");
     expect(worker).toContain("resumed = true");
     expect(worker).toContain("continue;");
   });
