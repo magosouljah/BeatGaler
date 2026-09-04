@@ -88,8 +88,8 @@ function linkedVaultId(dataDir, installationId) {
 }
 
 function authorizedInstallation(req) {
-  const requested = String(req.body?.beatgalerUserId || '').trim();
-  const authorized = String(req.beatgalerAuthorizedInstallationId || requested).trim();
+  const requested = String(req?.body?.beatgalerUserId || '').trim();
+  const authorized = String(req?.beatgalerAuthorizedInstallationId || '').trim();
   return requested && authorized && requested === authorized ? requested : '';
 }
 
@@ -386,6 +386,7 @@ module.exports = {
   normalizeStartupBeatIds,
   normalizeRoutingChanges,
   routingSnapshotFromManifest,
+  authorizedInstallation,
   createStartupRoutingStore,
   installStartupRoutingIndex,
 };
