@@ -3,6 +3,23 @@ import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
 
 let silentGestureUrl: string | null = null;
+const WEB_PLAYBACK_BUFFER_SIGNAL_EVENT = "beatgaler:web-playback-buffer";
+type PlaybackBufferSignalState = "idle" | "playing" | "waiting";
+
+function dispatchPlaybackBufferSignal(
+  audio: HTMLAudioElement,
+  beatId: string | null,
+  state: PlaybackBufferSignalState,
+): void {
+  if (!beatId || typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(WEB_PLAYBACK_BUFFER_SIGNAL_EVENT, {
+    detail: {
+      beatId,
+      currentTime: Math.max(0, Number(audio.currentTime) || 0),
+      state,
+    },
+  }));
+}
 
 function getSilentGestureUrl(): string {
   if (silentGestureUrl) return silentGestureUrl;
@@ -70,11 +87,13 @@ export function useAudio() {
       if (audio.duration > 0) {
         setState((s) => ({ ...s, progress: audio.currentTime / audio.duration }));
       }
+      dispatchPlaybackBufferSignal(audio, currentBeatIdRef.current, audio.paused ? "idle" : "playing");
     };
     const onLoadedMeta = () => setState((s) => ({ ...s, duration: audio.duration }));
     const onEnded = () => {
       const beatId = currentBeatIdRef.current;
       setState((s) => ({ ...s, isPlaying: false, progress: 0, endedSeq: s.endedSeq + 1 }));
+      dispatchPlaybackBufferSignal(audio, beatId, "idle");
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } }));
     };
     const onPlay = () => {
@@ -85,12 +104,15 @@ export function useAudio() {
       const beatId = currentBeatIdRef.current;
       playTrace("AUDIO_EVENT_PLAYING", { beat_id: beatId, ready_state: audio.readyState, current_time: audio.currentTime });
       setState((s) => ({ ...s, isPlaying: true }));
+      dispatchPlaybackBufferSignal(audio, beatId, "playing");
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-playing", { detail: { beatId } }));
       void platform.diagnostics.audioEvent("AUDIO_PLAYING", beatId, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
     };
     const onWaiting = () => {
-      playTrace("AUDIO_EVENT_WAITING", { beat_id: currentBeatIdRef.current, ready_state: audio.readyState, current_time: audio.currentTime });
-      void platform.diagnostics.audioEvent("AUDIO_WAITING", currentBeatIdRef.current, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
+      const beatId = currentBeatIdRef.current;
+      playTrace("AUDIO_EVENT_WAITING", { beat_id: beatId, ready_state: audio.readyState, current_time: audio.currentTime });
+      dispatchPlaybackBufferSignal(audio, beatId, "waiting");
+      void platform.diagnostics.audioEvent("AUDIO_WAITING", beatId, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
     };
     const onCanPlay = () => {
       playTrace("AUDIO_EVENT_CANPLAY", { beat_id: currentBeatIdRef.current, ready_state: audio.readyState });
@@ -99,6 +121,7 @@ export function useAudio() {
     const onPause = () => {
       const beatId = currentBeatIdRef.current;
       setState((s) => ({ ...s, isPlaying: false }));
+      dispatchPlaybackBufferSignal(audio, beatId, "idle");
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } }));
     };
     const onError = () => {

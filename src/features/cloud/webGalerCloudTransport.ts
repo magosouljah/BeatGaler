@@ -8,23 +8,39 @@ import type { PlatformBeatEditFiles } from "../../platform/contracts";
 import type { PlatformTrashItem } from "../../platform/contracts";
 import { playTrace } from "../playback/playTrace";
 import { listWebTrashItems, moveWebBeatsToTrash, purgeWebTrash, restoreWebBeatFromTrash } from "../trash/webTrash";
-import type {
-  WebTransportDownloadInput,
-  WebTransportDownloadResult,
-  WebTransportLibraryIndexResult,
-  WebTransportPrefetchInput,
-  WebTransportPrefetchResult,
-  WebTransportProgress,
-  WebTransportStreamInput,
-  WebTransportStreamResult,
-  WebTransportUploadInput,
-  WebTransportUploadResult,
+import {
+  runWebPrefetchBatch,
+  WEB_PREFETCH_BATCH_MAX_LANES,
+  type WebPrefetchBatchOutcome,
+  type WebPrefetchRoundChunk,
+} from "./webPrefetchBatch";
+import {
+  WEB_PLAYBACK_FIRST_CHUNK_BYTES,
+  type WebTransportDownloadInput,
+  type WebTransportDownloadResult,
+  type WebTransportLibraryIndexResult,
+  type WebTransportPrefetchInput,
+  type WebTransportPrefetchResult,
+  type WebTransportProgress,
+  type WebTransportStreamInput,
+  type WebTransportStreamResult,
+  type WebTransportUploadInput,
+  type WebTransportUploadResult,
 } from "./webTransportWorkerProtocol";
+
+type WarmPlaybackPrefix = {
+  prefix: ArrayBuffer;
+  totalBytes: number;
+  mimeType: string;
+  playableSeconds: number;
+};
 
 export class WebGalerCloudTransport {
   private readonly worker = new WebTransportWorkerClient();
   private readonly controller = new WebTransportController(this.worker);
   private readonly uploadCheckpoints = new Map<string, Promise<WebTransportUploadResult>>();
+  private readonly warmPlaybackPrefixes = new Map<number, WarmPlaybackPrefix>();
+  private readonly foregroundStreamingMessageIds = new Set<number>();
 
   constructor() {
     const started = Date.now();
@@ -120,21 +136,115 @@ export class WebGalerCloudTransport {
     );
   }
 
-  async prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
-    const started = Date.now();
-    playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId });
-    await this.controller.connect();
-    const result = await this.controller.withOperation(
-      "stream_master",
-      { objectType: "message", objectIds: [String(input.messageId)] },
-      () => this.worker.prefetch(input),
-    );
-    playTrace("TRANSPORT_PREFETCH_READY", {
-      message_id: input.messageId,
-      bytes: result.prefix.byteLength,
-      total_ms: Date.now() - started,
+  private readPrefetchRoundChunk(
+    input: WebTransportPrefetchInput,
+    offsetBytes: number,
+  ): Promise<WebPrefetchRoundChunk> {
+    return new Promise<WebPrefetchRoundChunk>((resolve, reject) => {
+      let settled = false;
+      let handle: ReturnType<WebTransportWorkerClient["stream"]> | null = null;
+      handle = this.worker.stream({
+        messageId: input.messageId,
+        mimeType: input.mimeType,
+        offsetBytes,
+      }, (chunk, downloadedBytes, totalBytes) => {
+        if (settled) return;
+        const bounded = chunk.byteLength > WEB_PLAYBACK_FIRST_CHUNK_BYTES
+          ? chunk.slice(0, WEB_PLAYBACK_FIRST_CHUNK_BYTES)
+          : chunk;
+        if (bounded.byteLength <= 0) {
+          settled = true;
+          handle?.cancel();
+          reject(new Error("Galer Cloud returned an empty playback prefix chunk."));
+          return;
+        }
+        settled = true;
+        if (!(totalBytes > 0 && downloadedBytes >= totalBytes)) handle?.cancel();
+        resolve({
+          chunk: bounded,
+          totalBytes,
+          mimeType: String(input.mimeType || "audio/mpeg"),
+        });
+      });
+      void handle.completed.then(
+        () => {
+          if (settled) return;
+          settled = true;
+          reject(new Error("Galer Cloud returned an empty playback prefix chunk."));
+        },
+        error => {
+          if (settled) return;
+          settled = true;
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
     });
-    return result;
+  }
+
+  async prefetchFiles(
+    inputs: readonly WebTransportPrefetchInput[],
+    maxLanes = WEB_PREFETCH_BATCH_MAX_LANES,
+  ): Promise<WebPrefetchBatchOutcome[]> {
+    if (inputs.length === 0) return [];
+    const started = Date.now();
+    const objectIds = Array.from(new Set(inputs.map(input => String(input.messageId))));
+    playTrace("PREFETCH_BATCH_BEGIN", {
+      visible_candidates: inputs.length,
+      lanes: Math.min(WEB_PREFETCH_BATCH_MAX_LANES, Math.max(1, Math.floor(maxLanes))),
+    });
+    await this.controller.connect();
+    try {
+      const outcomes = await this.controller.withOperation(
+        "stream_master",
+        { objectType: "message", objectIds },
+        () => runWebPrefetchBatch(
+          inputs,
+          (input, offsetBytes) => this.readPrefetchRoundChunk(input, offsetBytes),
+          {
+            maxLanes,
+            shouldContinue: input => !this.foregroundStreamingMessageIds.has(input.messageId),
+            onProgress: progress => {
+              this.warmPlaybackPrefixes.set(progress.input.messageId, {
+                prefix: progress.prefix,
+                totalBytes: progress.totalBytes,
+                mimeType: progress.mimeType,
+                playableSeconds: progress.playableSeconds,
+              });
+              playTrace("PREFETCH_PROGRESS", {
+                message_id: progress.input.messageId,
+                bytes: progress.bytes,
+                playable_seconds: Math.round(progress.playableSeconds * 1000) / 1000,
+                target_met: progress.targetMet,
+              });
+            },
+          },
+        ),
+      );
+      for (const outcome of outcomes) {
+        if (!outcome.result) continue;
+        playTrace("PREFETCH_READY", {
+          message_id: outcome.input.messageId,
+          bytes: outcome.result.prefix.byteLength,
+          playable_seconds: Math.round(outcome.playableSeconds * 1000) / 1000,
+          target_met: outcome.targetMet,
+        });
+      }
+      playTrace("PREFETCH_BATCH_DONE", {
+        candidates: inputs.length,
+        ready: outcomes.filter(outcome => outcome.result && !outcome.error).length,
+        elapsed_ms: Date.now() - started,
+      });
+      return outcomes;
+    } finally {
+      for (const input of inputs) this.warmPlaybackPrefixes.delete(input.messageId);
+    }
+  }
+
+  async prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+    const [outcome] = await this.prefetchFiles([input]);
+    if (outcome?.error) throw outcome.error;
+    if (!outcome?.result) throw new Error("Galer Cloud returned an empty playback prefix.");
+    return outcome.result;
   }
 
   async streamFile(
@@ -142,25 +252,65 @@ export class WebGalerCloudTransport {
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
   ): Promise<{ completed: Promise<WebTransportStreamResult>; cancel(): void }> {
     const started = Date.now();
-    playTrace("TRANSPORT_STREAM_ENTER");
-    const connectStarted = Date.now();
-    await this.controller.connect();
-    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
-    const operationStarted = Date.now();
-    const lease = await this.controller.beginOperation(
-      "stream_master",
-      { objectType: "message", objectIds: [String(input.messageId)] },
-    );
-    playTrace("TRANSPORT_STREAM_ADMITTED", { wait_ms: Date.now() - operationStarted });
-    const stream = this.worker.stream(input, onChunk);
-    playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started });
-    return {
-      completed: stream.completed.finally(() => {
-        playTrace("TRANSPORT_STREAM_DONE", { total_ms: Date.now() - started });
-        return this.controller.endOperation(lease).catch(() => {});
-      }),
-      cancel: stream.cancel,
-    };
+    const messageId = Number(input.messageId || 0);
+    const requestedOffset = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+    this.foregroundStreamingMessageIds.add(messageId);
+    let effectiveOffset = requestedOffset;
+    const warmed = this.warmPlaybackPrefixes.get(messageId);
+    try {
+      if (warmed && warmed.prefix.byteLength > requestedOffset) {
+        for (let offset = requestedOffset; offset < warmed.prefix.byteLength; offset += WEB_PLAYBACK_FIRST_CHUNK_BYTES) {
+          const end = Math.min(warmed.prefix.byteLength, offset + WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+          const chunk = warmed.prefix.slice(offset, end);
+          await onChunk(chunk, end, warmed.totalBytes || warmed.prefix.byteLength);
+        }
+        effectiveOffset = warmed.prefix.byteLength;
+        playTrace("TRANSPORT_PARTIAL_PREFETCH_CONSUMED", {
+          message_id: messageId,
+          requested_offset_bytes: requestedOffset,
+          offset_bytes: effectiveOffset,
+          playable_seconds: Math.round(warmed.playableSeconds * 1000) / 1000,
+        });
+      }
+
+      if (warmed && warmed.totalBytes > 0 && effectiveOffset >= warmed.totalBytes) {
+        const completed = Promise.resolve({
+          messageId,
+          totalBytes: warmed.totalBytes,
+          mimeType: warmed.mimeType || String(input.mimeType || "audio/mpeg"),
+        }).finally(() => {
+          this.foregroundStreamingMessageIds.delete(messageId);
+        });
+        return {
+          completed,
+          cancel: () => this.foregroundStreamingMessageIds.delete(messageId),
+        };
+      }
+
+      playTrace("TRANSPORT_STREAM_ENTER", { offset_bytes: effectiveOffset });
+      const connectStarted = Date.now();
+      await this.controller.connect();
+      playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
+      const operationStarted = Date.now();
+      const lease = await this.controller.beginOperation(
+        "stream_master",
+        { objectType: "message", objectIds: [String(input.messageId)] },
+      );
+      playTrace("TRANSPORT_STREAM_ADMITTED", { wait_ms: Date.now() - operationStarted });
+      const stream = this.worker.stream({ ...input, offsetBytes: effectiveOffset }, onChunk);
+      playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started, offset_bytes: effectiveOffset });
+      return {
+        completed: stream.completed.finally(() => {
+          this.foregroundStreamingMessageIds.delete(messageId);
+          playTrace("TRANSPORT_STREAM_DONE", { total_ms: Date.now() - started, offset_bytes: effectiveOffset });
+          return this.controller.endOperation(lease).catch(() => {});
+        }),
+        cancel: stream.cancel,
+      };
+    } catch (error) {
+      this.foregroundStreamingMessageIds.delete(messageId);
+      throw error;
+    }
   }
 
   async commitImportedBeat(
@@ -329,6 +479,8 @@ export class WebGalerCloudTransport {
 
   disconnect(): Promise<void> {
     this.uploadCheckpoints.clear();
+    this.warmPlaybackPrefixes.clear();
+    this.foregroundStreamingMessageIds.clear();
     return this.controller.disconnect();
   }
 }
@@ -344,3 +496,4 @@ export type {
   WebTransportStreamResult,
   WebTransportUploadResult,
 } from "./webTransportWorkerProtocol";
+export type { WebPrefetchBatchOutcome } from "./webPrefetchBatch";

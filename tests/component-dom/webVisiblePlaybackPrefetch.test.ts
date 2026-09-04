@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FULL_CARD_INTERSECTION_RATIO,
+  classifyBeatCardPrefetchZone,
   isFullyVisibleBeatCardIntersection,
 } from "../../src/features/playback/webVisiblePlaybackPrefetch";
 
@@ -48,16 +49,13 @@ function entry(input: {
   } as IntersectionObserverEntry;
 }
 
-describe("fully visible BeatCard prefetch eligibility", () => {
-  it("accepts a complete card inside the viewport", () => {
+describe("BeatCard prefetch eligibility", () => {
+  it("keeps the legacy exact full-card helper", () => {
     expect(isFullyVisibleBeatCardIntersection(entry({
       ratio: 1,
       top: 120,
       bottom: 380,
     }))).toBe(true);
-  });
-
-  it("rejects a card whose lower edge is clipped even when most of it is visible", () => {
     expect(isFullyVisibleBeatCardIntersection(entry({
       ratio: FULL_CARD_INTERSECTION_RATIO,
       top: 650,
@@ -66,11 +64,27 @@ describe("fully visible BeatCard prefetch eligibility", () => {
     }))).toBe(false);
   });
 
-  it("rejects partial visibility before the full-card ratio threshold", () => {
-    expect(isFullyVisibleBeatCardIntersection(entry({
-      ratio: 0.98,
-      top: 120,
-      bottom: 380,
-    }))).toBe(false);
+  it("classifies a partially clipped card as visible when any pixels intersect the viewport", () => {
+    expect(classifyBeatCardPrefetchZone(entry({
+      ratio: 0.2,
+      top: 760,
+      bottom: 920,
+    }), 1200, 800)).toBe("visible");
+  });
+
+  it("classifies an expanded-root card outside the real viewport as nearby", () => {
+    expect(classifyBeatCardPrefetchZone(entry({
+      ratio: 1,
+      top: 900,
+      bottom: 1100,
+    }), 1200, 800)).toBe("nearby");
+  });
+
+  it("rejects an entry that is outside the observer root", () => {
+    expect(classifyBeatCardPrefetchZone(entry({
+      ratio: 0,
+      top: 1700,
+      bottom: 1900,
+    }), 1200, 800)).toBeNull();
   });
 });
