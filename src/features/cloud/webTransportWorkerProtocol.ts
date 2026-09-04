@@ -14,8 +14,9 @@ export const WEB_PLAYBACK_FIRST_CHUNK_BYTES = WEB_PLAYBACK_FIRST_CHUNK_KB * 1024
 export const DEFAULT_PLAYBACK_DATA_LANES = 7;
 export const WEB_PLAYBACK_DATA_LANES = DEFAULT_PLAYBACK_DATA_LANES;
 export const STARTUP_PREFIX_BYTES = 64 * 1024;
-// Startup readiness is byte-based now. These legacy fields remain only for API compatibility.
-export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 0;
+// Startup readiness is byte-based now. Infinity explicitly disables the old
+// playable-seconds threshold so a 64 KiB prefix never delays Play admission.
+export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;
 export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;
 
 export interface WebTransportStoredFile {
