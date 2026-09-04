@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  bufferAheadSeconds,
   WebPlaybackSourceManager,
   type WebPlaybackTransport,
 } from "../../src/features/playback/webPlaybackSource";
@@ -121,46 +122,52 @@ describe("Web MASTER playback source", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:session-cache-2");
   });
 
-  it("caps speculative prefix downloads at two concurrent jobs", async () => {
-    const releases: Array<() => void> = [];
-    let active = 0;
-    let maxActive = 0;
-    const prefetchFile = vi.fn((input: { messageId: number; mimeType?: string | null }) => new Promise<{
-      messageId: number;
-      totalBytes: number;
-      mimeType: string;
-      prefix: ArrayBuffer;
-    }>(resolve => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      releases.push(() => {
-        active -= 1;
-        resolve({
-          messageId: input.messageId,
-          totalBytes: 65536,
-          mimeType: input.mimeType || "audio/mpeg",
-          prefix: new ArrayBuffer(65536),
-        });
-      });
-    }));
+  it("submits the visible group together with a six-lane physical transfer limit", async () => {
+    const batches: Array<{ ids: number[]; maxLanes: number | undefined }> = [];
     const transport: WebPlaybackTransport = {
-      prefetchFile,
+      prefetchFile: unusedPrefetch(),
+      async prefetchFiles(inputs, maxLanes) {
+        batches.push({ ids: inputs.map(input => input.messageId), maxLanes });
+        return inputs.map(input => ({
+          input,
+          result: {
+            messageId: input.messageId,
+            totalBytes: 65536,
+            mimeType: input.mimeType || "audio/mpeg",
+            prefix: new ArrayBuffer(65536),
+          },
+          playableSeconds: 1.05,
+          targetMet: true,
+          error: null,
+        }));
+      },
       streamFile: vi.fn(async () => { throw new Error("stream not expected"); }),
     };
     const manager = new WebPlaybackSourceManager(transport);
-    const jobs = [1, 2, 3, 4, 5].map(messageId => manager.prefetch(`beat-${messageId}`, messageId));
+    const jobs = Array.from({ length: 8 }, (_, index) => {
+      const messageId = index + 1;
+      return manager.prefetch(`beat-${messageId}`, messageId);
+    });
 
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(2));
-    releases.shift()!();
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(3));
-    releases.shift()!();
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(4));
-    releases.shift()!();
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(5));
-    while (releases.length) releases.shift()!();
     await Promise.all(jobs);
 
-    expect(maxActive).toBe(2);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].ids).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(batches[0].maxLanes).toBe(6);
+  });
+
+  it("measures actual MSE buffer ahead from the range containing currentTime", () => {
+    const sourceBuffer = {
+      buffered: {
+        length: 2,
+        start: (index: number) => index === 0 ? 0 : 5,
+        end: (index: number) => index === 0 ? 2.5 : 8,
+      },
+    } as unknown as SourceBuffer;
+
+    expect(bufferAheadSeconds(sourceBuffer, 1)).toBe(1.5);
+    expect(bufferAheadSeconds(sourceBuffer, 6.25)).toBe(1.75);
+    expect(bufferAheadSeconds(sourceBuffer, 4)).toBe(0);
   });
 
   it("does not hot-loop a failed speculative prefetch", async () => {
