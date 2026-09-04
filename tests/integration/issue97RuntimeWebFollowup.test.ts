@@ -96,13 +96,13 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).toContain("if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;");
     expect(accountGate).toContain("restoreBeatGalerSessionInFlight = pending;");
     expect(accountGate).toContain("pending.then(clear, clear);");
-    expect(accountGate.indexOf("if (account || optimisticRememberedSession) return <>{children}")).toBeLessThan(
+    expect(accountGate.indexOf("if (account || optimisticRememberedSession) return <>{children}</>")).toBeLessThan(
       accountGate.indexOf('if (checking) return <div className="bg-account-loading"'),
     );
     expect(accountGate).toContain("setOptimisticRememberedSession(false);");
   });
 
-  it("returns the first MSE URL before Direct stream admission and overlaps remembered auth, Direct startup, and activation", () => {
+  it("returns the first MSE URL before Direct stream admission and overlaps remembered auth with membership-gated Direct startup", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
     const adapter = source("src/platform/webAdapter.ts");
@@ -144,29 +144,32 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(workerClient).toContain("prewarm(): void {");
     expect(workerClient).toContain('playTrace("WORKER_PREWARM_BEGIN")');
     expect(workerClient).toContain("this.ensureWorker();");
-    expect(transport).toContain('playTrace("TRANSPORT_PRECONNECT_ENTER")');
+    expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER")');
     expect(transport).toContain("this.worker.prewarm();");
-    expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("void this.controller.connect().then("));
+    expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("startStartupWarm("));
 
     expect(sessionControl).toContain("const csrf = readWebCsrfToken();");
     expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
     expect(sessionControl).toContain('credentials: "include"');
-    expect(sessionControl).toContain("export async function reserveWebTransportSession()");
+    expect(sessionControl).toContain("export async function reserveWebTransportSession(startupBeatIds: readonly string[] = [])");
     expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
-    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession());");
+    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));");
 
-    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve();");
+    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve(this.startupBeatIds);");
     const activateIndex = controller.indexOf('observePlayStep("DIRECT_ACTIVATE"');
-    const bindIndex = controller.indexOf("return this.api.bind(bootstrap);");
+    const bindIndex = controller.indexOf("this.api.bind(bootstrap!)");
+    const activationGateIndex = controller.indexOf("const activationResult = await activationResultPromise;");
+    const mediaGateIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN")');
     const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
-    const joinIndex = controller.indexOf("const [activationResult, initializeResult] = await Promise.all([");
     const verifyIndex = controller.indexOf('observePlayStep("DIRECT_VERIFY"');
     expect(reserveIndex).toBeGreaterThanOrEqual(0);
     expect(reserveIndex).toBeLessThan(activateIndex);
     expect(activateIndex).toBeLessThan(bindIndex);
-    expect(bindIndex).toBeLessThan(initializeIndex);
-    expect(initializeIndex).toBeLessThan(joinIndex);
-    expect(joinIndex).toBeLessThan(verifyIndex);
+    expect(bindIndex).toBeLessThan(activationGateIndex);
+    expect(activationGateIndex).toBeLessThan(mediaGateIndex);
+    expect(mediaGateIndex).toBeLessThan(initializeIndex);
+    expect(initializeIndex).toBeLessThan(verifyIndex);
+    expect(controller).not.toContain("const [activationResult, initializeResult] = await Promise.all([");
     expect(controller).toContain("if (activationResultPromise) await activationResultPromise;");
     expect(controller).toContain("if (bootstrap) await this.api.stop(bootstrap).catch(() => {});");
   });
