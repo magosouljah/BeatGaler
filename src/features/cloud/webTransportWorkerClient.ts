@@ -44,12 +44,14 @@ export interface WebTransportStreamHandle {
 export interface WebTransportPrefetchBatchHandle {
   completed: Promise<WebTransportPrefetchBatchResult>;
   cancelMessage(messageId: number): void;
+  promoteMessage(messageId: number): Promise<void>;
   cancel(): void;
 }
 
 export class WebTransportWorkerClient implements WebTransportRuntime {
   private worker: Worker | null = null;
   private pending = new Map<string, PendingRequest>();
+  private sessionStartupMessageIds: number[] = [];
 
   constructor(
     private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
@@ -58,7 +60,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
     playTrace("WORKER_CREATE_BEGIN");
-    const worker = new Worker(new URL("./webTransport.worker.ts", import.meta.url), { type: "module", name: "galer-cloud-data-plane" });
+    const worker = new Worker(new URL("./webTransport.worker.ts", import.meta.url), {
+      type: "module",
+      name: "galer-cloud-data-plane",
+    });
     playTrace("WORKER_CREATED");
     worker.onmessage = event => this.onMessage(event.data as WebTransportWorkerResponse);
     worker.onerror = () => {
@@ -112,8 +117,12 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
     const completed = this.takePending(message.requestId);
     if (!completed) return;
-    if (completed.operation === "initialize" || completed.operation === "verify") {
-      playTrace("WORKER_RESPONSE_RECEIVED", { request_id: message.requestId, operation: completed.operation, ok: message.ok });
+    if (completed.operation === "initialize" || completed.operation === "verify" || completed.operation === "verify_identity") {
+      playTrace("WORKER_RESPONSE_RECEIVED", {
+        request_id: message.requestId,
+        operation: completed.operation,
+        ok: message.ok,
+      });
     }
     if (message.ok) completed.resolve(message.result);
     else completed.reject(new Error(message.error));
@@ -163,7 +172,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       });
       try {
         const worker = this.ensureWorker();
-        if (command.op === "initialize" || command.op === "verify") {
+        if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
           playTrace("WORKER_REQUEST_POSTED", { request_id: requestId, operation: command.op });
         }
         worker.postMessage({ ...command, requestId } as WebTransportWorkerCommand);
@@ -174,9 +183,14 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     });
   }
 
-  async initialize(session: WebTransportSession): Promise<void> {
+  async initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void> {
+    const sessionStartupMessageIds = Array.from(new Set(
+      startupMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
+    )).slice(0, 14);
+    this.sessionStartupMessageIds = sessionStartupMessageIds;
     await this.request({
       op: "initialize",
+      startupMessageIds: sessionStartupMessageIds,
       session: {
         chat_id: session.chat_id,
         transport_user_id: session.transport_user_id,
@@ -186,14 +200,16 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_session_id: session.temp_session_id,
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
-        startup_routes: session.startup_routes || {},
-        routing_revision: Math.max(0, Number(session.routing_revision) || 0),
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {
-    await this.initialize(session);
+    await this.initialize(session, this.sessionStartupMessageIds);
+  }
+
+  async verifyIdentity(): Promise<void> {
+    await this.request({ op: "verify_identity" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
   async verifyReady(): Promise<void> {
@@ -247,8 +263,21 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         onChunk,
       ),
       cancelMessage: messageId => this.sendPrefetchControl(requestId, messageId),
+      promoteMessage: messageId => this.focusPlayback(messageId),
       cancel: () => this.sendPrefetchControl(requestId),
     };
+  }
+
+  focusPlayback(messageId: number): Promise<void> {
+    return this.request<void>({ op: "playback_focus", messageId });
+  }
+
+  markPlaybackStable(messageId: number): Promise<void> {
+    return this.request<void>({ op: "playback_stable", messageId });
+  }
+
+  releasePlaybackFocus(messageId: number): Promise<void> {
+    return this.request<void>({ op: "playback_release", messageId });
   }
 
   stream(
@@ -285,6 +314,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     await this.request({ op: "shutdown" }).catch(() => {});
     worker.terminate();
     this.worker = null;
+    this.sessionStartupMessageIds = [];
     this.failPending("Galer Cloud Web transport closed.");
   }
 }

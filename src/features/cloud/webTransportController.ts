@@ -14,7 +14,7 @@ import {
 import { playTrace, observePlayStep } from "../playback/playTrace";
 
 export interface WebTransportRuntime {
-  initialize(session: WebTransportSession): Promise<void>;
+  initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void>;
   replaceCredentials(session: WebTransportSession): Promise<void>;
   verifyReady(session: WebTransportSession): Promise<void>;
   shutdown(): Promise<void>;
@@ -41,6 +41,11 @@ export interface WebTransportOperationLease {
   sessionId: string;
   generation: number;
   scope: WebTransportCapabilityScope;
+}
+
+export interface WebTransportStartupConfig {
+  startupBeatIds: readonly string[];
+  startupMessageIds: readonly number[];
 }
 
 const defaultApi: WebTransportControlApi = {
@@ -83,27 +88,36 @@ function normalizeStartupBeatIds(values: readonly string[]): string[] {
   return output;
 }
 
-/** Owns the Web lease. Credentials remain in memory and are handed only to the data-plane runtime. */
+function normalizeStartupMessageIds(values: readonly number[]): number[] {
+  const output: number[] = [];
+  const seen = new Set<number>();
+  for (const value of values) {
+    const id = Number(value || 0);
+    if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    output.push(id);
+    if (output.length >= MAX_STARTUP_BEATS) break;
+  }
+  return output;
+}
+
+/** Owns the Web lease. Startup routing is immutable for the lifetime of this controller. */
 export class WebTransportController {
   private session: WebTransportSession | null = null;
   private connectPromise: Promise<WebTransportSession> | null = null;
   private refreshPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
-  private startupBeatIds: string[] = [];
+  private readonly startupBeatIds: string[];
+  private readonly startupMessageIds: number[];
 
   constructor(
     private readonly runtime: WebTransportRuntime,
     private readonly api: WebTransportControlApi = defaultApi,
-  ) {}
-
-  configureStartupBeatIds(beatIds: readonly string[]): void {
-    if (this.session || this.connectPromise) {
-      playTrace("CONTROLLER_STARTUP_IDS_LATE", { count: beatIds.length });
-      return;
-    }
-    this.startupBeatIds = normalizeStartupBeatIds(beatIds);
-    playTrace("CONTROLLER_STARTUP_IDS_CONFIGURED", { count: this.startupBeatIds.length });
+    startup: WebTransportStartupConfig = { startupBeatIds: [], startupMessageIds: [] },
+  ) {
+    this.startupBeatIds = normalizeStartupBeatIds(startup.startupBeatIds);
+    this.startupMessageIds = normalizeStartupMessageIds(startup.startupMessageIds);
   }
 
   async connect(): Promise<WebTransportSession> {
@@ -132,42 +146,31 @@ export class WebTransportController {
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupBeatIds.length });
     try {
-      // Reserve first so TypeScript and teardown both have an explicit lease.
-      // Activation then overlaps only with temp-auth creation/binding; Worker
-      // initialize (which contains startup getMessages) remains gated below.
       bootstrap = await this.api.reserve(this.startupBeatIds);
       const activateStarted = Date.now();
       activationResultPromise = settleStartupBranch(
         observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
       ).then(result => {
-        if (result.ok) {
-          playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
-        }
+        if (result.ok) playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
         return result;
       });
 
       const session = await observePlayStep("DIRECT_PREPARE", () => this.api.bind(bootstrap!));
       playTrace("CONTROLLER_SESSION_PREPARE_DONE", {
         elapsed_ms: Date.now() - started,
-        startup_routes: Object.keys(session.startup_routes || {}).length,
-        routing_revision: Math.max(0, Number(session.routing_revision) || 0),
+        startup_message_count: this.startupMessageIds.length,
       });
 
-      // Important ordering invariant: getMessages(startup routes) runs inside
-      // runtime.initialize(). Do not race that RPC against vault membership.
+      // Telegram media access must not race vault activation. The local routing
+      // cache is already immutable, so there is no late candidate configuration.
       const activationResult = await activationResultPromise;
       if (!activationResult.ok) throw activationResult.error;
       playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
 
       const initializeStarted = Date.now();
-      const initializeResult = await settleStartupBranch(
-        observePlayStep("DIRECT_INITIALIZE", () => this.runtime.initialize(session)),
-      );
-      if (!initializeResult.ok) throw initializeResult.error;
+      await observePlayStep("DIRECT_INITIALIZE", () => this.runtime.initialize(session, this.startupMessageIds));
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
 
-      // getChat remains the explicit vault-membership check until the negative
-      // getMessages-without-membership probe proves Telegram's error is unambiguous.
       const verifyStarted = Date.now();
       await observePlayStep("DIRECT_VERIFY", () => this.runtime.verifyReady(session));
       playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
@@ -265,7 +268,10 @@ export class WebTransportController {
         try {
           await this.api.authorize(session, response.operationId, kind, scope);
         } catch (error) {
-          await this.api.end({ session_id: session.session_id, generation: session.generation }, response.operationId).catch(() => {});
+          await this.api.end(
+            { session_id: session.session_id, generation: session.generation },
+            response.operationId,
+          ).catch(() => {});
           throw error;
         }
         return {

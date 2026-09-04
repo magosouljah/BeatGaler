@@ -9,41 +9,44 @@ import {
   publishWebLibraryNavigationState,
   readRequestedWebLibraryOffset,
 } from "../features/library/webLibraryNavigation";
-import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
+import type { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
 import {
   installBeatCardWarmObserver,
   type BeatCardWarmPriority,
 } from "../features/playback/webVisiblePlaybackPrefetch";
 import { playTrace, observePlayStep } from "../features/playback/playTrace";
+import {
+  deletePlaybackRoutes,
+  readWebPlaybackRoutingCache,
+  upsertPlaybackRouteFromBeat,
+} from "../features/playback/webPlaybackRoutingCache";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
+let webCoordinator: Promise<import("../features/playback/webStartupPlaybackCoordinator").WebStartupPlaybackCoordinator> | null = null;
 let webCloudTransport: Promise<import("../features/cloud/webGalerCloudTransport").WebGalerCloudTransport> | null = null;
 let webLibraryWindow: WebLibraryWindowConsumer | null = null;
 let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 const webBeatRegistry = new Map<string, Beat>();
-// Cloud routing is a startup hint that may be newer than the presentation cache.
-// Keep it separate from Beat metadata and discard it as soon as Telegram's
-// authoritative manifest materializes the beat again.
-const webStartupRouteOverrides = new Map<string, number>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
 let stopPlaybackRuntimeObserver: (() => void) | null = null;
 
-const WEB_PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";
-const WEB_PRESENTATION_SORT_CACHE_KEY = "beatvault:sort:v2";
-const WEB_STARTUP_WARM_BEATS = 14;
-
-type StartupPresentationCandidate = {
-  beat: Beat;
-  beatId: string;
-  messageId: number;
-  mimeType: string;
-};
+async function resolveWebCoordinator() {
+  if (!webCoordinator) {
+    webCoordinator = observePlayStep("DIRECT_CODE_IMPORT", () => import("../features/playback/webStartupPlaybackCoordinator"))
+      .then(({ getWebStartupPlaybackCoordinator }) => getWebStartupPlaybackCoordinator());
+  }
+  return webCoordinator;
+}
 
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
-    webCloudTransport = observePlayStep("DIRECT_CODE_IMPORT", () => import("../features/cloud/webGalerCloudTransport"))
-      .then(({ WebGalerCloudTransport }) => new WebGalerCloudTransport());
+    webCloudTransport = resolveWebCoordinator().then(coordinator => {
+      void coordinator.start().catch(error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
+        error_name: error instanceof Error ? error.name : "unknown",
+      }));
+      return coordinator.getTransport();
+    });
   }
   return webCloudTransport;
 }
@@ -55,89 +58,23 @@ function directMessageId(value: string | null | undefined): number | null {
 }
 
 function webBeatMessageId(beat: Beat): number | null {
-  const startupRoute = webStartupRouteOverrides.get(beat.id);
-  if (startupRoute) return startupRoute;
+  const cached = readWebPlaybackRoutingCache().routes[beat.id]?.messageId;
+  if (cached) return cached;
   const explicit = Number(beat.telegram_message_id || 0);
   if (Number.isInteger(explicit) && explicit > 0) return explicit;
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
 }
 
-function readStartupPresentationCandidates(): StartupPresentationCandidate[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(WEB_PRESENTATION_LIBRARY_CACHE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const beats = parsed.filter((value): value is Beat => Boolean(value && typeof value === "object" && String(value.id || "").trim()));
-    const manualIndex = new Map(beats.map((beat, index) => [beat.id, index]));
-    const sortBy = String(window.localStorage.getItem(WEB_PRESENTATION_SORT_CACHE_KEY) || "rating");
-    const ordered = beats.slice().sort((a, b) => {
-      if (sortBy === "manual") return (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
-      if (sortBy === "bpm") return Number(a.bpm || 0) - Number(b.bpm || 0);
-      if (sortBy === "name") return a.name.localeCompare(b.name);
-      const ratingDiff = Number(b.rating || 0) - Number(a.rating || 0);
-      return ratingDiff || (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
-    });
-    const output: StartupPresentationCandidate[] = [];
-    for (const beat of ordered) {
-      const messageId = webBeatMessageId(beat);
-      if (!messageId) continue;
-      output.push({
-        beat,
-        beatId: beat.id,
-        messageId,
-        mimeType: beat.assets?.master?.mime_type || "audio/mpeg",
-      });
-      if (output.length >= WEB_STARTUP_WARM_BEATS) break;
-    }
-    return output;
-  } catch {
-    return [];
-  }
-}
-
 function prewarmAuthenticatedWebTransport(): void {
   if (typeof window === "undefined") return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-
-  try {
-    if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
-  } catch {
-    return;
-  }
-
-  const candidates = readStartupPresentationCandidates();
-  rememberWebBeats(candidates.map(candidate => candidate.beat));
-  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN", { startup_beat_count: candidates.length });
-  void resolveWebCloudTransport().then(async transport => {
-    if (candidates.length === 0) {
-      playTrace("ADAPTER_TRANSPORT_CODE_PREWARM_ONLY");
-      return;
-    }
-    await transport.startStartupWarm(
-      candidates.map(({ beatId, messageId, mimeType }) => ({ beatId, messageId, mimeType })),
-      async routed => {
-        // Cloud may know a newer MASTER than the presentation cache. Every
-        // startup playback/warm lookup must use the same routed id until the
-        // Telegram reconcile replaces the cached Beat objects.
-        for (const candidate of routed) {
-          webStartupRouteOverrides.set(candidate.beatId, candidate.messageId);
-        }
-        const sources = await resolveWebPlaybackSources();
-        const results = await Promise.allSettled(routed.map(candidate =>
-          sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")
-        ));
-        playTrace("ADAPTER_STARTUP_WARM_SETTLED", {
-          count: routed.length,
-          failures: results.filter(result => result.status === "rejected").length,
-        });
-      },
-    );
-    playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED", { startup_beat_count: candidates.length });
-  }).catch(error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
-    error_name: error instanceof Error ? error.name : "unknown",
-  }));
+  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
+  void resolveWebCoordinator().then(coordinator => coordinator.start()).then(
+    () => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"),
+    error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
+      error_name: error instanceof Error ? error.name : "unknown",
+    }),
+  );
 }
 
 async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
@@ -204,10 +141,8 @@ function rememberWebBeats(beats: readonly Beat[]): void {
 }
 
 function forgetWebBeats(ids: readonly string[]): void {
-  for (const id of ids) {
-    webBeatRegistry.delete(id);
-    webStartupRouteOverrides.delete(id);
-  }
+  for (const id of ids) webBeatRegistry.delete(id);
+  deletePlaybackRoutes(ids);
 }
 
 function resetVisiblePlaybackPrefetch(): void {
@@ -216,13 +151,9 @@ function resetVisiblePlaybackPrefetch(): void {
   stopPlaybackRuntimeObserver?.();
   stopPlaybackRuntimeObserver = null;
   webBeatRegistry.clear();
-  webStartupRouteOverrides.clear();
 }
 
 function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): void {
-  // This page came from the Telegram authoritative INDEX, so its MASTER ids
-  // supersede any temporary Cloud startup routing hints.
-  for (const beat of page.beats) webStartupRouteOverrides.delete(beat.id);
   rememberWebBeats(page.beats);
   publishWebLibraryNavigationState({
     offset: page.offset,
@@ -240,11 +171,10 @@ function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): vo
 
 async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
   if (webPlaybackSources) return webPlaybackSources;
-  const transport = await resolveWebCloudTransport();
-  if (!webPlaybackSources) {
-    webPlaybackSources = new WebPlaybackSourceManager(transport);
-    ensurePlaybackRuntimeObserver();
-  }
+  const coordinator = await resolveWebCoordinator();
+  void coordinator.start().catch(() => {});
+  webPlaybackSources = coordinator.getPlaybackSources();
+  ensurePlaybackRuntimeObserver();
   return webPlaybackSources;
 }
 
@@ -314,12 +244,8 @@ export const webAdapter: PlatformAdapter = {
         telegram_cloud_username: null,
       };
     },
-    async setIncompleteWarnings(enabled) {
-      writeBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, enabled);
-    },
-    async setCustomCursor(enabled) {
-      writeBooleanPreference(WEB_CUSTOM_CURSOR_KEY, enabled);
-    },
+    async setIncompleteWarnings(enabled) { writeBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, enabled); },
+    async setCustomCursor(enabled) { writeBooleanPreference(WEB_CUSTOM_CURSOR_KEY, enabled); },
   },
   trash: {
     async moveBeats(ids) {
@@ -335,7 +261,7 @@ export const webAdapter: PlatformAdapter = {
     async restoreBeat(id) {
       const transport = await resolveWebCloudTransport();
       const restored = await transport.restoreBeatFromTrash(id, webClientId);
-      webStartupRouteOverrides.delete(restored.id);
+      upsertPlaybackRouteFromBeat(restored);
       rememberWebBeats([restored]);
       return restored;
     },
@@ -367,12 +293,7 @@ export const webAdapter: PlatformAdapter = {
       const settings = await webAdapter.preferences.load();
       const beats = await webAdapter.library.load();
       const online = typeof navigator === "undefined" || navigator.onLine !== false;
-      return {
-        settings,
-        beats,
-        connectionState: online ? "online" : "offline",
-        libraryVerified: true,
-      };
+      return { settings, beats, connectionState: online ? "online" : "offline", libraryVerified: true };
     },
   },
   media: {
@@ -382,7 +303,11 @@ export const webAdapter: PlatformAdapter = {
       const messageId = webBeatMessageId(beat);
       rememberWebBeats([beat]);
       if (messageId) {
-        playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, message_id: messageId, mime_type: master?.mime_type || "audio/mpeg" });
+        playTrace("ADAPTER_PREPARE_ENTER", {
+          beat_id: beat.id,
+          message_id: messageId,
+          mime_type: master?.mime_type || "audio/mpeg",
+        });
         const sources = await resolveWebPlaybackSources();
         playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id });
         const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
@@ -399,37 +324,24 @@ export const webAdapter: PlatformAdapter = {
       const artwork = beat.assets?.artwork;
       const messageId = directMessageId(artwork?.object_id);
       if (!messageId) return null;
-
       const transport = await resolveWebCloudTransport();
-      const [result] = await transport.downloadFiles([{
-        messageId,
-        mimeType: artwork?.mime_type || "image/jpeg",
-      }]);
-
+      const [result] = await transport.downloadFiles([{ messageId, mimeType: artwork?.mime_type || "image/jpeg" }]);
       return result?.dataUrl ?? null;
     },
-    releasePlayback(beatId) {
-      webPlaybackSources?.release(beatId);
-    },
+    releasePlayback(beatId) { webPlaybackSources?.release(beatId); },
   },
   events: {
     async listen<T>(event: string, handler: PlatformEventHandler<T>): Promise<PlatformUnlisten> {
-      const listener = (message: Event) => {
-        handler((message as CustomEvent<T>).detail);
-      };
+      const listener = (message: Event) => handler((message as CustomEvent<T>).detail);
       window.addEventListener(event, listener);
       return () => window.removeEventListener(event, listener);
     },
   },
   external: {
-    async openUrl(url) {
-      window.open(url, "_blank", "noopener,noreferrer");
-    },
+    async openUrl(url) { window.open(url, "_blank", "noopener,noreferrer"); },
   },
   account: {
-    async getInstallationId() {
-      return webClientId;
-    },
+    async getInstallationId() { return webClientId; },
   },
   cloud: {
     async status() {
@@ -453,7 +365,7 @@ export const webAdapter: PlatformAdapter = {
           wav: slots.WAV,
           project: slots.PROJECT,
         }, webClientId, onProgress);
-        webStartupRouteOverrides.delete(committed.id);
+        upsertPlaybackRouteFromBeat(committed);
         rememberWebBeats([committed]);
         webImportPort.releaseBeat(beat.id);
         return committed;
@@ -472,19 +384,15 @@ export const webAdapter: PlatformAdapter = {
       webDownloads = null;
       webLibraryWindow = null;
       clearWebLibraryNavigationState();
-      if (!webCloudTransport) return;
-      const transport = await webCloudTransport;
+      const module = await import("../features/playback/webStartupPlaybackCoordinator");
+      await module.disconnectWebStartupPlaybackCoordinator();
+      webCoordinator = null;
       webCloudTransport = null;
-      await transport.disconnect();
     },
   },
   downloads: {
-    start(beat, kind, onProgress) {
-      return resolveWebDownloads().start(beat, kind, onProgress);
-    },
-    cancelAll() {
-      webDownloads?.cancelAll();
-    },
+    start(beat, kind, onProgress) { return resolveWebDownloads().start(beat, kind, onProgress); },
+    cancelAll() { webDownloads?.cancelAll(); },
   },
   editor: {
     pickFile: pickWebSlotFile,
@@ -492,7 +400,7 @@ export const webAdapter: PlatformAdapter = {
       const transport = await resolveWebCloudTransport();
       try {
         const committed = await transport.commitBeatEdit(original, updated, files, webClientId, onProgress);
-        webStartupRouteOverrides.delete(committed.id);
+        upsertPlaybackRouteFromBeat(committed);
         rememberWebBeats([committed]);
         return committed;
       } catch (error) {
@@ -504,9 +412,7 @@ export const webAdapter: PlatformAdapter = {
     },
   },
   cloudAuth: {
-    async syncSession() {
-      prewarmAuthenticatedWebTransport();
-    },
+    async syncSession() { prewarmAuthenticatedWebTransport(); },
   },
   diagnostics: {
     reviewPerformance() {},

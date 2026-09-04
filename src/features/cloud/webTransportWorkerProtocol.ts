@@ -14,8 +14,6 @@ export const WEB_PLAYBACK_FIRST_CHUNK_BYTES = WEB_PLAYBACK_FIRST_CHUNK_KB * 1024
 export const DEFAULT_PLAYBACK_DATA_LANES = 7;
 export const WEB_PLAYBACK_DATA_LANES = DEFAULT_PLAYBACK_DATA_LANES;
 export const STARTUP_PREFIX_BYTES = 64 * 1024;
-// Startup readiness is byte-based now. Infinity explicitly disables the old
-// playable-seconds threshold so a 64 KiB prefix never delays Play admission.
 export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;
 export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;
 
@@ -26,7 +24,6 @@ export interface WebTransportStoredFile {
   size: number;
   filename: string;
 }
-
 export interface WebTransportUploadResult {
   telegram_file_id: string;
   telegram_message_id: number;
@@ -35,7 +32,6 @@ export interface WebTransportUploadResult {
   parts: [WebTransportStoredFile];
   transport: "direct-web";
 }
-
 export interface WebTransportProgress { uploadedBytes: number; totalBytes: number; }
 export interface WebTransportLibraryIndexResult { manifest: unknown; messageId: number | null; }
 export interface WebTransportReplaceIndexInput { manifest: unknown; expectedMessageId: number | null; }
@@ -71,19 +67,16 @@ export interface WebTransportPrefetchChunk {
 }
 export type WebTransportPrefetchBatchItemResult =
   | { ok: true; result: WebTransportPrefetchResult & { playableSeconds: number; targetMet: boolean } }
-  | { ok: false; messageId: number; error: string };
+  | { ok: false; messageId: number; error: string; preempted?: boolean };
 export interface WebTransportPrefetchBatchResult { results: WebTransportPrefetchBatchItemResult[]; }
-export interface WebTransportStreamInput {
-  messageId: number;
-  mimeType?: string | null;
-  offsetBytes?: number;
-}
+export interface WebTransportStreamInput { messageId: number; mimeType?: string | null; offsetBytes?: number; }
 export interface WebTransportStreamResult { messageId: number; totalBytes: number; mimeType: string; }
 
 export type WebTransportWorkerCommand =
   | {
       requestId: string;
       op: "initialize";
+      startupMessageIds: number[];
       session: Pick<WebTransportSession,
         | "chat_id"
         | "transport_user_id"
@@ -91,13 +84,14 @@ export type WebTransportWorkerCommand =
         | "temp_session_id"
         | "temp_session_state"
         | "temp_primary_dcs"
-        | "startup_routes"
-        | "routing_revision"
       > & {
         expected_bot_id: string;
         temp_api_id: number;
+        startup_routes?: Record<string, number>;
+        routing_revision?: number;
       };
     }
+  | { requestId: string; op: "verify_identity" }
   | { requestId: string; op: "verify" }
   | { requestId: string; op: "get_index" }
   | { requestId: string; op: "replace_index"; input: WebTransportReplaceIndexInput }
@@ -106,6 +100,9 @@ export type WebTransportWorkerCommand =
   | { requestId: string; op: "prefetch"; input: WebTransportPrefetchInput }
   | { requestId: string; op: "prefetch_batch"; input: WebTransportPrefetchBatchInput }
   | { requestId: string; op: "prefetch_batch_cancel"; targetRequestId: string; messageId?: number }
+  | { requestId: string; op: "playback_focus"; messageId: number }
+  | { requestId: string; op: "playback_stable"; messageId: number }
+  | { requestId: string; op: "playback_release"; messageId: number }
   | { requestId: string; op: "stream"; input: WebTransportStreamInput }
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }
