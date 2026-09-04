@@ -53,6 +53,9 @@ export interface WebTransportSessionPublic {
   token_rotation_enabled: boolean;
   temp_auth_required: boolean;
   temp_auth: WebTransportTempAuthPublic;
+  startup_beat_ids?: string[];
+  startup_routes?: Record<string, number>;
+  routing_revision?: number;
 }
 
 export interface WebTransportSession extends WebTransportSessionPublic {
@@ -91,6 +94,20 @@ export interface WebTransportOperationResponse {
 }
 
 const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
+const MAX_STARTUP_BEAT_IDS = 14;
+
+function normalizeStartupBeatIds(values: readonly string[] | undefined): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values || []) {
+    const id = String(value || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    output.push(id);
+    if (output.length >= MAX_STARTUP_BEAT_IDS) break;
+  }
+  return output;
+}
 
 export function isTransientWebTempAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -164,6 +181,18 @@ function sessionIdentity(
   };
 }
 
+function retainStartupRouting(
+  response: WebTransportSessionPublic,
+  bootstrap: WebTransportSessionPublic,
+): WebTransportSessionPublic {
+  return {
+    ...response,
+    startup_beat_ids: bootstrap.startup_beat_ids || [],
+    startup_routes: bootstrap.startup_routes || {},
+    routing_revision: Math.max(0, Number(bootstrap.routing_revision) || 0),
+  };
+}
+
 async function bindTemporarySession(
   bootstrap: WebTransportSessionPublic,
   metadata?: TempAuthMetadata,
@@ -175,13 +204,12 @@ async function bindTemporarySession(
   for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
     let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
     try {
-      // Every attempt gets a brand-new MTProto connection and temporary auth key.
-      // The server-side lease remains the same installation/browser + vault lease.
       prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(safeBootstrap.temp_auth.dc_id), { attempt });
-      const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
       }));
+      const response = retainStartupRouting(rawResponse, safeBootstrap);
       if (
         response.session_id !== safeBootstrap.session_id ||
         response.generation !== safeBootstrap.generation ||
@@ -216,10 +244,11 @@ async function bindTemporarySession(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-/** Reserves/reuses the control-plane lease without creating browser MTProto credentials yet. */
-export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic> {
+/** Reserves/reuses the control-plane lease and resolves only the requested startup routes. */
+export async function reserveWebTransportSession(startupBeatIds: readonly string[] = []): Promise<WebTransportSessionPublic> {
   return validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
     browserClientId: getWebClientId(),
+    startupBeatIds: normalizeStartupBeatIds(startupBeatIds),
   }));
 }
 
@@ -229,8 +258,8 @@ export async function bindWebTransportSession(bootstrap: WebTransportSessionPubl
 }
 
 /** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
-export async function prepareWebTransportSession(): Promise<WebTransportSession> {
-  return bindWebTransportSession(await reserveWebTransportSession());
+export async function prepareWebTransportSession(startupBeatIds: readonly string[] = []): Promise<WebTransportSession> {
+  return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));
 }
 
 export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
@@ -239,10 +268,11 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
     let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
     try {
       prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(session.temp_auth.dc_id), { attempt, renewal: true });
-      const response = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
       }));
+      const response = retainStartupRouting(rawResponse, session);
       if (
         response.session_id !== session.session_id ||
         response.generation !== session.generation ||
@@ -388,11 +418,17 @@ export async function ensureWebTransportTopic(beatId: string, beatName: string):
   return threadId;
 }
 
-/** Records only the tiny authoritative INDEX pointer; document bytes stay on the direct data plane. */
+/** Records the authoritative INDEX pointer and the small routing delta produced by the same commit. */
 export async function commitWebTransportIndexPointer(input: {
   messageId: number;
   sourceId: string;
   beatCount: number;
+  routingChanges?: Record<string, number | null>;
 }): Promise<void> {
   await transportRequest("/transport/index/commit", input);
+}
+
+/** Telegram remains authoritative. Reconcile repairs Cloud routing after the full INDEX is read. */
+export async function reconcileWebTransportRouting(manifest: unknown): Promise<void> {
+  await transportRequest("/transport/routing/reconcile", { manifest });
 }
