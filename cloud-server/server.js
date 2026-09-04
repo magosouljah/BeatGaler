@@ -14,6 +14,7 @@ const { applyD8RoResolutions, d8LifecycleEnv } = require("./d8-ro-resolutions");
 const { installProductiveTempAuthBoundary } = require("./productive-temp-auth-boundary");
 const { installSecurityHeaders } = require("./security-headers");
 const { installAuthAbuseControls } = require("./auth-abuse-controls");
+const { installOutboundDnsPinning } = require("./outbound-dns-pinning");
 const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
@@ -22,6 +23,7 @@ const { installRuntimeOperability, configureRuntimeDependencies } = require("./r
 const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index");
 const { installStartupRoutingIndex } = require("./startup-routing-index");
 
+installOutboundDnsPinning();
 installRuntimeOperability(express);
 installSecurityHeaders(express);
 installLegacyMediaUploadDisable(express);
