@@ -11,6 +11,9 @@ export interface WebTransportUploadInput {
 export const WEB_DIRECT_MAX_FILE_BYTES = 1900 * 1024 * 1024;
 export const WEB_PLAYBACK_FIRST_CHUNK_KB = 64;
 export const WEB_PLAYBACK_FIRST_CHUNK_BYTES = WEB_PLAYBACK_FIRST_CHUNK_KB * 1024;
+export const WEB_PLAYBACK_DATA_LANES = 6;
+export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 1;
+export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = 1024 * 1024;
 
 export interface WebTransportStoredFile {
   telegram_file_id: string;
@@ -37,13 +40,35 @@ export interface WebTransportDeleteMessagesInput { messageIds: number[]; }
 export interface WebTransportDeleteMessagesResult { deleted: number; }
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
-export interface WebTransportPrefetchInput { messageId: number; mimeType?: string | null; }
+export interface WebTransportPrefetchInput { messageId: number; mimeType?: string | null; offsetBytes?: number; }
 export interface WebTransportPrefetchResult {
   messageId: number;
   totalBytes: number;
   mimeType: string;
   prefix: ArrayBuffer;
+  playableSeconds?: number;
+  targetMet?: boolean;
 }
+export interface WebTransportPrefetchBatchInput {
+  inputs: WebTransportPrefetchInput[];
+  targetPlayableSeconds?: number;
+  maxBytesPerFile?: number;
+  maxConcurrency?: number;
+}
+export interface WebTransportPrefetchChunk {
+  messageId: number;
+  totalBytes: number;
+  mimeType: string;
+  offsetBytes: number;
+  chunk: ArrayBuffer;
+  downloadedBytes: number;
+  playableSeconds: number;
+  targetMet: boolean;
+}
+export type WebTransportPrefetchBatchItemResult =
+  | { ok: true; result: WebTransportPrefetchResult & { playableSeconds: number; targetMet: boolean } }
+  | { ok: false; messageId: number; error: string };
+export interface WebTransportPrefetchBatchResult { results: WebTransportPrefetchBatchItemResult[]; }
 export interface WebTransportStreamInput {
   messageId: number;
   mimeType?: string | null;
@@ -66,6 +91,8 @@ export type WebTransportWorkerCommand =
   | { requestId: string; op: "delete_messages"; input: WebTransportDeleteMessagesInput }
   | { requestId: string; op: "download"; input: WebTransportDownloadInput }
   | { requestId: string; op: "prefetch"; input: WebTransportPrefetchInput }
+  | { requestId: string; op: "prefetch_batch"; input: WebTransportPrefetchBatchInput }
+  | { requestId: string; op: "prefetch_batch_cancel"; targetRequestId: string; messageId?: number }
   | { requestId: string; op: "stream"; input: WebTransportStreamInput }
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }
@@ -82,4 +109,5 @@ export type WebTransportWorkerResponse =
   | { requestId: string; ok: true; result?: unknown }
   | { requestId: string; ok: false; error: string }
   | { requestId: string; event: "progress"; progress: WebTransportProgress }
-  | { requestId: string; event: "download-chunk"; chunk: ArrayBuffer; downloadedBytes: number; totalBytes: number };
+  | { requestId: string; event: "download-chunk"; chunk: ArrayBuffer; downloadedBytes: number; totalBytes: number }
+  | { requestId: string; event: "prefetch-chunk"; progress: WebTransportPrefetchChunk };
