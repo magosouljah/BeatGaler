@@ -25,36 +25,23 @@ const webBeatRegistry = new Map<string, Beat>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
 let stopPlaybackRuntimeObserver: (() => void) | null = null;
 
+const WEB_PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";
+const WEB_PRESENTATION_SORT_CACHE_KEY = "beatvault:sort:v2";
+const WEB_STARTUP_WARM_BEATS = 14;
+
+type StartupPresentationCandidate = {
+  beat: Beat;
+  beatId: string;
+  messageId: number;
+  mimeType: string;
+};
+
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
     webCloudTransport = observePlayStep("DIRECT_CODE_IMPORT", () => import("../features/cloud/webGalerCloudTransport"))
       .then(({ WebGalerCloudTransport }) => new WebGalerCloudTransport());
   }
   return webCloudTransport;
-}
-
-function prewarmAuthenticatedWebTransport(): void {
-  if (typeof window === "undefined") return;
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-
-  try {
-    if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
-  } catch {
-    return;
-  }
-
-  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
-  void resolveWebCloudTransport().then(
-    () => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"),
-    error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
-}
-
-async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
-  if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport());
-  return webLibraryWindow;
 }
 
 function directMessageId(value: string | null | undefined): number | null {
@@ -67,6 +54,83 @@ function webBeatMessageId(beat: Beat): number | null {
   const explicit = Number(beat.telegram_message_id || 0);
   if (Number.isInteger(explicit) && explicit > 0) return explicit;
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
+}
+
+function readStartupPresentationCandidates(): StartupPresentationCandidate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(WEB_PRESENTATION_LIBRARY_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const beats = parsed.filter((value): value is Beat => Boolean(value && typeof value === "object" && String(value.id || "").trim()));
+    const manualIndex = new Map(beats.map((beat, index) => [beat.id, index]));
+    const sortBy = String(window.localStorage.getItem(WEB_PRESENTATION_SORT_CACHE_KEY) || "rating");
+    const ordered = beats.slice().sort((a, b) => {
+      if (sortBy === "manual") return (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
+      if (sortBy === "bpm") return Number(a.bpm || 0) - Number(b.bpm || 0);
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      const ratingDiff = Number(b.rating || 0) - Number(a.rating || 0);
+      return ratingDiff || (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
+    });
+    const output: StartupPresentationCandidate[] = [];
+    for (const beat of ordered) {
+      const messageId = webBeatMessageId(beat);
+      if (!messageId) continue;
+      output.push({
+        beat,
+        beatId: beat.id,
+        messageId,
+        mimeType: beat.assets?.master?.mime_type || "audio/mpeg",
+      });
+      if (output.length >= WEB_STARTUP_WARM_BEATS) break;
+    }
+    return output;
+  } catch {
+    return [];
+  }
+}
+
+function prewarmAuthenticatedWebTransport(): void {
+  if (typeof window === "undefined") return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+
+  try {
+    if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
+  } catch {
+    return;
+  }
+
+  const candidates = readStartupPresentationCandidates();
+  rememberWebBeats(candidates.map(candidate => candidate.beat));
+  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN", { startup_beat_count: candidates.length });
+  void resolveWebCloudTransport().then(async transport => {
+    if (candidates.length === 0) {
+      playTrace("ADAPTER_TRANSPORT_CODE_PREWARM_ONLY");
+      return;
+    }
+    await transport.startStartupWarm(
+      candidates.map(({ beatId, messageId, mimeType }) => ({ beatId, messageId, mimeType })),
+      async routed => {
+        const sources = await resolveWebPlaybackSources();
+        const results = await Promise.allSettled(routed.map(candidate =>
+          sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")
+        ));
+        playTrace("ADAPTER_STARTUP_WARM_SETTLED", {
+          count: routed.length,
+          failures: results.filter(result => result.status === "rejected").length,
+        });
+      },
+    );
+    playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED", { startup_beat_count: candidates.length });
+  }).catch(error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", {
+    error_name: error instanceof Error ? error.name : "unknown",
+  }));
+}
+
+async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
+  if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport());
+  return webLibraryWindow;
 }
 
 async function updateBeatWarmPriority(beatId: string, priority: BeatCardWarmPriority): Promise<void> {
