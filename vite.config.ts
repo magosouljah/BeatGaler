@@ -83,7 +83,7 @@ function productiveTrustBoundaryPlugin() {
       }
       if (cleanId.endsWith("/src/lib/tauri.ts")) {
         if (!code.includes(unsafeId3Loader)) {
-          throw new Error("Task 5.1 ID3 hardening anchor no longer match; refusing an unsafe build.");
+          throw new Error("Task 5.1 ID3 hardening anchor no longer matches; refusing an unsafe build.");
         }
         const transformed = code.replace(unsafeId3Loader, safeId3Loader);
         if (transformed.includes("cdn.jsdelivr.net/npm/jsmediatags")) {
