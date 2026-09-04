@@ -8,6 +8,10 @@ const routing = require(resolve(process.cwd(), "cloud-server/startup-routing-ind
   normalizeStartupBeatIds(values: unknown): string[];
   normalizeRoutingChanges(values: unknown): Record<string, number | null>;
   routingSnapshotFromManifest(manifest: unknown): Record<string, number>;
+  authorizedInstallation(req: {
+    body?: { beatgalerUserId?: string };
+    beatgalerAuthorizedInstallationId?: string;
+  }): string;
 };
 
 function source(path: string): string {
@@ -56,6 +60,20 @@ describe("Issue #97 startup routing runtime", () => {
       "beat-C": 0,
       "": 123,
     })).toEqual({ "beat-A": 3000, "beat-B": null });
+  });
+
+  it("never trusts a body-only installation id for startup routing authorization", () => {
+    expect(routing.authorizedInstallation({
+      body: { beatgalerUserId: "installation-A" },
+    })).toBe("");
+    expect(routing.authorizedInstallation({
+      body: { beatgalerUserId: "installation-A" },
+      beatgalerAuthorizedInstallationId: "installation-B",
+    })).toBe("");
+    expect(routing.authorizedInstallation({
+      body: { beatgalerUserId: "installation-A" },
+      beatgalerAuthorizedInstallationId: "installation-A",
+    })).toBe("installation-A");
   });
 
   it("keeps routing reconcile behind the authenticated installation containment boundary", () => {
