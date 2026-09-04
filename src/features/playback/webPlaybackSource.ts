@@ -35,6 +35,13 @@ export interface WebPlaybackPrefetchSnapshot {
   nearby: readonly WebPlaybackPrefetchCandidate[];
 }
 
+export type WebPlaybackBufferState = "idle" | "playing" | "waiting";
+export interface WebPlaybackBufferSignal {
+  beatId: string;
+  currentTime: number;
+  state: WebPlaybackBufferState;
+}
+
 type QueuedChunk = {
   chunk: ArrayBuffer;
   origin: "prefetch" | "stream";
@@ -56,11 +63,14 @@ type PlaybackEntry = {
   sourceBuffer: SourceBuffer | null;
   queue: QueuedChunk[];
   appending: QueuedChunk | null;
+  pendingStreamAck: (() => void) | null;
   streamDone: boolean;
   failed: boolean;
   cachedBytes: number;
   cachedChunks: ArrayBuffer[];
   lastUsedAt: number;
+  playbackState: WebPlaybackBufferState;
+  currentTime: number;
 };
 
 type PrefetchedPrefix = {
@@ -85,8 +95,11 @@ type PrefetchJob = {
 const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;
 const MAX_VISIBLE_PREFETCH_BATCH_CANDIDATES = 64;
 const NEARBY_PREFETCH_BATCH_SIZE = 2;
-const FOREGROUND_PREFETCH_PAUSE_MS = 1200;
 const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;
+const PLAYBACK_BUFFER_TARGET_SECONDS = 1;
+const PREFETCH_LANES_IDLE = 6;
+const PREFETCH_LANES_DURING_PLAYBACK = 5;
+export const WEB_PLAYBACK_BUFFER_SIGNAL_EVENT = "beatgaler:web-playback-buffer";
 
 function supportsMediaSource(mimeType: string): boolean {
   return typeof MediaSource !== "undefined" &&
@@ -147,6 +160,19 @@ function sourceBufferSnapshot(sourceBuffer: SourceBuffer | null): {
   }
 }
 
+export function bufferAheadSeconds(sourceBuffer: SourceBuffer | null, currentTime: number): number {
+  if (!sourceBuffer || !Number.isFinite(currentTime)) return 0;
+  try {
+    const buffered = sourceBuffer.buffered;
+    for (let index = 0; index < buffered.length; index += 1) {
+      const start = buffered.start(index);
+      const end = buffered.end(index);
+      if (currentTime >= start && currentTime <= end) return Math.max(0, end - currentTime);
+    }
+  } catch {}
+  return 0;
+}
+
 /** Owns short-lived browser playback URLs. Cloud credentials never enter them. */
 export class WebPlaybackSourceManager {
   private entries = new Map<string, PlaybackEntry>();
@@ -157,13 +183,61 @@ export class WebPlaybackSourceManager {
   private prefetchRetryAfter = new Map<string, number>();
   private prefetchBatchActive = false;
   private prefetchDrainScheduled = false;
-  private prefetchPausedUntil = 0;
-  private prefetchWakeTimer: ReturnType<typeof setTimeout> | null = null;
   private visiblePrefetchBeatIds = new Set<string>();
   private nearbyPrefetchBeatIds = new Set<string>();
   private sessionCacheLimitBytes = DEFAULT_SESSION_CACHE_LIMIT_MB * 1024 * 1024;
+  private readonly playbackSignalListener: ((event: Event) => void) | null;
 
-  constructor(private readonly transport: WebPlaybackTransport) {}
+  constructor(private readonly transport: WebPlaybackTransport) {
+    this.playbackSignalListener = typeof window === "undefined"
+      ? null
+      : event => this.onPlaybackBufferSignal((event as CustomEvent<WebPlaybackBufferSignal>).detail);
+    if (this.playbackSignalListener) {
+      window.addEventListener(WEB_PLAYBACK_BUFFER_SIGNAL_EVENT, this.playbackSignalListener);
+    }
+  }
+
+  private onPlaybackBufferSignal(signal: WebPlaybackBufferSignal | null | undefined): void {
+    const beatId = String(signal?.beatId || "").trim();
+    if (!beatId) return;
+    const entry = this.entries.get(beatId);
+    if (!entry || entry.released || entry.failed) return;
+    entry.playbackState = signal?.state === "waiting" || signal?.state === "playing" ? signal.state : "idle";
+    entry.currentTime = Math.max(0, Number(signal?.currentTime) || 0);
+    const bufferAhead = bufferAheadSeconds(entry.sourceBuffer, entry.currentTime);
+    playTrace("SOURCE_PLAYBACK_BUFFER", {
+      beat_id: beatId,
+      state: entry.playbackState,
+      current_time_s: roundTraceSeconds(entry.currentTime),
+      buffer_ahead_s: roundTraceSeconds(bufferAhead),
+    });
+    if (
+      entry.pendingStreamAck &&
+      (entry.playbackState !== "playing" || bufferAhead <= PLAYBACK_BUFFER_TARGET_SECONDS)
+    ) {
+      const release = entry.pendingStreamAck;
+      entry.pendingStreamAck = null;
+      playTrace("SOURCE_STREAM_ACK_RELEASED", {
+        beat_id: beatId,
+        state: entry.playbackState,
+        buffer_ahead_s: roundTraceSeconds(bufferAhead),
+      });
+      release();
+    }
+    this.schedulePrefetchDrain();
+  }
+
+  private prefetchLaneLimit(): number {
+    for (const entry of this.entries.values()) {
+      if (
+        !entry.released &&
+        !entry.failed &&
+        !entry.streamDone &&
+        (entry.playbackState === "playing" || entry.playbackState === "waiting")
+      ) return PREFETCH_LANES_DURING_PLAYBACK;
+    }
+    return PREFETCH_LANES_IDLE;
+  }
 
   setPrefetchSnapshot(snapshot: WebPlaybackPrefetchSnapshot): Promise<void> {
     this.visiblePrefetchBeatIds = new Set(snapshot.visible.map(candidate => candidate.beatId));
@@ -284,19 +358,6 @@ export class WebPlaybackSourceManager {
 
   private drainPrefetchQueue(): void {
     if (this.prefetchBatchActive) return;
-    if (this.prefetchWakeTimer) {
-      clearTimeout(this.prefetchWakeTimer);
-      this.prefetchWakeTimer = null;
-    }
-    const now = Date.now();
-    if (now < this.prefetchPausedUntil) {
-      this.prefetchWakeTimer = setTimeout(() => {
-        this.prefetchWakeTimer = null;
-        this.schedulePrefetchDrain();
-      }, this.prefetchPausedUntil - now);
-      return;
-    }
-
     this.pruneReadyPrefetchJobs();
     if (this.prefetchQueue.length <= 0) return;
     const visible = this.prefetchQueue.filter(job => job.zone === "visible");
@@ -313,6 +374,18 @@ export class WebPlaybackSourceManager {
     });
   }
 
+  private traceVisibleCoverage(): void {
+    const total = this.visiblePrefetchBeatIds.size;
+    if (total <= 0) return;
+    let ready = 0;
+    for (const beatId of this.visiblePrefetchBeatIds) {
+      const entry = this.entries.get(beatId);
+      const prefix = this.prefixes.get(beatId);
+      if ((entry && !entry.released && !entry.failed) || prefix) ready += 1;
+    }
+    playTrace("VISIBLE_COVERAGE", { ready, total });
+  }
+
   private async executePrefetchBatch(jobs: readonly PrefetchJob[]): Promise<void> {
     for (const job of jobs) {
       playTrace("SOURCE_PREFETCH_BEGIN", { beat_id: job.beatId, message_id: job.messageId, zone: job.zone });
@@ -321,6 +394,7 @@ export class WebPlaybackSourceManager {
       const outcomes = this.transport.prefetchFiles
         ? await this.transport.prefetchFiles(
             jobs.map(job => ({ messageId: job.messageId, mimeType: job.mimeType })),
+            this.prefetchLaneLimit(),
           )
         : await Promise.all(jobs.map(async job => {
             try {
@@ -379,6 +453,7 @@ export class WebPlaybackSourceManager {
         this.enforceCacheBudget(job.beatId);
         job.resolve();
       }
+      this.traceVisibleCoverage();
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       for (const job of jobs) {
@@ -395,7 +470,6 @@ export class WebPlaybackSourceManager {
   }
 
   prepare(beatId: string, messageId: number, mimeType = "audio/mpeg"): Promise<PreparedWebPlayback> {
-    this.prefetchPausedUntil = Math.max(this.prefetchPausedUntil, Date.now() + FOREGROUND_PREFETCH_PAUSE_MS);
     const mediaSourceSupported = supportsMediaSource(mimeType);
     playTrace("SOURCE_PREPARE", { beat_id: beatId, mime_type: mimeType, mode: mediaSourceSupported ? "mse" : "blob" });
     const existing = this.entries.get(beatId);
@@ -488,11 +562,14 @@ export class WebPlaybackSourceManager {
       sourceBuffer: null,
       queue: [],
       appending: null,
+      pendingStreamAck: null,
       streamDone: false,
       failed: false,
       cachedBytes: 0,
       cachedChunks: usablePrefix ? [usablePrefix.prefix] : [],
       lastUsedAt: Date.now(),
+      playbackState: "idle",
+      currentTime: 0,
     };
     if (usablePrefix) {
       entry.cachedBytes = usablePrefix.prefix.byteLength;
@@ -509,6 +586,8 @@ export class WebPlaybackSourceManager {
       if (entry.released || entry.failed) return;
       entry.failed = true;
       const failure = error instanceof Error ? error : new Error(String(error));
+      entry.pendingStreamAck?.();
+      entry.pendingStreamAck = null;
       entry.appending?.reject(failure);
       entry.appending = null;
       for (const queued of entry.queue.splice(0)) queued.reject(failure);
@@ -518,7 +597,7 @@ export class WebPlaybackSourceManager {
       }
     };
     const finishIfReady = () => {
-      if (!entry.streamDone || entry.queue.length > 0 || entry.appending || entry.sourceBuffer?.updating) return;
+      if (!entry.streamDone || entry.queue.length > 0 || entry.appending || entry.sourceBuffer?.updating || entry.pendingStreamAck) return;
       if (mediaSource.readyState === "open") {
         try { mediaSource.endOfStream(); } catch {}
       }
@@ -559,6 +638,7 @@ export class WebPlaybackSourceManager {
           const appended = entry.appending;
           if (appended) {
             const snapshot = sourceBufferSnapshot(entry.sourceBuffer);
+            const bufferAhead = bufferAheadSeconds(entry.sourceBuffer, entry.currentTime);
             playTrace("SOURCE_MSE_APPEND_DONE", {
               beat_id: beatId,
               message_id: messageId,
@@ -570,6 +650,7 @@ export class WebPlaybackSourceManager {
                 : Math.round((traceNowMs() - appended.appendStartedAtMs) * 10) / 10,
               queue_depth: entry.queue.length,
               media_source_state: mediaSource.readyState,
+              buffer_ahead_s: roundTraceSeconds(bufferAhead),
               ...snapshot,
             });
             if (appended.origin === "prefetch") {
@@ -579,8 +660,17 @@ export class WebPlaybackSourceManager {
                 bytes: appended.chunk.byteLength,
                 ...snapshot,
               });
+              appended.resolve();
+            } else if (entry.playbackState === "playing" && bufferAhead > PLAYBACK_BUFFER_TARGET_SECONDS) {
+              entry.pendingStreamAck = appended.resolve;
+              playTrace("SOURCE_STREAM_ACK_HELD", {
+                beat_id: beatId,
+                buffer_ahead_s: roundTraceSeconds(bufferAhead),
+                target_s: PLAYBACK_BUFFER_TARGET_SECONDS,
+              });
+            } else {
+              appended.resolve();
             }
-            appended.resolve();
           }
           entry.appending = null;
           pump();
@@ -628,6 +718,8 @@ export class WebPlaybackSourceManager {
         }
         void stream.completed.then(result => {
           entry.streamDone = true;
+          entry.pendingStreamAck?.();
+          entry.pendingStreamAck = null;
           entry.mimeType = result.mimeType || entry.mimeType;
           entry.cachedBytes = Math.max(entry.cachedBytes, result.totalBytes || entry.cachedBytes);
           entry.lastUsedAt = Date.now();
@@ -677,11 +769,14 @@ export class WebPlaybackSourceManager {
         sourceBuffer: null,
         queue: [],
         appending: null,
+        pendingStreamAck: null,
         streamDone: true,
         failed: false,
         cachedBytes: usablePrefix.totalBytes || offsetBytes,
         cachedChunks: chunks,
         lastUsedAt: Date.now(),
+        playbackState: "idle",
+        currentTime: 0,
       };
       this.entries.set(beatId, placeholder);
       this.enforceCacheBudget(beatId);
@@ -713,11 +808,14 @@ export class WebPlaybackSourceManager {
       sourceBuffer: null,
       queue: [],
       appending: null,
+      pendingStreamAck: null,
       streamDone: false,
       failed: false,
       cachedBytes: offsetBytes,
       cachedChunks: chunks,
       lastUsedAt: Date.now(),
+      playbackState: "idle",
+      currentTime: 0,
     };
     this.entries.set(beatId, placeholder);
     try {
@@ -766,6 +864,8 @@ export class WebPlaybackSourceManager {
     if (!entry) return;
     entry.released = true;
     entry.cancel?.();
+    entry.pendingStreamAck?.();
+    entry.pendingStreamAck = null;
     const cancelled = abortError();
     entry.appending?.reject(cancelled);
     entry.appending = null;
@@ -798,25 +898,43 @@ export class WebPlaybackSourceManager {
     let used = this.cacheUsedBytes();
     if (used <= this.sessionCacheLimitBytes) return;
 
-    const prefixCandidates = Array.from(this.prefixes.values())
-      .filter(prefix => prefix.beatId !== protectedBeatId)
-      .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
-    for (const prefix of prefixCandidates) {
-      if (used <= this.sessionCacheLimitBytes) break;
-      this.prefixes.delete(prefix.beatId);
-      used -= prefix.prefix.byteLength;
-    }
-
-    const candidates = Array.from(this.entries.values())
+    // Full old beats are least valuable during audition. Preserve short warm
+    // prefixes for what the user can see now before retaining complete tracks.
+    const completedCandidates = Array.from(this.entries.values())
       .filter(entry => entry.beatId !== protectedBeatId && entry.streamDone && !entry.failed)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
-    for (const entry of candidates) {
+    for (const entry of completedCandidates) {
       if (used <= this.sessionCacheLimitBytes) break;
       const bytes = entry.cachedBytes;
       this.hardRelease(entry.beatId);
       used -= bytes;
-      playTrace("SOURCE_SESSION_CACHE_EVICTED", { beat_id: entry.beatId, bytes });
+      playTrace("SOURCE_SESSION_CACHE_EVICTED", { beat_id: entry.beatId, bytes, reason: "completed_lru" });
     }
+
+    const evictPrefixes = (predicate: (prefix: PrefetchedPrefix) => boolean, reason: string) => {
+      const candidates = Array.from(this.prefixes.values())
+        .filter(prefix => prefix.beatId !== protectedBeatId && predicate(prefix))
+        .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+      for (const prefix of candidates) {
+        if (used <= this.sessionCacheLimitBytes) break;
+        this.prefixes.delete(prefix.beatId);
+        used -= prefix.prefix.byteLength;
+        playTrace("SOURCE_PREFETCH_CACHE_EVICTED", {
+          beat_id: prefix.beatId,
+          bytes: prefix.prefix.byteLength,
+          reason,
+        });
+      }
+    };
+
+    // FAR prefixes should normally disappear from snapshots, but if one is
+    // still cached it is cheaper to lose than near-scroll or visible coverage.
+    evictPrefixes(
+      prefix => !this.visiblePrefetchBeatIds.has(prefix.beatId) && !this.nearbyPrefetchBeatIds.has(prefix.beatId),
+      "far_prefix_lru",
+    );
+    evictPrefixes(prefix => this.nearbyPrefetchBeatIds.has(prefix.beatId), "nearby_prefix_lru");
+    evictPrefixes(prefix => this.visiblePrefetchBeatIds.has(prefix.beatId), "visible_prefix_last_resort");
   }
 
   cacheStatus(): { used_bytes: number; limit_mb: number } {
@@ -841,13 +959,14 @@ export class WebPlaybackSourceManager {
   }
 
   releaseAll(): void {
-    if (this.prefetchWakeTimer) clearTimeout(this.prefetchWakeTimer);
-    this.prefetchWakeTimer = null;
     this.prefetchQueue.splice(0).forEach(job => job.reject(abortError()));
     this.prefetchRetryAfter.clear();
     this.prefixes.clear();
     this.visiblePrefetchBeatIds.clear();
     this.nearbyPrefetchBeatIds.clear();
     for (const beatId of Array.from(this.entries.keys())) this.hardRelease(beatId);
+    if (this.playbackSignalListener && typeof window !== "undefined") {
+      window.removeEventListener(WEB_PLAYBACK_BUFFER_SIGNAL_EVENT, this.playbackSignalListener);
+    }
   }
 }
