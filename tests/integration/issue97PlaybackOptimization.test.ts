@@ -6,8 +6,8 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
-describe("Issue #97 combined Web playback optimization", () => {
-  it("re-verifies the Worker before publishing refreshed Direct credentials", () => {
+describe("Issue #97 optimized Web startup + playback", () => {
+  it("keeps credential refresh fail-closed", () => {
     const controller = source("src/features/cloud/webTransportController.ts");
     const refreshStart = controller.indexOf("private async applyCredentialRefresh");
     const replace = controller.indexOf("await this.runtime.replaceCredentials(session);", refreshStart);
@@ -22,53 +22,106 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(controller).toContain('playTrace("CONTROLLER_CREDENTIAL_REFRESH_FAILED"');
   });
 
-  it("uses 64 KiB physical rounds across six shared playback data lanes", () => {
+  it("uses seven configurable data lanes and exactly one 64 KiB startup chunk", () => {
     const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
-    expect(protocol).toContain("export const WEB_PLAYBACK_FIRST_CHUNK_KB = 64;");
-    expect(protocol).toContain("export const WEB_PLAYBACK_DATA_LANES = 6;");
-    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 1;");
-    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = 1024 * 1024;");
-    expect(worker).toContain("async function withDataLane");
-    expect(worker).toContain("activeDataLanes >= WEB_PLAYBACK_DATA_LANES");
-    expect(worker).toContain("WEB_PLAYBACK_FIRST_CHUNK_BYTES");
-    expect(worker).toContain("await withDataLane(() => active.downloadChunk({");
-    expect(worker).toContain("offset: absoluteOffset");
-    expect(worker).toContain("limit,");
+    expect(protocol).toContain("export const DEFAULT_PLAYBACK_DATA_LANES = 7;");
+    expect(protocol).toContain("export const STARTUP_PREFIX_BYTES = 64 * 1024;");
+    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 0;");
+    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;");
+    expect(worker).toContain("const MAX_CONFIGURABLE_DATA_LANES = 16;");
+    expect(worker).toContain("configureDataLaneLimit(input.maxConcurrency)");
+    expect(worker).toContain('type DataLanePriority = "foreground" | "warm";');
+    expect(worker).toContain("foregroundLaneWaiters.shift() || warmLaneWaiters.shift()");
+    expect(worker).toContain("const limit = Math.min(STARTUP_PREFIX_BYTES");
+    expect(worker).toContain('}), "warm");');
+    expect(worker).not.toContain("downloadBatchRound");
   });
 
-  it("warms candidates through one batch operation and keeps failures isolated per message", () => {
-    const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
+  it("resolves startup media with one Telegram getMessages vector and one simple retry", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
-    const playback = source("src/features/playback/webPlaybackSource.ts");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
-    expect(protocol).toContain('op: "prefetch_batch"');
-    expect(protocol).toContain('op: "prefetch_batch_cancel"');
-    expect(worker).toContain("activePrefetchBatches");
-    expect(worker).toContain("cancelledMessageIds");
-    expect(worker).toContain("await schedulerYield();");
+    expect(worker).toContain("return await active.getMessages(targetChatId, messageIds);");
+    expect(worker).toContain("for (let attempt = 1; attempt <= 2; attempt += 1)");
+    expect(worker).toContain("STARTUP_MEDIA_BATCH_RETRY_DELAY_MS");
+    expect(worker).toContain("resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)");
+    expect(worker).toContain("Promise.allSettled([identityPromise, startupMediaPromise])");
+    expect(worker).toContain("if (identityResult.status === \"rejected\") throw identityResult.reason;");
+    expect(worker).toContain("Temporary authorization resolved to the wrong transport identity.");
+  });
+
+  it("does not use slice barriers; persistent lane loops take the next warm job immediately", () => {
+    const worker = source("src/features/cloud/webTransport.worker.ts");
+
+    expect(worker).toContain("const laneLoop = async (lane: number) => {");
+    expect(worker).toContain("const candidate = queue[cursor++];");
+    expect(worker).toContain("await downloadStartupPrefix(requestId, state);");
+    expect(worker).toContain("Promise.all(Array.from({ length: laneCount }");
+    expect(worker).not.toContain("states.slice(start, start + maxConcurrency)");
+    expect(worker).not.toContain("candidates.slice(start, start + maxConcurrency)");
+  });
+
+  it("keeps one warm operation while foreground playback owns a separate stream operation", () => {
+    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
+    const playback = source("src/features/playback/webPlaybackSource.ts");
+
     expect(transport).toContain("async prefetchFiles(");
     expect(transport).toContain("const lease = await this.controller.beginOperation(");
     expect(transport).toContain('{ objectType: "message", objectIds: ids.map(String) }');
-    expect(transport).toContain("const workerBatch = this.worker.prefetchBatch({ inputs }, onChunk);");
-    expect(playback).toContain("this.transport.prefetchFiles(inputs, progress => this.acceptPrefetchChunk(batch, progress))");
-    expect(playback).toContain("const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;");
-    expect(playback).toContain('playTrace("SOURCE_PREFETCH_NEARBY_PREEMPT"');
+    expect(transport).toContain("maxConcurrency: this.playbackDataLanes");
+    expect(transport).toContain("Foreground playback deliberately owns a separate authorization from warm.");
+    expect(transport).toContain('{ objectType: "message", objectIds: [String(input.messageId)] }');
     expect(playback).toContain("batch.handle?.cancelMessage(job.messageId);");
-    expect(playback).toContain("measureMp3PlayablePrefix(prefix)");
+    expect(playback).toContain('playTrace("SOURCE_PREFETCH_NEARBY_PREEMPT"');
   });
 
-  it("consumes any usable partial prefix immediately and resumes at its exact aligned offset", () => {
+  it("consumes the 64 KiB prefix and resumes streaming at its exact aligned offset", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
 
     expect(playback).toContain("prefetched.totalBytes <= prefetched.prefix.byteLength || prefetched.prefix.byteLength % 4096 === 0");
     expect(playback).toContain('playTrace("SOURCE_PREFETCH_CONSUMED"');
     expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
     expect(playback).toContain("this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {");
-    expect(playback).toContain("const PLAYBACK_BUFFER_AHEAD_TARGET_SECONDS = 1;");
-    expect(playback).toContain("await this.waitForStreamDemand(entry);");
+  });
+
+  it("chooses the first 14 beats from the local presentation cache and current local sort", () => {
+    const adapter = source("src/platform/webAdapter.ts");
+
+    expect(adapter).toContain('const WEB_PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";');
+    expect(adapter).toContain('const WEB_PRESENTATION_SORT_CACHE_KEY = "beatvault:sort:v2";');
+    expect(adapter).toContain("const WEB_STARTUP_WARM_BEATS = 14;");
+    expect(adapter).toContain("const ordered = beats.slice().sort");
+    expect(adapter).toContain('if (sortBy === "bpm")');
+    expect(adapter).toContain('if (sortBy === "name")');
+    expect(adapter).toContain("ratingDiff");
+    expect(adapter).toContain("transport.startStartupWarm(");
+    expect(adapter).toContain('sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")');
+  });
+
+  it("returns only requested Cloud startup routes and repairs them from Telegram authority later", () => {
+    const routing = source("cloud-server/startup-routing-index.js");
+    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
+    const session = source("src/features/cloud/webTransportSession.ts");
+
+    expect(routing).toContain("const MAX_STARTUP_BEATS = 14;");
+    expect(routing).toContain("beatgaler_startup_routes");
+    expect(routing).toContain("startup_routes: routing.routes || {}");
+    expect(routing).toContain("routing_revision");
+    expect(routing).toContain("/transport/routing/reconcile");
+    expect(session).toContain("startupBeatIds: normalizeStartupBeatIds(startupBeatIds)");
+    expect(session).toContain("reconcileWebTransportRouting");
+    expect(transport).toContain("await this.startupWarmPromise.catch(() => {});");
+    expect(transport).toContain("void reconcileWebTransportRouting(result.manifest)");
+  });
+
+  it("retains getChat until the no-membership getMessages probe is proven unambiguous", () => {
+    const worker = source("src/features/cloud/webTransport.worker.ts");
+    const controller = source("src/features/cloud/webTransportController.ts");
+
+    expect(worker).toContain("await client.getChat(chatId);");
+    expect(worker).toContain("negative-membership probe");
+    expect(controller).toContain("getMessages-without-membership probe");
   });
 
   it("uses exactly one playback manager after the async Direct import race", () => {
@@ -85,35 +138,16 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(adapter).not.toContain("new WebPlaybackSourceManager(await resolveWebCloudTransport())");
   });
 
-  it("keeps playback bytes in a bounded 100 MB session-only RAM cache", () => {
+  it("keeps playback bytes in the bounded session-only RAM cache", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const adapter = source("src/platform/webAdapter.ts");
 
     expect(playback).toContain("const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;");
     expect(playback).toContain("cachedChunks: ArrayBuffer[];");
     expect(playback).toContain("entry.cachedChunks.push(chunk);");
-    expect(playback).toContain("new Blob(reusable.cachedChunks");
     expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_HIT"');
     expect(playback).toContain("private enforceCacheBudget");
-    expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_EVICTED"');
     expect(adapter).toContain("webPlaybackSources?.releaseAll();");
     expect(adapter).toContain("resetVisiblePlaybackPrefetch();");
-  });
-
-  it("classifies BeatCards as visible, nearby, or far without hover-driven warming", () => {
-    const visible = source("src/features/playback/webVisiblePlaybackPrefetch.ts");
-    const adapter = source("src/platform/webAdapter.ts");
-    const card = source("src/components/BeatCard.tsx");
-
-    expect(card).toContain("data-beat-card-id={visible ? beat.id : undefined}");
-    expect(visible).toContain('export type BeatCardWarmPriority = "visible" | "nearby" | "far";');
-    expect(visible).toContain('export const NEARBY_VIEWPORT_MARGIN = "100% 0px 100% 0px";');
-    expect(visible).toContain('document.querySelectorAll("[data-beat-card-id]")');
-    expect(visible).toContain("entry.isIntersecting && entry.intersectionRatio > 0");
-    expect(visible).toContain("rootMargin: NEARBY_VIEWPORT_MARGIN");
-    expect(visible).not.toContain("mouseenter");
-    expect(visible).not.toContain("mouseover");
-    expect(adapter).toContain("installBeatCardWarmObserver");
-    expect(adapter).toContain("sources.setPrefetchPriority(beat.id, messageId, mimeType, priority);");
   });
 });
