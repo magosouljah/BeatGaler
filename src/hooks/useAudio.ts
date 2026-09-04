@@ -47,6 +47,7 @@ export function useAudio() {
   const errorNotifiedRef = useRef(false);
   const primingRef = useRef(false);
   const waitingRef = useRef(false);
+  const durationHintsRef = useRef(new Map<string, number>());
   const [state, setState] = useState<AudioState>({
     playingId: null,
     isPlaying: false,
@@ -64,6 +65,12 @@ export function useAudio() {
     return audioRef.current;
   }, []);
 
+  const effectiveDuration = useCallback((audio: HTMLAudioElement): number => {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration;
+    const beatId = currentBeatIdRef.current;
+    return beatId ? Math.max(0, durationHintsRef.current.get(beatId) || 0) : 0;
+  }, []);
+
   useEffect(() => {
     const audio = getAudio();
     const publishPlaybackState = () => {
@@ -79,13 +86,32 @@ export function useAudio() {
       }));
     };
 
+    const onDurationHint = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId?: string; duration?: number }>).detail;
+      const beatId = String(detail?.beatId || "").trim();
+      const duration = Number(detail?.duration || 0);
+      if (!beatId || !Number.isFinite(duration) || duration <= 0) return;
+      durationHintsRef.current.set(beatId, duration);
+      if (currentBeatIdRef.current === beatId && !Number.isFinite(audio.duration)) {
+        setState((s) => ({ ...s, duration }));
+      }
+    };
+
     const onTimeUpdate = () => {
-      if (audio.duration > 0) {
-        setState((s) => ({ ...s, progress: audio.currentTime / audio.duration }));
+      const duration = effectiveDuration(audio);
+      if (duration > 0) {
+        setState((s) => ({
+          ...s,
+          duration,
+          progress: Math.max(0, Math.min(1, audio.currentTime / duration)),
+        }));
       }
       publishPlaybackState();
     };
-    const onLoadedMeta = () => setState((s) => ({ ...s, duration: audio.duration }));
+    const onLoadedMeta = () => {
+      const duration = effectiveDuration(audio);
+      if (duration > 0) setState((s) => ({ ...s, duration }));
+    };
     const onEnded = () => {
       const beatId = currentBeatIdRef.current;
       waitingRef.current = false;
@@ -166,6 +192,7 @@ export function useAudio() {
     audio.addEventListener("canplay", onCanPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("error", onError);
+    window.addEventListener("beatgaler:web-playback-duration", onDurationHint);
 
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
@@ -177,8 +204,9 @@ export function useAudio() {
       audio.removeEventListener("canplay", onCanPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("error", onError);
+      window.removeEventListener("beatgaler:web-playback-duration", onDurationHint);
     };
-  }, []);
+  }, [effectiveDuration, getAudio]);
 
   const primeAudioEngine = useCallback(async (path: string): Promise<boolean> => {
     const source = platform.media.resolveUrl(path);
@@ -282,7 +310,8 @@ export function useAudio() {
     if (previousBeatId && previousBeatId !== beatId) platform.media.releasePlayback(previousBeatId);
     void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {});
     playTrace("AUDIO_SRC_SET", { beat_id: beatId, ready_state: audio.readyState, url_scheme: String(sources[0] || "").split(":")[0] || null });
-    setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
+    const hintedDuration = Math.max(0, durationHintsRef.current.get(beatId) || 0);
+    setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: hintedDuration }));
     playTrace("AUDIO_PLAY_PROMISE_BEGIN", { beat_id: beatId });
     audio.play().then(
       () => playTrace("AUDIO_PLAY_PROMISE_RESOLVED", { beat_id: beatId }),
@@ -300,7 +329,7 @@ export function useAudio() {
 
   const seek = useCallback((ratio: number) => {
     const audio = getAudio();
-    if (audio.duration > 0) {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
       audio.currentTime = ratio * audio.duration;
       setState((s) => ({ ...s, progress: ratio }));
       const beatId = currentBeatIdRef.current;
