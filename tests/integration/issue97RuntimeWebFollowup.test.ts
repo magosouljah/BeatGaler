@@ -102,7 +102,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).toContain("setOptimisticRememberedSession(false);");
   });
 
-  it("returns the first MSE URL before Direct stream admission and overlaps remembered auth with membership-gated Direct startup", () => {
+  it("returns the first MSE URL before Direct stream admission and starts remembered Direct through the definitive coordinator", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
     const adapter = source("src/platform/webAdapter.ts");
@@ -121,13 +121,14 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(main).toContain("function preloadRememberedWebDirectCode(): void");
     expect(main).toContain("hasRememberedWebSessionMarker()");
     expect(main).toContain('playTrace("DIRECT_CODE_PRELOAD_BEGIN")');
-    expect(main).toContain('void import("./features/cloud/webGalerCloudTransport").then(');
+    expect(main).toContain('void import("./features/playback/webStartupPlaybackCoordinator").then(');
     expect(main).toContain("function preconnectRememberedWebDirect(): void");
     expect(main).toContain("if (!readWebCsrfToken()) {");
     expect(main).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
-    expect(main).toContain('void platform.cloudAuth.syncSession(null, "").then(');
+    expect(main).toContain("getWebStartupPlaybackCoordinator().start()");
     expect(main).toContain("preloadRememberedWebDirectCode();\npreconnectRememberedWebDirect();");
     expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
+    expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(main).not.toContain("new WebGalerCloudTransport");
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
@@ -135,9 +136,9 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(sessionBootstrap).toContain("readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME)");
 
     expect(adapter).toContain("function prewarmAuthenticatedWebTransport(): void");
-    expect(adapter).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
     expect(adapter).toContain("async syncSession() {");
     expect(adapter).toContain("prewarmAuthenticatedWebTransport();");
+    expect(adapter).toContain("resolveWebCoordinator().then(coordinator => coordinator.start())");
     expect(adapter).not.toContain("scheduleWebTransportPrewarm");
     expect(accountGate).toContain("await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());");
 
@@ -146,7 +147,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(workerClient).toContain("this.ensureWorker();");
     expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER")');
     expect(transport).toContain("this.worker.prewarm();");
-    expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("startStartupWarm("));
+    expect(transport).toContain("async connectPlaybackDataPlane(): Promise<void>");
 
     expect(sessionControl).toContain("const csrf = readWebCsrfToken();");
     expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
@@ -161,14 +162,21 @@ describe("Issue #97 production runtime follow-up", () => {
     const activationGateIndex = controller.indexOf("const activationResult = await activationResultPromise;");
     const mediaGateIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN")');
     const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
-    const verifyIndex = controller.indexOf('observePlayStep("DIRECT_VERIFY"');
+    const publishIndex = controller.indexOf("this.session = session;", initializeIndex);
+    const backgroundIndex = controller.indexOf("this.startBackgroundVerification(session);", publishIndex);
+    const readyIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_DATA_PLANE_READY"', backgroundIndex);
     expect(reserveIndex).toBeGreaterThanOrEqual(0);
     expect(reserveIndex).toBeLessThan(activateIndex);
     expect(activateIndex).toBeLessThan(bindIndex);
     expect(bindIndex).toBeLessThan(activationGateIndex);
     expect(activationGateIndex).toBeLessThan(mediaGateIndex);
     expect(mediaGateIndex).toBeLessThan(initializeIndex);
-    expect(initializeIndex).toBeLessThan(verifyIndex);
+    expect(initializeIndex).toBeLessThan(publishIndex);
+    expect(publishIndex).toBeLessThan(backgroundIndex);
+    expect(backgroundIndex).toBeLessThan(readyIndex);
+    expect(controller).toContain('observePlayStep("DIRECT_BACKGROUND_GET_ME"');
+    expect(controller).toContain('observePlayStep("DIRECT_BACKGROUND_GET_CHAT"');
+    expect(controller).not.toContain('observePlayStep("DIRECT_VERIFY"');
     expect(controller).not.toContain("const [activationResult, initializeResult] = await Promise.all([");
     expect(controller).toContain("if (activationResultPromise) await activationResultPromise;");
     expect(controller).toContain("if (bootstrap) await this.api.stop(bootstrap).catch(() => {});");
