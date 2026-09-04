@@ -20,6 +20,9 @@ export interface WebPrefetchBatchProgress {
   bytes: number;
   playableSeconds: number;
   targetMet: boolean;
+  totalBytes: number;
+  mimeType: string;
+  prefix: ArrayBuffer;
 }
 
 export interface WebPrefetchBatchOutcome {
@@ -75,6 +78,7 @@ export async function runWebPrefetchBatch(
     maxLanes?: number;
     targetSeconds?: number;
     maxBytesPerBeat?: number;
+    shouldContinue?: (input: WebTransportPrefetchInput) => boolean;
     onProgress?: (progress: WebPrefetchBatchProgress) => void;
   } = {},
 ): Promise<WebPrefetchBatchOutcome[]> {
@@ -100,10 +104,17 @@ export async function runWebPrefetchBatch(
   }));
 
   while (states.some(state => !state.done && !state.error)) {
+    for (const state of states) {
+      if (!state.done && !state.error && options.shouldContinue && !options.shouldContinue(state.input)) {
+        state.done = true;
+      }
+    }
+    const round = states.filter(state => !state.done && !state.error);
+    if (round.length <= 0) break;
+
     // Snapshot the round before any read starts. New progress made by an early
     // lane cannot cause it to receive another chunk until this whole snapshot
     // has had its turn.
-    const round = states.filter(state => !state.done && !state.error);
     for (let cursor = 0; cursor < round.length; cursor += maxLanes) {
       const lane = round.slice(cursor, cursor + maxLanes);
       await Promise.all(lane.map(async state => {
@@ -134,6 +145,9 @@ export async function runWebPrefetchBatch(
             bytes: state.bytes,
             playableSeconds: state.playableSeconds,
             targetMet: state.targetMet,
+            totalBytes: state.totalBytes || state.bytes,
+            mimeType: state.mimeType,
+            prefix,
           });
         } catch (error) {
           state.error = normalizeError(error);
