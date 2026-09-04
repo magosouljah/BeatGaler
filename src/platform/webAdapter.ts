@@ -87,11 +87,11 @@ function playbackCandidate(beatId: string): WebPlaybackPrefetchCandidate | null 
 
 async function prefetchViewportSnapshot(snapshot: BeatCardPrefetchSnapshot): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-  const visible = snapshot.visible.map(playbackCandidate).filter((value): value is WebPlaybackPrefetchCandidate => Boolean(value));
+  const visible = snapshot.visible.map(playbackCandidate).filter((value): value is WebPlaybackPrefetchCandidate => value !== null);
   const visibleIds = new Set(visible.map(candidate => candidate.beatId));
   const nearby = snapshot.nearby
     .map(playbackCandidate)
-    .filter((value): value is WebPlaybackPrefetchCandidate => Boolean(value) && !visibleIds.has(value.beatId));
+    .filter((value): value is WebPlaybackPrefetchCandidate => value !== null && !visibleIds.has(value.beatId));
   try {
     const sources = await resolveWebPlaybackSources();
     await sources.setPrefetchSnapshot({ visible, nearby });
