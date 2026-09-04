@@ -132,9 +132,6 @@ export class WebTransportController {
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupBeatIds.length });
     try {
-      // Reserve first so TypeScript and teardown both have an explicit lease.
-      // Activation then overlaps only with temp-auth creation/binding; Worker
-      // initialize (which contains startup getMessages) remains gated below.
       bootstrap = await this.api.reserve(this.startupBeatIds);
       const activateStarted = Date.now();
       activationResultPromise = settleStartupBranch(
@@ -153,8 +150,6 @@ export class WebTransportController {
         routing_revision: Math.max(0, Number(session.routing_revision) || 0),
       });
 
-      // Important ordering invariant: getMessages(startup routes) runs inside
-      // runtime.initialize(). Do not race that RPC against vault membership.
       const activationResult = await activationResultPromise;
       if (!activationResult.ok) throw activationResult.error;
       playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
@@ -166,8 +161,6 @@ export class WebTransportController {
       if (!initializeResult.ok) throw initializeResult.error;
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
 
-      // getChat remains the explicit vault-membership check until the negative
-      // getMessages-without-membership probe proves Telegram's error is unambiguous.
       const verifyStarted = Date.now();
       await observePlayStep("DIRECT_VERIFY", () => this.runtime.verifyReady(session));
       playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
@@ -247,7 +240,17 @@ export class WebTransportController {
         await this.refreshPromise;
         continue;
       }
+
+      const beginStarted = Date.now();
+      playTrace("CONTROLLER_OPERATION_BEGIN_HTTP_BEGIN", { kind });
       const response = await this.api.begin(session, kind, scope);
+      playTrace("CONTROLLER_OPERATION_BEGIN_HTTP_DONE", {
+        kind,
+        elapsed_ms: Date.now() - beginStarted,
+        wait: response.waitMs !== null,
+        operation_offered: Boolean(response.operationId),
+      });
+
       if (response.expired) {
         await this.resetLocalSession();
         continue;
@@ -262,9 +265,17 @@ export class WebTransportController {
         continue;
       }
       if (response.operationId) {
+        const authorizeStarted = Date.now();
+        playTrace("CONTROLLER_OPERATION_AUTHORIZE_BEGIN", { kind });
         try {
           await this.api.authorize(session, response.operationId, kind, scope);
+          playTrace("CONTROLLER_OPERATION_AUTHORIZE_DONE", { kind, elapsed_ms: Date.now() - authorizeStarted });
         } catch (error) {
+          playTrace("CONTROLLER_OPERATION_AUTHORIZE_FAILED", {
+            kind,
+            elapsed_ms: Date.now() - authorizeStarted,
+            error_name: error instanceof Error ? error.name : "unknown",
+          });
           await this.api.end({ session_id: session.session_id, generation: session.generation }, response.operationId).catch(() => {});
           throw error;
         }
