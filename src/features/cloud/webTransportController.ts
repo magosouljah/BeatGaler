@@ -16,6 +16,7 @@ import { playTrace, observePlayStep } from "../playback/playTrace";
 export interface WebTransportRuntime {
   initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void>;
   replaceCredentials(session: WebTransportSession): Promise<void>;
+  verifyIdentity(session: WebTransportSession): Promise<void>;
   verifyReady(session: WebTransportSession): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -62,9 +63,7 @@ const defaultApi: WebTransportControlApi = {
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds));
 const MAX_STARTUP_BEATS = 14;
 
-type StartupBranchResult =
-  | { ok: true }
-  | { ok: false; error: unknown };
+type StartupBranchResult = { ok: true } | { ok: false; error: unknown };
 
 async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchResult> {
   try {
@@ -106,6 +105,7 @@ export class WebTransportController {
   private session: WebTransportSession | null = null;
   private connectPromise: Promise<WebTransportSession> | null = null;
   private refreshPromise: Promise<void> | null = null;
+  private verificationPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private readonly startupBeatIds: string[];
@@ -161,22 +161,23 @@ export class WebTransportController {
         startup_message_count: this.startupMessageIds.length,
       });
 
-      // Telegram media access must not race vault activation. The local routing
-      // cache is already immutable, so there is no late candidate configuration.
       const activationResult = await activationResultPromise;
       if (!activationResult.ok) throw activationResult.error;
       playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
 
       const initializeStarted = Date.now();
-      await observePlayStep("DIRECT_INITIALIZE", () => this.runtime.initialize(session, this.startupMessageIds));
+      await observePlayStep("DIRECT_INITIALIZE", async () => {
+        await this.runtime.initialize(session, this.startupMessageIds);
+      });
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
 
-      const verifyStarted = Date.now();
-      await observePlayStep("DIRECT_VERIFY", () => this.runtime.verifyReady(session));
-      playTrace("CONTROLLER_SESSION_VERIFY_DONE", { elapsed_ms: Date.now() - verifyStarted });
+      // MTProto + startup-media setup is the playback readiness boundary.
+      // Identity/vault verification is intentionally background work so it does
+      // not extend OPEN->AUDIO or CLICK PLAY->AUDIO.
       this.session = session;
-      playTrace("CONTROLLER_SESSION_READY", { total_ms: Date.now() - started });
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
+      this.startBackgroundVerification(session);
+      playTrace("CONTROLLER_SESSION_DATA_PLANE_READY", { total_ms: Date.now() - started });
       return session;
     } catch (error) {
       if (activationResultPromise) await activationResultPromise;
@@ -184,6 +185,44 @@ export class WebTransportController {
       if (bootstrap) await this.api.stop(bootstrap).catch(() => {});
       throw error;
     }
+  }
+
+  private startBackgroundVerification(session: WebTransportSession): void {
+    const verification = (async () => {
+      try {
+        await Promise.all([
+          observePlayStep("DIRECT_BACKGROUND_GET_ME", () => this.runtime.verifyIdentity(session)),
+          observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => this.runtime.verifyReady(session)),
+        ]);
+        if (this.session === session) playTrace("CONTROLLER_BACKGROUND_VERIFY_READY");
+      } catch (error) {
+        playTrace("CONTROLLER_BACKGROUND_VERIFY_FAILED", {
+          error_name: error instanceof Error ? error.name : "unknown",
+        });
+        await this.failClosedSession(session);
+        throw error;
+      }
+    })();
+    this.verificationPromise = verification;
+    void verification.catch(() => {});
+    void verification.finally(() => {
+      if (this.verificationPromise === verification) this.verificationPromise = null;
+    }).catch(() => {});
+  }
+
+  private async waitUntilVerified(): Promise<void> {
+    const verification = this.verificationPromise;
+    if (verification) await verification;
+    if (!this.session) throw new Error("Galer Cloud Web transport verification failed.");
+  }
+
+  private async failClosedSession(session: WebTransportSession): Promise<void> {
+    if (this.session !== session) return;
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    this.session = null;
+    await this.runtime.shutdown().catch(() => {});
+    await this.api.stop(session).catch(() => {});
   }
 
   private scheduleHeartbeat(milliseconds: number): void {
@@ -215,7 +254,10 @@ export class WebTransportController {
       playTrace("CONTROLLER_CREDENTIAL_REFRESH_BEGIN");
       try {
         await this.runtime.replaceCredentials(session);
-        await this.runtime.verifyReady(session);
+        await Promise.all([
+          this.runtime.verifyIdentity(session),
+          this.runtime.verifyReady(session),
+        ]);
         this.session = session;
         playTrace("CONTROLLER_CREDENTIAL_REFRESH_READY");
       } catch (error) {
@@ -239,6 +281,9 @@ export class WebTransportController {
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
+    const verification = this.verificationPromise;
+    this.verificationPromise = null;
+    if (verification) await verification.catch(() => {});
     await this.runtime.shutdown().catch(() => {});
   }
 
@@ -246,6 +291,8 @@ export class WebTransportController {
     const deadline = Date.now() + 120_000;
     while (!this.closed && Date.now() < deadline) {
       const session = await this.connect();
+      await this.waitUntilVerified();
+      if (this.session !== session) continue;
       if (this.refreshPromise) {
         await this.refreshPromise;
         continue;
@@ -306,8 +353,11 @@ export class WebTransportController {
     this.heartbeatTimer = null;
     const refresh = this.refreshPromise;
     if (refresh) await refresh.catch(() => {});
+    const verification = this.verificationPromise;
+    if (verification) await verification.catch(() => {});
     const session = this.session;
     this.session = null;
+    this.verificationPromise = null;
     await this.runtime.shutdown().catch(() => {});
     if (session) await this.api.stop(session).catch(() => {});
   }
