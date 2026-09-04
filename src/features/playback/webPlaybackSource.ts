@@ -20,8 +20,12 @@ export interface WebPlaybackTransport {
   ): Promise<{
     completed: Promise<WebTransportPrefetchBatchResult>;
     cancelMessage(messageId: number): void;
+    promoteMessage?(messageId: number): Promise<void>;
     cancel(): void;
   }>;
+  focusPlayback?(messageId: number): Promise<void>;
+  markPlaybackStable?(messageId: number): Promise<void>;
+  releasePlaybackFocus?(messageId: number): Promise<void>;
   streamFile(
     input: WebTransportStreamInput,
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
@@ -70,6 +74,7 @@ type PlaybackEntry = {
   playbackCurrentTime: number;
   playbackPlaying: boolean;
   playbackWaiting: boolean;
+  playbackStable: boolean;
   streamDemandWaiters: Set<() => void>;
 };
 
@@ -107,7 +112,8 @@ type ActivePrefetchBatch = {
 
 const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;
 const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;
-const PLAYBACK_BUFFER_AHEAD_TARGET_SECONDS = 1;
+const PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS = 2;
+const PLAYBACK_STREAM_BUFFER_AHEAD_TARGET_SECONDS = PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS;
 
 function supportsMediaSource(mimeType: string): boolean {
   return typeof MediaSource !== "undefined" &&
@@ -184,9 +190,7 @@ function bufferedAheadSeconds(sourceBuffer: SourceBuffer | null, currentTime: nu
     for (let index = 0; index < ranges.length; index += 1) {
       const start = ranges.start(index);
       const end = ranges.end(index);
-      if (currentTime >= start - 0.05 && currentTime <= end + 0.05) {
-        return Math.max(0, end - currentTime);
-      }
+      if (currentTime >= start - 0.05 && currentTime <= end + 0.05) return Math.max(0, end - currentTime);
       if (currentTime < start) return 0;
     }
   } catch {}
@@ -199,7 +203,7 @@ function warmPriorityRank(priority: BeatCardWarmPriority): number {
   return 0;
 }
 
-/** Owns short-lived browser playback URLs and the browser-side warm-prefix policy. */
+/** Owns short-lived browser playback URLs, one 64 KiB warm prefix and session-only RAM audio. */
 export class WebPlaybackSourceManager {
   private entries = new Map<string, PlaybackEntry>();
   private pending = new Map<string, Promise<PreparedWebPlayback>>();
@@ -222,9 +226,7 @@ export class WebPlaybackSourceManager {
   ): Promise<void> {
     const key = `${beatId}:${messageId}`;
     const existingEntry = this.entries.get(beatId);
-    if (existingEntry?.messageId === messageId && !existingEntry.released && !existingEntry.failed) {
-      return Promise.resolve();
-    }
+    if (existingEntry?.messageId === messageId && !existingEntry.released && !existingEntry.failed) return Promise.resolve();
 
     const existingPrefix = this.prefixes.get(beatId);
     if (existingPrefix?.messageId === messageId) {
@@ -247,11 +249,7 @@ export class WebPlaybackSourceManager {
     const retryAfter = this.prefetchRetryAfter.get(key) || 0;
     const now = Date.now();
     if (retryAfter > now) {
-      playTrace("SOURCE_PREFETCH_COOLDOWN", {
-        beat_id: beatId,
-        message_id: messageId,
-        retry_in_ms: retryAfter - now,
-      });
+      playTrace("SOURCE_PREFETCH_COOLDOWN", { beat_id: beatId, message_id: messageId, retry_in_ms: retryAfter - now });
       return Promise.resolve();
     }
     if (retryAfter) this.prefetchRetryAfter.delete(key);
@@ -281,12 +279,7 @@ export class WebPlaybackSourceManager {
     return promise;
   }
 
-  setPrefetchPriority(
-    beatId: string,
-    messageId: number,
-    mimeType: string,
-    priority: BeatCardWarmPriority,
-  ): void {
+  setPrefetchPriority(beatId: string, messageId: number, mimeType: string, priority: BeatCardWarmPriority): void {
     const prefix = this.prefixes.get(beatId);
     if (prefix?.messageId === messageId) {
       prefix.priority = priority;
@@ -294,7 +287,6 @@ export class WebPlaybackSourceManager {
     }
     const key = `${beatId}:${messageId}`;
     const job = this.prefetchJobs.get(key);
-
     if (priority === "far") {
       if (job) {
         this.activePrefetchBatch?.handle?.cancelMessage(messageId);
@@ -303,14 +295,12 @@ export class WebPlaybackSourceManager {
       this.schedulePrefetchDrain();
       return;
     }
-
     if (job) {
       job.priority = priority;
       if (priority === "visible") this.preemptNearbyForVisible();
       this.schedulePrefetchDrain();
       return;
     }
-
     const entry = this.entries.get(beatId);
     if (entry?.messageId === messageId && !entry.released && !entry.failed) return;
     if (prefix?.messageId === messageId && (prefix.targetMet || prefix.exhausted)) return;
@@ -357,10 +347,7 @@ export class WebPlaybackSourceManager {
       return retryAfter <= now;
     });
     if (candidates.length === 0) return;
-
-    const priority: Exclude<BeatCardWarmPriority, "far"> = candidates.some(job => job.priority === "visible")
-      ? "visible"
-      : "nearby";
+    const priority: Exclude<BeatCardWarmPriority, "far"> = candidates.some(job => job.priority === "visible") ? "visible" : "nearby";
     const jobs = candidates.filter(job => job.priority === priority);
     if (jobs.length === 0) return;
     for (const job of jobs) job.inFlight = true;
@@ -390,11 +377,7 @@ export class WebPlaybackSourceManager {
         this.prefetchRetryAfter.set(job.key, retryAt);
         this.settlePrefetchJob(job, failure);
       }
-      playTrace("SOURCE_PREFETCH_BATCH_ERROR", {
-        priority,
-        count: jobs.length,
-        error_name: failure.name,
-      });
+      playTrace("SOURCE_PREFETCH_BATCH_ERROR", { priority, count: jobs.length, error_name: failure.name });
     } finally {
       for (const job of jobs) job.inFlight = false;
       if (this.activePrefetchBatch === batch) this.activePrefetchBatch = null;
@@ -417,7 +400,6 @@ export class WebPlaybackSourceManager {
       });
       return;
     }
-
     const prefix = appendArrayBuffer(existing?.prefix || new ArrayBuffer(0), progress.chunk);
     const measurement = measureMp3PlayablePrefix(prefix);
     const totalBytes = Math.max(existing?.totalBytes || 0, progress.totalBytes || 0, prefix.byteLength);
@@ -436,18 +418,14 @@ export class WebPlaybackSourceManager {
       lastUsedAt: Date.now(),
     };
     this.prefixes.set(job.beatId, next);
-    playTrace("SOURCE_PREFETCH_PROGRESS", {
+    playTrace("WARM_PREFIX_READY", {
       beat_id: job.beatId,
       message_id: job.messageId,
       bytes: prefix.byteLength,
       playable_seconds: roundTraceSeconds(measurement.playableSeconds),
-      target_met: targetMet,
-      priority: job.priority,
     });
     this.enforceCacheBudget(this.currentPlaybackBeatId);
-
     if (targetMet || exhausted) {
-      batch.handle?.cancelMessage(job.messageId);
       this.settlePrefetchJob(job);
       playTrace("SOURCE_PREFETCH_READY", {
         beat_id: job.beatId,
@@ -465,13 +443,13 @@ export class WebPlaybackSourceManager {
       if (job.settled) continue;
       const item = byMessageId.get(job.messageId);
       if (item && !item.ok) {
+        if (batch.preempted || item.preempted) continue;
         const failure = new Error(item.error);
         this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
         this.settlePrefetchJob(job, failure);
         continue;
       }
       if (batch.preempted) continue;
-
       const prefix = this.prefixes.get(job.beatId);
       if (prefix?.messageId === job.messageId) {
         prefix.exhausted = prefix.exhausted || !prefix.targetMet;
@@ -489,32 +467,43 @@ export class WebPlaybackSourceManager {
     else job.resolve();
   }
 
-  private cancelPrefetchForPlayback(beatId: string, messageId: number): void {
+  private async promotePrefetchForPlayback(beatId: string, messageId: number): Promise<void> {
     const key = `${beatId}:${messageId}`;
+    const existingWarm = this.prefetchPending.get(key);
+    if (this.transport.focusPlayback) await this.transport.focusPlayback(messageId);
+    if (!existingWarm) return;
+
     const job = this.prefetchJobs.get(key);
-    if (!job) return;
-    this.activePrefetchBatch?.handle?.cancelMessage(messageId);
-    this.settlePrefetchJob(job);
+    const active = Boolean(job?.inFlight && this.activePrefetchBatch?.jobs.includes(job));
+    playTrace(active ? "PLAY_WARM_ADOPTED" : "PLAY_WARM_PROMOTED", {
+      beat_id: beatId,
+      message_id: messageId,
+    });
+    await this.activePrefetchBatch?.handle?.promoteMessage?.(messageId);
+    await existingWarm;
   }
 
-  prepare(beatId: string, messageId: number, mimeType = "audio/mpeg"): Promise<PreparedWebPlayback> {
-    this.cancelPrefetchForPlayback(beatId, messageId);
+  async prepare(beatId: string, messageId: number, mimeType = "audio/mpeg"): Promise<PreparedWebPlayback> {
+    await this.promotePrefetchForPlayback(beatId, messageId);
     const mediaSourceSupported = supportsMediaSource(mimeType);
     playTrace("SOURCE_PREPARE", { beat_id: beatId, mime_type: mimeType, mode: mediaSourceSupported ? "mse" : "blob" });
+    const previousPlayback = this.currentPlaybackBeatId;
+    if (previousPlayback && previousPlayback !== beatId) {
+      const previous = this.entries.get(previousPlayback);
+      if (previous && this.transport.releasePlaybackFocus) void this.transport.releasePlaybackFocus(previous.messageId).catch(() => {});
+    }
+    this.currentPlaybackBeatId = beatId;
+
     const existing = this.entries.get(beatId);
     if (existing && existing.messageId !== messageId) this.hardRelease(beatId);
     const reusable = this.entries.get(beatId);
     if (reusable && !reusable.released && !reusable.failed) {
       reusable.lastUsedAt = Date.now();
       if (!reusable.streamDone) {
-        playTrace("SOURCE_ACTIVE_PLAYBACK_HIT", {
-          beat_id: beatId,
-          message_id: messageId,
-          bytes: reusable.cachedBytes,
-        });
-        return Promise.resolve({ url: reusable.url, completed: reusable.completed });
+        playTrace("SOURCE_ACTIVE_PLAYBACK_HIT", { beat_id: beatId, message_id: messageId, bytes: reusable.cachedBytes });
+        this.evaluatePlaybackStability(reusable);
+        return { url: reusable.url, completed: reusable.completed };
       }
-
       const availableBytes = chunkBytes(reusable.cachedChunks);
       if (availableBytes > 0 && availableBytes >= reusable.cachedBytes) {
         const previousUrl = reusable.url;
@@ -522,6 +511,7 @@ export class WebPlaybackSourceManager {
         reusable.url = url;
         reusable.mediaSource = null;
         reusable.sourceBuffer = null;
+        reusable.playbackStable = true;
         if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
         playTrace("SOURCE_SESSION_CACHE_HIT", {
           beat_id: beatId,
@@ -530,9 +520,9 @@ export class WebPlaybackSourceManager {
           bytes: availableBytes,
           fresh_blob_url: true,
         });
-        return Promise.resolve({ url, completed: reusable.completed });
+        if (this.transport.markPlaybackStable) void this.transport.markPlaybackStable(messageId).catch(() => {});
+        return { url, completed: reusable.completed };
       }
-
       playTrace("SOURCE_SESSION_CACHE_INVALID", {
         beat_id: beatId,
         message_id: messageId,
@@ -541,12 +531,16 @@ export class WebPlaybackSourceManager {
       });
       this.hardRelease(beatId);
     }
+
     const pending = this.pending.get(beatId);
     if (pending) return pending;
     const preparation = (mediaSourceSupported
       ? this.prepareMediaSource(beatId, messageId, mimeType)
       : this.prepareBlobFallback(beatId, messageId, mimeType)
-    ).finally(() => this.pending.delete(beatId));
+    ).catch(error => {
+      if (this.transport.releasePlaybackFocus) void this.transport.releasePlaybackFocus(messageId).catch(() => {});
+      throw error;
+    }).finally(() => this.pending.delete(beatId));
     this.pending.set(beatId, preparation);
     this.schedulePrefetchDrain();
     return preparation;
@@ -585,8 +579,24 @@ export class WebPlaybackSourceManager {
       playbackCurrentTime: 0,
       playbackPlaying: false,
       playbackWaiting: false,
+      playbackStable: false,
       streamDemandWaiters: new Set(),
     };
+  }
+
+  private evaluatePlaybackStability(entry: PlaybackEntry): void {
+    if (entry.released || entry.failed || entry.playbackStable) return;
+    const ahead = bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime);
+    const hasData = entry.streamDone || sourceBufferSnapshot(entry.sourceBuffer).buffered_ranges > 0;
+    if (!hasData || (!entry.streamDone && ahead < PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS)) return;
+    entry.playbackStable = true;
+    playTrace("PLAY_BUFFER_STABLE", {
+      beat_id: entry.beatId,
+      message_id: entry.messageId,
+      buffered_ahead_s: roundTraceSeconds(ahead),
+      stream_done: entry.streamDone,
+    });
+    if (this.transport.markPlaybackStable) void this.transport.markPlaybackStable(entry.messageId).catch(() => {});
   }
 
   private prepareMediaSource(beatId: string, messageId: number, mimeType: string): Promise<PreparedWebPlayback> {
@@ -608,24 +618,14 @@ export class WebPlaybackSourceManager {
     const entry = this.makePlaybackState(beatId, messageId, usablePrefix?.mimeType || mimeType, url, completed);
     entry.mediaSource = mediaSource;
     entry.cachedChunks = usablePrefix ? [usablePrefix.prefix] : [];
-    let resolvePrefixBuffered: (() => void) | null = null;
-    const prefixBuffered = usablePrefix
-      ? new Promise<void>(resolve => { resolvePrefixBuffered = resolve; })
-      : Promise.resolve();
     if (usablePrefix) {
       entry.cachedBytes = usablePrefix.prefix.byteLength;
-      entry.queue.push({
-        chunk: usablePrefix.prefix,
-        origin: "prefetch",
-        resolve: () => resolvePrefixBuffered?.(),
-        reject: () => resolvePrefixBuffered?.(),
-      });
-      playTrace("SOURCE_PREFETCH_CONSUMED", {
+      entry.queue.push({ chunk: usablePrefix.prefix, origin: "prefetch", resolve: () => {}, reject: () => {} });
+      playTrace("PLAY_PREFIX_READY", {
         beat_id: beatId,
         message_id: messageId,
         bytes: usablePrefix.prefix.byteLength,
         playable_seconds: roundTraceSeconds(usablePrefix.playableSeconds),
-        target_met: usablePrefix.targetMet,
       });
     }
     this.entries.set(beatId, entry);
@@ -648,6 +648,7 @@ export class WebPlaybackSourceManager {
       if (mediaSource.readyState === "open") {
         try { mediaSource.endOfStream(); } catch {}
       }
+      this.evaluatePlaybackStability(entry);
       resolveCompleted();
     };
     const pump = () => {
@@ -691,24 +692,15 @@ export class WebPlaybackSourceManager {
               append_seq: appended.appendSequence ?? null,
               origin: appended.origin,
               bytes: appended.chunk.byteLength,
-              append_ms: appended.appendStartedAtMs === undefined
-                ? null
-                : Math.round((traceNowMs() - appended.appendStartedAtMs) * 10) / 10,
+              append_ms: appended.appendStartedAtMs === undefined ? null : Math.round((traceNowMs() - appended.appendStartedAtMs) * 10) / 10,
               queue_depth: entry.queue.length,
               media_source_state: mediaSource.readyState,
               ...snapshot,
             });
-            if (appended.origin === "prefetch") {
-              playTrace("SOURCE_MSE_PREFETCH_BUFFERED", {
-                beat_id: beatId,
-                message_id: messageId,
-                bytes: appended.chunk.byteLength,
-                ...snapshot,
-              });
-            }
             appended.resolve();
           }
           entry.appending = null;
+          this.evaluatePlaybackStability(entry);
           pump();
         });
         entry.sourceBuffer.addEventListener("error", () => fail(new Error("Cloud audio could not be decoded.")));
@@ -731,18 +723,14 @@ export class WebPlaybackSourceManager {
           return;
         }
 
-        if (usablePrefix?.targetMet) {
-          await prefixBuffered;
-          await this.waitForStreamDemand(entry);
-          if (entry.released || entry.failed) return;
-        }
-
+        // Continuation starts immediately. Do not wait for the prefix to be
+        // consumed; the request resumes from the exact warm-prefix byte length.
         let firstChunkLogged = false;
-        playTrace("SOURCE_STREAM_REQUEST", { beat_id: beatId, offset_bytes: offsetBytes });
+        playTrace("PLAY_STREAM_BEGIN", { beat_id: beatId, message_id: messageId, offset_bytes: offsetBytes });
         const stream = await this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {
           if (!firstChunkLogged) {
             firstChunkLogged = true;
-            playTrace("SOURCE_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength, offset_bytes: offsetBytes });
+            playTrace("PLAY_STREAM_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength, offset_bytes: offsetBytes });
           }
           if (entry.released) return Promise.reject(abortError());
           if (entry.failed) return Promise.reject(new Error("Cloud audio stream failed."));
@@ -753,7 +741,6 @@ export class WebPlaybackSourceManager {
             pump();
           }).then(() => this.waitForStreamDemand(entry));
         });
-        playTrace("SOURCE_STREAM_HANDLE_READY", { beat_id: beatId });
         entry.cancel = stream.cancel;
         if (entry.released) {
           stream.cancel();
@@ -765,11 +752,8 @@ export class WebPlaybackSourceManager {
           entry.cachedBytes = Math.max(entry.cachedBytes, result.totalBytes || entry.cachedBytes);
           entry.lastUsedAt = Date.now();
           this.resolveStreamDemandWaiters(entry);
-          playTrace("SOURCE_SESSION_CACHE_READY", {
-            beat_id: beatId,
-            message_id: messageId,
-            bytes: entry.cachedBytes,
-          });
+          playTrace("SOURCE_SESSION_CACHE_READY", { beat_id: beatId, message_id: messageId, bytes: entry.cachedBytes });
+          this.evaluatePlaybackStability(entry);
           pump();
           finishIfReady();
           this.enforceCacheBudget(beatId);
@@ -793,34 +777,29 @@ export class WebPlaybackSourceManager {
     let firstChunkLogged = false;
     let placeholder: PlaybackEntry | null = null;
     const offsetBytes = usablePrefix?.prefix.byteLength || 0;
-    if (usablePrefix) {
-      playTrace("SOURCE_PREFETCH_CONSUMED", { beat_id: beatId, message_id: messageId, bytes: offsetBytes });
-    }
+    if (usablePrefix) playTrace("PLAY_PREFIX_READY", { beat_id: beatId, message_id: messageId, bytes: offsetBytes });
     if (usablePrefix && usablePrefix.totalBytes <= offsetBytes) {
       const url = URL.createObjectURL(new Blob(chunks, { type: usablePrefix.mimeType || mimeType }));
       const completed = Promise.resolve();
       placeholder = this.makePlaybackState(beatId, messageId, usablePrefix.mimeType || mimeType, url, completed);
       placeholder.streamDone = true;
+      placeholder.playbackStable = true;
       placeholder.cachedBytes = usablePrefix.totalBytes || offsetBytes;
       placeholder.cachedChunks = chunks;
       this.entries.set(beatId, placeholder);
       this.enforceCacheBudget(beatId);
-      playTrace("SOURCE_SESSION_CACHE_READY", {
-        beat_id: beatId,
-        message_id: messageId,
-        bytes: placeholder.cachedBytes,
-      });
+      if (this.transport.markPlaybackStable) void this.transport.markPlaybackStable(messageId).catch(() => {});
+      playTrace("SOURCE_SESSION_CACHE_READY", { beat_id: beatId, message_id: messageId, bytes: placeholder.cachedBytes });
       playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "blob", prefetched_only: true });
       return { url, completed };
     }
     const stream = await this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {
       if (!firstChunkLogged) {
         firstChunkLogged = true;
-        playTrace("SOURCE_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength, offset_bytes: offsetBytes });
+        playTrace("PLAY_STREAM_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength, offset_bytes: offsetBytes });
       }
       if (!placeholder?.released) chunks.push(chunk);
     });
-    playTrace("SOURCE_STREAM_HANDLE_READY", { beat_id: beatId });
     placeholder = this.makePlaybackState(beatId, messageId, mimeType, "", Promise.resolve());
     placeholder.cancel = stream.cancel;
     placeholder.cachedBytes = offsetBytes;
@@ -828,20 +807,18 @@ export class WebPlaybackSourceManager {
     this.entries.set(beatId, placeholder);
     try {
       const result = await stream.completed;
-      playTrace("SOURCE_BLOB_DOWNLOAD_DONE", { beat_id: beatId, chunks: chunks.length });
       if (placeholder.released) throw abortError();
       const url = URL.createObjectURL(new Blob(chunks, { type: result.mimeType || "audio/mpeg" }));
       placeholder.url = url;
       placeholder.mimeType = result.mimeType || placeholder.mimeType;
       placeholder.streamDone = true;
+      placeholder.playbackStable = true;
       placeholder.cachedBytes = result.totalBytes || chunkBytes(chunks);
       placeholder.lastUsedAt = Date.now();
       this.enforceCacheBudget(beatId);
-      playTrace("SOURCE_SESSION_CACHE_READY", {
-        beat_id: beatId,
-        message_id: messageId,
-        bytes: placeholder.cachedBytes,
-      });
+      if (this.transport.markPlaybackStable) void this.transport.markPlaybackStable(messageId).catch(() => {});
+      playTrace("PLAY_BUFFER_STABLE", { beat_id: beatId, message_id: messageId, stream_done: true });
+      playTrace("SOURCE_SESSION_CACHE_READY", { beat_id: beatId, message_id: messageId, bytes: placeholder.cachedBytes });
       playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "blob" });
       return { url, completed: Promise.resolve() };
     } catch (error) {
@@ -860,7 +837,12 @@ export class WebPlaybackSourceManager {
     entry.playbackWaiting = Boolean(state.waiting);
     entry.lastUsedAt = Date.now();
     if (state.playing || state.waiting) this.currentPlaybackBeatId = state.beatId;
-    else if (this.currentPlaybackBeatId === state.beatId) this.currentPlaybackBeatId = state.beatId;
+    if (state.waiting) {
+      entry.playbackStable = false;
+      playTrace("PLAY_FOCUS_BEGIN", { beat_id: state.beatId, message_id: entry.messageId, reason: "waiting" });
+      if (this.transport.focusPlayback) void this.transport.focusPlayback(entry.messageId).catch(() => {});
+    }
+    this.evaluatePlaybackStability(entry);
     this.wakeStreamDemandIfNeeded(entry);
   }
 
@@ -869,7 +851,7 @@ export class WebPlaybackSourceManager {
     if (!entry.sourceBuffer) return true;
     if (entry.playbackObserved && !entry.playbackPlaying && !entry.playbackWaiting) return false;
     if (entry.playbackWaiting) return true;
-    return bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime) < PLAYBACK_BUFFER_AHEAD_TARGET_SECONDS;
+    return bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime) < PLAYBACK_STREAM_BUFFER_AHEAD_TARGET_SECONDS;
   }
 
   private waitForStreamDemand(entry: PlaybackEntry): Promise<void> {
@@ -892,15 +874,14 @@ export class WebPlaybackSourceManager {
     if (!beatId) return;
     const entry = this.entries.get(beatId);
     if (!entry) return;
+    if (this.transport.releasePlaybackFocus) void this.transport.releasePlaybackFocus(entry.messageId).catch(() => {});
+    if (this.currentPlaybackBeatId === beatId) this.currentPlaybackBeatId = null;
     if (entry.streamDone && !entry.failed) {
       entry.lastUsedAt = Date.now();
       entry.playbackPlaying = false;
       entry.playbackWaiting = false;
-      playTrace("SOURCE_SESSION_CACHE_RETAINED", {
-        beat_id: beatId,
-        message_id: entry.messageId,
-        bytes: entry.cachedBytes,
-      });
+      entry.playbackStable = false;
+      playTrace("SOURCE_SESSION_CACHE_RETAINED", { beat_id: beatId, message_id: entry.messageId, bytes: entry.cachedBytes });
       return;
     }
     this.hardRelease(beatId);
@@ -909,6 +890,7 @@ export class WebPlaybackSourceManager {
   private hardRelease(beatId: string): void {
     const entry = this.entries.get(beatId);
     if (!entry) return;
+    if (this.transport.releasePlaybackFocus) void this.transport.releasePlaybackFocus(entry.messageId).catch(() => {});
     entry.released = true;
     entry.cancel?.();
     this.resolveStreamDemandWaiters(entry);
@@ -927,9 +909,7 @@ export class WebPlaybackSourceManager {
 
   private cacheUsedBytes(): number {
     let used = 0;
-    for (const entry of this.entries.values()) {
-      if (!entry.failed) used += Math.max(0, entry.cachedBytes);
-    }
+    for (const entry of this.entries.values()) if (!entry.failed) used += Math.max(0, entry.cachedBytes);
     for (const prefix of this.prefixes.values()) used += prefix.prefix.byteLength;
     return used;
   }
@@ -937,7 +917,6 @@ export class WebPlaybackSourceManager {
   private enforceCacheBudget(protectedBeatId: string | null): void {
     let used = this.cacheUsedBytes();
     if (used <= this.sessionCacheLimitBytes) return;
-
     const completedCandidates = Array.from(this.entries.values())
       .filter(entry => entry.beatId !== protectedBeatId && entry.streamDone && !entry.failed)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
@@ -948,7 +927,6 @@ export class WebPlaybackSourceManager {
       used -= bytes;
       playTrace("SOURCE_SESSION_CACHE_EVICTED", { beat_id: entry.beatId, bytes, kind: "completed" });
     }
-
     const prefixesByPriority = Array.from(this.prefixes.values())
       .filter(prefix => prefix.beatId !== protectedBeatId)
       .sort((a, b) => warmPriorityRank(a.priority) - warmPriorityRank(b.priority) || a.lastUsedAt - b.lastUsedAt);
@@ -965,10 +943,7 @@ export class WebPlaybackSourceManager {
   }
 
   cacheStatus(): { used_bytes: number; limit_mb: number } {
-    return {
-      used_bytes: this.cacheUsedBytes(),
-      limit_mb: Math.round(this.sessionCacheLimitBytes / (1024 * 1024)),
-    };
+    return { used_bytes: this.cacheUsedBytes(), limit_mb: Math.round(this.sessionCacheLimitBytes / (1024 * 1024)) };
   }
 
   setCacheLimitMb(limitMb: number): { used_bytes: number; limit_mb: number } {
