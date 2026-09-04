@@ -3,6 +3,7 @@ import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
 
 let silentGestureUrl: string | null = null;
+const WEB_PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";
 
 function getSilentGestureUrl(): string {
   if (silentGestureUrl) return silentGestureUrl;
@@ -28,6 +29,19 @@ function getSilentGestureUrl(): string {
   bytes.fill(128, 44);
   silentGestureUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
   return silentGestureUrl;
+}
+
+function cachedWebMasterSize(beatId: string): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(WEB_PRESENTATION_LIBRARY_CACHE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return 0;
+    const beat = parsed.find(value => String(value?.id || "") === beatId);
+    const bytes = Number(beat?.assets?.master?.size_bytes || 0);
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export interface AudioState {
@@ -86,15 +100,46 @@ export function useAudio() {
       }));
     };
 
-    const onDurationHint = (event: Event) => {
-      const detail = (event as CustomEvent<{ beatId?: string; duration?: number }>).detail;
-      const beatId = String(detail?.beatId || "").trim();
-      const duration = Number(detail?.duration || 0);
+    const storeDurationHint = (beatId: string, duration: number) => {
       if (!beatId || !Number.isFinite(duration) || duration <= 0) return;
       durationHintsRef.current.set(beatId, duration);
       if (currentBeatIdRef.current === beatId && !Number.isFinite(audio.duration)) {
-        setState((s) => ({ ...s, duration }));
+        setState((s) => ({
+          ...s,
+          duration,
+          progress: Math.max(0, Math.min(1, audio.currentTime / duration)),
+        }));
       }
+    };
+
+    const onDurationHint = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId?: string; duration?: number }>).detail;
+      storeDurationHint(String(detail?.beatId || "").trim(), Number(detail?.duration || 0));
+    };
+
+    const onPrefixTiming = (event: Event) => {
+      const detail = (event as CustomEvent<{ beatId?: string; bytes?: number; playableSeconds?: number }>).detail;
+      const beatId = String(detail?.beatId || "").trim();
+      const prefixBytes = Math.max(0, Number(detail?.bytes || 0));
+      const playableSeconds = Math.max(0, Number(detail?.playableSeconds || 0));
+      const totalBytes = cachedWebMasterSize(beatId);
+      if (!beatId || prefixBytes < 4096 || playableSeconds <= 0 || totalBytes <= 0) return;
+
+      // The Web masters are metadata-free audio in the current architecture.
+      // Estimate duration from measured MPEG-frame time/bytes without mutating
+      // MediaSource.duration. VBR can make this approximate; the native finite
+      // duration replaces the hint automatically once endOfStream() completes.
+      const estimated = playableSeconds * (Math.max(prefixBytes, totalBytes) / prefixBytes);
+      if (!Number.isFinite(estimated) || estimated <= 0) return;
+      const duration = Math.max(playableSeconds, estimated);
+      storeDurationHint(beatId, duration);
+      playTrace("AUDIO_DURATION_HINT", {
+        beat_id: beatId,
+        prefix_bytes: prefixBytes,
+        total_bytes: totalBytes,
+        prefix_seconds: Math.round(playableSeconds * 1000) / 1000,
+        duration_s: Math.round(duration * 1000) / 1000,
+      });
     };
 
     const onTimeUpdate = () => {
@@ -193,6 +238,7 @@ export function useAudio() {
     audio.addEventListener("pause", onPause);
     audio.addEventListener("error", onError);
     window.addEventListener("beatgaler:web-playback-duration", onDurationHint);
+    window.addEventListener("beatgaler:web-playback-prefix-timing", onPrefixTiming);
 
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
@@ -205,6 +251,7 @@ export function useAudio() {
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("error", onError);
       window.removeEventListener("beatgaler:web-playback-duration", onDurationHint);
+      window.removeEventListener("beatgaler:web-playback-prefix-timing", onPrefixTiming);
     };
   }, [effectiveDuration, getAudio]);
 
