@@ -196,18 +196,51 @@ jobs:
       - name: Prepare supply-chain reports
         run: mkdir -p artifacts/supply-chain
 
+      - name: Pin npm audit client
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.1 --ignore-scripts --no-audit --no-fund
+          test "$(npm --version)" = "11.19.1"
+          npm --version > artifacts/supply-chain/npm-audit-client.txt
+
       - name: Reject npm critical/high advisories
         shell: bash
         run: |
-          set +e
-          npm audit --audit-level=high --json > artifacts/supply-chain/npm-audit.json
-          ROOT_STATUS=$?
-          npm --prefix cloud-server audit --audit-level=high --json > artifacts/supply-chain/cloud-npm-audit.json
-          CLOUD_STATUS=$?
-          set -e
-          node -e "const r=require('./artifacts/supply-chain/npm-audit.json'); console.log('root', JSON.stringify(r.metadata?.vulnerabilities ?? {}, null, 2))"
-          node -e "const r=require('./artifacts/supply-chain/cloud-npm-audit.json'); console.log('cloud-server', JSON.stringify(r.metadata?.vulnerabilities ?? {}, null, 2))"
-          if [[ "$ROOT_STATUS" -ne 0 || "$CLOUD_STATUS" -ne 0 ]]; then exit 1; fi
+          set -euo pipefail
+          npm audit --audit-level=high --json > artifacts/supply-chain/npm-audit.json || true
+          npm --prefix cloud-server audit --audit-level=high --json > artifacts/supply-chain/cloud-npm-audit.json || true
+          node <<'NODE'
+          const fs = require("node:fs");
+          const reports = [
+            ["root", "artifacts/supply-chain/npm-audit.json"],
+            ["cloud-server", "artifacts/supply-chain/cloud-npm-audit.json"],
+          ];
+          let failed = false;
+          for (const [label, path] of reports) {
+            let report;
+            try {
+              report = JSON.parse(fs.readFileSync(path, "utf8"));
+            } catch (error) {
+              console.error(`${label}: npm audit did not return valid JSON: ${error.message}`);
+              failed = true;
+              continue;
+            }
+            const vulnerabilities = report?.metadata?.vulnerabilities;
+            if (
+              !vulnerabilities ||
+              typeof vulnerabilities.high !== "number" ||
+              typeof vulnerabilities.critical !== "number"
+            ) {
+              console.error(`${label}: npm audit did not return a valid vulnerability summary`);
+              failed = true;
+              continue;
+            }
+            console.log(label, JSON.stringify(vulnerabilities, null, 2));
+            if (vulnerabilities.high > 0 || vulnerabilities.critical > 0) failed = true;
+          }
+          if (failed) process.exit(1);
+          NODE
 
       - name: Verify npm dependency licenses
         run: |
