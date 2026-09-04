@@ -18,6 +18,9 @@ const tempAuthBoundary = read("cloud-server/productive-temp-auth-boundary.js");
 if (!vite.includes("beatgaler-productive-trust-boundary")) fail("productive Vite trust-boundary transform is missing");
 if (!vite.includes("refusing an unsafe build") || !vite.includes("trustedRememberedApi")) fail("cloud-origin transform is not fail-closed");
 if (!vite.includes("safeId3Loader") || !vite.includes("unsafeId3Loader")) fail("remote ID3 loader stripping is missing");
+if (!vite.includes('command === "serve" && mode === "web"')) fail("Web dev proxy is not restricted to Vite serve/web mode");
+if (!vite.includes("BEATGALER_DEV_API_TARGET") || !vite.includes('"/beatgaler-api"')) fail("Web dev same-origin Cloud proxy is missing");
+if (!vite.includes('cookieDomainRewrite: ""')) fail("Web dev proxy no longer rewrites upstream cookie domains for localhost");
 if (!main.includes('browserId3Reader') || !main.includes('(window as any).jsmediatags = browserId3Reader')) fail("local browser ID3 parser is not installed before app render");
 
 const csp = String(tauri?.app?.security?.csp || "");
@@ -66,4 +69,4 @@ if (existsSync(dist)) {
   }
 }
 
-console.log("PASS Task 5.1 hardening: fixed Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and serialized permanent auth");
+console.log("PASS Task 5.1 hardening: fixed Cloud origin, dev same-origin proxy, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and serialized permanent auth");

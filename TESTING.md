@@ -1,5 +1,28 @@
 # BeatGaler Automated Testing
 
+## Web dev against real BeatGaler Cloud
+
+For Web playback/startup work, use the Vite dev server instead of rebuilding and deploying `beatgaler.com` for every iteration:
+
+```powershell
+npm run dev:web
+# Runs the local Web UI with HMR and proxies /beatgaler-api to https://beatgaler.com by default.
+```
+
+Open `http://localhost:1420`.
+
+The browser still talks only to its same-origin `/beatgaler-api` path. Vite owns the dev-only proxy and forwards it to the configured Cloud target; productive builds do not contain this proxy. Because localhost has its own cookies/localStorage, sign in once on localhost before testing remembered-session/cache startup behavior.
+
+To point the local Web UI at a future staging Cloud instead:
+
+```powershell
+$env:BEATGALER_DEV_API_TARGET = "https://dev-api.beatgaler.com"
+npm run dev:web
+# Uses the same local Web runtime while forwarding /beatgaler-api to the selected HTTPS staging origin.
+```
+
+`BEATGALER_DEV_API_TARGET` accepts HTTPS origins, plus HTTP only for localhost/loopback development.
+
 ## Current automated layers
 
 ### Unit tests

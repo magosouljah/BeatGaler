@@ -35,6 +35,26 @@ function requiredCoreFile(...parts: string[]): string {
   return full;
 }
 
+const DEFAULT_WEB_DEV_API_TARGET = "https://beatgaler.com";
+
+function webDevApiTarget(): string {
+  const raw = String(process.env.BEATGALER_DEV_API_TARGET || DEFAULT_WEB_DEV_API_TARGET).trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("BEATGALER_DEV_API_TARGET must be an absolute URL.");
+  }
+  const loopbackHttp = parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !loopbackHttp) {
+    throw new Error("BEATGALER_DEV_API_TARGET must use HTTPS unless it is localhost/loopback.");
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("BEATGALER_DEV_API_TARGET must not contain credentials, query parameters, or fragments.");
+  }
+  return parsed.origin;
+}
+
 function productiveTrustBoundaryPlugin() {
   const unsafeCloudConstants = `const API_KEY = "beatgaler:cloud-api:v1";\nconst LOCAL_API = "http://127.0.0.1:4000";\nconst REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";`;
   const safeCloudConstants = `const API_KEY = "beatgaler:cloud-api:v1";\nconst REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";`;
@@ -84,40 +104,53 @@ function productiveTrustBoundaryPlugin() {
   };
 }
 
-export default defineConfig(async ({ command, mode }) => ({
-  plugins: [productiveTrustBoundaryPlugin(), react()],
-  base: command === "serve" ? "/" : "./",
-  clearScreen: false,
-  resolve: {
-    alias: {
-      __beatgaler_mtcute_authorization__: requiredCoreFile("network", "authorization.js"),
-      __beatgaler_mtcute_utils__: requiredCoreFile("utils.js"),
+export default defineConfig(async ({ command, mode }) => {
+  const devProxyTarget = command === "serve" && mode === "web" ? webDevApiTarget() : null;
+  return {
+    plugins: [productiveTrustBoundaryPlugin(), react()],
+    base: command === "serve" ? "/" : "./",
+    clearScreen: false,
+    resolve: {
+      alias: {
+        __beatgaler_mtcute_authorization__: requiredCoreFile("network", "authorization.js"),
+        __beatgaler_mtcute_utils__: requiredCoreFile("utils.js"),
+      },
     },
-  },
-  optimizeDeps: {
-    exclude: ["@mtcute/wasm"],
-  },
-  server: {
-    port: 1420,
-    strictPort: true,
-    watch: {
-      ignored: [
-        "**/src-tauri/**",
-        "**/.vs/**",
-        "**/node_modules/**"
-      ],
+    optimizeDeps: {
+      exclude: ["@mtcute/wasm"],
     },
-  },
-  envPrefix: ["VITE_", "TAURI_ENV_*"],
-  build: {
-    // Web transport dependencies use native BigInt. The browser build therefore
-    // targets ES2020, while Desktop keeps its existing platform-specific targets.
-    target: mode === "web"
-      ? "es2020"
-      : process.env.TAURI_ENV_PLATFORM == "windows"
-        ? "chrome105"
-        : "safari13",
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
-    sourcemap: !!process.env.TAURI_ENV_DEBUG,
-  },
-}));
+    server: {
+      port: 1420,
+      strictPort: true,
+      watch: {
+        ignored: [
+          "**/src-tauri/**",
+          "**/.vs/**",
+          "**/node_modules/**"
+        ],
+      },
+      ...(devProxyTarget ? {
+        proxy: {
+          "/beatgaler-api": {
+            target: devProxyTarget,
+            changeOrigin: true,
+            secure: true,
+            cookieDomainRewrite: "",
+          },
+        },
+      } : {}),
+    },
+    envPrefix: ["VITE_", "TAURI_ENV_*"],
+    build: {
+      // Web transport dependencies use native BigInt. The browser build therefore
+      // targets ES2020, while Desktop keeps its existing platform-specific targets.
+      target: mode === "web"
+        ? "es2020"
+        : process.env.TAURI_ENV_PLATFORM == "windows"
+          ? "chrome105"
+          : "safari13",
+      minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+      sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    },
+  };
+});
