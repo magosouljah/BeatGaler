@@ -132,31 +132,26 @@ export class WebTransportController {
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupBeatIds.length });
     try {
-      const session = await observePlayStep("DIRECT_PREPARE", async () => {
-        bootstrap = await this.api.reserve(this.startupBeatIds);
-
-        // Activation only needs the reserved lease identity, so keep it overlapped
-        // with temp-auth creation/binding. Worker media RPCs, however, need the bot
-        // to be a confirmed vault member, so initialize is gated on activation below.
-        const activateStarted = Date.now();
-        activationResultPromise = settleStartupBranch(
-          observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
-        ).then(result => {
-          if (result.ok) {
-            playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
-          }
-          return result;
-        });
-
-        return this.api.bind(bootstrap);
+      // Reserve first so TypeScript and teardown both have an explicit lease.
+      // Activation then overlaps only with temp-auth creation/binding; Worker
+      // initialize (which contains startup getMessages) remains gated below.
+      bootstrap = await this.api.reserve(this.startupBeatIds);
+      const activateStarted = Date.now();
+      activationResultPromise = settleStartupBranch(
+        observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
+      ).then(result => {
+        if (result.ok) {
+          playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
+        }
+        return result;
       });
+
+      const session = await observePlayStep("DIRECT_PREPARE", () => this.api.bind(bootstrap!));
       playTrace("CONTROLLER_SESSION_PREPARE_DONE", {
         elapsed_ms: Date.now() - started,
         startup_routes: Object.keys(session.startup_routes || {}).length,
         routing_revision: Math.max(0, Number(session.routing_revision) || 0),
       });
-
-      if (!activationResultPromise) throw new Error("Galer Cloud Web activation did not start after lease reservation.");
 
       // Important ordering invariant: getMessages(startup routes) runs inside
       // runtime.initialize(). Do not race that RPC against vault membership.
