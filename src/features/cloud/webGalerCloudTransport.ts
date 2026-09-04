@@ -216,11 +216,7 @@ export class WebGalerCloudTransport {
     const started = Date.now();
     playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId });
     await this.controller.connect();
-    const result = await this.controller.withOperation(
-      "stream_master",
-      { objectType: "message", objectIds: [String(input.messageId)] },
-      () => this.worker.prefetch(input),
-    );
+    const result = await this.worker.prefetch(input);
     playTrace("TRANSPORT_PREFETCH_READY", {
       message_id: input.messageId,
       bytes: result.prefix.byteLength,
@@ -247,17 +243,12 @@ export class WebGalerCloudTransport {
     ));
     playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length, lanes: this.playbackDataLanes });
     await this.controller.connect();
-    const lease = await this.controller.beginOperation(
-      "stream_master",
-      { objectType: "message", objectIds: ids.map(String) },
-    );
     const workerBatch = this.worker.prefetchBatch({
       inputs,
       maxConcurrency: this.playbackDataLanes,
     }, onChunk);
     const completed = workerBatch.completed.finally(() => {
       playTrace("TRANSPORT_PREFETCH_BATCH_DONE", { count: ids.length, total_ms: Date.now() - started });
-      return this.controller.endOperation(lease).catch(() => {});
     });
     return {
       completed,
@@ -276,18 +267,11 @@ export class WebGalerCloudTransport {
     const connectStarted = Date.now();
     await this.controller.connect();
     playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
-    const operationStarted = Date.now();
-    const lease = await this.controller.beginOperation(
-      "stream_master",
-      { objectType: "message", objectIds: [String(input.messageId)] },
-    );
-    playTrace("TRANSPORT_STREAM_ADMITTED", { wait_ms: Date.now() - operationStarted });
     const stream = this.worker.stream(input, onChunk);
     playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started });
     return {
       completed: stream.completed.finally(() => {
         playTrace("TRANSPORT_STREAM_DONE", { total_ms: Date.now() - started });
-        return this.controller.endOperation(lease).catch(() => {});
       }),
       cancel: stream.cancel,
     };
