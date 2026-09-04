@@ -1,0 +1,74 @@
+name: Probe - Task 5.1 Productive Temp Auth Compile
+
+on:
+  pull_request:
+    paths:
+      - "src/features/cloud/**"
+      - "src/mtcute-internals.d.ts"
+      - "cloud-server/**"
+      - "scripts/regression-web-bound-temp-rpc.mjs"
+      - "vite.config.ts"
+      - ".github/workflows/probe-task-5.1-productive-temp-auth-compile.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compile-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Enforce bound temporary-session continuity
+        run: node scripts/regression-web-bound-temp-rpc.mjs
+
+      - name: Capture Web build output
+        id: web-build
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts/task-5.1-temp-auth-compile
+          npm run build:web > artifacts/task-5.1-temp-auth-compile/web-build.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          cat artifacts/task-5.1-temp-auth-compile/web-build.log
+          exit 0
+
+      - name: Capture TypeScript output
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run test:typecheck > artifacts/task-5.1-temp-auth-compile/typecheck.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          cat artifacts/task-5.1-temp-auth-compile/typecheck.log
+          exit 0
+
+      - name: Upload compile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task-5.1-productive-temp-auth-compile
+          path: artifacts/task-5.1-temp-auth-compile/
+          if-no-files-found: error
+
+      - name: Enforce compile result
+        shell: bash
+        env:
+          WEB_STATUS: ${{ steps.web-build.outputs.status }}
+          TYPE_STATUS: ${{ steps.typecheck.outputs.status }}
+        run: |
+          test "$WEB_STATUS" = "0"
+          test "$TYPE_STATUS" = "0"

@@ -1,13 +1,66 @@
 import React, { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
+import { platform } from "../platform";
+import { hasRememberedWebSessionMarker } from "../features/auth/webSessionBootstrap";
+import { UiButton, UiFeedback, UiField, UiSpinner } from "./ui/DesignPrimitives";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
-export function getBeatGalerAuthToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
+const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
+const CSRF_KEY = "beatgaler:web-csrf:v1";
+const BROWSER_SESSION_SENTINEL = "browser-cookie-session";
+export function getBeatGalerAuthToken(): string | null {
+  if (platform.kind === "web") return localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1" ? BROWSER_SESSION_SENTINEL : null;
+  return localStorage.getItem(TOKEN_KEY);
+}
 const API_KEY = "beatgaler:cloud-api:v1";
 const LOCAL_API = "http://127.0.0.1:4000";
 const REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
+
+function sameOriginProxyApi(): string | null {
+  if (typeof window === "undefined") return null;
+  return `${window.location.origin}/beatgaler-api`;
+}
+
+function currentWebCsrfToken(): string {
+  if (platform.kind !== "web" || typeof sessionStorage === "undefined") return "";
+  return sessionStorage.getItem(CSRF_KEY) || "";
+}
+
+function trustedWebApiCandidate(value: string | null): value is string {
+  if (!value) return false;
+  const sameOriginProxy = sameOriginProxyApi();
+  if (value === REMOTE_API || (!!sameOriginProxy && value === sameOriginProxy)) return true;
+  return /^http:\/\/127\.0\.0\.1:\d+$/.test(value);
+}
+
+function isBeatGalerApiRequest(input: RequestInfo | URL): boolean {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const remembered = localStorage.getItem(API_KEY);
+  const candidates = [trustedWebApiCandidate(remembered) ? remembered : null, sameOriginProxyApi(), REMOTE_API].filter((value): value is string => Boolean(value));
+  return candidates.some(base => url === base || url.startsWith(`${base}/`));
+}
+
+function installWebCredentialedFetchBoundary(): void {
+  if (platform.kind !== "web" || typeof window === "undefined") return;
+  const taggedWindow = window as Window & { __beatgalerCredentialedFetchInstalled?: boolean };
+  if (taggedWindow.__beatgalerCredentialedFetchInstalled) return;
+  taggedWindow.__beatgalerCredentialedFetchInstalled = true;
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
+    if (!isBeatGalerApiRequest(input)) return nativeFetch(input, init);
+    const requestInput = typeof Request !== "undefined" && input instanceof Request ? input : null;
+    const headers = new Headers(init.headers || requestInput?.headers);
+    headers.set("X-BeatGaler-Client", "web");
+    const method = String(init.method || requestInput?.method || "GET").toUpperCase();
+    if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method)) {
+      const csrf = currentWebCsrfToken();
+      if (csrf) headers.set("X-BeatGaler-CSRF", csrf);
+    }
+    return nativeFetch(input, { ...init, headers, credentials: "include" });
+  }) as typeof window.fetch;
+}
+
+installWebCredentialedFetchBoundary();
 
 export type OAuthProvider = "google" | "x";
 export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";
@@ -56,18 +109,56 @@ export interface BeatGalerAccount {
   };
 }
 
-type AuthResponse = { ok: boolean; token: string; user: BeatGalerAccount; linked?: boolean; pending?: boolean };
+export interface BeatGalerSessionInfo {
+  id: string;
+  current: boolean;
+  created_at: string;
+  expires_at: string;
+  last_seen_at?: string | null;
+  client_kind?: string;
+  installation_id?: string | null;
+}
+
+type AuthResponse = { ok: boolean; token?: string; csrf_token?: string; session_transport?: "cookie"; session_rotated?: boolean; user: BeatGalerAccount; linked?: boolean; pending?: boolean };
+
+type RequestFailureKind = "http" | "offline" | "timeout" | "network";
+type BeatGalerRequestError = Error & { status?: number; code?: string; kind?: RequestFailureKind; mfa_required?: boolean };
+
+function taggedRequestError(message: string, fields: Partial<BeatGalerRequestError>): BeatGalerRequestError {
+  return Object.assign(new Error(message), fields);
+}
+
+function networkFailure(error: unknown): BeatGalerRequestError {
+  const value = error as { name?: string; message?: string } | null;
+  if (value?.name === "AbortError") return taggedRequestError("BeatGaler Cloud request timed out. Your saved session was kept.", { code: "CLOUD_TIMEOUT", kind: "timeout" });
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return taggedRequestError("BeatGaler Cloud is offline. Your saved session was kept.", { code: "CLOUD_OFFLINE", kind: "offline" });
+  return taggedRequestError(value?.message || "Could not reach BeatGaler Cloud. Your saved session was kept.", { code: "CLOUD_UNREACHABLE", kind: "network" });
+}
+
+export function isBeatGalerSessionExpiryError(error: unknown): boolean {
+  const value = error as BeatGalerRequestError | null;
+  return Number(value?.status || 0) === 401 || ["SESSION_EXPIRED", "SESSION_REVOKED", "SESSION_ROTATED", "SESSION_ROTATION_EXPIRED", "SESSION_INVALID"].includes(String(value?.code || ""));
+}
 
 async function fetchJson(url: string, init?: RequestInit, timeoutMs = 10000): Promise<any> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      throw networkFailure(error);
+    }
     const text = await response.text();
     let body: any = {};
     try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text || `HTTP ${response.status}` }; }
     if (!response.ok) {
-      const error: any = new Error(body?.error || `BeatGaler Cloud HTTP ${response.status}`);
+      const error: BeatGalerRequestError = taggedRequestError(body?.error || `BeatGaler Cloud HTTP ${response.status}`, {
+        status: response.status,
+        code: body?.code || `HTTP_${response.status}`,
+        kind: "http",
+      });
       Object.assign(error, body || {});
       throw error;
     }
@@ -83,6 +174,11 @@ async function probe(base: string, timeoutMs: number): Promise<boolean> {
 export async function resolveBeatGalerCloudApi(): Promise<string> {
   const remembered = localStorage.getItem(API_KEY);
   if (remembered && await probe(remembered, 1200)) return remembered;
+  const sameOriginProxy = sameOriginProxyApi();
+  if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
+    localStorage.setItem(API_KEY, sameOriginProxy);
+    return sameOriginProxy;
+  }
   if (await probe(LOCAL_API, 900)) { localStorage.setItem(API_KEY, LOCAL_API); return LOCAL_API; }
   if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
   throw new Error("Could not reach BeatGaler Cloud.");
@@ -90,59 +186,135 @@ export async function resolveBeatGalerCloudApi(): Promise<string> {
 
 export function getResolvedCloudApiBase(): string { return localStorage.getItem(API_KEY) || REMOTE_API; }
 
-async function getInstallationId(): Promise<string> {
-  let settings: any = await invoke("get_settings");
-  if (settings?.beatgaler_user_id) return String(settings.beatgaler_user_id);
-  try { await invoke("poll_telegram_cloud_status"); } catch {}
-  settings = await invoke("get_settings");
-  if (!settings?.beatgaler_user_id) throw new Error("BeatGaler could not create its installation ID.");
-  return String(settings.beatgaler_user_id);
+export async function getBeatGalerInstallationId(): Promise<string> {
+  return platform.account.getInstallationId();
+}
+
+function clearLocalSessionState(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(WEB_SESSION_MARKER_KEY);
+  try { sessionStorage.removeItem(CSRF_KEY); } catch {}
 }
 
 async function authRequest(path: string, body: Record<string, unknown> = {}, token?: string): Promise<any> {
-  const base = await resolveBeatGalerCloudApi();
+  let base: string;
+  try { base = await resolveBeatGalerCloudApi(); }
+  catch (error) { throw networkFailure(error); }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return fetchJson(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) }, path === "/auth/register" ? 45000 : 20000);
+  if (platform.kind === "web") {
+    headers["X-BeatGaler-Client"] = "web";
+    const csrf = currentWebCsrfToken();
+    if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
+  }
+  if (token && !(platform.kind === "web" && token === BROWSER_SESSION_SENTINEL)) headers.Authorization = `Bearer ${token}`;
+  const result = await fetchJson(`${base}${path}`, {
+    method: "POST",
+    headers,
+    credentials: platform.kind === "web" ? "include" : "same-origin",
+    body: JSON.stringify(body),
+  }, path === "/auth/register" ? 45000 : 20000);
+  if (platform.kind === "web" && result?.csrf_token) sessionStorage.setItem(CSRF_KEY, String(result.csrf_token));
+  return result;
 }
 
 async function storeSession(result: AuthResponse) {
-  if (result.token) {
+  if (platform.kind === "web") {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
+    if (result.csrf_token) sessionStorage.setItem(CSRF_KEY, result.csrf_token);
+    await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
+  } else if (result.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
-    await invoke("set_cloud_auth_token", { token: result.token, cloudApiBase: getResolvedCloudApiBase() });
+    await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
   }
   window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
   return result.user;
 }
 
 export async function registerBeatGalerAccount(usernameBase: string, email: string, password: string): Promise<BeatGalerAccount> {
-  const result = await authRequest("/auth/register", { usernameBase, email, password, beatgalerUserId: await getInstallationId() });
+  const result = await authRequest("/auth/register", { usernameBase, email, password, beatgalerUserId: await getBeatGalerInstallationId() });
   return await storeSession(result);
 }
 
 export async function loginBeatGalerAccount(identifier: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
-  const result = await authRequest("/auth/login", { identifier, password, mfaCode, beatgalerUserId: await getInstallationId() });
+  const result = await authRequest("/auth/login", { identifier, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() });
   return await storeSession(result);
 }
 
-export async function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (!token) return null;
-  try {
-    const result = await authRequest("/auth/session", { beatgalerUserId: await getInstallationId() }, token);
-    await invoke("set_cloud_auth_token", { token, cloudApiBase: getResolvedCloudApiBase() });
-    return result.user;
-  } catch {
-    localStorage.removeItem(TOKEN_KEY);
-    try { await invoke("set_cloud_auth_token", { token: null, cloudApiBase: getResolvedCloudApiBase() }); } catch {}
-    return null;
-  }
+let restoreBeatGalerSessionInFlight: Promise<BeatGalerAccount | null> | null = null;
+
+export function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
+  // AuthExperienceGate and the legacy AccountGate can mount in the same Web
+  // tree. Share one restore request so optimistic cache reveal does not turn
+  // into duplicate /auth/session round trips.
+  if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;
+
+  const pending = (async (): Promise<BeatGalerAccount | null> => {
+    const legacyToken = localStorage.getItem(TOKEN_KEY);
+    const hasWebMarker = platform.kind === "web" && localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1";
+    const token = platform.kind === "web" ? (legacyToken || (hasWebMarker ? BROWSER_SESSION_SENTINEL : null)) : legacyToken;
+    if (!token) return null;
+    try {
+      const result = await authRequest("/auth/session", { beatgalerUserId: await getBeatGalerInstallationId() }, token);
+      if (platform.kind === "web") {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
+        await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
+      } else {
+        const activeToken = result?.token || token;
+        if (result?.token) localStorage.setItem(TOKEN_KEY, result.token);
+        await platform.cloudAuth.syncSession(activeToken, getResolvedCloudApiBase());
+      }
+      return result.user;
+    } catch (error) {
+      if (!isBeatGalerSessionExpiryError(error)) throw error;
+      clearLocalSessionState();
+      try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+      return null;
+    }
+  })();
+
+  restoreBeatGalerSessionInFlight = pending;
+  const clear = () => {
+    if (restoreBeatGalerSessionInFlight === pending) restoreBeatGalerSessionInFlight = null;
+  };
+  pending.then(clear, clear);
+  return pending;
 }
 
 export async function getBeatGalerAccountInfo(): Promise<BeatGalerAccount> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
   return (await authRequest("/auth/account", {}, token)).user;
+}
+
+export async function listBeatGalerSessions(): Promise<BeatGalerSessionInfo[]> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/sessions", {}, token);
+  return Array.isArray(result?.sessions) ? result.sessions : [];
+}
+
+export async function revokeBeatGalerSession(sessionId: string): Promise<{ current_revoked: boolean }> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/sessions/revoke", { session_id: sessionId }, token);
+  if (result?.current_revoked) {
+    clearLocalSessionState();
+    try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+    window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+  }
+  return { current_revoked: result?.current_revoked === true };
+}
+
+export async function revokeAllBeatGalerSessions(): Promise<number> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/sessions/revoke-all", {}, token);
+  clearLocalSessionState();
+  try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+  window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+  return Number(result?.revoked_count || 0);
 }
 
 export async function getBeatGalerPlanCatalog(): Promise<BeatGalerPlanDefinition[]> {
@@ -170,7 +342,11 @@ export async function changeBeatGalerEmail(email: string, confirmEmail: string):
 export async function changeBeatGalerPassword(currentPassword: string, newPassword: string): Promise<void> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
-  await authRequest("/auth/password/change", { currentPassword, newPassword }, token);
+  const result = await authRequest("/auth/password/change", { currentPassword, newPassword }, token);
+  if (platform.kind !== "web" && result?.token) {
+    localStorage.setItem(TOKEN_KEY, result.token);
+    await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
+  }
 }
 
 export async function beginMfaSetup(): Promise<{ secret: string; otpauth_url: string }> {
@@ -188,11 +364,11 @@ export async function disableMfa(code: string): Promise<void> {
 }
 
 export async function oauthBeatGalerAccount(provider: OAuthProvider, linkExisting: boolean): Promise<BeatGalerAccount> {
-  const beatgalerUserId = await getInstallationId();
+  const beatgalerUserId = await getBeatGalerInstallationId();
   const token = linkExisting ? getBeatGalerAuthToken() || undefined : undefined;
   const before = linkExisting ? await getBeatGalerAccountInfo().catch(() => null) : null;
   const started = await authRequest("/auth/oauth/start", { provider, beatgalerUserId }, token);
-  await open(started.authorization_url);
+  await platform.external.openUrl(started.authorization_url);
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60 * 1000) {
     await new Promise(resolve => window.setTimeout(resolve, 900));
@@ -216,15 +392,12 @@ export async function disconnectOAuthProvider(provider: OAuthProvider): Promise<
 }
 
 export async function logoutBeatGalerAccount(): Promise<void> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  localStorage.removeItem(TOKEN_KEY);
-  try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getInstallationId() }, token); } catch {}
-  try { await invoke("set_cloud_auth_token", { token: null, cloudApiBase: getResolvedCloudApiBase() }); } catch {}
+  const token = getBeatGalerAuthToken();
+  try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getBeatGalerInstallationId() }, token); } catch {}
+  clearLocalSessionState();
+  try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
   window.dispatchEvent(new Event("beatgaler:account-logged-out"));
 }
-
-const providerButtonStyle: React.CSSProperties = { width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #2b2b2b", background: "#171717", color: "#ddd", cursor: "pointer", fontWeight: 600 };
-const fieldStyle: React.CSSProperties = { boxSizing: "border-box", width: "100%", marginTop: 7, padding: "10px 11px", border: "1px solid #292929", borderRadius: 8, outline: 0, background: "#151515", color: "#eee", fontSize: 13 };
 
 function XUnlockOverlay({ username, onDone }: { username: string; onDone: () => void }) {
   type UnlockStage = "waiting" | "opening" | "revealed" | "docking";
@@ -324,6 +497,11 @@ function XUnlockOverlay({ username, onDone }: { username: string; onDone: () => 
 
 export default function AccountGate({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<BeatGalerAccount | null>(null);
+  // A remembered Web profile owns its local presentation cache. Reveal that
+  // shell immediately while the shared session restore verifies cloud authority.
+  const [optimisticRememberedSession, setOptimisticRememberedSession] = useState(
+    () => platform.kind === "web" && hasRememberedWebSessionMarker(),
+  );
   const [checking, setChecking] = useState(true);
   const [registerMode, setRegisterMode] = useState(false);
   const [identifier, setIdentifier] = useState("");
@@ -338,19 +516,28 @@ export default function AccountGate({ children }: { children: React.ReactNode })
   const [unlockUsername, setUnlockUsername] = useState<string | null>(null);
 
   useEffect(() => {
-    // The static loader in index.html exists only to cover the short gap before
-    // React mounts. AccountGate has its own loading UI, so hand off immediately.
-    // Without this, a signed-out/expired macOS session can leave the static
-    // "Loading Beat Galer..." layer above the login screen forever.
     document.getElementById("beatgaler-startup-loader")?.remove();
 
     let cancelled = false;
-    void restoreBeatGalerSession().then(value => { if (!cancelled) setAccount(value); }).finally(() => { if (!cancelled) setChecking(false); });
-    const logout = () => setAccount(null);
+    void restoreBeatGalerSession()
+      .then(value => {
+        if (cancelled) return;
+        setAccount(value);
+        if (!value) setOptimisticRememberedSession(false);
+      })
+      .catch(e => { if (!cancelled) setError(String((e as Error)?.message || e)); })
+      .finally(() => { if (!cancelled) setChecking(false); });
+    const logout = () => {
+      setAccount(null);
+      setOptimisticRememberedSession(false);
+    };
     const updated = (event: Event) => {
       const detail = (event as CustomEvent<BeatGalerAccount>).detail;
       if (detail) setAccount(detail);
-      else void restoreBeatGalerSession().then(value => { if (value) setAccount(value); });
+      else void restoreBeatGalerSession().then(value => {
+        if (value) setAccount(value);
+        else setOptimisticRememberedSession(false);
+      }).catch(() => {});
     };
     const unlocked = (event: Event) => {
       const detail = (event as CustomEvent<{ username?: string }>).detail;
@@ -380,8 +567,8 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     return () => window.clearInterval(timer);
   }, [account?.id, account?.username, account?.email, account?.providers?.x?.connected]);
 
-  if (checking) return <div style={{ position: "fixed", inset: 0, background: "#090909", display: "grid", placeItems: "center", color: "#555", fontSize: 13 }}>Loading BeatGaler…</div>;
-  if (account) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
+  if (account || optimisticRememberedSession) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
+  if (checking) return <div className="bg-account-loading" aria-live="polite"><div className="bg-account-loading__inner"><UiSpinner label="Loading BeatGaler"/><span>Loading BeatGaler…</span></div></div>;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); if (busy) return; setError(null);
@@ -405,44 +592,50 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     finally { setBusy(false); }
   };
 
-  return <div style={{ position: "fixed", inset: 0, background: "#090909", color: "#ddd", display: "grid", placeItems: "center", fontFamily: "Inter, system-ui, sans-serif" }}>
-    <form onSubmit={submit} style={{ width: 370, padding: 28, border: "1px solid #202020", borderRadius: 14, background: "#101010", boxShadow: "0 24px 80px rgba(0,0,0,.55)" }}>
-      <div style={{ fontSize: 22, fontWeight: 650, letterSpacing: -.4 }}>BeatGaler</div>
-      <div style={{ marginTop: 6, color: "#666", fontSize: 12 }}>{registerMode ? "Create your BeatGaler account" : "Sign in to your BeatGaler account"}</div>
+  return <div className="bg-account-gate">
+    <form className="bg-account-card" onSubmit={submit} autoComplete="on">
+      <h1 className="bg-account-title">BeatGaler</h1>
+      <p className="bg-account-subtitle">{registerMode ? "Create your BeatGaler account" : "Sign in to your BeatGaler account"}</p>
 
       {!registerMode && <>
-        <div style={{ display: "grid", gap: 8, marginTop: 22 }}>
-          <button type="button" disabled={busy} onClick={() => void social("google")} style={providerButtonStyle}>Continue with Google</button>
-          <button type="button" disabled={busy} onClick={() => void social("x")} style={providerButtonStyle}>Continue with X</button>
+        <div className="bg-account-social">
+          <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void social("google")}>Continue with Google</UiButton>
+          <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void social("x")}>Continue with X</UiButton>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0", color: "#444", fontSize: 10 }}><span style={{ height: 1, flex: 1, background: "#222" }}/><span>OR</span><span style={{ height: 1, flex: 1, background: "#222" }}/></div>
+        <div className="bg-account-divider"><span>OR</span></div>
       </>}
 
       {registerMode ? <>
-        <label style={{ display: "block", marginTop: 20, fontSize: 11, color: "#777" }}>USERNAME</label>
-        <div style={{ marginTop: 7, display: "flex", alignItems: "center", border: "1px solid #292929", borderRadius: 8, background: "#151515", overflow: "hidden" }}>
-          <input autoFocus value={usernameBase} onChange={e => setUsernameBase(e.target.value.toLowerCase().replace(/[^a-z0-9._]/g, "").slice(0, 20))} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username" style={{ flex: 1, minWidth: 0, padding: "10px 11px", border: 0, outline: 0, background: "transparent", color: "#eee", fontSize: 13 }}/>
-          <span style={{ paddingRight: 11, color: "#555", fontSize: 12 }}># random</span>
+        <label className="bg-label bg-account-field-first" htmlFor="beatgaler-register-username">USERNAME</label>
+        <div className="bg-account-username-shell">
+          <input
+            id="beatgaler-register-username"
+            className="bg-account-username-input"
+            autoFocus
+            value={usernameBase}
+            onChange={e => setUsernameBase(e.target.value.toLowerCase().replace(/[^a-z0-9._]/g, "").slice(0, 20))}
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="username"
+          />
+          <span className="bg-account-username-suffix"># random</span>
         </div>
-        <div style={{ marginTop: 7, color: "#4e4e4e", fontSize: 10 }}>BeatGaler adds 4 random numbers, for example <span style={{ color: "#777" }}>{usernameBase || "username"}#4821</span>.</div>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>EMAIL</label>
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoCapitalize="none" autoCorrect="off" style={fieldStyle}/>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>PASSWORD</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={fieldStyle}/>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>CONFIRM PASSWORD</label>
-        <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} style={fieldStyle}/>
+        <div className="bg-account-hint">BeatGaler adds 4 random numbers, for example <strong>{usernameBase || "username"}#4821</strong>.</div>
+        <UiField containerClassName="bg-account-field" id="beatgaler-register-email" label="EMAIL" type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" />
+        <UiField id="beatgaler-register-password" label="PASSWORD" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
+        <UiField id="beatgaler-register-password-confirm" label="CONFIRM PASSWORD" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" />
       </> : <>
-        <label style={{ display: "block", fontSize: 11, color: "#777" }}>USERNAME OR EMAIL</label>
-        <input autoFocus value={identifier} onChange={e => setIdentifier(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username#1234 or email@example.com" style={fieldStyle}/>
-        <label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>PASSWORD</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={fieldStyle}/>
-        {mfaRequired && <><label style={{ display: "block", marginTop: 14, fontSize: 11, color: "#777" }}>AUTHENTICATOR CODE</label><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={fieldStyle}/></>}
+        <UiField id="beatgaler-login-identifier" label="USERNAME OR EMAIL" autoFocus value={identifier} onChange={e => setIdentifier(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username#1234 or email@example.com" />
+        <UiField id="beatgaler-login-password" label="PASSWORD" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" />
+        {mfaRequired && <UiField id="beatgaler-login-mfa" label="AUTHENTICATOR CODE" inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" />}
       </>}
 
-      {error && <div style={{ marginTop: 14, padding: "9px 10px", border: "1px solid #542020", borderRadius: 8, background: "#241010", color: "#e6a0a0", fontSize: 11, lineHeight: 1.55 }}>{sanitizeUserVisibleText(error)}</div>}
-      <button disabled={busy} type="submit" style={{ width: "100%", marginTop: 18, padding: "10px 12px", border: "1px solid #303030", borderRadius: 8, background: "#e9e9e9", color: "#111", fontWeight: 650, cursor: busy ? "default" : "pointer", opacity: busy ? .55 : 1 }}>{busy ? "Working…" : (registerMode ? "Create account" : "Sign in")}</button>
-      <button type="button" disabled={busy} onClick={() => { setRegisterMode(v => !v); setError(null); setMfaRequired(false); setMfaCode(""); setPassword(""); setConfirmPassword(""); }} style={{ width: "100%", marginTop: 8, padding: 8, border: 0, background: "transparent", color: "#777", cursor: busy ? "default" : "pointer", fontSize: 11 }}>{registerMode ? "Already have an account? Sign in" : "New to BeatGaler? Create account"}</button>
-      <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #1b1b1b", color: "#444", fontSize: 10, lineHeight: 1.55 }}>Normal BeatGaler usernames use username#1234. Claiming X replaces it with your official X username.</div>
+      {error && <UiFeedback tone="error" role="alert" aria-live="assertive">{sanitizeUserVisibleText(error)}</UiFeedback>}
+      <UiButton className="bg-account-submit" variant="primary" fullWidth loading={busy} type="submit">{registerMode ? "Create account" : "Sign in"}</UiButton>
+      <UiButton className="bg-account-switch" variant="ghost" fullWidth type="button" disabled={busy} onClick={() => { setRegisterMode(v => !v); setError(null); setMfaRequired(false); setMfaCode(""); setPassword(""); setConfirmPassword(""); }}>{registerMode ? "Already have an account? Sign in" : "New to BeatGaler? Create account"}</UiButton>
+      <div className="bg-account-footer">Normal BeatGaler usernames use username#1234. Claiming X replaces it with your official X username.</div>
     </form>
     {unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>} 
   </div>;

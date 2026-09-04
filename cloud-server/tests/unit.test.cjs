@@ -138,5 +138,63 @@ passed += test('pool state normalization deduplicates queue and preserves all co
   assert.deepEqual(state.queue, ['Bot01','Bot02','Bot03']);
 }) ? 1 : 0;
 
+const { stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');
+const { wrapWebTransportSession } = require('../web-transport-envelope.js');
+
+passed += test('productive transport boundary strips permanent credentials before client response', () => {
+  const safe = stripPermanentSecrets({
+    ok: true,
+    mode: 'telegram-direct-botapi-local',
+    session_id: 'session-1',
+    transport_id: 'Bot01',
+    chat_id: '-100123',
+    generation: 7,
+    credential_version: 3,
+    bot_token: '123456:must-never-reach-client',
+    telegram_api_id: 12345,
+    telegram_api_hash: 'REDACTED_TELEGRAM_API_HASH',
+    credential_envelope: { ciphertext: 'legacy-secret-wrapper' },
+  });
+
+  assert.equal(safe.bot_token, undefined);
+  assert.equal(safe.telegram_api_id, undefined);
+  assert.equal(safe.telegram_api_hash, undefined);
+  assert.equal(safe.credential_envelope, undefined);
+  assert.equal(safe.session_id, 'session-1');
+  assert.equal(safe.transport_id, 'Bot01');
+  assert.equal(safe.chat_id, '-100123');
+  assert.equal(safe.generation, 7);
+  assert.equal(safe.credential_version, 3);
+}) ? 1 : 0;
+
+passed += test('legacy Web envelope is inert and cannot create a client credential envelope', () => {
+  const session = {
+    session_id: 'session-1',
+    bot_token: 'server-only',
+    telegram_api_id: 12345,
+    telegram_api_hash: 'server-only-hash',
+  };
+  const wrapped = wrapWebTransportSession(session, { kty: 'RSA', n: 'ignored', e: 'AQAB' });
+  assert.strictEqual(wrapped, session);
+  assert.equal(wrapped.credential_envelope, undefined);
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web-transport-envelope.js'), 'utf8');
+  assert(!source.includes('publicEncrypt'));
+  assert(!source.includes('RSA-OAEP'));
+}) ? 1 : 0;
+
+passed += test('canonical Cloud entrypoint installs temporary-auth boundary before route registration', () => {
+  const entrySource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const installAt = entrySource.indexOf('installProductiveTempAuthBoundary(express)');
+  const coreAt = entrySource.indexOf('require("./server-core")');
+  assert(installAt >= 0 && coreAt > installAt);
+
+  const boundarySource = fs.readFileSync(path.join(__dirname, '..', 'productive-temp-auth-boundary.js'), 'utf8');
+  for (const route of ['/transport/session/start', '/transport/session/heartbeat', '/transport/operation/begin']) {
+    assert(boundarySource.includes(route));
+  }
+  assert(boundarySource.includes('mode: "galer-direct-temp-mtproto"'));
+  assert(boundarySource.includes('temp_auth_required'));
+}) ? 1 : 0;
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`PASS cloud/direct unit tests: ${passed}/11`);
+console.log(`PASS cloud/direct unit tests: ${passed}/14`);

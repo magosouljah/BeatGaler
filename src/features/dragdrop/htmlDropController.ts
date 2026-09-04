@@ -17,12 +17,16 @@ export type HtmlDropControllerOptions = {
   // card update. Return false/void when staging is finished and the controller may
   // release the temporary busy state.
   onBeatFileDrop: (beatId: string, roots: HtmlDroppedRoot[]) => boolean | void | Promise<boolean | void>;
+  onBrowserBeatFileDrop?: (beatId: string, files: File[]) => boolean | void | Promise<boolean | void>;
   onBeatFileStagingChange?: (beatId: string, active: boolean) => void;
   // Library drops can spend noticeable time staging WebView2 File objects before
   // Rust has real paths. Tell App at the exact DROP boundary so Instant Review
   // can paint its skeleton before any file bytes are copied.
   onLibraryFileStagingChange?: (active: boolean) => void;
   onLibraryFileDrop: (roots: HtmlDroppedRoot[]) => void | Promise<void>;
+  // Web owns real browser File objects directly. When present, library drops
+  // bypass Desktop path staging completely.
+  onBrowserLibraryFileDrop?: (files: File[]) => void | Promise<void>;
   onEmptyFileDrop?: () => void | Promise<void>;
   onError?: (error: unknown) => void | Promise<void>;
 };
@@ -241,6 +245,38 @@ export function installHtmlDropController(options: HtmlDropControllerOptions): (
     // seen during dragover so a project file dropped on a beat cannot fall through
     // into the global library importer (which would report "Nothing to import").
     const beatId = card?.dataset.beatCardId ?? lastBeatUpdateId;
+    if (beatId && options.onBrowserBeatFileDrop) {
+      const files = Array.from(dt.files || []);
+      clearAll();
+      void (async () => {
+        try {
+          if (files.length === 0) {
+            await options.onEmptyFileDrop?.();
+            return;
+          }
+          options.onBeatFileStagingChange?.(beatId, true);
+          const keepBusy = await options.onBrowserBeatFileDrop?.(beatId, files);
+          if (!keepBusy) options.onBeatFileStagingChange?.(beatId, false);
+        } catch (error) {
+          options.onBeatFileStagingChange?.(beatId, false);
+          await options.onError?.(error);
+        }
+      })();
+      return;
+    }
+    if (!beatId && options.onBrowserLibraryFileDrop) {
+      const files = Array.from(dt.files || []);
+      clearAll();
+      void (async () => {
+        try {
+          if (files.length === 0) await options.onEmptyFileDrop?.();
+          else await options.onBrowserLibraryFileDrop?.(files);
+        } catch (error) {
+          await options.onError?.(error);
+        }
+      })();
+      return;
+    }
     const capturedDrop = captureHtmlDrop(dt);
     if (beatId) options.onBeatFileStagingChange?.(beatId, true);
     clearAll();

@@ -1,0 +1,434 @@
+import { observePlayStep } from "../playback/playTrace";
+import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { readWebCsrfToken } from "../auth/webSessionBootstrap";
+import { getWebClientId } from "../../platform/webClientId";
+import {
+  prepareWebTempAuth,
+  type TempAuthBinding,
+  type TempAuthLongJson,
+  type TempAuthMetadata,
+  type TempAuthSessionState,
+} from "./webTempAuth";
+
+export interface WebTransportTempAuthPublic {
+  version: 1;
+  dc_id: number;
+  api_id: number;
+  expected_bot_id: string;
+  expires_at: number | null;
+  binding: TempAuthBinding | null;
+}
+
+export interface WebTransportCapabilityScope {
+  objectType: "beat" | "topic" | "message" | "index" | "trash";
+  objectIds: string[];
+}
+
+export interface WebTransportCapabilityPublic {
+  token: string;
+  user_id: string;
+  tenant_id: string;
+  installation_id: string;
+  vault_scope: string;
+  operation: string;
+  object_scope: { object_type: string; object_ids: string[] };
+  issued_at: string;
+  expires_at: string;
+}
+
+export interface WebTransportSessionPublic {
+  ok?: boolean;
+  mode: "galer-direct-temp-mtproto";
+  session_id: string;
+  transport_id: string;
+  transport_user_id: string | null;
+  transport_username: string | null;
+  chat_id: string;
+  resolver_chat_id: string | null;
+  generation: number;
+  credential_version: number;
+  heartbeat_interval_ms: number;
+  heartbeat_timeout_ms: number;
+  token_rotation_enabled: boolean;
+  temp_auth_required: boolean;
+  temp_auth: WebTransportTempAuthPublic;
+  startup_beat_ids?: string[];
+  startup_routes?: Record<string, number>;
+  routing_revision?: number;
+}
+
+export interface WebTransportSession extends WebTransportSessionPublic {
+  temp_auth_required: false;
+  temp_auth: WebTransportTempAuthPublic & {
+    expires_at: number;
+    binding: TempAuthBinding;
+  };
+  /** Client-generated temporary key. It is never serialized back to Galer Cloud. */
+  temp_auth_key: Uint8Array;
+  /** MTProto session id that the temporary key was cryptographically bound to. */
+  temp_session_id: TempAuthLongJson;
+  /** MTProto counters/salt/ACK state needed to continue the bound session in the Worker. */
+  temp_session_state: TempAuthSessionState;
+  temp_primary_dcs: unknown;
+}
+
+export interface WebTransportHeartbeatResponse {
+  ok?: boolean;
+  expired?: boolean;
+  refresh_required?: boolean;
+  temp_auth_required?: boolean;
+  credential_refresh?: WebTransportSessionPublic | null;
+}
+
+export interface WebTransportOperationResponse {
+  ok?: boolean;
+  expired?: boolean;
+  wait?: boolean;
+  retry_after_ms?: number;
+  refresh_required?: boolean;
+  temp_auth_required?: boolean;
+  operation_id?: string;
+  capability?: WebTransportCapabilityPublic;
+  credential_refresh?: WebTransportSessionPublic | null;
+}
+
+const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
+const MAX_STARTUP_BEAT_IDS = 14;
+
+function normalizeStartupBeatIds(values: readonly string[] | undefined): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values || []) {
+    const id = String(value || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    output.push(id);
+    if (output.length >= MAX_STARTUP_BEAT_IDS) break;
+  }
+  return output;
+}
+
+export function isTransientWebTempAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid nonce hash from server/i.test(message);
+}
+
+async function transportRequest<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const stage = path === "/transport/session/start"
+    ? body.tempAuthMetadata ? "SESSION_START_BIND" : "SESSION_START_BOOTSTRAP"
+    : path === "/transport/session/activate" ? "SESSION_ACTIVATE_HTTP" : null;
+  const request = async () => {
+    const token = getBeatGalerAuthToken();
+    if (!token) throw new Error("Session expired. Sign in again.");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
+    const csrf = readWebCsrfToken();
+    if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
+    const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: JSON.stringify(webTransportRequestBody(body)),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (stage) reportDirectStartupDiagnostics(response, stage);
+    if (!response.ok) throw new Error(payload?.error || `Galer Cloud HTTP ${response.status}`);
+    return payload as T;
+  };
+  return stage ? observePlayStep(stage, request) : request();
+}
+
+export function webTransportRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  return { ...body, beatgalerUserId: getWebClientId() };
+}
+
+function assertNoPermanentCredentials(value: unknown): void {
+  const serialized = JSON.stringify(value);
+  for (const forbidden of ["bot_token", "telegram_api_id", "telegram_api_hash", "credential_envelope"]) {
+    if (serialized.includes(`\"${forbidden}\"`)) {
+      throw new Error("Galer Cloud refused an unsafe transport credential response.");
+    }
+  }
+}
+
+function validateBootstrap(response: WebTransportSessionPublic): WebTransportSessionPublic {
+  assertNoPermanentCredentials(response);
+  if (response?.mode !== "galer-direct-temp-mtproto") {
+    throw new Error("Galer Cloud returned an unsupported Direct transport mode.");
+  }
+  const dcId = Number(response?.temp_auth?.dc_id || 0);
+  const apiId = Number(response?.temp_auth?.api_id || 0);
+  if (
+    !Number.isInteger(dcId) || dcId < 1 || dcId > 5 ||
+    !Number.isInteger(apiId) || apiId <= 0 ||
+    !response?.temp_auth?.expected_bot_id
+  ) {
+    throw new Error("Galer Cloud returned incomplete temporary authorization metadata.");
+  }
+  return response;
+}
+
+function sessionIdentity(
+  session: Pick<WebTransportSessionPublic, "session_id" | "generation" | "credential_version">,
+) {
+  return {
+    sessionId: session.session_id,
+    generation: session.generation,
+    credentialVersion: session.credential_version,
+  };
+}
+
+function retainStartupRouting(
+  response: WebTransportSessionPublic,
+  bootstrap: WebTransportSessionPublic,
+): WebTransportSessionPublic {
+  return {
+    ...response,
+    startup_beat_ids: bootstrap.startup_beat_ids || [],
+    startup_routes: bootstrap.startup_routes || {},
+    routing_revision: Math.max(0, Number(bootstrap.routing_revision) || 0),
+  };
+}
+
+async function bindTemporarySession(
+  bootstrap: WebTransportSessionPublic,
+  metadata?: TempAuthMetadata,
+): Promise<WebTransportSession> {
+  const safeBootstrap = validateBootstrap(bootstrap);
+  if (metadata) throw new Error("Unexpected prebuilt temporary-auth metadata.");
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
+    let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
+    try {
+      prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(safeBootstrap.temp_auth.dc_id), { attempt });
+      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+        browserClientId: getWebClientId(),
+        tempAuthMetadata: prepared.metadata,
+      }));
+      const response = retainStartupRouting(rawResponse, safeBootstrap);
+      if (
+        response.session_id !== safeBootstrap.session_id ||
+        response.generation !== safeBootstrap.generation ||
+        response.transport_id !== safeBootstrap.transport_id ||
+        response.temp_auth.api_id !== safeBootstrap.temp_auth.api_id
+      ) {
+        throw new Error("Galer Cloud changed the Direct lease while binding temporary authorization.");
+      }
+      const binding = response.temp_auth.binding;
+      const expiresAt = Number(response.temp_auth.expires_at || 0);
+      if (!binding || expiresAt !== prepared.metadata.expiresAt) {
+        throw new Error("Galer Cloud returned an incomplete temporary authorization binding.");
+      }
+      const imported = await observePlayStep("TEMP_AUTH_BIND", () => prepared!.bind(binding), { attempt });
+      return {
+        ...response,
+        temp_auth_required: false,
+        temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
+        temp_auth_key: imported.authKey,
+        temp_session_id: prepared.metadata.tempSessionId,
+        temp_session_state: imported.sessionState,
+        temp_primary_dcs: imported.primaryDcs,
+      } as WebTransportSession;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWebTempAuthError(error) || attempt >= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS) throw error;
+      console.warn(`[web/temp-auth] transient handshake failure; retrying with fresh temp auth attempt=${attempt + 1}`);
+    } finally {
+      if (prepared) await observePlayStep("TEMP_AUTH_DESTROY", () => prepared!.destroy(), { attempt }).catch(() => {});
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/** Reserves/reuses the control-plane lease and resolves only the requested startup routes. */
+export async function reserveWebTransportSession(startupBeatIds: readonly string[] = []): Promise<WebTransportSessionPublic> {
+  return validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+    browserClientId: getWebClientId(),
+    startupBeatIds: normalizeStartupBeatIds(startupBeatIds),
+  }));
+}
+
+/** Creates and binds a fresh, memory-only temporary MTProto authorization to an already reserved lease. */
+export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession> {
+  return bindTemporarySession(bootstrap);
+}
+
+/** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
+export async function prepareWebTransportSession(startupBeatIds: readonly string[] = []): Promise<WebTransportSession> {
+  return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));
+}
+
+export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
+    let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
+    try {
+      prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(session.temp_auth.dc_id), { attempt, renewal: true });
+      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+        browserClientId: getWebClientId(),
+        tempAuthMetadata: prepared.metadata,
+      }));
+      const response = retainStartupRouting(rawResponse, session);
+      if (
+        response.session_id !== session.session_id ||
+        response.generation !== session.generation ||
+        response.transport_id !== session.transport_id ||
+        response.temp_auth.api_id !== session.temp_auth.api_id
+      ) {
+        throw new Error("Galer Cloud changed the Direct lease during temporary-auth renewal.");
+      }
+      const binding = response.temp_auth.binding;
+      const expiresAt = Number(response.temp_auth.expires_at || 0);
+      if (!binding || expiresAt !== prepared.metadata.expiresAt) {
+        throw new Error("Galer Cloud returned an incomplete renewal binding.");
+      }
+      const imported = await observePlayStep("TEMP_AUTH_BIND", () => prepared!.bind(binding), { attempt });
+      return {
+        ...response,
+        temp_auth_required: false,
+        temp_auth: { ...response.temp_auth, expires_at: expiresAt, binding },
+        temp_auth_key: imported.authKey,
+        temp_session_id: prepared.metadata.tempSessionId,
+        temp_session_state: imported.sessionState,
+        temp_primary_dcs: imported.primaryDcs,
+      } as WebTransportSession;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWebTempAuthError(error) || attempt >= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS) throw error;
+      console.warn(`[web/temp-auth] transient renewal failure; retrying with fresh temp auth attempt=${attempt + 1}`);
+    } finally {
+      if (prepared) await observePlayStep("TEMP_AUTH_DESTROY", () => prepared!.destroy(), { attempt }).catch(() => {});
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+export async function activateWebTransportSession(session: WebTransportSessionPublic): Promise<void> {
+  const response = await transportRequest<{ activated?: boolean }>("/transport/session/activate", sessionIdentity(session));
+  if (response.activated !== true) throw new Error("Galer Cloud could not activate this Web storage session.");
+}
+
+export async function heartbeatWebTransportSession(session: WebTransportSession): Promise<{
+  expired: boolean;
+  credentialRefresh: WebTransportSession | null;
+}> {
+  const response = await transportRequest<WebTransportHeartbeatResponse>("/transport/session/heartbeat", sessionIdentity(session));
+  assertNoPermanentCredentials(response);
+  if (response.expired === true) return { expired: true, credentialRefresh: null };
+  const now = Math.floor(Date.now() / 1000);
+  const renewBefore = session.temp_auth.expires_at - 120;
+  const needsRenewal = now >= renewBefore || response.refresh_required === true || response.temp_auth_required === true;
+  return {
+    expired: false,
+    credentialRefresh: needsRenewal ? await renewWebTransportSession(session) : null,
+  };
+}
+
+export async function beginWebTransportOperation(
+  session: WebTransportSession,
+  kind: string,
+  scope: WebTransportCapabilityScope,
+): Promise<{
+  expired: boolean;
+  waitMs: number | null;
+  credentialRefresh: WebTransportSession | null;
+  operationId: string | null;
+}> {
+  const response = await transportRequest<WebTransportOperationResponse>("/transport/operation/begin", {
+    ...sessionIdentity(session),
+    kind,
+    scope,
+  });
+  assertNoPermanentCredentials(response);
+  if (response.expired === true) {
+    return { expired: true, waitMs: null, credentialRefresh: null, operationId: null };
+  }
+  if (response.refresh_required === true || response.temp_auth_required === true) {
+    return {
+      expired: false,
+      waitMs: null,
+      credentialRefresh: await renewWebTransportSession(session),
+      operationId: null,
+    };
+  }
+  const operationId = typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null;
+  if (operationId && (!response.capability || response.capability.token !== operationId)) {
+    throw new Error("Galer Cloud returned an unscoped Direct operation.");
+  }
+  return {
+    expired: false,
+    waitMs: response.wait === true ? Math.min(1000, Math.max(100, Number(response.retry_after_ms) || 250)) : null,
+    credentialRefresh: null,
+    operationId,
+  };
+}
+
+export async function authorizeWebTransportOperation(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+  operationId: string,
+  kind: string,
+  scope: WebTransportCapabilityScope,
+): Promise<void> {
+  const response = await transportRequest<{ authorized?: boolean; operation_id?: string }>("/transport/capability/authorize", {
+    sessionId: session.session_id,
+    generation: session.generation,
+    operationId,
+    kind,
+    scope,
+  });
+  assertNoPermanentCredentials(response);
+  if (response.authorized !== true || response.operation_id !== operationId) {
+    throw new Error("Galer Cloud refused the scoped Direct capability.");
+  }
+}
+
+export async function endWebTransportOperation(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+  operationId: string,
+): Promise<void> {
+  await transportRequest("/transport/operation/end", {
+    sessionId: session.session_id,
+    generation: session.generation,
+    operationId,
+  });
+}
+
+export async function stopWebTransportSession(
+  session: Pick<WebTransportSessionPublic, "session_id" | "generation">,
+): Promise<void> {
+  await transportRequest("/transport/session/stop", {
+    sessionId: session.session_id,
+    generation: session.generation,
+  });
+}
+
+export async function ensureWebTransportTopic(beatId: string, beatName: string): Promise<number> {
+  const response = await transportRequest<{ message_thread_id?: number }>("/transport/topic/ensure", {
+    beatId,
+    beatName,
+  });
+  const threadId = Number(response.message_thread_id || 0);
+  if (!Number.isInteger(threadId) || threadId <= 0) {
+    throw new Error("Galer Cloud returned incomplete beat storage information.");
+  }
+  return threadId;
+}
+
+/** Records the authoritative INDEX pointer and the small routing delta produced by the same commit. */
+export async function commitWebTransportIndexPointer(input: {
+  messageId: number;
+  sourceId: string;
+  beatCount: number;
+  routingChanges?: Record<string, number | null>;
+}): Promise<void> {
+  await transportRequest("/transport/index/commit", input);
+}
+
+/** Telegram remains authoritative. Reconcile repairs Cloud routing after the full INDEX is read. */
+export async function reconcileWebTransportRouting(manifest: unknown): Promise<void> {
+  await transportRequest("/transport/routing/reconcile", { manifest });
+}

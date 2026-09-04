@@ -25,10 +25,12 @@ const http = require("http");
 const net = require("net");
 const dns = require("dns").promises;
 const multer = require("multer");
-const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, masterStorageReady } = require("./master-storage");
+const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verifyPrivateUserStorageGroup, masterStorageReady } = require("./master-storage");
 const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
+const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
+const { hashPassword, verifyPassword } = require("./password-kdf");
 
 const PORT = process.env.PORT || 4000;
 const MANAGER_BOT_USERNAME = String(process.env.MANAGER_BOT_USERNAME_1 || process.env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim();
@@ -165,6 +167,37 @@ function topicKey(userId, beatId) {
   return `${String(userId)}:${String(beatId)}`;
 }
 
+function storedBeatTopicCandidates(chatId, userId, beatId) {
+  const exactKey = topicKey(userId, beatId);
+  const suffix = `:${String(beatId)}`;
+  return [...beatTopics.entries()]
+    .filter(([key, current]) => {
+      const threadId = Number(current?.messageThreadId);
+      return (key === exactKey || key.endsWith(suffix)) &&
+        Number(current?.chatId) === Number(chatId) &&
+        Number.isFinite(threadId) && threadId > 0;
+    })
+    .sort(([, a], [, b]) => Number(a.messageThreadId) - Number(b.messageThreadId));
+}
+
+function adoptCanonicalBeatTopic(chatId, userId, beatId, beatName, current) {
+  const suffix = `:${String(beatId)}`;
+  const canonical = {
+    chatId: Number(chatId),
+    messageThreadId: Number(current.messageThreadId),
+    beatName,
+    updatedAt: Date.now(),
+  };
+  for (const [key, candidate] of beatTopics.entries()) {
+    if (key.endsWith(suffix) && Number(candidate?.chatId) === Number(chatId)) {
+      beatTopics.set(key, { ...canonical });
+    }
+  }
+  beatTopics.set(topicKey(userId, beatId), { ...canonical });
+  savePersistentData();
+  return canonical.messageThreadId;
+}
+
 function storageChatId(account) {
   const value = Number(account?.storageChatId);
   if (!Number.isFinite(value) || value === 0) {
@@ -192,24 +225,20 @@ async function ensureBeatTopic(account, userId, beatId, beatName) {
   const chatId = storageChatId(account);
   const key = topicKey(userId, beatId);
   const name = topicName(beatName || beatId);
-  const current = beatTopics.get(key);
 
-  if (current && Number(current.chatId) === chatId && Number(current.messageThreadId) > 0) {
-    if (String(current.beatName || "") === name) return Number(current.messageThreadId);
+  const candidates = storedBeatTopicCandidates(chatId, userId, beatId);
+  for (const [candidateKey, current] of candidates) {
+    const messageThreadId = Number(current.messageThreadId);
     try {
-      await directTransport.editForumTopic(chatId, Number(current.messageThreadId), name);
-      current.beatName = name;
-      current.updatedAt = Date.now();
-      beatTopics.set(key, current);
-      savePersistentData();
-      return Number(current.messageThreadId);
+      await directTransport.editForumTopic(chatId, messageThreadId, name);
+      return adoptCanonicalBeatTopic(chatId, userId, beatId, name, current);
     } catch (error) {
       if (!isMissingTopicError(error)) {
-        console.warn("[topics] MASTER rename failed:", error?.message || error);
-        return Number(current.messageThreadId);
+        console.warn("[topics] canonical topic verification/rename failed:", error?.message || error);
+        return adoptCanonicalBeatTopic(chatId, userId, beatId, name, current);
       }
-      console.warn("[topics] stored topic no longer exists; recreating:", error?.message || error);
-      forgetBeatTopic(userId, beatId);
+      console.warn("[topics] stored topic no longer exists; forgetting candidate:", error?.message || error);
+      beatTopics.delete(candidateKey);
     }
   }
 
@@ -774,20 +803,6 @@ function generateBeatGalerHandle(rawBase) {
   throw new Error("Could not allocate a BeatGaler username. Try another name.");
 }
 
-function hashPassword(password, saltHex) {
-  return crypto.scryptSync(String(password), Buffer.from(saltHex, "hex"), 64).toString("hex");
-}
-
-function verifyPassword(password, user) {
-  try {
-    const actual = Buffer.from(hashPassword(password, user.passwordSalt), "hex");
-    const expected = Buffer.from(user.passwordHash, "hex");
-    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-  } catch {
-    return false;
-  }
-}
-
 function sessionKey(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
@@ -1136,6 +1151,27 @@ async function ensureUserStorage(user) {
       storageChatId: botApiChatIdFromStored(user.storageChatId),
       storageChatTitle: user.storageChatTitle,
     };
+
+    // Direct index bootstrap no longer touches MASTER, so it cannot prove
+    // that a persisted vault still exists. Verify the stored chat explicitly.
+    // Only a definitive missing-vault signal reprovisions; transient failures
+    // keep the current vault and retry on a later auth/session restore.
+    if (masterStorageReady()) {
+      try {
+        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });
+      } catch (error) {
+        const message = String(error?.errorMessage || error?.message || error);
+        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
+          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
+          user.storageChatId = null;
+          user.storageChatTitle = null;
+          user.storageCreatedAt = null;
+          saveAuthData();
+          return ensureUserStorage(user);
+        }
+        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
+      }
+    }
 
     // Migration invariant: the manager bot (001BeatGaler) never belongs to a
     // user vault. If an older BeatGaler build left it there, MASTER removes it.
@@ -1486,7 +1522,7 @@ app.post("/auth/register", async (req, res) => {
     usernameSource: "beatgaler",
     email,
     passwordSalt: salt,
-    passwordHash: hashPassword(password, salt),
+    passwordHash: await hashPassword(password, salt),
     createdAt: Date.now(),
     storageChatId: null,
     storageChatTitle: null,
@@ -1517,7 +1553,7 @@ app.post("/auth/login", async (req, res) => {
   const normalizedIdentifier = normalizeBeatGalerUsername(identifier);
   const user = identifier.includes("@") ? findUserByEmail(identifier) : (beatGalerUsers.get(normalizedIdentifier) || findUserByEmail(identifier));
 
-  if (!user || !user.passwordHash || !verifyPassword(password, user)) {
+  if (!user || !user.passwordHash || !(await verifyPassword(password, user))) {
     return res.status(401).json({ error: "Invalid username/email or password." });
   }
   if (user.mfaSecret && !verifyTotp(user.mfaSecret, req.body?.mfaCode)) {
@@ -1576,16 +1612,16 @@ app.post("/auth/email/change", (req, res) => {
   res.json(accountPublicPayload(user, bearerToken(req)));
 });
 
-app.post("/auth/password/change", (req, res) => {
+app.post("/auth/password/change", async (req, res) => {
   const user = getAuthUserFromToken(bearerToken(req));
   if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
   const currentPassword = String(req.body?.currentPassword || "");
   const newPassword = String(req.body?.newPassword || "");
-  if (user.passwordHash && !verifyPassword(currentPassword, user)) return res.status(401).json({ error: "Current password is incorrect." });
+  if (user.passwordHash && !(await verifyPassword(currentPassword, user))) return res.status(401).json({ error: "Current password is incorrect." });
   if (newPassword.length < 8 || newPassword.length > 200) return res.status(400).json({ error: "New password must be at least 8 characters." });
   const salt = crypto.randomBytes(16).toString("hex");
   user.passwordSalt = salt;
-  user.passwordHash = hashPassword(newPassword, salt);
+  user.passwordHash = await hashPassword(newPassword, salt);
   saveAuthData();
   res.json({ ok: true });
 });
@@ -1895,17 +1931,23 @@ app.get("/transport/status", (req, res) => {
   }
 });
 
+const { createDirectStartupTrace } = require("./direct-startup-trace");
+
 app.post("/transport/session/start", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId, account } = auth;
+  const startupTrace = createDirectStartupTrace();
   try {
     const session = await directTransport.startSession({
+      startupTrace,
       installationId: beatgalerUserId,
       chatId: storageChatId(account),
     });
-    res.json(session);
+    startupTrace.publish(res, "done");
+    res.json(wrapWebTransportSession(session, req.body?.webTransportPublicKey));
   } catch (error) {
+    startupTrace.publish(res, "error");
     console.error("[direct] session start failed:", error?.message || error);
     res.status(503).json({ error: "Galer Cloud session unavailable. Please try again." });
   }
@@ -1915,13 +1957,18 @@ app.post("/transport/session/activate", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId } = auth;
+  const startupTrace = createDirectStartupTrace();
   try {
-    res.json(await directTransport.activateSession({
+    const result = await directTransport.activateSession({
+      startupTrace,
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
-    }));
+    });
+    startupTrace.publish(res, "done");
+    res.json(result);
   } catch (error) {
+    startupTrace.publish(res, "error");
     console.error("[direct] session activation failed:", error?.message || error);
     res.status(409).json({ error: "Galer Cloud could not activate this storage session. Please try again." });
   }
@@ -1932,12 +1979,19 @@ app.post("/transport/session/heartbeat", async (req, res) => {
   if (!auth) return;
   const { beatgalerUserId } = auth;
   try {
-    res.json(await directTransport.heartbeat({
+    const heartbeat = await directTransport.heartbeat({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
-    }));
+    });
+    if (heartbeat?.credential_refresh) {
+      heartbeat.credential_refresh = wrapWebTransportSession(
+        heartbeat.credential_refresh,
+        req.body?.webTransportPublicKey,
+      );
+    }
+    res.json(heartbeat);
   } catch (error) {
     console.error("[direct] heartbeat failed:", error?.message || error);
     res.status(500).json({ error: "Cloud session heartbeat failed." });
@@ -1967,13 +2021,20 @@ app.post("/transport/operation/begin", async (req, res) => {
   if (!auth) return;
   const { beatgalerUserId } = auth;
   try {
-    res.json(await directTransport.beginOperation({
+    const operation = await directTransport.beginOperation({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
       kind: String(req.body?.kind || "data"),
-    }));
+    });
+    if (operation?.credential_refresh) {
+      operation.credential_refresh = wrapWebTransportSession(
+        operation.credential_refresh,
+        req.body?.webTransportPublicKey,
+      );
+    }
+    res.json(operation);
   } catch (error) {
     const message = String(error?.message || error || "");
     console.error("[direct] operation begin failed:", message);

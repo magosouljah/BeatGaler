@@ -4,6 +4,7 @@ import type {
   UploadTemplate, YouTubeChannel, YouTubeUploadPayload, YouTubeUploadResult,
   TelegramCloudStatus
 } from "../types";
+import { getWebClientId } from "../platform/webClientId";
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type OpenFn = (options?: Record<string, unknown>) => Promise<string | string[] | null>;
@@ -158,7 +159,7 @@ export async function recordOfflineTrashIntent(beatId: string): Promise<void> {
 
 export async function flushOfflineTrashIntents(): Promise<number> {
   await initTauri();
-  if (!invoke) throw new Error("Tauri not available");
+  if (!invoke) return 0;
   return invoke<number>("flush_offline_trash_intents");
 }
 
@@ -493,7 +494,16 @@ export async function pickFolder(title = "Select folder"): Promise<string | null
 
 export async function getSettings(): Promise<AppSettings> {
   await initTauri();
-  if (!invoke) return { beats_folder: null, incomplete_warnings_enabled: true, custom_cursor_enabled: true };
+  if (!invoke) {
+    return {
+      beats_folder: null,
+      incomplete_warnings_enabled: true,
+      custom_cursor_enabled: true,
+      beatgaler_user_id: getWebClientId(),
+      telegram_cloud_connected: true,
+      telegram_cloud_username: null,
+    };
+  }
   return invoke<AppSettings>("get_settings");
 }
 
@@ -702,7 +712,10 @@ export async function connectTelegramCloud(): Promise<void> {
 
 export async function pollTelegramCloudStatus(): Promise<TelegramCloudStatus> {
   await initTauri();
-  if (!invoke) return { connected: false, reachable: false, username: null };
+  if (!invoke) {
+    const reachable = typeof navigator === "undefined" || navigator.onLine !== false;
+    return { connected: true, reachable, username: null };
+  }
   return invoke<TelegramCloudStatus>("poll_telegram_cloud_status");
 }
 
@@ -710,7 +723,10 @@ export async function pollTelegramCloudStatus(): Promise<TelegramCloudStatus> {
 // network — used on app startup / Settings panel open.
 export async function getTelegramCloudStatus(): Promise<TelegramCloudStatus> {
   await initTauri();
-  if (!invoke) return { connected: false, reachable: false, username: null };
+  if (!invoke) {
+    const reachable = typeof navigator === "undefined" || navigator.onLine !== false;
+    return { connected: true, reachable, username: null };
+  }
   return invoke<TelegramCloudStatus>("get_telegram_cloud_status");
 }
 

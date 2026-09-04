@@ -1,0 +1,32 @@
+name: F3 - 17.1 Checkout Contract
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/billing-checkout.js'
+      - 'cloud-server/tests/billing-checkout.test.cjs'
+      - '.github/workflows/f3-17.1-checkout-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  checkout-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: cloud-server/package-lock.json
+      - name: Assert exact PR head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install cloud-server dependencies
+        working-directory: cloud-server
+        run: npm ci
+      - name: Test F3 17.1 checkout contract
+        working-directory: cloud-server
+        run: node --test tests/billing-checkout.test.cjs

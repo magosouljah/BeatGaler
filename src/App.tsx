@@ -1,3 +1,4 @@
+import { startupCacheContext } from "./features/perf/directStartupDiagnostics";
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import uploadCompleteWav from "./assets/status/upload-complete.wav";
 import downloadCompleteWav from "./assets/status/download-complete.wav";
@@ -15,8 +16,9 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, loadCloudArtworkForBeat, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
+import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
@@ -27,12 +29,14 @@ import { useTagColors, setTagColor, renameTagColor, TAG_COLOR_PALETTE } from "./
 import { registerJob, updateJob } from "./lib/jobStore";
 import { cleanTags, validateBpm, validateMusicKey } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
+import { cacheArtworkThumbnail, readCachedArtworkThumbnail } from "./features/artwork/artworkThumbnailCache";
 import { artworkFileToDataUrl } from "./features/dragdrop/browserArtwork";
 import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeExternalImage";
 import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
 import { installHtmlDropController } from "./features/dragdrop/htmlDropController";
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
+import { playTrace } from "./features/playback/playTrace";
 import { createBeatRuntimeState, hydrateBeatRuntimeState, transitionBeatRuntimeState, type BeatRuntimeEvent, type BeatRuntimeState } from "./features/state/beatRuntimeState";
 import { reviewPerfMark } from "./features/perf/reviewPerf";
 
@@ -633,10 +637,19 @@ async function rollbackInterruptedCloudUploads(beatgalerUserId: string, authorit
 function loadCachedBeats(): Beat[] | null {
   try {
     const raw = localStorage.getItem(LIBRARY_CACHE_KEY);
-    if (!raw) return null;
+    if (!raw) {
+      playTrace("LIBRARY_CACHE_READ", { library_cache: "miss", ...startupCacheContext("miss") });
+      return null;
+    }
     const parsed = JSON.parse(raw);
+    playTrace("LIBRARY_CACHE_READ", {
+      library_cache: Array.isArray(parsed) ? "hit" : "invalid",
+      ...startupCacheContext(Array.isArray(parsed) ? "hit" : "invalid"),
+      cached_card_count: Array.isArray(parsed) ? parsed.length : 0,
+    });
     return Array.isArray(parsed) ? parsed : null;
   } catch {
+    playTrace("LIBRARY_CACHE_READ", { library_cache: "unavailable_or_invalid", ...startupCacheContext("unavailable_or_invalid") });
     return null;
   }
 }
@@ -648,8 +661,8 @@ function saveCachedBeats(beats: Beat[]) {
     const lightweight = beats.map(beat => ({
       ...beat,
       image_base64: null,
-      // Keep the small preview when available so cards can still paint quickly.
-      image_preview_base64: beat.image_preview_base64 ?? null,
+      // Artwork bytes live in Cache Storage as bounded thumbnails; keep the manifest metadata-only.
+      image_preview_base64: null,
       other_files: [],
     }));
     localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(lightweight));
@@ -735,8 +748,6 @@ export function clearUploadPreviewCache() {
   try { localStorage.removeItem('beatvault:upload-cache:v1'); } catch {}
 }
 
-const STARTUP_PRIORITY_BEATS = 6;
-
 function decodeArtworkDataUrl(src: string): Promise<boolean> {
   return new Promise(resolve => {
     const image = new Image();
@@ -756,38 +767,10 @@ function decodeArtworkDataUrl(src: string): Promise<boolean> {
   });
 }
 
-function GalleryStartupSkeleton() {
-  return (
-    <div
-      aria-label="Loading beat library"
-      style={{
-        position: "absolute", inset: 0, zIndex: 60, background: "#0c0c0c",
-        overflow: "hidden", pointerEvents: "auto", padding: "28px 24px",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "28px 22px", maxWidth: 1300, width: "100%" }}>
-          {Array.from({ length: STARTUP_PRIORITY_BEATS }, (_, i) => (
-            <div key={i} style={{ width: 160, opacity: 0.82 }}>
-              <div className="beatgaler-skeleton-block beatgaler-skeleton-cover" />
-              <div className="beatgaler-skeleton-block beatgaler-skeleton-title" />
-              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <div className="beatgaler-skeleton-block beatgaler-skeleton-tag" />
-                <div className="beatgaler-skeleton-block beatgaler-skeleton-tag beatgaler-skeleton-tag-short" />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function BeatGalerApp() {
-  // Browser/localStorage library data is only an instant-paint helper AFTER the
-  // cloud/offline source has been verified. Never render it as a cold-start
-  // library by itself: navigator.onLine and a localhost SSE connection can both
-  // look healthy while Telegram is actually unreachable.
+  // Browser/localStorage library data is an instant-paint presentation cache.
+  // It may render before cloud authority resolves, but remains read-only until
+  // verification and is never allowed to overwrite the authoritative library.
   const startupCachedBeatsRef = useRef<Beat[] | null>(null);
   if (startupCachedBeatsRef.current === null) {
     const cached = loadCachedBeats() ?? [];
@@ -796,7 +779,7 @@ function BeatGalerApp() {
       ? cached.filter(beat => !interruptedIds.has(beat.id))
       : cached;
   }
-  const [beats, setBeats] = useState<Beat[]>([]);
+  const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);
   const [openableCloudProjectIds, setOpenableCloudProjectIds] = useState<Set<string>>(new Set());
   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
   const cloudMetaTimersRef = useRef<Map<string, number>>(new Map());
@@ -899,8 +882,12 @@ function BeatGalerApp() {
 
   const [loading, setLoading] = useState(() => loadCachedBeats() === null);
   const [libraryRefreshing, setLibraryRefreshing] = useState(false);
-  const [startupCookingGate, setStartupCookingGate] = useState(true);
-  const [revealedBeatIds, setRevealedBeatIds] = useState<Set<string>>(() => new Set());
+  const [startupCookingGate, setStartupCookingGate] = useState(() => (startupCachedBeatsRef.current ?? []).length === 0);
+  const [revealedBeatIds, setRevealedBeatIds] = useState<Set<string>>(() => new Set(
+    (startupCachedBeatsRef.current ?? [])
+      .filter(beat => Boolean(beat.image_preview_base64 || beat.image_base64))
+      .map(beat => beat.id)
+  ));
   const startupCookingResolvedRef = useRef(false);
   const startupPipelineStartedRef = useRef(false);
   const startupEnginePrimeReadyRef = useRef(false);
@@ -986,7 +973,7 @@ function BeatGalerApp() {
   const [queueIds, setQueueIds] = useState<string[]>([]);
   const lastHandledEndedSeqRef = useRef(0);
 
-  const { state: audio, play, primeAudioEngine, togglePause, seek, setVolume, releaseFile } = useAudio();
+  const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();
 
   // Keep a ref to togglePause so the keydown handler never goes stale
   const togglePauseRef = useRef(togglePause);
@@ -1107,8 +1094,7 @@ function BeatGalerApp() {
         startupPipelineStartedRef.current = false;
         startupEnginePrimeReadyRef.current = false;
         progressiveRevealRunRef.current += 1;
-        setRevealedBeatIds(new Set());
-        setStartupCookingGate(true);
+        setStartupCookingGate((startupCachedBeatsRef.current ?? []).length === 0);
 
         // Recovery markers are only hints. Before deleting an interrupted upload,
         // verify it against the authoritative Telegram INDEX. A beat already in
@@ -1174,10 +1160,16 @@ function BeatGalerApp() {
         if (!cancelled) {
           setSetupDone(true);
           setLoading(false);
-          await showOfflineLibrary(
-            typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor"
-          );
-          dismissBeatGalerStartupLoader();
+          setCloudSessionVerified(false);
+          if (typeof navigator !== "undefined" && navigator.onLine === false) {
+            await showOfflineLibrary("offline");
+          } else {
+            // Authority is temporarily unknown, not empty. Keep the verified/cache
+            // presentation already on screen, but make it read-only until a later
+            // authoritative reload succeeds. This prevents 60 -> 0 -> 60 flashes.
+            setConnectionState("poor");
+            dismissBeatGalerStartupLoader();
+          }
         }
       }
     })();
@@ -1216,8 +1208,7 @@ function BeatGalerApp() {
       cookingWarmPromisesRef.current.clear();
       cookingPlaybackUrlRef.current.clear();
       artworkLoadPromisesRef.current.clear();
-      setRevealedBeatIds(new Set());
-      setStartupCookingGate(true);
+      setStartupCookingGate(false);
     };
 
     const reconnect = async () => {
@@ -1411,10 +1402,8 @@ function BeatGalerApp() {
           cookingWarmPromisesRef.current.clear();
           cookingPlaybackUrlRef.current.clear();
           progressiveRevealRunRef.current += 1;
-          setRevealedBeatIds(new Set());
-          setStartupCookingGate(true);
+          setStartupCookingGate(false);
           setCloudSessionVerified(false);
-          setBeats([]);
           setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : current);
           await applyRemoteLibraryChange();
           if (!cancelled) setCloudSessionVerified(true);
@@ -1470,7 +1459,7 @@ function BeatGalerApp() {
 
     // Hiding the cloud library while disconnected is a view decision, not a
     // destructive cache mutation. Preserve the last verified instant-paint cache.
-    if (settings && !settings.telegram_cloud_connected) return;
+    if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;
 
     cacheSaveTimerRef.current = window.setTimeout(() => {
       cacheSaveTimerRef.current = null;
@@ -1483,7 +1472,7 @@ function BeatGalerApp() {
         cacheSaveTimerRef.current = null;
       }
     };
-  }, [beats, settings?.telegram_cloud_connected]);
+  }, [beats, settings?.telegram_cloud_connected, cloudSessionVerified]);
 
   useEffect(() => {
     visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);
@@ -1682,24 +1671,42 @@ function BeatGalerApp() {
     return promise;
   }, []);
 
-  const ensureArtworkReady = useCallback((beat: Beat): Promise<boolean> => {
-    const existingPromise = artworkLoadPromisesRef.current.get(beat.id);
+  const ensureArtworkReady = useCallback((beat: Beat, allowNetwork = true): Promise<boolean> => {
+    const promiseKey = allowNetwork ? beat.id : `${beat.id}:cache`;
+    const existingPromise = artworkLoadPromisesRef.current.get(promiseKey);
     if (existingPromise) return existingPromise;
 
     const promise = (async () => {
       const existing = beat.image_preview_base64 || beat.image_base64;
       if (existing) {
-        return decodeArtworkDataUrl(existing);
+        const decoded = await decodeArtworkDataUrl(existing);
+        if (decoded) void cacheArtworkThumbnail(beat, existing).catch(() => {});
+        return decoded;
       }
 
+      const cachedArtwork = await readCachedArtworkThumbnail(beat).catch(() => null);
+      if (cachedArtwork) {
+        const decoded = await decodeArtworkDataUrl(cachedArtwork);
+        if (decoded) {
+          setBeats(current => current.map(item => item.id === beat.id
+            ? { ...item, image_base64: cachedArtwork, image_preview_base64: null }
+            : item));
+          return true;
+        }
+      }
+
+      const hasArtworkReference = Boolean(beat.assets?.artwork?.object_id);
+      if (!allowNetwork) return !hasArtworkReference;
+
       try {
-        const artwork = await loadCloudArtworkForBeat(beat.id);
+        const artwork = await platform.media.loadArtwork(beat);
         if (!artwork) return true; // This beat genuinely has no artwork; gradient fallback is ready.
-        const decoded = await decodeArtworkDataUrl(artwork);
+        const presentationArtwork = await cacheArtworkThumbnail(beat, artwork).catch(() => artwork);
+        const decoded = await decodeArtworkDataUrl(presentationArtwork);
         if (!decoded) return false;
         setBeats(current => {
           const next = current.map(item => item.id === beat.id
-            ? { ...item, image_base64: artwork, image_preview_base64: null }
+            ? { ...item, image_base64: presentationArtwork, image_preview_base64: null }
             : item);
           const hydrated = next.find(item => item.id === beat.id);
           if (hydrated && cloudMetaSnapshotRef.current) {
@@ -1718,13 +1725,10 @@ function BeatGalerApp() {
         console.warn(`Artwork warm failed for ${beat.name}:`, error);
         return false;
       }
-    })().finally(() => {
-      // Keep successful readiness memoized for this app session, but allow a
-      // failed cover to retry later instead of permanently hiding the beat.
-    });
+    })();
 
-    artworkLoadPromisesRef.current.set(beat.id, promise);
-    void promise.then(ok => { if (!ok) artworkLoadPromisesRef.current.delete(beat.id); });
+    artworkLoadPromisesRef.current.set(promiseKey, promise);
+    void promise.then(ok => { if (!ok) artworkLoadPromisesRef.current.delete(promiseKey); });
     return promise;
   }, []);
 
@@ -1788,6 +1792,7 @@ function BeatGalerApp() {
   }, [waitForCookingReady]);
 
   const handleWarm = useCallback((beat: Beat) => {
+    if (!platform.capabilities.playbackCache) return;
     void ensureWarmPlaybackUrl(beat);
   }, [ensureWarmPlaybackUrl]);
 
@@ -1796,13 +1801,54 @@ function BeatGalerApp() {
     // Read the latest Beat object because upload state can change after the
     // caller captured its render-time object.
     const latestBeat = beatsLatestRef.current.find(item => item.id === beat.id) ?? beat;
+    playTrace("APP_HANDLE_PLAY_ENTER", {
+      beat_id: beat.id,
+      render_status: beat.cloud_status || null,
+      latest_status: latestBeat.cloud_status || null,
+      slot_busy: beatCloudUpdateBusyIds.has(beat.id),
+    });
     if (beatCloudUpdateBusyIds.has(beat.id) || isBeatPlaybackBlocked(beat) || isBeatPlaybackBlocked(latestBeat)) {
       const blocked = isBeatPlaybackBlocked(latestBeat) ? latestBeat : beat;
       const reason = beatCloudUpdateBusyIds.has(beat.id) ? "SLOT_UPDATE" : String(blocked.cloud_status || "");
+      playTrace("APP_HANDLE_PLAY_BLOCKED", { beat_id: blocked.id, reason });
       void downloadCookingDiagnosticEvent("PLAY_BLOCKED_LOADING", blocked.id, blocked.name, reason).catch(() => {});
       return;
     }
     beat = latestBeat;
+
+    // Web playback uses the browser MTProto streaming adapter.
+    // Never fall through to the native Tauri playback/cache path.
+    if (!isTauriAvailable) {
+      try {
+        if (audio.playingId && audio.playingId !== beat.id) {
+          platform.media.releasePlayback(audio.playingId);
+        }
+
+        playTrace("APP_PREPARE_BEGIN", { beat_id: beat.id });
+        const prepared = await platform.media.preparePlayback(beat);
+        playTrace("APP_PREPARE_READY", { beat_id: beat.id, url_scheme: String(prepared.url || "").split(":")[0] || null });
+
+        void prepared.completed.catch(error => {
+          console.warn(`[web/playback] stream failed beat_id=${beat.id}`, error);
+          platform.media.releasePlayback(beat.id);
+        });
+
+        playTrace("APP_AUDIO_PLAY_CALL", { beat_id: beat.id });
+        play(beat.id, [prepared.url]);
+      } catch (error) {
+        playTrace("APP_PREPARE_ERROR", { beat_id: beat.id, error_name: error instanceof Error ? error.name : "unknown" });
+        platform.media.releasePlayback(beat.id);
+        await appAlert({
+          title: "Beat unavailable",
+          message: sanitizeUserVisibleText(
+            error instanceof Error ? error.message : String(error),
+            "Cloud audio unavailable."
+          ),
+          danger: true,
+        });
+      }
+      return;
+    }
 
     const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
     // Sync and playback are independent state machines. In V7 a beat can stay in
@@ -2131,6 +2177,58 @@ function BeatGalerApp() {
 
   const cloudifyImportedBeats = useCallback((newBeats: Beat[]) => {
     if (newBeats.length === 0) return;
+
+    if (platform.capabilities.reviewBeatCloudCommit) {
+      for (const beat of newBeats) {
+        if (autoCloudUploadRef.current.has(beat.id)) continue;
+        autoCloudUploadRef.current.add(beat.id);
+        transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPLOAD" }, beat);
+        transitionRuntime(beat.id, { type: "SYNC_UPLOAD_STARTED" }, beat);
+        setBackgroundUploadErrors(current => {
+          if (!(beat.id in current)) return current;
+          const next = { ...current };
+          delete next[beat.id];
+          return next;
+        });
+        setBeats(current => {
+          const next = current.map(item => item.id === beat.id ? { ...item, cloud_status: "UPLOADING" } : item);
+          beatsLatestRef.current = next;
+          return next;
+        });
+
+        void platform.cloudData.commitImportedBeat(beat).then(committed => {
+          transitionRuntime(committed.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, committed);
+          setBackgroundUploadErrors(current => {
+            if (!(committed.id in current)) return current;
+            const next = { ...current };
+            delete next[committed.id];
+            return next;
+          });
+          setBeats(current => {
+            const next = current.map(item => item.id === committed.id ? committed : item);
+            beatsLatestRef.current = next;
+            return next;
+          });
+        }).catch(error => {
+          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+          transitionRuntime(beat.id, {
+            type: "SYNC_FAILED",
+            code: "WEB_IMPORT_FAILED",
+            message,
+            retryable: true,
+          }, beat);
+          setBackgroundUploadErrors(current => ({ ...current, [beat.id]: message }));
+          setBeats(current => {
+            const next = current.map(item => item.id === beat.id ? { ...item, cloud_status: "ERROR" } : item);
+            beatsLatestRef.current = next;
+            return next;
+          });
+        }).finally(() => {
+          autoCloudUploadRef.current.delete(beat.id);
+        });
+      }
+      return;
+    }
 
     // Do not trust the React settings snapshot here. On macOS the Telegram
     // callback/SSE can complete before this closure receives the updated
@@ -2538,6 +2636,7 @@ function BeatGalerApp() {
       const currentBeat = q.beats[q.index];
       const sourceKey = currentBeat ? reviewSourceKey(currentBeat) : "";
       if (sourceKey) skippedReviewSourceKeysRef.current.add(sourceKey);
+      if (platform.capabilities.reviewBeatCloudCommit && currentBeat) platform.importer.releaseBeat(currentBeat.id);
 
       const knownLast = q.total !== null && q.index >= q.total - 1;
       if (knownLast && !q.preparing) {
@@ -2574,6 +2673,9 @@ function BeatGalerApp() {
     // the current + remaining unsaved review candidates are removed.
     setReviewQueue(q => {
       if (!q) return null;
+      if (platform.capabilities.reviewBeatCloudCommit) {
+        for (const beat of q.beats.slice(q.index)) platform.importer.releaseBeat(beat.id);
+      }
       if (q.batchId) void discardImportReviewBatch(q.batchId);
       window.setTimeout(() => {
         const protectedBeats = [
@@ -3025,6 +3127,9 @@ function BeatGalerApp() {
   }, [refreshOpenableCloudProjects, rejectOfflineMutation, transitionRuntime]);
 
   useEffect(() => {
+    // Web edits are explicit durable transactions through platform.editor.
+    // Never let the legacy Desktop metadata observer invoke Tauri from Web.
+    if (platform.capabilities.browserCloudEditing) return;
     if (connectionState !== "online" || !cloudSessionVerified) return;
     const next = new Map<string, string>();
     for (const beat of beats) {
@@ -3303,10 +3408,32 @@ function BeatGalerApp() {
 
   const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {
     if (rejectOfflineMutation("Changing artwork")) return;
-    // Artwork is an explicit cloud transaction. Decoding/loading artwork is no
-    // longer part of cloudBeatFingerprint, so only a real user artwork change
-    // reaches Telegram here. Order is intentionally:
-    //   upload new artwork -> commit new INDEX -> helper deletes old artwork.
+
+    const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
+
+    if (platform.capabilities.browserCloudEditing) {
+      // Publish the browser-decoded artwork immediately, then commit it through
+      // the Web editor/Direct transport. No Tauri metadata path participates.
+      updateBeat(updated);
+      transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);
+      try {
+        const committed = await platform.editor.commit(beat, updated, {});
+        setBeats(current => {
+          const next = current.map(item => item.id === committed.id ? committed : item);
+          beatsLatestRef.current = next;
+          return next;
+        });
+        setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);
+        transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);
+      } catch (error) {
+        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+        transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);
+        throw error;
+      }
+      return;
+    }
+
+    // Desktop keeps its existing native metadata/artwork transaction.
     await saveBeatMeta({
       mp3_path: beat.mp3_path,
       wav_path: beat.wav_path,
@@ -3318,7 +3445,6 @@ function BeatGalerApp() {
       update_filename: false,
     });
 
-    const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
     updateBeat(updated);
 
     if (updated.telegram_file_id && connectionState === "online") {
@@ -3329,9 +3455,6 @@ function BeatGalerApp() {
         await syncBeatMetadataToTelegram(updated);
         const indexSnapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
         await libraryStateManager.commitSnapshot(indexSnapshot, "upload-batch");
-
-        // This explicit transaction owns the INDEX commit. Prevent the generic
-        // library observer/cloud-file event from immediately writing it again.
         if (cloudLibraryTimerRef.current) {
           window.clearTimeout(cloudLibraryTimerRef.current);
           cloudLibraryTimerRef.current = null;
@@ -3549,6 +3672,91 @@ function BeatGalerApp() {
   }, [beatFileDrop, hasStoredProject, runBeatCloudUpdate, startProjectAssetUpdate, waitForUploadedBeatPlaybackReady]);
 
 
+  const importDroppedBrowserFiles = useCallback(async (files: File[]) => {
+    if (rejectOfflineMutation("Importing beats")) return;
+    if (dropImporting) return;
+
+    const supported = files.filter(file =>
+      /\.(mp3|wav)$/i.test(file.name) ||
+      file.type === "audio/mpeg" ||
+      file.type === "audio/wav" ||
+      file.type === "audio/x-wav"
+    );
+    if (supported.length === 0) {
+      await appAlert({ title: "Nothing to import", message: "Drop an MP3 or WAV file to add a beat." });
+      return;
+    }
+    if (supported.length > 1) {
+      await appAlert({ title: "Drop one beat at a time", message: "BeatGaler Web imports one beat per drag action." });
+      return;
+    }
+
+    setDropImporting(true);
+    setDropActive(false);
+    try {
+      const candidate = platform.importer.fromFile(supported[0]);
+      const hydrated = await candidate.hydrated.catch(() => candidate.beat);
+      const beat = { ...hydrated, tags: cleanTags(hydrated.tags || []).tags };
+      setShowAdd(false);
+      setReviewPreparationDone(true);
+      setReviewBootstrap(null);
+      setDeferredImportBatch(null);
+      setAudioConflictBatch(null);
+      setDropImportBatch(null);
+      setReviewQueue({ beats: [beat], index: 0, total: 1, batchId: null, preparing: false });
+    } catch (error) {
+      await appAlert({ title: "Import failed", message: String(error), danger: true });
+    } finally {
+      setDropImporting(false);
+    }
+  }, [dropImporting, rejectOfflineMutation]);
+
+  const handleBrowserBeatFileDrop = useCallback(async (beatId: string, files: File[]): Promise<boolean> => {
+    const beat = beatsLatestRef.current.find(item => item.id === beatId);
+    if (!beat) throw new Error(`Dropped file target beat was not found: ${beatId}`);
+    if (files.length !== 1) {
+      await appAlert({ title: "Drop one file at a time", message: "Drop one MP3, WAV, or PROJECT ZIP on a beat." });
+      return false;
+    }
+
+    const file = files[0];
+    const name = file.name.toLowerCase();
+    const kind = name.endsWith(".mp3") ? "MASTER" : name.endsWith(".wav") ? "WAV" : name.endsWith(".zip") ? "PROJECT" : null;
+    if (!kind) {
+      await appAlert({ title: "Unsupported file", message: "BeatGaler Web accepts MP3, WAV, or PROJECT ZIP files on an existing beat." });
+      return false;
+    }
+
+    if (kind === "MASTER" && beat.telegram_file_id) {
+      const replace = await appConfirm({
+        title: "Replace MASTER?",
+        message: `Replace the current MASTER for "${beat.name}" with ${file.name}?`,
+        confirmLabel: "Replace",
+        cancelLabel: "Cancel",
+        danger: true,
+      });
+      if (!replace) return false;
+    }
+
+    transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
+    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
+    try {
+      const committed = await platform.editor.commit(beat, beat, { [kind]: file });
+      setBeats(current => {
+        const next = current.map(item => item.id === committed.id ? committed : item);
+        beatsLatestRef.current = next;
+        return next;
+      });
+      setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);
+      transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);
+      return false;
+    } catch (error) {
+      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+      transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "WEB_FILE_UPDATE_FAILED", message, retryable: true }, beat);
+      throw error;
+    }
+  }, [transitionRuntime]);
+
   // Browser/Pinterest controller. Windows desktop keeps the existing single native
   // owner. macOS keeps HTML enabled for browser artwork while local Finder drops
   // are claimed by the native-path fast path before staging can begin.
@@ -3639,6 +3847,8 @@ function BeatGalerApp() {
         if (!REVIEW_SKELETON_ENABLED) return;
         setLibraryDropStaging(active);
       },
+      onBrowserBeatFileDrop: platform.capabilities.browserFileImport ? handleBrowserBeatFileDrop : undefined,
+      onBrowserLibraryFileDrop: platform.capabilities.browserFileImport ? importDroppedBrowserFiles : undefined,
       onLibraryFileDrop: async roots => {
         await importDroppedPaths(roots.map(root => root.path));
       },
@@ -3653,7 +3863,7 @@ function BeatGalerApp() {
         await appAlert({ title: "Drag & drop failed", message: String(error), danger: true });
       },
     });
-  }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]);
+  }, [handleAutoProjectDrop, handleBrowserBeatFileDrop, handleDropArtwork, importDroppedBrowserFiles, importDroppedPaths]);
 
   useEffect(() => {
     if (!isTauriAvailable) return;
@@ -4114,6 +4324,8 @@ function BeatGalerApp() {
   }, [cloudFilesBeat, cloudFilesBusyId, transitionRuntime]);
 
   useEffect(() => {
+    if (!isTauriAvailable) return;
+
     let unlisten: (() => void) | undefined;
     let disposed = false;
 
@@ -4235,7 +4447,11 @@ function BeatGalerApp() {
             startupCookingResolvedRef.current = true;
             startupPipelineStartedRef.current = false;
             progressiveRevealRunRef.current += 1;
-            setRevealedBeatIds(new Set(visible.map(beat => beat.id)));
+            setRevealedBeatIds(current => {
+              const next = new Set(current);
+              for (const beat of visible) next.add(beat.id);
+              return next;
+            });
             setStartupCookingGate(false);
             setCloudSessionVerified(true);
             console.info(`[library-refresh] APPLIED beats=${visible.length} attempt=${attempt}`);
@@ -4574,218 +4790,108 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     });
 
   const filteredBeatIdsKey = filteredBeats.map(beat => beat.id).join("|");
-  const displayedBeats = startupCookingGate
-    ? []
-    : filteredBeats.filter(beat => revealedBeatIds.has(beat.id));
+  const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));
 
-  // Startup means "safe to use", not "entire MP3 downloaded". Prepare only
-  // the first six beats: fresh artwork decoded, 512 KB cooking head ready,
-  // localhost playback URL assigned, and the shared audio engine primed.
+  const revealBeat = useCallback((beatId: string) => {
+    setRevealedBeatIds(current => {
+      if (current.has(beatId)) return current;
+      const next = new Set(current);
+      next.add(beatId);
+      return next;
+    });
+  }, []);
+
+  // Instant-paint pass: use only local presentation cache while cloud authority
+  // is still resolving. This never mutates the source of truth and never starts
+  // an audio download. Every BeatCard is already mounted invisibly in its final
+  // slot, so cards can appear independently without reflowing the grid.
   useEffect(() => {
-    if (startupCookingResolvedRef.current || startupPipelineStartedRef.current) return;
+    if (filteredBeats.length === 0) return;
+    let cancelled = false;
+    const queue = filteredBeats.filter(beat => !revealedBeatIds.has(beat.id));
+
+    void Promise.all(queue.map(async beat => {
+      const ready = await ensureArtworkReady(beat, false);
+      if (!cancelled && ready) revealBeat(beat.id);
+    })).then(() => {
+      if (!cancelled) {
+        setStartupCookingGate(false);
+        dismissBeatGalerStartupLoader();
+      }
+    });
+
+    return () => { cancelled = true; };
+    // revealedBeatIds intentionally stays out of deps: one cache sweep per library shape.
+  }, [filteredBeatIdsKey, ensureArtworkReady, revealBeat]);
+
+  // Authority/reveal pass: title + artwork are enough to show a beat. Audio is
+  // deliberately NOT part of this gate. Once a visible card enters the viewport,
+  // BeatCard's existing IntersectionObserver calls onWarm and the progressive
+  // audio/chunk path continues exactly as before.
+  useEffect(() => {
     if (loading || settings === null) return;
+
     if (connectionState === "checking") {
-      setStartupCookingGate(true);
+      if (filteredBeats.length === 0) setStartupCookingGate(true);
       return;
     }
 
-    if (connectionState !== "online" || !settings.telegram_cloud_connected || filteredBeats.length === 0) {
-      startupCookingResolvedRef.current = true;
+    if (connectionState !== "online" || !settings.telegram_cloud_connected) {
       setRevealedBeatIds(new Set(filteredBeats.map(beat => beat.id)));
+      startupCookingResolvedRef.current = true;
+      startupPipelineStartedRef.current = false;
       setStartupCookingGate(false);
       dismissBeatGalerStartupLoader();
       return;
     }
 
-    // Do not use the instant-paint cache as proof that a cloud beat is ready.
-    // Wait until the pinned Telegram index has been restored into SQLite first.
+    // Cached cards may stay visible while this is false, but confirmed-empty UI
+    // remains forbidden until the authoritative INDEX resolves.
     if (!cloudSessionVerified) {
-      setStartupCookingGate(true);
+      setStartupCookingGate(filteredBeats.length === 0);
       return;
     }
 
-    startupPipelineStartedRef.current = true;
-    let cancelled = false;
-    const priority = filteredBeats.slice(0, STARTUP_PRIORITY_BEATS);
-    setStartupCookingGate(true);
-    void downloadCookingDiagnosticEvent(
-      "STARTUP_GATE_BEGIN", null, null,
-      `library_beats=${filteredBeats.length} priority=${priority.length}`
-    ).catch(() => {});
+    startupCookingResolvedRef.current = true;
+    startupPipelineStartedRef.current = false;
+    setStartupCookingGate(false);
+    dismissBeatGalerStartupLoader();
 
-    void (async () => {
-      // Artwork, audio cooking and decoder priming overlap. Nothing here waits
-      // for a full MASTER; the audio requirement is only the configured head.
-      const artworkReadyPromise = Promise.all(priority.map(beat => ensureArtworkReady(beat)));
-      await Promise.all(priority.map(beat => ensureWarmPlaybackUrl(beat)));
-      if (cancelled) return;
+    if (filteredBeats.length === 0) return;
 
-      const cookingReady = new Set<string>();
-      const cookingFailed = new Set<string>();
-      const started = performance.now();
-      let readyBytes = 0;
-      let enginePrimePromise: Promise<boolean> | null = null;
-      const hasCloudAudio = priority.some(beat => !!beat.telegram_file_id);
-
-      while (!cancelled && performance.now() - started < 12000) {
-        try {
-          const status = await getDownloadCookingStatus();
-          readyBytes = status.ready_bytes;
-          const byBeat = new Map(status.entries.map(entry => [entry.beat_id, entry]));
-          cookingReady.clear();
-          cookingFailed.clear();
-          for (const beat of priority) {
-            if (beat.offline_available || !beat.telegram_file_id) {
-              cookingReady.add(beat.id);
-              continue;
-            }
-            const entry = byBeat.get(beat.id);
-            if (entry?.failed) {
-              cookingFailed.add(beat.id);
-              continue;
-            }
-            const urlReady = cookingPlaybackUrlRef.current.get(beat.id)?.telegramFileId === beat.telegram_file_id;
-            if (entry && urlReady && (entry.complete || entry.downloaded_bytes >= status.ready_bytes)) {
-              cookingReady.add(beat.id);
-            }
-          }
-
-          // Start the shared decoder as soon as the FIRST priority beat has its
-          // 512 KB head. It primes in parallel while covers/other beats finish.
-          if (!enginePrimePromise && hasCloudAudio) {
-            const firstReady = priority.find(beat => beat.telegram_file_id && cookingReady.has(beat.id));
-            const primeUrl = firstReady ? cookingPlaybackUrlRef.current.get(firstReady.id)?.url : undefined;
-            if (primeUrl) {
-              enginePrimePromise = (async () => {
-                let ok = false;
-                for (let attempt = 0; attempt < 3 && !ok && !cancelled; attempt += 1) {
-                  ok = await primeAudioEngine(primeUrl).catch(() => false);
-                  if (!ok) await new Promise(resolve => window.setTimeout(resolve, 220));
-                }
-                return ok;
-              })();
-            }
-          }
-
-          if (cookingReady.size + cookingFailed.size >= priority.length) break;
-        } catch {}
-        await new Promise(resolve => window.setTimeout(resolve, 90));
-      }
-      if (cancelled) return;
-
-      const artworkReady = await artworkReadyPromise;
-      const engineReady = hasCloudAudio
-        ? await (enginePrimePromise ?? Promise.resolve(false))
-        : true;
-      startupEnginePrimeReadyRef.current = engineReady;
-      if (cancelled) return;
-
-      const usable = priority.filter((beat, index) => artworkReady[index] && cookingReady.has(beat.id));
-
-      // Rendering must never be held hostage by decoder priming. Browsers can
-      // reject an automatic prime because no user gesture has happened yet,
-      // even though the exact same beat plays correctly after a click. Keep the
-      // prime as a performance optimization, not as a condition for showing the
-      // library.
-      if (!engineReady) {
-        void downloadCookingDiagnosticEvent(
-          "STARTUP_ENGINE_PRIME_DEFERRED", null, null,
-          `priority=${priority.length} usable=${usable.length} user_gesture_may_be_required=1`
-        ).catch(() => {});
-      }
-
-      // A stale/missing historical artwork reference must not leave the entire
-      // gallery in an eternal skeleton. We waited for the normal preparation
-      // window already; reveal audio-ready beats with the card's stable artwork
-      // fallback and let artwork recovery continue independently.
-      const revealable = usable.length > 0
-        ? usable
-        : priority.filter(beat => cookingReady.has(beat.id));
-
-      if (revealable.length === 0) {
-        // Last-resort UI safety: the INDEX contains real beats, so stop showing
-        // an infinite startup state. Cards can still surface their own local
-        // loading/error state instead of blocking the whole gallery.
-        void downloadCookingDiagnosticEvent(
-          "STARTUP_GATE_FALLBACK_REVEAL", null, null,
-          `priority=${priority.length} usable=0 cooking_ready=0`
-        ).catch(() => {});
-      }
-
-      const initialIds = new Set((revealable.length > 0 ? revealable : priority).map(beat => beat.id));
-      setRevealedBeatIds(initialIds);
-      startupCookingResolvedRef.current = true;
-      void downloadCookingDiagnosticEvent(
-        "STARTUP_GATE_READY", null, null,
-        `visible=${usable.length} images=${usable.length} audio=${usable.length} engine=1 ready_bytes=${readyBytes}`
-      ).catch(() => {});
-
-      requestAnimationFrame(() => {
-        if (!cancelled) {
-          setStartupCookingGate(false);
-          dismissBeatGalerStartupLoader();
-        }
-      });
-    })();
-
-    return () => {
-      cancelled = true;
-      if (!startupCookingResolvedRef.current) startupPipelineStartedRef.current = false;
-    };
-  }, [
-    loading, settings, cloudSessionVerified, connectionState, filteredBeatIdsKey,
-    ensureArtworkReady, ensureWarmPlaybackUrl, primeAudioEngine,
-  ]);
-
-  // After the first six are usable, prepare the rest one at a time. A card is
-  // added to React only after its artwork is decoded and its cooking head is
-  // ready, so the user never watches a blank cover fill in later.
-  useEffect(() => {
-    if (startupCookingGate || loading || !cloudSessionVerified || !settings?.telegram_cloud_connected) return;
     const runId = ++progressiveRevealRunRef.current;
     const queue = filteredBeats.filter(beat => !revealedBeatIds.has(beat.id));
-    if (queue.length === 0) return;
+    let cursor = 0;
+    const workerCount = Math.min(isTauriAvailable ? 6 : 1, queue.length);
 
-    void (async () => {
-      for (const beat of queue) {
-        if (progressiveRevealRunRef.current !== runId) return;
-        const [artworkReady] = await Promise.all([
-          ensureArtworkReady(beat),
-          ensureWarmPlaybackUrl(beat),
-        ]);
-        if (progressiveRevealRunRef.current !== runId) return;
-        const audioReady = await waitForCookingReady(beat);
-        if (progressiveRevealRunRef.current !== runId) return;
-        if (!audioReady) continue;
+    const worker = async () => {
+      while (cursor < queue.length) {
+        const index = cursor++;
+        const beat = queue[index];
+        if (!beat || progressiveRevealRunRef.current !== runId) return;
 
-        // Missing/stale artwork is a per-card degradation, not a reason to hide
-        // the beat forever. BeatCard owns the stable fallback presentation.
-        if (!artworkReady) {
-          void downloadCookingDiagnosticEvent(
-            "PROGRESSIVE_REVEAL_ARTWORK_FALLBACK", beat.id, beat.name, "artwork=0 audio=1"
-          ).catch(() => {});
+        let ready = false;
+        for (let attempt = 0; attempt < 4 && !ready; attempt += 1) {
+          ready = await ensureArtworkReady(beat, true);
+          if (ready || progressiveRevealRunRef.current !== runId) break;
+          const delay = [350, 900, 1800, 3200][attempt] ?? 3200;
+          await new Promise(resolve => window.setTimeout(resolve, delay));
         }
 
-        setRevealedBeatIds(current => {
-          if (current.has(beat.id)) return current;
-          const next = new Set(current);
-          next.add(beat.id);
-          return next;
-        });
-        void downloadCookingDiagnosticEvent(
-          "PROGRESSIVE_REVEAL_READY", beat.id, beat.name,
-          artworkReady ? "artwork=1 audio=1" : "artwork=fallback audio=1"
-        ).catch(() => {});
-        await new Promise(resolve => window.setTimeout(resolve, 70));
+        if (progressiveRevealRunRef.current !== runId) return;
+        if (ready) revealBeat(beat.id);
       }
-    })();
+    };
+
+    void Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     return () => {
       if (progressiveRevealRunRef.current === runId) progressiveRevealRunRef.current += 1;
     };
+    // revealedBeatIds intentionally stays out of deps so each reveal does not restart workers.
   }, [
-    startupCookingGate, loading, cloudSessionVerified, settings?.telegram_cloud_connected,
-    filteredBeatIdsKey, ensureArtworkReady, ensureWarmPlaybackUrl, waitForCookingReady,
+    loading, settings, cloudSessionVerified, connectionState, filteredBeatIdsKey,
+    ensureArtworkReady, revealBeat,
   ]);
 
 
@@ -5188,6 +5294,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
       {/* Grid — OS file drag-drop */}
       <div
         data-library-scroll="true"
+        aria-busy={startupCookingGate || (connectionState === "online" && !cloudSessionVerified)}
         style={{ flex: 1, position: "relative", overflowY: "auto", padding: "28px 24px", paddingBottom: currentBeat ? 90 : 28, opacity: libraryRefreshing ? 0.82 : 1, transform: libraryRefreshing ? "scale(0.997)" : "scale(1)", transition: "opacity 150ms ease, transform 150ms ease" }}
 
       >
@@ -5196,19 +5303,22 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             <div style={{ width: "28%", height: "100%", background: "rgba(255,255,255,.38)", animation: "beatgaler-refresh-line .72s ease-in-out infinite" }} />
           </div>
         )}
-        {((loading && !cloudSessionVerified) || (startupCookingGate && beats.length > 0) || (filteredBeats.length > 0 && displayedBeats.length === 0)) ? (
-          <GalleryStartupSkeleton />
-        ) : filteredBeats.length === 0 ? (
+        {filteredBeats.length === 0 ? (
           <div style={{ textAlign: "center", paddingTop: 92, color: "#383838" }}>
             {beats.length === 0 ? (
-              <div>
-                <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>Empty Gallery</div>
-                <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>
-                  {settings?.telegram_cloud_connected
-                    ? "Add a beat to start your library."
-                    : "BeatGaler Cloud is currently unavailable."}
+              cloudSessionVerified && connectionState === "online" ? (
+                <div>
+                  <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>Empty Gallery</div>
+                  <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Add a beat to start your library.</div>
                 </div>
-              </div>
+              ) : connectionState === "offline" || connectionState === "poor" ? (
+                <div>
+                  <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>No offline beats available</div>
+                  <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Reconnect to verify your Galer Cloud library.</div>
+                </div>
+              ) : (
+                <div aria-label="Loading beat library" style={{ minHeight: 1 }} />
+              )
             ) : <div style={{ fontSize: 13 }}>No beats match your search</div>}
           </div>
         ) : (
@@ -5219,14 +5329,17 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             onDragEnd={handleDragEnd}
             onDragCancel={handleDragCancel}
           >
-            <SortableContext items={displayedBeats.map((b) => b.id)} strategy={rectSortingStrategy}>
+            <SortableContext items={filteredBeats.map((b) => b.id)} strategy={rectSortingStrategy}>
               <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "28px 22px", alignContent: "flex-start", maxWidth: 1300 }}>
-                {displayedBeats.map((beat, i) => (
+                {filteredBeats.map((beat, i) => (
                   <BeatCard
                     key={beat.id}
                     beat={beat}
-                    openableProject={openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path))}
+                    visible={revealedBeatIds.has(beat.id)}
+                    interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}
+                    playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}
+                    openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}
                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}
                     tagFrequency={tagFrequency}
                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
@@ -5234,9 +5347,12 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     selected={selectedIds.has(beat.id)}
                     selectedCount={selectedIds.size}
                     selectMode={selectMode}
-                    dragEnabled={!selectMode}
+                    dragEnabled={!selectMode && platform.capabilities.manualLibraryReorder}
                     networkOnline={connectionState === "online"}
                     offlineBusy={offlineBusyIds.has(beat.id)}
+                    canUseOfflinePackage={platform.capabilities.offlinePackage}
+                    canUseLocalHelper={platform.capabilities.localHelper}
+                    canInspectNativeProject={platform.capabilities.openProjectInDaw}
                     onToggleOffline={handleToggleOffline}
                     onRetryUpload={retryBackgroundUpload}
                     onBulkEdit={handleEditBulk}
@@ -5255,8 +5371,8 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     onOpenProject={handleOpenProject}
                     onUpdateProject={handleUpdateProject}
                     onCloudFiles={handleCloudFiles}
-                    onToggleSelect={(b, e) => handleToggleSelect(b, e, displayedBeats)}
-                    animDelay={i * 0.02}
+                    onToggleSelect={(b, e) => handleToggleSelect(b, e, filteredBeats)}
+                    animDelay={0}
                   />
                 ))}
                 </div>
@@ -5365,7 +5481,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}
           onBulkSaved={applyBulkUpdate}
           mutationAllowed={connectionState === "online"}
-          onCloudMutationCommit={commitDrawerCloudMutation}
+          onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}
         />
       )}
 
@@ -5391,7 +5507,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           onClose={skipCurrentReviewBeat}
           onSkipCurrent={skipCurrentReviewBeat}
           onSkipAll={skipAllReviewQueue}
-          onSaveAll={handleReviewedSaveAll}
+          onSaveAll={platform.capabilities.reviewBeatCloudCommit ? undefined : handleReviewedSaveAll}
           mutationAllowed={connectionState === "online"}
           isReviewNameTaken={(candidateName, _currentBeatId) => {
             const normalized = candidateName.trim().toLocaleLowerCase();
@@ -5403,7 +5519,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
               existing.name.trim().toLocaleLowerCase() === normalized
             );
           }}
-          onCloudMutationCommit={commitDrawerCloudMutation}
+          onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}
           onSaved={handleReviewedBeatSaved}
           onReleaseAudio={() => {
             if (audio.playingId === reviewQueue.beats[reviewQueue.index].id) releaseFile();
@@ -5529,6 +5645,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             handlePlay(target);
             setQueueIds((ids) => ids.filter((id) => id !== target.id));
           }}
+          canAddBeat={platform.capabilities.browserFileImport || platform.capabilities.nativeFilesystemDrop}
           onAddBeat={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}
           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })}
           onEdit={(b) => { if (!rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}
@@ -5553,5 +5670,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
 
 
 export default function App() {
-  return <AccountGate><BeatGalerApp /></AccountGate>;
+  return platform.kind === "web"
+    ? <BeatGalerApp />
+    : <AccountGate><BeatGalerApp /></AccountGate>;
 }

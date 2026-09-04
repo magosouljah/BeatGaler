@@ -1,0 +1,55 @@
+name: Web - Production Build
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'deploy/web/**'
+      - 'scripts/deploy-web-production.ps1'
+      - 'scripts/test-public-operations-pages.mjs'
+      - 'scripts/regression-web-startup-bridge.mjs'
+      - 'scripts/regression-web-bound-temp-rpc.mjs'
+      - '.github/workflows/web-production-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-production-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.2'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate public operations source
+        run: node scripts/test-public-operations-pages.mjs
+      - name: Guard browser startup bridge
+        run: node scripts/regression-web-startup-bridge.mjs
+      - name: Guard bound-temp Web RPC seam
+        run: node scripts/regression-web-bound-temp-rpc.mjs
+      - name: Build browser Web
+        run: npm run build:web
+      - name: Validate static package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          node scripts/test-public-operations-pages.mjs --dist
+          find dist -maxdepth 2 -type f -print | head -100
+          grep -R --include='*.js' -q '/beatgaler-api' dist
+      - name: Validate EC2 installer syntax
+        run: bash -n deploy/web/install-web-production.sh
+      - name: Validate PowerShell deploy script syntax
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create((Get-Content -Raw scripts/deploy-web-production.ps1))

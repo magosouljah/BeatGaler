@@ -10,7 +10,7 @@ import {
   connectYouTubeChannel, uploadToYouTube, disconnectYouTube, startYoutubeUpload,
   pickFolder, saveTemplateDialog, setTemplatesFolder,
 } from "../lib/tauri";
-import { listen } from '@tauri-apps/api/event';
+import { platform } from "../platform";
 import { registerJob } from "../lib/jobStore";
 import { hashFilePath } from "../utils/hash";
 import { getCachedUpload, setCachedUpload } from "../utils/uploadCache";
@@ -641,9 +641,8 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
         registerJob(jobId, job.beat.name);
 
         // Listen for completion or error for this job
-        const unlistenDone = await listen('youtube:done', (e: any) => {
+        const unlistenDone = await platform.events.listen<any>('youtube:done', payload => {
           try {
-            const payload = e.payload as any;
             if (payload?.job_id === jobId) {
               setJobs(js => js.map(j => j.beat.id === id
                 ? { ...j, upload_status: 'done', upload_progress: 100, upload_result_url: payload.result?.url ?? undefined }
@@ -654,9 +653,8 @@ export default function UploadModal({ initialBeat, allBeats, onClose, initialSel
             }
           } catch (_) { /* ignore */ }
         });
-        const unlistenErr = await listen('youtube:error', (e: any) => {
+        const unlistenErr = await platform.events.listen<any>('youtube:error', payload => {
           try {
-            const payload = e.payload as any;
             if (payload?.job_id === jobId) {
               const message = payload?.error ?? 'Upload failed';
               setJobs(js => js.map(j => j.beat.id === id
@@ -2011,5 +2009,4 @@ function Step4({
     </div>
   );
 }
-
 

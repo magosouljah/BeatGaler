@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Beat Galer</title>
+    <title>Galer</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body, #root { height: 100%; }
@@ -50,8 +50,29 @@
     </style>
   </head>
   <body>
-    <div id="beatgaler-startup-loader" aria-live="polite">Loading Beat Galer...</div>
+    <div id="beatgaler-startup-loader" aria-live="polite">Loading Galer...</div>
     <div id="root"></div>
+    <script>
+      (() => {
+        const root = document.getElementById("root");
+        if (!root) return;
+
+        const dismissWhenSignedOutGateRenders = () => {
+          const readyAuth = root.querySelector('.bg-auth-shell:not([aria-busy="true"])');
+          const legacyDesktopAuth = root.querySelector(".bg-account-gate");
+          if (!readyAuth && !legacyDesktopAuth) return false;
+          document.getElementById("beatgaler-startup-loader")?.remove();
+          return true;
+        };
+
+        if (dismissWhenSignedOutGateRenders()) return;
+        const observer = new MutationObserver(() => {
+          if (!dismissWhenSignedOutGateRenders()) return;
+          observer.disconnect();
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

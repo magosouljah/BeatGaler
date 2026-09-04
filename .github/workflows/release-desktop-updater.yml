@@ -6,6 +6,16 @@ on:
         description: "Release tag, e.g. v0.8.0"
         required: true
         type: string
+      release_channel:
+        description: "Versioned updater channel policy to consume"
+        required: true
+        type: choice
+        default: alpha
+        options:
+          - alpha
+          - beta
+          - candidate
+          - stable
       windows_run_id:
         description: "Successful Build - Windows run ID"
         required: true
@@ -24,25 +34,113 @@ permissions:
 concurrency:
   group: release-desktop-${{ inputs.release_tag }}
   cancel-in-progress: false
-env:
-  PUBLIC_RELEASE_REPO: magosouljah/galer
 
 jobs:
-  release-desktop-updater:
-    name: Publish verified Desktop release
-    runs-on: ubuntu-latest
+  verify-windows-authenticode:
+    name: Verify Windows OS signing gate
+    runs-on: windows-2025
+    env:
+      WINDOWS_AUTHENTICODE_PROVIDER: ${{ vars.WINDOWS_AUTHENTICODE_PROVIDER || 'PENDING_OWNER_PROVIDER' }}
+      WINDOWS_AUTHENTICODE_EXPECTED_SUBJECT: ${{ vars.WINDOWS_AUTHENTICODE_EXPECTED_SUBJECT }}
 
     steps:
-      - name: Checkout release tools
-        uses: actions/checkout@v4
+      - name: Verify selected Windows run is a successful public build
+        id: selected-run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_RUN_ID: ${{ inputs.windows_run_id }}
+        run: |
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:WINDOWS_RUN_ID"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read selected Windows workflow run." }
+          $run = $json | ConvertFrom-Json
+          if ($run.name -ne "Build - Windows") { throw "Selected Windows run is '$($run.name)', not Build - Windows." }
+          if ($run.conclusion -ne "success") { throw "Selected Windows build conclusion is '$($run.conclusion)', not success." }
+          if ($run.event -ne "workflow_dispatch") { throw "Selected Windows build was not an explicit workflow_dispatch run." }
+          if ($run.display_title -notmatch '\[public\]') { throw "Selected Windows build is not marked as release_intent=public by the source workflow run-name." }
+          if ([string]::IsNullOrWhiteSpace($run.head_sha)) { throw "Selected Windows build has no source SHA." }
+          "source_sha=$($run.head_sha)" >> $env:GITHUB_OUTPUT
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Checkout verifier at exact Windows build source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 22
+          ref: ${{ steps.selected-run.outputs.source_sha }}
+
+      - name: Download selected Windows build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: BeatGaler-Windows-x64
+          path: release-input/windows
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.windows_run_id }}
+
+      - name: Reject internal, deferred, or unverifiable Windows artifacts
+        shell: pwsh
+        run: |
+          $statusPath = "release-input/windows/WINDOWS-AUTHENTICODE-STATUS.json"
+          if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+            throw "Windows build is missing Authenticode release eligibility evidence."
+          }
+
+          $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+          if ($status.note -eq "INTERNAL_NOT_FOR_PUBLIC_RELEASE") {
+            throw "INTERNAL_NOT_FOR_PUBLIC_RELEASE artifacts cannot enter publication."
+          }
+          if ($status.release_intent -ne "public") {
+            throw "Windows artifact was built for '$($status.release_intent)', not public release."
+          }
+          if ($status.public_release_eligible -ne $true) {
+            throw "Windows artifact is not public_release_eligible."
+          }
+          if ($status.authenticode -ne "valid" -or $status.digest -ne "SHA256" -or $status.timestamp -ne "RFC3161") {
+            throw "Windows build evidence does not claim Authenticode SHA-256 + RFC3161 verification."
+          }
+          if (-not $status.provider -or $status.provider -eq "PENDING_OWNER_PROVIDER") {
+            throw "Windows build provider is still PENDING_OWNER_PROVIDER."
+          }
+          if ($env:WINDOWS_AUTHENTICODE_PROVIDER -eq "PENDING_OWNER_PROVIDER") {
+            throw "Current Windows signing provider is still PENDING_OWNER_PROVIDER."
+          }
+          if ($status.provider -ne $env:WINDOWS_AUTHENTICODE_PROVIDER) {
+            throw "Windows artifact provider '$($status.provider)' differs from current approved provider '$env:WINDOWS_AUTHENTICODE_PROVIDER'."
+          }
+
+          $installers = @(Get-ChildItem release-input/windows -Filter *.exe -Recurse -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer executable; found $($installers.Count)."
+          }
+
+          # Metadata is only a preliminary rejection signal. The real installer is
+          # independently re-verified under Windows trust policy before publication.
+          ./scripts/windows-authenticode.ps1 -Path $installers[0].FullName -RequireExpectedSubject
+
+  release-desktop-updater:
+    name: Publish verified Desktop release
+    needs: verify-windows-authenticode
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout release verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
           cache: npm
 
-      - name: Verify selected build runs
+      - name: Enforce tag/channel release intent
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-governance.mjs github-env \
+            --tag "${{ inputs.release_tag }}" \
+            --channel "${{ inputs.release_channel }}"
+
+      - name: Verify selected build runs and bind source SHA
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,36 +148,49 @@ jobs:
           MACOS_RUN_ID: ${{ inputs.macos_run_id }}
         run: |
           set -euo pipefail
-
           WIN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN_ID")"
           MAC_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$MACOS_RUN_ID")"
-
           WIN_NAME="$(printf '%s' "$WIN_JSON" | jq -r '.name')"
           MAC_NAME="$(printf '%s' "$MAC_JSON" | jq -r '.name')"
-
           WIN_RESULT="$(printf '%s' "$WIN_JSON" | jq -r '.conclusion')"
           MAC_RESULT="$(printf '%s' "$MAC_JSON" | jq -r '.conclusion')"
-
           WIN_SHA="$(printf '%s' "$WIN_JSON" | jq -r '.head_sha')"
           MAC_SHA="$(printf '%s' "$MAC_JSON" | jq -r '.head_sha')"
-
           test "$WIN_NAME" = "Build - Windows"
           test "$MAC_NAME" = "Build - macOS"
-
           test "$WIN_RESULT" = "success"
           test "$MAC_RESULT" = "success"
-
-          if [ "$WIN_SHA" != "$MAC_SHA" ]; then
-            echo "::error::Windows and macOS builds came from different commits."
-            echo "Windows: $WIN_SHA"
-            echo "macOS:   $MAC_SHA"
-            exit 1
-          fi
-
+          node scripts/release-governance.mjs assert-build-shas \
+            --windows-sha "$WIN_SHA" \
+            --macos-sha "$MAC_SHA"
+          test -n "$WIN_SHA"
+          echo "RELEASE_SOURCE_SHA=$WIN_SHA" >> "$GITHUB_ENV"
           echo "Verified shared source commit: $WIN_SHA"
 
+      - name: Pin release tools to verified build SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$RELEASE_SOURCE_SHA"
+          git checkout --detach "$RELEASE_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          echo "Release tools pinned to artifact source SHA: $RELEASE_SOURCE_SHA"
+
+      - name: Load canonical release manifest
+        run: node scripts/release-manifest.mjs github-env
+
+      - name: Generate source dependency SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          mkdir -p release-evidence
+          npm sbom --sbom-format spdx > release-evidence/sbom.spdx.json
+          test -s release-evidence/sbom.spdx.json
+          jq -e '.spdxVersion and .packages' release-evidence/sbom.spdx.json >/dev/null
+
       - name: Download Windows build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: BeatGaler-Windows-x64
           path: release-input/windows
@@ -88,7 +199,7 @@ jobs:
           run-id: ${{ inputs.windows_run_id }}
 
       - name: Download macOS build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: BeatGaler-macOS-Universal
           path: release-input/macos
@@ -96,52 +207,80 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.macos_run_id }}
 
-      - name: Verify versions and prepare Desktop release
+      - name: Verify versions, provenance and prepare Desktop release
         shell: bash
+        env:
+          WINDOWS_RUN_ID: ${{ inputs.windows_run_id }}
+          MACOS_RUN_ID: ${{ inputs.macos_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          USER_RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           set -euo pipefail
-
           WIN_VERSION="$(tr -d '\r\n' < release-input/windows/VERSION)"
           MAC_VERSION="$(tr -d '\r\n' < release-input/macos/VERSION)"
-
           if [ "$WIN_VERSION" != "$MAC_VERSION" ]; then
             echo "::error::Windows version ($WIN_VERSION) differs from macOS version ($MAC_VERSION)."
             exit 1
           fi
-
-          if [ "v$WIN_VERSION" != "${{ inputs.release_tag }}" ]; then
-            echo "::error::Build version ($WIN_VERSION) does not match release tag (${{ inputs.release_tag }})."
+          if [ "v$WIN_VERSION" != "$RELEASE_TAG" ]; then
+            echo "::error::Build version ($WIN_VERSION) does not match release tag ($RELEASE_TAG)."
+            exit 1
+          fi
+          SOURCE_VERSION="$(tr -d '\r\n' < VERSION)"
+          if [ "$SOURCE_VERSION" != "$WIN_VERSION" ]; then
+            echo "::error::Pinned source VERSION ($SOURCE_VERSION) differs from artifacts ($WIN_VERSION)."
             exit 1
           fi
 
           WIN_EXE="$(find release-input/windows -type f -name '*.exe' | head -n 1)"
           WIN_SIG="${WIN_EXE}.sig"
-
+          WIN_PROVENANCE="$(find release-input/windows -type f -name 'runtime-provenance-windows.json' | head -n 1)"
+          WIN_SUMS="$(find release-input/windows -type f -name 'SHA256SUMS-Windows.txt' | head -n 1)"
           MAC_DMG="$(find release-input/macos -type f -name '*.dmg' | head -n 1)"
           MAC_UPDATER="$(find release-input/macos -type f -name '*.app.tar.gz' | head -n 1)"
           MAC_SIG="${MAC_UPDATER}.sig"
+          MAC_PROVENANCE="$(find release-input/macos -type f -name 'runtime-provenance-macos.json' | head -n 1)"
+          MAC_SUMS="$(find release-input/macos -type f -name 'SHA256SUMS-macOS.txt' | head -n 1)"
 
-          test -f "$WIN_EXE"
-          test -s "$WIN_SIG"
-          test -f "$MAC_DMG"
-          test -f "$MAC_UPDATER"
-          test -s "$MAC_SIG"
+          for file in "$WIN_EXE" "$WIN_SIG" "$WIN_PROVENANCE" "$WIN_SUMS" "$MAC_DMG" "$MAC_UPDATER" "$MAC_SIG" "$MAC_PROVENANCE" "$MAC_SUMS"; do
+            test -n "$file" && test -s "$file"
+          done
+
+          WIN_PROVENANCE_SHA="$(jq -r '.gitSha // empty' "$WIN_PROVENANCE")"
+          MAC_PROVENANCE_SHA="$(jq -r '.gitSha // empty' "$MAC_PROVENANCE")"
+          test "$WIN_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"
+          test "$MAC_PROVENANCE_SHA" = "$RELEASE_SOURCE_SHA"
+
+          verify_digest() {
+            local sums="$1"
+            local file="$2"
+            local expected actual
+            expected="$(awk -v name="$(basename "$file")" '$2 == name {print $1; exit}' "$sums")"
+            actual="$(sha256sum "$file" | awk '{print $1}')"
+            test -n "$expected"
+            test "$expected" = "$actual"
+          }
+          verify_digest "$WIN_SUMS" "$WIN_EXE"
+          verify_digest "$WIN_SUMS" "$WIN_SIG"
+          verify_digest "$MAC_SUMS" "$MAC_DMG"
+          verify_digest "$MAC_SUMS" "$MAC_UPDATER"
+          verify_digest "$MAC_SUMS" "$MAC_SIG"
 
           mkdir -p release-assets
-
           WIN_NAME="Beat.Galer_${WIN_VERSION}_x64-setup.exe"
           MAC_DMG_NAME="Beat.Galer_${WIN_VERSION}_universal.dmg"
           MAC_UPDATER_NAME="Beat.Galer_${WIN_VERSION}_universal.app.tar.gz"
-
           cp "$WIN_EXE" "release-assets/$WIN_NAME"
           cp "$WIN_SIG" "release-assets/$WIN_NAME.sig"
-
           cp "$MAC_DMG" "release-assets/$MAC_DMG_NAME"
           cp "$MAC_UPDATER" "release-assets/$MAC_UPDATER_NAME"
           cp "$MAC_SIG" "release-assets/$MAC_UPDATER_NAME.sig"
+          cp "$WIN_PROVENANCE" release-assets/runtime-provenance-windows.json
+          cp "$MAC_PROVENANCE" release-assets/runtime-provenance-macos.json
+          cp release-evidence/sbom.spdx.json release-assets/sbom.spdx.json
 
-          WIN_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$WIN_NAME"
-          MAC_URL="https://github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/${{ inputs.release_tag }}/$MAC_UPDATER_NAME"
+          WIN_URL="https://github.com/${BEATGALER_PUBLIC_RELEASE_REPO}/releases/download/${RELEASE_TAG}/$WIN_NAME"
+          MAC_URL="https://github.com/${BEATGALER_PUBLIC_RELEASE_REPO}/releases/download/${RELEASE_TAG}/$MAC_UPDATER_NAME"
 
           node scripts/updater-manifest.mjs generate \
             --version "$WIN_VERSION" \
@@ -151,7 +290,6 @@ jobs:
             --url "$WIN_URL" \
             --output release-assets/latest-windows.json \
             --notes "Beat Galer $WIN_VERSION"
-
           node scripts/updater-manifest.mjs generate \
             --version "$WIN_VERSION" \
             --platform darwin-aarch64 \
@@ -161,7 +299,6 @@ jobs:
             --output release-assets/latest-arm.json \
             --notes "Beat Galer $WIN_VERSION" \
             --merge-existing release-assets/latest-windows.json
-
           node scripts/updater-manifest.mjs generate \
             --version "$WIN_VERSION" \
             --platform darwin-x86_64 \
@@ -171,34 +308,146 @@ jobs:
             --output release-assets/latest.json \
             --notes "Beat Galer $WIN_VERSION" \
             --merge-existing release-assets/latest-arm.json
-
           node scripts/updater-manifest.mjs validate-release release-assets/latest.json
+          rm release-assets/latest-windows.json release-assets/latest-arm.json
 
-          rm release-assets/latest-windows.json
-          rm release-assets/latest-arm.json
+          jq -n \
+            --arg source_repository "$GITHUB_REPOSITORY" \
+            --arg source_sha "$RELEASE_SOURCE_SHA" \
+            --arg release_repository "$BEATGALER_PUBLIC_RELEASE_REPO" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg version "$WIN_VERSION" \
+            --arg release_channel "$RELEASE_POLICY_CHANNEL" \
+            --arg windows_run_id "$WINDOWS_RUN_ID" \
+            --arg macos_run_id "$MACOS_RUN_ID" \
+            --arg publication_repository "$GITHUB_REPOSITORY" \
+            --arg publication_workflow "$GITHUB_WORKFLOW" \
+            --arg publication_run_id "$GITHUB_RUN_ID" \
+            --arg publication_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg publication_ref "$GITHUB_REF" \
+            --arg publication_sha "$GITHUB_SHA" \
+            --argjson prerelease "$RELEASE_IS_PRERELEASE" \
+            '{
+              schema_version: 1,
+              source_repository: $source_repository,
+              source_sha: $source_sha,
+              release_repository: $release_repository,
+              release_tag: $release_tag,
+              version: $version,
+              release_channel: $release_channel,
+              prerelease: $prerelease,
+              windows_run_id: $windows_run_id,
+              macos_run_id: $macos_run_id,
+              publication_repository: $publication_repository,
+              publication_workflow: $publication_workflow,
+              publication_run_id: $publication_run_id,
+              publication_run_attempt: $publication_run_attempt,
+              publication_ref: $publication_ref,
+              publication_sha: $publication_sha
+            }' > release-assets/provenance.json
 
-      - name: Create or update public Desktop Release
+          jq -e \
+            --arg sha "$RELEASE_SOURCE_SHA" \
+            --arg windows_run_id "$WINDOWS_RUN_ID" \
+            --arg macos_run_id "$MACOS_RUN_ID" \
+            '.source_sha == $sha
+              and .windows_run_id == $windows_run_id
+              and .macos_run_id == $macos_run_id' \
+            release-assets/provenance.json >/dev/null
+
+          NOTES="$USER_RELEASE_NOTES"
+          if [ -z "$NOTES" ]; then NOTES="Beat Galer $RELEASE_TAG"; fi
+          {
+            printf '%s\n\n' "$NOTES"
+            printf '### Provenance\n'
+            printf -- '- Source: `%s@%s`\n' "$GITHUB_REPOSITORY" "$RELEASE_SOURCE_SHA"
+            printf -- '- Windows build run: `%s`\n' "$WINDOWS_RUN_ID"
+            printf -- '- macOS build run: `%s`\n' "$MACOS_RUN_ID"
+            printf -- '- Publication run: `%s/actions/runs/%s`\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf -- '- Machine-readable metadata: `provenance.json`\n'
+          } > release-notes.md
+
+          (cd release-assets && sha256sum \
+            "$WIN_NAME" "$WIN_NAME.sig" \
+            "$MAC_DMG_NAME" "$MAC_UPDATER_NAME" "$MAC_UPDATER_NAME.sig" \
+            latest.json runtime-provenance-windows.json runtime-provenance-macos.json \
+            provenance.json sbom.spdx.json \
+            | sort > SHA256SUMS)
+
+      - name: Enforce channel minimum version and kill switch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-controls.mjs assert-publish \
+            --channel "$RELEASE_POLICY_CHANNEL" \
+            --version "$(tr -d '\r\n' < VERSION)"
+
+      - name: Create immutable release draft
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          TAG="$RELEASE_TAG"
 
-          TAG="${{ inputs.release_tag }}"
-          NOTES="${{ inputs.release_notes }}"
-
-          if [ -z "$NOTES" ]; then
-            NOTES="Beat Galer $TAG"
+          if gh release view "$TAG" --repo "$BEATGALER_PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Refusing to mutate or overwrite an existing release."
+            exit 1
+          fi
+          if gh api "repos/$BEATGALER_PUBLIC_RELEASE_REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists in $BEATGALER_PUBLIC_RELEASE_REPO. Refusing an ambiguous or incompatible release."
+            exit 1
           fi
 
-          if ! gh release view "$TAG" --repo "$PUBLIC_RELEASE_REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --repo "$PUBLIC_RELEASE_REPO" \
-              --target main \
-              --title "Beat Galer $TAG" \
-              --notes "$NOTES"
+          PUBLIC_DEFAULT_BRANCH="$(gh api "repos/$BEATGALER_PUBLIC_RELEASE_REPO" --jq '.default_branch')"
+          PUBLIC_TARGET_SHA="$(gh api "repos/$BEATGALER_PUBLIC_RELEASE_REPO/commits/$PUBLIC_DEFAULT_BRANCH" --jq '.sha')"
+          test -n "$PUBLIC_TARGET_SHA"
+          if [ "$PUBLIC_TARGET_SHA" = "$RELEASE_SOURCE_SHA" ]; then
+            echo "::error::Public release target unexpectedly equals the BeatGaler source SHA; cross-repository provenance must remain metadata."
+            exit 1
           fi
 
+          CREATE_PAYLOAD="$(jq -n \
+            --arg tag "$TAG" \
+            --arg target "$PUBLIC_TARGET_SHA" \
+            --arg name "Beat Galer $TAG" \
+            --rawfile body release-notes.md \
+            --argjson prerelease "$RELEASE_IS_PRERELEASE" \
+            '{
+              "tag_name": $tag,
+              "target_commitish": $target,
+              "name": $name,
+              "body": $body,
+              "draft": true,
+              "prerelease": $prerelease,
+              "make_latest": "false"
+            }')"
+
+          RELEASE_JSON="$(printf '%s' "$CREATE_PAYLOAD" | gh api \
+            --method POST \
+            "repos/$BEATGALER_PUBLIC_RELEASE_REPO/releases" \
+            --input -)"
+          RELEASE_ID="$(printf '%s' "$RELEASE_JSON" | jq -r '.id')"
+          test -n "$RELEASE_ID"
+          test "$RELEASE_ID" != "null"
+
+          printf '%s' "$RELEASE_JSON" | jq -e \
+            --arg tag "$TAG" \
+            --argjson prerelease "$RELEASE_IS_PRERELEASE" \
+            '.draft == true and .tag_name == $tag and .prerelease == $prerelease' >/dev/null
+
+          echo "PUBLIC_RELEASE_TARGET_SHA=$PUBLIC_TARGET_SHA" >> "$GITHUB_ENV"
+          echo "PUBLIC_RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+
+      - name: Upload all assets to draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
           gh release upload "$TAG" \
             release-assets/*.exe \
             release-assets/*.exe.sig \
@@ -206,5 +455,87 @@ jobs:
             release-assets/*.app.tar.gz \
             release-assets/*.app.tar.gz.sig \
             release-assets/latest.json \
-            --repo "$PUBLIC_RELEASE_REPO" \
-            --clobber
+            release-assets/runtime-provenance-windows.json \
+            release-assets/runtime-provenance-macos.json \
+            release-assets/provenance.json \
+            release-assets/sbom.spdx.json \
+            release-assets/SHA256SUMS \
+            --repo "$BEATGALER_PUBLIC_RELEASE_REPO"
+
+      - name: Verify draft release and assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          RELEASE_JSON="$(gh api "repos/$BEATGALER_PUBLIC_RELEASE_REPO/releases/$PUBLIC_RELEASE_ID")"
+          printf '%s' "$RELEASE_JSON" | jq -e \
+            --arg tag "$TAG" \
+            --argjson prerelease "$RELEASE_IS_PRERELEASE" \
+            '.draft == true and .tag_name == $tag and .prerelease == $prerelease' >/dev/null
+
+          mapfile -t EXPECTED_ASSETS < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+          ASSETS_JSON="$(gh api --paginate "repos/$BEATGALER_PUBLIC_RELEASE_REPO/releases/$PUBLIC_RELEASE_ID/assets?per_page=100")"
+          printf '%s' "$ASSETS_JSON" | jq -e \
+            'length > 0 and all(.[]; .state == "uploaded" and .size > 0)' >/dev/null
+          mapfile -t ACTUAL_ASSETS < <(printf '%s' "$ASSETS_JSON" | jq -r '.[].name' | sort)
+
+          diff \
+            <(printf '%s\n' "${EXPECTED_ASSETS[@]}") \
+            <(printf '%s\n' "${ACTUAL_ASSETS[@]}")
+
+          jq -e \
+            --arg sha "$RELEASE_SOURCE_SHA" \
+            --arg windows_run_id "${{ inputs.windows_run_id }}" \
+            --arg macos_run_id "${{ inputs.macos_run_id }}" \
+            '.source_sha == $sha
+              and .windows_run_id == $windows_run_id
+              and .macos_run_id == $macos_run_id' \
+            release-assets/provenance.json >/dev/null
+
+      - name: Publish verified immutable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          MAKE_LATEST="false"
+          if [ "$RELEASE_IS_PRERELEASE" = "false" ]; then
+            MAKE_LATEST="true"
+          fi
+
+          PUBLISH_PAYLOAD="$(jq -n \
+            --argjson prerelease "$RELEASE_IS_PRERELEASE" \
+            --arg make_latest "$MAKE_LATEST" \
+            '{
+              "draft": false,
+              "prerelease": $prerelease,
+              "make_latest": $make_latest
+            }')"
+
+          PUBLISHED_JSON="$(printf '%s' "$PUBLISH_PAYLOAD" | gh api \
+            --method PATCH \
+            "repos/$BEATGALER_PUBLIC_RELEASE_REPO/releases/$PUBLIC_RELEASE_ID" \
+            --input -)"
+          printf '%s' "$PUBLISHED_JSON" | jq -e \
+            --arg tag "$TAG" \
+            --argjson prerelease "$RELEASE_IS_PRERELEASE" \
+            '.draft == false and .tag_name == $tag and .prerelease == $prerelease' >/dev/null
+
+          # PUBLICATION BOUNDARY: after this point the release is immutable.
+          # Only read-only verification is allowed below.
+          if [ "$RELEASE_IS_PRERELEASE" = "true" ]; then
+            if LATEST_TAG="$(gh api "repos/$BEATGALER_PUBLIC_RELEASE_REPO/releases/latest" --jq '.tag_name' 2>/dev/null)"; then
+              if [ "$LATEST_TAG" = "$TAG" ]; then
+                echo "::error::Prerelease $TAG became GitHub latest; stable channel protection failed."
+                exit 1
+              fi
+            fi
+          else
+            LATEST_TAG="$(gh api "repos/$BEATGALER_PUBLIC_RELEASE_REPO/releases/latest" --jq '.tag_name')"
+            test "$LATEST_TAG" = "$TAG"
+          fi

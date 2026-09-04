@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "task": "21.2",
+  "baseline": {
+    "version": "0.7.4",
+    "branch": "galer-cloud-v0.7.4",
+    "sha": "131df88753c812c0fdf440a5558fff46b2a83f57",
+    "productName": "Beat Galer",
+    "bundleIdentifier": "vtm.beatgaler.playground"
+  },
+  "target": {
+    "versionSource": "VERSION",
+    "releaseManifest": "release/desktop-manifest.json",
+    "productName": "Galer",
+    "bundleIdentifier": "com.beatgaler.app"
+  },
+  "preserve": {
+    "appDataTree": true,
+    "requiredExamples": [
+      "beatvault.db",
+      "settings.json",
+      "offline/**"
+    ],
+    "playbackCache": {
+      "strategy": "stable-temp-path",
+      "pathContract": "${TEMP}/BeatGaler/cloud-cache/audio"
+    },
+    "rollbackSourceUntouched": true,
+    "destinationNeverOverwritten": true
+  },
+  "recovery": {
+    "cleanInstall": "fresh app-data + fresh SQLite is valid",
+    "incompleteLegacyTree": "copy available entries and let existing defaults/schema initialization fill missing state",
+    "corruptSQLite": "preserve DB/WAL/SHM under app-data/recovery before creating a fresh database"
+  },
+  "windowsInstaller": {
+    "legacyProductName": "Beat Galer",
+    "targetProductName": "Galer",
+    "hooks": "src-tauri/windows/upgrade-hooks.nsh",
+    "releaseConfig": "src-tauri/tauri.windows-release.conf.json",
+    "reuseLegacyInstallLocation": true,
+    "retireLegacyRegistrationAfterInstall": true,
+    "preserveShortcutChoices": true
+  },
+  "staging": {
+    "sameSourceShaRequired": true,
+    "guard": "scripts/release-manifest.mjs"
+  }
+}

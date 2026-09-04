@@ -9,6 +9,8 @@ const cargo = read("src-tauri/Cargo.toml");
 const lib = read("src-tauri/src/lib.rs");
 const updater = read("src-tauri/src/updater.rs");
 const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
+const releaseManifest = JSON.parse(read("release/desktop-manifest.json"));
+const releaseGuard = read("scripts/release-manifest.mjs");
 const ui = read("src/components/SettingsPanel.tsx");
 const bridge = read("src/lib/tauri.ts");
 const windowsBuild = read(".github/workflows/build-windows.yml");
@@ -26,12 +28,12 @@ if (!conf.plugins?.updater?.pubkey?.startsWith("dW50cnVzdGVk")) fail("real publi
 if (JSON.stringify(conf.plugins.updater).includes("PRIVATE")) fail("private signing material leaked into config");
 if (!bridge.includes("checkForAppUpdate") || !bridge.includes("installAppUpdate")) fail("frontend updater bridge missing");
 if (!ui.includes("Check for updates") || !ui.includes("Updates are verified before installation")) fail("user-facing updater controls missing");
-if (!windowsBuild.includes("BEATGALER_UPDATER_ENDPOINT") || !macBuild.includes("BEATGALER_UPDATER_ENDPOINT")) fail("Desktop builds are not bound to the updater endpoint");
-if (!releaseWorkflow.includes("PUBLIC_RELEASE_REPO: magosouljah/galer")) fail("Desktop release is not bound to the dedicated public release repository");
+if (releaseManifest.updater?.compiledEnv !== "BEATGALER_UPDATER_ENDPOINT") fail("canonical manifest no longer names the compiled updater endpoint input");
+if (releaseManifest.updater?.publicReleaseRepo !== "magosouljah/galer") fail("canonical manifest is no longer bound to the dedicated public release repository");
+if (!/^https:\/\/github\.com\/magosouljah\/galer\/releases\/latest\/download\/latest\.json$/.test(String(releaseManifest.updater?.endpoint || ""))) fail("canonical updater endpoint no longer follows the dedicated public release repository");
+if (!releaseGuard.includes("BEATGALER_UPDATER_ENDPOINT") || !releaseGuard.includes("BEATGALER_PUBLIC_RELEASE_REPO")) fail("release guard no longer exports the canonical updater/repository inputs");
+if (!windowsBuild.includes("release-manifest.mjs github-env") || !macBuild.includes("release-manifest.mjs github-env")) fail("Desktop builds no longer load the canonical updater endpoint source");
+if (!releaseWorkflow.includes("release-manifest.mjs github-env") || !releaseWorkflow.includes("BEATGALER_PUBLIC_RELEASE_REPO")) fail("Desktop release no longer consumes the canonical public release repository source");
 if (!baseline.includes("git remote get-url origin") || !baseline.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")) fail("real 0.6.1 baseline test builder is incomplete");
 
-console.log("PASS Phase 12C real updater client: signed HTTPS checks/install are wired, public key is embedded, endpoint follows the release repo, and a real 0.6.1 baseline build is available");
-
-
-
-
+console.log("PASS Phase 12C real updater client: signed HTTPS checks/install are wired, public key is embedded, endpoint follows the canonical release repo, and a real 0.6.1 baseline build is available");

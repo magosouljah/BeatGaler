@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Beat Galer",
-  "version": "0.7.4",
-  "identifier": "vtm.beatgaler.playground",
+  "productName": "Galer",
+  "version": "0.8.0-alpha.1",
+  "identifier": "com.beatgaler.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Beat Galer",
+        "title": "Galer",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -33,7 +33,7 @@
           "**"
         ]
       },
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost blob: data: https:; media-src 'self' asset: http://asset.localhost blob: data: https: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost https: wss: http://127.0.0.1:*; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -67,9 +67,6 @@
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEExODA5NzI4MTMwRDdFQjgKUldTNGZnMFRLSmVBb1p5RnVoMEUvdjZKZlZRRHc3b1IyMzJaYnRFeitkNGtPUTRNNTNGZjJnNCsK",
-      "endpoints": [
-        "https://github.com/magosouljah/galer/releases/latest/download/latest.json"
-      ],
       "windows": {
         "installMode": "passive"
       }

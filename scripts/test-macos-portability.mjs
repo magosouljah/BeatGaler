@@ -24,6 +24,7 @@ const commands = read("src-tauri/src/commands.rs");
 const app = read("src/App.tsx");
 const accountGate = read("src/components/AccountGate.tsx");
 const settingsPanel = read("src/components/SettingsPanel.tsx");
+const desktopAdapter = read("src/platform/desktopAdapter.ts");
 const drawer = read("src/components/Drawer.tsx");
 const addBeatModal = read("src/components/AddBeatModal.tsx");
 const importAudioConflicts = read("src/components/ImportAudioConflictsModal.tsx");
@@ -33,6 +34,8 @@ const libRs = read("src-tauri/src/lib.rs");
 const cargo = read("src-tauri/Cargo.toml");
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
 const tauriMac = JSON.parse(read("src-tauri/tauri.macos.conf.json"));
+const releaseManifest = JSON.parse(read("release/desktop-manifest.json"));
+const runtimeSources = JSON.parse(read("supply-chain/runtime-sources.json"));
 const macBuildWorkflow = read(".github/workflows/build-macos.yml");
 const windowsBuildWorkflow = read(".github/workflows/build-windows.yml");
 const desktopReleaseWorkflow = read(".github/workflows/release-desktop-updater.yml");
@@ -88,7 +91,7 @@ ok(commands.includes('"direct-bot-api-{}-{}"') && commands.includes("random_urls
 ok(cargo.includes('tauri-plugin-single-instance = "=2.4.3"'), "desktop uses the pinned Mac-safe single-instance plugin release");
 ok(libRs.indexOf("tauri_plugin_single_instance::init") < libRs.indexOf("tauri_plugin_wdio::init"), "single-instance plugin is registered first");
 
-ok(accountGate.includes("cloudApiBase: getResolvedCloudApiBase()"), "React passes the resolved Galer Cloud base to Rust auth context");
+ok(accountGate.includes("platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase())") && desktopAdapter.includes('invoke("set_cloud_auth_token", { token, cloudApiBase })'), "React passes the resolved Galer Cloud base through the Desktop auth adapter");
 ok(commands.includes("cloud_api_base: Option<String>") && commands.includes("cloud_api_base_slot"), "Rust Direct uses the frontend-selected Galer Cloud origin");
 
 const artworkSync = section(app, "const handleDropArtwork", "const runBeatCloudUpdate");
@@ -106,8 +109,8 @@ ok(tauriMac.bundle?.resources?.["direct-transport/runtime-watchdog.cjs"] === "di
 
 ok(!exists(".github/workflows/build-macos-fast.yml") && !exists(".github/workflows/build-macos-cloud-beta.yml") && !exists(".github/workflows/release-windows-updater.yml") && !exists(".github/workflows/test-macos-portability.yml"), "obsolete split/legacy Desktop workflows are removed");
 ok(macBuildWorkflow.includes("name: Build - macOS") && windowsBuildWorkflow.includes("name: Build - Windows") && desktopReleaseWorkflow.includes("name: Release - Desktop Updater") && portabilityWorkflow.includes("name: Test - Desktop Portability"), "Desktop CI uses the canonical four-workflow layout");
-const pinnedCommit = "adfd7f6a8e990272851777eeb3ae0def4216f161";
-ok(macBuildWorkflow.includes(pinnedCommit), "Bot API source is pinned to an exact commit in the canonical Mac build");
+const pinnedCommit = runtimeSources.telegramBotApi?.commit;
+ok(Boolean(pinnedCommit) && macBuildWorkflow.includes("supply-chain/runtime-sources.json") && macBuildWorkflow.includes("BOT_API_COMMIT"), "Bot API source is loaded from the canonical pinned runtime manifest in the Mac build");
 ok(macBuildWorkflow.includes('MACOSX_DEPLOYMENT_TARGET: "12.0"'), "Mac build has an explicit deployment target");
 ok(exists("scripts/check-macos-min-version.mjs") && exists("scripts/test-macos-min-version.mjs"), "Mach-O minimum-version checker has a portable parser regression test");
 ok(macBuildWorkflow.includes("check-macos-min-version.mjs"), "canonical Mac build rejects runtimes requiring a newer macOS than supported");
@@ -121,7 +124,7 @@ ok(macBuildWorkflow.includes("Ad-hoc sign embedded Universal Mach-O runtimes") &
 ok(!macBuildWorkflow.includes("Authority=Developer ID Application:"), "ad-hoc Mac build does not require Developer ID authority");
 ok(macBuildWorkflow.includes("--bundles app,dmg"), "Mac build includes the app target required to generate updater artifacts");
 ok(macBuildWorkflow.includes(".app.tar.gz") && macBuildWorkflow.includes(".app.tar.gz.sig") && macBuildWorkflow.includes("BeatGaler-macOS-Universal"), "Mac build exports a signed updater-ready artifact without publishing it");
-ok(macBuildWorkflow.includes("BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json"), "Mac build compiles the real HTTPS updater endpoint into the app");
+ok(macBuildWorkflow.includes("release-manifest.mjs github-env") && !macBuildWorkflow.includes(releaseManifest.updater.endpoint), "Mac build compiles the canonical HTTPS updater endpoint without duplicating its literal value");
 ok(!macBuildWorkflow.includes("gh release create") && !macBuildWorkflow.includes("gh release upload") && !macBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Mac build does not publish a public GitHub release");
 ok(windowsBuildWorkflow.includes("TAURI_SIGNING_PRIVATE_KEY") && windowsBuildWorkflow.includes("--bundles nsis") && windowsBuildWorkflow.includes("*.exe.sig") && windowsBuildWorkflow.includes("BeatGaler-Windows-x64"), "Windows build exports a signed updater-ready NSIS artifact");
 ok(!windowsBuildWorkflow.includes("gh release create") && !windowsBuildWorkflow.includes("gh release upload") && !windowsBuildWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Windows build does not publish a public GitHub release");
@@ -141,12 +144,34 @@ ok(exists("scripts/check-macos-runtime-dylibs.sh") && runtimeDylibCheck.includes
 ok(runtimeDylibCheck.includes('[[ "$line" == "$binary (architecture "* ]]'), "embedded runtime dylib audit ignores Universal Mach-O architecture headers");
 ok((macBuildWorkflow.match(/check-macos-runtime-dylibs\.sh/g) || []).length >= 2, "Universal Mac build audits FFmpeg, Node, and Bot API both before bundling and inside the DMG");
 
+const publicReleaseOwnerFiles = fs.readdirSync(path.join(root, ".github/workflows"))
+  .filter(name => /\.ya?ml$/i.test(name))
+  .filter(name => {
+    const workflow = read(`.github/workflows/${name}`);
+    return workflow.includes("PUBLIC_RELEASE_TOKEN")
+      || /gh\s+release\s+(?:create|upload|edit|delete)\b/.test(workflow)
+      || /--method\s+(?:POST|PATCH|PUT|DELETE)\b[\s\S]{0,240}repos\/\$BEATGALER_PUBLIC_RELEASE_REPO\/releases/.test(workflow);
+  });
+const releaseDraftCreateIndex = desktopReleaseWorkflow.indexOf("      - name: Create immutable release draft");
+const releaseAssetUploadIndex = desktopReleaseWorkflow.indexOf("      - name: Upload all assets to draft release");
+const releasePublishIndex = desktopReleaseWorkflow.indexOf("      - name: Publish verified immutable release");
+const publicationBoundaryIndex = desktopReleaseWorkflow.indexOf("# PUBLICATION BOUNDARY: after this point the release is immutable.");
+const postPublication = publicationBoundaryIndex >= 0 ? desktopReleaseWorkflow.slice(publicationBoundaryIndex) : "";
+
 ok(desktopReleaseWorkflow.includes('group: release-desktop-${{ inputs.release_tag }}'), "Desktop release serializes publication per release tag");
 ok(desktopReleaseWorkflow.includes("windows_run_id") && desktopReleaseWorkflow.includes("macos_run_id") && desktopReleaseWorkflow.includes("head_sha"), "Desktop release selects explicit Windows/macOS runs and verifies a shared source commit");
 ok(desktopReleaseWorkflow.includes("Download Windows build") && desktopReleaseWorkflow.includes("Download macOS build"), "Desktop release consumes prebuilt artifacts instead of rebuilding applications");
 ok(!desktopReleaseWorkflow.includes("npx tauri build") && !desktopReleaseWorkflow.includes("cargo build"), "Desktop release workflow does not compile Desktop binaries");
 ok(desktopReleaseWorkflow.includes("windows-x86_64") && desktopReleaseWorkflow.includes("darwin-aarch64") && desktopReleaseWorkflow.includes("darwin-x86_64") && desktopReleaseWorkflow.includes("--merge-existing"), "Desktop release emits one updater manifest for Windows, Apple Silicon, and Intel Mac");
-ok(desktopReleaseWorkflow.includes("gh release create") && desktopReleaseWorkflow.includes("gh release upload") && desktopReleaseWorkflow.includes("PUBLIC_RELEASE_TOKEN"), "Desktop release is the sole public GitHub publication owner");
+ok(publicReleaseOwnerFiles.length === 1 && publicReleaseOwnerFiles[0] === "release-desktop-updater.yml", "Desktop release is the sole public GitHub publication owner");
+ok(releaseDraftCreateIndex >= 0 && desktopReleaseWorkflow.includes("--method POST") && desktopReleaseWorkflow.includes('"draft": true') && desktopReleaseWorkflow.includes('"make_latest": "false"'), "Desktop release creates the public release as a non-latest Draft via API");
+ok(releaseAssetUploadIndex > releaseDraftCreateIndex && releasePublishIndex > releaseAssetUploadIndex && desktopReleaseWorkflow.includes('gh release upload "$TAG"'), "Desktop release uploads all assets before publication");
+ok(releasePublishIndex >= 0 && desktopReleaseWorkflow.includes("--method PATCH") && desktopReleaseWorkflow.includes('"draft": false'), "Desktop release publishes exactly once with PATCH draft:false");
+ok(!desktopReleaseWorkflow.includes("--clobber"), "Desktop release never overwrites immutable release assets");
+ok(publicationBoundaryIndex > releasePublishIndex && (desktopReleaseWorkflow.slice(0, publicationBoundaryIndex).match(/--method PATCH/g) || []).length === 1, "Desktop release has exactly one publication mutation before the immutable boundary");
+ok(!/--method\s+(?:POST|PATCH|PUT|DELETE)\b/.test(postPublication) && !/gh\s+release\s+(?:create|upload|edit|delete)\b/.test(postPublication), "Desktop release permits only read-only verification after publication");
+ok(desktopReleaseWorkflow.includes('MAKE_LATEST="false"') && desktopReleaseWorkflow.includes('if [ "$RELEASE_IS_PRERELEASE" = "false" ]; then') && desktopReleaseWorkflow.includes('MAKE_LATEST="true"'), "Prereleases cannot request latest and only stable releases can become latest");
+ok(postPublication.includes('if [ "$RELEASE_IS_PRERELEASE" = "true" ]; then') && postPublication.includes('if [ "$LATEST_TAG" = "$TAG" ]; then') && postPublication.includes('test "$LATEST_TAG" = "$TAG"'), "Post-publication verification rejects prerelease latest and requires stable latest");
 ok(libRs.includes("WindowEvent::CloseRequested") && libRs.includes("api.prevent_close()") && libRs.includes("window.hide()"), "macOS red close hides instead of destroying the main window");
 ok(libRs.includes("RunEvent::Reopen") && libRs.includes('get_webview_window("main")'), "macOS Dock reopen restores the hidden main window");
 ok(cargo.includes('unicode-normalization = "=0.1.25"') && commands.includes(".nfc()"), "beat identity normalizes Unicode to NFC across Windows/macOS");
@@ -163,7 +188,7 @@ ok(drawer.includes("onCloudMutationCommit") && app.includes("commitDrawerCloudMu
 ok(commands.includes("VERIFY_OK") && commands.includes("missing projects"), "INDEX writes verify pinned project membership before reporting success");
 
 const publicServerErrorTexts = cloudServer.split(/\r?\n/).filter(line => line.includes("error:")).map(line => line.slice(line.indexOf("error:") + 6));
-ok(!publicServerErrorTexts.some(text => /telegram|bot api|transport bot|001beatgaler|tdlib/i.test(text)), "public Cloud HTTP errors do not expose the hidden storage implementation");
+ok(!publicServerErrorTexts.some(text => /telegram|bot api|transport bot|001beatgaler|tdlib/i.test(text)), "public Cloud HTTP errors do not expose the hidden storage implementation names");
 ok(!cloudServer.split(/\r?\n/).some(line => line.includes("res.status(500).json") && line.includes("err.message")), "public Cloud HTTP 500 responses do not forward raw internal exception text");
 ok(dialog.includes("sanitizeUserVisibleText(normalized.message") && userVisibleError.includes("[redacted credential]"), "application alerts sanitize hidden transport names and credential-looking text before rendering");
 ok((app.match(/sanitizeUserVisibleText\(runtimeErrorMessage/g) || []).length >= 8, "runtime-state/cloud inline errors are sanitized before being stored for rendering");

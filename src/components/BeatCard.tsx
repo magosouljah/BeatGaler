@@ -10,10 +10,14 @@ import { CSS } from "@dnd-kit/utilities";
 import { useTagColors } from "../lib/tagColors";
 import { getProjectCloudStatus, type ProjectCloudStatus } from "../lib/tauri";
 import { beatCardIncompleteReasons, beatCardPlaybackBlocked, shouldShowIncompleteWarning, sortBeatCardTags } from "../features/components/componentLogic";
+import { playTrace } from "../features/playback/playTrace";
 
 import BeatGalerIcon from "./BeatGalerIcon";
 interface Props {
   beat: Beat;
+  visible?: boolean;
+  interactive?: boolean;
+  playbackInteractive?: boolean;
   cloudUploadErrorDetail?: string;
   tagFrequency: ReadonlyMap<string, number>;
   showIncompleteWarnings: boolean;
@@ -43,11 +47,14 @@ interface Props {
   dragEnabled: boolean;
   networkOnline: boolean;
   offlineBusy: boolean;
+  canUseOfflinePackage: boolean;
+  canUseLocalHelper: boolean;
+  canInspectNativeProject: boolean;
   onToggleOffline: (beat: Beat) => void;
   onRetryUpload: (beat: Beat) => void;
 }
 
-function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, telegramSynced, projectCloudState, canOpenProject, onOpenProject, onUpdateProject, onCloudFiles, offlineAvailable, networkOnline, offlineBusy, uploadFailed, onRetryUpload, onToggleOffline, onClose }: {
+function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, telegramSynced, projectCloudState, canOpenProject, onOpenProject, onUpdateProject, onCloudFiles, offlineAvailable, networkOnline, offlineBusy, canUseOfflinePackage, canUseLocalHelper, uploadFailed, onRetryUpload, onToggleOffline, onClose }: {
   x: number; y: number;
   onEdit: () => void; onDetail: () => void;
   onAddToQueue: () => void;
@@ -65,6 +72,8 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
   offlineAvailable: boolean;
   networkOnline: boolean;
   offlineBusy: boolean;
+  canUseOfflinePackage: boolean;
+  canUseLocalHelper: boolean;
   uploadFailed: boolean;
   onRetryUpload: () => void;
   onToggleOffline: () => void;
@@ -96,12 +105,12 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
   return ReactDOM.createPortal(
     <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: y, left: x, zIndex: 9999, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 8, padding: "4px 0", minWidth: 180, boxShadow: "0 8px 32px rgba(0,0,0,0.85)", fontFamily: "'DM Sans',sans-serif" }}>
       {([
-        ...(uploadFailed && networkOnline ? [["Retry upload", onRetryUpload] as [string, () => void]] : []),
-        ["Upload to YouTube", onUpload],
+        ...(canUseLocalHelper && uploadFailed && networkOnline ? [["Retry upload", onRetryUpload] as [string, () => void]] : []),
+        ...(canUseLocalHelper ? [["Upload to YouTube", onUpload] as [string, () => void]] : []),
         ...(canOpenProject ? [["Open project", onOpenProject] as [string, () => void]] : []),
         ...(canOpenProject && projectCloudState && projectCloudState !== "LOCAL" ? [["Update project", onUpdateProject] as [string, () => void]] : []),
         ["Download", onCloudFiles],
-        ...((offlineAvailable || networkOnline) && !offlineBusy
+        ...(canUseOfflinePackage && (offlineAvailable || networkOnline) && !offlineBusy
           ? [[offlineAvailable ? "Remove offline download" : "Make available offline", onToggleOffline] as [string, () => void]]
           : []),
         ["Edit metadata", onEdit],
@@ -121,12 +130,13 @@ function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, onReveal,
   );
 }
 
-function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }: {
+function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, canUseLocalHelper, onClose }: {
   x: number;
   y: number;
   onEditAll: () => void;
   onUploadBulk: () => void;
   onRemoveAll: () => void;
+  canUseLocalHelper: boolean;
   onClose: () => void;
 }) {
   React.useEffect(() => {
@@ -146,7 +156,7 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 
   const items: [string, () => void, boolean?][] = [
     ["Edit all", onEditAll],
-    ["Upload to YouTube (bulk)", onUploadBulk],
+    ...(canUseLocalHelper ? [["Upload to YouTube (bulk)", onUploadBulk] as [string, () => void]] : []),
     ["Remove all", onRemoveAll, true],
   ];
 
@@ -166,10 +176,10 @@ function BulkContextMenu({ x, y, onEditAll, onUploadBulk, onRemoveAll, onClose }
 }
 
 export default function BeatCard({
-  beat, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
+  beat, visible = true, interactive = true, playbackInteractive = interactive, cloudUploadErrorDetail, tagFrequency, showIncompleteWarnings, openableProject = false, playing, selected, selectedCount, selectMode,
   onPlay, onWarm, onDetail, onEdit, onDelete, onAddToQueue, onUpload, onUploadTelegram, onDownloadTelegram, onUploadProjectTelegram, onOpenProject, onUpdateProject, onCloudFiles,
   onBulkEdit, onBulkUpload, onBulkDelete, onToggleSelect,
-  animDelay = 0, dragEnabled, networkOnline, offlineBusy, onToggleOffline, onRetryUpload
+  animDelay = 0, dragEnabled, networkOnline, offlineBusy, canUseOfflinePackage, canUseLocalHelper, canInspectNativeProject, onToggleOffline, onRetryUpload
 }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [hovered, setHovered] = useState(false);
@@ -242,7 +252,7 @@ export default function BeatCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: beat.id, disabled: !dragEnabled });
+  } = useSortable({ id: beat.id, disabled: !dragEnabled || !visible || !interactive });
 
   const cookingNodeRef = useRef<HTMLDivElement | null>(null);
   const cookingRequestedRef = useRef<string | null>(null);
@@ -253,7 +263,7 @@ export default function BeatCard({
 
   useEffect(() => {
     const node = cookingNodeRef.current;
-    if (!node || hasEnteredViewport) return;
+    if (!visible || !playbackInteractive || !node || hasEnteredViewport) return;
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some(entry => entry.isIntersecting && entry.intersectionRatio > 0)) return;
       setHasEnteredViewport(true);
@@ -261,20 +271,24 @@ export default function BeatCard({
     }, { threshold: 0.01 });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasEnteredViewport]);
+  }, [visible, playbackInteractive, hasEnteredViewport]);
 
   useEffect(() => {
-    if (!hasEnteredViewport || !beat.telegram_file_id) return;
+    if (!visible || !playbackInteractive || !hasEnteredViewport || !beat.telegram_file_id) return;
     const fileId = beat.telegram_file_id;
     if (cookingRequestedRef.current === fileId) return;
     cookingRequestedRef.current = fileId;
     onWarm(beat);
-  }, [hasEnteredViewport, beat.id, beat.telegram_file_id, onWarm]);
+  }, [visible, playbackInteractive, hasEnteredViewport, beat.id, beat.telegram_file_id, onWarm]);
 
   // PROJECT validation is useful only when the card can actually be seen/used.
   // Avoid one Tauri invoke (and possible ZIP validation) for every offscreen card.
   useEffect(() => {
-    if (!hasEnteredViewport) return;
+    if (!visible || !interactive || !hasEnteredViewport) return;
+    if (!canInspectNativeProject) {
+      setProjectCloud(null);
+      return;
+    }
     let cancelled = false;
     const refresh = () => {
       if (!(beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY" || beat.flp_path)) {
@@ -295,7 +309,7 @@ export default function BeatCard({
       cancelled = true;
       window.removeEventListener("beatgaler:project-cloud-updated", onCloudUpdate);
     };
-  }, [hasEnteredViewport, beat.id, beat.flp_path, beat.folder_path, beat.cloud_status]);
+  }, [visible, interactive, hasEnteredViewport, beat.id, beat.flp_path, beat.folder_path, beat.cloud_status, canInspectNativeProject]);
 
   const incompleteReasons = useMemo(() => beatCardIncompleteReasons(projectCloud), [projectCloud]);
   const cloudUploading = beat.cloud_status === "UPLOADING";
@@ -342,6 +356,7 @@ export default function BeatCard({
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    if (!interactive) return;
     if (selectMode) {
       // Only open the bulk menu when right-clicking one of multiple selected cards.
       if (!selected || selectedCount <= 1) return;
@@ -355,10 +370,11 @@ export default function BeatCard({
   return (
     <div
       ref={setCardNodeRef}
-      data-beat-card-id={beat.id}
+      data-beat-slot-id={beat.id}
+      data-beat-card-id={visible ? beat.id : undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onClick={e => { if (selectMode) onToggleSelect(beat, e); }}
+      onClick={e => { if (interactive && selectMode) onToggleSelect(beat, e); }}
       onContextMenu={handleContextMenu}
       style={{
         width: 160, position: "relative",
@@ -366,9 +382,9 @@ export default function BeatCard({
         // Raise the whole card while a tooltip is open so neighboring artwork
         // can never paint over the diagnostic/warning panel.
         zIndex: uploadErrorOpen || warningInfoOpen ? 1000 : undefined,
-        cursor: selectMode ? "pointer" : "default",
-        animation: "fadeUp 0.36s cubic-bezier(0.22, 1, 0.36, 1)",
-        animationDelay: `${animDelay}s`,
+        cursor: visible && interactive && selectMode ? "pointer" : "default",
+        visibility: visible ? "visible" : "hidden",
+        pointerEvents: visible ? "auto" : "none",
         borderRadius: 12,
         transform: composedTransform,
         opacity: isDragging ? 0.72 : 1,
@@ -405,11 +421,11 @@ export default function BeatCard({
       <div
         data-beat-artwork-id={beat.id}
         ref={setActivatorNodeRef}
-        {...(dragEnabled ? attributes : {})}
-        {...(dragEnabled ? listeners : {})}
-        aria-disabled={playbackBlocked}
+        {...(dragEnabled && interactive ? attributes : {})}
+        {...(dragEnabled && interactive ? listeners : {})}
+        aria-disabled={playbackBlocked || !playbackInteractive}
         style={{
-          position: "relative", cursor: playbackBlocked ? "default" : (dragEnabled ? "grab" : "pointer"),
+          position: "relative", cursor: playbackBlocked || !playbackInteractive ? "default" : (dragEnabled && interactive ? "grab" : "pointer"),
           touchAction: "none",
           opacity: selectMode && selected ? 0.7 : 1,
           transition: "opacity 0.15s, box-shadow 0.15s",
@@ -421,9 +437,23 @@ export default function BeatCard({
         }}
         onClick={e => {
           if (isDragging) { e.preventDefault(); return; }
-          if (selectMode) { e.stopPropagation(); onToggleSelect(beat, e); return; }
+          if (selectMode) {
+            if (!interactive) return;
+            e.stopPropagation(); onToggleSelect(beat, e); return;
+          }
           e.stopPropagation();
-          if (playbackBlocked) return;
+          playTrace("CARD_PLAY_CLICK", {
+            beat_id: beat.id,
+            playback_interactive: playbackInteractive,
+            playback_blocked: playbackBlocked,
+            interactive,
+            cloud_status: beat.cloud_status || null,
+          });
+          if (!playbackInteractive || playbackBlocked) {
+            playTrace("CARD_PLAY_REJECTED", { beat_id: beat.id });
+            return;
+          }
+          playTrace("CARD_PLAY_ACCEPTED", { beat_id: beat.id });
           onPlay(beat);
         }}
       >
@@ -707,6 +737,7 @@ export default function BeatCard({
           onEditAll={onBulkEdit}
           onUploadBulk={onBulkUpload}
           onRemoveAll={onBulkDelete}
+          canUseLocalHelper={canUseLocalHelper}
           onClose={() => setMenu(null)}
         />
       ) : menu ? (
@@ -719,13 +750,15 @@ export default function BeatCard({
           onUploadProjectTelegram={() => onUploadProjectTelegram(beat)}
           telegramSynced={beat.cloud_status === "SYNCED" || beat.cloud_status === "CLOUD_ONLY"}
           projectCloudState={projectCloud?.state ?? null}
-          canOpenProject={openableProject}
+          canOpenProject={canInspectNativeProject && openableProject}
           onOpenProject={() => onOpenProject(beat)}
           onUpdateProject={() => onUpdateProject(beat)}
           onCloudFiles={() => onCloudFiles(beat)}
           offlineAvailable={Boolean(beat.offline_available)}
           networkOnline={networkOnline}
           offlineBusy={offlineBusy}
+          canUseOfflinePackage={canUseOfflinePackage}
+          canUseLocalHelper={canUseLocalHelper}
           uploadFailed={cloudUploadError}
           onRetryUpload={() => onRetryUpload(beat)}
           onToggleOffline={() => onToggleOffline(beat)}

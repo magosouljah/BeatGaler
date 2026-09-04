@@ -24,10 +24,6 @@ function branchFor(version) {
   if (/^beta(?:\.|$)/i.test(version.prerelease)) {
     return `galer-cloud-beta-v${version.stable}`;
   }
-  if (version.prerelease) {
-    const channel = version.prerelease.split(".")[0].replace(/[^0-9A-Za-z-]+/g, "-").toLowerCase();
-    return `galer-cloud-${channel}-v${version.stable}`;
-  }
   return `galer-cloud-v${version.stable}`;
 }
 
@@ -118,5 +114,3 @@ if (hasStagedChanges) {
 runGit(["push", "-u", "origin", `HEAD:refs/heads/${branch}`]);
 
 console.log(`\nDONE: ${branch}`);
-console.log(`Version: ${version.raw}`);
-console.log("GitHub is up to date.\n");

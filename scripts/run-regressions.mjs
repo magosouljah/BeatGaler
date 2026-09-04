@@ -192,14 +192,17 @@ try {
   // runs from a durable background queue.
   const settingsPanel = readFileSync(path.join(root, "src", "components", "SettingsPanel.tsx"), "utf8");
   const rustCommands = readFileSync(path.join(root, "src-tauri", "src", "commands.rs"), "utf8");
-  const cloudServer = readFileSync(path.join(root, "cloud-server", "server.js"), "utf8");
+  const cloudServer = [
+    readFileSync(path.join(root, "cloud-server", "server.js"), "utf8"),
+    readFileSync(path.join(root, "cloud-server", "server-core.js"), "utf8"),
+  ].join("\n");
 
   const forbiddenEmptyRecovery = /if \(!settings\?\.telegram_cloud_connected\) return;\s*if \(beats\.length !== 0\) return;\s*void recoverTelegramLibraryOnceIfEmpty\(\);/;
   if (forbiddenEmptyRecovery.test(app)) fail("App.tsx reintroduced automatic Telegram recovery whenever beats becomes empty; Remove All can resurrect stale cards.");
   if (!app.includes('an empty library is a valid, authoritative state')) fail("App.tsx lost the empty-library mutation invariant comment; review Remove All recovery behavior.");
   if (!settingsPanel.includes("setTrashItems([]);")) fail("Settings Trash must disappear immediately after permanent-delete confirmation.");
   if (!settingsPanel.includes("Deleting ${requested} beat")) fail("Settings Trash lost its non-blocking background-delete status.");
-  if (!settingsPanel.includes("const remaining = await listTrash();")) fail("Settings Trash must recover real rows if background deletion could not be queued.");
+  if (!settingsPanel.includes("const remaining = await platform.trash.listBeats();")) fail("Settings Trash must recover real rows through the platform boundary if background deletion could not be queued.");
   if (!rustCommands.includes('metadata_display_name')) fail("Cloud Trash insertion must prefer BeatMeta.name over synthetic import-* paths.");
   if (!rustCommands.includes('beat_meta_json FROM trash ORDER BY trashed_at DESC')) fail("Trash listing must recover names from beat metadata for already-broken rows.");
   if (!rustCommands.includes('/beats/delete-topics-batch')) fail("Rust Trash purge must use the batch permanent-delete endpoint.");
@@ -228,7 +231,7 @@ try {
 
   const playbackReadiness = readFileSync(path.join(root, "src", "features", "playback", "playbackReadiness.ts"), "utf8");
   if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
-  if (!beatCard.includes("if (playbackBlocked) return;")) fail("BeatCard must ignore Play clicks while upload/playback preparation is active.");
+  if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) {") || !beatCard.includes("CARD_PLAY_REJECTED") || !beatCard.includes("onPlay(beat);")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
   if (!app.includes('PLAY_BLOCKED_LOADING')) fail("App handlePlay lost its defensive loading-state guard.");
   if (!app.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
   if (app.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
@@ -312,7 +315,12 @@ try {
   if (!app.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
   if (!app.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
   if (!app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
-  if (!app.includes('const [beats, setBeats] = useState<Beat[]>([]);')) fail("Cold Offline startup can render ordinary cached cloud cards before verification again.");
+  if (!app.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
+  if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
+  if (!beatCard.includes('pointerEvents: visible ? "auto" : "none"')) fail("Visible cached cards lost the pointer path required for progressive playback.");
+if (!app.includes('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}')) fail("Cached cards lost the non-destructive playback gate while cloud authority is verifying.");
+if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (interactive && selectMode)') || !beatCard.includes('dragEnabled && interactive')) fail("Cached presentation can mutate before authority verification.");
+  if (!app.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");
   if (!app.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
   if (!app.includes('BeatGaler does not import new beats while offline')) fail("Offline mode re-enabled beat imports.");
   if (!app.includes('const delays = [0, 1000, 2000, 5000, 10000, 30000, 60000]')) fail("Reconnect/upload preflight lost the bounded 1s→60s backoff sequence.");

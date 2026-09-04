@@ -1,0 +1,224 @@
+.bg-auth-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: clamp(20px, 5vw, 56px) 20px;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(255,255,255,.08), transparent 40%),
+    #0b0b0b;
+  color: var(--bg-color-text, #f4f4f4);
+  overflow-y: auto;
+}
+
+.bg-auth-card {
+  width: min(100%, 460px);
+  box-sizing: border-box;
+  padding: clamp(24px, 5vw, 38px);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 24px;
+  background: rgba(18,18,18,.96);
+  box-shadow: 0 28px 90px rgba(0,0,0,.42);
+}
+
+.bg-auth-card--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 180px;
+}
+
+.bg-auth-brand {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 18px;
+  border-radius: 14px;
+  background: #f4f4f4;
+  color: #0b0b0b;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -.4px;
+}
+
+.bg-auth-title {
+  margin: 0;
+  color: #f7f7f7;
+  font-size: clamp(28px, 7vw, 38px);
+  line-height: 1.05;
+  letter-spacing: -1.15px;
+  outline: none;
+}
+
+.bg-auth-title:focus-visible {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(255,255,255,.22);
+}
+
+.bg-auth-subtitle {
+  margin: 10px 0 24px;
+  color: #a6a6a6;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.bg-auth-form {
+  display: grid;
+  gap: 14px;
+}
+
+.bg-auth-form .bg-field-wrap {
+  min-width: 0;
+}
+
+.bg-auth-form .bg-field {
+  min-height: 46px;
+  font-size: 16px;
+}
+
+.bg-auth-social {
+  display: grid;
+  gap: 10px;
+}
+
+.bg-auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 2px 0;
+  color: #777;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.bg-auth-divider::before,
+.bg-auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,.09);
+}
+
+.bg-auth-live:empty {
+  display: none;
+}
+
+.bg-auth-live {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.bg-auth-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.bg-auth-inline-actions--center {
+  justify-content: center;
+}
+
+.bg-auth-oauth-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.045);
+  color: #c8c8c8;
+  font-size: 12px;
+}
+
+.bg-auth-oauth-blocked {
+  display: grid;
+  gap: 12px;
+}
+
+.bg-auth-link-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 10px;
+  color: #f3f3f3;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.bg-auth-link-button:hover {
+  background: rgba(255,255,255,.07);
+}
+
+.bg-auth-link-button:focus-visible {
+  outline: 3px solid rgba(255,255,255,.42);
+  outline-offset: 2px;
+}
+
+.bg-auth-footnote {
+  margin: 22px 0 0;
+  color: #6f6f6f;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+@media (max-width: 520px) {
+  .bg-auth-shell {
+    align-items: start;
+    padding: 16px 12px 28px;
+  }
+
+  .bg-auth-card {
+    width: 100%;
+    padding: 22px 18px;
+    border-radius: 18px;
+  }
+
+  .bg-auth-inline-actions:not(.bg-auth-inline-actions--center) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bg-auth-inline-actions:not(.bg-auth-inline-actions--center) > * {
+    width: 100%;
+  }
+}
+
+@media (max-width: 350px) {
+  .bg-auth-card {
+    padding-inline: 14px;
+  }
+
+  .bg-auth-inline-actions--center {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-auth-shell *,
+  .bg-auth-shell *::before,
+  .bg-auth-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .bg-auth-card,
+  .bg-auth-link-button {
+    border: 1px solid CanvasText;
+  }
+}

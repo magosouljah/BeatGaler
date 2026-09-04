@@ -1,0 +1,43 @@
+name: F4 - Release Controls
+
+on:
+  pull_request:
+    paths:
+      - "release/release-controls.json"
+      - "scripts/release-controls.mjs"
+      - "scripts/release-governance.mjs"
+      - "scripts/test-release-governance.mjs"
+      - "scripts/release-manifest.mjs"
+      - ".github/workflows/release-desktop-updater.yml"
+      - ".github/workflows/f4-release-controls.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-controls:
+    name: Validate fail-closed release controls
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Validate channels, rings, minimum versions and kill switch
+        run: node scripts/release-controls.mjs validate
+      - name: Validate release tag governance and immutable publication ordering
+        run: node scripts/test-release-governance.mjs
+      - name: Validate updater/release manifest contract
+        run: node scripts/release-manifest.mjs check
+      - name: Prove current policy blocks publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node scripts/release-controls.mjs assert-publish --channel alpha --version 0.8.0-alpha.1; then
+            echo "::error::Fail-closed release policy unexpectedly allowed publication"
+            exit 1
+          fi
+          echo "PASS publication remains blocked by the committed kill switch"

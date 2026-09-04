@@ -53,40 +53,45 @@ vi.mock("../../src/lib/dialog", () => ({
   appConfirm: vi.fn(async () => true),
 }));
 
-vi.mock("../../src/lib/tauri", () => ({
-  revealInExplorer: vi.fn(async () => undefined),
-  getProjectCloudStatus: vi.fn(async () => ({ state: "LOCAL" })),
-  saveBeatMeta: vi.fn(async (payload: { mp3_path: string; wav_path: string | null }) => ({
-    new_mp3_path: payload.mp3_path,
-    new_wav_path: payload.wav_path,
-  })),
-  renameBeat: vi.fn(async () => ({
-    new_folder_path: "C:/beats/Purple Beat",
-    new_mp3_path: "C:/beats/Purple Beat/Purple Beat.mp3",
-    new_wav_path: null,
-    new_stems_path: null,
-    new_flp_path: null,
-  })),
-  addFileToBeat: vi.fn(async () => undefined),
-  pickFile: vi.fn(async () => null),
-  pickFolder: vi.fn(async () => null),
-  isTauriAvailable: false,
-  listCloudFilesForBeat: vi.fn(async () => []),
-  downloadCloudFileToCache: vi.fn(async () => "C:/cache/test.mp3"),
-  uploadDroppedFileToTelegram: vi.fn(async () => undefined),
-  uploadProjectToTelegram: vi.fn(async () => undefined),
-  updateProjectArchiveFromSource: vi.fn(async () => undefined),
-  inspectAudioMetadata: vi.fn(async () => ({
-    has_metadata: false,
-    bpm: "",
-    key: "",
-    tags: [],
-    rating: 0,
-    image_base64: null,
-  })),
-  readImagePathAsDataUrl: vi.fn(async () => null),
-  diagnosticLog: vi.fn(async () => undefined),
-}));
+vi.mock("../../src/lib/tauri", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/tauri")>();
+  return {
+    ...actual,
+    getCloudClientId: vi.fn(() => "test-desktop-client"),
+    revealInExplorer: vi.fn(async () => undefined),
+    getProjectCloudStatus: vi.fn(async () => ({ state: "LOCAL" })),
+    saveBeatMeta: vi.fn(async (payload: { mp3_path: string; wav_path: string | null }) => ({
+      new_mp3_path: payload.mp3_path,
+      new_wav_path: payload.wav_path,
+    })),
+    renameBeat: vi.fn(async () => ({
+      new_folder_path: "C:/beats/Purple Beat",
+      new_mp3_path: "C:/beats/Purple Beat/Purple Beat.mp3",
+      new_wav_path: null,
+      new_stems_path: null,
+      new_flp_path: null,
+    })),
+    addFileToBeat: vi.fn(async () => undefined),
+    pickFile: vi.fn(async () => null),
+    pickFolder: vi.fn(async () => null),
+    isTauriAvailable: false,
+    listCloudFilesForBeat: vi.fn(async () => []),
+    downloadCloudFileToCache: vi.fn(async () => "C:/cache/test.mp3"),
+    uploadDroppedFileToTelegram: vi.fn(async () => undefined),
+    uploadProjectToTelegram: vi.fn(async () => undefined),
+    updateProjectArchiveFromSource: vi.fn(async () => undefined),
+    inspectAudioMetadata: vi.fn(async () => ({
+      has_metadata: false,
+      bpm: "",
+      key: "",
+      tags: [],
+      rating: 0,
+      image_base64: null,
+    })),
+    readImagePathAsDataUrl: vi.fn(async () => null),
+    diagnosticLog: vi.fn(async () => undefined),
+  };
+});
 
 import BeatCard from "../../src/components/BeatCard";
 import Drawer from "../../src/components/Drawer";
@@ -197,6 +202,7 @@ describe("Player real DOM", () => {
         onCycleRepeat={() => undefined}
         onToggleQueue={() => undefined}
         onPlayQueueIndex={() => undefined}
+        canAddBeat
         onAddBeat={() => undefined}
         onDetail={() => undefined}
         onEdit={() => undefined}
@@ -222,6 +228,7 @@ describe("Player real DOM", () => {
         onNext={() => undefined} onVolumeChange={() => undefined}
         onToggleShuffle={() => undefined} onCycleRepeat={() => undefined}
         onToggleQueue={() => undefined} onPlayQueueIndex={() => undefined}
+        canAddBeat
         onAddBeat={() => undefined} onDetail={() => undefined} onEdit={() => undefined}
         onDelete={() => undefined} onAddToQueue={() => undefined}
       />
@@ -261,6 +268,9 @@ describe("BeatCard real DOM", () => {
       dragEnabled: false,
       networkOnline: true,
       offlineBusy: false,
+      canUseOfflinePackage: true,
+      canUseLocalHelper: true,
+      canInspectNativeProject: true,
       onToggleOffline: () => undefined,
       onRetryUpload: () => undefined,
     };

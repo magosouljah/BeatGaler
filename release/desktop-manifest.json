@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "versionSource": "VERSION",
+  "channelSource": "VERSION.prerelease",
+  "productName": "Galer",
+  "bundleIdentifier": {
+    "source": "src-tauri/tauri.conf.json",
+    "status": "FINAL",
+    "value": "com.beatgaler.app"
+  },
+  "updater": {
+    "compiledEnv": "BEATGALER_UPDATER_ENDPOINT",
+    "publicReleaseRepo": "magosouljah/galer",
+    "endpoint": "https://github.com/magosouljah/galer/releases/latest/download/latest.json"
+  },
+  "capabilities": {
+    "desktop": "src-tauri/capabilities/default.json"
+  },
+  "runtimeSources": "supply-chain/runtime-sources.json",
+  "platforms": {
+    "windows-x64": {
+      "tauriConfig": "src-tauri/tauri.windows-release.conf.json",
+      "resources": {
+        "resources/windows/ffmpeg.exe": "ffmpeg.exe",
+        "resources/windows/node.exe": "node.exe",
+        "resources/windows/telegram-bot-api.exe": "telegram-bot-api.exe",
+        "direct-transport/transport-helper.cjs": "direct-transport/transport-helper.cjs",
+        "direct-transport/runtime-watchdog.cjs": "direct-transport/runtime-watchdog.cjs"
+      }
+    },
+    "macos-universal": {
+      "tauriConfig": "src-tauri/tauri.macos.conf.json",
+      "resources": {
+        "resources/ffmpeg": "ffmpeg",
+        "resources/node": "node",
+        "resources/telegram-bot-api": "telegram-bot-api",
+        "direct-transport/transport-helper.cjs": "direct-transport/transport-helper.cjs",
+        "direct-transport/runtime-watchdog.cjs": "direct-transport/runtime-watchdog.cjs"
+      }
+    }
+  }
+}

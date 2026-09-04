@@ -11,9 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BOT_API_COMMIT: adfd7f6a8e990272851777eeb3ae0def4216f161
   MACOSX_DEPLOYMENT_TARGET: "12.0"
-  BEATGALER_UPDATER_ENDPOINT: https://github.com/magosouljah/galer/releases/latest/download/latest.json
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
   APPLE_SIGNING_IDENTITY: "-"
@@ -23,12 +21,23 @@ jobs:
     name: Build pinned Bot API arm64
     runs-on: macos-15
     steps:
+      - name: Checkout runtime source manifest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load pinned Bot API source
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT_API_COMMIT="$(python3 -c 'import json; print(json.load(open("supply-chain/runtime-sources.json"))["telegramBotApi"]["commit"])')"
+          test -n "$BOT_API_COMMIT"
+          echo "BOT_API_COMMIT=$BOT_API_COMMIT" >> "$GITHUB_ENV"
+
       - name: Restore Bot API arm64 cache
         id: botapi-cache
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/telegram-bot-api
-          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Build static arm64 runtime
         if: steps.botapi-cache.outputs.cache-hit != 'true'
@@ -66,7 +75,10 @@ jobs:
             exit 1
           fi
           echo "$BOT_API_COMMIT" > runtime/telegram-bot-api.commit
-      - uses: actions/upload-artifact@v4
+          shasum -a 256 runtime/telegram-bot-api | awk '{print $1}' > runtime/telegram-bot-api.sha256
+
+      - name: Upload Bot API arm64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: telegram-bot-api-arm64
           path: runtime/
@@ -76,12 +88,23 @@ jobs:
     name: Build pinned Bot API x86_64
     runs-on: macos-15-intel
     steps:
+      - name: Checkout runtime source manifest
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Load pinned Bot API source
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOT_API_COMMIT="$(python3 -c 'import json; print(json.load(open("supply-chain/runtime-sources.json"))["telegramBotApi"]["commit"])')"
+          test -n "$BOT_API_COMMIT"
+          echo "BOT_API_COMMIT=$BOT_API_COMMIT" >> "$GITHUB_ENV"
+
       - name: Restore Bot API x86_64 cache
         id: botapi-cache
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/telegram-bot-api
-          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ env.BOT_API_COMMIT }}
+          key: beatgaler-bot-api-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Build static Intel runtime
         if: steps.botapi-cache.outputs.cache-hit != 'true'
@@ -119,7 +142,10 @@ jobs:
             exit 1
           fi
           echo "$BOT_API_COMMIT" > runtime/telegram-bot-api.commit
-      - uses: actions/upload-artifact@v4
+          shasum -a 256 runtime/telegram-bot-api | awk '{print $1}' > runtime/telegram-bot-api.sha256
+
+      - name: Upload Bot API x86_64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: telegram-bot-api-x86_64
           path: runtime/
@@ -132,7 +158,7 @@ jobs:
 
     steps:
       - name: Checkout exact release source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
@@ -145,19 +171,23 @@ jobs:
           git log -1 --oneline
           git rev-parse HEAD
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
-      - name: Setup Rust with both macOS targets
-        uses: dtolnay/rust-toolchain@stable
+      - name: Load canonical release manifest
+        run: node scripts/release-manifest.mjs github-env
+
+      - name: Setup pinned Rust with both macOS targets
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: 1.98.0
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache Cargo and Tauri build output
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
@@ -168,12 +198,12 @@ jobs:
             macos-universal-tauri-
 
       - name: Cache downloaded macOS runtimes
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             /tmp/beatgaler-ffmpeg
             /tmp/beatgaler-node
-          key: macos-runtimes-ffmpeg-b6.1.1-node-22.18.0
+          key: macos-runtimes-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Install npm dependencies
         run: npm ci
@@ -183,6 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run version:check
+          node scripts/release-manifest.mjs check
           npm run test:mac-portability:static
           npm run test:unit:ts
           npm run test:regressions
@@ -196,23 +227,25 @@ jobs:
             exit 1
           fi
 
-      - name: Download and build universal FFmpeg
+      - name: Download, verify and build universal FFmpeg
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          FFMPEG_TAG="b6.1.1"
-          REPO="eugeneware/ffmpeg-static"
+          FFMPEG_TAG="$BEATGALER_FFMPEG_TAG"
+          REPO="$BEATGALER_FFMPEG_REPOSITORY"
+          ARM_ASSET="$BEATGALER_FFMPEG_MAC_ARM64_ASSET"
+          X64_ASSET="$BEATGALER_FFMPEG_MAC_X64_ASSET"
           BASE_URL="https://github.com/${REPO}/releases/download/${FFMPEG_TAG}"
           mkdir -p src-tauri/resources /tmp/beatgaler-ffmpeg
-          curl --fail --location --retry 3 "${BASE_URL}/ffmpeg-darwin-arm64" -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
-          curl --fail --location --retry 3 "${BASE_URL}/ffmpeg-darwin-x64" -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
+          curl --fail --location --retry 3 "${BASE_URL}/${ARM_ASSET}" -o /tmp/beatgaler-ffmpeg/ffmpeg-arm64
+          curl --fail --location --retry 3 "${BASE_URL}/${X64_ASSET}" -o /tmp/beatgaler-ffmpeg/ffmpeg-x64
           chmod +x /tmp/beatgaler-ffmpeg/ffmpeg-arm64 /tmp/beatgaler-ffmpeg/ffmpeg-x64
 
           RELEASE_JSON="$(gh api "repos/${REPO}/releases/tags/${FFMPEG_TAG}")"
-          ARM_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-arm64") | .digest // empty' | sed 's/^sha256://')"
-          X64_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name=="ffmpeg-darwin-x64") | .digest // empty' | sed 's/^sha256://')"
+          ARM_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r --arg asset "$ARM_ASSET" '.assets[] | select(.name==$asset) | .digest // empty' | sed 's/^sha256://')"
+          X64_EXPECTED="$(printf '%s' "$RELEASE_JSON" | jq -r --arg asset "$X64_ASSET" '.assets[] | select(.name==$asset) | .digest // empty' | sed 's/^sha256://')"
           ARM_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-arm64 | awk '{print $1}')"
           X64_ACTUAL="$(shasum -a 256 /tmp/beatgaler-ffmpeg/ffmpeg-x64 | awk '{print $1}')"
           test -n "$ARM_EXPECTED" && test -n "$X64_EXPECTED"
@@ -225,28 +258,34 @@ jobs:
           echo "$ARCHS" | grep -q arm64
           echo "$ARCHS" | grep -q x86_64
 
-      - name: Download and build universal Node runtime
+      - name: Download, verify and build universal Node runtime
         shell: bash
         run: |
           set -euo pipefail
-          NODE_VERSION="22.18.0"
-          mkdir -p src-tauri/resources /tmp/beatgaler-node
-          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-arm64.tar.gz" -o /tmp/beatgaler-node/node-arm64.tar.gz
-          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-x64.tar.gz" -o /tmp/beatgaler-node/node-x64.tar.gz
-          tar -xzf /tmp/beatgaler-node/node-arm64.tar.gz -C /tmp/beatgaler-node
-          tar -xzf /tmp/beatgaler-node/node-x64.tar.gz -C /tmp/beatgaler-node
+          NODE_VERSION="$BEATGALER_NODE_VERSION"
+          ROOT="/tmp/beatgaler-node"
+          mkdir -p src-tauri/resources "$ROOT"
+          ARM_NAME="node-v${NODE_VERSION}-darwin-arm64.tar.gz"
+          X64_NAME="node-v${NODE_VERSION}-darwin-x64.tar.gz"
+          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/${ARM_NAME}" -o "$ROOT/$ARM_NAME"
+          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/${X64_NAME}" -o "$ROOT/$X64_NAME"
+          curl --fail --location --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" -o "$ROOT/SHASUMS256.txt"
+          (cd "$ROOT" && grep " ${ARM_NAME}$" SHASUMS256.txt | shasum -a 256 -c -)
+          (cd "$ROOT" && grep " ${X64_NAME}$" SHASUMS256.txt | shasum -a 256 -c -)
+          tar -xzf "$ROOT/$ARM_NAME" -C "$ROOT"
+          tar -xzf "$ROOT/$X64_NAME" -C "$ROOT"
           lipo -create \
-            "/tmp/beatgaler-node/node-v${NODE_VERSION}-darwin-arm64/bin/node" \
-            "/tmp/beatgaler-node/node-v${NODE_VERSION}-darwin-x64/bin/node" \
+            "$ROOT/node-v${NODE_VERSION}-darwin-arm64/bin/node" \
+            "$ROOT/node-v${NODE_VERSION}-darwin-x64/bin/node" \
             -output src-tauri/resources/node
           chmod +x src-tauri/resources/node
           ARCHS="$(lipo -archs src-tauri/resources/node)"
           echo "$ARCHS" | grep -q arm64
           echo "$ARCHS" | grep -q x86_64
-          src-tauri/resources/node --version
+          test "$(src-tauri/resources/node --version)" = "v${NODE_VERSION}"
 
-      - name: Combine pinned Bot API into Universal runtime
-        uses: actions/download-artifact@v4
+      - name: Download pinned Bot API halves
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: telegram-bot-api-*
           path: /tmp/beatgaler-bot-api-halves
@@ -255,11 +294,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARM="/tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api"
-          INTEL="/tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api"
+          ARM_DIR="/tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64"
+          INTEL_DIR="/tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64"
+          ARM="$ARM_DIR/telegram-bot-api"
+          INTEL="$INTEL_DIR/telegram-bot-api"
           test -x "$ARM" && test -x "$INTEL"
-          test "$(cat /tmp/beatgaler-bot-api-halves/telegram-bot-api-arm64/telegram-bot-api.commit)" = "$BOT_API_COMMIT"
-          test "$(cat /tmp/beatgaler-bot-api-halves/telegram-bot-api-x86_64/telegram-bot-api.commit)" = "$BOT_API_COMMIT"
+          test "$(cat "$ARM_DIR/telegram-bot-api.commit")" = "$BEATGALER_BOT_API_COMMIT"
+          test "$(cat "$INTEL_DIR/telegram-bot-api.commit")" = "$BEATGALER_BOT_API_COMMIT"
+          test "$(cat "$ARM_DIR/telegram-bot-api.sha256")" = "$(shasum -a 256 "$ARM" | awk '{print $1}')"
+          test "$(cat "$INTEL_DIR/telegram-bot-api.sha256")" = "$(shasum -a 256 "$INTEL" | awk '{print $1}')"
           test "$(lipo -archs "$ARM")" = "arm64"
           test "$(lipo -archs "$INTEL")" = "x86_64"
           mkdir -p src-tauri/resources
@@ -268,6 +311,7 @@ jobs:
           ARCHS="$(lipo -archs src-tauri/resources/telegram-bot-api)"
           echo "$ARCHS" | grep -q arm64
           echo "$ARCHS" | grep -q x86_64
+
       - name: Verify Universal runtimes have only Apple system dylib dependencies
         shell: bash
         run: |
@@ -294,6 +338,18 @@ jobs:
             codesign --verify --strict --verbose=2 "$path"
           done
 
+      - name: Record staged macOS runtime provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/write-runtime-provenance.mjs \
+            --output artifacts/runtime-provenance-macos.json \
+            --platform macos-universal \
+            --sources supply-chain/runtime-sources.json \
+            ffmpeg=src-tauri/resources/ffmpeg \
+            node=src-tauri/resources/node \
+            bot-api=src-tauri/resources/telegram-bot-api
+
       - name: Compile and run Rust unit tests with all Universal runtimes present
         shell: bash
         run: |
@@ -309,7 +365,7 @@ jobs:
           cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null
           npx tauri build --bundles app,dmg --target universal-apple-darwin
 
-      - name: Verify Universal runtimes and ad-hoc signatures inside final DMG
+      - name: Verify Universal runtimes, digests and ad-hoc signatures inside final DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -350,17 +406,36 @@ jobs:
           done
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
+          test "$(shasum -a 256 src-tauri/resources/ffmpeg | awk '{print $1}')" = "$(shasum -a 256 "$FFMPEG_PATH" | awk '{print $1}')"
+          test "$(shasum -a 256 src-tauri/resources/node | awk '{print $1}')" = "$(shasum -a 256 "$NODE_PATH" | awk '{print $1}')"
+          test "$(shasum -a 256 src-tauri/resources/telegram-bot-api | awk '{print $1}')" = "$(shasum -a 256 "$BOT_API_PATH" | awk '{print $1}')"
+
           UPDATER_PATH="$(find "$ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1)"
           test -n "$UPDATER_PATH" && test -f "$UPDATER_PATH"
           test -s "${UPDATER_PATH}.sig"
 
+      - name: Create macOS artifact checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ROOT="src-tauri/target/universal-apple-darwin/release/bundle"
+          : > artifacts/SHA256SUMS-macOS.txt
+          for file in "$ROOT"/dmg/*.dmg "$ROOT"/macos/*.app.tar.gz "$ROOT"/macos/*.app.tar.gz.sig; do
+            test -f "$file"
+            HASH="$(shasum -a 256 "$file" | awk '{print $1}')"
+            printf '%s  %s\n' "$HASH" "$(basename "$file")" >> artifacts/SHA256SUMS-macOS.txt
+          done
+
       - name: Upload macOS build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: BeatGaler-macOS-Universal
           path: |
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            artifacts/runtime-provenance-macos.json
+            artifacts/SHA256SUMS-macOS.txt
             VERSION
           if-no-files-found: error

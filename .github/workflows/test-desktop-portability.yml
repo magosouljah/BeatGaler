@@ -5,42 +5,353 @@ on:
   push:
     branches:
       - main
+      - integration-v0.8.0-alpha.1
   workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  windows-portability:
-    name: Portable gate on Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+concurrency:
+  group: required-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-      - uses: actions/setup-node@v4
+jobs:
+  web_shared:
+    name: Web + shared gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked npm graph
+        run: npm ci
 
-      - run: npm ci
+      - name: Verify version and manifests agree
+        run: npm run version:check
 
-      - name: Prepare compile-only frontend placeholder
+      - name: Build real Web bundle
+        run: npm run build:web
+
+      - name: Smoke compiled Web bundle in Chrome
+        run: npm run test:web:smoke
+
+      - name: Typecheck shared frontend
+        run: npm run test:typecheck
+
+      - name: Run TypeScript unit contract
+        run: npm run test:unit:ts
+
+      - name: Run DOM component contract
+        run: npm run test:component:dom
+
+      - name: Run shared integration contract
+        run: npm run test:integration
+
+      - name: Run backend unit contract
+        run: npm run test:unit:cloud
+
+      - name: Run regression guards
+        run: npm run test:regressions
+
+      - name: Run static packaging and portability guards
+        run: npm run test:packaging:static
+
+  postgres_integration:
+    name: PostgreSQL live integration + recovery gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      postgres_restore:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_restore
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_restore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_ci
+      RESTORE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5433/beatgaler_restore
+      BEATGALER_POSTGRES_ENABLED: "true"
+      BEATGALER_POSTGRES_SSL_MODE: disable
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked cloud-server graph
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Execute migrations and adversarial persistence checks on PostgreSQL
+        run: node cloud-server/tests/postgres-live.integration.cjs
+
+      - name: Dump, encrypt and restore into an isolated PostgreSQL instance
         shell: bash
         run: |
-          mkdir -p dist
-          printf '<!doctype html><html><body></body></html>\n' > dist/index.html
+          set -euo pipefail
+          mkdir -p artifacts/recovery
+          START_EPOCH=$(date +%s)
+          PG_IMAGE='postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109'
+          docker run --rm --network host -e PGPASSWORD=postgres "$PG_IMAGE" \
+            pg_dump --no-owner --no-privileges --format=plain \
+            -h 127.0.0.1 -p 5432 -U postgres -d beatgaler_ci > /tmp/beatgaler-control-plane.sql
+          sha256sum /tmp/beatgaler-control-plane.sql > artifacts/recovery/plaintext-dump.sha256
 
-      - name: Run complete Mac portability gate without a Mac
-        run: npm run test:mac-portability
+          BACKUP_KEY=$(openssl rand -hex 32)
+          openssl enc -aes-256-cbc -pbkdf2 -salt \
+            -in /tmp/beatgaler-control-plane.sql \
+            -out /tmp/beatgaler-control-plane.sql.enc \
+            -pass pass:"$BACKUP_KEY"
+          rm -f /tmp/beatgaler-control-plane.sql
+          test ! -e /tmp/beatgaler-control-plane.sql
+
+          openssl enc -d -aes-256-cbc -pbkdf2 \
+            -in /tmp/beatgaler-control-plane.sql.enc \
+            -out /tmp/beatgaler-control-plane.restore.sql \
+            -pass pass:"$BACKUP_KEY"
+          sha256sum /tmp/beatgaler-control-plane.sql.enc > artifacts/recovery/encrypted-backup.sha256
+
+          docker run --rm --network host -i -e PGPASSWORD=postgres "$PG_IMAGE" \
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5433 -U postgres -d beatgaler_restore \
+            < /tmp/beatgaler-control-plane.restore.sql
+          rm -f /tmp/beatgaler-control-plane.restore.sql /tmp/beatgaler-control-plane.sql.enc
+          unset BACKUP_KEY
+
+          RESTORE_SECONDS=$(( $(date +%s) - START_EPOCH ))
+          test "$RESTORE_SECONDS" -lt 7200
+          printf '{"isolated_restore":true,"backup_encrypted_in_drill":true,"rto_target_seconds":7200,"measured_restore_seconds":%s,"production_pitr_rpo_proven":false}\n' \
+            "$RESTORE_SECONDS" > artifacts/recovery/restore-drill.json
+
+      - name: Verify restored constraints, secrets, reconciliation and rollback state
+        run: node cloud-server/tests/postgres-restore.verify.cjs
+
+      - name: Upload recovery drill evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: postgres-recovery-evidence
+          path: artifacts/recovery/
+          if-no-files-found: error
+
+  supply_chain:
+    name: Supply chain gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
+
+      - name: Restore pinned security-tool cache
+        id: security-tools-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-cyclonedx
+          key: supply-tools-cargo-audit-0.22.2-cyclonedx-0.5.9-rust-1.98.0
+
+      - name: Install locked npm graphs
+        run: |
+          npm ci
+          npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Prepare supply-chain reports
+        run: mkdir -p artifacts/supply-chain
+
+      - name: Pin npm audit client
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.1 --ignore-scripts --no-audit --no-fund
+          test "$(npm --version)" = "11.19.1"
+          npm --version > artifacts/supply-chain/npm-audit-client.txt
+
+      - name: Reject npm critical/high advisories
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm audit --audit-level=high --json > artifacts/supply-chain/npm-audit.json || true
+          npm --prefix cloud-server audit --audit-level=high --json > artifacts/supply-chain/cloud-npm-audit.json || true
+          node <<'NODE'
+          const fs = require("node:fs");
+          const reports = [
+            ["root", "artifacts/supply-chain/npm-audit.json"],
+            ["cloud-server", "artifacts/supply-chain/cloud-npm-audit.json"],
+          ];
+          let failed = false;
+          for (const [label, path] of reports) {
+            let report;
+            try {
+              report = JSON.parse(fs.readFileSync(path, "utf8"));
+            } catch (error) {
+              console.error(`${label}: npm audit did not return valid JSON: ${error.message}`);
+              failed = true;
+              continue;
+            }
+            const vulnerabilities = report?.metadata?.vulnerabilities;
+            if (
+              !vulnerabilities ||
+              typeof vulnerabilities.high !== "number" ||
+              typeof vulnerabilities.critical !== "number"
+            ) {
+              console.error(`${label}: npm audit did not return a valid vulnerability summary`);
+              failed = true;
+              continue;
+            }
+            console.log(label, JSON.stringify(vulnerabilities, null, 2));
+            if (vulnerabilities.high > 0 || vulnerabilities.critical > 0) failed = true;
+          }
+          if (failed) process.exit(1);
+          NODE
+
+      - name: Verify npm dependency licenses
+        run: |
+          node scripts/check-npm-licenses.mjs
+          node scripts/check-pg-licenses.mjs cloud-server/package-lock.json artifacts/supply-chain/postgres-npm-licenses.json
+
+      - name: Install pinned Rust security/SBOM tools
+        if: steps.security-tools-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+
+      - name: Reject RustSec advisories
+        shell: bash
+        run: |
+          set +e
+          cargo audit --file src-tauri/Cargo.lock --json > artifacts/supply-chain/cargo-audit.json
+          STATUS=$?
+          set -e
+          cat artifacts/supply-chain/cargo-audit.json
+          exit "$STATUS"
+
+      - name: Verify Cargo dependency licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 > artifacts/supply-chain/cargo-metadata.json
+          node scripts/check-cargo-licenses.mjs artifacts/supply-chain/cargo-metadata.json
+
+      - name: Verify every external GitHub Action is immutable
+        run: node scripts/check-workflow-action-pins.mjs
+
+      - name: Run pinned HEAD-only secret scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.30.1"
+          ARCHIVE="/tmp/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --location --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o "$ARCHIVE"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $ARCHIVE" | sha256sum --check --strict
+          tar -xzf "$ARCHIVE" -C /tmp gitleaks
+          : > artifacts/supply-chain/gitleaks.json
+          /tmp/gitleaks dir --no-banner --redact --config .gitleaks.toml --report-format json --report-path artifacts/supply-chain/gitleaks.json .
+
+      - name: Generate npm and Rust CycloneDX SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm sbom --sbom-format cyclonedx > artifacts/supply-chain/npm.cdx.json
+          npm --prefix cloud-server sbom --sbom-format cyclonedx > artifacts/supply-chain/cloud-npm.cdx.json
+          cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --override-filename beatgaler-rust.cdx
+          test -f src-tauri/beatgaler-rust.cdx.json
+          mv src-tauri/beatgaler-rust.cdx.json artifacts/supply-chain/rust.cdx.json
+
+      - name: Record source-lock checksums and runtime source pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum package-lock.json cloud-server/package-lock.json src-tauri/Cargo.lock supply-chain/runtime-sources.json > artifacts/supply-chain/source-locks.sha256
+          cp supply-chain/runtime-sources.json artifacts/supply-chain/runtime-sources.json
+
+      - name: Upload supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-evidence
+          path: artifacts/supply-chain/
+          if-no-files-found: warn
+
+  windows_portability:
+    name: Portable gate on Windows
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked npm graph
+        run: npm ci
+
+      - name: Prepare compile-only frontend placeholder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Set-Content -Path dist/index.html -Value '<!doctype html><html><body>CI compile placeholder</body></html>'
+
+      - name: Run locked portability gate on Windows
+        run: npm run test:mac-portability:locked
 
       - name: Verify Cargo.lock is committed exactly as tested
+        shell: pwsh
         run: git diff --exit-code -- src-tauri/Cargo.lock
 
       - name: Upload regenerated Cargo.lock when the lock is stale
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: regenerated-Cargo-lock
           path: src-tauri/Cargo.lock
@@ -56,39 +367,73 @@ jobs:
             runner: macos-15
           - arch: x86_64
             runner: macos-15-intel
-
     runs-on: ${{ matrix.runner }}
-
+    timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: "12.0"
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.98.0
 
-      - run: npm ci
+      - name: Install locked npm graph
+        run: npm ci
 
       - name: Prepare compile-only frontend placeholder
         shell: bash
         run: |
           mkdir -p dist
-          printf '<!doctype html><html><body></body></html>\n' > dist/index.html
+          printf '%s\n' '<!doctype html><html><body>CI compile placeholder</body></html>' > dist/index.html
 
       - name: Prepare compile-only Mac resource placeholders
         shell: bash
         run: |
-          set -euo pipefail
           mkdir -p src-tauri/resources
-          for name in ffmpeg node telegram-bot-api; do
-            printf '#!/bin/sh\nexit 0\n' > "src-tauri/resources/$name"
-            chmod +x "src-tauri/resources/$name"
-          done
+          printf '#!/bin/sh\nexit 0\n' > src-tauri/resources/ffmpeg
+          printf '#!/bin/sh\nexit 0\n' > src-tauri/resources/node
+          printf '#!/bin/sh\nexit 0\n' > src-tauri/resources/telegram-bot-api
+          chmod +x src-tauri/resources/ffmpeg src-tauri/resources/node src-tauri/resources/telegram-bot-api
 
-      - name: Compile and run portable Rust/TS regressions natively on macOS
+      - name: Compile and run locked portable Rust/TS regressions natively on macOS
         run: npm run test:mac-portability:locked
+
+  required_ci:
+    name: Required CI
+    if: ${{ always() }}
+    needs:
+      - web_shared
+      - postgres_integration
+      - supply_chain
+      - windows_portability
+      - macos-native-smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce every required gate
+        env:
+          WEB_RESULT: ${{ needs.web_shared.result }}
+          POSTGRES_RESULT: ${{ needs.postgres_integration.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply_chain.result }}
+          WINDOWS_RESULT: ${{ needs.windows_portability.result }}
+          MACOS_RESULT: ${{ needs['macos-native-smoke'].result }}
+        shell: bash
+        run: |
+          echo "Web/shared: $WEB_RESULT"
+          echo "PostgreSQL live + recovery: $POSTGRES_RESULT"
+          echo "Supply chain: $SUPPLY_CHAIN_RESULT"
+          echo "Windows: $WINDOWS_RESULT"
+          echo "macOS matrix: $MACOS_RESULT"
+          if [[ "$WEB_RESULT" != "success" || "$POSTGRES_RESULT" != "success" || "$SUPPLY_CHAIN_RESULT" != "success" || "$WINDOWS_RESULT" != "success" || "$MACOS_RESULT" != "success" ]]; then
+            echo "Required CI failed because at least one gate did not succeed."
+            exit 1
+          fi
+          echo "Required CI PASS: Web/shared, live PostgreSQL + isolated recovery, supply-chain security, packaging/portability, Windows, and macOS all succeeded."

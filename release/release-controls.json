@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "defaultChannel": "alpha",
+  "channels": {
+    "alpha": {
+      "ring": "internal-alpha",
+      "minimumVersion": "0.8.0-alpha.1",
+      "publicationEnabled": false
+    },
+    "beta": {
+      "ring": "preview",
+      "minimumVersion": "0.8.0-beta.1",
+      "publicationEnabled": false
+    },
+    "candidate": {
+      "ring": "candidate",
+      "minimumVersion": "0.8.0-rc.1",
+      "publicationEnabled": false
+    },
+    "stable": {
+      "ring": "stable",
+      "minimumVersion": "0.8.0",
+      "publicationEnabled": false
+    }
+  },
+  "killSwitch": {
+    "engaged": true,
+    "reason": "Public updater publication remains disabled until signing, rollback, canary, and owner approval gates are complete."
+  }
+}

@@ -1,0 +1,43 @@
+name: Test - Windows Authenticode seam
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build-windows.yml"
+      - ".github/workflows/release-desktop-updater.yml"
+      - ".github/workflows/test-windows-authenticode.yml"
+      - "docs/WINDOWS-AUTHENTICODE.md"
+      - "package.json"
+      - "scripts/prepare-windows-authenticode-config.ps1"
+      - "scripts/test-windows-authenticode-guard.mjs"
+      - "scripts/test-windows-authenticode-seam.ps1"
+      - "scripts/windows-authenticode.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-authenticode-seam-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-authenticode-seam:
+    name: Windows Authenticode seam test
+    runs-on: windows-2025
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Verify fail-closed Authenticode contract without production certificate
+        shell: pwsh
+        run: |
+          npm run test:windows-authenticode-guard
+          ./scripts/test-windows-authenticode-seam.ps1

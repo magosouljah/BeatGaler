@@ -470,28 +470,114 @@ async function ensureIndex(session) {
   } finally { try { fs.unlinkSync(temp); } catch (_) {} }
 }
 
+function id3v2PrefixLength(header, fileSize) {
+  if (header.length < 10 || header[0] !== 0x49 || header[1] !== 0x44 || header[2] !== 0x33) return 0;
+  const major = header[3];
+  if (major < 2 || major > 4) return 0;
+  const sizeBytes = [header[6], header[7], header[8], header[9]];
+  if (sizeBytes.some(value => value >= 0x80)) return 0;
+  const bodySize = (sizeBytes[0] << 21) | (sizeBytes[1] << 14) | (sizeBytes[2] << 7) | sizeBytes[3];
+  const footerSize = major === 4 && (header[5] & 0x10) !== 0 ? 10 : 0;
+  const total = 10 + bodySize + footerSize;
+  return total > 0 && total < fileSize ? total : 0;
+}
+
+function copyFileRange(sourcePath, destinationPath, start, endExclusive) {
+  const input = fs.openSync(sourcePath, 'r');
+  const output = fs.openSync(destinationPath, 'wx', 0o600);
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  let offset = start;
+  try {
+    while (offset < endExclusive) {
+      const wanted = Math.min(buffer.byteLength, endExclusive - offset);
+      const read = fs.readSync(input, buffer, 0, wanted, offset);
+      if (read <= 0) throw new Error('Unexpected end of MP3 while creating clean Cloud payload.');
+      let written = 0;
+      while (written < read) written += fs.writeSync(output, buffer, written, read - written);
+      offset += read;
+    }
+  } finally {
+    fs.closeSync(output);
+    fs.closeSync(input);
+  }
+}
+
+function prepareCleanMp3Upload(filePath, filename) {
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile() || stat.size <= 0 || !/\.mp3$/i.test(String(filename || filePath))) {
+    return { path: filePath, bytes: stat.size, removedBytes: 0, cleanup() {} };
+  }
+  const fd = fs.openSync(filePath, 'r');
+  let prefix = 0;
+  let suffix = 0;
+  try {
+    const head = Buffer.alloc(10);
+    const headRead = fs.readSync(fd, head, 0, head.length, 0);
+    prefix = id3v2PrefixLength(head.subarray(0, headRead), stat.size);
+    if (stat.size - prefix > 128) {
+      const tail = Buffer.alloc(128);
+      const tailRead = fs.readSync(fd, tail, 0, tail.length, stat.size - 128);
+      if (tailRead === 128 && tail[0] === 0x54 && tail[1] === 0x41 && tail[2] === 0x47) suffix = 128;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  const end = stat.size - suffix;
+  if ((prefix === 0 && suffix === 0) || prefix >= end) {
+    return { path: filePath, bytes: stat.size, removedBytes: 0, cleanup() {} };
+  }
+  const tempPath = path.join(os.tmpdir(), `beatgaler-clean-mp3-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+  try {
+    copyFileRange(filePath, tempPath, prefix, end);
+  } catch (error) {
+    try { fs.unlinkSync(tempPath); } catch (_) {}
+    throw error;
+  }
+  return {
+    path: tempPath,
+    bytes: end - prefix,
+    removedBytes: stat.size - (end - prefix),
+    cleanup() { try { fs.unlinkSync(tempPath); } catch (_) {} },
+  };
+}
+
 async function upload(session, command) {
   const filePath = path.resolve(String(command.path || ''));
   const stat = fs.statSync(filePath);
   if (!stat.isFile() || stat.size <= 0) throw new Error('Upload source is missing or empty.');
-  diag('UPLOAD_BEGIN', { vault: session.chatId, path: filePath, bytes: stat.size, thread_id: Number(command.reply_to || 0) });
-  const sent = await sendDocumentLocal(session, {
-    filePath,
-    filename: String(command.filename || path.basename(filePath)),
-    caption: String(command.caption || ''),
-    threadId: Number(command.reply_to || 0),
+  const filename = String(command.filename || path.basename(filePath));
+  const clean = prepareCleanMp3Upload(filePath, filename);
+  diag('UPLOAD_BEGIN', {
+    vault: session.chatId,
+    path: filePath,
+    bytes: clean.bytes,
+    source_bytes: stat.size,
+    stripped_id3_bytes: clean.removedBytes,
+    thread_id: Number(command.reply_to || 0),
   });
-  sessionFileIds.set(Number(sent.message_id), String(sent.document.file_id));
-  diag('UPLOAD_OK', { vault: session.chatId, message_id: sent.message_id, bytes: stat.size });
-  return {
-    ok: true,
-    op: 'upload',
-    message_id: Number(sent.message_id),
-    telegram_file_id: String(sent.document.file_id),
-    file_id: String(sent.document.file_id),
-    filename: String(command.filename || path.basename(filePath)),
-    bytes: stat.size,
-  };
+  try {
+    const sent = await sendDocumentLocal(session, {
+      filePath: clean.path,
+      filename,
+      caption: String(command.caption || ''),
+      threadId: Number(command.reply_to || 0),
+    });
+    sessionFileIds.set(Number(sent.message_id), String(sent.document.file_id));
+    diag('UPLOAD_OK', { vault: session.chatId, message_id: sent.message_id, bytes: clean.bytes, stripped_id3_bytes: clean.removedBytes });
+    return {
+      ok: true,
+      op: 'upload',
+      message_id: Number(sent.message_id),
+      telegram_file_id: String(sent.document.file_id),
+      file_id: String(sent.document.file_id),
+      filename,
+      bytes: clean.bytes,
+      source_bytes: stat.size,
+      stripped_id3_bytes: clean.removedBytes,
+    };
+  } finally {
+    clean.cleanup();
+  }
 }
 
 async function resolveMediaFileId(session, command) {

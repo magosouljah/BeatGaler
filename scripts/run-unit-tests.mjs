@@ -30,6 +30,7 @@ try {
     "metadataValidation.test.js",
     "playbackReadiness.test.js",
     "beatRuntimeState.test.js",
+    "platformCapabilities.test.js",
     "dragDropLogic.test.js",
     "proceduralBeatBackground.test.js",
     "securityFuzz.test.js",

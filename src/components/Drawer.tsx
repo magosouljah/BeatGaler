@@ -5,6 +5,8 @@ import ImageCropModal from "./ImageCropModal";
 import { saveBeatMeta, renameBeat, addFileToBeat, pickFile, pickFolder, revealInExplorer, isTauriAvailable, listCloudFilesForBeat, downloadCloudFileToCache, uploadDroppedFileToTelegram, uploadProjectToTelegram, updateProjectArchiveFromSource, inspectAudioMetadata, readImagePathAsDataUrl, diagnosticLog, type CloudFileRecord, type CloudFileType, type ProjectAssetKind } from "../lib/tauri";
 import { appConfirm } from "../lib/dialog";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
+import { platform } from "../platform";
+import type { PlatformCloudCommitProgress, PlatformBeatEditFiles, PlatformBeatEditSlotKind, PlatformImportSlotKind } from "../platform/contracts";
 import { cleanTags, validateBpm, validateMusicKey } from "../lib/metadataValidation";
 import { getReviewFooterState, reviewHeaderLabel } from "../features/components/componentLogic";
 
@@ -13,7 +15,7 @@ interface Props {
   mode: "detail" | "edit";
   tagSuggestions?: string[];
   onClose: () => void;
-  onSaved: (updated: Beat) => void;
+  onSaved: (updated: Beat, onProgress?: (progress: PlatformCloudCommitProgress) => void) => Promise<void> | void;
   onReleaseAudio: () => void;
   selectedBeats?: Beat[];
   onBulkSaved?: (updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => void;
@@ -30,7 +32,6 @@ interface Props {
   ) => Promise<void>;
 }
 
-// Pending file assignment — only committed on Save
 type PendingFiles = {
   mp3?: string;
   wav?: string;
@@ -65,9 +66,13 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
 
 export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
-  // pending holds files chosen by the user but NOT yet written to disk
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState<PlatformCloudCommitProgress | null>(null);
+  const [reviewSlotNames, setReviewSlotNames] = useState<Partial<Record<PlatformImportSlotKind, string>>>(() => {
+    const slots = platform.capabilities.reviewBeatCloudCommit ? platform.importer.slotFilesForBeat(beat.id) : {};
+    return Object.fromEntries(Object.entries(slots).map(([kind, file]) => [kind, file?.name]));
+  });
   const [error, setError] = useState<string | null>(null);
   const [duplicateNameError, setDuplicateNameError] = useState(false);
   const [bulkFields, setBulkFields] = useState<Set<string>>(new Set());
@@ -77,15 +82,23 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isEdit = mode === "edit";
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
+  const displayedBeatIdRef = useRef(beat.id);
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [pendingCloud, setPendingCloud] = useState<PendingCloudFiles>({});
-  const hasPending = Object.keys(pending).length > 0 || Object.keys(pendingCloud).length > 0;
+  const [pendingWebEdit, setPendingWebEdit] = useState<PlatformBeatEditFiles>({});
   const bpmValidation = validateBpm(data.bpm);
   const keyValidation = validateMusicKey(data.key);
 
   const refreshCloudFiles = useCallback(async () => {
+    // Web's editable file surface is backed by the library manifest + platform.editor.
+    // Do not probe the legacy Desktop cloud-file bridge just because Drawer opened.
+    if (platform.capabilities.browserCloudEditing) {
+      setCloudFiles([]);
+      setCloudError(null);
+      return;
+    }
     if (!beat.telegram_file_id) {
       setCloudFiles([]);
       return;
@@ -122,7 +135,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     const source = await pickFile([picker], beat.folder_path || undefined);
     if (!source) return;
 
-    // Picking a file is NEVER a Telegram mutation. It stays pending until Save.
     if (type === "MASTER") {
       try {
         const preview = await inspectAudioMetadata(source);
@@ -200,27 +212,60 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
 
   useEffect(() => {
     if (isBulk) {
-      // In bulk mode, tags are additive inputs (start empty to avoid copying one beat's tags to all).
       setData({ ...beat, tags: [] });
       return;
     }
+    if (displayedBeatIdRef.current === beat.id) {
+      setData(current => ({
+        ...current,
+        bpm: current.bpm || beat.bpm,
+        key: current.key || beat.key,
+        tags: current.tags.length > 0 ? current.tags : beat.tags,
+        image_base64: current.image_base64 || beat.image_base64,
+        image_preview_base64: current.image_preview_base64 || beat.image_preview_base64,
+      }));
+      return;
+    }
+    displayedBeatIdRef.current = beat.id;
     setData({ ...beat });
+    if (platform.capabilities.reviewBeatCloudCommit) {
+      const slots = platform.importer.slotFilesForBeat(beat.id);
+      setReviewSlotNames(Object.fromEntries(Object.entries(slots).map(([kind, file]) => [kind, file?.name])));
+    }
     setPending({});
     setPendingCloud({});
+    setPendingWebEdit({});
     setDuplicateNameError(false);
   }, [beat, isBulk]);
 
   const toggleBulkField = (f: string) =>
     setBulkFields(s => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n; });
 
-  // ── Save ────────────────────────────────────────────────────
+  const handleReviewSlotPick = useCallback(async (kind: PlatformImportSlotKind) => {
+    if (saving) return;
+    try {
+      const file = await platform.importer.pickSlotFile(beat.id, kind);
+      if (file) setReviewSlotNames(current => ({ ...current, [kind]: file.name }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [beat.id, saving]);
+
+  const handleWebEditFilePick = useCallback(async (kind: PlatformBeatEditSlotKind) => {
+    if (saving) return;
+    try {
+      const file = await platform.editor.pickFile(kind);
+      if (file) setPendingWebEdit(current => ({ ...current, [kind]: file }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [saving]);
+
   const handleSave = useCallback(async (reviewAction: "next" | "all" = "next") => {
     if (!mutationAllowed) {
       setError("Connect to the internet before saving changes. Offline mode is read-only.");
       return;
     }
-    // FIRST operation on Review Save: purely local duplicate-name validation.
-    // If it fails, nothing is saved locally and absolutely nothing is uploaded.
     const requestedName = data.name.trim();
     if (reviewInfo && isReviewNameTaken?.(requestedName, beat.id)) {
       setDuplicateNameError(true);
@@ -247,8 +292,30 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     };
     setData(validatedData);
     setSaving(true);
+    setSaveProgress(null);
     setError(null);
     try {
+      if (platform.capabilities.reviewBeatCloudCommit && reviewInfo && !isBulk) {
+        const updated = { ...validatedData, cloud_status: "PENDING_UPLOAD" };
+        if (reviewAction === "all" && onSaveAll) await onSaveAll(updated);
+        else {
+          await onSaved(updated, progress => setSaveProgress(progress));
+          if (closeAfterSave) onClose();
+        }
+        return;
+      }
+      if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk && !onCloudMutationCommit) {
+        const committed = await platform.editor.commit(
+          beat,
+          validatedData,
+          pendingWebEdit,
+          progress => setSaveProgress(progress),
+        );
+        setPendingWebEdit({});
+        await onSaved(committed);
+        if (closeAfterSave) onClose();
+        return;
+      }
       if (isBulk && onBulkSaved) {
         const updates: Partial<Beat> = {};
         const tagsInput = Array.from(new Set(validatedData.tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
@@ -279,7 +346,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         return;
       }
 
-      // Commit any pending file assignments FIRST
       let committed = { ...validatedData };
       for (const [role, srcPath] of Object.entries(pending) as [keyof PendingFiles, string][]) {
         if (!srcPath) continue;
@@ -343,9 +409,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         };
       }
 
-      // Apply cloud file transaction ONLY AFTER Save Changes was pressed and
-      // local metadata validation succeeded. Until this point Telegram has not
-      // been modified by anything selected in FILES.
       let cloudUpdated = { ...updated };
 
       if (pendingCloud.MASTER) {
@@ -355,8 +418,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           telegram_file_id: uploaded.telegram_file_id ?? cloudUpdated.telegram_file_id,
           telegram_message_id: uploaded.telegram_message_id ?? cloudUpdated.telegram_message_id,
           cloud_status: "SYNCED",
-          // Force the next Play through prepareBeatForPlayback so the new
-          // Telegram MASTER MP3 wins over every old local/cache path.
           playback_path: "",
         };
       }
@@ -387,7 +448,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         await uploadProjectToTelegram(cloudUpdated);
       }
 
-      // Clear other_files — after rename old paths are gone; Rust re-scans on next load
       const finalUpdated = { ...cloudUpdated, other_files: [] };
       const metadataChanged =
         finalUpdated.name !== beat.name ||
@@ -399,10 +459,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       const cloudFilesChanged = Object.keys(pendingCloud).length > 0;
       const hasCloudAuthority = Boolean(finalUpdated.telegram_file_id) || cloudFiles.length > 0 || cloudFilesChanged;
 
-      // V7 has no generic "React state changed => rewrite INDEX" observer.
-      // Drawer mutations therefore own their logical cloud commit explicitly.
-      // This is especially important for artwork (excluded from the lightweight
-      // fingerprint) and PROJECT (stored in SQLite, not in the Beat object).
       if ((metadataChanged && hasCloudAuthority) || cloudFilesChanged) {
         if (!onCloudMutationCommit) {
           throw new Error("Changes were saved locally, but the library INDEX commit handler is unavailable.");
@@ -433,17 +489,17 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       if (reviewAction === "all" && reviewInfo && onSaveAll) {
         await onSaveAll(finalUpdated);
       } else {
-        onSaved(finalUpdated);
+        await onSaved(finalUpdated);
         if (closeAfterSave) onClose();
       }
     } catch (e: any) {
       setError(String(e));
     } finally {
       setSaving(false);
+      setSaveProgress(null);
     }
-  }, [beat, data, pending, pendingCloud, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit]);
+  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit]);
 
-  // ── Enter to save ───────────────────────────────────────────
   useEffect(() => {
     if (!isEdit && !isBulk) return;
     const handler = (e: KeyboardEvent) => {
@@ -458,7 +514,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     return () => window.removeEventListener("keydown", handler);
   }, [isEdit, isBulk, handleSave]);
 
-  // ── Pick a file (just queues it, no disk write) ─────────────
   const handlePickFile = async (
     role: "mp3" | "wav" | "stems" | "flp" | "als",
     existingPath?: string | null
@@ -475,7 +530,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       : data.folder_path;
     const filePath = await pickFile(filters[role], defaultPath);
     if (!filePath) return;
-    // Just queue it — no disk write yet
     setPending(p => ({ ...p, [role]: filePath }));
   };
 
@@ -485,10 +539,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     setPending(p => ({ ...p, samples: folderPath }));
   };
 
-  // App owns the single Tauri native receiver and forwards drawer-specific
-  // targets as DOM events. This avoids the legacy tauri://drag-* event path,
-  // which can report zero paths on macOS even though the Webview receiver has
-  // the final Finder paths at DROP time.
   useEffect(() => {
     if (!isEdit) return;
     const onNativeHover = (event: Event) => {
@@ -597,7 +647,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     setData(d => ({ ...d, tags: [] }));
   };
 
-  // ── Helpers ─────────────────────────────────────────────────
   const BulkCheck = ({ field, label }: { field: string; label: string }) => isBulk ? (
     <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginBottom: 6 }}>
       <input type="checkbox" checked={bulkFields.has(field)} onChange={() => toggleBulkField(field)}
@@ -606,10 +655,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     </label>
   ) : <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, marginBottom: 6, fontWeight: 600 }}>{label}</div>;
 
-  // File row — shows pending state preview, no disk write until Save
-  const FileRow = ({
-    label, sublabel, present, path, role, hint
-  }: {
+  const FileRow = ({ label, sublabel, present, path, role, hint }: {
     label: string; sublabel?: string; present: boolean; path: string | null;
     role: "mp3" | "wav" | "stems" | "flp" | "als"; hint?: string;
   }) => {
@@ -633,13 +679,10 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           transition: "background 0.12s, border-color 0.12s",
         }}
       >
-        {/* Label */}
         <div style={{ minWidth: 48, flexShrink: 0 }}>
           <div style={{ fontSize: 12, color: isPresent ? "#ddd" : "#555" }}>{label}</div>
           {sublabel && <div style={{ fontSize: 9, color: "#666", marginTop: 1 }}>{sublabel}</div>}
         </div>
-
-        {/* Filename / hint */}
         <div style={{ flex: 1, overflow: "hidden" }}>
           {pendingPath ? (
             <div style={{ fontSize: 10, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -650,43 +693,26 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             <div style={{ fontSize: 10, color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {displayPath.split(/[/\\]/).pop()}
             </div>
-          ) : hint ? (
-            <div style={{ fontSize: 10, color: "#444" }}>{hint}</div>
-          ) : null}
+          ) : hint ? <div style={{ fontSize: 10, color: "#444" }}>{hint}</div> : null}
         </div>
-
-        {/* Buttons */}
         {isEdit && (
           <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
             {present && path && !pendingPath && (
-              <button
-                onClick={() => revealInExplorer(path)}
-                style={{ padding: "3px 8px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 5, color: "#666", fontSize: 10, cursor: "pointer" }}
-                onMouseEnter={e => (e.currentTarget.style.color = "#bbb")}
-                onMouseLeave={e => (e.currentTarget.style.color = "#666")}
-              >show</button>
+              <button onClick={() => revealInExplorer(path)} style={{ padding: "3px 8px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 5, color: "#666", fontSize: 10, cursor: "pointer" }}
+                onMouseEnter={e => (e.currentTarget.style.color = "#bbb")} onMouseLeave={e => (e.currentTarget.style.color = "#666")}>show</button>
             )}
             {pendingPath ? (
-              // Cancel pending
-              <button
-                onClick={() => setPending(p => { const n = { ...p }; delete n[role]; return n; })}
-                style={{ padding: "3px 8px", background: "#2a1a00", border: "1px solid #4a2e00", borderRadius: 5, color: "#fb923c", fontSize: 10, cursor: "pointer" }}
-              >undo</button>
+              <button onClick={() => setPending(p => { const n = { ...p }; delete n[role]; return n; })}
+                style={{ padding: "3px 8px", background: "#2a1a00", border: "1px solid #4a2e00", borderRadius: 5, color: "#fb923c", fontSize: 10, cursor: "pointer" }}>undo</button>
             ) : (
-              <button
-                onClick={() => handlePickFile(role, present ? path : null)}
-                style={{ padding: "3px 8px", background: present ? "#2a1a00" : "#0f2a0f", border: `1px solid ${present ? "#4a2e00" : "#1a4a1a"}`, borderRadius: 5, color: present ? "#fb923c" : "#4ade80", fontSize: 10, cursor: "pointer" }}
-              >{present ? "replace" : "+ add"}</button>
+              <button onClick={() => handlePickFile(role, present ? path : null)}
+                style={{ padding: "3px 8px", background: present ? "#2a1a00" : "#0f2a0f", border: `1px solid ${present ? "#4a2e00" : "#1a4a1a"}`, borderRadius: 5, color: present ? "#fb923c" : "#4ade80", fontSize: 10, cursor: "pointer" }}>{present ? "replace" : "+ add"}</button>
             )}
           </div>
         )}
         {!isEdit && present && path && (
-          <button
-            onClick={() => revealInExplorer(path)}
-            style={{ padding: "3px 8px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 5, color: "#555", fontSize: 10, cursor: "pointer", flexShrink: 0 }}
-            onMouseEnter={e => (e.currentTarget.style.color = "#bbb")}
-            onMouseLeave={e => (e.currentTarget.style.color = "#555")}
-          >show</button>
+          <button onClick={() => revealInExplorer(path)} style={{ padding: "3px 8px", background: "transparent", border: "1px solid #2a2a2a", borderRadius: 5, color: "#555", fontSize: 10, cursor: "pointer", flexShrink: 0 }}
+            onMouseEnter={e => (e.currentTarget.style.color = "#bbb")} onMouseLeave={e => (e.currentTarget.style.color = "#555")}>show</button>
         )}
       </div>
     );
@@ -696,18 +722,10 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     <>
       <div onClick={reviewInfo ? undefined : onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 300, backdropFilter: "blur(4px)" }} />
       <div style={{ position: "fixed", right: 0, top: 0, bottom: 0, width: 340, background: "#0f0f0f", borderLeft: "1px solid #1a1a1a", zIndex: 310, display: "flex", flexDirection: "column", animation: "drawerIn 0.22s ease" }}>
-
-        {/* Header */}
         <div style={{ padding: "18px 22px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <span style={{ fontWeight: 500, fontSize: 14, color: "#e0e0e0" }}>
-              {reviewHeaderLabel({
-                reviewCurrent: reviewInfo?.current,
-                reviewTotal: reviewInfo?.total,
-                isBulk,
-                selectedBeatsCount: selectedBeats?.length ?? 0,
-                isEdit,
-              })}
+              {reviewHeaderLabel({ reviewCurrent: reviewInfo?.current, reviewTotal: reviewInfo?.total, isBulk, selectedBeatsCount: selectedBeats?.length ?? 0, isEdit })}
             </span>
             {isBulk && <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>Check fields to apply to all</div>}
           </div>
@@ -716,25 +734,17 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
               <button onClick={onSkipCurrent ?? onClose} title="Skip only this beat" style={{ background: "none", border: "none", color: "#aaa", fontSize: 12, cursor: "pointer" }}>Skip beat</button>
               <button onClick={onSkipAll ?? onClose} title="Cancel the remaining import" style={{ background: "none", border: "none", color: "#666", fontSize: 12, cursor: "pointer" }}>Cancel import</button>
             </div>
-          ) : (
-            <button onClick={onClose} title="Close" style={{ background: "none", border: "none", color: "#777", fontSize: 18, cursor: "pointer" }} />
-          )}
+          ) : <button onClick={onClose} title="Close" style={{ background: "none", border: "none", color: "#777", fontSize: 18, cursor: "pointer" }} />}
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: 22 }}>
-
-          {/* Artwork */}
           {!isBulk && (
             <>
-              <div
-                data-beatgaler-drop-owner="local"
-                data-artwork-drop
+              <div data-beatgaler-drop-owner="local" data-artwork-drop
                 onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDropTarget("artwork"); }}
                 onDragLeave={e => { e.preventDefault(); setDropTarget(null); }}
                 onDrop={e => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setDropTarget(null);
+                  e.preventDefault(); e.stopPropagation(); setDropTarget(null);
                   const file = e.dataTransfer.files?.[0];
                   if (file) handleImageFile(file);
                   else {
@@ -742,361 +752,153 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
                     setError("The image drop reached BeatGaler, but macOS provided no readable file. Use Add cover to select it.");
                   }
                 }}
-                style={{
-                  borderRadius: 10,
-                  outline: dropTarget === "artwork" ? "1px solid #666" : "1px solid transparent",
-                  outlineOffset: 3,
-                }}
-              >
+                style={{ borderRadius: 10, outline: dropTarget === "artwork" ? "1px solid #666" : "1px solid transparent", outlineOffset: 3 }}>
                 <Artwork beat={data} size={296} playing={false} />
               </div>
               {isEdit && (
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <button onClick={() => void handlePickArtwork()}
-                    style={{ flex: 1, padding: "7px 12px", background: "#1a1a1a", border: "1px solid #252525", borderRadius: 7, color: "#ccc", fontSize: 12, cursor: "pointer" }}>
-                    {data.image_base64 ? "Change cover" : "Add cover"}
-                  </button>
-                  {data.image_base64 && (
-                    <>
-                      <button onClick={() => setCropSrc(data.image_base64 || null)}
-                        style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 7, color: "#ffd66b", fontSize: 12, cursor: "pointer" }}>Recortar</button>
-                      <button onClick={() => setData(d => ({ ...d, image_base64: null, image_preview_base64: null, image_crop: null }))}
-                        style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a1a1a", borderRadius: 7, color: "#f87171", fontSize: 12, cursor: "pointer" }}>Remove</button>
-                    </>
-                  )}
+                  <button onClick={() => void handlePickArtwork()} style={{ flex: 1, padding: "7px 12px", background: "#1a1a1a", border: "1px solid #252525", borderRadius: 7, color: "#ccc", fontSize: 12, cursor: "pointer" }}>{data.image_base64 ? "Change cover" : "Add cover"}</button>
+                  {data.image_base64 && <>
+                    <button onClick={() => setCropSrc(data.image_base64 || null)} style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 7, color: "#ffd66b", fontSize: 12, cursor: "pointer" }}>Recortar</button>
+                    <button onClick={() => setData(d => ({ ...d, image_base64: null, image_preview_base64: null, image_crop: null }))} style={{ padding: "7px 12px", background: "#1a1a1a", border: "1px solid #2a1a1a", borderRadius: 7, color: "#f87171", fontSize: 12, cursor: "pointer" }}>Remove</button>
+                  </>}
                 </div>
               )}
-              <input ref={imgRef} type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif,image/avif" style={{ display: "none" }}
-                onChange={e => {
-                  const file = e.target.files?.[0];
-                  if (file) handleImageFile(file);
-                  e.currentTarget.value = "";
-                }} />
+              <input ref={imgRef} type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif,image/avif" style={{ display: "none" }} onChange={e => { const file = e.target.files?.[0]; if (file) handleImageFile(file); e.currentTarget.value = ""; }} />
             </>
           )}
 
-          {/* Name */}
-          {!isBulk && (
-            <div style={{ marginTop: 16 }}>
-              {isEdit ? (
-                <div>
-                  <input
-                    value={data.name}
-                    onChange={e => {
-                      setData(d => ({ ...d, name: e.target.value }));
-                      if (duplicateNameError) {
-                        setDuplicateNameError(false);
-                        setError(null);
-                      }
-                    }}
-                    aria-invalid={duplicateNameError}
-                    style={{
-                      background: "#181818",
-                      border: duplicateNameError ? "1px solid #ef4444" : "1px solid #252525",
-                      boxShadow: duplicateNameError ? "0 0 0 2px rgba(239,68,68,0.14)" : "none",
-                      borderRadius: 8,
-                      padding: "8px 12px",
-                      color: "#fff",
-                      fontSize: 17,
-                      fontWeight: 500,
-                      width: "100%",
-                      outline: "none",
-                    }}
-                  />
-                  {duplicateNameError && (
-                    <div style={{ marginTop: 6, color: "#ef6464", fontSize: 11 }}>
-                      A beat with this name already exists. Change the name to continue.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div style={{ fontWeight: 500, fontSize: 19, color: "#fff" }}>{data.name}</div>
-              )}
-            </div>
-          )}
+          {!isBulk && <div style={{ marginTop: 16 }}>
+            {isEdit ? <div>
+              <input value={data.name} onChange={e => { setData(d => ({ ...d, name: e.target.value })); if (duplicateNameError) { setDuplicateNameError(false); setError(null); } }} aria-invalid={duplicateNameError}
+                style={{ background: "#181818", border: duplicateNameError ? "1px solid #ef4444" : "1px solid #252525", boxShadow: duplicateNameError ? "0 0 0 2px rgba(239,68,68,0.14)" : "none", borderRadius: 8, padding: "8px 12px", color: "#fff", fontSize: 17, fontWeight: 500, width: "100%", outline: "none" }} />
+              {duplicateNameError && <div style={{ marginTop: 6, color: "#ef6464", fontSize: 11 }}>A beat with this name already exists. Change the name to continue.</div>}
+            </div> : <div style={{ fontWeight: 500, fontSize: 19, color: "#fff" }}>{data.name}</div>}
+          </div>}
 
-          {/* Rating */}
-          <div style={{ marginTop: 14 }}>
-            <BulkCheck field="rating" label="RATING" />
-            <Stars n={data.rating} onChange={(isEdit || isBulk) ? v => setData(d => ({ ...d, rating: v })) : undefined} />
-          </div>
+          <div style={{ marginTop: 14 }}><BulkCheck field="rating" label="RATING" /><Stars n={data.rating} onChange={(isEdit || isBulk) ? v => setData(d => ({ ...d, rating: v })) : undefined} /></div>
 
-          {/* Tags */}
           <div style={{ marginTop: 14, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
             <BulkCheck field="tags" label={isBulk ? `TAGS (${bulkTagsMode.toUpperCase()})` : "TAGS"} />
-            {isBulk && bulkFields.has("tags") && (
-              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                <button
-                  onClick={() => changeBulkTagsMode("add")}
-                  style={{
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: `1px solid ${bulkTagsMode === "add" ? "#3a3a3a" : "#242424"}`,
-                    background: bulkTagsMode === "add" ? "#202020" : "transparent",
-                    color: bulkTagsMode === "add" ? "#d0d0d0" : "#666",
-                    fontSize: 10,
-                    cursor: "pointer",
-                  }}
-                >
-                  Add tags
-                </button>
-                <button
-                  onClick={() => changeBulkTagsMode("replace")}
-                  style={{
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: `1px solid ${bulkTagsMode === "replace" ? "#4a2a2a" : "#242424"}`,
-                    background: bulkTagsMode === "replace" ? "#2a1717" : "transparent",
-                    color: bulkTagsMode === "replace" ? "#ef9a9a" : "#666",
-                    fontSize: 10,
-                    cursor: "pointer",
-                  }}
-                >
-                  Replace tags
-                </button>
-                <button
-                  onClick={() => changeBulkTagsMode("remove")}
-                  style={{
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: `1px solid ${bulkTagsMode === "remove" ? "#5a2525" : "#242424"}`,
-                    background: bulkTagsMode === "remove" ? "#321717" : "transparent",
-                    color: bulkTagsMode === "remove" ? "#fca5a5" : "#666",
-                    fontSize: 10,
-                    cursor: "pointer",
-                  }}
-                >
-                  Remove tags
-                </button>
-              </div>
-            )}
+            {isBulk && bulkFields.has("tags") && <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              {(["add", "replace", "remove"] as const).map(mode => <button key={mode} onClick={() => changeBulkTagsMode(mode)} style={{ padding: "4px 10px", borderRadius: 999, border: `1px solid ${bulkTagsMode === mode ? "#4a2a2a" : "#242424"}`, background: bulkTagsMode === mode ? "#2a1717" : "transparent", color: bulkTagsMode === mode ? "#ef9a9a" : "#666", fontSize: 10, cursor: "pointer" }}>{mode === "add" ? "Add tags" : mode === "replace" ? "Replace tags" : "Remove tags"}</button>)}
+            </div>}
             {isBulk && bulkFields.has("tags") && bulkTagsMode === "remove" ? (
               <div data-prevent-enter-save="true">
-                <div style={{ fontSize: 10, color: commonTags.length ? "#888" : "#f59e0b", marginBottom: 9, lineHeight: 1.5 }}>
-                  {commonTags.length
-                    ? "Click the common tags you want to delete. Red and crossed-out tags will be removed from every selected beat."
-                    : "These beats do not have any tags in common."}
-                </div>
+                <div style={{ fontSize: 10, color: commonTags.length ? "#888" : "#f59e0b", marginBottom: 9, lineHeight: 1.5 }}>{commonTags.length ? "Click the common tags you want to delete. Red and crossed-out tags will be removed from every selected beat." : "These beats do not have any tags in common."}</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {commonTags.map(tag => {
                     const normalized = tag.trim().toLowerCase();
                     const marked = data.tags.some(t => t.trim().toLowerCase() === normalized);
-                    return (
-                      <button
-                        key={normalized}
-                        type="button"
-                        aria-pressed={marked}
-                        onClick={() => setData(d => ({
-                          ...d,
-                          tags: marked
-                            ? d.tags.filter(t => t.trim().toLowerCase() !== normalized)
-                            : [...d.tags, normalized],
-                        }))}
-                        style={{
-                          padding: "4px 10px",
-                          borderRadius: 999,
-                          border: `1px solid ${marked ? "#7f1d1d" : "#2a2a2a"}`,
-                          background: marked ? "rgba(248,113,113,0.14)" : "transparent",
-                          color: marked ? "#f87171" : "#aaa",
-                          textDecoration: marked ? "line-through" : "none",
-                          fontSize: 11,
-                          cursor: "pointer",
-                        }}
-                        title={marked ? `Will remove ${tag}` : `Keep ${tag}`}
-                      >
-                        {tag}
-                      </button>
-                    );
+                    return <button key={normalized} type="button" aria-pressed={marked} onClick={() => setData(d => ({ ...d, tags: marked ? d.tags.filter(t => t.trim().toLowerCase() !== normalized) : [...d.tags, normalized] }))}
+                      style={{ padding: "4px 10px", borderRadius: 999, border: `1px solid ${marked ? "#7f1d1d" : "#2a2a2a"}`, background: marked ? "rgba(248,113,113,0.14)" : "transparent", color: marked ? "#f87171" : "#aaa", textDecoration: marked ? "line-through" : "none", fontSize: 11, cursor: "pointer" }}>{tag}</button>;
                   })}
                 </div>
               </div>
-            ) : (isEdit || isBulk) ? (
-              <TagEditor
-                tags={data.tags}
-                suggestions={tagSuggestions}
-                onChange={tags => setData(d => ({ ...d, tags }))}
-              />
-            ) : (
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {data.tags.length ? data.tags.map(t => <TagPill key={t} label={t} />) : <span style={{ fontSize: 12, color: "#444" }}>No tags</span>}
-              </div>
-            )}
+            ) : (isEdit || isBulk) ? <TagEditor tags={data.tags} suggestions={tagSuggestions} onChange={tags => setData(d => ({ ...d, tags }))} /> : <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>{data.tags.length ? data.tags.map(t => <TagPill key={t} label={t} />) : <span style={{ fontSize: 12, color: "#444" }}>No tags</span>}</div>}
           </div>
 
-          {/* BPM + Key */}
           <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div style={{ background: "#161616", borderRadius: 8, padding: "12px 14px", border: `1px solid ${bpmValidation.valid ? "#1e1e1e" : "#7f1d1d"}` }}>
               <BulkCheck field="bpm" label="BPM" />
-              {(isEdit || isBulk) ? (
-                <input
-                  value={data.bpm}
-                  inputMode="decimal"
-                  aria-invalid={!bpmValidation.valid}
-                  onChange={e => setData(d => ({ ...d, bpm: e.target.value }))}
-                  onBlur={() => { const checked = validateBpm(data.bpm); if (checked.valid) setData(d => ({ ...d, bpm: checked.normalized })); }}
-                  style={{ background: "none", border: "none", outline: "none", color: bpmValidation.valid ? "#fff" : "#fca5a5", fontSize: 16, fontWeight: 500, width: "100%", marginTop: 2 }}
-                />
-              ) : <div style={{ fontSize: 16, fontWeight: 500, color: "#fff", marginTop: 2 }}>{data.bpm || "—"}</div>}
+              {(isEdit || isBulk) ? <input value={data.bpm} inputMode="decimal" aria-invalid={!bpmValidation.valid} onChange={e => setData(d => ({ ...d, bpm: e.target.value }))} onBlur={() => { const checked = validateBpm(data.bpm); if (checked.valid) setData(d => ({ ...d, bpm: checked.normalized })); }} style={{ background: "none", border: "none", outline: "none", color: bpmValidation.valid ? "#fff" : "#fca5a5", fontSize: 16, fontWeight: 500, width: "100%", marginTop: 2 }} /> : <div style={{ fontSize: 16, fontWeight: 500, color: "#fff", marginTop: 2 }}>{data.bpm || "—"}</div>}
               {bpmValidation.valid === false && <div style={{ color: "#f87171", fontSize: 9, lineHeight: 1.4, marginTop: 5 }}>{bpmValidation.reason}</div>}
               {bpmValidation.valid && (isEdit || isBulk) && <div style={{ color: "#4d4d4d", fontSize: 9, marginTop: 5 }}>60–300</div>}
             </div>
-
             <div style={{ background: "#161616", borderRadius: 8, padding: "12px 14px", border: `1px solid ${keyValidation.valid ? "#1e1e1e" : "#7f1d1d"}` }}>
               <BulkCheck field="key" label="KEY" />
-              {(isEdit || isBulk) ? (
-                <input
-                  value={data.key}
-                  aria-invalid={!keyValidation.valid}
-                  onChange={e => setData(d => ({ ...d, key: e.target.value }))}
-                  onBlur={() => { const checked = validateMusicKey(data.key); if (checked.valid) setData(d => ({ ...d, key: checked.normalized })); }}
-                  style={{ background: "none", border: "none", outline: "none", color: keyValidation.valid ? "#fff" : "#fca5a5", fontSize: 16, fontWeight: 500, width: "100%", marginTop: 2 }}
-                />
-              ) : <div style={{ fontSize: 16, fontWeight: 500, color: "#fff", marginTop: 2 }}>{data.key || "—"}</div>}
+              {(isEdit || isBulk) ? <input value={data.key} aria-invalid={!keyValidation.valid} onChange={e => setData(d => ({ ...d, key: e.target.value }))} onBlur={() => { const checked = validateMusicKey(data.key); if (checked.valid) setData(d => ({ ...d, key: checked.normalized })); }} style={{ background: "none", border: "none", outline: "none", color: keyValidation.valid ? "#fff" : "#fca5a5", fontSize: 16, fontWeight: 500, width: "100%", marginTop: 2 }} /> : <div style={{ fontSize: 16, fontWeight: 500, color: "#fff", marginTop: 2 }}>{data.key || "—"}</div>}
               {keyValidation.valid === false && <div style={{ color: "#f87171", fontSize: 9, lineHeight: 1.4, marginTop: 5 }}>{keyValidation.reason}</div>}
               {keyValidation.valid && (isEdit || isBulk) && <div style={{ color: "#4d4d4d", fontSize: 9, marginTop: 5 }}>Major: C, C#, Cb · Minor: cm, c#m, cbm</div>}
             </div>
           </div>
 
-          {/* Telegram is the only persistent beat storage in V1. */}
-          {!isBulk && (
+          {!isBulk && reviewInfo && platform.capabilities.reviewBeatCloudCommit && (
             <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div>
-                <span style={{ fontSize: 10, color: "#4ade80" }}>GALER CLOUD</span>
-              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}><div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div><span style={{ fontSize: 10, color: "#4ade80" }}>GALER CLOUD</span></div>
+              {(["MASTER", "WAV", "PROJECT"] as PlatformImportSlotKind[]).map(kind => {
+                const filename = reviewSlotNames[kind];
+                const required = kind === "MASTER";
+                return <div key={kind} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 62, fontSize: 10, color: kind === "MASTER" ? "#60a5fa" : kind === "WAV" ? "#34d399" : "#c084fc", fontWeight: 700 }}>{kind}</span>
+                  <span title={filename} style={{ flex: 1, minWidth: 0, color: filename ? "#aaa" : required ? "#f87171" : "#555", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{filename || (required ? "Required MP3" : "Optional")}</span>
+                  <button disabled={saving} onClick={() => void handleReviewSlotPick(kind)} style={{ padding: "4px 8px", background: "#1a1a1a", border: "1px solid #303030", borderRadius: 5, color: "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>{filename ? "Replace" : `+ ${kind}`}</button>
+                </div>;
+              })}
+              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>Each selected slot is stored as one Cloud file. Nothing is uploaded until Save.</div>
+            </div>
+          )}
+
+          {!isBulk && !reviewInfo && platform.capabilities.browserCloudEditing && (
+            <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}><div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div><span style={{ fontSize: 10, color: "#4ade80" }}>GALER CLOUD</span></div>
+              {(["MASTER", "WAV", "PROJECT"] as PlatformBeatEditSlotKind[]).map(kind => {
+                const queued = pendingWebEdit[kind];
+                const current = kind === "MASTER" ? data.assets?.master : kind === "WAV" ? data.assets?.wav : data.assets?.project;
+                const filename = queued?.name || current?.filename;
+                return <div key={kind} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 62, fontSize: 10, color: kind === "MASTER" ? "#60a5fa" : kind === "WAV" ? "#34d399" : "#c084fc", fontWeight: 700 }}>{kind}</span>
+                  <span title={filename || undefined} style={{ flex: 1, minWidth: 0, color: queued ? "#fb923c" : current ? "#aaa" : "#555", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queued ? `Pending: ${queued.name}` : filename || (kind === "MASTER" ? "Cloud MASTER" : "Not added")}</span>
+                  <button disabled={saving} onClick={() => void handleWebEditFilePick(kind)} style={{ padding: "4px 8px", background: queued ? "#2a1a00" : "#1a1a1a", border: `1px solid ${queued ? "#4a2e00" : "#303030"}`, borderRadius: 5, color: queued ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>{current || queued ? "Replace" : `+ ${kind}`}</button>
+                </div>;
+              })}
+              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>Files stay pending until Save Changes. Metadata, artwork, and replacements are then published together.</div>
+            </div>
+          )}
+
+          {!isBulk && !platform.capabilities.browserCloudEditing && !platform.capabilities.reviewBeatCloudCommit && (
+            <div style={{ marginTop: 10, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}><div style={{ fontSize: 12, color: "#aaa", letterSpacing: 1, fontWeight: 600 }}>FILES</div><span style={{ fontSize: 10, color: "#4ade80" }}>GALER CLOUD</span></div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
                 {(["MASTER", "WAV", "STEMS", "LOOP", "OTHER"] as CloudFileType[]).map(type => {
                   const queued = pendingCloud[type];
-                  return (
-                    <button key={type} disabled={saving} onClick={() => void handleCloudReplace(type)}
-                      title={queued ? queued : `Choose ${type}; Galer Cloud will not change until Save Changes`}
-                      style={{ padding: "5px 8px", background: queued ? "#2a1a00" : "#1a1a1a", border: `1px solid ${queued ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 6, color: queued ? "#fb923c" : "#bbb", fontSize: 10, cursor: saving ? "default" : "pointer" }}>
-                      {queued ? `PENDING ${type}` : `+ ${type}`}
-                    </button>
-                  );
+                  return <button key={type} disabled={saving} onClick={() => void handleCloudReplace(type)} title={queued ? queued : `Choose ${type}; Galer Cloud will not change until Save Changes`}
+                    style={{ padding: "5px 8px", background: queued ? "#2a1a00" : "#1a1a1a", border: `1px solid ${queued ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 6, color: queued ? "#fb923c" : "#bbb", fontSize: 10, cursor: saving ? "default" : "pointer" }}>{queued ? `PENDING ${type}` : `+ ${type}`}</button>;
                 })}
               </div>
-              <div style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", gap: 8 }}>
-                <span style={{ width: 58, fontSize: 10, color: "#60a5fa", fontWeight: 700 }}>MASTER</span>
-                <span style={{ flex: 1, color: data.telegram_file_id ? "#888" : "#555", fontSize: 10 }}>
-                  {data.telegram_file_id ? "Stored in Galer Cloud" : "Uploading / not stored yet"}
-                </span>
-              </div>
+              <div style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", gap: 8 }}><span style={{ width: 58, fontSize: 10, color: "#60a5fa", fontWeight: 700 }}>MASTER</span><span style={{ flex: 1, color: data.telegram_file_id ? "#888" : "#555", fontSize: 10 }}>{data.telegram_file_id ? "Stored in Galer Cloud" : "Uploading / not stored yet"}</span></div>
               <div style={{ padding: "9px 0", borderTop: "1px solid #222" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                  <span style={{ width: 58, fontSize: 10, color: "#c084fc", fontWeight: 700 }}>PROJECT</span>
-                  <span style={{ flex: 1, color: cloudFiles.some(f => f.file_type === "PROJECT") ? "#888" : "#555", fontSize: 10 }}>
-                    {cloudFiles.some(f => f.file_type === "PROJECT") ? `${data.name}.zip` : "No valid project stored"}
-                  </span>
-                </div>
-                {isEdit && (
-                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    <button disabled={saving} onClick={() => void handleProjectAsset("flp")}
-                      title={pendingCloud.PROJECT_FLP ? pendingCloud.PROJECT_FLP : "Queued until Save Changes"}
-                      style={{ padding: "4px 7px", background: pendingCloud.PROJECT_FLP ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_FLP ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_FLP ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
-                      {pendingCloud.PROJECT_FLP ? "PENDING FLP" : "+ FLP"}
-                    </button>
-                    <button disabled={saving} onClick={() => void handleProjectAsset("samples")}
-                      title={pendingCloud.PROJECT_SAMPLES ? pendingCloud.PROJECT_SAMPLES : "Queued until Save Changes"}
-                      style={{ padding: "4px 7px", background: pendingCloud.PROJECT_SAMPLES ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_SAMPLES ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_SAMPLES ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
-                      {pendingCloud.PROJECT_SAMPLES ? "PENDING Samples" : "+ Samples"}
-                    </button>
-                    <button disabled={saving} onClick={() => void handleProjectAsset("audio")}
-                      title={pendingCloud.PROJECT_AUDIO ? pendingCloud.PROJECT_AUDIO : "Queued until Save Changes"}
-                      style={{ padding: "4px 7px", background: pendingCloud.PROJECT_AUDIO ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_AUDIO ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_AUDIO ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>
-                      {pendingCloud.PROJECT_AUDIO ? "PENDING Audio" : "+ Audio"}
-                    </button>
-                    {cloudFiles.some(f => f.file_type === "PROJECT") && (
-                      <button disabled={cloudBusy !== null} onClick={() => void handleManualProjectUpdate()}
-                        style={{ padding: "4px 7px", background: "#171f17", border: "1px solid #294029", borderRadius: 5, color: "#86efac", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>
-                        {cloudBusy === "PROJECT-UPDATE" ? "Updating…" : "Update Project"}
-                      </button>
-                    )}
-                  </div>
-                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}><span style={{ width: 58, fontSize: 10, color: "#c084fc", fontWeight: 700 }}>PROJECT</span><span style={{ flex: 1, color: cloudFiles.some(f => f.file_type === "PROJECT") ? "#888" : "#555", fontSize: 10 }}>{cloudFiles.some(f => f.file_type === "PROJECT") ? `${data.name}.zip` : "No valid project stored"}</span></div>
+                {isEdit && <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  <button disabled={saving} onClick={() => void handleProjectAsset("flp")} title={pendingCloud.PROJECT_FLP ? pendingCloud.PROJECT_FLP : "Queued until Save Changes"} style={{ padding: "4px 7px", background: pendingCloud.PROJECT_FLP ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_FLP ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_FLP ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>{pendingCloud.PROJECT_FLP ? "PENDING FLP" : "+ FLP"}</button>
+                  <button disabled={saving} onClick={() => void handleProjectAsset("samples")} title={pendingCloud.PROJECT_SAMPLES ? pendingCloud.PROJECT_SAMPLES : "Queued until Save Changes"} style={{ padding: "4px 7px", background: pendingCloud.PROJECT_SAMPLES ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_SAMPLES ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_SAMPLES ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>{pendingCloud.PROJECT_SAMPLES ? "PENDING Samples" : "+ Samples"}</button>
+                  <button disabled={saving} onClick={() => void handleProjectAsset("audio")} title={pendingCloud.PROJECT_AUDIO ? pendingCloud.PROJECT_AUDIO : "Queued until Save Changes"} style={{ padding: "4px 7px", background: pendingCloud.PROJECT_AUDIO ? "#2a1a00" : "#1a1a1a", border: `1px solid ${pendingCloud.PROJECT_AUDIO ? "#4a2e00" : "#2a2a2a"}`, borderRadius: 5, color: pendingCloud.PROJECT_AUDIO ? "#fb923c" : "#bbb", fontSize: 9, cursor: saving ? "default" : "pointer" }}>{pendingCloud.PROJECT_AUDIO ? "PENDING Audio" : "+ Audio"}</button>
+                  {cloudFiles.some(f => f.file_type === "PROJECT") && <button disabled={cloudBusy !== null} onClick={() => void handleManualProjectUpdate()} style={{ padding: "4px 7px", background: "#171f17", border: "1px solid #294029", borderRadius: 5, color: "#86efac", fontSize: 9, cursor: cloudBusy ? "default" : "pointer" }}>{cloudBusy === "PROJECT-UPDATE" ? "Updating…" : "Update Project"}</button>}
+                </div>}
               </div>
-              {cloudFiles.filter(file => file.file_type !== "PROJECT").map(file => (
-                <div key={file.cloud_file_id} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ width: 58, fontSize: 10, color: "#8b8b8b", fontWeight: 700 }}>{file.file_type}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div title={file.filename} style={{ color: "#bbb", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.filename}</div>
-                    <div style={{ color: "#555", fontSize: 9, marginTop: 2 }}>
-                      {formatCloudSize(file.original_size)}{file.part_count > 1 ? ` · ${file.part_count} parts` : ""}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>
-                Files marked PENDING are local selections only. Galer Cloud is not changed until you click Save Changes. Cancel closes the editor without uploading those selections.
-                <br />PLAY always uses the MASTER MP3; WAV is HQ/download only.
-              </div>
+              {cloudFiles.filter(file => file.file_type !== "PROJECT").map(file => <div key={file.cloud_file_id} style={{ padding: "7px 0", borderTop: "1px solid #222", display: "flex", alignItems: "center", gap: 8 }}><span style={{ width: 58, fontSize: 10, color: "#8b8b8b", fontWeight: 700 }}>{file.file_type}</span><div style={{ flex: 1, minWidth: 0 }}><div title={file.filename} style={{ color: "#bbb", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.filename}</div><div style={{ color: "#555", fontSize: 9, marginTop: 2 }}>{formatCloudSize(file.original_size)}{file.part_count > 1 ? ` · ${file.part_count} parts` : ""}</div></div></div>)}
+              <div style={{ marginTop: 9, color: "#777", fontSize: 9, lineHeight: 1.55 }}>Files marked PENDING are local selections only. Galer Cloud is not changed until you click Save Changes. Cancel closes the editor without uploading those selections.<br />PLAY always uses the MASTER MP3; WAV is HQ/download only.</div>
               {cloudError && <div style={{ marginTop: 8, color: "#f87171", fontSize: 10 }}>{sanitizeUserVisibleText(cloudError)}</div>}
             </div>
           )}
 
-          {error && (
-            <div style={{ marginTop: 12, padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5", lineHeight: 1.5 }}>
-              {sanitizeUserVisibleText(error)}
-            </div>
-          )}
+          {error && <div style={{ marginTop: 12, padding: "10px 14px", background: "#3d0000", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5", lineHeight: 1.5 }}>{sanitizeUserVisibleText(error)}</div>}
         </div>
 
-        {(isEdit || isBulk) && (
-          <div style={{ padding: "14px 22px", borderTop: "1px solid #1a1a1a" }}>
-            {(() => {
-              const footerState = getReviewFooterState({
-                mutationAllowed,
-                saving,
-                isBulk,
-                bulkFieldCount: bulkFields.size,
-                bulkTagsMode,
-                tagsCount: data.tags.length,
-                selectedBeatsCount: selectedBeats?.length ?? 0,
-                bpmValid: bpmValidation.valid,
-                keyValid: keyValidation.valid,
-                bulkHasBpm: bulkFields.has("bpm"),
-                bulkHasKey: bulkFields.has("key"),
-                bulkHasTags: bulkFields.has("tags"),
-                reviewCurrent: reviewInfo?.current,
-                reviewTotal: reviewInfo?.total,
-                hasOnSaveAll: !!onSaveAll,
-                pendingFileCount: Object.keys(pending).length + Object.keys(pendingCloud).length,
-              });
-              const { disabled, label, canSaveAll } = footerState;
-              return (
-                <div style={{ display: "flex", gap: canSaveAll ? 8 : 0 }}>
-                  <button onClick={() => void handleSave("next")} disabled={disabled}
-                    style={{ flex: 1, width: "100%", padding: "10px", background: disabled ? "#1e1e1e" : "#fff", border: "none", borderRadius: 8, color: disabled ? "#3a3a3a" : "#000", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
-                    {label}
-                  </button>
-                  {canSaveAll && <button onClick={() => void handleSave("all")} disabled={disabled}
-                    style={{ flex: 1, padding: "10px", background: disabled ? "#1e1e1e" : "#171717", border: `1px solid ${disabled ? "#222" : "#353535"}`, borderRadius: 8, color: disabled ? "#3a3a3a" : "#e7e7e7", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
-                    Save all
-                  </button>}
-                </div>
-              );
-            })()}
-          </div>
-        )}
+        {(isEdit || isBulk) && <div style={{ padding: "14px 22px", borderTop: "1px solid #1a1a1a" }}>
+          {(() => {
+            const footerState = getReviewFooterState({
+              mutationAllowed, saving, isBulk, bulkFieldCount: bulkFields.size, bulkTagsMode, tagsCount: data.tags.length,
+              selectedBeatsCount: selectedBeats?.length ?? 0, bpmValid: bpmValidation.valid, keyValid: keyValidation.valid,
+              bulkHasBpm: bulkFields.has("bpm"), bulkHasKey: bulkFields.has("key"), bulkHasTags: bulkFields.has("tags"),
+              reviewCurrent: reviewInfo?.current, reviewTotal: reviewInfo?.total, hasOnSaveAll: !!onSaveAll,
+              pendingFileCount: Object.keys(pending).length + Object.keys(pendingCloud).length + Object.keys(pendingWebEdit).length,
+            });
+            const { disabled, label, canSaveAll } = footerState;
+            return <div style={{ display: "flex", gap: canSaveAll ? 8 : 0 }}>
+              <button onClick={() => void handleSave("next")} disabled={disabled} style={{ flex: 1, width: "100%", padding: "10px", background: disabled ? "#1e1e1e" : "#fff", border: "none", borderRadius: 8, color: disabled ? "#3a3a3a" : "#000", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
+                {saving && saveProgress ? `Saving ${Math.round((saveProgress.uploadedBytes / Math.max(1, saveProgress.totalBytes)) * 100)}%…` : label}
+              </button>
+              {canSaveAll && <button onClick={() => void handleSave("all")} disabled={disabled} style={{ flex: 1, padding: "10px", background: disabled ? "#1e1e1e" : "#171717", border: `1px solid ${disabled ? "#222" : "#353535"}`, borderRadius: 8, color: disabled ? "#3a3a3a" : "#e7e7e7", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>Save all</button>}
+            </div>;
+          })()}
+        </div>}
       </div>
 
-      {cropSrc && (
-        <ImageCropModal
-          imageSrc={cropSrc}
-          onCancel={() => setCropSrc(null)}
-          onConfirm={(croppedDataUrl, crop) => {
-            // The confirmed crop is the actual artwork that Save changes persists
-            // and later syncs to Telegram. Do not keep the previous image_base64.
-            setData(d => ({
-              ...d,
-              image_base64: croppedDataUrl,
-              image_preview_base64: croppedDataUrl,
-              image_crop: crop,
-            }));
-            setCropSrc(null);
-          }}
-        />
-      )}
+      {cropSrc && <ImageCropModal imageSrc={cropSrc} onCancel={() => setCropSrc(null)} onConfirm={(croppedDataUrl, crop) => {
+        setData(d => ({ ...d, image_base64: croppedDataUrl, image_preview_base64: croppedDataUrl, image_crop: crop }));
+        setCropSrc(null);
+      }} />}
     </>
   );
 }
