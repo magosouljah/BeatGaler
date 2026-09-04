@@ -111,7 +111,8 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(visible).toContain('document.querySelectorAll("[data-beat-card-id]")');
     expect(visible).toContain("entry.isIntersecting && entry.intersectionRatio > 0");
     expect(visible).toContain("rootMargin: NEARBY_VIEWPORT_MARGIN");
-    expect(visible).not.toContain("hover");
+    expect(visible).not.toContain("mouseenter");
+    expect(visible).not.toContain("mouseover");
     expect(adapter).toContain("installBeatCardWarmObserver");
     expect(adapter).toContain("sources.setPrefetchPriority(beat.id, messageId, mimeType, priority);");
   });
