@@ -22,32 +22,53 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(controller).toContain('playTrace("CONTROLLER_CREDENTIAL_REFRESH_FAILED"');
   });
 
-  it("uses a 64 KiB playback part and caches Telegram media by message id", () => {
+  it("uses 64 KiB physical rounds across six shared playback data lanes", () => {
     const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
     expect(protocol).toContain("export const WEB_PLAYBACK_FIRST_CHUNK_KB = 64;");
-    expect(worker).toContain("const playbackMediaCache = new Map<number, CachedPlaybackMedia>();");
-    expect(worker).toContain('playTrace("WORKER_PLAYBACK_MEDIA_CACHE_HIT"');
-    expect(worker).toContain('playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS"');
-    expect(worker).toContain("partSize: WEB_PLAYBACK_FIRST_CHUNK_KB");
-    expect(worker).toContain("offset: offsetBytes");
+    expect(protocol).toContain("export const WEB_PLAYBACK_DATA_LANES = 6;");
+    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = 1;");
+    expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = 1024 * 1024;");
+    expect(worker).toContain("async function withDataLane");
+    expect(worker).toContain("activeDataLanes >= WEB_PLAYBACK_DATA_LANES");
+    expect(worker).toContain("WEB_PLAYBACK_FIRST_CHUNK_BYTES");
+    expect(worker).toContain("await withDataLane(() => active.downloadChunk({");
+    expect(worker).toContain("offset: absoluteOffset");
+    expect(worker).toContain("limit,");
   });
 
-  it("prefetches only one small prefix and resumes playback after that prefix", () => {
+  it("warms candidates through one batch operation and keeps failures isolated per message", () => {
+    const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
     const worker = source("src/features/cloud/webTransport.worker.ts");
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
-    expect(worker).toContain("WEB_PLAYBACK_FIRST_CHUNK_BYTES");
-    expect(worker).toContain("await active.downloadChunk({");
-    expect(worker).toContain("limit,");
-    expect(transport).toContain("async prefetchFile(input: WebTransportPrefetchInput)");
-    expect(playback).toContain("const MAX_PREFETCH_CONCURRENCY = 2;");
+    expect(protocol).toContain('op: "prefetch_batch"');
+    expect(protocol).toContain('op: "prefetch_batch_cancel"');
+    expect(worker).toContain("activePrefetchBatches");
+    expect(worker).toContain("cancelledMessageIds");
+    expect(worker).toContain("await schedulerYield();");
+    expect(transport).toContain("async prefetchFiles(");
+    expect(transport).toContain("const lease = await this.controller.beginOperation(");
+    expect(transport).toContain('{ objectType: "message", objectIds: ids.map(String) }');
+    expect(transport).toContain("const workerBatch = this.worker.prefetchBatch({ inputs }, onChunk);");
+    expect(playback).toContain("this.transport.prefetchFiles(inputs, progress => this.acceptPrefetchChunk(batch, progress))");
     expect(playback).toContain("const PREFETCH_FAILURE_COOLDOWN_MS = 10_000;");
+    expect(playback).toContain('playTrace("SOURCE_PREFETCH_NEARBY_PREEMPT"');
+    expect(playback).toContain("batch.handle?.cancelMessage(job.messageId);");
+    expect(playback).toContain("measureMp3PlayablePrefix(prefix)");
+  });
+
+  it("consumes any usable partial prefix immediately and resumes at its exact aligned offset", () => {
+    const playback = source("src/features/playback/webPlaybackSource.ts");
+
+    expect(playback).toContain("prefetched.totalBytes <= prefetched.prefix.byteLength || prefetched.prefix.byteLength % 4096 === 0");
     expect(playback).toContain('playTrace("SOURCE_PREFETCH_CONSUMED"');
     expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
-    expect(playback).toContain("this.transport.streamFile({ messageId, mimeType, offsetBytes }");
+    expect(playback).toContain("this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {");
+    expect(playback).toContain("const PLAYBACK_BUFFER_AHEAD_TARGET_SECONDS = 1;");
+    expect(playback).toContain("await this.waitForStreamDemand(entry);");
   });
 
   it("uses exactly one playback manager after the async Direct import race", () => {
@@ -55,7 +76,7 @@ describe("Issue #97 combined Web playback optimization", () => {
     const resolverStart = adapter.indexOf("async function resolveWebPlaybackSources");
     const firstGuard = adapter.indexOf("if (webPlaybackSources) return webPlaybackSources;", resolverStart);
     const awaitTransport = adapter.indexOf("const transport = await resolveWebCloudTransport();", firstGuard);
-    const secondGuard = adapter.indexOf("if (!webPlaybackSources) webPlaybackSources = new WebPlaybackSourceManager(transport);", awaitTransport);
+    const secondGuard = adapter.indexOf("if (!webPlaybackSources) {", awaitTransport);
 
     expect(resolverStart).toBeGreaterThanOrEqual(0);
     expect(firstGuard).toBeGreaterThan(resolverStart);
@@ -64,7 +85,7 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(adapter).not.toContain("new WebPlaybackSourceManager(await resolveWebCloudTransport())");
   });
 
-  it("keeps completed playback bytes in a bounded session-only RAM cache", () => {
+  it("keeps playback bytes in a bounded 100 MB session-only RAM cache", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const adapter = source("src/platform/webAdapter.ts");
 
@@ -73,25 +94,26 @@ describe("Issue #97 combined Web playback optimization", () => {
     expect(playback).toContain("entry.cachedChunks.push(chunk);");
     expect(playback).toContain("new Blob(reusable.cachedChunks");
     expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_HIT"');
-    expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_RETAINED"');
-    expect(playback).toContain("if (entry.streamDone && !entry.failed)");
     expect(playback).toContain("private enforceCacheBudget");
     expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_EVICTED"');
     expect(adapter).toContain("webPlaybackSources?.releaseAll();");
     expect(adapter).toContain("resetVisiblePlaybackPrefetch();");
   });
 
-  it("observes full card roots rather than artwork for visible prefetch", () => {
+  it("classifies BeatCards as visible, nearby, or far without hover-driven warming", () => {
     const visible = source("src/features/playback/webVisiblePlaybackPrefetch.ts");
     const adapter = source("src/platform/webAdapter.ts");
     const card = source("src/components/BeatCard.tsx");
 
     expect(card).toContain("data-beat-card-id={visible ? beat.id : undefined}");
+    expect(visible).toContain('export type BeatCardWarmPriority = "visible" | "nearby" | "far";');
+    expect(visible).toContain('export const NEARBY_VIEWPORT_MARGIN = "100% 0px 100% 0px";');
     expect(visible).toContain('document.querySelectorAll("[data-beat-card-id]")');
-    expect(visible).toContain("entry.intersectionRatio < FULL_CARD_INTERSECTION_RATIO");
-    expect(visible).toContain("rect.bottom <= root.bottom + PIXEL_TOLERANCE");
-    expect(visible).not.toContain("data-beat-artwork-id");
-    expect(adapter).toContain("installFullyVisibleBeatCardObserver");
-    expect(adapter).toContain("void prefetchVisibleBeat(beatId);");
+    expect(visible).toContain("entry.isIntersecting && entry.intersectionRatio > 0");
+    expect(visible).toContain("rootMargin: NEARBY_VIEWPORT_MARGIN");
+    expect(visible).not.toContain("mouseenter");
+    expect(visible).not.toContain("mouseover");
+    expect(adapter).toContain("installBeatCardWarmObserver");
+    expect(adapter).toContain("sources.setPrefetchPriority(beat.id, messageId, mimeType, priority);");
   });
 });

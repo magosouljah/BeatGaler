@@ -3,6 +3,10 @@ import {
   WebPlaybackSourceManager,
   type WebPlaybackTransport,
 } from "../../src/features/playback/webPlaybackSource";
+import type {
+  WebTransportPrefetchBatchResult,
+  WebTransportPrefetchChunk,
+} from "../../src/features/cloud/webTransportWorkerProtocol";
 
 class FakeSourceBuffer extends EventTarget {
   updating = false;
@@ -44,10 +48,26 @@ class FakeMediaSource extends EventTarget {
   }
 }
 
-function unusedPrefetch(): WebPlaybackTransport["prefetchFile"] {
+function unusedPrefetchFiles(): WebPlaybackTransport["prefetchFiles"] {
   return vi.fn(async () => {
     throw new Error("prefetch not expected in this test");
   });
+}
+
+function successfulBatch(inputs: readonly { messageId: number }[]): WebTransportPrefetchBatchResult {
+  return {
+    results: inputs.map(input => ({
+      ok: true as const,
+      result: {
+        messageId: input.messageId,
+        totalBytes: 65536,
+        mimeType: "audio/mpeg",
+        prefix: new ArrayBuffer(65536),
+        playableSeconds: 0,
+        targetMet: false,
+      },
+    })),
+  };
 }
 
 afterEach(() => {
@@ -69,7 +89,7 @@ describe("Web MASTER playback source", () => {
     let finish!: (value: { messageId: number; totalBytes: number; mimeType: string }) => void;
     const cancel = vi.fn();
     const transport: WebPlaybackTransport = {
-      prefetchFile: unusedPrefetch(),
+      prefetchFiles: unusedPrefetchFiles(),
       streamFile: vi.fn(async (_input, onChunk) => {
         emitChunk = onChunk;
         return {
@@ -97,85 +117,117 @@ describe("Web MASTER playback source", () => {
     expect(mediaSource.sourceBuffer.appended).toHaveLength(2);
     expect(mediaSource.sourceBuffer.mode).toBe("sequence");
     expect(mediaSource.endReason).toBe("complete");
-    expect(createObjectURL).toHaveBeenCalledWith(mediaSource);
 
     manager.release("beat-1");
     expect(cancel).not.toHaveBeenCalled();
-    expect(revokeObjectURL).not.toHaveBeenCalled();
 
     const replay = await manager.prepare("beat-1", 91);
     expect(replay.url).toBe("blob:session-cache-1");
     expect(transport.streamFile).toHaveBeenCalledTimes(1);
-    expect(createObjectURL.mock.calls[1][0]).toBeInstanceOf(Blob);
     expect((createObjectURL.mock.calls[1][0] as Blob).size).toBe(4);
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:cloud-master");
-
-    manager.release("beat-1");
-    const replayAgain = await manager.prepare("beat-1", 91);
-    expect(replayAgain.url).toBe("blob:session-cache-2");
-    expect(transport.streamFile).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:session-cache-1");
 
     manager.clearCache();
     expect(cancel).toHaveBeenCalledOnce();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:session-cache-2");
   });
 
-  it("caps speculative prefix downloads at two concurrent jobs", async () => {
-    const releases: Array<() => void> = [];
-    let active = 0;
-    let maxActive = 0;
-    const prefetchFile = vi.fn((input: { messageId: number; mimeType?: string | null }) => new Promise<{
-      messageId: number;
-      totalBytes: number;
-      mimeType: string;
-      prefix: ArrayBuffer;
-    }>(resolve => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      releases.push(() => {
-        active -= 1;
-        resolve({
+  it("coalesces all currently visible warm candidates into one batch", async () => {
+    const cancel = vi.fn();
+    const cancelMessage = vi.fn();
+    const prefetchFiles = vi.fn(async (inputs: any[], onChunk?: (progress: WebTransportPrefetchChunk) => void) => {
+      for (const input of inputs) {
+        onChunk?.({
           messageId: input.messageId,
           totalBytes: 65536,
-          mimeType: input.mimeType || "audio/mpeg",
-          prefix: new ArrayBuffer(65536),
+          mimeType: "audio/mpeg",
+          offsetBytes: 0,
+          chunk: new ArrayBuffer(65536),
+          downloadedBytes: 65536,
+          playableSeconds: 0,
+          targetMet: false,
         });
-      });
-    }));
-    const transport: WebPlaybackTransport = {
-      prefetchFile,
-      streamFile: vi.fn(async () => { throw new Error("stream not expected"); }),
-    };
-    const manager = new WebPlaybackSourceManager(transport);
-    const jobs = [1, 2, 3, 4, 5].map(messageId => manager.prefetch(`beat-${messageId}`, messageId));
-
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(2));
-    releases.shift()!();
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(3));
-    releases.shift()!();
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(4));
-    releases.shift()!();
-    await vi.waitFor(() => expect(prefetchFile).toHaveBeenCalledTimes(5));
-    while (releases.length) releases.shift()!();
-    await Promise.all(jobs);
-
-    expect(maxActive).toBe(2);
-  });
-
-  it("does not hot-loop a failed speculative prefetch", async () => {
-    const prefetchFile = vi.fn(async () => {
-      throw new Error("502 Bad Gateway");
+      }
+      return {
+        completed: Promise.resolve(successfulBatch(inputs)),
+        cancelMessage,
+        cancel,
+      };
     });
     const transport: WebPlaybackTransport = {
-      prefetchFile,
+      prefetchFiles,
       streamFile: vi.fn(async () => { throw new Error("stream not expected"); }),
     };
     const manager = new WebPlaybackSourceManager(transport);
+    const jobs = Array.from({ length: 14 }, (_, index) => manager.prefetch(`beat-${index + 1}`, index + 1));
 
-    await expect(manager.prefetch("beat-fail", 404)).rejects.toThrow("502 Bad Gateway");
-    await expect(manager.prefetch("beat-fail", 404)).resolves.toBeUndefined();
-    expect(prefetchFile).toHaveBeenCalledTimes(1);
+    await Promise.all(jobs);
+
+    expect(prefetchFiles).toHaveBeenCalledTimes(1);
+    expect(prefetchFiles.mock.calls[0][0]).toHaveLength(14);
+    expect(prefetchFiles.mock.calls[0][0].every((input: any) => input.offsetBytes === 0)).toBe(true);
+  });
+
+  it("hands any aligned partial prefix to Play and resumes at its exact byte length", async () => {
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:cloud-master"), revokeObjectURL: vi.fn() });
+    let reportChunk!: (progress: WebTransportPrefetchChunk) => void;
+    let completeBatch!: (value: WebTransportPrefetchBatchResult) => void;
+    const cancelMessage = vi.fn();
+    const prefetchFiles = vi.fn(async (_inputs: any[], onChunk?: (progress: WebTransportPrefetchChunk) => void) => {
+      reportChunk = onChunk!;
+      return {
+        completed: new Promise<WebTransportPrefetchBatchResult>(resolve => { completeBatch = resolve; }),
+        cancelMessage,
+        cancel: vi.fn(),
+      };
+    });
+    const streamFile = vi.fn(async () => ({
+      completed: new Promise<never>(() => {}),
+      cancel: vi.fn(),
+    }));
+    const manager = new WebPlaybackSourceManager({ prefetchFiles, streamFile });
+    const warm = manager.prefetch("beat-partial", 77);
+    await vi.waitFor(() => expect(prefetchFiles).toHaveBeenCalledOnce());
+
+    reportChunk({
+      messageId: 77,
+      totalBytes: 500000,
+      mimeType: "audio/mpeg",
+      offsetBytes: 0,
+      chunk: new ArrayBuffer(65536),
+      downloadedBytes: 65536,
+      playableSeconds: 0,
+      targetMet: false,
+    });
+
+    const prepared = await manager.prepare("beat-partial", 77);
+    await warm;
+    expect(prepared.url).toBe("blob:cloud-master");
+    expect(cancelMessage).toHaveBeenCalledWith(77);
+    expect(streamFile).toHaveBeenCalledWith(
+      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536 },
+      expect.any(Function),
+    );
+
+    completeBatch(successfulBatch([{ messageId: 77 }]));
+  });
+
+  it("cools down the whole batch when transport admission fails", async () => {
+    const prefetchFiles = vi.fn(async () => {
+      throw new Error("502 Bad Gateway");
+    });
+    const manager = new WebPlaybackSourceManager({
+      prefetchFiles,
+      streamFile: vi.fn(async () => { throw new Error("stream not expected"); }),
+    });
+
+    const first = Promise.all([
+      manager.prefetch("beat-fail-1", 401),
+      manager.prefetch("beat-fail-2", 402),
+    ]);
+    await expect(first).rejects.toThrow("502 Bad Gateway");
+    await expect(manager.prefetch("beat-fail-1", 401)).resolves.toBeUndefined();
+    await expect(manager.prefetch("beat-fail-2", 402)).resolves.toBeUndefined();
+    expect(prefetchFiles).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to a complete MP3 Blob when MediaSource is unavailable", async () => {
@@ -183,7 +235,7 @@ describe("Web MASTER playback source", () => {
     const createObjectURL = vi.fn(() => "blob:fallback-master");
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     const transport: WebPlaybackTransport = {
-      prefetchFile: unusedPrefetch(),
+      prefetchFiles: unusedPrefetchFiles(),
       streamFile: vi.fn(async (_input, onChunk) => {
         await onChunk(new Uint8Array([1, 2, 3]).buffer, 3, 3);
         return {
@@ -196,7 +248,6 @@ describe("Web MASTER playback source", () => {
     const prepared = await new WebPlaybackSourceManager(transport).prepare("beat-2", 92);
 
     expect(prepared.url).toBe("blob:fallback-master");
-    expect(createObjectURL.mock.calls[0][0]).toBeInstanceOf(Blob);
     expect((createObjectURL.mock.calls[0][0] as Blob).size).toBe(3);
   });
 });

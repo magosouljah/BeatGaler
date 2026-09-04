@@ -14,7 +14,7 @@ class FakeWorker {
   }
 
   respond(result: unknown = undefined): void {
-    const request = this.postMessage.mock.calls.at(-1)?.[0] as { requestId?: string } | undefined;
+    const request = this.postMessage.mock.calls.findLast(call => call[0]?.op !== "prefetch_batch_cancel")?.[0] as { requestId?: string } | undefined;
     if (!request?.requestId) throw new Error("Fake Worker has no request to answer.");
     this.onmessage?.({
       data: { requestId: request.requestId, ok: true, result },
@@ -71,5 +71,46 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     FakeWorker.instances[1].respond();
 
     await expect(secondRequest).resolves.toBeUndefined();
+  });
+
+  it("routes warm-prefix progress and cancels one batch member without cancelling the batch", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const onChunk = vi.fn();
+    const handle = client.prefetchBatch({ inputs: [
+      { messageId: 11, mimeType: "audio/mpeg" },
+      { messageId: 12, mimeType: "audio/mpeg" },
+    ] }, onChunk);
+    const worker = FakeWorker.instances[0];
+    const batchRequest = worker.postMessage.mock.calls[0][0];
+
+    worker.onmessage?.({
+      data: {
+        requestId: batchRequest.requestId,
+        event: "prefetch-chunk",
+        progress: {
+          messageId: 11,
+          totalBytes: 200000,
+          mimeType: "audio/mpeg",
+          offsetBytes: 0,
+          chunk: new ArrayBuffer(65536),
+          downloadedBytes: 65536,
+          playableSeconds: 0.7,
+          targetMet: false,
+        },
+      },
+    } as MessageEvent);
+    handle.cancelMessage(11);
+
+    expect(onChunk).toHaveBeenCalledWith(expect.objectContaining({ messageId: 11, downloadedBytes: 65536 }));
+    expect(worker.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      op: "prefetch_batch_cancel",
+      targetRequestId: batchRequest.requestId,
+      messageId: 11,
+    }));
+
+    worker.onmessage?.({
+      data: { requestId: batchRequest.requestId, ok: true, result: { results: [] } },
+    } as MessageEvent);
+    await expect(handle.completed).resolves.toEqual({ results: [] });
   });
 });

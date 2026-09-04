@@ -79,7 +79,7 @@ describe("BeatGaler Web no-Tauri contract", () => {
     expect(eventHandler).toHaveBeenCalledWith({ ok: true });
     unlisten();
 
-    expect(await webAdapter.playbackCache.status()).toEqual({ used_bytes: 0, limit_mb: 0 });
+    expect(await webAdapter.playbackCache.status()).toEqual({ used_bytes: 0, limit_mb: 100 });
     expect(await webAdapter.system.getLogDirectory()).toBe("");
     expect(await webAdapter.system.getTemplatesDirectory()).toBe("");
     await expect(webAdapter.system.revealPath("ignored")).rejects.toThrow("not available in BeatGaler Web yet");

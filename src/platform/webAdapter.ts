@@ -10,7 +10,10 @@ import {
   readRequestedWebLibraryOffset,
 } from "../features/library/webLibraryNavigation";
 import { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
-import { installFullyVisibleBeatCardObserver } from "../features/playback/webVisiblePlaybackPrefetch";
+import {
+  installBeatCardWarmObserver,
+  type BeatCardWarmPriority,
+} from "../features/playback/webVisiblePlaybackPrefetch";
 import { playTrace, observePlayStep } from "../features/playback/playTrace";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
@@ -20,6 +23,7 @@ let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 const webBeatRegistry = new Map<string, Beat>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
+let stopPlaybackRuntimeObserver: (() => void) | null = null;
 
 async function resolveWebCloudTransport() {
   if (!webCloudTransport) {
@@ -33,8 +37,6 @@ function prewarmAuthenticatedWebTransport(): void {
   if (typeof window === "undefined") return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
 
-  // Authentication owns this trigger. The durable marker is only a final guard
-  // so session-expiry/logout syncs cannot import Direct for a signed-out page.
   try {
     if (window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1") return;
   } catch {
@@ -67,20 +69,22 @@ function webBeatMessageId(beat: Beat): number | null {
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
 }
 
-async function prefetchVisibleBeat(beatId: string): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+async function updateBeatWarmPriority(beatId: string, priority: BeatCardWarmPriority): Promise<void> {
+  if (priority !== "far" && typeof navigator !== "undefined" && navigator.onLine === false) return;
   const beat = webBeatRegistry.get(beatId);
   if (!beat) return;
   const messageId = webBeatMessageId(beat);
   if (!messageId) return;
+  if (priority === "far" && !webPlaybackSources) return;
   const mimeType = beat.assets?.master?.mime_type || "audio/mpeg";
   try {
     const sources = await resolveWebPlaybackSources();
-    await sources.prefetch(beat.id, messageId, mimeType);
+    sources.setPrefetchPriority(beat.id, messageId, mimeType, priority);
   } catch (error) {
-    playTrace("ADAPTER_VISIBLE_PREFETCH_DEFERRED", {
+    playTrace("ADAPTER_WARM_PRIORITY_DEFERRED", {
       beat_id: beat.id,
       message_id: messageId,
+      priority,
       error_name: error instanceof Error ? error.name : "unknown",
     });
   }
@@ -88,17 +92,36 @@ async function prefetchVisibleBeat(beatId: string): Promise<void> {
 
 function ensureVisiblePlaybackObserver(): void {
   if (stopVisiblePlaybackObserver || typeof window === "undefined") return;
-  stopVisiblePlaybackObserver = installFullyVisibleBeatCardObserver(beatId => {
-    playTrace("ADAPTER_VISIBLE_CARD_PREFETCH", { beat_id: beatId });
-    void prefetchVisibleBeat(beatId);
+  stopVisiblePlaybackObserver = installBeatCardWarmObserver((beatId, priority) => {
+    playTrace("ADAPTER_CARD_WARM_PRIORITY", { beat_id: beatId, priority });
+    void updateBeatWarmPriority(beatId, priority);
   });
+}
+
+function ensurePlaybackRuntimeObserver(): void {
+  if (stopPlaybackRuntimeObserver || typeof window === "undefined") return;
+  const listener = (message: Event) => {
+    const detail = (message as CustomEvent<{
+      beatId?: string | null;
+      currentTime?: number;
+      playing?: boolean;
+      waiting?: boolean;
+    }>).detail;
+    const beatId = String(detail?.beatId || "").trim();
+    if (!beatId) return;
+    webPlaybackSources?.updatePlaybackState({
+      beatId,
+      currentTime: Math.max(0, Number(detail?.currentTime) || 0),
+      playing: Boolean(detail?.playing),
+      waiting: Boolean(detail?.waiting),
+    });
+  };
+  window.addEventListener("beatgaler:web-playback-state", listener);
+  stopPlaybackRuntimeObserver = () => window.removeEventListener("beatgaler:web-playback-state", listener);
 }
 
 function rememberWebBeats(beats: readonly Beat[]): void {
   for (const beat of beats) webBeatRegistry.set(beat.id, beat);
-  // IntersectionObserver's initial callback may already have fired when a fast
-  // Play seeded only one cached beat. Reinstall after registry growth so every
-  // currently full-card-visible beat is reconsidered once metadata is known.
   stopVisiblePlaybackObserver?.();
   stopVisiblePlaybackObserver = null;
   ensureVisiblePlaybackObserver();
@@ -111,6 +134,8 @@ function forgetWebBeats(ids: readonly string[]): void {
 function resetVisiblePlaybackPrefetch(): void {
   stopVisiblePlaybackObserver?.();
   stopVisiblePlaybackObserver = null;
+  stopPlaybackRuntimeObserver?.();
+  stopPlaybackRuntimeObserver = null;
   webBeatRegistry.clear();
 }
 
@@ -133,10 +158,10 @@ function reportLibraryWindow(page: WebLibraryWindowSnapshot, reason: string): vo
 async function resolveWebPlaybackSources(): Promise<WebPlaybackSourceManager> {
   if (webPlaybackSources) return webPlaybackSources;
   const transport = await resolveWebCloudTransport();
-  // Multiple fully-visible cards can resolve in the same microtask while the
-  // Direct import is still pending. Re-check after the await so those callbacks
-  // all share one manager, one prefix cache, and one 2-wide prefetch queue.
-  if (!webPlaybackSources) webPlaybackSources = new WebPlaybackSourceManager(transport);
+  if (!webPlaybackSources) {
+    webPlaybackSources = new WebPlaybackSourceManager(transport);
+    ensurePlaybackRuntimeObserver();
+  }
   return webPlaybackSources;
 }
 
@@ -239,9 +264,12 @@ export const webAdapter: PlatformAdapter = {
     async purgePresets() { return unavailable("Preset deletion"); },
   },
   playbackCache: {
-    async status() { return { used_bytes: 0, limit_mb: 0 }; },
-    async setLimitMb(limitMb) { return { used_bytes: 0, limit_mb: Math.max(0, limitMb) }; },
-    async clear() { return { used_bytes: 0, limit_mb: 0 }; },
+    async status() { return webPlaybackSources?.cacheStatus() ?? { used_bytes: 0, limit_mb: 100 }; },
+    async setLimitMb(limitMb) {
+      if (!webPlaybackSources) return { used_bytes: 0, limit_mb: Math.max(0, Math.round(limitMb)) };
+      return webPlaybackSources.setCacheLimitMb(limitMb);
+    },
+    async clear() { return webPlaybackSources?.clearCache() ?? { used_bytes: 0, limit_mb: 100 }; },
   },
   system: {
     async getLogDirectory() { return ""; },
@@ -269,9 +297,6 @@ export const webAdapter: PlatformAdapter = {
       const master = beat.assets?.master;
       const messageId = webBeatMessageId(beat);
       rememberWebBeats([beat]);
-      // A blob: URL is valid only for the document that created it. Cached Web
-      // manifests can outlive that document, so cloud-backed beats must always
-      // obtain a fresh session-owned playback URL from WebPlaybackSourceManager.
       if (messageId) {
         playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, mime_type: master?.mime_type || "audio/mpeg" });
         const sources = await resolveWebPlaybackSources();
@@ -280,8 +305,6 @@ export const webAdapter: PlatformAdapter = {
         playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id });
         return prepared;
       }
-      // Keep the direct blob path only for a browser-local import that has not
-      // been committed to Galer Cloud yet.
       if (beat.playback_path.startsWith("blob:")) {
         playTrace("ADAPTER_LOCAL_BLOB", { beat_id: beat.id });
         return { url: beat.playback_path, completed: Promise.resolve() };

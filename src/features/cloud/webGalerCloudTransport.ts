@@ -12,6 +12,8 @@ import type {
   WebTransportDownloadInput,
   WebTransportDownloadResult,
   WebTransportLibraryIndexResult,
+  WebTransportPrefetchBatchResult,
+  WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
   WebTransportProgress,
@@ -21,6 +23,12 @@ import type {
   WebTransportUploadResult,
 } from "./webTransportWorkerProtocol";
 
+export interface WebTransportPrefetchFilesHandle {
+  completed: Promise<WebTransportPrefetchBatchResult>;
+  cancelMessage(messageId: number): void;
+  cancel(): void;
+}
+
 export class WebGalerCloudTransport {
   private readonly worker = new WebTransportWorkerClient();
   private readonly controller = new WebTransportController(this.worker);
@@ -29,8 +37,6 @@ export class WebGalerCloudTransport {
   constructor() {
     const started = Date.now();
     playTrace("TRANSPORT_PRECONNECT_ENTER");
-    // Phase 3 / P2: load/evaluate the Worker module while control-plane prepare
-    // is running. This does not initialize MTProto or change session ordering.
     this.worker.prewarm();
     void this.controller.connect().then(
       () => playTrace("TRANSPORT_PRECONNECT_READY", { elapsed_ms: Date.now() - started }),
@@ -135,6 +141,37 @@ export class WebGalerCloudTransport {
       total_ms: Date.now() - started,
     });
     return result;
+  }
+
+  async prefetchFiles(
+    inputs: WebTransportPrefetchInput[],
+    onChunk?: (progress: WebTransportPrefetchChunk) => void,
+  ): Promise<WebTransportPrefetchFilesHandle> {
+    if (inputs.length === 0) {
+      return {
+        completed: Promise.resolve({ results: [] }),
+        cancelMessage() {},
+        cancel() {},
+      };
+    }
+    const started = Date.now();
+    const ids = Array.from(new Set(inputs.map(input => Number(input.messageId)).filter(id => Number.isInteger(id) && id > 0)));
+    playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length });
+    await this.controller.connect();
+    const lease = await this.controller.beginOperation(
+      "stream_master",
+      { objectType: "message", objectIds: ids.map(String) },
+    );
+    const workerBatch = this.worker.prefetchBatch({ inputs }, onChunk);
+    const completed = workerBatch.completed.finally(() => {
+      playTrace("TRANSPORT_PREFETCH_BATCH_DONE", { count: ids.length, total_ms: Date.now() - started });
+      return this.controller.endOperation(lease).catch(() => {});
+    });
+    return {
+      completed,
+      cancelMessage: workerBatch.cancelMessage,
+      cancel: workerBatch.cancel,
+    };
   }
 
   async streamFile(
@@ -337,6 +374,8 @@ export type {
   WebTransportDownloadInput,
   WebTransportDownloadResult,
   WebTransportLibraryIndexResult,
+  WebTransportPrefetchBatchResult,
+  WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
   WebTransportProgress,
