@@ -28,10 +28,22 @@ import type {
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
 export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
+const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
+const NON_RESUMABLE_PREFIX_ERROR = "Galer Cloud returned a non-resumable partial playback prefix.";
 
 function publishTransportInvalidated(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(WEB_TRANSPORT_INVALIDATED_EVENT));
+}
+
+function isReusablePlaybackPrefixEnd(offsetBytes: number, byteLength: number, totalBytes: number): boolean {
+  const offset = Math.max(0, Math.floor(Number(offsetBytes) || 0));
+  const bytes = Math.max(0, Math.floor(Number(byteLength) || 0));
+  const total = Math.max(0, Math.floor(Number(totalBytes) || 0));
+  if (bytes <= 0) return false;
+  const end = offset + bytes;
+  if (total > 0 && end >= total) return true;
+  return end % PLAYBACK_PREFIX_ALIGNMENT_BYTES === 0;
 }
 
 export class WebTransportWorkerError extends Error {
@@ -49,6 +61,8 @@ type PendingRequest = {
   onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
   onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void;
   onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void;
+  prefetchOffsetBytes?: number;
+  invalidPrefetchMessageIds?: Set<number>;
   timeoutId: ReturnType<typeof setTimeout> | null;
   activeTimeoutMs: number | null;
 };
@@ -132,6 +146,48 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     playTrace("WORKER_INDEX_DEADLINE_ACTIVE", { request_id: requestId, timeout_ms: pending.activeTimeoutMs });
   }
 
+  private onPrefetchChunk(pending: PendingRequest, progress: WebTransportPrefetchChunk): void {
+    if (isReusablePlaybackPrefixEnd(progress.offsetBytes, progress.chunk.byteLength, progress.totalBytes)) {
+      pending.onPrefetchChunk?.(progress);
+      return;
+    }
+    const invalid = pending.invalidPrefetchMessageIds ?? new Set<number>();
+    pending.invalidPrefetchMessageIds = invalid;
+    if (invalid.has(progress.messageId)) return;
+    invalid.add(progress.messageId);
+    pending.onPrefetchTerminal?.({
+      messageId: progress.messageId,
+      status: "FAILED",
+      code: "TRANSFER_FAILED",
+      error: NON_RESUMABLE_PREFIX_ERROR,
+    });
+    playTrace("WORKER_PREFETCH_NON_RESUMABLE", {
+      message_id: progress.messageId,
+      offset_bytes: progress.offsetBytes,
+      bytes: progress.chunk.byteLength,
+      total_bytes: progress.totalBytes,
+    });
+  }
+
+  private normalizePrefetchBatchResult(
+    result: WebTransportPrefetchBatchResult,
+    invalidMessageIds: ReadonlySet<number> | undefined,
+  ): WebTransportPrefetchBatchResult {
+    if (!invalidMessageIds || invalidMessageIds.size === 0) return result;
+    return {
+      results: result.results.map(item => {
+        const messageId = item.ok ? item.result.messageId : item.messageId;
+        if (!invalidMessageIds.has(messageId)) return item;
+        return {
+          ok: false as const,
+          messageId,
+          error: NON_RESUMABLE_PREFIX_ERROR,
+          code: "TRANSFER_FAILED" as const,
+        };
+      }),
+    };
+  }
+
   private onMessage(message: WebTransportWorkerResponse): void {
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
@@ -139,9 +195,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       if (message.event === "progress") {
         pending.onProgress?.(message.progress);
       } else if (message.event === "prefetch-chunk") {
-        pending.onPrefetchChunk?.(message.progress);
+        this.onPrefetchChunk(pending, message.progress);
       } else if (message.event === "prefetch-terminal") {
-        pending.onPrefetchTerminal?.(message.terminal);
+        if (!pending.invalidPrefetchMessageIds?.has(message.terminal.messageId)) {
+          pending.onPrefetchTerminal?.(message.terminal);
+        }
       } else if (message.event === "index-state") {
         this.onIndexState(message.requestId, pending, message.state);
       } else if (message.event === "download-chunk") {
@@ -164,8 +222,26 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         ok: message.ok,
       });
     }
-    if (message.ok) completed.resolve(message.result);
-    else completed.reject(new WebTransportWorkerError(message.error, message.code));
+    if (!message.ok) {
+      completed.reject(new WebTransportWorkerError(message.error, message.code));
+      return;
+    }
+    if (completed.operation === "prefetch") {
+      const result = message.result as WebTransportPrefetchResult;
+      const offsetBytes = completed.prefetchOffsetBytes || 0;
+      if (!isReusablePlaybackPrefixEnd(offsetBytes, result.prefix.byteLength, result.totalBytes)) {
+        completed.reject(new WebTransportWorkerError(NON_RESUMABLE_PREFIX_ERROR, "TRANSFER_FAILED"));
+        return;
+      }
+    }
+    if (completed.operation === "prefetch_batch") {
+      completed.resolve(this.normalizePrefetchBatchResult(
+        message.result as WebTransportPrefetchBatchResult,
+        completed.invalidPrefetchMessageIds,
+      ));
+      return;
+    }
+    completed.resolve(message.result);
   }
 
   private failPending(message: string): void {
@@ -220,6 +296,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         onChunk,
         onPrefetchChunk,
         onPrefetchTerminal,
+        prefetchOffsetBytes: command.op === "prefetch" ? Math.max(0, Math.floor(Number(command.input.offsetBytes) || 0)) : undefined,
+        invalidPrefetchMessageIds: command.op === "prefetch_batch" ? new Set<number>() : undefined,
         timeoutId,
         activeTimeoutMs,
       });
