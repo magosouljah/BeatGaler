@@ -131,7 +131,9 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
     expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
     expect(rememberedPreconnect).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
-    expect(rememberedPreconnect).toContain("void coordinator.start().then(");
+    expect(rememberedPreconnect).toContain("const startup = coordinator.start();");
+    expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")');
+    expect(rememberedPreconnect).toContain("void startup.catch(error =>");
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
