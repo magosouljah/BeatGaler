@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
-import { shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
+import { invalidateAllWebPlaybackIntents, shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
 import { WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, type WebPlaybackRouteRecoveryDetail } from "../features/playback/webPlaybackRouteRecoveryEvents";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../features/cloud/webTransportEvents";
 
@@ -134,6 +134,7 @@ export function useAudio() {
       playTrace("AUDIO_ROUTE_RECOVERY_READY", { beat_id: beatId, resume_time: resumeTime });
     };
     const onTransportInvalidated = () => {
+      invalidateAllWebPlaybackIntents();
       const beatId = currentBeatIdRef.current; playTrace("AUDIO_SESSION_INVALIDATED", { beat_id: beatId }); audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; primingRef.current = false; waitingRef.current = false; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; if (beatId) platform.media.releasePlayback(beatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
     };
     audio.addEventListener("timeupdate", onTimeUpdate); audio.addEventListener("loadedmetadata", onLoadedMeta); audio.addEventListener("ended", onEnded); audio.addEventListener("play", onPlay); audio.addEventListener("playing", onPlaying); audio.addEventListener("waiting", onWaiting); audio.addEventListener("canplay", onCanPlay); audio.addEventListener("pause", onPause); audio.addEventListener("error", onError); window.addEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRouteRecovery); window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated);
