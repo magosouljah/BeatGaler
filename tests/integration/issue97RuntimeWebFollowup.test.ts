@@ -102,7 +102,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).toContain("setOptimisticRememberedSession(false);");
   });
 
-  it("returns the first MSE URL before Direct stream admission and starts remembered Direct through the definitive coordinator", () => {
+  it("returns the first MSE URL before Direct stream admission and dispatches remembered Direct before React mount", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
     const adapter = source("src/platform/webAdapter.ts");
@@ -118,16 +118,16 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(playback).toContain("return Promise.resolve({ url, completed });");
     expect(playback).not.toContain("private async prepareMediaSource");
 
-    expect(main).toContain("function preloadRememberedWebDirectCode(): void");
+    expect(main).toContain('import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";');
     expect(main).toContain("hasRememberedWebSessionMarker()");
-    expect(main).toContain('playTrace("DIRECT_CODE_PRELOAD_BEGIN")');
-    expect(main).toContain('void import("./features/playback/webStartupPlaybackCoordinator").then(');
     expect(main).toContain("function preconnectRememberedWebDirect(): void");
+    expect(main).toContain("if (Boolean((window as any).__TAURI_INTERNALS__)) return;");
     expect(main).toContain("if (!readWebCsrfToken()) {");
     expect(main).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
-    expect(main).toContain("getWebStartupPlaybackCoordinator().start()");
-    expect(main).toContain("preloadRememberedWebDirectCode();\npreconnectRememberedWebDirect();");
+    expect(main).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
+    expect(main).toContain("void coordinator.start().then(");
     expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
+    expect(main).not.toContain('void import("./features/playback/webStartupPlaybackCoordinator").then(');
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(main).not.toContain("new WebGalerCloudTransport");
 
@@ -145,6 +145,8 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(workerClient).toContain("prewarm(): void {");
     expect(workerClient).toContain('playTrace("WORKER_PREWARM_BEGIN")');
     expect(workerClient).toContain("this.ensureWorker();");
+    expect(workerClient).toContain("this.desiredPlaybackMessageId = id;");
+    expect(workerClient).toContain('op: "playback_focus", messageId: desiredPlaybackMessageId');
     expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER", { startup_beat_count: candidates.length });');
     expect(transport).toContain("this.worker.prewarm();");
     expect(transport).toContain("async connectPlaybackDataPlane(): Promise<void>");
@@ -156,16 +158,17 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
     expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));");
 
-    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve(this.startupBeatIds);");
+    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve();");
     const activateIndex = controller.indexOf('observePlayStep("DIRECT_ACTIVATE"');
     const bindIndex = controller.indexOf("this.api.bind(bootstrap!)");
     const activationGateIndex = controller.indexOf("const activationResult = await activationResultPromise;");
     const mediaGateIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN")');
     const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
     const publishIndex = controller.indexOf("this.session = session;", initializeIndex);
-    const backgroundIndex = controller.indexOf("this.startBackgroundVerification(session);", publishIndex);
+    const backgroundIndex = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration);", publishIndex);
     const readyIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_DATA_PLANE_READY"', backgroundIndex);
     expect(reserveIndex).toBeGreaterThanOrEqual(0);
+    expect(controller).not.toContain("this.api.reserve(this.startupBeatIds)");
     expect(reserveIndex).toBeLessThan(activateIndex);
     expect(activateIndex).toBeLessThan(bindIndex);
     expect(bindIndex).toBeLessThan(activationGateIndex);
