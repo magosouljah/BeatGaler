@@ -7,6 +7,7 @@ import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
 import { playTrace } from "./features/playback/playTrace";
+import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";
 import { hasRememberedWebSessionMarker, readWebCsrfToken } from "./features/auth/webSessionBootstrap";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
 import { PlatformProvider } from "./platform/react";
@@ -19,38 +20,26 @@ import "./styles/library-ux.css";
 installStartupTrace();
 installWebCsrfFetchCoordinator();
 
-function preloadRememberedWebDirectCode(): void {
-  if (typeof window === "undefined") return;
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-  if (!hasRememberedWebSessionMarker()) return;
-
-  const started = performance.now();
-  playTrace("DIRECT_CODE_PRELOAD_BEGIN");
-  void import("./features/playback/webStartupPlaybackCoordinator").then(
-    () => playTrace("DIRECT_CODE_PRELOAD_DONE", { elapsed_ms: Math.round(performance.now() - started) }),
-    error => playTrace("DIRECT_CODE_PRELOAD_DEFERRED", {
-      elapsed_ms: Math.round(performance.now() - started),
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
-}
-
 function preconnectRememberedWebDirect(): void {
   if (typeof window === "undefined") return;
+  // This entrypoint is shared by Web and Tauri. Never construct the browser
+  // Direct transport from a Desktop runtime.
+  if (Boolean((window as any).__TAURI_INTERNALS__)) return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   if (!hasRememberedWebSessionMarker()) return;
 
-  // /transport/session/start is unsafe and still needs the persisted CSRF
-  // material. Account restore remains parallel; it is no longer a Direct gate.
+  // /transport/session/start is unsafe and still needs persisted CSRF material.
+  // Account restore remains parallel; it is no longer a Direct gate.
   if (!readWebCsrfToken()) {
     playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", { reason: "csrf_unavailable" });
     return;
   }
 
   playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
-  void import("./features/playback/webStartupPlaybackCoordinator").then(
-    ({ getWebStartupPlaybackCoordinator }) => getWebStartupPlaybackCoordinator().start(),
-  ).then(
+  // The coordinator is obtained synchronously and start() is invoked before
+  // createRoot below. Network work is never awaited on the render path.
+  const coordinator = getWebStartupPlaybackCoordinator();
+  void coordinator.start().then(
     () => playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED"),
     error => playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", {
       reason: "dispatch_failed",
@@ -59,9 +48,6 @@ function preconnectRememberedWebDirect(): void {
   );
 }
 
-// Code preload and Direct dispatch both happen before React. /auth/session may
-// restore the account UI in parallel, but is not on the playback critical path.
-preloadRememberedWebDirectCode();
 preconnectRememberedWebDirect();
 
 function GlobalStyles() {
@@ -84,7 +70,7 @@ function GlobalStyles() {
           opacity: 0;
         }
         to {
-          transform: translateX(0);
+          transform: translateX(0) scale(1);
           opacity: 1;
         }
       }
@@ -127,11 +113,6 @@ function GlobalStyles() {
         100% { transform: translateX(430%); opacity: .25; }
       }
 
-      @keyframes beatgaler-skeleton-pulse {
-        0%, 100% { opacity: .48; }
-        50% { opacity: .9; }
-      }
-
       .beatgaler-skeleton-block {
         background: #303030;
         border-radius: 8px;
@@ -141,6 +122,11 @@ function GlobalStyles() {
       .beatgaler-skeleton-title { width: 150px; height: 17px; margin-top: 12px; }
       .beatgaler-skeleton-tag { width: 72px; height: 17px; border-radius: 999px; }
       .beatgaler-skeleton-tag-short { width: 48px; }
+
+      @keyframes beatgaler-skeleton-pulse {
+        0%, 100% { opacity: .48; }
+        50% { opacity: .9; }
+      }
 
       @keyframes pgb1 { from { transform: scaleY(0.25); } to { transform: scaleY(1); } }
       @keyframes pgb2 { from { transform: scaleY(0.4); } to { transform: scaleY(0.9); } }
