@@ -22,11 +22,10 @@ export function preconnectRememberedWebDirect(): void {
   // the entrypoint. Network completion remains fire-and-forget so React render
   // never waits for Direct.
   const coordinator = getWebStartupPlaybackCoordinator();
-  void coordinator.start().then(
-    () => playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED"),
-    error => playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", {
-      reason: "dispatch_failed",
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
+  const startup = coordinator.start();
+  playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
+  void startup.catch(error => playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", {
+    reason: "dispatch_failed",
+    error_name: error instanceof Error ? error.name : "unknown",
+  }));
 }
