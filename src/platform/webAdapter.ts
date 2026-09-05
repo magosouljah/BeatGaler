@@ -58,8 +58,12 @@ function directMessageId(value: string | null | undefined): number | null {
 }
 
 function webBeatMessageId(beat: Beat): number | null {
-  const cached = readWebPlaybackRoutingCache().routes[beat.id]?.messageId;
+  const routing = readWebPlaybackRoutingCache();
+  const cached = routing.routes[beat.id]?.messageId;
   if (cached) return cached;
+  // Once Telegram has produced an authoritative routing snapshot, an absent
+  // route is meaningful. Never resurrect it from a stale rich/presentation Beat.
+  if (routing.authoritative === true) return null;
   const explicit = Number(beat.telegram_message_id || 0);
   if (Number.isInteger(explicit) && explicit > 0) return explicit;
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
