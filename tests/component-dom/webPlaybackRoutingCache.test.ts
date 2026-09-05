@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
 import {
   deletePlaybackRoutes,
@@ -48,6 +48,10 @@ describe("Web playback routing cache", () => {
     localStorage.clear();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("recomputes startup14 for manual, rating, bpm and name without presentation cache", () => {
     const beats = Array.from({ length: 16 }, (_, index) => manifestBeat(index + 1));
     updatePlaybackRoutingCacheFromManifest({ beats, deleted: [], trash: [] });
@@ -71,6 +75,33 @@ describe("Web playback routing cache", () => {
     const nameIds = beats.slice().sort((a, b) => a.name.localeCompare(b.name) || beats.indexOf(a) - beats.indexOf(b))
       .slice(0, 14).map(item => item.id);
     expect(readWebPlaybackRoutingCache().startup.map(item => item.beatId)).toEqual(nameIds);
+  });
+
+  it("does not rewrite an unchanged authoritative manifest but reconciles a changed route", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const first = { beats: [manifestBeat(1), manifestBeat(2), manifestBeat(3)], deleted: [], trash: [] };
+
+    updatePlaybackRoutingCacheFromManifest(first);
+    const writesAfterFirst = setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v1").length;
+    expect(writesAfterFirst).toBe(1);
+
+    updatePlaybackRoutingCacheFromManifest({
+      beats: [manifestBeat(1), manifestBeat(2), manifestBeat(3)],
+      deleted: [],
+      trash: [],
+    });
+    expect(setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v1")).toHaveLength(writesAfterFirst);
+
+    const changed = manifestBeat(2);
+    changed.master.telegram_message_id = 9999;
+    updatePlaybackRoutingCacheFromManifest({
+      beats: [manifestBeat(1), changed, manifestBeat(3)],
+      deleted: [],
+      trash: [],
+    });
+
+    expect(setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v1")).toHaveLength(writesAfterFirst + 1);
+    expect(readWebPlaybackRoutingCache().routes["beat-2"]?.messageId).toBe(9999);
   });
 
   it("preserves null sizes instead of converting unknown to zero", () => {

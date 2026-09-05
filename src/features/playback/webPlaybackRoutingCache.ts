@@ -38,6 +38,9 @@ export interface WebPlaybackRoutingCacheV1 {
 
 type JsonRecord = Record<string, unknown>;
 
+let lastAuthoritativeManifestFingerprint: string | null = null;
+let lastAuthoritativeCache: WebPlaybackRoutingCacheV1 | null = null;
+
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord
@@ -270,9 +273,81 @@ function startupFromOrder(
   return startup;
 }
 
+interface ManifestFingerprintState {
+  primary: number;
+  secondary: number;
+}
+
+function mixFingerprintNumber(state: ManifestFingerprintState, value: number): void {
+  const normalized = value >>> 0;
+  state.primary = Math.imul((state.primary ^ normalized) >>> 0, 0x01000193) >>> 0;
+  state.secondary = Math.imul((state.secondary ^ normalized) >>> 0, 0x5bd1e995) >>> 0;
+}
+
+function mixFingerprintText(state: ManifestFingerprintState, value: string): void {
+  mixFingerprintNumber(state, value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    mixFingerprintNumber(state, value.charCodeAt(index));
+  }
+}
+
+function manifestRoutingFingerprint(manifest: JsonRecord): string {
+  const state: ManifestFingerprintState = { primary: 0x811c9dc5, secondary: 0x9e3779b9 };
+  const deleted = deletedIds(manifest);
+  let visibleCount = 0;
+  let routeCount = 0;
+
+  for (const raw of Array.isArray(manifest.beats) ? manifest.beats : []) {
+    const beat = record(raw);
+    const beatId = text(beat?.id);
+    if (!beat || !beatId || deleted.has(beatId)) continue;
+
+    mixFingerprintNumber(state, 0x42544154);
+    mixFingerprintText(state, beatId);
+    mixFingerprintText(state, text(beat.name));
+    mixFingerprintText(state, String(finiteNumber(beat.rating)));
+    mixFingerprintText(state, String(finiteNumber(beat.bpm)));
+
+    const route = routeFromManifestBeat(beat);
+    if (route) {
+      routeCount += 1;
+      mixFingerprintNumber(state, 1);
+      mixFingerprintText(state, String(route.messageId));
+      mixFingerprintText(state, route.mimeType);
+      mixFingerprintText(state, route.sizeBytes === null ? "null" : String(route.sizeBytes));
+    } else {
+      mixFingerprintNumber(state, 0);
+    }
+    visibleCount += 1;
+  }
+
+  return `${visibleCount}:${routeCount}:${state.primary.toString(16)}:${state.secondary.toString(16)}`;
+}
+
+function hasPersistedPlaybackRoutingCache(): boolean {
+  const storage = browserStorage();
+  if (!storage) return false;
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      if (storage.key(index) === WEB_PLAYBACK_ROUTING_CACHE_KEY) return true;
+    }
+  } catch {}
+  return false;
+}
+
 export function updatePlaybackRoutingCacheFromManifest(value: unknown): WebPlaybackRoutingCacheV1 {
   const manifest = record(value);
   if (!manifest) return readWebPlaybackRoutingCache();
+
+  const fingerprint = manifestRoutingFingerprint(manifest);
+  if (
+    fingerprint === lastAuthoritativeManifestFingerprint
+    && lastAuthoritativeCache
+    && hasPersistedPlaybackRoutingCache()
+  ) {
+    return lastAuthoritativeCache;
+  }
+
   const previous = readWebPlaybackRoutingCache();
   const routes: Record<string, CachedPlaybackRoute> = {};
   const deleted = deletedIds(manifest);
@@ -294,6 +369,8 @@ export function updatePlaybackRoutingCacheFromManifest(value: unknown): WebPlayb
     order,
   };
   writeWebPlaybackRoutingCache(cache);
+  lastAuthoritativeManifestFingerprint = fingerprint;
+  lastAuthoritativeCache = cache;
   return cache;
 }
 
@@ -336,6 +413,8 @@ function upsertOrderEntry(cache: WebPlaybackRoutingCacheV1, beat: Beat): void {
 export function upsertPlaybackRouteFromBeat(beat: Beat): void {
   const route = routeFromBeat(beat);
   if (!route) return;
+  lastAuthoritativeManifestFingerprint = null;
+  lastAuthoritativeCache = null;
   const cache = readWebPlaybackRoutingCache();
   cache.routes[beat.id] = route;
   upsertOrderEntry(cache, beat);
@@ -346,6 +425,8 @@ export function upsertPlaybackRouteFromBeat(beat: Beat): void {
 
 export function deletePlaybackRoutes(beatIds: readonly string[]): void {
   if (beatIds.length === 0) return;
+  lastAuthoritativeManifestFingerprint = null;
+  lastAuthoritativeCache = null;
   const ids = new Set(beatIds.map(id => String(id || "").trim()).filter(Boolean));
   const cache = readWebPlaybackRoutingCache();
   for (const id of ids) delete cache.routes[id];
@@ -376,6 +457,7 @@ export function updatePlaybackRoutingStartupFromBeats(
 
   cache.updatedAt = Date.now();
   writeWebPlaybackRoutingCache(cache);
+  if (cache.authoritative && lastAuthoritativeManifestFingerprint) lastAuthoritativeCache = cache;
   return cache;
 }
 
@@ -387,6 +469,7 @@ export function updatePlaybackRoutingSort(sortBy: WebPlaybackSort, beats?: reado
     cache.startup = startupFromOrder(cache.order || [], cache.routes, normalized);
     cache.updatedAt = Date.now();
     writeWebPlaybackRoutingCache(cache);
+    if (lastAuthoritativeManifestFingerprint) lastAuthoritativeCache = cache;
     return;
   }
   if (beats) {
