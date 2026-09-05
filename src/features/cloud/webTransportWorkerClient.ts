@@ -295,7 +295,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   private timeoutIndexRequest(requestId: string): void {
     const timedOut = this.takePending(requestId);
-    if (!timOut) return;
+    if (!timedOut) return;
     playTrace("WORKER_INDEX_ACTIVE_TIMEOUT", { request_id: requestId });
     timedOut.reject(new Error("Galer Cloud Web transport timed out during active get_index."));
     this.sendIndexCancel(requestId);
