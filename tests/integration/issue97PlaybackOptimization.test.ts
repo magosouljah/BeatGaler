@@ -104,7 +104,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const controller = source("src/features/cloud/webTransportController.ts");
 
     expect(transport).toContain("constructor(startupCandidates");
-    expect(controller).toContain("startupBeatIds: readonly string[]");
+    expect(controller).not.toContain("startupBeatIds");
     expect(controller).toContain("startupMessageIds: readonly number[]");
     expect(controller).not.toContain("configureStartupBeatIds(");
     expect(controller).not.toContain("CONTROLLER_STARTUP_IDS_LATE");
