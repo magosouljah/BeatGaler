@@ -123,7 +123,7 @@ Permanentes:
 
 - `V1.md`
 - `SYSTEM.md`
-- `BRUNO.md` (recordatorios de Bruno, no reglas normales de IA)
+- `BRUNO.md` (*ignorar, recordatorios de Bruno, no reglas normales de IA)
 - arquitecturas canónicas dentro de `ARCHITECTURE/`
 
 Desechable:
