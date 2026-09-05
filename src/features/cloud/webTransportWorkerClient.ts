@@ -27,6 +27,12 @@ import type {
 } from "./webTransportWorkerProtocol";
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
+export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
+
+function publishTransportInvalidated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(WEB_TRANSPORT_INVALIDATED_EVENT));
+}
 
 export class WebTransportWorkerError extends Error {
   constructor(message: string, readonly code?: WebTransportErrorCode) {
@@ -83,6 +89,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       this.failPending("Galer Cloud Web Worker stopped unexpectedly.");
       worker.terminate();
       if (this.worker === worker) this.worker = null;
+      publishTransportInvalidated();
     };
     this.worker = worker;
     return worker;
@@ -178,6 +185,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     if (worker) {
       worker.terminate();
       if (this.worker === worker) this.worker = null;
+      publishTransportInvalidated();
     }
     this.failPending("Galer Cloud Web transport reset after an unresponsive worker request.");
   }
@@ -248,9 +256,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
 
-    // initialize() replaces the MTProto client and resets Worker scheduler state.
-    // Reapply a focus that was requested while reserve/bind/activate were still
-    // pending before readiness is published to the controller.
     const desiredPlaybackMessageId = this.desiredPlaybackMessageId;
     if (desiredPlaybackMessageId !== null) {
       await this.request<void>({ op: "playback_focus", messageId: desiredPlaybackMessageId });
@@ -381,14 +386,13 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   async shutdown(): Promise<void> {
     const worker = this.worker;
     this.desiredPlaybackMessageId = null;
-    if (!worker) {
-      this.sessionStartupMessageIds = [];
-      return;
-    }
-    await this.request({ op: "shutdown" }).catch(() => {});
-    worker.terminate();
-    this.worker = null;
     this.sessionStartupMessageIds = [];
+    if (worker) {
+      await this.request({ op: "shutdown" }).catch(() => {});
+      worker.terminate();
+      if (this.worker === worker) this.worker = null;
+    }
     this.failPending("Galer Cloud Web transport closed.");
+    publishTransportInvalidated();
   }
 }

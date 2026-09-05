@@ -1,5 +1,6 @@
 import type { Beat } from "../../types";
 import { WebGalerCloudTransport, type WebStartupWarmCandidate } from "../cloud/webGalerCloudTransport";
+import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../cloud/webTransportWorkerClient";
 import { WebPlaybackSourceManager, type WebPlaybackTransport } from "./webPlaybackSource";
 import { playTrace } from "./playTrace";
 import {
@@ -35,18 +36,12 @@ function localSort(): WebPlaybackSort {
 }
 
 function startupCandidates(): WebStartupWarmCandidate[] {
-  // The compact Telegram-derived routing projection remains authoritative, but
-  // the user's persisted presentation sort decides which 14 routes are startup.
-  // This also repairs a sort changed in the previous session before Direct starts.
   const sort = localSort();
   let routing = readWebPlaybackRoutingCache();
   if (routing.sortBy !== sort && routing.authoritative && (routing.order?.length || 0) > 0) {
     updatePlaybackRoutingSort(sort);
     routing = readWebPlaybackRoutingCache();
   }
-
-  // Presentation cache is only a migration/bootstrap fallback and must never
-  // replace a full manifest-derived all-library projection with a rich page.
   if (routing.startup.length === 0) {
     const presentation = localPresentationBeats();
     if (presentation.length > 0) routing = updatePlaybackRoutingStartupFromBeats(presentation, sort);
@@ -67,9 +62,14 @@ export class WebStartupPlaybackCoordinator {
   private startPromise: Promise<void> | null = null;
   private warmSettled = false;
   private resolveIndexBarrier!: () => void;
+  private listeningForInvalidation = false;
   private readonly indexBarrierPromise = new Promise<void>(resolve => {
     this.resolveIndexBarrier = resolve;
   });
+  private readonly onTransportInvalidated = () => {
+    playTrace("SOURCE_SESSION_INVALIDATED");
+    this.sources.releaseAll();
+  };
 
   constructor() {
     this.transport.setIndexBarrier(() => this.waitUntilIndexAllowed());
@@ -82,6 +82,10 @@ export class WebStartupPlaybackCoordinator {
       streamFile: (input, onChunk) => this.transport.streamFile(input, onChunk),
     };
     this.sources = new WebPlaybackSourceManager(coordinatedTransport);
+    if (typeof window !== "undefined") {
+      window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, this.onTransportInvalidated);
+      this.listeningForInvalidation = true;
+    }
     playTrace("STARTUP_LOCAL_ROUTING_READY", { count: this.candidates.length });
   }
 
@@ -104,9 +108,6 @@ export class WebStartupPlaybackCoordinator {
       const failures = results.filter(result => result.status === "rejected").length;
       this.finishStartupWarm(this.candidates.length, failures);
     })().catch(error => {
-      // A transient reserve/bind/connect failure is not a terminal READY/FAILED
-      // result for all startup candidates. Clear the attempt so a later caller
-      // can start a coherent new connection instead of reusing a rejected Promise.
       if (this.startPromise === attempt) this.startPromise = null;
       playTrace("DIRECT_START_RETRYABLE_FAILURE", {
         error_name: error instanceof Error ? error.name : "unknown",
@@ -133,8 +134,6 @@ export class WebStartupPlaybackCoordinator {
 
   async beginPlayback(messageId: number): Promise<void> {
     playTrace("PLAY_FOCUS_BEGIN", { message_id: messageId });
-    // Focus is intentionally dispatched immediately. WorkerClient retains it
-    // across initialize(), while Direct startup continues independently.
     const startup = this.start();
     void startup.catch(error => playTrace("PLAY_DIRECT_START_DEFERRED", {
       message_id: messageId,
@@ -158,6 +157,14 @@ export class WebStartupPlaybackCoordinator {
   getPlaybackSources(): WebPlaybackSourceManager {
     return this.sources;
   }
+
+  dispose(): void {
+    if (this.listeningForInvalidation && typeof window !== "undefined") {
+      window.removeEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, this.onTransportInvalidated);
+      this.listeningForInvalidation = false;
+    }
+    this.sources.releaseAll();
+  }
 }
 
 let singleton: WebStartupPlaybackCoordinator | null = null;
@@ -171,6 +178,6 @@ export async function disconnectWebStartupPlaybackCoordinator(): Promise<void> {
   const current = singleton;
   singleton = null;
   if (!current) return;
-  current.getPlaybackSources().releaseAll();
+  current.dispose();
   await current.getTransport().disconnect();
 }

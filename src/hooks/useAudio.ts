@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
 import { shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
+import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../features/cloud/webTransportWorkerClient";
 
 let silentGestureUrl: string | null = null;
 
@@ -81,30 +82,28 @@ export function useAudio() {
     };
 
     const onTimeUpdate = () => {
-      if (audio.duration > 0) {
-        setState((s) => ({ ...s, progress: audio.currentTime / audio.duration }));
-      }
+      if (audio.duration > 0) setState(s => ({ ...s, progress: audio.currentTime / audio.duration }));
       publishPlaybackState();
     };
-    const onLoadedMeta = () => setState((s) => ({ ...s, duration: audio.duration }));
+    const onLoadedMeta = () => setState(s => ({ ...s, duration: audio.duration }));
     const onEnded = () => {
       const beatId = currentBeatIdRef.current;
       waitingRef.current = false;
-      setState((s) => ({ ...s, isPlaying: false, progress: 0, endedSeq: s.endedSeq + 1 }));
+      setState(s => ({ ...s, isPlaying: false, progress: 0, endedSeq: s.endedSeq + 1 }));
       publishPlaybackState();
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } }));
     };
     const onPlay = () => {
       waitingRef.current = false;
       playTrace("AUDIO_EVENT_PLAY", { beat_id: currentBeatIdRef.current, ready_state: audio.readyState });
-      setState((s) => ({ ...s, isPlaying: true }));
+      setState(s => ({ ...s, isPlaying: true }));
       publishPlaybackState();
     };
     const onPlaying = () => {
       const beatId = currentBeatIdRef.current;
       waitingRef.current = false;
       playTrace("AUDIO_EVENT_PLAYING", { beat_id: beatId, ready_state: audio.readyState, current_time: audio.currentTime });
-      setState((s) => ({ ...s, isPlaying: true }));
+      setState(s => ({ ...s, isPlaying: true }));
       publishPlaybackState();
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-playing", { detail: { beatId } }));
       void platform.diagnostics.audioEvent("AUDIO_PLAYING", beatId, null, `readyState=${audio.readyState} currentTime=${audio.currentTime.toFixed(3)}`).catch(() => {});
@@ -124,7 +123,7 @@ export function useAudio() {
     const onPause = () => {
       const beatId = currentBeatIdRef.current;
       waitingRef.current = false;
-      setState((s) => ({ ...s, isPlaying: false }));
+      setState(s => ({ ...s, isPlaying: false }));
       publishPlaybackState();
       if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } }));
     };
@@ -143,12 +142,10 @@ export function useAudio() {
         platform.media.releasePlayback(failedBeatId);
         sourceUrlsRef.current = [];
         sourceIndexRef.current = 0;
-        setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
+        setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
         if (!errorNotifiedRef.current) {
           errorNotifiedRef.current = true;
-          window.dispatchEvent(new CustomEvent("beatgaler:audio-unavailable", {
-            detail: { beatId: currentBeatIdRef.current },
-          }));
+          window.dispatchEvent(new CustomEvent("beatgaler:audio-unavailable", { detail: { beatId: currentBeatIdRef.current } }));
         }
         return;
       }
@@ -156,6 +153,21 @@ export function useAudio() {
       audio.src = sourceUrlsRef.current[nextIndex];
       audio.load();
       audio.play().catch(console.error);
+    };
+    const onTransportInvalidated = () => {
+      const beatId = currentBeatIdRef.current;
+      playTrace("AUDIO_SESSION_INVALIDATED", { beat_id: beatId });
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      sourceUrlsRef.current = [];
+      sourceIndexRef.current = 0;
+      currentBeatIdRef.current = null;
+      errorNotifiedRef.current = false;
+      primingRef.current = false;
+      waitingRef.current = false;
+      if (beatId) platform.media.releasePlayback(beatId);
+      setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
     };
 
     audio.addEventListener("timeupdate", onTimeUpdate);
@@ -167,6 +179,7 @@ export function useAudio() {
     audio.addEventListener("canplay", onCanPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("error", onError);
+    window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated);
 
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
@@ -178,15 +191,15 @@ export function useAudio() {
       audio.removeEventListener("canplay", onCanPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("error", onError);
+      window.removeEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated);
     };
-  }, []);
+  }, [getAudio]);
 
   const primeAudioEngine = useCallback(async (path: string): Promise<boolean> => {
     const source = platform.media.resolveUrl(path);
     if (!source) return false;
     const audio = getAudio();
     if (audio.src === source && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return true;
-
     primingRef.current = true;
     audio.pause();
     audio.preload = "auto";
@@ -194,23 +207,18 @@ export function useAudio() {
     currentBeatIdRef.current = null;
     waitingRef.current = false;
     void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_BEGIN", null, null, source).catch(() => {});
-
-    return await new Promise<boolean>((resolve) => {
+    return await new Promise<boolean>(resolve => {
       const cleanup = () => {
         audio.removeEventListener("canplay", onReady);
         audio.removeEventListener("error", onPrimeError);
       };
       const onReady = () => {
-        cleanup();
-        primingRef.current = false;
-        audio.muted = false;
+        cleanup(); primingRef.current = false; audio.muted = false;
         void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_READY", null, null, `readyState=${audio.readyState}`).catch(() => {});
         resolve(true);
       };
       const onPrimeError = () => {
-        cleanup();
-        primingRef.current = false;
-        audio.muted = false;
+        cleanup(); primingRef.current = false; audio.muted = false;
         void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_ERROR", null, null, "").catch(() => {});
         resolve(false);
       };
@@ -254,7 +262,6 @@ export function useAudio() {
       console.error("No audio sources available for beat", beatId);
       return;
     }
-
     const samePendingSource = currentBeatIdRef.current === beatId && sourceUrlsRef.current[0] === sources[0];
     if (samePendingSource && audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA && !audio.error) {
       void platform.diagnostics.audioEvent("AUDIO_DUPLICATE_PLAY_IGNORED", beatId, null, `readyState=${audio.readyState}`).catch(() => {});
@@ -287,7 +294,7 @@ export function useAudio() {
     if (previousBeatId && previousBeatId !== beatId) platform.media.releasePlayback(previousBeatId);
     void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {});
     playTrace("AUDIO_SRC_SET", { beat_id: beatId, ready_state: audio.readyState, url_scheme: String(sources[0] || "").split(":")[0] || null });
-    setState((s) => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
+    setState(s => ({ ...s, playingId: beatId, progress: 0, duration: 0 }));
     playTrace("AUDIO_PLAY_PROMISE_BEGIN", { beat_id: beatId });
     audio.play().then(
       () => playTrace("AUDIO_PLAY_PROMISE_RESOLVED", { beat_id: beatId }),
@@ -307,7 +314,7 @@ export function useAudio() {
     const audio = getAudio();
     if (audio.duration > 0) {
       audio.currentTime = ratio * audio.duration;
-      setState((s) => ({ ...s, progress: ratio }));
+      setState(s => ({ ...s, progress: ratio }));
       const beatId = currentBeatIdRef.current;
       if (beatId) {
         window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", {
@@ -321,7 +328,7 @@ export function useAudio() {
     const audio = getAudio();
     const next = Math.max(0, Math.min(1, volume));
     audio.volume = next;
-    setState((s) => ({ ...s, volume: next }));
+    setState(s => ({ ...s, volume: next }));
   }, [getAudio]);
 
   const releaseFile = useCallback(() => {
@@ -336,7 +343,7 @@ export function useAudio() {
     errorNotifiedRef.current = false;
     waitingRef.current = false;
     platform.media.releasePlayback(releasedBeatId);
-    setState((s) => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
+    setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
   }, [getAudio]);
 
   return { state, play, primeAudioEngine, armPlaybackGesture, togglePause, seek, setVolume, releaseFile };
