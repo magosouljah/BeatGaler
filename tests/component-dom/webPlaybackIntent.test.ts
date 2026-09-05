@@ -31,6 +31,15 @@ describe("Web playback intent", () => {
     expect(shouldAcceptWebPlaybackRequest("x", ["blob:x-new"])).toBe(true);
   });
 
+  it("keeps globally invalidated Web URLs tracked so a late stale play stays rejected", () => {
+    const current = beginWebPlaybackIntent("x");
+    rememberPreparedWebPlaybackUrl("blob:x-before-invalidation", current);
+
+    invalidateAllWebPlaybackIntents();
+
+    expect(shouldAcceptWebPlaybackRequest("x", ["blob:x-before-invalidation"])).toBe(false);
+  });
+
   it("does not let releasing a previous beat invalidate the newer beat intent", () => {
     const previous = beginWebPlaybackIntent("x");
     rememberPreparedWebPlaybackUrl("blob:x", previous);
