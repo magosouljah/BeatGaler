@@ -12,12 +12,14 @@ import {
   type WebTransportDownloadResult,
   type WebTransportDeleteMessagesInput,
   type WebTransportDeleteMessagesResult,
+  type WebTransportErrorCode,
   type WebTransportLibraryIndexResult,
   type WebTransportPrefetchBatchInput,
   type WebTransportPrefetchBatchItemResult,
   type WebTransportPrefetchBatchResult,
   type WebTransportPrefetchInput,
   type WebTransportPrefetchResult,
+  type WebTransportPrefetchTerminal,
   type WebTransportReplaceIndexInput,
   type WebTransportReplaceIndexResult,
   type WebTransportStreamInput,
@@ -64,6 +66,13 @@ type BoundTempPool = { _connections?: BoundTempConnection[] };
 type BoundTempDcManager = { main?: BoundTempPool };
 type BoundTempNetwork = { _dcConnections?: Map<number, BoundTempDcManager> };
 
+class WorkerTransportError extends Error {
+  constructor(readonly code: WebTransportErrorCode, message: string) {
+    super(message);
+    this.name = "WorkerTransportError";
+  }
+}
+
 type CachedPlaybackMedia = {
   media: FileDownloadLocation;
   totalBytes: number;
@@ -89,6 +98,8 @@ type BatchPrefetchState = {
   targetMet: boolean;
   done: boolean;
   error: Error | null;
+  errorCode: WebTransportErrorCode | null;
+  terminalEmitted: boolean;
   warmState: WarmState;
   controller: AbortController | null;
   cancelled: boolean;
@@ -103,6 +114,7 @@ type PrefetchBatchControl = {
 };
 type DataLanePriority = "foreground" | "warm";
 type PlaybackSchedulerState = "IDLE" | "PLAY_CRITICAL" | "PLAY_STABLE";
+type IndexAbortReason = "play" | "warm" | "cancel";
 
 const scope = globalThis as unknown as WorkerScope;
 let client: TelegramClient | null = null;
@@ -113,6 +125,7 @@ const activeStreams = new Map<string, { controller: AbortController; acknowledge
 const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
 const activeWarmTransfers = new Map<number, AbortController>();
 const playbackMediaCache = new Map<number, CachedPlaybackMedia>();
+const playbackMediaMissingCache = new Map<number, WorkerTransportError>();
 const MAX_PLAYBACK_MEDIA_CACHE_ENTRIES = 256;
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
 const MAX_CONFIGURABLE_DATA_LANES = 16;
@@ -125,6 +138,9 @@ const warmLaneWaiters: Array<() => void> = [];
 let playbackSchedulerState: PlaybackSchedulerState = "IDLE";
 let playbackMessageId: number | null = null;
 let activeIndexAbortController: AbortController | null = null;
+let activeIndexRequestId: string | null = null;
+let activeIndexAbortReason: IndexAbortReason | null = null;
+const cancelledIndexRequests = new Set<string>();
 let schedulerEpoch = 0;
 const schedulerWaiters = new Set<() => void>();
 
@@ -270,9 +286,13 @@ async function closeClient(): Promise<void> {
   }
   activePrefetchBatches.clear();
   activeWarmTransfers.clear();
+  activeIndexAbortReason = "cancel";
   activeIndexAbortController?.abort();
   activeIndexAbortController = null;
+  activeIndexRequestId = null;
+  cancelledIndexRequests.clear();
   playbackMediaCache.clear();
+  playbackMediaMissingCache.clear();
   foregroundLaneWaiters.splice(0).forEach(resolve => resolve());
   warmLaneWaiters.splice(0).forEach(resolve => resolve());
   activeDataLanes = 0;
@@ -291,12 +311,13 @@ async function closeClient(): Promise<void> {
 function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number]): FileDownloadLocation {
   const media = message?.media;
   if (!media || !["document", "audio", "video", "voice", "photo", "sticker"].includes(media.type)) {
-    throw new Error("Galer Cloud stored object is not downloadable.");
+    throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud stored object is not downloadable.");
   }
   return media as FileDownloadLocation;
 }
 
 function touchPlaybackMedia(messageId: number, value: CachedPlaybackMedia): void {
+  playbackMediaMissingCache.delete(messageId);
   playbackMediaCache.delete(messageId);
   playbackMediaCache.set(messageId, value);
   while (playbackMediaCache.size > MAX_PLAYBACK_MEDIA_CACHE_ENTRIES) {
@@ -311,6 +332,10 @@ function cachedPlaybackMedia(messageId: number): ResolvedPlaybackMedia | null {
   if (!cached) return null;
   touchPlaybackMedia(messageId, cached);
   return { media: cached.media, totalBytes: cached.totalBytes, mimeType: cached.mimeType, sourceMime: cached.mimeType, cacheHit: true };
+}
+
+function cachedMissingPlaybackMedia(messageId: number): WorkerTransportError | null {
+  return playbackMediaMissingCache.get(messageId) || null;
 }
 
 function resolvedMediaFromMessage(message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number]): ResolvedPlaybackMedia {
@@ -360,7 +385,15 @@ async function resolvePlaybackMediaBatch(
     if (cached) {
       resolved.set(messageId, cached);
       playTrace("WORKER_PLAYBACK_MEDIA_CACHE_HIT", { message_id: messageId });
-    } else misses.push(messageId);
+      continue;
+    }
+    const negative = cachedMissingPlaybackMedia(messageId);
+    if (negative) {
+      missing.set(messageId, negative);
+      playTrace("WORKER_PLAYBACK_MEDIA_NEGATIVE_CACHE_HIT", { message_id: messageId, code: negative.code });
+      continue;
+    }
+    misses.push(messageId);
   }
   if (misses.length === 0) return { resolved, missing };
   const messages = await getMessagesBatchWithRetry(active, targetChatId, misses);
@@ -372,15 +405,22 @@ async function resolvePlaybackMediaBatch(
   for (const messageId of misses) {
     const message = byId.get(messageId);
     if (!message) {
-      missing.set(messageId, new Error("Galer Cloud object no longer exists."));
+      const error = new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
+      missing.set(messageId, error);
+      playbackMediaMissingCache.set(messageId, error);
       continue;
     }
     try {
       const value = resolvedMediaFromMessage(message);
       resolved.set(messageId, value);
+      playbackMediaMissingCache.delete(messageId);
       if (publishCache) touchPlaybackMedia(messageId, { media: value.media, totalBytes: value.totalBytes, mimeType: value.sourceMime });
     } catch (error) {
-      missing.set(messageId, error instanceof Error ? error : new Error(String(error)));
+      const failure = error instanceof WorkerTransportError
+        ? error
+        : new WorkerTransportError("MEDIA_UNAVAILABLE", error instanceof Error ? error.message : String(error));
+      missing.set(messageId, failure);
+      playbackMediaMissingCache.set(messageId, failure);
     }
   }
   return { resolved, missing };
@@ -389,11 +429,13 @@ async function resolvePlaybackMediaBatch(
 async function resolvePlaybackMedia(active: TelegramClient, messageId: number): Promise<ResolvedPlaybackMedia> {
   const cached = cachedPlaybackMedia(messageId);
   if (cached) return cached;
+  const negative = cachedMissingPlaybackMedia(messageId);
+  if (negative) throw negative;
   playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId });
   const batch = await resolvePlaybackMediaBatch(active, chatId, [messageId]);
   const resolved = batch.resolved.get(messageId);
   if (resolved) return resolved;
-  throw batch.missing.get(messageId) || new Error("Galer Cloud object no longer exists.");
+  throw batch.missing.get(messageId) || new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
 }
 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
@@ -419,7 +461,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       temp_auth_key.byteLength !== 256 || !isBoundTempLongJson(temp_session_id) ||
       !isBoundTempSessionState(temp_session_state) || !Number.isInteger(primaryDcId) || primaryDcId < 1 ||
       primaryDcId > 5 || !temp_primary_dcs) {
-    throw new Error("Galer Cloud returned incomplete temporary transport authorization.");
+    throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud returned incomplete temporary transport authorization.");
   }
 
   const next = new TelegramClient({
@@ -487,13 +529,13 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
 }
 
 function requireConnected(): TelegramClient {
-  if (!client || !chatId) throw new Error("Galer Cloud Web transport is not initialized.");
+  if (!client || !chatId) throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud Web transport is not initialized.");
   return client;
 }
 
 function requireReady(): TelegramClient {
   const active = requireConnected();
-  if (!vaultVerified) throw new Error("Galer Cloud Web transport is not ready.");
+  if (!vaultVerified) throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud Web transport is not ready.");
   return active;
 }
 
@@ -502,7 +544,7 @@ async function verifyIdentity(): Promise<void> {
   try {
     const self = await active.getMe();
     if (!self?.isBot || String(self.id) !== expectedBotId) {
-      throw new Error("Temporary authorization resolved to the wrong transport identity.");
+      throw new WorkerTransportError("SESSION_INVALID", "Temporary authorization resolved to the wrong transport identity.");
     }
     playTrace("DIRECT_BACKGROUND_GET_ME_OK");
   } catch (error) {
@@ -543,57 +585,104 @@ async function waitUntilIndexPriorityAllowed(): Promise<void> {
   }
 }
 
-function preemptActiveIndex(reason: "play" | "warm"): void {
-  const controller = activeIndexAbortController;
-  if (!controller || controller.signal.aborted) return;
-  controller.abort();
-  playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM");
+function postIndexState(requestId: string | null, state: "active" | "paused"): void {
+  if (!requestId) return;
+  scope.postMessage({ requestId, event: "index-state", state });
 }
 
-async function getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+function preemptActiveIndex(reason: "play" | "warm"): void {
+  if (!activeIndexRequestId && !activeIndexAbortController) return;
+  activeIndexAbortReason = reason;
+  postIndexState(activeIndexRequestId, "paused");
+  const controller = activeIndexAbortController;
+  if (controller && !controller.signal.aborted) controller.abort();
+  playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM", {
+    request_id: activeIndexRequestId,
+  });
+}
+
+function cancelIndex(targetRequestId: string): { cancelled: boolean } {
+  const requestId = String(targetRequestId || "");
+  if (!requestId) return { cancelled: false };
+  cancelledIndexRequests.add(requestId);
+  if (activeIndexRequestId === requestId) {
+    activeIndexAbortReason = "cancel";
+    activeIndexAbortController?.abort();
+  }
+  notifyScheduler();
+  return { cancelled: true };
+}
+
+function assertIndexNotCancelled(requestId: string | null): void {
+  if (requestId && cancelledIndexRequests.has(requestId)) {
+    throw new WorkerTransportError("CANCELLED", "Galer Cloud INDEX read was cancelled.");
+  }
+}
+
+async function getLibraryIndex(requestId: string | null = null): Promise<WebTransportLibraryIndexResult> {
   const active = requireConnected();
   const started = Date.now();
   let failures = 0;
   let resumed = false;
-  while (failures < 5) {
-    await waitUntilIndexPriorityAllowed();
-    playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN");
-    let controller: AbortController | null = null;
-    try {
-      const fullChat = await active.getFullChat(chatId);
-      if (!indexPriorityAllowed()) { resumed = true; continue; }
-      const pinnedId = Number(fullChat.pinnedMsgId || 0);
-      if (!Number.isInteger(pinnedId) || pinnedId <= 0) throw new Error("Galer Cloud library index is still synchronizing.");
-      const [message] = await active.getMessages(chatId, [pinnedId]);
-      if (!indexPriorityAllowed()) { resumed = true; continue; }
-      if (!message || !message.text.startsWith(LIBRARY_INDEX_CAPTION)) throw new Error("Galer Cloud library index is not available.");
-      controller = new AbortController();
-      activeIndexAbortController = controller;
-      const bytes = await active.downloadAsBuffer(downloadableMedia(message), {
-        abortSignal: controller.signal,
-        stallTimeout: 20_000,
-      });
-      if (controller.signal.aborted || !indexPriorityAllowed()) {
-        resumed = true;
-        continue;
+  try {
+    while (failures < 5) {
+      assertIndexNotCancelled(requestId);
+      await waitUntilIndexPriorityAllowed();
+      assertIndexNotCancelled(requestId);
+      activeIndexRequestId = requestId;
+      activeIndexAbortReason = null;
+      postIndexState(requestId, "active");
+      playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", { request_id: requestId });
+      let controller: AbortController | null = null;
+      try {
+        const fullChat = await active.getFullChat(chatId);
+        assertIndexNotCancelled(requestId);
+        if (!indexPriorityAllowed()) { resumed = true; continue; }
+        const pinnedId = Number(fullChat.pinnedMsgId || 0);
+        if (!Number.isInteger(pinnedId) || pinnedId <= 0) throw new Error("Galer Cloud library index is still synchronizing.");
+        const [message] = await active.getMessages(chatId, [pinnedId]);
+        assertIndexNotCancelled(requestId);
+        if (!indexPriorityAllowed()) { resumed = true; continue; }
+        if (!message || !message.text.startsWith(LIBRARY_INDEX_CAPTION)) throw new Error("Galer Cloud library index is not available.");
+        controller = new AbortController();
+        activeIndexAbortController = controller;
+        const bytes = await active.downloadAsBuffer(downloadableMedia(message), {
+          abortSignal: controller.signal,
+          stallTimeout: 20_000,
+        });
+        assertIndexNotCancelled(requestId);
+        if (controller.signal.aborted || !indexPriorityAllowed()) {
+          resumed = true;
+          continue;
+        }
+        if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) throw new Error("Galer Cloud library index has an invalid size.");
+        playTrace("INDEX_DONE", { elapsed_ms: Date.now() - started, bytes: bytes.byteLength, request_id: requestId });
+        return { manifest: JSON.parse(new TextDecoder().decode(bytes)), messageId: pinnedId };
+      } catch (error) {
+        const preemptReason = activeIndexAbortReason;
+        if (preemptReason === "cancel" || (requestId && cancelledIndexRequests.has(requestId))) {
+          throw error instanceof WorkerTransportError
+            ? error
+            : new WorkerTransportError("CANCELLED", "Galer Cloud INDEX read was cancelled.");
+        }
+        if ((preemptReason === "play" || preemptReason === "warm") && (controller?.signal.aborted || isAbortError(error) || !indexPriorityAllowed())) {
+          resumed = true;
+          continue;
+        }
+        failures += 1;
+        playTrace("WORKER_GET_INDEX_RETRY", { attempt: failures, error_name: error instanceof Error ? error.name : "unknown" });
+        if (failures < 5) await new Promise(resolve => setTimeout(resolve, Math.min(1000, 80 * (2 ** (failures - 1)))));
+        else throw error;
+      } finally {
+        if (activeIndexAbortController === controller) activeIndexAbortController = null;
+        if (activeIndexRequestId === requestId) activeIndexRequestId = null;
+        activeIndexAbortReason = null;
       }
-      if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) throw new Error("Galer Cloud library index has an invalid size.");
-      playTrace("INDEX_DONE", { elapsed_ms: Date.now() - started, bytes: bytes.byteLength });
-      return { manifest: JSON.parse(new TextDecoder().decode(bytes)), messageId: pinnedId };
-    } catch (error) {
-      if ((controller?.signal.aborted || isAbortError(error)) && !indexPriorityAllowed()) {
-        resumed = true;
-        continue;
-      }
-      failures += 1;
-      playTrace("WORKER_GET_INDEX_RETRY", { attempt: failures, error_name: error instanceof Error ? error.name : "unknown" });
-      if (failures < 5) await new Promise(resolve => setTimeout(resolve, Math.min(1000, 80 * (2 ** (failures - 1)))));
-      else throw error;
-    } finally {
-      if (activeIndexAbortController === controller) activeIndexAbortController = null;
     }
+    throw new Error("Galer Cloud library index could not be read.");
+  } finally {
+    if (requestId) cancelledIndexRequests.delete(requestId);
   }
-  throw new Error("Galer Cloud library index could not be read.");
 }
 
 function libraryIdentityIds(manifest: unknown): Set<string> {
@@ -673,9 +762,9 @@ async function download(input: WebTransportDownloadInput): Promise<WebTransportD
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
   const [message] = await active.getMessages(chatId, [messageId]);
-  if (!message) throw new Error("Galer Cloud object no longer exists.");
+  if (!message) throw new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
   const bytes = await active.downloadAsBuffer(downloadableMedia(message), { stallTimeout: 20_000 });
-  if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty object.");
+  if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty object.");
   const declaredMime = String(input.mimeType || "").trim().toLowerCase();
   const mimeType = /^image\/(?:png|jpe?g|gif|webp|bmp|avif)$/.test(declaredMime) ? declaredMime : sniffImageMime(bytes);
   return { messageId, dataUrl: `data:${mimeType};base64,${bytesToBase64(bytes)}` };
@@ -702,14 +791,14 @@ async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportP
   const started = Date.now();
   const active = requireConnected();
   const messageId = Number(input.messageId || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
+  if (!Number.isInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
   const resolved = await resolvePlaybackMedia(active, messageId);
   const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
-  if (offsetBytes % 4096 !== 0) throw new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+  if (offsetBytes % 4096 !== 0) throw new WorkerTransportError("TRANSFER_FAILED", "Galer Cloud playback offset must be aligned to 4 KiB.");
   const remaining = resolved.totalBytes > 0 ? Math.max(0, resolved.totalBytes - offsetBytes) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
   const limit = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
   const bytes = await withDataLane(() => active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit }), "foreground");
-  if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty playback prefix.");
+  if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
   const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
   const measurement = offsetBytes === 0 ? measureMp3PlayablePrefix(prefix) : null;
@@ -733,20 +822,55 @@ function normalizeBatchState(input: WebTransportPrefetchInput): BatchPrefetchSta
     targetMet: false,
     done: false,
     error: null,
+    errorCode: null,
+    terminalEmitted: false,
     warmState: "queued",
     controller: null,
     cancelled: false,
   };
 }
 
-async function resolveBatchStates(active: TelegramClient, states: BatchPrefetchState[]): Promise<void> {
+function codeForError(error: unknown, fallback: WebTransportErrorCode): WebTransportErrorCode {
+  return error instanceof WorkerTransportError ? error.code : fallback;
+}
+
+function postPrefetchTerminal(
+  requestId: string,
+  state: BatchPrefetchState,
+  status: WebTransportPrefetchTerminal["status"],
+  code?: WebTransportErrorCode,
+  error?: string,
+): void {
+  if (state.terminalEmitted) return;
+  state.terminalEmitted = true;
+  const terminal: WebTransportPrefetchTerminal = {
+    messageId: state.messageId,
+    status,
+    ...(code ? { code } : {}),
+    ...(error ? { error } : {}),
+  };
+  scope.postMessage({ requestId, event: "prefetch-terminal", terminal });
+  playTrace("WORKER_PREFETCH_TERMINAL", { message_id: state.messageId, status, code: code || null });
+}
+
+async function resolveBatchStates(requestId: string, active: TelegramClient, states: BatchPrefetchState[]): Promise<void> {
   const valid: BatchPrefetchState[] = [];
   for (const state of states) {
     if (!Number.isInteger(state.messageId) || state.messageId <= 0) {
-      state.error = new Error("Galer Cloud object reference is invalid."); state.done = true; state.warmState = "failed"; continue;
+      state.error = new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
+      state.errorCode = "MEDIA_UNAVAILABLE";
+      state.done = true;
+      state.warmState = "failed";
+      postPrefetchTerminal(requestId, state, "FAILED", state.errorCode, state.error.message);
+      continue;
     }
     if (state.offsetBytes % 4096 !== 0) {
-      state.error = new Error("Galer Cloud playback offset must be aligned to 4 KiB."); state.done = true; state.warmState = "failed"; continue;
+      state.error = new WorkerTransportError("TRANSFER_FAILED", "Galer Cloud playback offset must be aligned to 4 KiB.");
+      state.errorCode = "TRANSFER_FAILED";
+      state.done = true;
+      state.warmState = "failed";
+      postPrefetchTerminal(requestId, state, "FAILED", state.errorCode, state.error.message);
+      continue;
     }
     valid.push(state);
   }
@@ -756,20 +880,33 @@ async function resolveBatchStates(active: TelegramClient, states: BatchPrefetchS
     batch = await resolvePlaybackMediaBatch(active, chatId, valid.map(state => state.messageId));
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    for (const state of valid) { state.error = failure; state.done = true; state.warmState = "failed"; }
+    for (const state of valid) {
+      state.error = failure;
+      state.errorCode = codeForError(failure, "TRANSFER_FAILED");
+      state.done = true;
+      state.warmState = "failed";
+      postPrefetchTerminal(requestId, state, "FAILED", state.errorCode, failure.message);
+    }
     return;
   }
   for (const state of valid) {
     const resolved = batch.resolved.get(state.messageId);
     if (!resolved) {
-      state.error = batch.missing.get(state.messageId) || new Error("Galer Cloud object no longer exists.");
-      state.done = true; state.warmState = "failed"; continue;
+      state.error = batch.missing.get(state.messageId) || new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
+      state.errorCode = codeForError(state.error, "ROUTE_MISSING");
+      state.done = true;
+      state.warmState = "failed";
+      postPrefetchTerminal(requestId, state, "FAILED", state.errorCode, state.error.message);
+      continue;
     }
     state.media = resolved.media;
     state.totalBytes = resolved.totalBytes;
     state.mimeType = downloadMime(state.requestedMimeType || resolved.sourceMime);
     if (state.totalBytes > 0 && state.offsetBytes >= state.totalBytes) {
-      state.done = true; state.targetMet = true; state.warmState = "ready";
+      state.done = true;
+      state.targetMet = true;
+      state.warmState = "ready";
+      postPrefetchTerminal(requestId, state, "READY");
     }
   }
 }
@@ -811,7 +948,13 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
   const absoluteOffset = state.offsetBytes;
   const remainingFile = state.totalBytes > 0 ? Math.max(0, state.totalBytes - absoluteOffset) : STARTUP_PREFIX_BYTES;
   const limit = Math.min(STARTUP_PREFIX_BYTES, remainingFile || STARTUP_PREFIX_BYTES);
-  if (limit <= 0) { state.done = true; state.targetMet = true; state.warmState = "ready"; return; }
+  if (limit <= 0) {
+    state.done = true;
+    state.targetMet = true;
+    state.warmState = "ready";
+    postPrefetchTerminal(requestId, state, "READY");
+    return;
+  }
 
   const controller = new AbortController();
   state.controller = controller;
@@ -826,7 +969,7 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
       limit,
       abortSignal: controller.signal,
     }), promoted ? "foreground" : "warm");
-    if (bytes.byteLength <= 0) throw new Error("Galer Cloud returned an empty playback prefix.");
+    if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
     const stored = bytes.slice();
     state.chunks = [stored];
     state.downloadedBytes = stored.byteLength;
@@ -845,6 +988,7 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
       playableSeconds: 0,
       targetMet: true,
     } }, [transferable]);
+    postPrefetchTerminal(requestId, state, "READY");
     playTrace("WARM_PREFIX_READY", { message_id: state.messageId, bytes: stored.byteLength, offset_bytes: absoluteOffset });
   } catch (error) {
     const cancelled = control.cancelAll || control.cancelledMessageIds.has(state.messageId) || state.cancelled;
@@ -852,15 +996,20 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
       state.warmState = "preempted";
       state.done = false;
       state.error = null;
+      state.errorCode = null;
       if (!control.pendingWarm.includes(state)) control.pendingWarm.push(state);
       playTrace("WORKER_WARM_PREEMPTED", { message_id: state.messageId });
     } else if (cancelled && isAbortError(error)) {
       state.cancelled = true;
       state.done = true;
+      state.errorCode = "CANCELLED";
+      postPrefetchTerminal(requestId, state, "FAILED", "CANCELLED", "Cancelled.");
     } else {
       state.error = error instanceof Error ? error : new Error(String(error));
+      state.errorCode = codeForError(state.error, "TRANSFER_FAILED");
       state.done = true;
       state.warmState = "failed";
+      postPrefetchTerminal(requestId, state, "FAILED", state.errorCode, state.error.message);
     }
   } finally {
     if (activeWarmTransfers.get(state.messageId) === controller) activeWarmTransfers.delete(state.messageId);
@@ -891,7 +1040,7 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
   preemptActiveIndex("warm");
   playTrace("WARM_BATCH_BEGIN", { count: states.length, prefix_bytes: STARTUP_PREFIX_BYTES, lanes: maxConcurrency });
   try {
-    await resolveBatchStates(active, states);
+    await resolveBatchStates(requestId, active, states);
     control.pendingWarm = states.filter(state => !state.done && !state.error && !state.cancelled);
     if (playbackMessageId) moveFocusedTargetToFront(control, playbackMessageId);
     notifyScheduler();
@@ -915,8 +1064,8 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
     await Promise.all(Array.from({ length: laneCount }, (_, index) => laneLoop(index + 1)));
 
     const results: WebTransportPrefetchBatchItemResult[] = states.map(state => {
-      if (state.error) return { ok: false as const, messageId: state.messageId, error: state.error.message };
-      if (state.cancelled) return { ok: false as const, messageId: state.messageId, error: "Cancelled." };
+      if (state.error) return { ok: false as const, messageId: state.messageId, error: state.error.message, code: state.errorCode || undefined };
+      if (state.cancelled) return { ok: false as const, messageId: state.messageId, error: "Cancelled.", code: "CANCELLED" as const };
       const prefixBytes = concatBytes(state.chunks);
       const prefix = prefixBytes.buffer.slice(prefixBytes.byteOffset, prefixBytes.byteOffset + prefixBytes.byteLength) as ArrayBuffer;
       return { ok: true as const, result: {
@@ -943,12 +1092,24 @@ function cancelPrefetchBatch(targetRequestId: string, messageId?: number): { can
     const id = Number(messageId);
     control.cancelledMessageIds.add(id);
     const state = control.states.find(candidate => candidate.messageId === id);
-    if (state) { state.cancelled = true; state.done = true; state.controller?.abort(); }
+    if (state) {
+      state.cancelled = true;
+      state.done = true;
+      state.errorCode = "CANCELLED";
+      state.controller?.abort();
+      postPrefetchTerminal(control.requestId, state, "FAILED", "CANCELLED", "Cancelled.");
+    }
     control.pendingWarm = control.pendingWarm.filter(candidate => candidate.messageId !== id);
   } else {
     control.cancelAll = true;
     for (const state of control.states) {
-      if (!state.done) { state.cancelled = true; state.done = true; state.controller?.abort(); }
+      if (!state.done) {
+        state.cancelled = true;
+        state.done = true;
+        state.errorCode = "CANCELLED";
+        state.controller?.abort();
+        postPrefetchTerminal(control.requestId, state, "FAILED", "CANCELLED", "Cancelled.");
+      }
     }
     control.pendingWarm.length = 0;
   }
@@ -997,13 +1158,13 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
   const started = Date.now();
   const active = requireConnected();
   const messageId = Number(input.messageId || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
+  if (!Number.isInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
   const resolved = await resolvePlaybackMedia(active, messageId);
   const media = resolved.media;
   const totalBytes = resolved.totalBytes;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
   const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
-  if (offsetBytes % 4096 !== 0) throw new Error("Galer Cloud playback offset must be aligned to 4 KiB.");
+  if (offsetBytes % 4096 !== 0) throw new WorkerTransportError("TRANSFER_FAILED", "Galer Cloud playback offset must be aligned to 4 KiB.");
   if (totalBytes > 0 && offsetBytes >= totalBytes) return { messageId, totalBytes, mimeType };
   const controller = new AbortController();
   const state = { controller, acknowledge: null as (() => void) | null };
@@ -1035,7 +1196,7 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
       await new Promise<void>(resolve => { state.acknowledge = resolve; });
       state.acknowledge = null;
     }
-    if (transferredBytes <= 0 && !(totalBytes > 0 && offsetBytes >= totalBytes)) throw new Error("Galer Cloud returned an empty object.");
+    if (transferredBytes <= 0 && !(totalBytes > 0 && offsetBytes >= totalBytes)) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty object.");
     return { messageId, totalBytes: totalBytes || downloadedBytes, mimeType };
   } finally {
     activeStreams.delete(requestId);
@@ -1090,7 +1251,8 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "initialize": await initialize(command); return { ready: true };
     case "verify_identity": await verifyIdentity(); return { verified: true };
     case "verify": await verifyReady(); return { verified: true };
-    case "get_index": return getLibraryIndex();
+    case "get_index": return getLibraryIndex(command.requestId);
+    case "cancel_index": return cancelIndex(command.targetRequestId);
     case "replace_index": return replaceLibraryIndex(command.input);
     case "delete_messages": return deleteMessages(command.input);
     case "download": return download(command.input);
@@ -1115,6 +1277,11 @@ scope.onmessage = event => {
   }
   void handle(command).then(
     result => scope.postMessage({ requestId: command.requestId, ok: true, result }),
-    error => scope.postMessage({ requestId: command.requestId, ok: false, error: String((error as any)?.message || error) }),
+    error => scope.postMessage({
+      requestId: command.requestId,
+      ok: false,
+      error: String((error as any)?.message || error),
+      ...(error instanceof WorkerTransportError ? { code: error.code } : {}),
+    }),
   );
 };
