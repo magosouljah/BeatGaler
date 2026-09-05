@@ -158,9 +158,10 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(sessionControl).toContain("const csrf = readWebCsrfToken();");
     expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
     expect(sessionControl).toContain('credentials: "include"');
-    expect(sessionControl).toContain("export async function reserveWebTransportSession(startupBeatIds: readonly string[] = [])");
+    expect(sessionControl).toContain("export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic>");
     expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
-    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));");
+    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession());");
+    expect(sessionControl).not.toContain("startupBeatIds");
 
     const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve();");
     const activateIndex = controller.indexOf('observePlayStep("DIRECT_ACTIVATE"');
@@ -172,7 +173,7 @@ describe("Issue #97 production runtime follow-up", () => {
     const backgroundIndex = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration);", publishIndex);
     const readyIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_DATA_PLANE_READY"', backgroundIndex);
     expect(reserveIndex).toBeGreaterThanOrEqual(0);
-    expect(controller).not.toContain("this.api.reserve(this.startupBeatIds)");
+    expect(controller).not.toContain("startupBeatIds");
     expect(reserveIndex).toBeLessThan(activateIndex);
     expect(activateIndex).toBeLessThan(bindIndex);
     expect(bindIndex).toBeLessThan(activationGateIndex);
