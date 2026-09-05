@@ -87,8 +87,8 @@ describe("App migration characterization contracts", () => {
       "q.beats.slice(q.index)",
       "platform.importer.releaseBeat(beat.id)",
       "cleanupOrphanedDropStaging(protectedBeats)",
-      "return null",
     ]);
+    expect(cancel.lastIndexOf("return null")).toBeGreaterThan(cancel.indexOf("cleanupOrphanedDropStaging(protectedBeats)"));
 
     const save = section("const handleReviewedBeatSaved = useCallback", "const handleReviewedSaveAll = useCallback");
     expectOrdered(save, ["setBeats(bs =>", "setReviewQueue(q =>", "cloudifyImportedBeats([updated])"]);
