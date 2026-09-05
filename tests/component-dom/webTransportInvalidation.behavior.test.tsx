@@ -17,6 +17,7 @@ vi.mock("../../src/platform", () => ({
 }));
 
 import { useAudio } from "../../src/hooks/useAudio";
+import { WEB_PLAYBACK_ROUTE_RECOVERY_EVENT } from "../../src/features/playback/webPlaybackRouteRecoveryEvents";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../../src/features/cloud/webTransportEvents";
 
 class FakeAudio extends EventTarget {
@@ -83,18 +84,20 @@ describe("Web transport invalidation behavior", () => {
     vi.unstubAllGlobals();
   });
 
-  it("stops audible playback, detaches src and releases the active beat when the Web session is invalidated", async () => {
+  async function renderPlayingBeat(): Promise<FakeAudio> {
     await act(async () => {
       root.render(<Harness onValue={value => { latest = value; }} />);
     });
     expect(latest).not.toBeNull();
-
     await act(async () => {
       latest!.play("beat-1", ["blob:session-audio"]);
       await Promise.resolve();
     });
+    return FakeAudio.instances[0];
+  }
 
-    const audio = FakeAudio.instances[0];
+  it("stops audible playback, detaches src and releases the active beat when the Web session is invalidated", async () => {
+    const audio = await renderPlayingBeat();
     expect(audio.src).toBe("blob:session-audio");
     expect(audio.paused).toBe(false);
 
@@ -109,5 +112,60 @@ describe("Web transport invalidation behavior", () => {
     expect(releasePlayback).toHaveBeenCalledWith("beat-1");
     expect(latest!.state.playingId).toBeNull();
     expect(latest!.state.isPlaying).toBe(false);
+  });
+
+  it("holds the current intent through an async route error and resumes the repaired URL at the previous playback time", async () => {
+    const audio = await renderPlayingBeat();
+    audio.currentTime = 7.25;
+    releasePlayback.mockClear();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, {
+        detail: { beatId: "beat-1", phase: "begin" },
+      }));
+      audio.dispatchEvent(new Event("error"));
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(releasePlayback).not.toHaveBeenCalled();
+    expect(latest!.state.playingId).toBe("beat-1");
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, {
+        detail: { beatId: "beat-1", phase: "ready", url: "blob:repaired-audio" },
+      }));
+      await Promise.resolve();
+    });
+
+    expect(audio.src).toBe("blob:repaired-audio");
+    expect(audio.currentTime).toBe(7.25);
+    expect(audio.load).toHaveBeenCalled();
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    expect(releasePlayback).not.toHaveBeenCalled();
+    expect(latest!.state.playingId).toBe("beat-1");
+  });
+
+  it("ignores a late repaired URL after a newer beat supersedes the recovering beat", async () => {
+    const audio = await renderPlayingBeat();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, {
+        detail: { beatId: "beat-1", phase: "begin" },
+      }));
+    });
+
+    await act(async () => {
+      latest!.play("beat-2", ["blob:new-beat"]);
+      await Promise.resolve();
+    });
+    expect(audio.src).toBe("blob:new-beat");
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, {
+        detail: { beatId: "beat-1", phase: "ready", url: "blob:late-old-beat" },
+      }));
+    });
+
+    expect(audio.src).toBe("blob:new-beat");
+    expect(latest!.state.playingId).toBe("beat-2");
   });
 });
