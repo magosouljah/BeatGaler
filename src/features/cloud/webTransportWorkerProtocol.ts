@@ -17,6 +17,13 @@ export const STARTUP_PREFIX_BYTES = 64 * 1024;
 export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;
 export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;
 
+export type WebTransportErrorCode =
+  | "ROUTE_MISSING"
+  | "MEDIA_UNAVAILABLE"
+  | "TRANSFER_FAILED"
+  | "SESSION_INVALID"
+  | "CANCELLED";
+
 export interface WebTransportStoredFile {
   telegram_file_id: string;
   telegram_message_id: number;
@@ -38,7 +45,7 @@ export interface WebTransportReplaceIndexInput { manifest: unknown; expectedMess
 export interface WebTransportReplaceIndexResult { messageId: number; previousMessageId: number | null; beatCount: number; }
 export interface WebTransportDeleteMessagesInput { messageIds: number[]; }
 export interface WebTransportDeleteMessagesResult { deleted: number; }
-export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
+export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; purpose?: "artwork" | "other"; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
 export interface WebTransportPrefetchInput { messageId: number; mimeType?: string | null; offsetBytes?: number; }
 export interface WebTransportPrefetchResult {
@@ -65,11 +72,23 @@ export interface WebTransportPrefetchChunk {
   playableSeconds: number;
   targetMet: boolean;
 }
+export interface WebTransportPrefetchTerminal {
+  messageId: number;
+  status: "READY" | "FAILED";
+  code?: WebTransportErrorCode;
+  error?: string;
+  preempted?: boolean;
+}
 export type WebTransportPrefetchBatchItemResult =
   | { ok: true; result: WebTransportPrefetchResult & { playableSeconds: number; targetMet: boolean } }
-  | { ok: false; messageId: number; error: string; preempted?: boolean };
+  | { ok: false; messageId: number; error: string; code?: WebTransportErrorCode; preempted?: boolean };
 export interface WebTransportPrefetchBatchResult { results: WebTransportPrefetchBatchItemResult[]; }
-export interface WebTransportStreamInput { messageId: number; mimeType?: string | null; offsetBytes?: number; }
+export interface WebTransportStreamInput {
+  messageId: number;
+  mimeType?: string | null;
+  offsetBytes?: number;
+  purpose?: "playback" | "export";
+}
 export interface WebTransportStreamResult { messageId: number; totalBytes: number; mimeType: string; }
 
 export type WebTransportWorkerCommand =
@@ -94,6 +113,7 @@ export type WebTransportWorkerCommand =
   | { requestId: string; op: "verify_identity" }
   | { requestId: string; op: "verify" }
   | { requestId: string; op: "get_index" }
+  | { requestId: string; op: "cancel_index"; targetRequestId: string }
   | { requestId: string; op: "replace_index"; input: WebTransportReplaceIndexInput }
   | { requestId: string; op: "delete_messages"; input: WebTransportDeleteMessagesInput }
   | { requestId: string; op: "download"; input: WebTransportDownloadInput }
@@ -117,7 +137,9 @@ export type WebTransportWorkerRequest = WebTransportWorkerCommand extends infer 
 
 export type WebTransportWorkerResponse =
   | { requestId: string; ok: true; result?: unknown }
-  | { requestId: string; ok: false; error: string }
+  | { requestId: string; ok: false; error: string; code?: WebTransportErrorCode }
   | { requestId: string; event: "progress"; progress: WebTransportProgress }
   | { requestId: string; event: "download-chunk"; chunk: ArrayBuffer; downloadedBytes: number; totalBytes: number }
-  | { requestId: string; event: "prefetch-chunk"; progress: WebTransportPrefetchChunk };
+  | { requestId: string; event: "prefetch-chunk"; progress: WebTransportPrefetchChunk }
+  | { requestId: string; event: "prefetch-terminal"; terminal: WebTransportPrefetchTerminal }
+  | { requestId: string; event: "index-state"; state: "active" | "paused" };
