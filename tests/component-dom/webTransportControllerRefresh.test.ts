@@ -60,7 +60,7 @@ function boundSession(generation: number, credentialVersion: number): WebTranspo
 }
 
 describe("WebTransportController credential refresh", () => {
-  it("re-verifies refreshed Worker credentials before authorizing the next operation", async () => {
+  it("re-verifies refreshed Worker credentials before authorizing the next sensitive write", async () => {
     const initial = boundSession(1, 1);
     const refreshed = boundSession(1, 2);
     const events: string[] = [];
@@ -100,9 +100,9 @@ describe("WebTransportController credential refresh", () => {
     };
 
     const controller = new WebTransportController(runtime, api);
-    const lease = await controller.beginOperation("stream_master", {
-      objectType: "message",
-      objectIds: ["123"],
+    const lease = await controller.beginOperation("commit_edit", {
+      objectType: "beat",
+      objectIds: ["beat-123"],
     });
 
     expect(lease.operationId).toBe("operation-1");
