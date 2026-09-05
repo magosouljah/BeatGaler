@@ -73,6 +73,44 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     await expect(secondRequest).resolves.toBeUndefined();
   });
 
+  it("reapplies the latest focus after initialize before reporting readiness", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const focus = client.focusPlayback(77);
+    const worker = FakeWorker.instances[0];
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ op: "playback_focus", messageId: 77 }));
+    worker.respond();
+    await focus;
+
+    const initialize = client.initialize({
+      chat_id: -100123,
+      transport_user_id: "transport-1",
+      temp_auth: { expected_bot_id: "77", api_id: 1 },
+      temp_auth_key: "00",
+      temp_session_id: "session",
+      temp_session_state: "state",
+      temp_primary_dcs: [],
+    } as any, [11, 12]);
+
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      op: "initialize",
+      startupMessageIds: [11, 12],
+    }));
+    worker.respond();
+    await Promise.resolve();
+
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      op: "playback_focus",
+      messageId: 77,
+    }));
+    let settled = false;
+    void initialize.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    worker.respond();
+    await expect(initialize).resolves.toBeUndefined();
+  });
+
   it("routes warm-prefix progress and cancels one batch member without cancelling the batch", async () => {
     const client = new WebTransportWorkerClient(1000);
     const onChunk = vi.fn();
