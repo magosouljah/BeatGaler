@@ -105,6 +105,7 @@ describe("Issue #97 production runtime follow-up", () => {
   it("returns the first MSE URL before Direct stream admission and dispatches remembered Direct before React mount", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
+    const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const adapter = source("src/platform/webAdapter.ts");
     const accountGate = source("src/components/AccountGate.tsx");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
@@ -118,18 +119,19 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(playback).toContain("return Promise.resolve({ url, completed });");
     expect(playback).not.toContain("private async prepareMediaSource");
 
-    expect(main).toContain('import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";');
-    expect(main).toContain("hasRememberedWebSessionMarker()");
-    expect(main).toContain("function preconnectRememberedWebDirect(): void");
-    expect(main).toContain("if (Boolean((window as any).__TAURI_INTERNALS__)) return;");
-    expect(main).toContain("if (!readWebCsrfToken()) {");
-    expect(main).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
-    expect(main).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
-    expect(main).toContain("void coordinator.start().then(");
+    expect(main).toContain('import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";');
     expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
     expect(main).not.toContain('void import("./features/playback/webStartupPlaybackCoordinator").then(');
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(main).not.toContain("new WebGalerCloudTransport");
+
+    expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
+    expect(rememberedPreconnect).toContain("hasRememberedWebSessionMarker()");
+    expect(rememberedPreconnect).toContain("if (Boolean((window as any).__TAURI_INTERNALS__)) return;");
+    expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
+    expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
+    expect(rememberedPreconnect).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
+    expect(rememberedPreconnect).toContain("void coordinator.start().then(");
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
