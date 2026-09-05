@@ -3,20 +3,30 @@ import type { BeatCardWarmPriority } from "./webVisiblePlaybackPrefetch";
 import {
   WEB_PLAYBACK_PREFETCH_MAX_BYTES,
   WEB_PLAYBACK_PREFETCH_TARGET_SECONDS,
+  type WebTransportErrorCode,
   type WebTransportPrefetchBatchResult,
   type WebTransportPrefetchChunk,
   type WebTransportPrefetchInput,
   type WebTransportPrefetchResult,
+  type WebTransportPrefetchTerminal,
   type WebTransportStreamInput,
   type WebTransportStreamResult,
 } from "../cloud/webTransportWorkerProtocol";
 import { playTrace } from "./playTrace";
+
+export class WebPlaybackPrefetchError extends Error {
+  constructor(message: string, readonly code: WebTransportErrorCode = "TRANSFER_FAILED") {
+    super(message);
+    this.name = "WebPlaybackPrefetchError";
+  }
+}
 
 export interface WebPlaybackTransport {
   prefetchFile?(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult>;
   prefetchFiles(
     inputs: WebTransportPrefetchInput[],
     onChunk?: (progress: WebTransportPrefetchChunk) => void,
+    onTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
   ): Promise<{
     completed: Promise<WebTransportPrefetchBatchResult>;
     cancelMessage(messageId: number): void;
@@ -205,6 +215,21 @@ function warmPriorityRank(priority: BeatCardWarmPriority): number {
   return 0;
 }
 
+function errorCode(error: unknown, fallback: WebTransportErrorCode = "TRANSFER_FAILED"): WebTransportErrorCode {
+  const code = String((error as { code?: unknown } | null)?.code || "");
+  return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE" || code === "TRANSFER_FAILED" ||
+    code === "SESSION_INVALID" || code === "CANCELLED" ? code : fallback;
+}
+
+function playbackPrefetchError(error: unknown, fallback: WebTransportErrorCode = "TRANSFER_FAILED"): WebPlaybackPrefetchError {
+  if (error instanceof WebPlaybackPrefetchError) return error;
+  return new WebPlaybackPrefetchError(error instanceof Error ? error.message : String(error), errorCode(error, fallback));
+}
+
+function shouldCooldownPrefetch(code: WebTransportErrorCode): boolean {
+  return code === "TRANSFER_FAILED" || code === "SESSION_INVALID";
+}
+
 /** Owns short-lived browser playback URLs, one 64 KiB warm prefix and session-only RAM audio. */
 export class WebPlaybackSourceManager {
   private entries = new Map<string, PlaybackEntry>();
@@ -291,8 +316,6 @@ export class WebPlaybackSourceManager {
     const key = `${beatId}:${messageId}`;
     const job = this.prefetchJobs.get(key);
     if (priority === "far") {
-      // Viewport distance is advisory only. It must never settle/cancel a startup
-      // barrier member or a Play target as though it reached READY/FAILED.
       if (job) playTrace("SOURCE_PREFETCH_FAR_ADVISORY", { beat_id: beatId, message_id: messageId });
       return;
     }
@@ -365,20 +388,24 @@ export class WebPlaybackSourceManager {
     playTrace("SOURCE_PREFETCH_BATCH_BEGIN", { priority, count: jobs.length });
 
     try {
-      const handle = await this.transport.prefetchFiles(inputs, progress => this.acceptPrefetchChunk(batch, progress));
+      const handle = await this.transport.prefetchFiles(
+        inputs,
+        progress => this.acceptPrefetchChunk(batch, progress),
+        terminal => this.acceptPrefetchTerminal(batch, terminal),
+      );
       batch.handle = handle;
       if (batch.preempted) handle.cancel();
       const result = await handle.completed;
       this.completePrefetchBatch(batch, result);
     } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
+      const failure = playbackPrefetchError(error);
       const retryAt = Date.now() + PREFETCH_FAILURE_COOLDOWN_MS;
       for (const job of jobs) {
         if (job.settled) continue;
-        this.prefetchRetryAfter.set(job.key, retryAt);
+        if (shouldCooldownPrefetch(failure.code)) this.prefetchRetryAfter.set(job.key, retryAt);
         this.settlePrefetchJob(job, failure);
       }
-      playTrace("SOURCE_PREFETCH_BATCH_ERROR", { priority, count: jobs.length, error_name: failure.name });
+      playTrace("SOURCE_PREFETCH_BATCH_ERROR", { priority, count: jobs.length, error_name: failure.name, code: failure.code });
     } finally {
       for (const job of jobs) job.inFlight = false;
       if (this.activePrefetchBatch === batch) this.activePrefetchBatch = null;
@@ -438,6 +465,29 @@ export class WebPlaybackSourceManager {
     }
   }
 
+  private acceptPrefetchTerminal(batch: ActivePrefetchBatch, terminal: WebTransportPrefetchTerminal): void {
+    const job = batch.jobs.find(candidate => candidate.messageId === terminal.messageId && !candidate.settled);
+    if (!job) return;
+    if (terminal.status === "READY") {
+      this.settlePrefetchJob(job);
+      playTrace("SOURCE_PREFETCH_TERMINAL_READY", { beat_id: job.beatId, message_id: job.messageId });
+      return;
+    }
+    const failure = new WebPlaybackPrefetchError(
+      terminal.error || "Galer Cloud playback prefix failed.",
+      terminal.code || "TRANSFER_FAILED",
+    );
+    if (shouldCooldownPrefetch(failure.code)) {
+      this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
+    }
+    this.settlePrefetchJob(job, failure);
+    playTrace("SOURCE_PREFETCH_TERMINAL_FAILED", {
+      beat_id: job.beatId,
+      message_id: job.messageId,
+      code: failure.code,
+    });
+  }
+
   private completePrefetchBatch(batch: ActivePrefetchBatch, result: WebTransportPrefetchBatchResult): void {
     const byMessageId = new Map(result.results.map(item => [item.ok ? item.result.messageId : item.messageId, item]));
     for (const job of batch.jobs) {
@@ -445,8 +495,10 @@ export class WebPlaybackSourceManager {
       const item = byMessageId.get(job.messageId);
       if (item && !item.ok) {
         if (batch.preempted || item.preempted) continue;
-        const failure = new Error(item.error);
-        this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
+        const failure = new WebPlaybackPrefetchError(item.error, item.code || "TRANSFER_FAILED");
+        if (shouldCooldownPrefetch(failure.code)) {
+          this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
+        }
         this.settlePrefetchJob(job, failure);
         continue;
       }
@@ -502,42 +554,47 @@ export class WebPlaybackSourceManager {
     if (this.transport.focusPlayback) await this.transport.focusPlayback(messageId);
     if (!existingWarm) return;
 
-    const job = this.prefetchJobs.get(key);
-    const inActiveBatch = Boolean(job?.inFlight && this.activePrefetchBatch?.jobs.includes(job));
-    if (job && !inActiveBatch && this.transport.prefetchFile) {
-      // This target exists only in SourceManager's local queue. Waiting for the
-      // active batch would deadlock after PLAY_CRITICAL freezes unrelated warm.
-      playTrace("PLAY_WARM_PROMOTED", { beat_id: beatId, message_id: messageId, source: "local_queue" });
-      job.inFlight = true;
-      try {
-        const existing = this.prefixes.get(beatId);
-        const offsetBytes = existing?.messageId === messageId ? existing.prefix.byteLength : 0;
-        const result = await this.transport.prefetchFile({ messageId, mimeType: job.mimeType, offsetBytes });
-        if (!job.settled) {
-          this.storeForegroundPrefix(job, result);
-          this.settlePrefetchJob(job);
+    try {
+      const job = this.prefetchJobs.get(key);
+      const inActiveBatch = Boolean(job?.inFlight && this.activePrefetchBatch?.jobs.includes(job));
+      if (job && !inActiveBatch && this.transport.prefetchFile) {
+        playTrace("PLAY_WARM_PROMOTED", { beat_id: beatId, message_id: messageId, source: "local_queue" });
+        job.inFlight = true;
+        try {
+          const existing = this.prefixes.get(beatId);
+          const offsetBytes = existing?.messageId === messageId ? existing.prefix.byteLength : 0;
+          const result = await this.transport.prefetchFile({ messageId, mimeType: job.mimeType, offsetBytes });
+          if (!job.settled) {
+            this.storeForegroundPrefix(job, result);
+            this.settlePrefetchJob(job);
+          }
+        } catch (error) {
+          const failure = playbackPrefetchError(error);
+          if (!job.settled) {
+            if (shouldCooldownPrefetch(failure.code)) {
+              this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
+            }
+            this.settlePrefetchJob(job, failure);
+          }
+          throw failure;
+        } finally {
+          job.inFlight = false;
         }
-      } catch (error) {
-        const failure = error instanceof Error ? error : new Error(String(error));
-        if (!job.settled) {
-          this.prefetchRetryAfter.set(job.key, Date.now() + PREFETCH_FAILURE_COOLDOWN_MS);
-          this.settlePrefetchJob(job, failure);
-        }
-        throw failure;
-      } finally {
-        job.inFlight = false;
+        await existingWarm;
+        return;
       }
-      await existingWarm;
-      return;
-    }
 
-    const active = Boolean(job?.inFlight && this.activePrefetchBatch?.jobs.includes(job));
-    playTrace(active ? "PLAY_WARM_ADOPTED" : "PLAY_WARM_PROMOTED", {
-      beat_id: beatId,
-      message_id: messageId,
-    });
-    await this.activePrefetchBatch?.handle?.promoteMessage?.(messageId);
-    await existingWarm;
+      const active = Boolean(job?.inFlight && this.activePrefetchBatch?.jobs.includes(job));
+      playTrace(active ? "PLAY_WARM_ADOPTED" : "PLAY_WARM_PROMOTED", {
+        beat_id: beatId,
+        message_id: messageId,
+      });
+      await this.activePrefetchBatch?.handle?.promoteMessage?.(messageId);
+      await existingWarm;
+    } catch (error) {
+      if (this.transport.releasePlaybackFocus) await this.transport.releasePlaybackFocus(messageId).catch(() => {});
+      throw error;
+    }
   }
 
   async prepare(
@@ -816,11 +873,9 @@ export class WebPlaybackSourceManager {
           return;
         }
 
-        // Continuation starts immediately. Do not wait for the prefix to be
-        // consumed; the request resumes from the exact warm-prefix byte length.
         let firstChunkLogged = false;
         playTrace("PLAY_STREAM_BEGIN", { beat_id: beatId, message_id: messageId, offset_bytes: offsetBytes });
-        const stream = await this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {
+        const stream = await this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback" }, chunk => {
           if (!firstChunkLogged) {
             firstChunkLogged = true;
             playTrace("PLAY_STREAM_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength, offset_bytes: offsetBytes });
@@ -891,7 +946,7 @@ export class WebPlaybackSourceManager {
       playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "blob", prefetched_only: true });
       return { url, completed };
     }
-    const stream = await this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {
+    const stream = await this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback" }, chunk => {
       if (!firstChunkLogged) {
         firstChunkLogged = true;
         playTrace("PLAY_STREAM_FIRST_CHUNK", { beat_id: beatId, bytes: chunk.byteLength, offset_bytes: offsetBytes });
@@ -955,8 +1010,6 @@ export class WebPlaybackSourceManager {
       playTrace("PLAY_FOCUS_RELEASED", { beat_id: state.beatId, message_id: entry.messageId, reason: "pause_or_end" });
     }
 
-    // waiting=true always dominates stable, even if a previous range already
-    // contains >=2s or the transport has reached EOF.
     if (!entry.playbackWaiting) this.evaluatePlaybackStability(entry);
     this.wakeStreamDemandIfNeeded(entry);
   }
