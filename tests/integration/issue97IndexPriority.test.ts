@@ -33,7 +33,7 @@ describe("Issue #97 INDEX priority", () => {
     expect(worker).toContain("abortSignal: controller.signal");
     expect(worker).toContain('preemptActiveIndex("play")');
     expect(worker).toContain('preemptActiveIndex("warm")');
-    expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN")');
+    expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN",');
     expect(worker).toContain('playTrace("INDEX_DONE"');
   });
 
