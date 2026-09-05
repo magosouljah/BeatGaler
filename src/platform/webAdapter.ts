@@ -10,6 +10,8 @@ import { installBeatCardWarmObserver, type BeatCardWarmPriority } from "../featu
 import { playTrace, observePlayStep } from "../features/playback/playTrace";
 import { beginWebPlaybackIntent, invalidateAllWebPlaybackIntents, invalidateWebPlaybackIntentForBeat, isCurrentWebPlaybackIntent, rememberPreparedWebPlaybackUrl, supersededWebPlaybackUrl } from "../features/playback/webPlaybackIntent";
 import { deletePlaybackRoutes, readWebPlaybackRoutingCache, upsertPlaybackRouteFromBeat } from "../features/playback/webPlaybackRoutingCache";
+import { markPlaybackMessageRouteSuspect } from "../features/playback/webPlaybackRoutingSuspect";
+import { publishWebPlaybackRouteRecovery } from "../features/playback/webPlaybackRouteRecoveryEvents";
 import { WebDownloadsManager } from "../features/downloads/webDownloads";
 
 let webCoordinator: Promise<import("../features/playback/webStartupPlaybackCoordinator").WebStartupPlaybackCoordinator> | null = null;
@@ -48,7 +50,7 @@ async function recoverPlaybackRoute(beatId: string, failedMessageId: number): Pr
     playTrace("PLAY_ROUTE_SUSPECT", { beat_id: beatId, message_id: failedMessageId }); const windowConsumer = await resolveWebLibraryWindow(); const page = await windowConsumer.refresh(); reportLibraryWindow(page, "playback-route-recovery");
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("beatgaler:web-library-reconciled", { detail: { beats: page.beats } }));
     const repaired = readWebPlaybackRoutingCache().routes[beatId]?.messageId || null;
-    if (!repaired || repaired === failedMessageId) { if (repaired === failedMessageId) deletePlaybackRoutes([beatId]); playTrace("PLAY_ROUTE_RECOVERY_FAILED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return null; }
+    if (!repaired || repaired === failedMessageId) { playTrace("PLAY_ROUTE_RECOVERY_FAILED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return null; }
     playTrace("PLAY_ROUTE_RECOVERED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return repaired;
   })().finally(() => { if (playbackRouteRecoveries.get(beatId) === recovery) playbackRouteRecoveries.delete(beatId); }); playbackRouteRecoveries.set(beatId, recovery); return recovery;
 }
@@ -106,10 +108,35 @@ export const webAdapter: PlatformAdapter = {
         playTrace("ADAPTER_PREPARE_ENTER", { beat_id: beat.id, message_id: messageId, mime_type: mimeType, intent_id: intent.id }); const sources = await resolveWebPlaybackSources(); if (!isCurrentWebPlaybackIntent(intent)) return { url: supersededWebPlaybackUrl(intent), completed: Promise.resolve() };
         playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id, intent_id: intent.id });
         const prepareOnce = async (targetMessageId: number) => { const warm = sources.prefetch(beat.id, targetMessageId, mimeType, "visible"); void warm.catch(() => {}); return sources.prepare(beat.id, targetMessageId, mimeType, intent.id); };
-        try { const prepared = await prepareOnce(messageId); rememberPreparedWebPlaybackUrl(prepared.url, intent); playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id, intent_id: intent.id, current: isCurrentWebPlaybackIntent(intent) }); return prepared; }
+        const attachAsyncRouteRecovery = (prepared: Awaited<ReturnType<typeof prepareOnce>>, failedMessageId: number) => {
+          const completed = prepared.completed.catch(async error => {
+            if (!isRecoverablePlaybackRouteError(error) || !isCurrentWebPlaybackIntent(intent)) throw error;
+            markPlaybackMessageRouteSuspect(failedMessageId);
+            publishWebPlaybackRouteRecovery({ beatId: beat.id, phase: "begin" });
+            try {
+              const repairedMessageId = await recoverPlaybackRoute(beat.id, failedMessageId);
+              if (!isCurrentWebPlaybackIntent(intent)) return;
+              if (!repairedMessageId || repairedMessageId === failedMessageId) throw error;
+              const retried = await prepareOnce(repairedMessageId);
+              if (!isCurrentWebPlaybackIntent(intent)) { sources.release(beat.id); return; }
+              rememberPreparedWebPlaybackUrl(retried.url, intent);
+              playTrace("ADAPTER_STREAM_ROUTE_RETRY_READY", { beat_id: beat.id, intent_id: intent.id, failed_message_id: failedMessageId, repaired_message_id: repairedMessageId });
+              publishWebPlaybackRouteRecovery({ beatId: beat.id, phase: "ready", url: retried.url });
+              await retried.completed;
+            } catch (recoveryError) {
+              if (isCurrentWebPlaybackIntent(intent)) publishWebPlaybackRouteRecovery({ beatId: beat.id, phase: "failed" });
+              throw recoveryError;
+            }
+          });
+          void completed.catch(() => {});
+          return { url: prepared.url, completed };
+        };
+        try {
+          const prepared = await prepareOnce(messageId); rememberPreparedWebPlaybackUrl(prepared.url, intent); playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id, intent_id: intent.id, current: isCurrentWebPlaybackIntent(intent) }); return attachAsyncRouteRecovery(prepared, messageId);
+        }
         catch (error) {
           if (isAbortError(error) && !isCurrentWebPlaybackIntent(intent)) { const url = supersededWebPlaybackUrl(intent); playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id }); return { url, completed: Promise.resolve() }; }
-          if (isRecoverablePlaybackRouteError(error) && isCurrentWebPlaybackIntent(intent)) { const repairedMessageId = await recoverPlaybackRoute(beat.id, messageId); if (!isCurrentWebPlaybackIntent(intent)) { const url = supersededWebPlaybackUrl(intent); playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id, phase: "route_reconcile" }); return { url, completed: Promise.resolve() }; } if (repairedMessageId && repairedMessageId !== messageId) { const prepared = await prepareOnce(repairedMessageId); rememberPreparedWebPlaybackUrl(prepared.url, intent); playTrace("ADAPTER_PREPARE_ROUTE_RETRY_READY", { beat_id: beat.id, intent_id: intent.id, failed_message_id: messageId, repaired_message_id: repairedMessageId }); return prepared; } }
+          if (isRecoverablePlaybackRouteError(error) && isCurrentWebPlaybackIntent(intent)) { markPlaybackMessageRouteSuspect(messageId); const repairedMessageId = await recoverPlaybackRoute(beat.id, messageId); if (!isCurrentWebPlaybackIntent(intent)) { const url = supersededWebPlaybackUrl(intent); playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id, phase: "route_reconcile" }); return { url, completed: Promise.resolve() }; } if (repairedMessageId && repairedMessageId !== messageId) { const prepared = await prepareOnce(repairedMessageId); rememberPreparedWebPlaybackUrl(prepared.url, intent); playTrace("ADAPTER_PREPARE_ROUTE_RETRY_READY", { beat_id: beat.id, intent_id: intent.id, failed_message_id: messageId, repaired_message_id: repairedMessageId }); return prepared; } }
           throw error;
         }
       }
