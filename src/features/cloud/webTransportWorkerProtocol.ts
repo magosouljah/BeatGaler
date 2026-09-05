@@ -106,8 +106,6 @@ export type WebTransportWorkerCommand =
       > & {
         expected_bot_id: string;
         temp_api_id: number;
-        startup_routes?: Record<string, number>;
-        routing_revision?: number;
       };
     }
   | { requestId: string; op: "verify_identity" }
