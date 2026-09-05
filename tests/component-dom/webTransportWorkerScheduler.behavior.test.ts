@@ -111,7 +111,7 @@ const harness = vi.hoisted(() => {
 
   class TelegramClient {
     importSession = vi.fn(async () => undefined);
-    connect = vi.fn(async () => undefined);
+    connect = vi.fn(async () => { connection.connect(); });
     destroy = vi.fn(async () => undefined);
     getMe = vi.fn(async () => ({ id: 4242, isBot: true }));
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
