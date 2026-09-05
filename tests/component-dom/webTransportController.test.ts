@@ -67,6 +67,7 @@ function harness() {
   const runtime: WebTransportRuntime = {
     initialize: vi.fn(async () => {}),
     replaceCredentials: vi.fn(async () => {}),
+    verifyIdentity: vi.fn(async () => {}),
     verifyReady: vi.fn(async () => {}),
     shutdown: vi.fn(async () => {}),
   };
@@ -84,7 +85,7 @@ function harness() {
 }
 
 describe("Galer Cloud Web transport lifecycle", () => {
-  it("overlaps activation with temp-auth binding but gates Worker media initialization on confirmed vault membership", async () => {
+  it("overlaps activation with temp-auth binding and starts background verification after Worker media initialization", async () => {
     const { controller, runtime, api } = harness();
     let finishBind!: () => void;
     let finishActivate!: () => void;
@@ -103,6 +104,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     expect(api.reserve).toHaveBeenCalledOnce();
     expect(api.activate).toHaveBeenCalledOnce();
     expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(vi.mocked(api.reserve).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.activate).mock.invocationCallOrder[0]);
     expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.bind).mock.invocationCallOrder[0]);
@@ -110,29 +112,47 @@ describe("Galer Cloud Web transport lifecycle", () => {
     finishBind();
     await Promise.resolve();
     expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
 
     finishActivate();
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b);
     expect(runtime.initialize).toHaveBeenCalledOnce();
+    expect(runtime.verifyIdentity).toHaveBeenCalledOnce();
     expect(runtime.verifyReady).toHaveBeenCalledOnce();
     expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]);
+    expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyIdentity).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
     await controller.disconnect();
   });
 
-  it("singleflights concurrent session startup across reserve, bind, activation and verify", async () => {
+  it("singleflights concurrent session startup and begins background verification once", async () => {
     const { controller, runtime, api } = harness();
     const [first, second] = await Promise.all([controller.connect(), controller.connect()]);
 
     expect(first).toBe(second);
     expect(api.reserve).toHaveBeenCalledOnce();
     expect(api.bind).toHaveBeenCalledOnce();
-    expect(runtime.initialize).toHaveBeenCalledWith(first);
+    expect(runtime.initialize).toHaveBeenCalledWith(first, []);
     expect(api.activate).toHaveBeenCalledWith(expect.objectContaining({ session_id: "web-session", generation: 7 }));
+    expect(runtime.verifyIdentity).toHaveBeenCalledWith(first);
     expect(runtime.verifyReady).toHaveBeenCalledWith(first);
 
+    await controller.disconnect();
+  });
+
+  it("keeps startup message ids local and never sends playback routing to Cloud reserve", async () => {
+    const { runtime, api } = harness();
+    const controller = new WebTransportController(runtime, api, {
+      startupMessageIds: [501, 502],
+    });
+
+    const connected = await controller.connect();
+
+    expect(api.reserve).toHaveBeenCalledTimes(1);
+    expect(api.reserve).toHaveBeenCalledWith();
+    expect(runtime.initialize).toHaveBeenCalledWith(connected, [501, 502]);
     await controller.disconnect();
   });
 
@@ -158,6 +178,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     finishActivate();
     expect((await failure).message).toBe("temp auth failed");
     expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledWith(expect.objectContaining({ session_id: "web-session", generation: 7 }));
@@ -185,6 +206,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     finishActivate();
     expect((await failure).message).toBe("worker init failed");
     expect(runtime.initialize).toHaveBeenCalledOnce();
+    expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledOnce();
@@ -209,6 +231,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
 
     expect((await failure).message).toBe("activation failed");
     expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledOnce();
@@ -223,6 +246,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
     const lease = await controller.beginOperation("upload", uploadScope);
 
     expect(runtime.replaceCredentials).toHaveBeenCalledWith(expect.objectContaining({ credential_version: 2 }));
+    expect(runtime.verifyIdentity).toHaveBeenCalledWith(expect.objectContaining({ credential_version: 2 }));
     expect(api.authorize).toHaveBeenCalledWith(
       expect.objectContaining({ session_id: "web-session", credential_version: 2 }),
       "op-refreshed",

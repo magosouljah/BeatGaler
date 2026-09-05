@@ -44,14 +44,15 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("refreshes cloud-backed playback even when cached metadata contains a stale blob URL", () => {
-    const messageLookup = webAdapter.indexOf("const messageId = webBeatMessageId(beat);");
+    const messageLookup = webAdapter.indexOf("let messageId = webBeatMessageId(beat);");
     const cloudPrepare = webAdapter.indexOf("if (messageId) {", messageLookup);
     const localBlobFallback = webAdapter.indexOf('if (beat.playback_path.startsWith("blob:"))', cloudPrepare);
     expect(messageLookup).toBeGreaterThan(-1);
     expect(cloudPrepare).toBeGreaterThan(messageLookup);
     expect(localBlobFallback).toBeGreaterThan(cloudPrepare);
     expect(webAdapter).toContain("const explicit = Number(beat.telegram_message_id || 0);");
-    expect(webAdapter).toContain('sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg")');
+    expect(webAdapter).toContain("const prepareOnce = async (targetMessageId: number) =>");
+    expect(webAdapter).toContain("return sources.prepare(beat.id, targetMessageId, mimeType, intent.id)");
   });
 
   it("keeps productive Web auth on the same-origin proxy and clears remembered legacy endpoints", () => {

@@ -60,13 +60,14 @@ function boundSession(generation: number, credentialVersion: number): WebTranspo
 }
 
 describe("WebTransportController credential refresh", () => {
-  it("re-verifies refreshed Worker credentials before authorizing the next operation", async () => {
+  it("re-verifies refreshed Worker credentials before authorizing the next sensitive write", async () => {
     const initial = boundSession(1, 1);
     const refreshed = boundSession(1, 2);
     const events: string[] = [];
     const runtime: WebTransportRuntime = {
       initialize: vi.fn(async session => { events.push(`initialize:${session.credential_version}`); }),
       replaceCredentials: vi.fn(async session => { events.push(`replace:${session.credential_version}`); }),
+      verifyIdentity: vi.fn(async session => { events.push(`identity:${session.credential_version}`); }),
       verifyReady: vi.fn(async session => { events.push(`verify:${session.credential_version}`); }),
       shutdown: vi.fn(async () => { events.push("shutdown"); }),
     };
@@ -99,17 +100,21 @@ describe("WebTransportController credential refresh", () => {
     };
 
     const controller = new WebTransportController(runtime, api);
-    const lease = await controller.beginOperation("stream_master", {
-      objectType: "message",
-      objectIds: ["123"],
+    const lease = await controller.beginOperation("commit_edit", {
+      objectType: "beat",
+      objectIds: ["beat-123"],
     });
 
     expect(lease.operationId).toBe("operation-1");
     expect(events).toContain("replace:2");
+    expect(events).toContain("identity:2");
     expect(events).toContain("verify:2");
+    expect(events.indexOf("replace:2")).toBeLessThan(events.indexOf("identity:2"));
     expect(events.indexOf("replace:2")).toBeLessThan(events.indexOf("verify:2"));
+    expect(events.indexOf("identity:2")).toBeLessThan(events.indexOf("authorize"));
     expect(events.indexOf("verify:2")).toBeLessThan(events.indexOf("authorize"));
     expect(runtime.replaceCredentials).toHaveBeenCalledTimes(1);
+    expect(runtime.verifyIdentity).toHaveBeenCalledTimes(2);
     expect(runtime.verifyReady).toHaveBeenCalledTimes(2);
 
     await controller.endOperation(lease);

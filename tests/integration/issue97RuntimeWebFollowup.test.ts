@@ -102,9 +102,10 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).toContain("setOptimisticRememberedSession(false);");
   });
 
-  it("returns the first MSE URL before Direct stream admission and overlaps remembered auth with membership-gated Direct startup", () => {
+  it("returns the first MSE URL before Direct stream admission and dispatches remembered Direct before React mount", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
+    const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const adapter = source("src/platform/webAdapter.ts");
     const accountGate = source("src/components/AccountGate.tsx");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
@@ -118,57 +119,72 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(playback).toContain("return Promise.resolve({ url, completed });");
     expect(playback).not.toContain("private async prepareMediaSource");
 
-    expect(main).toContain("function preloadRememberedWebDirectCode(): void");
-    expect(main).toContain("hasRememberedWebSessionMarker()");
-    expect(main).toContain('playTrace("DIRECT_CODE_PRELOAD_BEGIN")');
-    expect(main).toContain('void import("./features/cloud/webGalerCloudTransport").then(');
-    expect(main).toContain("function preconnectRememberedWebDirect(): void");
-    expect(main).toContain("if (!readWebCsrfToken()) {");
-    expect(main).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
-    expect(main).toContain('void platform.cloudAuth.syncSession(null, "").then(');
-    expect(main).toContain("preloadRememberedWebDirectCode();\npreconnectRememberedWebDirect();");
+    expect(main).toContain('import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";');
     expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
+    expect(main).not.toContain('void import("./features/playback/webStartupPlaybackCoordinator").then(');
+    expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(main).not.toContain("new WebGalerCloudTransport");
+
+    expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
+    expect(rememberedPreconnect).toContain("hasRememberedWebSessionMarker()");
+    expect(rememberedPreconnect).toContain("if (Boolean((window as any).__TAURI_INTERNALS__)) return;");
+    expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
+    expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
+    expect(rememberedPreconnect).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
+    expect(rememberedPreconnect).toContain("const startup = coordinator.start();");
+    expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")');
+    expect(rememberedPreconnect).toContain("void startup.catch(error =>");
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
     expect(sessionBootstrap).toContain("readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME)");
 
     expect(adapter).toContain("function prewarmAuthenticatedWebTransport(): void");
-    expect(adapter).toContain('window.localStorage.getItem("beatgaler:web-session-present:v1") !== "1"');
     expect(adapter).toContain("async syncSession() {");
     expect(adapter).toContain("prewarmAuthenticatedWebTransport();");
+    expect(adapter).toContain("resolveWebCoordinator().then(coordinator => coordinator.start())");
     expect(adapter).not.toContain("scheduleWebTransportPrewarm");
     expect(accountGate).toContain("await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());");
 
     expect(workerClient).toContain("prewarm(): void {");
     expect(workerClient).toContain('playTrace("WORKER_PREWARM_BEGIN")');
     expect(workerClient).toContain("this.ensureWorker();");
-    expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER")');
+    expect(workerClient).toContain("this.desiredPlaybackMessageId = id;");
+    expect(workerClient).toContain('op: "playback_focus", messageId: desiredPlaybackMessageId');
+    expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER", { startup_beat_count: candidates.length });');
     expect(transport).toContain("this.worker.prewarm();");
-    expect(transport.indexOf("this.worker.prewarm();")).toBeLessThan(transport.indexOf("startStartupWarm("));
+    expect(transport).toContain("async connectPlaybackDataPlane(): Promise<void>");
 
     expect(sessionControl).toContain("const csrf = readWebCsrfToken();");
     expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
     expect(sessionControl).toContain('credentials: "include"');
-    expect(sessionControl).toContain("export async function reserveWebTransportSession(startupBeatIds: readonly string[] = [])");
+    expect(sessionControl).toContain("export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic>");
     expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
-    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));");
+    expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession());");
+    expect(sessionControl).not.toContain("startupBeatIds");
 
-    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve(this.startupBeatIds);");
+    const reserveIndex = controller.indexOf("bootstrap = await this.api.reserve();");
     const activateIndex = controller.indexOf('observePlayStep("DIRECT_ACTIVATE"');
     const bindIndex = controller.indexOf("this.api.bind(bootstrap!)");
     const activationGateIndex = controller.indexOf("const activationResult = await activationResultPromise;");
     const mediaGateIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN")');
     const initializeIndex = controller.indexOf('observePlayStep("DIRECT_INITIALIZE"');
-    const verifyIndex = controller.indexOf('observePlayStep("DIRECT_VERIFY"');
+    const publishIndex = controller.indexOf("this.session = session;", initializeIndex);
+    const backgroundIndex = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration);", publishIndex);
+    const readyIndex = controller.indexOf('playTrace("CONTROLLER_SESSION_DATA_PLANE_READY"', backgroundIndex);
     expect(reserveIndex).toBeGreaterThanOrEqual(0);
+    expect(controller).not.toContain("startupBeatIds");
     expect(reserveIndex).toBeLessThan(activateIndex);
     expect(activateIndex).toBeLessThan(bindIndex);
     expect(bindIndex).toBeLessThan(activationGateIndex);
     expect(activationGateIndex).toBeLessThan(mediaGateIndex);
     expect(mediaGateIndex).toBeLessThan(initializeIndex);
-    expect(initializeIndex).toBeLessThan(verifyIndex);
+    expect(initializeIndex).toBeLessThan(publishIndex);
+    expect(publishIndex).toBeLessThan(backgroundIndex);
+    expect(backgroundIndex).toBeLessThan(readyIndex);
+    expect(controller).toContain('observePlayStep("DIRECT_BACKGROUND_GET_ME"');
+    expect(controller).toContain('observePlayStep("DIRECT_BACKGROUND_GET_CHAT"');
+    expect(controller).not.toContain('observePlayStep("DIRECT_VERIFY"');
     expect(controller).not.toContain("const [activationResult, initializeResult] = await Promise.all([");
     expect(controller).toContain("if (activationResultPromise) await activationResultPromise;");
     expect(controller).toContain("if (bootstrap) await this.api.stop(bootstrap).catch(() => {});");
