@@ -113,7 +113,7 @@ describe("Web MASTER playback source", () => {
     const prepared = await manager.prepare("beat-1", 91);
     expect(prepared.url).toBe("blob:cloud-master");
     expect(transport.streamFile).toHaveBeenCalledWith(
-      { messageId: 91, mimeType: "audio/mpeg", offsetBytes: 0 },
+      { messageId: 91, mimeType: "audio/mpeg", offsetBytes: 0, purpose: "playback" },
       expect.any(Function),
     );
 
@@ -214,7 +214,7 @@ describe("Web MASTER playback source", () => {
     expect(prepared.url).toBe("blob:cloud-master");
     expect(cancelMessage).not.toHaveBeenCalled();
     expect(streamFile).toHaveBeenCalledWith(
-      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536 },
+      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" },
       expect.any(Function),
     );
 
@@ -291,9 +291,11 @@ describe("Web MASTER playback source", () => {
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
     expect(markPlaybackStable).toHaveBeenCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenCalledTimes(1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: false, waiting: false });
     expect(releasePlaybackFocus).toHaveBeenCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenCalledTimes(1);
   });
 
   it("stops retaining replay bytes at a zero cache budget without interrupting the active MSE stream", async () => {

@@ -16,9 +16,7 @@ class FakeWorker {
   respond(result: unknown = undefined): void {
     const request = this.postMessage.mock.calls.findLast(call => call[0]?.op !== "prefetch_batch_cancel")?.[0] as { requestId?: string } | undefined;
     if (!request?.requestId) throw new Error("Fake Worker has no request to answer.");
-    this.onmessage?.({
-      data: { requestId: request.requestId, ok: true, result },
-    } as MessageEvent);
+    this.onmessage?.({ data: { requestId: request.requestId, ok: true, result } } as MessageEvent);
   }
 }
 
@@ -34,16 +32,20 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     vi.unstubAllGlobals();
   });
 
-  it("rejects a silent bootstrap index request instead of waiting forever", async () => {
+  it("keeps an INDEX request alive beyond the bootstrap timeout without terminating the Worker", async () => {
     const client = new WebTransportWorkerClient(1000);
     const request = client.getLibraryIndex();
-    const rejection = expect(request).rejects.toThrow("timed out during get_index");
+    const worker = FakeWorker.instances[0];
 
-    await vi.advanceTimersByTimeAsync(1000);
-    await rejection;
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(worker.terminate).not.toHaveBeenCalled();
 
-    expect(FakeWorker.instances).toHaveLength(1);
-    expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce();
+    worker.respond({ manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [] }, messageId: 7 });
+    await expect(request).resolves.toEqual({
+      manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [] },
+      messageId: 7,
+    });
+    expect(worker.terminate).not.toHaveBeenCalled();
   });
 
   it("clears the bootstrap deadline when the worker answers", async () => {
@@ -85,10 +87,6 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
       chat_id: -100123,
       transport_user_id: "transport-1",
       temp_auth: { expected_bot_id: "77", api_id: 1 },
-      temp_auth_key: "00",
-      temp_session_id: "session",
-      temp_session_state: "state",
-      temp_primary_dcs: [],
     } as any, [11, 12]);
 
     expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
@@ -146,9 +144,7 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
       messageId: 11,
     }));
 
-    worker.onmessage?.({
-      data: { requestId: batchRequest.requestId, ok: true, result: { results: [] } },
-    } as MessageEvent);
+    worker.onmessage?.({ data: { requestId: batchRequest.requestId, ok: true, result: { results: [] } } } as MessageEvent);
     await expect(handle.completed).resolves.toEqual({ results: [] });
   });
 });

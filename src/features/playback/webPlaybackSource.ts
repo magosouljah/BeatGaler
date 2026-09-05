@@ -715,7 +715,8 @@ export class WebPlaybackSourceManager {
   }
 
   private evaluatePlaybackStability(entry: PlaybackEntry): void {
-    if (entry.released || entry.failed || entry.playbackStable || entry.playbackWaiting) return;
+    if (entry.released || entry.failed || entry.playbackStable || entry.playbackWaiting ||
+        (entry.playbackObserved && !entry.playbackPlaying)) return;
     const ahead = bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime);
     const hasData = entry.streamDone || sourceBufferSnapshot(entry.sourceBuffer).buffered_ranges > 0;
     if (!hasData || (!entry.streamDone && ahead < PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS)) return;

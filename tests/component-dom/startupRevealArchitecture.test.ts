@@ -51,7 +51,7 @@ describe("Issue #97 startup reveal architecture", () => {
     expect(cloudPrepare).toBeGreaterThan(messageLookup);
     expect(localBlobFallback).toBeGreaterThan(cloudPrepare);
     expect(webAdapter).toContain("const explicit = Number(beat.telegram_message_id || 0);");
-    expect(webAdapter).toContain('sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg")');
+    expect(webAdapter).toContain('sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg", intent.id)');
   });
 
   it("keeps productive Web auth on the same-origin proxy and clears remembered legacy endpoints", () => {
