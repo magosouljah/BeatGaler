@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
 import { shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
+import { WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, type WebPlaybackRouteRecoveryDetail } from "../features/playback/webPlaybackRouteRecoveryEvents";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../features/cloud/webTransportEvents";
 
 let silentGestureUrl: string | null = null;
@@ -49,6 +50,8 @@ export function useAudio() {
   const errorNotifiedRef = useRef(false);
   const primingRef = useRef(false);
   const waitingRef = useRef(false);
+  const routeRecoveryBeatIdRef = useRef<string | null>(null);
+  const routeRecoveryResumeTimeRef = useRef(0);
   const [state, setState] = useState<AudioState>({ playingId: null, isPlaying: false, progress: 0, duration: 0, volume: 0.75, endedSeq: 0 });
 
   const getAudio = useCallback(() => {
@@ -63,6 +66,14 @@ export function useAudio() {
       if (!beatId) return;
       window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", { detail: { beatId, currentTime: Math.max(0, Number(audio.currentTime) || 0), playing: !audio.paused && !audio.ended, waiting: waitingRef.current } }));
     };
+    const failCurrentSource = () => {
+      const nextIndex = sourceIndexRef.current + 1;
+      if (nextIndex < sourceUrlsRef.current.length) {
+        sourceIndexRef.current = nextIndex; audio.src = sourceUrlsRef.current[nextIndex]; audio.load(); audio.play().catch(console.error); return;
+      }
+      const failedBeatId = currentBeatIdRef.current; console.error("Audio playback failed for all available sources.", sourceUrlsRef.current); audio.pause(); audio.removeAttribute("src"); audio.load(); platform.media.releasePlayback(failedBeatId); sourceUrlsRef.current = []; sourceIndexRef.current = 0; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
+      if (!errorNotifiedRef.current) { errorNotifiedRef.current = true; window.dispatchEvent(new CustomEvent("beatgaler:audio-unavailable", { detail: { beatId: failedBeatId } })); }
+    };
     const onTimeUpdate = () => { if (audio.duration > 0) setState(s => ({ ...s, progress: audio.currentTime / audio.duration })); publishPlaybackState(); };
     const onLoadedMeta = () => setState(s => ({ ...s, duration: audio.duration }));
     const onEnded = () => { const beatId = currentBeatIdRef.current; waitingRef.current = false; setState(s => ({ ...s, isPlaying: false, progress: 0, endedSeq: s.endedSeq + 1 })); publishPlaybackState(); if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } })); };
@@ -73,24 +84,65 @@ export function useAudio() {
     const onPause = () => { const beatId = currentBeatIdRef.current; waitingRef.current = false; setState(s => ({ ...s, isPlaying: false })); publishPlaybackState(); if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } })); };
     const onError = () => {
       waitingRef.current = false; playTrace("AUDIO_EVENT_ERROR", { beat_id: currentBeatIdRef.current, media_error: audio.error?.code || null, priming: primingRef.current }); publishPlaybackState(); if (primingRef.current) return;
-      const nextIndex = sourceIndexRef.current + 1;
-      if (nextIndex >= sourceUrlsRef.current.length) {
-        const failedBeatId = currentBeatIdRef.current; console.error("Audio playback failed for all available sources.", sourceUrlsRef.current); audio.pause(); audio.removeAttribute("src"); audio.load(); platform.media.releasePlayback(failedBeatId); sourceUrlsRef.current = []; sourceIndexRef.current = 0; setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
-        if (!errorNotifiedRef.current) { errorNotifiedRef.current = true; window.dispatchEvent(new CustomEvent("beatgaler:audio-unavailable", { detail: { beatId: currentBeatIdRef.current } })); }
+      queueMicrotask(() => {
+        if (routeRecoveryBeatIdRef.current && routeRecoveryBeatIdRef.current === currentBeatIdRef.current) {
+          waitingRef.current = true;
+          playTrace("AUDIO_ROUTE_RECOVERY_ERROR_HELD", { beat_id: currentBeatIdRef.current });
+          publishPlaybackState();
+          return;
+        }
+        failCurrentSource();
+      });
+    };
+    const onRouteRecovery = (event: Event) => {
+      const detail = (event as CustomEvent<WebPlaybackRouteRecoveryDetail>).detail;
+      const beatId = String(detail?.beatId || "").trim();
+      if (!beatId || currentBeatIdRef.current !== beatId) return;
+      if (detail.phase === "begin") {
+        routeRecoveryBeatIdRef.current = beatId;
+        routeRecoveryResumeTimeRef.current = Math.max(0, Number(audio.currentTime) || 0);
+        waitingRef.current = true;
+        playTrace("AUDIO_ROUTE_RECOVERY_BEGIN", { beat_id: beatId, current_time: routeRecoveryResumeTimeRef.current });
+        publishPlaybackState();
         return;
       }
-      sourceIndexRef.current = nextIndex; audio.src = sourceUrlsRef.current[nextIndex]; audio.load(); audio.play().catch(console.error);
+      if (routeRecoveryBeatIdRef.current !== beatId) return;
+      if (detail.phase === "failed" || !detail.url) {
+        routeRecoveryBeatIdRef.current = null;
+        routeRecoveryResumeTimeRef.current = 0;
+        waitingRef.current = false;
+        playTrace("AUDIO_ROUTE_RECOVERY_FAILED", { beat_id: beatId });
+        failCurrentSource();
+        return;
+      }
+      const resumeTime = routeRecoveryResumeTimeRef.current;
+      routeRecoveryBeatIdRef.current = null;
+      routeRecoveryResumeTimeRef.current = 0;
+      errorNotifiedRef.current = false;
+      waitingRef.current = true;
+      sourceUrlsRef.current = [detail.url];
+      sourceIndexRef.current = 0;
+      audio.src = detail.url;
+      audio.load();
+      const resumeAndPlay = () => {
+        if (currentBeatIdRef.current !== beatId) return;
+        if (resumeTime > 0) { try { audio.currentTime = resumeTime; } catch {} }
+        void audio.play().catch(console.error);
+      };
+      if (resumeTime > 0 && audio.readyState < HTMLMediaElement.HAVE_METADATA) audio.addEventListener("loadedmetadata", resumeAndPlay, { once: true });
+      else resumeAndPlay();
+      playTrace("AUDIO_ROUTE_RECOVERY_READY", { beat_id: beatId, resume_time: resumeTime });
     };
     const onTransportInvalidated = () => {
-      const beatId = currentBeatIdRef.current; playTrace("AUDIO_SESSION_INVALIDATED", { beat_id: beatId }); audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; primingRef.current = false; waitingRef.current = false; if (beatId) platform.media.releasePlayback(beatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
+      const beatId = currentBeatIdRef.current; playTrace("AUDIO_SESSION_INVALIDATED", { beat_id: beatId }); audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; primingRef.current = false; waitingRef.current = false; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; if (beatId) platform.media.releasePlayback(beatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
     };
-    audio.addEventListener("timeupdate", onTimeUpdate); audio.addEventListener("loadedmetadata", onLoadedMeta); audio.addEventListener("ended", onEnded); audio.addEventListener("play", onPlay); audio.addEventListener("playing", onPlaying); audio.addEventListener("waiting", onWaiting); audio.addEventListener("canplay", onCanPlay); audio.addEventListener("pause", onPause); audio.addEventListener("error", onError); window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated);
-    return () => { audio.removeEventListener("timeupdate", onTimeUpdate); audio.removeEventListener("loadedmetadata", onLoadedMeta); audio.removeEventListener("ended", onEnded); audio.removeEventListener("play", onPlay); audio.removeEventListener("playing", onPlaying); audio.removeEventListener("waiting", onWaiting); audio.removeEventListener("canplay", onCanPlay); audio.removeEventListener("pause", onPause); audio.removeEventListener("error", onError); window.removeEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated); };
+    audio.addEventListener("timeupdate", onTimeUpdate); audio.addEventListener("loadedmetadata", onLoadedMeta); audio.addEventListener("ended", onEnded); audio.addEventListener("play", onPlay); audio.addEventListener("playing", onPlaying); audio.addEventListener("waiting", onWaiting); audio.addEventListener("canplay", onCanPlay); audio.addEventListener("pause", onPause); audio.addEventListener("error", onError); window.addEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRouteRecovery); window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated);
+    return () => { audio.removeEventListener("timeupdate", onTimeUpdate); audio.removeEventListener("loadedmetadata", onLoadedMeta); audio.removeEventListener("ended", onEnded); audio.removeEventListener("play", onPlay); audio.removeEventListener("playing", onPlaying); audio.removeEventListener("waiting", onWaiting); audio.removeEventListener("canplay", onCanPlay); audio.removeEventListener("pause", onPause); audio.removeEventListener("error", onError); window.removeEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRouteRecovery); window.removeEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated); };
   }, [getAudio]);
 
   const primeAudioEngine = useCallback(async (path: string): Promise<boolean> => {
     const source = platform.media.resolveUrl(path); if (!source) return false; const audio = getAudio(); if (audio.src === source && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return true;
-    primingRef.current = true; audio.pause(); audio.preload = "auto"; audio.muted = true; currentBeatIdRef.current = null; waitingRef.current = false; void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_BEGIN", null, null, source).catch(() => {});
+    primingRef.current = true; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; audio.pause(); audio.preload = "auto"; audio.muted = true; currentBeatIdRef.current = null; waitingRef.current = false; void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_BEGIN", null, null, source).catch(() => {});
     return await new Promise<boolean>(resolve => {
       const cleanup = () => { audio.removeEventListener("canplay", onReady); audio.removeEventListener("error", onPrimeError); };
       const onReady = () => { cleanup(); primingRef.current = false; audio.muted = false; void platform.diagnostics.audioEvent("AUDIO_ENGINE_PRIME_READY", null, null, `readyState=${audio.readyState}`).catch(() => {}); resolve(true); };
@@ -100,7 +152,7 @@ export function useAudio() {
   }, [getAudio]);
 
   const armPlaybackGesture = useCallback((): Promise<boolean> => {
-    const audio = getAudio(); const silentUrl = getSilentGestureUrl(); primingRef.current = true; audio.pause(); audio.preload = "auto"; audio.loop = true; audio.muted = true; audio.src = silentUrl; audio.currentTime = 0; audio.load(); const attempt = audio.play();
+    const audio = getAudio(); const silentUrl = getSilentGestureUrl(); primingRef.current = true; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; audio.pause(); audio.preload = "auto"; audio.loop = true; audio.muted = true; audio.src = silentUrl; audio.currentTime = 0; audio.load(); const attempt = audio.play();
     return Promise.resolve(attempt).then(() => true, () => false).finally(() => { if (audio.src === silentUrl) audio.pause(); audio.loop = false; audio.muted = false; primingRef.current = false; });
   }, [getAudio]);
 
@@ -111,7 +163,7 @@ export function useAudio() {
     const samePendingSource = currentBeatIdRef.current === beatId && sourceUrlsRef.current[0] === sources[0];
     if (samePendingSource && audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA && !audio.error) { void platform.diagnostics.audioEvent("AUDIO_DUPLICATE_PLAY_IGNORED", beatId, null, `readyState=${audio.readyState}`).catch(() => {}); return; }
     if (samePendingSource || state.playingId === beatId) { audio.paused ? audio.play().catch(console.error) : audio.pause(); return; }
-    const previousBeatId = currentBeatIdRef.current; audio.pause(); currentBeatIdRef.current = beatId; errorNotifiedRef.current = false; primingRef.current = false; waitingRef.current = false; audio.muted = false; audio.loop = false; sourceUrlsRef.current = sources; sourceIndexRef.current = 0;
+    const previousBeatId = currentBeatIdRef.current; audio.pause(); currentBeatIdRef.current = beatId; errorNotifiedRef.current = false; primingRef.current = false; waitingRef.current = false; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; audio.muted = false; audio.loop = false; sourceUrlsRef.current = sources; sourceIndexRef.current = 0;
     const canReusePrimedSource = audio.src === sources[0] && audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
     if (!canReusePrimedSource) { audio.src = sources[0]; audio.currentTime = 0; audio.load(); } else { audio.currentTime = 0; void platform.diagnostics.audioEvent("AUDIO_PRIMED_SOURCE_REUSED", beatId, null, `readyState=${audio.readyState}`).catch(() => {}); }
     if (previousBeatId && previousBeatId !== beatId) platform.media.releasePlayback(previousBeatId); void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {}); playTrace("AUDIO_SRC_SET", { beat_id: beatId, ready_state: audio.readyState, url_scheme: String(sources[0] || "").split(":")[0] || null }); setState(s => ({ ...s, playingId: beatId, progress: 0, duration: 0 })); playTrace("AUDIO_PLAY_PROMISE_BEGIN", { beat_id: beatId }); audio.play().then(() => playTrace("AUDIO_PLAY_PROMISE_RESOLVED", { beat_id: beatId }), error => { playTrace("AUDIO_PLAY_PROMISE_REJECTED", { beat_id: beatId, error_name: error instanceof Error ? error.name : "unknown" }); console.error(error); });
@@ -120,6 +172,6 @@ export function useAudio() {
   const togglePause = useCallback(() => { const audio = getAudio(); audio.paused ? audio.play().catch(console.error) : audio.pause(); }, [getAudio]);
   const seek = useCallback((ratio: number) => { const audio = getAudio(); if (audio.duration > 0) { audio.currentTime = ratio * audio.duration; setState(s => ({ ...s, progress: ratio })); const beatId = currentBeatIdRef.current; if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", { detail: { beatId, currentTime: audio.currentTime, playing: !audio.paused, waiting: waitingRef.current } })); } }, [getAudio]);
   const setVolume = useCallback((volume: number) => { const audio = getAudio(); const next = Math.max(0, Math.min(1, volume)); audio.volume = next; setState(s => ({ ...s, volume: next })); }, [getAudio]);
-  const releaseFile = useCallback(() => { const audio = getAudio(); const releasedBeatId = currentBeatIdRef.current; audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; waitingRef.current = false; platform.media.releasePlayback(releasedBeatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 })); }, [getAudio]);
+  const releaseFile = useCallback(() => { const audio = getAudio(); const releasedBeatId = currentBeatIdRef.current; audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; waitingRef.current = false; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; platform.media.releasePlayback(releasedBeatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 })); }, [getAudio]);
   return { state, play, primeAudioEngine, armPlaybackGesture, togglePause, seek, setVolume, releaseFile };
 }
