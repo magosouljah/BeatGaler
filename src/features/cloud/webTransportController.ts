@@ -22,7 +22,7 @@ export interface WebTransportRuntime {
 }
 
 export interface WebTransportControlApi {
-  reserve(startupBeatIds?: readonly string[]): Promise<WebTransportSessionPublic>;
+  reserve(): Promise<WebTransportSessionPublic>;
   bind(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession>;
   activate(session: WebTransportSessionPublic): Promise<void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
@@ -45,7 +45,6 @@ export interface WebTransportOperationLease {
 }
 
 export interface WebTransportStartupConfig {
-  startupBeatIds: readonly string[];
   startupMessageIds: readonly number[];
 }
 
@@ -74,19 +73,6 @@ async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchRe
   }
 }
 
-function normalizeStartupBeatIds(values: readonly string[]): string[] {
-  const output: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const id = String(value || "").trim();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    output.push(id);
-    if (output.length >= MAX_STARTUP_BEATS) break;
-  }
-  return output;
-}
-
 function normalizeStartupMessageIds(values: readonly number[]): number[] {
   const output: number[] = [];
   const seen = new Set<number>();
@@ -100,7 +86,7 @@ function normalizeStartupMessageIds(values: readonly number[]): number[] {
   return output;
 }
 
-/** Owns the Web lease. Startup routing is immutable for the lifetime of this controller. */
+/** Owns the Web lease and the local startup message-vector handoff to the Worker. */
 export class WebTransportController {
   private session: WebTransportSession | null = null;
   private connectPromise: Promise<WebTransportSession> | null = null;
@@ -109,15 +95,13 @@ export class WebTransportController {
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private lifecycleGeneration = 0;
-  private readonly startupBeatIds: string[];
   private readonly startupMessageIds: number[];
 
   constructor(
     private readonly runtime: WebTransportRuntime,
     private readonly api: WebTransportControlApi = defaultApi,
-    startup: WebTransportStartupConfig = { startupBeatIds: [], startupMessageIds: [] },
+    startup: WebTransportStartupConfig = { startupMessageIds: [] },
   ) {
-    this.startupBeatIds = normalizeStartupBeatIds(startup.startupBeatIds);
     this.startupMessageIds = normalizeStartupMessageIds(startup.startupMessageIds);
   }
 
@@ -139,7 +123,7 @@ export class WebTransportController {
       playTrace("CONTROLLER_CONNECT_JOIN");
       return this.connectPromise;
     }
-    playTrace("CONTROLLER_CONNECT_NEW", { startup_beat_count: this.startupBeatIds.length });
+    playTrace("CONTROLLER_CONNECT_NEW", { startup_beat_count: this.startupMessageIds.length });
     const lifecycleGeneration = this.lifecycleGeneration;
     this.connectPromise = this.openSession(lifecycleGeneration).finally(() => { this.connectPromise = null; });
     return this.connectPromise;
@@ -150,7 +134,7 @@ export class WebTransportController {
     let bootstrap: WebTransportSessionPublic | null = null;
     let activationResultPromise: Promise<StartupBranchResult> | null = null;
 
-    playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupBeatIds.length });
+    playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupMessageIds.length });
     try {
       // The new Web client owns startup routing locally. Do not request Cloud
       // startup routes on the playback-critical reservation response.
