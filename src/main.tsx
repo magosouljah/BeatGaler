@@ -6,9 +6,7 @@ import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
-import { playTrace } from "./features/playback/playTrace";
-import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";
-import { hasRememberedWebSessionMarker, readWebCsrfToken } from "./features/auth/webSessionBootstrap";
+import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
@@ -19,35 +17,6 @@ import "./styles/library-ux.css";
 
 installStartupTrace();
 installWebCsrfFetchCoordinator();
-
-function preconnectRememberedWebDirect(): void {
-  if (typeof window === "undefined") return;
-  // This entrypoint is shared by Web and Tauri. Never construct the browser
-  // Direct transport from a Desktop runtime.
-  if (Boolean((window as any).__TAURI_INTERNALS__)) return;
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-  if (!hasRememberedWebSessionMarker()) return;
-
-  // /transport/session/start is unsafe and still needs persisted CSRF material.
-  // Account restore remains parallel; it is no longer a Direct gate.
-  if (!readWebCsrfToken()) {
-    playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", { reason: "csrf_unavailable" });
-    return;
-  }
-
-  playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
-  // The coordinator is obtained synchronously and start() is invoked before
-  // createRoot below. Network work is never awaited on the render path.
-  const coordinator = getWebStartupPlaybackCoordinator();
-  void coordinator.start().then(
-    () => playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED"),
-    error => playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", {
-      reason: "dispatch_failed",
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
-}
-
 preconnectRememberedWebDirect();
 
 function GlobalStyles() {
