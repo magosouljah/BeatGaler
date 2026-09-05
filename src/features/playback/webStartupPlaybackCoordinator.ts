@@ -34,9 +34,15 @@ function localSort(): WebPlaybackSort {
 }
 
 function startupCandidates(): WebStartupWarmCandidate[] {
-  const presentation = localPresentationBeats();
-  if (presentation.length > 0) updatePlaybackRoutingStartupFromBeats(presentation, localSort());
-  return readWebPlaybackRoutingCache().startup.map(route => ({
+  // An already-persisted routing startup is the OPEN authority. Presentation
+  // cache is only a migration/bootstrap fallback and must not replace a full
+  // manifest-derived startup with the first rich page.
+  let routing = readWebPlaybackRoutingCache();
+  if (routing.startup.length === 0) {
+    const presentation = localPresentationBeats();
+    if (presentation.length > 0) routing = updatePlaybackRoutingStartupFromBeats(presentation, localSort());
+  }
+  return routing.startup.map(route => ({
     beatId: route.beatId,
     messageId: route.messageId,
     mimeType: route.mimeType,
@@ -73,7 +79,9 @@ export class WebStartupPlaybackCoordinator {
   start(): Promise<void> {
     if (this.startPromise) return this.startPromise;
     playTrace("DIRECT_START_DISPATCHED", { startup_candidate_count: this.candidates.length });
-    this.startPromise = (async () => {
+
+    let attempt!: Promise<void>;
+    attempt = (async () => {
       await this.transport.connectPlaybackDataPlane();
       if (this.candidates.length === 0) {
         this.finishStartupWarm(0, 0);
@@ -87,11 +95,18 @@ export class WebStartupPlaybackCoordinator {
       const failures = results.filter(result => result.status === "rejected").length;
       this.finishStartupWarm(this.candidates.length, failures);
     })().catch(error => {
-      // A failed Direct startup must not deadlock the authoritative INDEX path.
-      this.finishStartupWarm(this.candidates.length, this.candidates.length);
+      // A transient reserve/bind/connect failure is not a terminal READY/FAILED
+      // result for all startup candidates. Clear the attempt so a later caller
+      // can start a coherent new connection instead of reusing a rejected Promise.
+      if (this.startPromise === attempt) this.startPromise = null;
+      playTrace("DIRECT_START_RETRYABLE_FAILURE", {
+        error_name: error instanceof Error ? error.name : "unknown",
+      });
       throw error;
     });
-    return this.startPromise;
+
+    this.startPromise = attempt;
+    return attempt;
   }
 
   private finishStartupWarm(count: number, failures: number): void {
@@ -103,13 +118,19 @@ export class WebStartupPlaybackCoordinator {
 
   async waitUntilIndexAllowed(): Promise<void> {
     if (!this.warmSettled) playTrace("INDEX_WAIT_STARTUP", { count: this.candidates.length });
-    void this.start();
+    await this.start();
     await this.indexBarrierPromise;
   }
 
   async beginPlayback(messageId: number): Promise<void> {
     playTrace("PLAY_FOCUS_BEGIN", { message_id: messageId });
-    void this.start();
+    // Focus is intentionally dispatched immediately. WorkerClient retains it
+    // across initialize(), while Direct startup continues independently.
+    const startup = this.start();
+    void startup.catch(error => playTrace("PLAY_DIRECT_START_DEFERRED", {
+      message_id: messageId,
+      error_name: error instanceof Error ? error.name : "unknown",
+    }));
     await this.transport.focusPlayback(messageId);
   }
 
