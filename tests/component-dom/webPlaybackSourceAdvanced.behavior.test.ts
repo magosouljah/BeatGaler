@@ -272,7 +272,9 @@ describe("WebPlaybackSourceManager advanced scheduling behavior", () => {
     });
 
     await manager.prepare("beat-threshold", 90);
-    const source = FakeMediaSource.instances[0].sourceBuffer;
+    const mediaSource = FakeMediaSource.instances[0];
+    mediaSource.open();
+    const source = mediaSource.sourceBuffer;
     source.ranges = [[0, 1.99], [5, 8]];
 
     manager.updatePlaybackState({ beatId: "beat-threshold", currentTime: 0, playing: true, waiting: false });
@@ -290,7 +292,9 @@ describe("WebPlaybackSourceManager advanced scheduling behavior", () => {
       streamFile: vi.fn(async () => ({ completed: new Promise<never>(() => {}), cancel: vi.fn() })),
     });
     await secondManager.prepare("beat-seek", 91);
-    const secondSource = FakeMediaSource.instances[1].sourceBuffer;
+    const secondMediaSource = FakeMediaSource.instances[1];
+    secondMediaSource.open();
+    const secondSource = secondMediaSource.sourceBuffer;
     secondSource.ranges = [[0, 1], [5, 8]];
     secondManager.updatePlaybackState({ beatId: "beat-seek", currentTime: 1.5, playing: true, waiting: false });
     expect(secondStable).not.toHaveBeenCalled();
