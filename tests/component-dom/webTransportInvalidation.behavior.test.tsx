@@ -3,16 +3,18 @@ import { act } from "react-dom/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const releasePlayback = vi.fn();
-const audioEvent = vi.fn(async () => {});
+const platformMocks = vi.hoisted(() => ({
+  releasePlayback: vi.fn(),
+  audioEvent: vi.fn(async () => {}),
+}));
 
 vi.mock("../../src/platform", () => ({
   platform: {
     media: {
       resolveUrl: (value: string) => value,
-      releasePlayback,
+      releasePlayback: platformMocks.releasePlayback,
     },
-    diagnostics: { audioEvent },
+    diagnostics: { audioEvent: platformMocks.audioEvent },
   },
 }));
 
@@ -74,8 +76,8 @@ describe("Web transport invalidation behavior", () => {
 
   beforeEach(() => {
     FakeAudio.instances = [];
-    releasePlayback.mockClear();
-    audioEvent.mockClear();
+    platformMocks.releasePlayback.mockClear();
+    platformMocks.audioEvent.mockClear();
     vi.stubGlobal("Audio", FakeAudio);
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -117,7 +119,7 @@ describe("Web transport invalidation behavior", () => {
     expect(audio.removeAttribute).toHaveBeenCalledWith("src");
     expect(audio.load).toHaveBeenCalled();
     expect(audio.src).toBe("");
-    expect(releasePlayback).toHaveBeenCalledWith("beat-1");
+    expect(platformMocks.releasePlayback).toHaveBeenCalledWith("beat-1");
     expect(latest!.state.playingId).toBeNull();
     expect(latest!.state.isPlaying).toBe(false);
   });
@@ -143,7 +145,7 @@ describe("Web transport invalidation behavior", () => {
   it("holds the current intent through an async route error and resumes the repaired URL at the previous playback time", async () => {
     const audio = await renderPlayingBeat();
     audio.currentTime = 7.25;
-    releasePlayback.mockClear();
+    platformMocks.releasePlayback.mockClear();
 
     act(() => {
       window.dispatchEvent(new CustomEvent(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, {
@@ -153,7 +155,7 @@ describe("Web transport invalidation behavior", () => {
     });
     await act(async () => { await Promise.resolve(); });
 
-    expect(releasePlayback).not.toHaveBeenCalled();
+    expect(platformMocks.releasePlayback).not.toHaveBeenCalled();
     expect(latest!.state.playingId).toBe("beat-1");
 
     await act(async () => {
@@ -167,7 +169,7 @@ describe("Web transport invalidation behavior", () => {
     expect(audio.currentTime).toBe(7.25);
     expect(audio.load).toHaveBeenCalled();
     expect(audio.play).toHaveBeenCalledTimes(2);
-    expect(releasePlayback).not.toHaveBeenCalled();
+    expect(platformMocks.releasePlayback).not.toHaveBeenCalled();
     expect(latest!.state.playingId).toBe("beat-1");
   });
 
