@@ -147,4 +147,137 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     worker.onmessage?.({ data: { requestId: batchRequest.requestId, ok: true, result: { results: [] } } } as MessageEvent);
     await expect(handle.completed).resolves.toEqual({ results: [] });
   });
+
+  it("rejects a foreground partial prefix that cannot resume without repeating offset zero", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const request = client.prefetch({ messageId: 21, mimeType: "audio/mpeg", offsetBytes: 0 });
+    const worker = FakeWorker.instances[0];
+    const posted = worker.postMessage.mock.calls[0][0];
+
+    worker.onmessage?.({
+      data: {
+        requestId: posted.requestId,
+        ok: true,
+        result: {
+          messageId: 21,
+          totalBytes: 200000,
+          mimeType: "audio/mpeg",
+          prefix: new ArrayBuffer(60000),
+          playableSeconds: 0,
+          targetMet: true,
+        },
+      },
+    } as MessageEvent);
+
+    await expect(request).rejects.toMatchObject({ code: "TRANSFER_FAILED" });
+  });
+
+  it("accepts aligned partial prefixes and short EOF prefixes", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const aligned = client.prefetch({ messageId: 22, mimeType: "audio/mpeg", offsetBytes: 0 });
+    const worker = FakeWorker.instances[0];
+    let posted = worker.postMessage.mock.calls.at(-1)?.[0];
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      ok: true,
+      result: {
+        messageId: 22,
+        totalBytes: 200000,
+        mimeType: "audio/mpeg",
+        prefix: new ArrayBuffer(65536),
+        playableSeconds: 0,
+        targetMet: true,
+      },
+    } } as MessageEvent);
+    await expect(aligned).resolves.toMatchObject({ messageId: 22 });
+
+    const eof = client.prefetch({ messageId: 23, mimeType: "audio/mpeg", offsetBytes: 0 });
+    posted = worker.postMessage.mock.calls.at(-1)?.[0];
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      ok: true,
+      result: {
+        messageId: 23,
+        totalBytes: 60000,
+        mimeType: "audio/mpeg",
+        prefix: new ArrayBuffer(60000),
+        playableSeconds: 0,
+        targetMet: true,
+      },
+    } } as MessageEvent);
+    await expect(eof).resolves.toMatchObject({ messageId: 23 });
+  });
+
+  it("fails only the non-resumable member of a warm batch and never publishes its bytes", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const onChunk = vi.fn();
+    const onTerminal = vi.fn();
+    const handle = client.prefetchBatch({ inputs: [
+      { messageId: 31, mimeType: "audio/mpeg" },
+      { messageId: 32, mimeType: "audio/mpeg" },
+    ] }, onChunk, onTerminal);
+    const worker = FakeWorker.instances[0];
+    const posted = worker.postMessage.mock.calls[0][0];
+
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      event: "prefetch-chunk",
+      progress: {
+        messageId: 31,
+        totalBytes: 200000,
+        mimeType: "audio/mpeg",
+        offsetBytes: 0,
+        chunk: new ArrayBuffer(60000),
+        downloadedBytes: 60000,
+        playableSeconds: 0,
+        targetMet: true,
+      },
+    } } as MessageEvent);
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      event: "prefetch-chunk",
+      progress: {
+        messageId: 32,
+        totalBytes: 200000,
+        mimeType: "audio/mpeg",
+        offsetBytes: 0,
+        chunk: new ArrayBuffer(65536),
+        downloadedBytes: 65536,
+        playableSeconds: 0,
+        targetMet: true,
+      },
+    } } as MessageEvent);
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      event: "prefetch-terminal",
+      terminal: { messageId: 31, status: "READY" },
+    } } as MessageEvent);
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      event: "prefetch-terminal",
+      terminal: { messageId: 32, status: "READY" },
+    } } as MessageEvent);
+    worker.onmessage?.({ data: {
+      requestId: posted.requestId,
+      ok: true,
+      result: {
+        results: [
+          { ok: true, result: { messageId: 31, totalBytes: 200000, mimeType: "audio/mpeg", prefix: new ArrayBuffer(60000), playableSeconds: 0, targetMet: true } },
+          { ok: true, result: { messageId: 32, totalBytes: 200000, mimeType: "audio/mpeg", prefix: new ArrayBuffer(65536), playableSeconds: 0, targetMet: true } },
+        ],
+      },
+    } } as MessageEvent);
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith(expect.objectContaining({ messageId: 32, downloadedBytes: 65536 }));
+    expect(onTerminal).toHaveBeenCalledTimes(2);
+    expect(onTerminal).toHaveBeenCalledWith(expect.objectContaining({ messageId: 31, status: "FAILED", code: "TRANSFER_FAILED" }));
+    expect(onTerminal).toHaveBeenCalledWith(expect.objectContaining({ messageId: 32, status: "READY" }));
+    await expect(handle.completed).resolves.toEqual({
+      results: [
+        expect.objectContaining({ ok: false, messageId: 31, code: "TRANSFER_FAILED" }),
+        expect.objectContaining({ ok: true, result: expect.objectContaining({ messageId: 32 }) }),
+      ],
+    });
+  });
 });
