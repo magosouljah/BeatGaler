@@ -176,6 +176,37 @@ describe("Web MASTER playback source", () => {
     expect(prefetchFiles.mock.calls[0][0].every((input: any) => input.offsetBytes === 0)).toBe(true);
   });
 
+  it("treats FAR as advisory and never turns an existing warm into a terminal cancellation", async () => {
+    let finishBatch!: (value: WebTransportPrefetchBatchResult) => void;
+    const cancel = vi.fn();
+    const cancelMessage = vi.fn();
+    const prefetchFiles = vi.fn(async (inputs: any[]) => ({
+      completed: new Promise<WebTransportPrefetchBatchResult>(resolve => { finishBatch = resolve; }),
+      cancelMessage,
+      cancel,
+    }));
+    const manager = new WebPlaybackSourceManager({
+      prefetchFiles,
+      streamFile: vi.fn(async () => { throw new Error("stream not expected"); }),
+    });
+
+    let settled = false;
+    const warm = manager.prefetch("beat-far", 41, "audio/mpeg", "visible").then(() => { settled = true; });
+    await vi.waitFor(() => expect(prefetchFiles).toHaveBeenCalledOnce());
+
+    manager.setPrefetchPriority("beat-far", 41, "audio/mpeg", "far");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(cancelMessage).not.toHaveBeenCalled();
+
+    finishBatch(successfulBatch([{ messageId: 41 }]));
+    await warm;
+    expect(settled).toBe(true);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(cancelMessage).not.toHaveBeenCalled();
+  });
+
   it("adopts any aligned partial prefix for Play and resumes at its exact byte length", async () => {
     vi.stubGlobal("MediaSource", FakeMediaSource);
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:cloud-master"), revokeObjectURL: vi.fn() });
@@ -296,6 +327,12 @@ describe("Web MASTER playback source", () => {
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: false, waiting: false });
     expect(releasePlaybackFocus).toHaveBeenCalledWith(51);
     expect(markPlaybackStable).toHaveBeenCalledTimes(1);
+
+    manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
+    expect(focusPlayback).toHaveBeenCalledTimes(2);
+    expect(focusPlayback).toHaveBeenLastCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenCalledTimes(2);
+    expect(markPlaybackStable).toHaveBeenLastCalledWith(51);
   });
 
   it("stops retaining replay bytes at a zero cache budget without interrupting the active MSE stream", async () => {
