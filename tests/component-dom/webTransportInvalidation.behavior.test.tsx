@@ -19,6 +19,11 @@ vi.mock("../../src/platform", () => ({
 import { useAudio } from "../../src/hooks/useAudio";
 import { WEB_PLAYBACK_ROUTE_RECOVERY_EVENT } from "../../src/features/playback/webPlaybackRouteRecoveryEvents";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../../src/features/cloud/webTransportEvents";
+import {
+  beginWebPlaybackIntent,
+  invalidateAllWebPlaybackIntents,
+  rememberPreparedWebPlaybackUrl,
+} from "../../src/features/playback/webPlaybackIntent";
 
 class FakeAudio extends EventTarget {
   static instances: FakeAudio[] = [];
@@ -76,6 +81,7 @@ describe("Web transport invalidation behavior", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     latest = null;
+    invalidateAllWebPlaybackIntents();
   });
 
   afterEach(() => {
@@ -89,6 +95,8 @@ describe("Web transport invalidation behavior", () => {
       root.render(<Harness onValue={value => { latest = value; }} />);
     });
     expect(latest).not.toBeNull();
+    const intent = beginWebPlaybackIntent("beat-1");
+    rememberPreparedWebPlaybackUrl("blob:session-audio", intent);
     await act(async () => {
       latest!.play("beat-1", ["blob:session-audio"]);
       await Promise.resolve();
@@ -112,6 +120,24 @@ describe("Web transport invalidation behavior", () => {
     expect(releasePlayback).toHaveBeenCalledWith("beat-1");
     expect(latest!.state.playingId).toBeNull();
     expect(latest!.state.isPlaying).toBe(false);
+  });
+
+  it("rejects a late tracked Web URL after transport invalidation", async () => {
+    const audio = await renderPlayingBeat();
+    expect(audio.play).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event(WEB_TRANSPORT_INVALIDATED_EVENT));
+    });
+
+    await act(async () => {
+      latest!.play("beat-1", ["blob:session-audio"]);
+      await Promise.resolve();
+    });
+
+    expect(audio.src).toBe("");
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(latest!.state.playingId).toBeNull();
   });
 
   it("holds the current intent through an async route error and resumes the repaired URL at the previous playback time", async () => {
