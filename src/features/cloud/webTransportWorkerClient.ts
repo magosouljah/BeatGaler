@@ -6,12 +6,14 @@ import type {
   WebTransportDownloadResult,
   WebTransportDeleteMessagesInput,
   WebTransportDeleteMessagesResult,
+  WebTransportErrorCode,
   WebTransportLibraryIndexResult,
   WebTransportPrefetchBatchInput,
   WebTransportPrefetchBatchResult,
   WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
+  WebTransportPrefetchTerminal,
   WebTransportReplaceIndexInput,
   WebTransportReplaceIndexResult,
   WebTransportProgress,
@@ -26,6 +28,13 @@ import type {
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
 
+export class WebTransportWorkerError extends Error {
+  constructor(message: string, readonly code?: WebTransportErrorCode) {
+    super(message);
+    this.name = "WebTransportWorkerError";
+  }
+}
+
 type PendingRequest = {
   operation: WebTransportWorkerRequest["op"];
   resolve(value: unknown): void;
@@ -33,7 +42,9 @@ type PendingRequest = {
   onProgress?: (progress: WebTransportProgress) => void;
   onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
   onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void;
+  onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void;
   timeoutId: ReturnType<typeof setTimeout> | null;
+  activeTimeoutMs: number | null;
 };
 
 export interface WebTransportStreamHandle {
@@ -89,12 +100,29 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
   }
 
+  private clearPendingTimeout(pending: PendingRequest): void {
+    if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+    pending.timeoutId = null;
+  }
+
   private takePending(requestId: string): PendingRequest | undefined {
     const pending = this.pending.get(requestId);
     if (!pending) return undefined;
     this.pending.delete(requestId);
-    if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+    this.clearPendingTimeout(pending);
     return pending;
+  }
+
+  private onIndexState(requestId: string, pending: PendingRequest, state: "active" | "paused"): void {
+    if (pending.operation !== "get_index" || pending.activeTimeoutMs === null) return;
+    if (state === "paused") {
+      this.clearPendingTimeout(pending);
+      playTrace("WORKER_INDEX_DEADLINE_PAUSED", { request_id: requestId });
+      return;
+    }
+    if (pending.timeoutId !== null) return;
+    pending.timeoutId = setTimeout(() => this.timeoutIndexRequest(requestId), pending.activeTimeoutMs);
+    playTrace("WORKER_INDEX_DEADLINE_ACTIVE", { request_id: requestId, timeout_ms: pending.activeTimeoutMs });
   }
 
   private onMessage(message: WebTransportWorkerResponse): void {
@@ -105,7 +133,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         pending.onProgress?.(message.progress);
       } else if (message.event === "prefetch-chunk") {
         pending.onPrefetchChunk?.(message.progress);
-      } else {
+      } else if (message.event === "prefetch-terminal") {
+        pending.onPrefetchTerminal?.(message.terminal);
+      } else if (message.event === "index-state") {
+        this.onIndexState(message.requestId, pending, message.state);
+      } else if (message.event === "download-chunk") {
         void Promise.resolve(pending.onChunk?.(message.chunk, message.downloadedBytes, message.totalBytes))
           .then(() => this.sendStreamControl("stream_ack", message.requestId))
           .catch(error => {
@@ -126,12 +158,12 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       });
     }
     if (message.ok) completed.resolve(message.result);
-    else completed.reject(new Error(message.error));
+    else completed.reject(new WebTransportWorkerError(message.error, message.code));
   }
 
   private failPending(message: string): void {
     for (const pending of this.pending.values()) {
-      if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+      this.clearPendingTimeout(pending);
       pending.reject(new Error(message));
     }
     this.pending.clear();
@@ -150,6 +182,14 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     this.failPending("Galer Cloud Web transport reset after an unresponsive worker request.");
   }
 
+  private timeoutIndexRequest(requestId: string): void {
+    const timedOut = this.takePending(requestId);
+    if (!timedOut) return;
+    playTrace("WORKER_INDEX_ACTIVE_TIMEOUT", { request_id: requestId });
+    timedOut.reject(new Error("Galer Cloud Web transport timed out during active get_index."));
+    this.sendIndexCancel(requestId);
+  }
+
   private request<T>(
     command: WebTransportWorkerRequest,
     onProgress?: (progress: WebTransportProgress) => void,
@@ -157,6 +197,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     requestId = crypto.randomUUID(),
     timeoutMs: number | null = null,
     onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void,
+    onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
+    activeTimeoutMs: number | null = null,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timeoutId = timeoutMs !== null && timeoutMs > 0
@@ -169,7 +211,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         onProgress,
         onChunk,
         onPrefetchChunk,
+        onPrefetchTerminal,
         timeoutId,
+        activeTimeoutMs,
       });
       try {
         const worker = this.ensureWorker();
@@ -232,6 +276,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       undefined,
       undefined,
       undefined,
+      null,
+      undefined,
+      undefined,
       this.bootstrapRequestTimeoutMs,
     );
   }
@@ -261,6 +308,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   prefetchBatch(
     input: WebTransportPrefetchBatchInput,
     onChunk?: (progress: WebTransportPrefetchChunk) => void,
+    onTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
   ): WebTransportPrefetchBatchHandle {
     const requestId = crypto.randomUUID();
     return {
@@ -271,6 +319,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         requestId,
         null,
         onChunk,
+        onTerminal,
       ),
       cancelMessage: messageId => this.sendPrefetchControl(requestId, messageId),
       promoteMessage: messageId => this.focusPlayback(messageId),
@@ -310,6 +359,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   private sendStreamControl(op: "stream_ack" | "cancel", targetRequestId: string): void {
     this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op, targetRequestId } as WebTransportWorkerCommand);
+  }
+
+  private sendIndexCancel(targetRequestId: string): void {
+    this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op: "cancel_index", targetRequestId } as WebTransportWorkerCommand);
   }
 
   private sendPrefetchControl(targetRequestId: string, messageId?: number): void {
