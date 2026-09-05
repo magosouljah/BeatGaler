@@ -148,4 +148,71 @@ describe("WorkerClient playback continuity during credential refresh", () => {
     await streamFailure;
     expect(posted(worker, "stream")).toHaveLength(1);
   });
+
+  it("physically cancels a secondary stream for Play and resumes from the last consumer-confirmed byte only after stable", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    let releaseChunk!: () => void;
+    const chunkGate = new Promise<void>(resolve => { releaseChunk = resolve; });
+    const onChunk = vi.fn(() => chunkGate);
+    const stream = client.stream({
+      messageId: 91,
+      mimeType: "audio/wav",
+      offsetBytes: 0,
+      purpose: "export",
+    }, onChunk);
+    const worker = FakeWorker.instances[0];
+    const firstStream = posted(worker, "stream")[0];
+
+    worker.chunk(firstStream.requestId, 4096, 200000, 4096);
+    await vi.waitFor(() => expect(onChunk).toHaveBeenCalledTimes(1));
+
+    const focus = client.focusPlayback(77);
+    const focusRequest = posted(worker, "playback_focus").at(-1)!;
+    await vi.waitFor(() => expect(posted(worker, "cancel").some(request => request.targetRequestId === firstStream.requestId)).toBe(true));
+    worker.fail(firstStream.requestId, "Playback stream cancelled.", "CANCELLED");
+    worker.succeed(focusRequest.requestId);
+    await focus;
+
+    // The worker-side stream is already physically cancelled, but the consumer
+    // has not confirmed its 4 KiB chunk yet. A replacement must not start from
+    // offset zero or race that consumer acknowledgement.
+    expect(posted(worker, "stream")).toHaveLength(1);
+    releaseChunk();
+    await vi.waitFor(() => expect(posted(worker, "stream_ack")).toHaveLength(1));
+    expect(posted(worker, "stream")).toHaveLength(1);
+
+    const stable = client.markPlaybackStable(77);
+    const stableRequest = posted(worker, "playback_stable").at(-1)!;
+    worker.succeed(stableRequest.requestId);
+    await stable;
+
+    await vi.waitFor(() => expect(posted(worker, "stream")).toHaveLength(2));
+    const resumed = posted(worker, "stream")[1];
+    expect(resumed.input).toEqual(expect.objectContaining({
+      messageId: 91,
+      purpose: "export",
+      offsetBytes: 4096,
+    }));
+    expect(onChunk).toHaveBeenCalledTimes(1);
+
+    worker.succeed(resumed.requestId, { messageId: 91, totalBytes: 200000, mimeType: "audio/wav" });
+    await expect(stream.completed).resolves.toMatchObject({ messageId: 91, totalBytes: 200000 });
+    expect(posted(worker, "stream").map(request => request.input.offsetBytes)).toEqual([0, 4096]);
+  });
+
+  it("never preempts a playback stream when applying Play focus", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const stream = client.stream({ messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" }, vi.fn());
+    const worker = FakeWorker.instances[0];
+    const playbackStream = posted(worker, "stream")[0];
+
+    const focus = client.focusPlayback(77);
+    const focusRequest = posted(worker, "playback_focus").at(-1)!;
+    worker.succeed(focusRequest.requestId);
+    await focus;
+
+    expect(posted(worker, "cancel").some(request => request.targetRequestId === playbackStream.requestId)).toBe(false);
+    worker.succeed(playbackStream.requestId, { messageId: 77, totalBytes: 200000, mimeType: "audio/mpeg" });
+    await expect(stream.completed).resolves.toMatchObject({ messageId: 77 });
+  });
 });
