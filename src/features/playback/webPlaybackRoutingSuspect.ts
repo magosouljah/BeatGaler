@@ -1,7 +1,6 @@
 import {
+  markPlaybackRouteSuspect,
   readWebPlaybackRoutingCache,
-  writeWebPlaybackRoutingCache,
-  type CachedPlaybackRouteSuspect,
 } from "./webPlaybackRoutingCache";
 
 function positiveMessageId(value: unknown): number | null {
@@ -31,12 +30,5 @@ export function markPlaybackMessageRouteSuspect(messageId: number): string[] {
     .map(([beatId]) => beatId);
   if (matched.length === 0) return [];
 
-  const nextSuspect: Record<string, CachedPlaybackRouteSuspect> = { ...(cache.suspect || {}) };
-  const markedAt = Date.now();
-  for (const beatId of matched) nextSuspect[beatId] = { messageId: id, markedAt };
-  cache.suspect = nextSuspect;
-  cache.startup = cache.startup.filter(item => !matched.includes(item.beatId));
-  cache.updatedAt = markedAt;
-  writeWebPlaybackRoutingCache(cache);
-  return matched;
+  return matched.filter(beatId => markPlaybackRouteSuspect(beatId, id));
 }
