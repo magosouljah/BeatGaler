@@ -37,6 +37,8 @@ import { installHtmlDropController } from "./features/dragdrop/htmlDropControlle
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
 import { playTrace } from "./features/playback/playTrace";
+import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
+import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState, hydrateBeatRuntimeState, transitionBeatRuntimeState, type BeatRuntimeEvent, type BeatRuntimeState } from "./features/state/beatRuntimeState";
 import { reviewPerfMark } from "./features/perf/reviewPerf";
 
@@ -907,6 +909,15 @@ function BeatGalerApp() {
   const [tagRenameBusy, setTagRenameBusy] = useState(false);
   const [tagRenameError, setTagRenameError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>(() => loadCachedSort());
+  useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");
+  const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {
+    setBeats(current => {
+      const next = preserveLoadedArtwork(incoming, current);
+      beatsLatestRef.current = next;
+      return next;
+    });
+  }, []);
+  useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);
   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [dropActive, setDropActive] = useState(false);
