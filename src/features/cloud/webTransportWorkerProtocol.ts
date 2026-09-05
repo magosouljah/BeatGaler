@@ -87,7 +87,7 @@ export interface WebTransportStreamInput {
   messageId: number;
   mimeType?: string | null;
   offsetBytes?: number;
-  purpose?: "playback" | "export";
+  purpose?: "playback" | "export" | "other";
 }
 export interface WebTransportStreamResult { messageId: number; totalBytes: number; mimeType: string; }
 

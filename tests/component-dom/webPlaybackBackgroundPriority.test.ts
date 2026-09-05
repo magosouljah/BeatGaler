@@ -26,6 +26,13 @@ describe("PLAY physical priority over artwork/export", () => {
     expect(transport).not.toContain("results[index] = await this.worker.download");
   });
 
+  it("does not let a stale release/stable from beat X reopen background traffic during beat Y", () => {
+    expect(coordinator).toContain("private currentPlaybackMessageId: number | null = null");
+    expect(coordinator).toContain("if (this.currentPlaybackMessageId !== messageId) return");
+    expect(coordinator).toContain("PLAY_FOCUS_RESTORE_AFTER_STALE_RELEASE");
+    expect(coordinator).toContain("await this.restoreCurrentFocusAfter(messageId)");
+  });
+
   it("keeps the main UI bundle pointed at the tiny event module rather than WorkerClient", () => {
     expect(audio).toContain('from "../features/cloud/webTransportEvents"');
     expect(coordinator).toContain('from "../cloud/webTransportEvents"');

@@ -63,10 +63,12 @@ export class WebStartupPlaybackCoordinator {
   private warmSettled = false;
   private resolveIndexBarrier!: () => void;
   private listeningForInvalidation = false;
+  private currentPlaybackMessageId: number | null = null;
   private readonly indexBarrierPromise = new Promise<void>(resolve => {
     this.resolveIndexBarrier = resolve;
   });
   private readonly onTransportInvalidated = () => {
+    this.currentPlaybackMessageId = null;
     playTrace("SOURCE_SESSION_INVALIDATED");
     this.sources.releaseAll();
   };
@@ -132,22 +134,43 @@ export class WebStartupPlaybackCoordinator {
     await this.indexBarrierPromise;
   }
 
+  private async restoreCurrentFocusAfter(staleMessageId: number): Promise<void> {
+    const current = this.currentPlaybackMessageId;
+    if (current === null || current === staleMessageId) return;
+    playTrace("PLAY_FOCUS_RESTORE_AFTER_STALE_RELEASE", {
+      stale_message_id: staleMessageId,
+      current_message_id: current,
+    });
+    await this.transport.focusPlayback(current);
+  }
+
   async beginPlayback(messageId: number): Promise<void> {
+    this.currentPlaybackMessageId = messageId;
     playTrace("PLAY_FOCUS_BEGIN", { message_id: messageId });
     const startup = this.start();
     void startup.catch(error => playTrace("PLAY_DIRECT_START_DEFERRED", {
       message_id: messageId,
       error_name: error instanceof Error ? error.name : "unknown",
     }));
-    await this.transport.focusPlayback(messageId);
+    try {
+      await this.transport.focusPlayback(messageId);
+    } catch (error) {
+      if (this.currentPlaybackMessageId === messageId) this.currentPlaybackMessageId = null;
+      throw error;
+    }
   }
 
-  markPlaybackStable(messageId: number): Promise<void> {
-    return this.transport.markPlaybackStable(messageId);
+  async markPlaybackStable(messageId: number): Promise<void> {
+    if (this.currentPlaybackMessageId !== messageId) return;
+    await this.transport.markPlaybackStable(messageId);
+    await this.restoreCurrentFocusAfter(messageId);
   }
 
-  endPlayback(messageId: number): Promise<void> {
-    return this.transport.releasePlaybackFocus(messageId);
+  async endPlayback(messageId: number): Promise<void> {
+    if (this.currentPlaybackMessageId !== messageId) return;
+    this.currentPlaybackMessageId = null;
+    await this.transport.releasePlaybackFocus(messageId);
+    await this.restoreCurrentFocusAfter(messageId);
   }
 
   getTransport(): WebGalerCloudTransport {
@@ -159,6 +182,7 @@ export class WebStartupPlaybackCoordinator {
   }
 
   dispose(): void {
+    this.currentPlaybackMessageId = null;
     if (this.listeningForInvalidation && typeof window !== "undefined") {
       window.removeEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, this.onTransportInvalidated);
       this.listeningForInvalidation = false;

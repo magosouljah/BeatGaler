@@ -1,61 +1,296 @@
-import { jsPDF } from "jspdf";
-import JSZip from "jszip";
-import type { Beat, BeatAssetRef } from "../../types";
-import type { WebGalerCloudTransport } from "../cloud/webGalerCloudTransport";
+import type { GalerCloudObjectRef } from "../../domain/beat";
+import type { Beat } from "../../types";
+import type {
+  PlatformDownloadKind,
+  PlatformDownloadProgress,
+  PlatformDownloadTask,
+} from "../../platform/contracts";
+import { buildBeatGalerId3Tag, readBlobAsArrayBuffer, type Mp3Artwork } from "../audio/mp3Metadata";
+import type { WebTransportStreamInput, WebTransportStreamResult } from "../cloud/webTransportWorkerProtocol";
 
-export type WebDownloadKind = "mp3" | "wav" | "project" | "everything" | "covers_pdf";
-export type WebDownloadProgress = { done: number; total: number; message: string };
-export interface WebDownloadHandle { cancel(): void; done: Promise<void>; }
+type SingleKind = Exclude<PlatformDownloadKind, "ALL">;
 
-type Slot = { label: string; asset: BeatAssetRef | null | undefined; fallbackName: string };
+interface WebDownloadTransport {
+  streamFile(
+    input: WebTransportStreamInput,
+    onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
+  ): Promise<{ completed: Promise<WebTransportStreamResult>; cancel(): void }>;
+}
 
-function directMessageId(value: string | null | undefined): number | null {
-  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
-  const messageId = Number(match?.[1] || 0);
-  return Number.isInteger(messageId) && messageId > 0 ? messageId : null;
+type BrowserWritable = {
+  write(data: BufferSource | Blob | string): Promise<void>;
+  close(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+};
+
+type BrowserFileHandle = { createWritable(): Promise<BrowserWritable> };
+type BrowserDirectoryHandle = {
+  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<BrowserDirectoryHandle>;
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<BrowserFileHandle>;
+};
+
+type DownloadWindow = Window & {
+  showSaveFilePicker?: (options?: { suggestedName?: string }) => Promise<BrowserFileHandle>;
+  showDirectoryPicker?: (options?: { mode?: "read" | "readwrite" }) => Promise<BrowserDirectoryHandle>;
+};
+
+type DownloadAsset = {
+  kind: SingleKind;
+  ref: GalerCloudObjectRef | null;
+  filename: string;
+  mimeType: string;
+  size: number;
+  inlineDataUrl: string | null;
+};
+
+type CachedArtwork = Mp3Artwork & { messageId: number | null };
+
+function safeName(value: string, fallback: string): string {
+  return value
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .trim() || fallback;
 }
-function extensionForMime(mime: string | null | undefined, fallback: string): string {
-  const value = String(mime || "").toLowerCase();
-  if (value.includes("wav")) return "wav"; if (value.includes("zip")) return "zip"; if (value.includes("png")) return "png"; if (value.includes("webp")) return "webp"; if (value.includes("jpeg") || value.includes("jpg")) return "jpg"; return fallback;
+
+function extensionForMime(mime: string): string {
+  if (/jpe?g/i.test(mime)) return "jpg";
+  if (/webp/i.test(mime)) return "webp";
+  if (/gif/i.test(mime)) return "gif";
+  if (/bmp/i.test(mime)) return "bmp";
+  if (/avif/i.test(mime)) return "avif";
+  return "png";
 }
-function safeName(value: string): string { return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").replace(/\s+/g, " ").trim() || "Beat"; }
-function downloadBlob(blob: Blob, filename: string): void { const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.style.display = "none"; document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 0); }
-function assetSlot(beat: Beat, kind: "MASTER" | "WAV" | "PROJECT" | "ARTWORK"): BeatAssetRef | null | undefined { return kind === "MASTER" ? beat.assets?.master : kind === "WAV" ? beat.assets?.wav : kind === "PROJECT" ? beat.assets?.project : beat.assets?.artwork; }
-function slotFor(beat: Beat, kind: Exclude<WebDownloadKind, "everything" | "covers_pdf">): Slot | null {
-  const name = safeName(beat.name); if (kind === "mp3") return { label: "MP3", asset: assetSlot(beat, "MASTER"), fallbackName: `${name}.mp3` }; if (kind === "wav") return { label: "WAV", asset: assetSlot(beat, "WAV"), fallbackName: `${name}.wav` }; if (kind === "project") return { label: "Project", asset: assetSlot(beat, "PROJECT"), fallbackName: `${name}.zip` }; return null;
+
+function messageId(ref: GalerCloudObjectRef | null): number | null {
+  const match = /^direct:(\d+)$/.exec(String(ref?.object_id || ""));
+  const id = Number(match?.[1] || 0);
+  return Number.isInteger(id) && id > 0 ? id : null;
 }
-function everythingSlots(beat: Beat): Slot[] { const name = safeName(beat.name); return [
-  { label: "MP3", asset: beat.assets?.master, fallbackName: `${name}.mp3` },
-  { label: "WAV", asset: beat.assets?.wav, fallbackName: `${name}.wav` },
-  { label: "Project", asset: beat.assets?.project, fallbackName: `${name}.zip` },
-  { label: "Artwork", asset: beat.assets?.artwork, fallbackName: `${name}.${extensionForMime(beat.assets?.artwork?.mime_type, "jpg")}` },
-].filter(slot => directMessageId(slot.asset?.object_id)); }
+
+function assetsForBeat(beat: Beat): DownloadAsset[] {
+  const base = safeName(beat.name || "Beat", "Beat");
+  const meta = [beat.bpm?.trim(), beat.key?.trim()].filter(Boolean).join(" ");
+  const audioBase = meta && !base.endsWith(`[${meta}]`) ? `${base} [${meta}]` : base;
+  const artworkMime = beat.assets?.artwork?.mime_type || beat.image_base64?.match(/^data:([^;,]+)/)?.[1] || "image/png";
+  const assets: DownloadAsset[] = [
+    { kind: "MP3", ref: beat.assets?.master || null, filename: `${audioBase}.mp3`, mimeType: beat.assets?.master?.mime_type || "audio/mpeg", size: beat.assets?.master?.size_bytes || 0, inlineDataUrl: null },
+    { kind: "WAV", ref: beat.assets?.wav || null, filename: `${audioBase}.wav`, mimeType: beat.assets?.wav?.mime_type || "audio/wav", size: beat.assets?.wav?.size_bytes || 0, inlineDataUrl: null },
+    { kind: "ARTWORK", ref: beat.assets?.artwork || null, filename: `${base}-artwork.${extensionForMime(artworkMime)}`, mimeType: artworkMime, size: beat.assets?.artwork?.size_bytes || 0, inlineDataUrl: beat.assets?.artwork ? null : beat.image_base64 || null },
+    { kind: "PROJECT", ref: beat.assets?.project || null, filename: `${base}.zip`, mimeType: beat.assets?.project?.mime_type || "application/zip", size: beat.assets?.project?.size_bytes || 0, inlineDataUrl: null },
+  ];
+  return assets.filter(asset => messageId(asset.ref) !== null || Boolean(asset.inlineDataUrl));
+}
+
+function abortError(): DOMException {
+  return new DOMException("Download cancelled.", "AbortError");
+}
+
+function isAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+async function uniqueDirectory(root: BrowserDirectoryHandle, base: string): Promise<BrowserDirectoryHandle> {
+  for (let index = 0; index < 1000; index += 1) {
+    const name = index === 0 ? base : `${base} (${index + 1})`;
+    try {
+      await root.getDirectoryHandle(name);
+    } catch {
+      return root.getDirectoryHandle(name, { create: true });
+    }
+  }
+  return root.getDirectoryHandle(`${base}-${Date.now()}`, { create: true });
+}
 
 export class WebDownloadsManager {
-  private active = new Set<() => void>();
-  constructor(private readonly transport: Promise<WebGalerCloudTransport>) {}
-  start(beat: Beat, kind: WebDownloadKind, onProgress?: (progress: WebDownloadProgress) => void): WebDownloadHandle {
-    let cancelled = false; let streamCancel: (() => void) | null = null; const cancel = () => { cancelled = true; streamCancel?.(); }; this.active.add(cancel);
-    const report = (done: number, total: number, message: string) => onProgress?.({ done, total, message });
-    const done = (async () => {
+  private tasks = new Map<string, { cancel(): void }>();
+
+  constructor(private readonly transport: WebDownloadTransport | Promise<WebDownloadTransport>) {}
+
+  start(
+    beat: Beat,
+    kind: PlatformDownloadKind,
+    onProgress?: (progress: PlatformDownloadProgress) => void,
+  ): PlatformDownloadTask {
+    const available = assetsForBeat(beat);
+    const assets = kind === "ALL" ? available : available.filter(asset => asset.kind === kind);
+    if (assets.length === 0) throw new Error(`${kind === "ALL" ? "Files are" : `${kind} is`} not available for this beat.`);
+
+    const id = crypto.randomUUID();
+    const controller = new AbortController();
+    let activeCancel: (() => void) | null = null;
+    let activeWritable: BrowserWritable | null = null;
+    let cachedCloudArtwork: CachedArtwork | null | undefined;
+    const browser = window as DownloadWindow;
+    const singleHandle = kind !== "ALL" && browser.showSaveFilePicker
+      ? browser.showSaveFilePicker({ suggestedName: assets[0].filename })
+      : null;
+    const rootHandle = kind === "ALL" && browser.showDirectoryPicker
+      ? browser.showDirectoryPicker({ mode: "readwrite" })
+      : null;
+
+    const cancel = () => {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      activeCancel?.();
+      void activeWritable?.abort(abortError()).catch(() => {});
+    };
+    this.tasks.set(id, { cancel });
+
+    const completed = (async (): Promise<{ cancelled: boolean }> => {
+      const loadArtworkForMp3 = async (): Promise<Mp3Artwork | null> => {
+        if (beat.image_base64) {
+          const blob = await (await fetch(beat.image_base64)).blob();
+          if (controller.signal.aborted) throw abortError();
+          return { mimeType: blob.type || "image/png", bytes: await readBlobAsArrayBuffer(blob) };
+        }
+        if (cachedCloudArtwork !== undefined) return cachedCloudArtwork;
+        const artworkRef = beat.assets?.artwork || null;
+        const artworkMessageId = messageId(artworkRef);
+        if (!artworkMessageId) {
+          cachedCloudArtwork = null;
+          return null;
+        }
+        const chunks: ArrayBuffer[] = [];
+        const transport = await this.transport;
+        const stream = await transport.streamFile({
+          messageId: artworkMessageId,
+          mimeType: artworkRef?.mime_type || "image/png",
+          purpose: "export",
+        }, chunk => {
+          if (controller.signal.aborted) throw abortError();
+          chunks.push(chunk);
+        });
+        activeCancel = stream.cancel;
+        await stream.completed;
+        activeCancel = null;
+        if (controller.signal.aborted) throw abortError();
+        cachedCloudArtwork = {
+          mimeType: artworkRef?.mime_type || "image/png",
+          bytes: await readBlobAsArrayBuffer(new Blob(chunks)),
+          messageId: artworkMessageId,
+        };
+        return cachedCloudArtwork;
+      };
+
       try {
-        const transport = await this.transport; if (cancelled) throw new DOMException("Download cancelled.", "AbortError");
-        if (kind === "covers_pdf") {
-          const artwork = beat.assets?.artwork; const messageId = directMessageId(artwork?.object_id); if (!messageId) throw new Error("This beat has no artwork to export."); report(0, 1, "Downloading artwork…");
-          const chunks: ArrayBuffer[] = []; const stream = await transport.streamFile({ messageId, mimeType: artwork?.mime_type || "image/jpeg", purpose: "export" }, chunk => { if (cancelled) throw new DOMException("Download cancelled.", "AbortError"); chunks.push(chunk); }); streamCancel = stream.cancel; const result = await stream.completed;
-          const blob = new Blob(chunks, { type: result.mimeType || artwork?.mime_type || "image/jpeg" }); const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
-          const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: [1000, 1000] }); const format = blob.type.includes("png") ? "PNG" : "JPEG"; pdf.addImage(dataUrl, format, 0, 0, 1000, 1000, undefined, "FAST"); downloadBlob(pdf.output("blob"), `${safeName(beat.name)}-cover.pdf`); report(1, 1, "Cover PDF ready"); return;
+        const totalBytes = assets.reduce((sum, asset) => sum + Math.max(0, asset.size), 0);
+        let completedBytes = 0;
+        let directory: BrowserDirectoryHandle | null = null;
+        if (rootHandle) {
+          const root = await rootHandle;
+          if (controller.signal.aborted) throw abortError();
+          directory = await uniqueDirectory(root, safeName(beat.name || "Beat", "Beat"));
         }
-        const slots = kind === "everything" ? everythingSlots(beat) : [slotFor(beat, kind)].filter((slot): slot is Slot => Boolean(slot)); const present = slots.filter(slot => directMessageId(slot.asset?.object_id)); if (present.length === 0) throw new Error("The requested file is not available for this beat.");
-        const zip = kind === "everything" ? new JSZip() : null; let completedSlots = 0;
-        for (const slot of present) {
-          if (cancelled) throw new DOMException("Download cancelled.", "AbortError"); const messageId = directMessageId(slot.asset?.object_id)!; report(completedSlots, present.length, `Downloading ${slot.label}…`); const chunks: ArrayBuffer[] = [];
-          const stream = await transport.streamFile({ messageId, mimeType: slot.asset?.mime_type || "application/octet-stream", purpose: "export" }, chunk => { if (cancelled) throw new DOMException("Download cancelled.", "AbortError"); chunks.push(chunk); }); streamCancel = stream.cancel; const result = await stream.completed; const filename = safeName(slot.asset?.filename || slot.fallbackName); const blob = new Blob(chunks, { type: result.mimeType || slot.asset?.mime_type || "application/octet-stream" }); if (zip) zip.file(filename, blob); else downloadBlob(blob, filename); completedSlots += 1; report(completedSlots, present.length, `${slot.label} ready`);
+
+        for (const asset of assets) {
+          if (controller.signal.aborted) throw abortError();
+          const handle = singleHandle
+            ? await singleHandle
+            : directory
+              ? await directory.getFileHandle(asset.filename, { create: true })
+              : null;
+          if (controller.signal.aborted) throw abortError();
+          const writable = handle ? await handle.createWritable() : null;
+          activeWritable = writable;
+          const chunks: ArrayBuffer[] = [];
+          let assetBytes = 0;
+
+          if (asset.kind === "MP3") {
+            const artwork = await loadArtworkForMp3();
+            const id3 = buildBeatGalerId3Tag({
+              name: beat.name,
+              bpm: beat.bpm,
+              key: beat.key,
+              tags: beat.tags,
+              rating: beat.rating,
+            }, artwork);
+            const id3Buffer = exactArrayBuffer(id3);
+            if (writable) await writable.write(id3Buffer);
+            else chunks.push(id3Buffer);
+          }
+
+          if (asset.inlineDataUrl) {
+            const blob = await (await fetch(asset.inlineDataUrl)).blob();
+            const buffer = await readBlobAsArrayBuffer(blob);
+            if (writable) await writable.write(buffer);
+            else chunks.push(buffer);
+            assetBytes = buffer.byteLength;
+            onProgress?.({ currentKind: asset.kind, downloadedBytes: completedBytes + assetBytes, totalBytes: Math.max(totalBytes, completedBytes + assetBytes) });
+          } else {
+            const objectMessageId = messageId(asset.ref);
+            if (!objectMessageId) throw new Error(`${asset.kind} is not available for this beat.`);
+
+            if (asset.kind === "ARTWORK" && cachedCloudArtwork?.messageId === objectMessageId) {
+              const buffer = cachedCloudArtwork.bytes instanceof Uint8Array
+                ? exactArrayBuffer(cachedCloudArtwork.bytes)
+                : cachedCloudArtwork.bytes;
+              if (writable) await writable.write(buffer);
+              else chunks.push(buffer);
+              assetBytes = buffer.byteLength;
+              onProgress?.({ currentKind: asset.kind, downloadedBytes: completedBytes + assetBytes, totalBytes: Math.max(totalBytes, completedBytes + assetBytes) });
+            } else {
+              const transport = await this.transport;
+              const stream = await transport.streamFile({
+                messageId: objectMessageId,
+                mimeType: asset.mimeType,
+                purpose: "export",
+              }, async (chunk, downloadedBytes, streamTotal) => {
+                if (controller.signal.aborted) throw abortError();
+                if (writable) await writable.write(chunk);
+                else chunks.push(chunk);
+                assetBytes = downloadedBytes;
+                onProgress?.({
+                  currentKind: asset.kind,
+                  downloadedBytes: completedBytes + downloadedBytes,
+                  totalBytes: Math.max(totalBytes, completedBytes + streamTotal),
+                });
+              });
+              activeCancel = stream.cancel;
+              const result = await stream.completed;
+              assetBytes = result.totalBytes;
+            }
+          }
+
+          if (controller.signal.aborted) throw abortError();
+          if (writable) await writable.close();
+          else triggerBrowserDownload(new Blob(chunks, { type: asset.mimeType }), asset.filename);
+          activeWritable = null;
+          activeCancel = null;
+          completedBytes += assetBytes;
         }
-        if (zip) { report(present.length, present.length, "Building ZIP…"); downloadBlob(await zip.generateAsync({ type: "blob" }), `${safeName(beat.name)}-everything.zip`); }
-      } finally { this.active.delete(cancel); }
+        return { cancelled: false };
+      } catch (error) {
+        if (!controller.signal.aborted) await activeWritable?.abort(error).catch(() => {});
+        if (controller.signal.aborted || isAbort(error)) return { cancelled: true };
+        throw error;
+      } finally {
+        this.tasks.delete(id);
+        activeCancel = null;
+        activeWritable = null;
+      }
     })();
-    return { cancel, done };
+    void completed.catch(() => {});
+    return { id, completed, cancel };
   }
-  cancelAll(): void { for (const cancel of Array.from(this.active)) cancel(); this.active.clear(); }
+
+  cancelAll(): void {
+    for (const task of this.tasks.values()) task.cancel();
+    this.tasks.clear();
+  }
 }
