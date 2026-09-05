@@ -309,9 +309,11 @@ describe("Web MASTER playback source", () => {
     });
 
     const prepared = await manager.prepare("beat-wait", 51, "audio/mpeg", 1);
+    expect(focusPlayback).toHaveBeenCalledTimes(1);
     const mediaSource = FakeMediaSource.instances[0];
     mediaSource.sourceBuffer.ranges = [[0, 5]];
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: false, waiting: true });
+    expect(focusPlayback).toHaveBeenCalledTimes(2);
     mediaSource.open();
     await emitChunk(new ArrayBuffer(8), 8, 8);
     finish({ messageId: 51, totalBytes: 8, mimeType: "audio/mpeg" });
@@ -329,7 +331,7 @@ describe("Web MASTER playback source", () => {
     expect(markPlaybackStable).toHaveBeenCalledTimes(1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
-    expect(focusPlayback).toHaveBeenCalledTimes(2);
+    expect(focusPlayback).toHaveBeenCalledTimes(3);
     expect(focusPlayback).toHaveBeenLastCalledWith(51);
     expect(markPlaybackStable).toHaveBeenCalledTimes(2);
     expect(markPlaybackStable).toHaveBeenLastCalledWith(51);
