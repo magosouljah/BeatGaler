@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
+import { WEB_PLAYBACK_ROUTE_RECOVERY_EVENT } from "../../src/features/playback/webPlaybackRouteRecoveryEvents";
 
 const harness = vi.hoisted(() => {
   const prepare = vi.fn();
@@ -161,6 +162,84 @@ describe("Web stale playback route recovery", () => {
     expect(harness.refresh).toHaveBeenCalledTimes(1);
     expect(reconciled).toHaveBeenCalledTimes(1);
     expect((reconciled.mock.calls[0][0] as CustomEvent).detail.beats).toEqual([repairedBeat]);
+  });
+
+  it("recovers one async continuation route failure and publishes the repaired URL", async () => {
+    await seedAuthoritativeRoute(1500);
+    let rejectFirst!: (error: Error) => void;
+    const firstCompleted = new Promise<void>((_, reject) => { rejectFirst = reject; });
+    harness.refresh.mockImplementation(async () => {
+      await seedAuthoritativeRoute(1900);
+      return snapshot([beat(1900)]);
+    });
+    harness.prepare
+      .mockResolvedValueOnce({ url: "blob:stale-prefix", completed: firstCompleted })
+      .mockResolvedValueOnce({ url: "blob:repaired-stream", completed: Promise.resolve() });
+
+    const recoveryEvents: Array<{ phase: string; url?: string }> = [];
+    const onRecovery = (event: Event) => recoveryEvents.push((event as CustomEvent).detail);
+    window.addEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRecovery);
+    const { webAdapter } = await import("../../src/platform/webAdapter");
+    const prepared = await webAdapter.media.preparePlayback(beat(1500));
+    expect(prepared.url).toBe("blob:stale-prefix");
+
+    rejectFirst(routeError("ROUTE_MISSING"));
+    await expect(prepared.completed).resolves.toBeUndefined();
+    window.removeEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRecovery);
+
+    expect(harness.prepare.mock.calls.map(call => call[1])).toEqual([1500, 1900]);
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    expect(recoveryEvents.map(event => event.phase)).toEqual(["begin", "ready"]);
+    expect(recoveryEvents.at(-1)?.url).toBe("blob:repaired-stream");
+    const { readWebPlaybackRoutingCache } = await import("../../src/features/playback/webPlaybackRoutingCache");
+    expect(readWebPlaybackRoutingCache().routes["beat-x"]?.messageId).toBe(1900);
+    expect(readWebPlaybackRoutingCache().suspect?.["beat-x"]).toBeUndefined();
+  });
+
+  it("consumes the async route retry once and never loops after the repaired stream also fails", async () => {
+    await seedAuthoritativeRoute(1500);
+    let rejectFirst!: (error: Error) => void;
+    let rejectRetry!: (error: Error) => void;
+    const firstCompleted = new Promise<void>((_, reject) => { rejectFirst = reject; });
+    const retryCompleted = new Promise<void>((_, reject) => { rejectRetry = reject; });
+    harness.refresh.mockImplementation(async () => {
+      await seedAuthoritativeRoute(1900);
+      return snapshot([beat(1900)]);
+    });
+    harness.prepare
+      .mockResolvedValueOnce({ url: "blob:stale-prefix", completed: firstCompleted })
+      .mockResolvedValueOnce({ url: "blob:retry", completed: retryCompleted });
+
+    const recoveryEvents: Array<{ phase: string }> = [];
+    const onRecovery = (event: Event) => recoveryEvents.push((event as CustomEvent).detail);
+    window.addEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRecovery);
+    const { webAdapter } = await import("../../src/platform/webAdapter");
+    const prepared = await webAdapter.media.preparePlayback(beat(1500));
+    rejectFirst(routeError("ROUTE_MISSING"));
+    await vi.waitFor(() => expect(recoveryEvents.map(event => event.phase)).toContain("ready"));
+    rejectRetry(routeError("ROUTE_MISSING"));
+
+    await expect(prepared.completed).rejects.toMatchObject({ code: "ROUTE_MISSING" });
+    window.removeEventListener(WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, onRecovery);
+    expect(harness.prepare.mock.calls.map(call => call[1])).toEqual([1500, 1900]);
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    expect(recoveryEvents.map(event => event.phase)).toEqual(["begin", "ready", "failed"]);
+  });
+
+  it("keeps an unchanged authoritative route instead of deleting it when reconcile cannot repair it", async () => {
+    await seedAuthoritativeRoute(1500);
+    harness.refresh.mockImplementation(async () => {
+      await seedAuthoritativeRoute(1500);
+      return snapshot([beat(1500)]);
+    });
+    harness.prepare.mockRejectedValueOnce(routeError("ROUTE_MISSING"));
+
+    const { webAdapter } = await import("../../src/platform/webAdapter");
+    await expect(webAdapter.media.preparePlayback(beat(1500))).rejects.toMatchObject({ code: "ROUTE_MISSING" });
+    expect(harness.prepare).toHaveBeenCalledTimes(1);
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    const { readWebPlaybackRoutingCache } = await import("../../src/features/playback/webPlaybackRoutingCache");
+    expect(readWebPlaybackRoutingCache().routes["beat-x"]?.messageId).toBe(1500);
   });
 
   it("removes an authoritatively deleted beat and never loops or retries the stale route", async () => {
