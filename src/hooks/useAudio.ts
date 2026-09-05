@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
+import { shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
 
 let silentGestureUrl: string | null = null;
 
@@ -245,6 +246,10 @@ export function useAudio() {
     const audio = getAudio();
     playTrace("AUDIO_PLAY_FUNCTION_ENTER", { beat_id: beatId, ready_state: audio.readyState, paused: audio.paused });
     const sources = Array.from(new Set(paths.filter(Boolean).map(path => platform.media.resolveUrl(path))));
+    if (!shouldAcceptWebPlaybackRequest(beatId, sources)) {
+      playTrace("AUDIO_SUPERSEDED_PLAY_IGNORED", { beat_id: beatId });
+      return;
+    }
     if (sources.length === 0) {
       console.error("No audio sources available for beat", beatId);
       return;
