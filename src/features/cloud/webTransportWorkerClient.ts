@@ -105,6 +105,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private desiredPlaybackMessageId: number | null = null;
   private credentialRefreshEpoch = 0;
   private credentialRefreshPromise: Promise<void> | null = null;
+  private playbackCritical = false;
+  private activeBackgroundStreamRequests = new Set<string>();
+  private preemptedBackgroundStreamRequests = new Set<string>();
+  private backgroundResumeWaiters = new Set<() => void>();
 
   constructor(
     private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
@@ -342,6 +346,28 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     });
   }
 
+  private releaseBackgroundResumeWaiters(): void {
+    if (this.playbackCritical) return;
+    const waiters = Array.from(this.backgroundResumeWaiters);
+    this.backgroundResumeWaiters.clear();
+    for (const resolve of waiters) resolve();
+  }
+
+  private async waitUntilBackgroundStreamsAllowed(): Promise<void> {
+    while (this.playbackCritical) {
+      await new Promise<void>(resolve => this.backgroundResumeWaiters.add(resolve));
+    }
+  }
+
+  private preemptBackgroundStreams(): void {
+    for (const requestId of this.activeBackgroundStreamRequests) {
+      if (this.preemptedBackgroundStreamRequests.has(requestId)) continue;
+      this.preemptedBackgroundStreamRequests.add(requestId);
+      this.sendStreamControl("cancel", requestId);
+      playTrace("WORKER_BACKGROUND_STREAM_PREEMPTED_PLAY", { request_id: requestId });
+    }
+  }
+
   async initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void> {
     const sessionStartupMessageIds = Array.from(new Set(
       startupMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
@@ -473,19 +499,37 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     const id = Number(messageId || 0);
     if (!Number.isSafeInteger(id) || id <= 0) return Promise.resolve();
     this.desiredPlaybackMessageId = id;
-    return this.request<void>({ op: "playback_focus", messageId: id });
+    this.playbackCritical = true;
+    this.preemptBackgroundStreams();
+    return this.request<void>({ op: "playback_focus", messageId: id }).catch(error => {
+      if (this.desiredPlaybackMessageId === id) {
+        this.playbackCritical = false;
+        this.releaseBackgroundResumeWaiters();
+      }
+      throw error;
+    });
   }
 
   markPlaybackStable(messageId: number): Promise<void> {
     const id = Number(messageId || 0);
     if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
-    return this.request<void>({ op: "playback_stable", messageId: id });
+    return this.request<void>({ op: "playback_stable", messageId: id }).then(() => {
+      if (this.desiredPlaybackMessageId === id) {
+        this.playbackCritical = false;
+        this.releaseBackgroundResumeWaiters();
+      }
+    });
   }
 
   releasePlaybackFocus(messageId: number): Promise<void> {
     const id = Number(messageId || 0);
     if (this.desiredPlaybackMessageId === id) this.desiredPlaybackMessageId = null;
-    return this.request<void>({ op: "playback_release", messageId: id });
+    return this.request<void>({ op: "playback_release", messageId: id }).finally(() => {
+      if (this.desiredPlaybackMessageId === null) {
+        this.playbackCritical = false;
+        this.releaseBackgroundResumeWaiters();
+      }
+    });
   }
 
   stream(
@@ -495,25 +539,45 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     let cancelled = false;
     let activeRequestId: string | null = null;
     let confirmedOffset = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+    let chunkInFlight: Promise<void> = Promise.resolve();
+    const background = (input.purpose || "playback") !== "playback";
 
     const completed = (async (): Promise<WebTransportStreamResult> => {
       while (true) {
         if (cancelled) throw streamCancelledError();
+        if (background) await this.waitUntilBackgroundStreamsAllowed();
+        if (cancelled) throw streamCancelledError();
         const attemptRefreshEpoch = this.credentialRefreshEpoch;
         const requestId = crypto.randomUUID();
         activeRequestId = requestId;
+        if (background) this.activeBackgroundStreamRequests.add(requestId);
         try {
           return await this.request<WebTransportStreamResult>(
             { op: "stream", input: { ...input, offsetBytes: confirmedOffset } },
             undefined,
-            async (chunk, downloadedBytes, totalBytes) => {
-              await onChunk(chunk, downloadedBytes, totalBytes);
-              confirmedOffset = Math.max(confirmedOffset, Math.floor(Number(downloadedBytes) || confirmedOffset));
+            (chunk, downloadedBytes, totalBytes) => {
+              const processing = (async () => {
+                await onChunk(chunk, downloadedBytes, totalBytes);
+                confirmedOffset = Math.max(confirmedOffset, Math.floor(Number(downloadedBytes) || confirmedOffset));
+              })();
+              chunkInFlight = processing;
+              return processing;
             },
             requestId,
           );
         } catch (error) {
           if (cancelled) throw streamCancelledError();
+          await chunkInFlight;
+          const preemptedByPlay = background && this.preemptedBackgroundStreamRequests.delete(requestId);
+          if (preemptedByPlay) {
+            await this.waitUntilBackgroundStreamsAllowed();
+            if (cancelled) throw streamCancelledError();
+            playTrace("WORKER_BACKGROUND_STREAM_RESUME", {
+              message_id: input.messageId,
+              offset_bytes: confirmedOffset,
+            });
+            continue;
+          }
           const refreshObserved = this.credentialRefreshEpoch !== attemptRefreshEpoch || this.credentialRefreshPromise !== null;
           if (!refreshObserved) throw error;
           const refresh = this.credentialRefreshPromise;
@@ -525,6 +589,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
             refresh_epoch: this.credentialRefreshEpoch,
           });
         } finally {
+          if (background) this.activeBackgroundStreamRequests.delete(requestId);
           if (activeRequestId === requestId) activeRequestId = null;
         }
       }
@@ -564,6 +629,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   async shutdown(): Promise<void> {
     const worker = this.worker;
     this.desiredPlaybackMessageId = null;
+    this.playbackCritical = false;
+    this.activeBackgroundStreamRequests.clear();
+    this.preemptedBackgroundStreamRequests.clear();
+    this.releaseBackgroundResumeWaiters();
     this.sessionStartupMessageIds = [];
     if (worker) {
       await this.request({ op: "shutdown" }).catch(() => {});
