@@ -160,7 +160,9 @@ describe("WorkerClient playback continuity during credential refresh", () => {
       offsetBytes: 0,
       purpose: "export",
     }, onChunk);
+    await vi.waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
+    await vi.waitFor(() => expect(posted(worker, "stream")).toHaveLength(1));
     const firstStream = posted(worker, "stream")[0];
 
     worker.chunk(firstStream.requestId, 4096, 200000, 4096);
