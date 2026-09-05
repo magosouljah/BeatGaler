@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
 import {
   deletePlaybackRoutes,
+  isPlaybackRouteSuspect,
+  markPlaybackRouteSuspect,
   readWebPlaybackRoutingCache,
   updatePlaybackRoutingCacheFromManifest,
   updatePlaybackRoutingSort,
   updatePlaybackRoutingStartupFromBeats,
   upsertPlaybackRouteFromBeat,
 } from "../../src/features/playback/webPlaybackRoutingCache";
+import { markPlaybackMessageRouteSuspect } from "../../src/features/playback/webPlaybackRoutingSuspect";
 
 function manifestBeat(index: number) {
   return {
@@ -136,15 +139,88 @@ describe("Web playback routing cache", () => {
     });
     updatePlaybackRoutingSort("rating");
 
+    // Import.
     upsertPlaybackRouteFromBeat(beat(3, { rating: 99, name: "Top" }));
     expect(readWebPlaybackRoutingCache().startup[0]?.beatId).toBe("beat-3");
 
+    // Edit.
     upsertPlaybackRouteFromBeat(beat(3, { rating: -1, name: "Edited" }));
     expect(readWebPlaybackRoutingCache().startup[0]?.beatId).not.toBe("beat-3");
+
+    // Delete then restore the same identity with a new route.
+    deletePlaybackRoutes(["beat-2"]);
+    expect(readWebPlaybackRoutingCache().routes["beat-2"]).toBeUndefined();
+    upsertPlaybackRouteFromBeat(beat(2, { telegram_message_id: 7777, telegram_file_id: "direct:7777", rating: 88 }));
+    expect(readWebPlaybackRoutingCache().routes["beat-2"]?.messageId).toBe(7777);
+    expect(readWebPlaybackRoutingCache().startup[0]?.beatId).toBe("beat-2");
 
     deletePlaybackRoutes(["beat-2"]);
     const cache = readWebPlaybackRoutingCache();
     expect(cache.routes["beat-2"]).toBeUndefined();
     expect(cache.startup.some(item => item.beatId === "beat-2")).toBe(false);
+  });
+
+  it("keeps the whole compact projection and startup14 correct across more than 240 beats", () => {
+    const manifest = Array.from({ length: 260 }, (_, index) => ({
+      ...manifestBeat(index + 1),
+      name: `Beat ${String(260 - index).padStart(3, "0")}`,
+      bpm: 60 + ((index * 7) % 180),
+      rating: (index * 11) % 101,
+    }));
+    updatePlaybackRoutingCacheFromManifest({ beats: manifest, deleted: [], trash: [] });
+
+    const initial = readWebPlaybackRoutingCache();
+    expect(initial.order).toHaveLength(260);
+    expect(Object.keys(initial.routes)).toHaveLength(260);
+
+    for (const sort of ["manual", "rating", "bpm", "name"] as const) {
+      updatePlaybackRoutingSort(sort);
+      const cache = readWebPlaybackRoutingCache();
+      expect(cache.startup).toHaveLength(14);
+      expect(new Set(cache.startup.map(item => item.beatId)).size).toBe(14);
+      expect(cache.startup.every(item => cache.routes[item.beatId]?.messageId === item.messageId)).toBe(true);
+    }
+
+    upsertPlaybackRouteFromBeat(beat(261, { name: "A First", rating: 999, bpm: "1" }));
+    updatePlaybackRoutingSort("name");
+    expect(readWebPlaybackRoutingCache().startup[0]?.beatId).toBe("beat-261");
+    deletePlaybackRoutes(["beat-261"]);
+    expect(readWebPlaybackRoutingCache().startup.some(item => item.beatId === "beat-261")).toBe(false);
+    expect(readWebPlaybackRoutingCache().order).toHaveLength(260);
+  });
+
+  it("persists a suspect message version, excludes it from startup, and clears it only after authoritative reconcile", () => {
+    const original = [manifestBeat(1), manifestBeat(2), manifestBeat(3)];
+    updatePlaybackRoutingCacheFromManifest({ beats: original, deleted: [], trash: [] });
+    updatePlaybackRoutingSort("manual");
+
+    expect(markPlaybackRouteSuspect("beat-1", 1001)).toBe(true);
+    let cache = readWebPlaybackRoutingCache();
+    expect(isPlaybackRouteSuspect("beat-1", 1001)).toBe(true);
+    expect(cache.suspect?.["beat-1"]?.messageId).toBe(1001);
+    expect(cache.startup.some(item => item.beatId === "beat-1")).toBe(false);
+
+    updatePlaybackRoutingSort("rating");
+    expect(readWebPlaybackRoutingCache().startup.some(item => item.beatId === "beat-1")).toBe(false);
+
+    const repaired = manifestBeat(1);
+    repaired.master.telegram_message_id = 1900;
+    updatePlaybackRoutingCacheFromManifest({ beats: [repaired, manifestBeat(2), manifestBeat(3)], deleted: [], trash: [] });
+    cache = readWebPlaybackRoutingCache();
+    expect(cache.suspect?.["beat-1"]).toBeUndefined();
+    expect(cache.routes["beat-1"]?.messageId).toBe(1900);
+  });
+
+  it("quarantines every beat owning a failed message id without treating unrelated routes as suspect", () => {
+    updatePlaybackRoutingCacheFromManifest({
+      beats: [manifestBeat(1), manifestBeat(2), manifestBeat(3)],
+      deleted: [],
+      trash: [],
+    });
+
+    expect(markPlaybackMessageRouteSuspect(1002)).toEqual(["beat-2"]);
+    expect(isPlaybackRouteSuspect("beat-2", 1002)).toBe(true);
+    expect(isPlaybackRouteSuspect("beat-1")).toBe(false);
+    expect(readWebPlaybackRoutingCache().startup.some(item => item.beatId === "beat-2")).toBe(false);
   });
 });
