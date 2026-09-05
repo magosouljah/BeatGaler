@@ -1,4 +1,4 @@
-name: Temporary Task 2.1 Validation
+name: Temporary Task 2.1 Apply
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  validate-and-cleanup:
+  apply-and-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,25 @@ jobs:
         with:
           node-version: 22.23.2
           cache: npm
+
+      - name: Apply the reviewed Task 2.1 extraction recipe
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess
+          import textwrap
+
+          source = subprocess.check_output(
+              ["git", "show", "46ae86e393c0bfbcc321db942777bbb40726f99a:.github/workflows/task-2-1-apply.yml"],
+              text=True,
+          )
+          marker = "          python - <<'PY'\n"
+          if marker not in source:
+              raise SystemExit("Task 2.1 extraction recipe marker not found")
+          recipe = source.split(marker, 1)[1].split("\n          PY", 1)[0]
+          recipe = textwrap.dedent(recipe)
+          exec(compile(recipe, "task-2-1-extraction-recipe", "exec"), {})
+          PY
 
       - name: Install dependencies
         run: npm ci
@@ -48,11 +67,12 @@ jobs:
       - name: Desktop-source build
         run: npm run build
 
-      - name: Remove temporary validation workflow
+      - name: Commit verified extraction and remove temporary workflow
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/task-2-1-apply.yml
-          git commit -m "chore: remove task 2.1 validation workflow"
+          git add src/App.tsx src/features/downloads/components/CloudFilesModal.tsx src/features/dragdrop/components/BeatFileDropModal.tsx tests/component-dom/appAuxiliaryModals.test.tsx tests/integration/appAuxiliaryModalExtraction.test.ts
+          git commit -m "refactor: extract auxiliary modals"
           git push origin HEAD:app-tsx-migration
