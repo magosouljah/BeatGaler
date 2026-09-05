@@ -108,6 +108,7 @@ export class WebTransportController {
   private verificationPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private lifecycleGeneration = 0;
   private readonly startupBeatIds: string[];
   private readonly startupMessageIds: number[];
 
@@ -118,6 +119,10 @@ export class WebTransportController {
   ) {
     this.startupBeatIds = normalizeStartupBeatIds(startup.startupBeatIds);
     this.startupMessageIds = normalizeStartupMessageIds(startup.startupMessageIds);
+  }
+
+  private isCurrentLifecycle(generation: number): boolean {
+    return !this.closed && generation === this.lifecycleGeneration;
   }
 
   async connect(): Promise<WebTransportSession> {
@@ -135,18 +140,23 @@ export class WebTransportController {
       return this.connectPromise;
     }
     playTrace("CONTROLLER_CONNECT_NEW", { startup_beat_count: this.startupBeatIds.length });
-    this.connectPromise = this.openSession().finally(() => { this.connectPromise = null; });
+    const lifecycleGeneration = this.lifecycleGeneration;
+    this.connectPromise = this.openSession(lifecycleGeneration).finally(() => { this.connectPromise = null; });
     return this.connectPromise;
   }
 
-  private async openSession(): Promise<WebTransportSession> {
+  private async openSession(lifecycleGeneration: number): Promise<WebTransportSession> {
     const started = Date.now();
     let bootstrap: WebTransportSessionPublic | null = null;
     let activationResultPromise: Promise<StartupBranchResult> | null = null;
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupBeatIds.length });
     try {
-      bootstrap = await this.api.reserve(this.startupBeatIds);
+      // The new Web client owns startup routing locally. Do not request Cloud
+      // startup routes on the playback-critical reservation response.
+      bootstrap = await this.api.reserve();
+      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
+
       const activateStarted = Date.now();
       activationResultPromise = settleStartupBranch(
         observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
@@ -156,6 +166,7 @@ export class WebTransportController {
       });
 
       const session = await observePlayStep("DIRECT_PREPARE", () => this.api.bind(bootstrap!));
+      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_PREPARE_DONE", {
         elapsed_ms: Date.now() - started,
         startup_message_count: this.startupMessageIds.length,
@@ -163,12 +174,14 @@ export class WebTransportController {
 
       const activationResult = await activationResultPromise;
       if (!activationResult.ok) throw activationResult.error;
+      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
 
       const initializeStarted = Date.now();
       await observePlayStep("DIRECT_INITIALIZE", async () => {
         await this.runtime.initialize(session, this.startupMessageIds);
       });
+      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
 
       // MTProto + startup-media setup is the playback readiness boundary.
@@ -176,7 +189,7 @@ export class WebTransportController {
       // not extend OPEN->AUDIO or CLICK PLAY->AUDIO.
       this.session = session;
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
-      this.startBackgroundVerification(session);
+      this.startBackgroundVerification(session, lifecycleGeneration);
       playTrace("CONTROLLER_SESSION_DATA_PLANE_READY", { total_ms: Date.now() - started });
       return session;
     } catch (error) {
@@ -187,14 +200,14 @@ export class WebTransportController {
     }
   }
 
-  private startBackgroundVerification(session: WebTransportSession): void {
+  private startBackgroundVerification(session: WebTransportSession, lifecycleGeneration = this.lifecycleGeneration): void {
     const verification = (async () => {
       try {
         await Promise.all([
           observePlayStep("DIRECT_BACKGROUND_GET_ME", () => this.runtime.verifyIdentity(session)),
           observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => this.runtime.verifyReady(session)),
         ]);
-        if (this.session === session) playTrace("CONTROLLER_BACKGROUND_VERIFY_READY");
+        if (this.session === session && this.isCurrentLifecycle(lifecycleGeneration)) playTrace("CONTROLLER_BACKGROUND_VERIFY_READY");
       } catch (error) {
         playTrace("CONTROLLER_BACKGROUND_VERIFY_FAILED", {
           error_name: error instanceof Error ? error.name : "unknown",
@@ -218,6 +231,7 @@ export class WebTransportController {
 
   private async failClosedSession(session: WebTransportSession): Promise<void> {
     if (this.session !== session) return;
+    this.lifecycleGeneration += 1;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
@@ -250,6 +264,7 @@ export class WebTransportController {
 
   private async applyCredentialRefresh(session: WebTransportSession): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise;
+    const lifecycleGeneration = this.lifecycleGeneration;
     const refresh = (async () => {
       playTrace("CONTROLLER_CREDENTIAL_REFRESH_BEGIN");
       try {
@@ -258,6 +273,9 @@ export class WebTransportController {
           this.runtime.verifyIdentity(session),
           this.runtime.verifyReady(session),
         ]);
+        if (!this.isCurrentLifecycle(lifecycleGeneration)) {
+          throw new Error("Galer Cloud Web transport refresh was superseded.");
+        }
         this.session = session;
         playTrace("CONTROLLER_CREDENTIAL_REFRESH_READY");
       } catch (error) {
@@ -266,6 +284,7 @@ export class WebTransportController {
         });
         if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = null;
+        if (this.isCurrentLifecycle(lifecycleGeneration)) this.lifecycleGeneration += 1;
         this.session = null;
         await this.runtime.shutdown().catch(() => {});
         throw error;
@@ -278,6 +297,7 @@ export class WebTransportController {
   }
 
   private async resetLocalSession(): Promise<void> {
+    this.lifecycleGeneration += 1;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
@@ -349,15 +369,18 @@ export class WebTransportController {
   async disconnect(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.lifecycleGeneration += 1;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
-    const refresh = this.refreshPromise;
-    if (refresh) await refresh.catch(() => {});
-    const verification = this.verificationPromise;
-    if (verification) await verification.catch(() => {});
     const session = this.session;
     this.session = null;
+    const connect = this.connectPromise;
+    const refresh = this.refreshPromise;
+    const verification = this.verificationPromise;
     this.verificationPromise = null;
+    if (connect) await connect.catch(() => {});
+    if (refresh) await refresh.catch(() => {});
+    if (verification) await verification.catch(() => {});
     await this.runtime.shutdown().catch(() => {});
     if (session) await this.api.stop(session).catch(() => {});
   }
