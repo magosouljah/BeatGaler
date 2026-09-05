@@ -2,14 +2,12 @@
 
 Recordatorios personales para dirigir BeatGaler.
 
-- **Stupid Simple.** Si algo empieza a necesitar demasiadas reglas, documentos o estados, simplificar.
-- **Tú decides el producto.** La IA investiga, propone e implementa; no decide libremente qué debe ser BeatGaler.
-- **Architecture representa lo que quieres conservar.** Si decides cambiar una arquitectura canónica, actualizar su MD.
-- **No documentar experimentos como arquitectura.** Solo entra en `ARCHITECTURE/` lo que ya decidiste aceptar.
-- **No duplicar GitHub.** PRs, commits, CI, historial y estado diario viven allí.
-- **Pizarra es basura útil.** Promover lo importante al lugar correcto y borrar el resto.
-- **No convertir excepciones en reglas automáticamente.**
-- **Antes de añadir otro MD:** preguntar por qué no cabe en los que ya existen.
-- **Antes de añadir otra regla a la IA:** preguntar si realmente necesita saberla o si basta con que tú la recuerdes.
-- **No conservar una arquitectura por orgullo o por trabajo invertido.** Si encontramos una forma claramente mejor, cambiarla conscientemente.
+- **Stupid Simple.** Si algo empieza a necesitar demasiadas capas, reglas o excepciones, buscar una forma más simple.
+- **Volver a los dos flujos centrales.** Construir/organizar existe para que encontrar/escuchar/descargar sea exactamente como el usuario quiere.
+- **V1 tiene frontera.** Una idea nueva no entra automáticamente; si no hace falta para la V1 definida, va después.
+- **Un problema importante a la vez.** Terminar limpio antes de abrir otro frente cuando sea posible.
+- **“Funciona” no significa “terminado”.** También debe conservar lo importante, cubrir sus riesgos y no dejar basura o caminos duplicados.
+- **No conservar complejidad por trabajo invertido.** Si una arquitectura claramente mejor reemplaza a la anterior, cambiarla conscientemente.
+- **Architecture solo guarda decisiones que realmente quieres conservar.** No experimentos ni planes temporales.
+- **La IA ayuda a entender, decidir e implementar; tú decides qué debe ser BeatGaler.**
 - **El objetivo es terminar BeatGaler V1, no perfeccionar el sistema de trabajo.**
