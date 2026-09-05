@@ -17,6 +17,3 @@ Puede incluir:
 
 No contiene experimentos, planes temporales ni alternativas todavía en evaluación.
 
-## Arquitecturas
-
-Ninguna añadida todavía.
