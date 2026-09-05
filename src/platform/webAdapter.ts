@@ -36,6 +36,7 @@ let webLibraryWindow: WebLibraryWindowConsumer | null = null;
 let webPlaybackSources: WebPlaybackSourceManager | null = null;
 let webDownloads: WebDownloadsManager | null = null;
 const webBeatRegistry = new Map<string, Beat>();
+const playbackRouteRecoveries = new Map<string, Promise<number | null>>();
 let stopVisiblePlaybackObserver: (() => void) | null = null;
 let stopPlaybackRuntimeObserver: (() => void) | null = null;
 
@@ -69,12 +70,20 @@ function webBeatMessageId(beat: Beat): number | null {
   const routing = readWebPlaybackRoutingCache();
   const cached = routing.routes[beat.id]?.messageId;
   if (cached) return cached;
-  // Once Telegram has produced an authoritative routing snapshot, an absent
-  // route is meaningful. Never resurrect it from a stale rich/presentation Beat.
   if (routing.authoritative === true) return null;
   const explicit = Number(beat.telegram_message_id || 0);
   if (Number.isInteger(explicit) && explicit > 0) return explicit;
   return directMessageId(beat.assets?.master?.object_id) || directMessageId(beat.telegram_file_id);
+}
+
+function playbackErrorCode(error: unknown): string | null {
+  const code = String((error as { code?: unknown } | null)?.code || "").trim();
+  return code || null;
+}
+
+function isRecoverablePlaybackRouteError(error: unknown): boolean {
+  const code = playbackErrorCode(error);
+  return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE";
 }
 
 function prewarmAuthenticatedWebTransport(): void {
@@ -92,6 +101,42 @@ function prewarmAuthenticatedWebTransport(): void {
 async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> {
   if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport());
   return webLibraryWindow;
+}
+
+async function recoverPlaybackRoute(beatId: string, failedMessageId: number): Promise<number | null> {
+  const existing = playbackRouteRecoveries.get(beatId);
+  if (existing) return existing;
+
+  let recovery!: Promise<number | null>;
+  recovery = (async () => {
+    playTrace("PLAY_ROUTE_SUSPECT", { beat_id: beatId, message_id: failedMessageId });
+    const windowConsumer = await resolveWebLibraryWindow();
+    const page = await windowConsumer.refresh();
+    reportLibraryWindow(page, "playback-route-recovery");
+    const repaired = readWebPlaybackRoutingCache().routes[beatId]?.messageId || null;
+    if (!repaired || repaired === failedMessageId) {
+      // Telegram message resolution already proved this route unusable. If the
+      // INDEX still points at the same message, suppress it locally so another
+      // click cannot resurrect the stale locator until authority changes.
+      if (repaired === failedMessageId) deletePlaybackRoutes([beatId]);
+      playTrace("PLAY_ROUTE_RECOVERY_FAILED", {
+        beat_id: beatId,
+        failed_message_id: failedMessageId,
+        repaired_message_id: repaired,
+      });
+      return null;
+    }
+    playTrace("PLAY_ROUTE_RECOVERED", {
+      beat_id: beatId,
+      failed_message_id: failedMessageId,
+      repaired_message_id: repaired,
+    });
+    return repaired;
+  })().finally(() => {
+    if (playbackRouteRecoveries.get(beatId) === recovery) playbackRouteRecoveries.delete(beatId);
+  });
+  playbackRouteRecoveries.set(beatId, recovery);
+  return recovery;
 }
 
 async function updateBeatWarmPriority(beatId: string, priority: BeatCardWarmPriority): Promise<void> {
@@ -322,13 +367,24 @@ export const webAdapter: PlatformAdapter = {
     async preparePlayback(beat) {
       const intent = beginWebPlaybackIntent(beat.id);
       const master = beat.assets?.master;
-      const messageId = webBeatMessageId(beat);
+      const mimeType = master?.mime_type || "audio/mpeg";
+      let messageId = webBeatMessageId(beat);
       rememberWebBeats([beat]);
+
+      const pendingRecovery = playbackRouteRecoveries.get(beat.id);
+      if (pendingRecovery) {
+        const repaired = await pendingRecovery;
+        if (!isCurrentWebPlaybackIntent(intent)) {
+          return { url: supersededWebPlaybackUrl(intent), completed: Promise.resolve() };
+        }
+        messageId = repaired;
+      }
+
       if (messageId) {
         playTrace("ADAPTER_PREPARE_ENTER", {
           beat_id: beat.id,
           message_id: messageId,
-          mime_type: master?.mime_type || "audio/mpeg",
+          mime_type: mimeType,
           intent_id: intent.id,
         });
         const sources = await resolveWebPlaybackSources();
@@ -337,8 +393,19 @@ export const webAdapter: PlatformAdapter = {
           return { url, completed: Promise.resolve() };
         }
         playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id, intent_id: intent.id });
+
+        const prepareOnce = async (targetMessageId: number) => {
+          // Register the foreground target before prepare(). Existing warm work is
+          // adopted; a SourceManager-only queued target is promoted through the
+          // single-file foreground primitive. This also validates a cold route by
+          // downloading the same 64 KiB prefix Play needs anyway.
+          const warm = sources.prefetch(beat.id, targetMessageId, mimeType, "visible");
+          void warm.catch(() => {});
+          return sources.prepare(beat.id, targetMessageId, mimeType, intent.id);
+        };
+
         try {
-          const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg", intent.id);
+          const prepared = await prepareOnce(messageId);
           rememberPreparedWebPlaybackUrl(prepared.url, intent);
           playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id, intent_id: intent.id, current: isCurrentWebPlaybackIntent(intent) });
           return prepared;
@@ -347,6 +414,25 @@ export const webAdapter: PlatformAdapter = {
             const url = supersededWebPlaybackUrl(intent);
             playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id });
             return { url, completed: Promise.resolve() };
+          }
+          if (isRecoverablePlaybackRouteError(error) && isCurrentWebPlaybackIntent(intent)) {
+            const repairedMessageId = await recoverPlaybackRoute(beat.id, messageId);
+            if (!isCurrentWebPlaybackIntent(intent)) {
+              const url = supersededWebPlaybackUrl(intent);
+              playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id, phase: "route_reconcile" });
+              return { url, completed: Promise.resolve() };
+            }
+            if (repairedMessageId && repairedMessageId !== messageId) {
+              const prepared = await prepareOnce(repairedMessageId);
+              rememberPreparedWebPlaybackUrl(prepared.url, intent);
+              playTrace("ADAPTER_PREPARE_ROUTE_RETRY_READY", {
+                beat_id: beat.id,
+                intent_id: intent.id,
+                failed_message_id: messageId,
+                repaired_message_id: repairedMessageId,
+              });
+              return prepared;
+            }
           }
           throw error;
         }
@@ -363,7 +449,11 @@ export const webAdapter: PlatformAdapter = {
       const messageId = directMessageId(artwork?.object_id);
       if (!messageId) return null;
       const transport = await resolveWebCloudTransport();
-      const [result] = await transport.downloadFiles([{ messageId, mimeType: artwork?.mime_type || "image/jpeg" }]);
+      const [result] = await transport.downloadFiles([{
+        messageId,
+        mimeType: artwork?.mime_type || "image/jpeg",
+        purpose: "artwork",
+      }]);
       return result?.dataUrl ?? null;
     },
     releasePlayback(beatId) {
@@ -419,6 +509,7 @@ export const webAdapter: PlatformAdapter = {
     },
     async disconnect() {
       invalidateAllWebPlaybackIntents();
+      playbackRouteRecoveries.clear();
       resetVisiblePlaybackPrefetch();
       webPlaybackSources?.releaseAll();
       webPlaybackSources = null;
