@@ -46,6 +46,7 @@ async function recoverPlaybackRoute(beatId: string, failedMessageId: number): Pr
   const existing = playbackRouteRecoveries.get(beatId); if (existing) return existing; let recovery!: Promise<number | null>;
   recovery = (async () => {
     playTrace("PLAY_ROUTE_SUSPECT", { beat_id: beatId, message_id: failedMessageId }); const windowConsumer = await resolveWebLibraryWindow(); const page = await windowConsumer.refresh(); reportLibraryWindow(page, "playback-route-recovery");
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("beatgaler:web-library-reconciled", { detail: { beats: page.beats } }));
     const repaired = readWebPlaybackRoutingCache().routes[beatId]?.messageId || null;
     if (!repaired || repaired === failedMessageId) { if (repaired === failedMessageId) deletePlaybackRoutes([beatId]); playTrace("PLAY_ROUTE_RECOVERY_FAILED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return null; }
     playTrace("PLAY_ROUTE_RECOVERED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return repaired;
