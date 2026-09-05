@@ -35,6 +35,8 @@ import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeEx
 import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
 import { installHtmlDropController } from "./features/dragdrop/htmlDropController";
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
+import CloudFilesModal, { type BeatDownloadKind } from "./features/downloads/components/CloudFilesModal";
+import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
 import { playTrace } from "./features/playback/playTrace";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
@@ -42,7 +44,6 @@ import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconci
 import { createBeatRuntimeState, hydrateBeatRuntimeState, transitionBeatRuntimeState, type BeatRuntimeEvent, type BeatRuntimeState } from "./features/state/beatRuntimeState";
 import { reviewPerfMark } from "./features/perf/reviewPerf";
 
-type DroppedBeatFileRole = "main" | "wav" | "projectFolder" | "loop" | "stems";
 type AutoProjectDropResult = "not-project" | "handled" | "started";
 
 type ReviewQueueState = {
@@ -117,231 +118,7 @@ function isRuntimeConflictError(error: unknown): boolean {
   return message.includes("409") || message.includes("conflict") || message.includes("revision mismatch") || message.includes("version mismatch");
 }
 
-type BeatDownloadKind = "MP3" | "WAV" | "PROJECT" | "ALL";
 type ConnectionState = "checking" | "online" | "poor" | "offline";
-
-function CloudFilesModal({
-  beat, files, busyId, downloadedIds, onDownload, onClose,
-}: {
-  beat: Beat;
-  files: CloudFileRecord[];
-  busyId: string | null;
-  downloadedIds: Set<string>;
-  onDownload: (kind: BeatDownloadKind) => void;
-  onClose: () => void;
-}) {
-  // Available Offline is a complete local package, not just a playback hint.
-  // Prefer the durable local paths when present so the Download UI keeps
-  // working on a cold start with no Telegram connection at all.
-  const hasMp3 = Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
-  const hasWav = Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
-  const hasProject = Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
-  const availableCount = Number(hasMp3) + Number(hasWav) + Number(hasProject);
-
-  const option = (
-    kind: BeatDownloadKind,
-    title: string,
-    sub: string,
-    available: boolean,
-  ) => {
-    const busy = busyId === kind;
-    const downloaded = downloadedIds.has(kind);
-    const disabled = !available || busyId !== null;
-    return (
-      <button
-        key={kind}
-        disabled={disabled}
-        onClick={() => onDownload(kind)}
-        style={{
-          width: "100%",
-          display: "grid",
-          gridTemplateColumns: "minmax(0,1fr) auto",
-          alignItems: "center",
-          gap: 18,
-          textAlign: "left",
-          border: "1px solid #282828",
-          borderRadius: 12,
-          padding: "15px 16px",
-          marginTop: 9,
-          background: available ? "#181818" : "#141414",
-          color: available ? "#f0f0f0" : "#555",
-          cursor: available && busyId === null ? "pointer" : "default",
-          opacity: available ? 1 : .62,
-          transition: "background 120ms ease, border-color 120ms ease, transform 120ms ease",
-        }}
-        onMouseEnter={e => {
-          if (!available || busyId !== null) return;
-          e.currentTarget.style.background = "#1d1d1d";
-          e.currentTarget.style.borderColor = "#383838";
-        }}
-        onMouseLeave={e => {
-          e.currentTarget.style.background = available ? "#181818" : "#141414";
-          e.currentTarget.style.borderColor = "#282828";
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, lineHeight: 1.2, fontWeight: 650, letterSpacing: "-.01em" }}>{title}</div>
-          <div style={{ fontSize: 10.5, lineHeight: 1.35, color: available ? "#777" : "#505050", marginTop: 4 }}>{sub}</div>
-        </div>
-        <div style={{
-          minWidth: 78,
-          textAlign: "right",
-          fontSize: 10.5,
-          fontWeight: 600,
-          color: busy ? "#d7d7d7" : downloaded ? "#55d878" : available ? "#9b9b9b" : "#555",
-          whiteSpace: "nowrap",
-        }}>
-          {busy ? "Downloading..." : downloaded ? "Downloaded" : available ? "Download" : "Unavailable"}
-        </div>
-      </button>
-    );
-  };
-
-  return ReactDOM.createPortal(
-    <div
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 20060,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 18,
-        background: "rgba(0,0,0,.76)",
-        backdropFilter: "blur(8px)",
-        fontFamily: "'DM Sans',sans-serif",
-      }}
-    >
-      <div style={{
-        width: 460,
-        maxWidth: "100%",
-        borderRadius: 16,
-        background: "#111",
-        border: "1px solid #292929",
-        boxShadow: "0 24px 70px rgba(0,0,0,.48)",
-        padding: "20px 20px 17px",
-      }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20, marginBottom: 15 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 16, lineHeight: 1.2, fontWeight: 700, color: "#f3f3f3", letterSpacing: "-.02em" }}>Download</div>
-            <div style={{ color: "#727272", fontSize: 11, marginTop: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{beat.name}</div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close download window"
-            style={{
-              border: 0,
-              background: "transparent",
-              color: "#8a8a8a",
-              padding: "0 2px",
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Close
-          </button>
-        </div>
-
-        <div style={{ borderTop: "1px solid #202020", paddingTop: 2 }}>
-          {option("MP3", "MP3", "Master audio", hasMp3)}
-          {option("WAV", "WAV", "Original high-quality audio", hasWav)}
-          {option("PROJECT", "Full Project", "Project archive with included audio and samples", hasProject)}
-          {option("ALL", "Download Everything", `${availableCount} available ${availableCount === 1 ? "asset" : "assets"} in a new folder`, availableCount > 0)}
-        </div>
-
-        <div style={{ color: "#555", fontSize: 9.5, lineHeight: 1.45, marginTop: 14, padding: "0 2px" }}>
-          Downloads are independent copies and are not used by Beat Galer for playback or synchronization.
-        </div>
-      </div>
-    </div>, document.body
-  );
-}
-
-function BeatFileDropModal({
-  beat,
-  filePath,
-  isDirectory,
-  onChoose,
-  onClose,
-}: {
-  beat: Beat;
-  filePath: string;
-  isDirectory: boolean;
-  onChoose: (role: DroppedBeatFileRole) => void;
-  onClose: () => void;
-}) {
-  const ext = extensionFromPath(filePath);
-  const maybeFolder = isDirectory;
-  const choices: Array<{ role: DroppedBeatFileRole; title: string; sub: string; disabled?: boolean }> = [
-    { role: "main", title: "MASTER MP3", sub: "Replace the beat's MASTER with this MP3", disabled: ext !== "mp3" },
-    { role: "wav", title: "WAV HQ", sub: "Add or replace the beat's high-quality WAV slot", disabled: ext !== "wav" },
-    { role: "loop", title: "Loop · Coming soon", sub: "Loop storage will be enabled in a future BeatGaler update", disabled: true },
-    { role: "projectFolder", title: "Add folder to Project", sub: "Keep this folder's name and place it inside PROJECT.zip", disabled: !maybeFolder },
-    { role: "stems", title: "Stems · Coming soon", sub: "Dedicated Stems storage will be enabled in a future BeatGaler update", disabled: true },
-  ];
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return ReactDOM.createPortal(
-    <div
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
-      style={{
-        position: "fixed", inset: 0, zIndex: 20050, display: "flex",
-        alignItems: "center", justifyContent: "center",
-        background: "rgba(0,0,0,0.72)", backdropFilter: "blur(7px)",
-        fontFamily: "'DM Sans',sans-serif",
-      }}
-    >
-      <div style={{
-        width: 430, maxWidth: "calc(100vw - 32px)", borderRadius: 14,
-        background: "#151515", border: "1px solid #2c2c2c",
-        boxShadow: "0 24px 80px rgba(0,0,0,0.75)", padding: 18,
-      }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "#eee", marginBottom: 5 }}>
-          What are you adding?
-        </div>
-        <div style={{ color: "#777", fontSize: 12, marginBottom: 4 }}>{beat.name}</div>
-        <div title={filePath} style={{ color: "#aaa", fontSize: 12, marginBottom: 16, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {fileNameFromPath(filePath)}
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {choices.map(choice => (
-            <button
-              key={choice.role}
-              disabled={choice.disabled}
-              onClick={() => onChoose(choice.role)}
-              style={{
-                width: "100%", display: "flex", alignItems: "center", gap: 12,
-                borderRadius: 10, border: "1px solid #292929", padding: "11px 12px", textAlign: "left",
-                background: "#1b1b1b", color: choice.disabled ? "#444" : "#ddd",
-                cursor: choice.disabled ? "default" : "pointer", opacity: choice.disabled ? 0.55 : 1,
-              }}
-            >
-              <span>
-                <span style={{ display: "block", fontSize: 13, fontWeight: 650 }}>{choice.title}</span>
-                <span style={{ display: "block", marginTop: 2, color: choice.disabled ? "#3d3d3d" : "#777", fontSize: 11 }}>{choice.sub}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={{ border: 0, background: "transparent", color: "#777", padding: "7px 10px", cursor: "pointer", fontSize: 12 }}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body
-  );
-}
 
 type SortKey = "name" | "bpm" | "rating" | "manual";
 
@@ -5542,6 +5319,8 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         <BeatFileDropModal
           beat={beatFileDrop.beat}
           filePath={beatFileDrop.filePath}
+          fileName={fileNameFromPath(beatFileDrop.filePath)}
+          fileExtension={extensionFromPath(beatFileDrop.filePath)}
           isDirectory={beatFileDrop.kind === "directory"}
           onChoose={handleDroppedBeatFileRole}
           onClose={() => {
