@@ -55,6 +55,7 @@ try {
   });
 
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+  const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
   const rustLib = readFileSync(path.join(root, "src-tauri", "src", "lib.rs"), "utf8");
@@ -147,8 +148,8 @@ try {
   const uploadBeatBlock = uploadBeatEnd > uploadBeatStart ? rustProjectCommands.slice(uploadBeatStart, uploadBeatEnd) : rustProjectCommands.slice(uploadBeatStart, uploadBeatStart + 9000);
   if (uploadBeatBlock.includes('local_library_has_duplicate_name')) fail("Cloud upload reintroduced stale SQLite duplicate-name authority; Telegram must own cloud name uniqueness.");
   if (!uploadBeatBlock.includes('final_cloud_display_name_after_review')) fail("Cloud upload lost the Telegram-authoritative duplicate-name gate.");
-  if (app.includes('projectSamples') || app.includes('projectAudio') || app.includes('role: "other"')) fail("Existing-beat drop chooser reintroduced Samples/Audio split or Other.");
-  if (!app.includes('Loop · Coming soon') || !app.includes('Stems · Coming soon')) fail("Loop/Stems must remain visible as Coming soon, not active upload destinations.");
+  if (beatFileDropModal.includes('projectSamples') || beatFileDropModal.includes('projectAudio') || beatFileDropModal.includes('role: "other"')) fail("Existing-beat drop chooser reintroduced Samples/Audio split or Other.");
+  if (!beatFileDropModal.includes('Loop · Coming soon') || !beatFileDropModal.includes('Stems · Coming soon')) fail("Loop/Stems must remain visible as Coming soon, not active upload destinations.");
   if (!app.includes('inspectProjectDropSource(filePath)')) fail("Project files/ZIPs lost automatic destination inspection.");
   if (!app.includes('const autoResult = await handleAutoProjectDrop(beat, root.path)')) fail("Recognized project files/ZIPs must bypass the redundant role chooser.");
   if (!controller.includes('onBeatFileStagingChange?.(beatId, true)') || !app.includes('onBeatFileStagingChange: (beatId, active)')) fail("Beat-card loading must begin before WebView2 copies/inspects a large PROJECT ZIP.");
