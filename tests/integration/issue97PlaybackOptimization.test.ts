@@ -61,7 +61,14 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
 
     expect(main).toContain('import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";');
-    expect(main).toContain("getWebStartupPlaybackCoordinator().start()");
+    const coordinatorAcquire = main.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
+    const coordinatorStart = main.indexOf("void coordinator.start().then(", coordinatorAcquire);
+    const startupDispatch = main.indexOf("preconnectRememberedWebDirect();", coordinatorStart);
+    const reactRender = main.indexOf("ReactDOM.createRoot(", startupDispatch);
+    expect(coordinatorAcquire).toBeGreaterThanOrEqual(0);
+    expect(coordinatorStart).toBeGreaterThan(coordinatorAcquire);
+    expect(startupDispatch).toBeGreaterThan(coordinatorStart);
+    expect(reactRender).toBeGreaterThan(startupDispatch);
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
@@ -176,7 +183,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain("abortSignal: controller.signal");
     expect(worker).toContain('playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM", {');
     expect(worker).toContain("request_id: activeIndexRequestId");
-    expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN")');
+    expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", {');
+    expect(worker).toContain("request_id: requestId");
   });
 
   it("publishes the playback data plane before getMe/getChat background verification", () => {
