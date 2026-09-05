@@ -6,79 +6,17 @@ import AuthExperienceGate from "./features/auth/AuthExperienceGate";
 import LibraryUxBridge from "./features/library/LibraryUxBridge";
 import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
-import { playTrace } from "./features/playback/playTrace";
-import { hasRememberedWebSessionMarker, readWebCsrfToken } from "./features/auth/webSessionBootstrap";
+import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
-import { platform } from "./platform";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
 import "./styles/library-ux.css";
 
-// Browser metadata parsing is bundled with BeatGaler. The legacy fallback in
-// tauri.ts is stripped from productive Vite output by the trust-boundary plugin,
-// so no runtime JavaScript is loaded from a CDN.
 (window as any).jsmediatags = browserId3Reader;
 
-// Issue #97 startup instrumentation is intentionally observational. Install it
-// before React mounts so Web and Desktop record the same visible startup path.
 installStartupTrace();
-
-// AccountGate installs the credentialed BeatGaler fetch boundary while App's
-// module graph is evaluated. Wrap that boundary before any remembered-session
-// preconnect so unsafe requests stay coherent with the browser CSRF cookie even
-// while /auth/session is restoring in parallel.
 installWebCsrfFetchCoordinator();
-
-function preloadRememberedWebDirectCode(): void {
-  if (typeof window === "undefined") return;
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-
-  // Phase 3 / P2 preloads code only. A remembered marker is enough to justify
-  // fetching the lazy chunk even before the account restore effect runs.
-  if (!hasRememberedWebSessionMarker()) return;
-
-  const started = performance.now();
-  playTrace("DIRECT_CODE_PRELOAD_BEGIN");
-  void import("./features/cloud/webGalerCloudTransport").then(
-    () => playTrace("DIRECT_CODE_PRELOAD_DONE", { elapsed_ms: Math.round(performance.now() - started) }),
-    error => playTrace("DIRECT_CODE_PRELOAD_DEFERRED", {
-      elapsed_ms: Math.round(performance.now() - started),
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
-}
-
-function preconnectRememberedWebDirect(): void {
-  if (platform.kind !== "web") return;
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-  if (!hasRememberedWebSessionMarker()) return;
-
-  // The persisted CSRF cookie is proof that this browser has the material
-  // required to make an unsafe cookie-authenticated control-plane request.
-  // /transport/session/start still authenticates the real session server-side;
-  // a stale marker/cookie cannot reserve a bot. If the cookie is unavailable
-  // (for example on a cross-origin fallback), normal /auth/session restore owns
-  // the later retry and refreshes the sessionStorage CSRF token first.
-  if (!readWebCsrfToken()) {
-    playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", { reason: "csrf_unavailable" });
-    return;
-  }
-
-  playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
-  void platform.cloudAuth.syncSession(null, "").then(
-    () => playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED"),
-    error => playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", {
-      reason: "dispatch_failed",
-      error_name: error instanceof Error ? error.name : "unknown",
-    }),
-  );
-}
-
-// Start code loading and, when a remembered cookie session can satisfy CSRF,
-// dispatch the authenticated Direct bootstrap before React effects restore the
-// account UI. The server remains the authority for whether the session is valid.
-preloadRememberedWebDirectCode();
 preconnectRememberedWebDirect();
 
 function GlobalStyles() {

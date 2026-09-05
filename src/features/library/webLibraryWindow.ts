@@ -25,6 +25,7 @@ export class WebLibraryWindowConsumer {
   private currentPage: WebLibraryPage | null = null;
   private pageLoads = 0;
   private maxMaterializedCount = 0;
+  private refreshInFlight: Promise<WebLibraryWindowSnapshot> | null = null;
 
   constructor(
     private readonly transport: WebLibraryTransport,
@@ -91,7 +92,14 @@ export class WebLibraryWindowConsumer {
   }
 
   async refresh(): Promise<WebLibraryWindowSnapshot> {
-    return this.loadAt(this.currentPage?.offset ?? 0);
+    if (this.refreshInFlight) return this.refreshInFlight;
+    const pending = this.loadAt(this.currentPage?.offset ?? 0);
+    this.refreshInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.refreshInFlight === pending) this.refreshInFlight = null;
+    }
   }
 
   private snapshotWithoutLoad(page: WebLibraryPage): WebLibraryWindowSnapshot {

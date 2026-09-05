@@ -84,6 +84,38 @@ describe("WebLibraryWindowConsumer", () => {
     expect(transport.downloadFiles).not.toHaveBeenCalled();
   });
 
+  it("coalesces concurrent authoritative refreshes and allows a fresh read after the shared one settles", async () => {
+    let releaseRefresh!: () => void;
+    let calls = 0;
+    const gate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+    const getLibraryIndex = vi.fn(async () => {
+      calls += 1;
+      if (calls === 2) await gate;
+      return { messageId: 703 + calls, manifest: manifest(8) };
+    });
+    const transport: WebLibraryTransport = {
+      getLibraryIndex,
+      downloadFiles: vi.fn(async () => []),
+    };
+    const consumer = new WebLibraryWindowConsumer(transport, 4);
+
+    await consumer.first();
+    expect(getLibraryIndex).toHaveBeenCalledTimes(1);
+
+    const firstRefresh = consumer.refresh();
+    const secondRefresh = consumer.refresh();
+    await vi.waitFor(() => expect(getLibraryIndex).toHaveBeenCalledTimes(2));
+    expect(getLibraryIndex).toHaveBeenCalledTimes(2);
+
+    releaseRefresh();
+    const [firstResult, secondResult] = await Promise.all([firstRefresh, secondRefresh]);
+    expect(firstResult.beats.map(beat => beat.id)).toEqual(secondResult.beats.map(beat => beat.id));
+    expect(getLibraryIndex).toHaveBeenCalledTimes(2);
+
+    await consumer.refresh();
+    expect(getLibraryIndex).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps currentOrFirst stable without performing another authoritative page load", async () => {
     const transport: WebLibraryTransport = {
       getLibraryIndex: vi.fn(async () => ({ messageId: 702, manifest: manifest(500) })),

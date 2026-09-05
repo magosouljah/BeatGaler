@@ -25,6 +25,8 @@ vi.mock("../../src/components/AccountGate", () => ({
 
 vi.mock("../../src/features/cloud/webGalerCloudTransport", () => ({
   WebGalerCloudTransport: class {
+    setIndexBarrier = vi.fn();
+    connectPlaybackDataPlane = vi.fn(async () => undefined);
     getLibraryIndex = vi.fn(async () => ({
       messageId: null,
       manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [] },

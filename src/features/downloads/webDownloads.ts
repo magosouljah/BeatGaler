@@ -168,7 +168,11 @@ export class WebDownloadsManager {
         }
         const chunks: ArrayBuffer[] = [];
         const transport = await this.transport;
-        const stream = await transport.streamFile({ messageId: artworkMessageId, mimeType: artworkRef?.mime_type || "image/png" }, chunk => {
+        const stream = await transport.streamFile({
+          messageId: artworkMessageId,
+          mimeType: artworkRef?.mime_type || "image/png",
+          purpose: "export",
+        }, chunk => {
           if (controller.signal.aborted) throw abortError();
           chunks.push(chunk);
         });
@@ -207,8 +211,6 @@ export class WebDownloadsManager {
           const chunks: ArrayBuffer[] = [];
           let assetBytes = 0;
 
-          // Cloud MASTER intentionally has no ID3. Rehydrate BeatGaler INDEX metadata and
-          // the dedicated artwork slot only at export/download time.
           if (asset.kind === "MP3") {
             const artwork = await loadArtworkForMp3();
             const id3 = buildBeatGalerId3Tag({
@@ -234,8 +236,6 @@ export class WebDownloadsManager {
             const objectMessageId = messageId(asset.ref);
             if (!objectMessageId) throw new Error(`${asset.kind} is not available for this beat.`);
 
-            // When Everything is exported, reuse the artwork bytes already fetched for APIC
-            // instead of downloading the same Cloud object a second time.
             if (asset.kind === "ARTWORK" && cachedCloudArtwork?.messageId === objectMessageId) {
               const buffer = cachedCloudArtwork.bytes instanceof Uint8Array
                 ? exactArrayBuffer(cachedCloudArtwork.bytes)
@@ -246,7 +246,11 @@ export class WebDownloadsManager {
               onProgress?.({ currentKind: asset.kind, downloadedBytes: completedBytes + assetBytes, totalBytes: Math.max(totalBytes, completedBytes + assetBytes) });
             } else {
               const transport = await this.transport;
-              const stream = await transport.streamFile({ messageId: objectMessageId, mimeType: asset.mimeType }, async (chunk, downloadedBytes, streamTotal) => {
+              const stream = await transport.streamFile({
+                messageId: objectMessageId,
+                mimeType: asset.mimeType,
+                purpose: "export",
+              }, async (chunk, downloadedBytes, streamTotal) => {
                 if (controller.signal.aborted) throw abortError();
                 if (writable) await writable.write(chunk);
                 else chunks.push(chunk);

@@ -1,4 +1,5 @@
 import { playTrace } from "../playback/playTrace";
+import { isPlaybackMessageRouteSuspect, markPlaybackMessageRouteSuspect } from "../playback/webPlaybackRoutingSuspect";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
 import type {
@@ -6,12 +7,14 @@ import type {
   WebTransportDownloadResult,
   WebTransportDeleteMessagesInput,
   WebTransportDeleteMessagesResult,
+  WebTransportErrorCode,
   WebTransportLibraryIndexResult,
   WebTransportPrefetchBatchInput,
   WebTransportPrefetchBatchResult,
   WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
+  WebTransportPrefetchTerminal,
   WebTransportReplaceIndexInput,
   WebTransportReplaceIndexResult,
   WebTransportProgress,
@@ -25,6 +28,48 @@ import type {
 } from "./webTransportWorkerProtocol";
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
+export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
+const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
+const NON_RESUMABLE_PREFIX_ERROR = "Galer Cloud returned a non-resumable partial playback prefix.";
+const SUSPECT_ROUTE_ERROR = "Galer Cloud playback route is awaiting authoritative reconciliation.";
+
+function publishTransportInvalidated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(WEB_TRANSPORT_INVALIDATED_EVENT));
+}
+
+function isReusablePlaybackPrefixEnd(offsetBytes: number, byteLength: number, totalBytes: number): boolean {
+  const offset = Math.max(0, Math.floor(Number(offsetBytes) || 0));
+  const bytes = Math.max(0, Math.floor(Number(byteLength) || 0));
+  const total = Math.max(0, Math.floor(Number(totalBytes) || 0));
+  if (bytes <= 0) return false;
+  const end = offset + bytes;
+  if (total > 0 && end >= total) return true;
+  return end % PLAYBACK_PREFIX_ALIGNMENT_BYTES === 0;
+}
+
+function streamCancelledError(): DOMException {
+  return new DOMException("Playback stream cancelled.", "AbortError");
+}
+
+function routeFailure(code: WebTransportErrorCode | undefined): boolean {
+  return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE";
+}
+
+function quarantinePlaybackRoute(messageId: number, code: WebTransportErrorCode | undefined): void {
+  if (!routeFailure(code)) return;
+  const beatIds = markPlaybackMessageRouteSuspect(messageId);
+  if (beatIds.length > 0) {
+    playTrace("WORKER_ROUTE_QUARANTINED", { message_id: messageId, beat_count: beatIds.length, code });
+  }
+}
+
+export class WebTransportWorkerError extends Error {
+  constructor(message: string, readonly code?: WebTransportErrorCode) {
+    super(message);
+    this.name = "WebTransportWorkerError";
+  }
+}
 
 type PendingRequest = {
   operation: WebTransportWorkerRequest["op"];
@@ -33,7 +78,12 @@ type PendingRequest = {
   onProgress?: (progress: WebTransportProgress) => void;
   onChunk?: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
   onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void;
+  onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void;
+  prefetchOffsetBytes?: number;
+  prefetchMessageId?: number;
+  invalidPrefetchMessageIds?: Set<number>;
   timeoutId: ReturnType<typeof setTimeout> | null;
+  activeTimeoutMs: number | null;
 };
 
 export interface WebTransportStreamHandle {
@@ -44,12 +94,21 @@ export interface WebTransportStreamHandle {
 export interface WebTransportPrefetchBatchHandle {
   completed: Promise<WebTransportPrefetchBatchResult>;
   cancelMessage(messageId: number): void;
+  promoteMessage(messageId: number): Promise<void>;
   cancel(): void;
 }
 
 export class WebTransportWorkerClient implements WebTransportRuntime {
   private worker: Worker | null = null;
   private pending = new Map<string, PendingRequest>();
+  private sessionStartupMessageIds: number[] = [];
+  private desiredPlaybackMessageId: number | null = null;
+  private credentialRefreshEpoch = 0;
+  private credentialRefreshPromise: Promise<void> | null = null;
+  private playbackCritical = false;
+  private activeBackgroundStreamRequests = new Set<string>();
+  private preemptedBackgroundStreamRequests = new Set<string>();
+  private backgroundResumeWaiters = new Set<() => void>();
 
   constructor(
     private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
@@ -58,7 +117,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
     playTrace("WORKER_CREATE_BEGIN");
-    const worker = new Worker(new URL("./webTransport.worker.ts", import.meta.url), { type: "module", name: "galer-cloud-data-plane" });
+    const worker = new Worker(new URL("./webTransport.worker.ts", import.meta.url), {
+      type: "module",
+      name: "galer-cloud-data-plane",
+    });
     playTrace("WORKER_CREATED");
     worker.onmessage = event => this.onMessage(event.data as WebTransportWorkerResponse);
     worker.onerror = () => {
@@ -66,6 +128,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       this.failPending("Galer Cloud Web Worker stopped unexpectedly.");
       worker.terminate();
       if (this.worker === worker) this.worker = null;
+      publishTransportInvalidated();
     };
     this.worker = worker;
     return worker;
@@ -83,12 +146,71 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
   }
 
+  private clearPendingTimeout(pending: PendingRequest): void {
+    if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+    pending.timeoutId = null;
+  }
+
   private takePending(requestId: string): PendingRequest | undefined {
     const pending = this.pending.get(requestId);
     if (!pending) return undefined;
     this.pending.delete(requestId);
-    if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+    this.clearPendingTimeout(pending);
     return pending;
+  }
+
+  private onIndexState(requestId: string, pending: PendingRequest, state: "active" | "paused"): void {
+    if (pending.operation !== "get_index" || pending.activeTimeoutMs === null) return;
+    if (state === "paused") {
+      this.clearPendingTimeout(pending);
+      playTrace("WORKER_INDEX_DEADLINE_PAUSED", { request_id: requestId });
+      return;
+    }
+    if (pending.timeoutId !== null) return;
+    pending.timeoutId = setTimeout(() => this.timeoutIndexRequest(requestId), pending.activeTimeoutMs);
+    playTrace("WORKER_INDEX_DEADLINE_ACTIVE", { request_id: requestId, timeout_ms: pending.activeTimeoutMs });
+  }
+
+  private onPrefetchChunk(pending: PendingRequest, progress: WebTransportPrefetchChunk): void {
+    if (isReusablePlaybackPrefixEnd(progress.offsetBytes, progress.chunk.byteLength, progress.totalBytes)) {
+      pending.onPrefetchChunk?.(progress);
+      return;
+    }
+    const invalid = pending.invalidPrefetchMessageIds ?? new Set<number>();
+    pending.invalidPrefetchMessageIds = invalid;
+    if (invalid.has(progress.messageId)) return;
+    invalid.add(progress.messageId);
+    pending.onPrefetchTerminal?.({
+      messageId: progress.messageId,
+      status: "FAILED",
+      code: "TRANSFER_FAILED",
+      error: NON_RESUMABLE_PREFIX_ERROR,
+    });
+    playTrace("WORKER_PREFETCH_NON_RESUMABLE", {
+      message_id: progress.messageId,
+      offset_bytes: progress.offsetBytes,
+      bytes: progress.chunk.byteLength,
+      total_bytes: progress.totalBytes,
+    });
+  }
+
+  private normalizePrefetchBatchResult(
+    result: WebTransportPrefetchBatchResult,
+    invalidMessageIds: ReadonlySet<number> | undefined,
+  ): WebTransportPrefetchBatchResult {
+    if (!invalidMessageIds || invalidMessageIds.size === 0) return result;
+    return {
+      results: result.results.map(item => {
+        const messageId = item.ok ? item.result.messageId : item.messageId;
+        if (!invalidMessageIds.has(messageId)) return item;
+        return {
+          ok: false as const,
+          messageId,
+          error: NON_RESUMABLE_PREFIX_ERROR,
+          code: "TRANSFER_FAILED" as const,
+        };
+      }),
+    };
   }
 
   private onMessage(message: WebTransportWorkerResponse): void {
@@ -98,8 +220,17 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       if (message.event === "progress") {
         pending.onProgress?.(message.progress);
       } else if (message.event === "prefetch-chunk") {
-        pending.onPrefetchChunk?.(message.progress);
-      } else {
+        this.onPrefetchChunk(pending, message.progress);
+      } else if (message.event === "prefetch-terminal") {
+        if (message.terminal.status === "FAILED") {
+          quarantinePlaybackRoute(message.terminal.messageId, message.terminal.code);
+        }
+        if (!pending.invalidPrefetchMessageIds?.has(message.terminal.messageId)) {
+          pending.onPrefetchTerminal?.(message.terminal);
+        }
+      } else if (message.event === "index-state") {
+        this.onIndexState(message.requestId, pending, message.state);
+      } else if (message.event === "download-chunk") {
         void Promise.resolve(pending.onChunk?.(message.chunk, message.downloadedBytes, message.totalBytes))
           .then(() => this.sendStreamControl("stream_ack", message.requestId))
           .catch(error => {
@@ -112,16 +243,41 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
     const completed = this.takePending(message.requestId);
     if (!completed) return;
-    if (completed.operation === "initialize" || completed.operation === "verify") {
-      playTrace("WORKER_RESPONSE_RECEIVED", { request_id: message.requestId, operation: completed.operation, ok: message.ok });
+    if (completed.operation === "initialize" || completed.operation === "verify" || completed.operation === "verify_identity") {
+      playTrace("WORKER_RESPONSE_RECEIVED", {
+        request_id: message.requestId,
+        operation: completed.operation,
+        ok: message.ok,
+      });
     }
-    if (message.ok) completed.resolve(message.result);
-    else completed.reject(new Error(message.error));
+    if (!message.ok) {
+      if (completed.operation === "prefetch" && completed.prefetchMessageId) {
+        quarantinePlaybackRoute(completed.prefetchMessageId, message.code);
+      }
+      completed.reject(new WebTransportWorkerError(message.error, message.code));
+      return;
+    }
+    if (completed.operation === "prefetch") {
+      const result = message.result as WebTransportPrefetchResult;
+      const offsetBytes = completed.prefetchOffsetBytes || 0;
+      if (!isReusablePlaybackPrefixEnd(offsetBytes, result.prefix.byteLength, result.totalBytes)) {
+        completed.reject(new WebTransportWorkerError(NON_RESUMABLE_PREFIX_ERROR, "TRANSFER_FAILED"));
+        return;
+      }
+    }
+    if (completed.operation === "prefetch_batch") {
+      completed.resolve(this.normalizePrefetchBatchResult(
+        message.result as WebTransportPrefetchBatchResult,
+        completed.invalidPrefetchMessageIds,
+      ));
+      return;
+    }
+    completed.resolve(message.result);
   }
 
   private failPending(message: string): void {
     for (const pending of this.pending.values()) {
-      if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+      this.clearPendingTimeout(pending);
       pending.reject(new Error(message));
     }
     this.pending.clear();
@@ -136,8 +292,17 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     if (worker) {
       worker.terminate();
       if (this.worker === worker) this.worker = null;
+      publishTransportInvalidated();
     }
     this.failPending("Galer Cloud Web transport reset after an unresponsive worker request.");
+  }
+
+  private timeoutIndexRequest(requestId: string): void {
+    const timedOut = this.takePending(requestId);
+    if (!timedOut) return;
+    playTrace("WORKER_INDEX_ACTIVE_TIMEOUT", { request_id: requestId });
+    timedOut.reject(new Error("Galer Cloud Web transport timed out during active get_index."));
+    this.sendIndexCancel(requestId);
   }
 
   private request<T>(
@@ -147,6 +312,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     requestId = crypto.randomUUID(),
     timeoutMs: number | null = null,
     onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void,
+    onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
+    activeTimeoutMs: number | null = null,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timeoutId = timeoutMs !== null && timeoutMs > 0
@@ -159,11 +326,16 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         onProgress,
         onChunk,
         onPrefetchChunk,
+        onPrefetchTerminal,
+        prefetchOffsetBytes: command.op === "prefetch" ? Math.max(0, Math.floor(Number(command.input.offsetBytes) || 0)) : undefined,
+        prefetchMessageId: command.op === "prefetch" ? Number(command.input.messageId) || undefined : undefined,
+        invalidPrefetchMessageIds: command.op === "prefetch_batch" ? new Set<number>() : undefined,
         timeoutId,
+        activeTimeoutMs,
       });
       try {
         const worker = this.ensureWorker();
-        if (command.op === "initialize" || command.op === "verify") {
+        if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
           playTrace("WORKER_REQUEST_POSTED", { request_id: requestId, operation: command.op });
         }
         worker.postMessage({ ...command, requestId } as WebTransportWorkerCommand);
@@ -174,9 +346,36 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     });
   }
 
-  async initialize(session: WebTransportSession): Promise<void> {
+  private releaseBackgroundResumeWaiters(): void {
+    if (this.playbackCritical) return;
+    const waiters = Array.from(this.backgroundResumeWaiters);
+    this.backgroundResumeWaiters.clear();
+    for (const resolve of waiters) resolve();
+  }
+
+  private async waitUntilBackgroundStreamsAllowed(): Promise<void> {
+    while (this.playbackCritical) {
+      await new Promise<void>(resolve => this.backgroundResumeWaiters.add(resolve));
+    }
+  }
+
+  private preemptBackgroundStreams(): void {
+    for (const requestId of this.activeBackgroundStreamRequests) {
+      if (this.preemptedBackgroundStreamRequests.has(requestId)) continue;
+      this.preemptedBackgroundStreamRequests.add(requestId);
+      this.sendStreamControl("cancel", requestId);
+      playTrace("WORKER_BACKGROUND_STREAM_PREEMPTED_PLAY", { request_id: requestId });
+    }
+  }
+
+  async initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void> {
+    const sessionStartupMessageIds = Array.from(new Set(
+      startupMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
+    )).slice(0, 14);
+    this.sessionStartupMessageIds = sessionStartupMessageIds;
     await this.request({
       op: "initialize",
+      startupMessageIds: sessionStartupMessageIds,
       session: {
         chat_id: session.chat_id,
         transport_user_id: session.transport_user_id,
@@ -186,14 +385,29 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_session_id: session.temp_session_id,
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
-        startup_routes: session.startup_routes || {},
-        routing_revision: Math.max(0, Number(session.routing_revision) || 0),
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+
+    const desiredPlaybackMessageId = this.desiredPlaybackMessageId;
+    if (desiredPlaybackMessageId !== null) {
+      await this.request<void>({ op: "playback_focus", messageId: desiredPlaybackMessageId });
+      playTrace("WORKER_PLAYBACK_FOCUS_REAPPLIED", { message_id: desiredPlaybackMessageId });
+    }
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {
-    await this.initialize(session);
+    this.credentialRefreshEpoch += 1;
+    const refresh = this.initialize(session, this.sessionStartupMessageIds);
+    this.credentialRefreshPromise = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.credentialRefreshPromise === refresh) this.credentialRefreshPromise = null;
+    }
+  }
+
+  async verifyIdentity(): Promise<void> {
+    await this.request({ op: "verify_identity" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
   async verifyReady(): Promise<void> {
@@ -204,6 +418,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     return this.request<WebTransportLibraryIndexResult>(
       { op: "get_index" },
       undefined,
+      undefined,
+      undefined,
+      null,
       undefined,
       undefined,
       this.bootstrapRequestTimeoutMs,
@@ -223,6 +440,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+    if (isPlaybackMessageRouteSuspect(input.messageId)) {
+      return Promise.reject(new WebTransportWorkerError(SUSPECT_ROUTE_ERROR, "ROUTE_MISSING"));
+    }
     return this.request<WebTransportPrefetchResult>(
       { op: "prefetch", input },
       undefined,
@@ -235,35 +455,162 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   prefetchBatch(
     input: WebTransportPrefetchBatchInput,
     onChunk?: (progress: WebTransportPrefetchChunk) => void,
+    onTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
   ): WebTransportPrefetchBatchHandle {
     const requestId = crypto.randomUUID();
+    const suspectIds = new Set(
+      input.inputs.map(candidate => candidate.messageId).filter(isPlaybackMessageRouteSuspect),
+    );
+    const runnableInputs = input.inputs.filter(candidate => !suspectIds.has(candidate.messageId));
+    const suspectResults = Array.from(suspectIds, messageId => ({
+      ok: false as const,
+      messageId,
+      error: SUSPECT_ROUTE_ERROR,
+      code: "ROUTE_MISSING" as const,
+    }));
+    for (const messageId of suspectIds) {
+      queueMicrotask(() => onTerminal?.({
+        messageId,
+        status: "FAILED",
+        code: "ROUTE_MISSING",
+        error: SUSPECT_ROUTE_ERROR,
+      }));
+    }
+    const completed = runnableInputs.length === 0
+      ? Promise.resolve({ results: suspectResults })
+      : this.request<WebTransportPrefetchBatchResult>(
+          { op: "prefetch_batch", input: { ...input, inputs: runnableInputs } },
+          undefined,
+          undefined,
+          requestId,
+          null,
+          onChunk,
+          onTerminal,
+        ).then(result => ({ results: [...suspectResults, ...result.results] }));
     return {
-      completed: this.request<WebTransportPrefetchBatchResult>(
-        { op: "prefetch_batch", input },
-        undefined,
-        undefined,
-        requestId,
-        null,
-        onChunk,
-      ),
-      cancelMessage: messageId => this.sendPrefetchControl(requestId, messageId),
-      cancel: () => this.sendPrefetchControl(requestId),
+      completed,
+      cancelMessage: messageId => { if (!suspectIds.has(messageId)) this.sendPrefetchControl(requestId, messageId); },
+      promoteMessage: messageId => this.focusPlayback(messageId),
+      cancel: () => { if (runnableInputs.length > 0) this.sendPrefetchControl(requestId); },
     };
+  }
+
+  focusPlayback(messageId: number): Promise<void> {
+    const id = Number(messageId || 0);
+    if (!Number.isSafeInteger(id) || id <= 0) return Promise.resolve();
+    this.desiredPlaybackMessageId = id;
+    this.playbackCritical = true;
+    this.preemptBackgroundStreams();
+    return this.request<void>({ op: "playback_focus", messageId: id }).catch(error => {
+      if (this.desiredPlaybackMessageId === id) {
+        this.playbackCritical = false;
+        this.releaseBackgroundResumeWaiters();
+      }
+      throw error;
+    });
+  }
+
+  markPlaybackStable(messageId: number): Promise<void> {
+    const id = Number(messageId || 0);
+    if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
+    return this.request<void>({ op: "playback_stable", messageId: id }).then(() => {
+      if (this.desiredPlaybackMessageId === id) {
+        this.playbackCritical = false;
+        this.releaseBackgroundResumeWaiters();
+      }
+    });
+  }
+
+  releasePlaybackFocus(messageId: number): Promise<void> {
+    const id = Number(messageId || 0);
+    if (this.desiredPlaybackMessageId === id) this.desiredPlaybackMessageId = null;
+    return this.request<void>({ op: "playback_release", messageId: id }).finally(() => {
+      if (this.desiredPlaybackMessageId === null) {
+        this.playbackCritical = false;
+        this.releaseBackgroundResumeWaiters();
+      }
+    });
   }
 
   stream(
     input: WebTransportStreamInput,
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
   ): WebTransportStreamHandle {
-    const requestId = crypto.randomUUID();
+    let cancelled = false;
+    let activeRequestId: string | null = null;
+    let confirmedOffset = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+    let chunkInFlight: Promise<void> = Promise.resolve();
+    const background = (input.purpose || "playback") !== "playback";
+
+    const completed = (async (): Promise<WebTransportStreamResult> => {
+      while (true) {
+        if (cancelled) throw streamCancelledError();
+        if (background) await this.waitUntilBackgroundStreamsAllowed();
+        if (cancelled) throw streamCancelledError();
+        const attemptRefreshEpoch = this.credentialRefreshEpoch;
+        const requestId = crypto.randomUUID();
+        activeRequestId = requestId;
+        if (background) this.activeBackgroundStreamRequests.add(requestId);
+        try {
+          return await this.request<WebTransportStreamResult>(
+            { op: "stream", input: { ...input, offsetBytes: confirmedOffset } },
+            undefined,
+            (chunk, downloadedBytes, totalBytes) => {
+              const processing = (async () => {
+                await onChunk(chunk, downloadedBytes, totalBytes);
+                confirmedOffset = Math.max(confirmedOffset, Math.floor(Number(downloadedBytes) || confirmedOffset));
+              })();
+              chunkInFlight = processing;
+              return processing;
+            },
+            requestId,
+          );
+        } catch (error) {
+          if (cancelled) throw streamCancelledError();
+          await chunkInFlight;
+          const preemptedByPlay = background && this.preemptedBackgroundStreamRequests.delete(requestId);
+          if (preemptedByPlay) {
+            await this.waitUntilBackgroundStreamsAllowed();
+            if (cancelled) throw streamCancelledError();
+            playTrace("WORKER_BACKGROUND_STREAM_RESUME", {
+              message_id: input.messageId,
+              offset_bytes: confirmedOffset,
+            });
+            continue;
+          }
+          const refreshObserved = this.credentialRefreshEpoch !== attemptRefreshEpoch || this.credentialRefreshPromise !== null;
+          if (!refreshObserved) throw error;
+          const refresh = this.credentialRefreshPromise;
+          if (refresh) await refresh;
+          if (cancelled) throw streamCancelledError();
+          playTrace("WORKER_STREAM_REFRESH_RESUME", {
+            message_id: input.messageId,
+            offset_bytes: confirmedOffset,
+            refresh_epoch: this.credentialRefreshEpoch,
+          });
+        } finally {
+          if (background) this.activeBackgroundStreamRequests.delete(requestId);
+          if (activeRequestId === requestId) activeRequestId = null;
+        }
+      }
+    })();
+
     return {
-      completed: this.request<WebTransportStreamResult>({ op: "stream", input }, undefined, onChunk, requestId),
-      cancel: () => this.sendStreamControl("cancel", requestId),
+      completed,
+      cancel: () => {
+        if (cancelled) return;
+        cancelled = true;
+        if (activeRequestId) this.sendStreamControl("cancel", activeRequestId);
+      },
     };
   }
 
   private sendStreamControl(op: "stream_ack" | "cancel", targetRequestId: string): void {
     this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op, targetRequestId } as WebTransportWorkerCommand);
+  }
+
+  private sendIndexCancel(targetRequestId: string): void {
+    this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op: "cancel_index", targetRequestId } as WebTransportWorkerCommand);
   }
 
   private sendPrefetchControl(targetRequestId: string, messageId?: number): void {
@@ -281,10 +628,18 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   async shutdown(): Promise<void> {
     const worker = this.worker;
-    if (!worker) return;
-    await this.request({ op: "shutdown" }).catch(() => {});
-    worker.terminate();
-    this.worker = null;
+    this.desiredPlaybackMessageId = null;
+    this.playbackCritical = false;
+    this.activeBackgroundStreamRequests.clear();
+    this.preemptedBackgroundStreamRequests.clear();
+    this.releaseBackgroundResumeWaiters();
+    this.sessionStartupMessageIds = [];
+    if (worker) {
+      await this.request({ op: "shutdown" }).catch(() => {});
+      worker.terminate();
+      if (this.worker === worker) this.worker = null;
+    }
     this.failPending("Galer Cloud Web transport closed.");
+    publishTransportInvalidated();
   }
 }
