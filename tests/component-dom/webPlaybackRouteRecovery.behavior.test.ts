@@ -42,10 +42,10 @@ vi.mock("../../src/features/playback/webVisiblePlaybackPrefetch", () => ({
   installBeatCardWarmObserver: () => () => {},
 }));
 
-function beat(messageId: number): Beat {
+function beat(messageId: number, id = "beat-x"): Beat {
   return {
-    id: "beat-x",
-    name: "X",
+    id,
+    name: id === "beat-x" ? "X" : "Y",
     bpm: "120",
     key: "Cm",
     tags: [],
@@ -102,6 +102,18 @@ async function seedAuthoritativeRoute(messageId: number): Promise<void> {
         size: 100000,
       },
     }],
+    deleted: [],
+    trash: [],
+  });
+}
+
+async function seedTwoRoutes(xMessageId: number, yMessageId: number): Promise<void> {
+  const { updatePlaybackRoutingCacheFromManifest } = await import("../../src/features/playback/webPlaybackRoutingCache");
+  updatePlaybackRoutingCacheFromManifest({
+    beats: [
+      { id: "beat-x", name: "X", bpm: 120, rating: 0, master: { telegram_message_id: xMessageId, mime: "audio/mpeg", size: 100000 } },
+      { id: "beat-y", name: "Y", bpm: 121, rating: 0, master: { telegram_message_id: yMessageId, mime: "audio/mpeg", size: 100000 } },
+    ],
     deleted: [],
     trash: [],
   });
@@ -184,5 +196,38 @@ describe("Web stale playback route recovery", () => {
     expect(harness.prepare).toHaveBeenCalledTimes(1);
     const { readWebPlaybackRoutingCache } = await import("../../src/features/playback/webPlaybackRoutingCache");
     expect(readWebPlaybackRoutingCache().routes["beat-x"]?.messageId).toBe(1500);
+  });
+
+  it("lets a Y click supersede X while X is reconciling and never performs X's stale retry", async () => {
+    await seedTwoRoutes(1500, 2000);
+    let finishRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    harness.refresh.mockImplementation(async () => {
+      await refreshGate;
+      await seedTwoRoutes(1900, 2000);
+      return snapshot([beat(1900, "beat-x"), beat(2000, "beat-y")]);
+    });
+    harness.prepare.mockImplementation(async (beatId: string, messageId: number) => {
+      if (beatId === "beat-x" && messageId === 1500) throw routeError("ROUTE_MISSING");
+      if (beatId === "beat-y" && messageId === 2000) return { url: "blob:y", completed: Promise.resolve() };
+      if (beatId === "beat-x" && messageId === 1900) return { url: "blob:x-retry", completed: Promise.resolve() };
+      throw new Error(`unexpected prepare ${beatId}/${messageId}`);
+    });
+
+    const { webAdapter } = await import("../../src/platform/webAdapter");
+    const x = webAdapter.media.preparePlayback(beat(1500, "beat-x"));
+    await vi.waitFor(() => expect(harness.refresh).toHaveBeenCalledOnce());
+
+    const y = await webAdapter.media.preparePlayback(beat(2000, "beat-y"));
+    expect(y.url).toBe("blob:y");
+    finishRefresh();
+    const xResult = await x;
+
+    expect(xResult.url).toMatch(/^blob:beatgaler-superseded-/);
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    expect(harness.prepare.mock.calls.map(call => [call[0], call[1]])).toEqual([
+      ["beat-x", 1500],
+      ["beat-y", 2000],
+    ]);
   });
 });
