@@ -1,0 +1,515 @@
+name: Temporary Task 2.1 Apply
+
+on:
+  push:
+    branches:
+      - app-tsx-migration
+    paths:
+      - .github/workflows/task-2-1-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: app-tsx-migration
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Apply extraction and characterization tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app_path = Path('src/App.tsx')
+          app = app_path.read_text(encoding='utf-8')
+
+          import_anchor = 'import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";\n'
+          new_imports = (
+              'import CloudFilesModal, { type BeatDownloadKind } from "./features/downloads/components/CloudFilesModal";\n'
+              'import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";\n'
+          )
+          if new_imports not in app:
+              if import_anchor not in app:
+                  raise SystemExit('App import anchor not found')
+              app = app.replace(import_anchor, import_anchor + new_imports, 1)
+
+          app = app.replace('type DroppedBeatFileRole = "main" | "wav" | "projectFolder" | "loop" | "stems";\n', '', 1)
+          app = app.replace('type BeatDownloadKind = "MP3" | "WAV" | "PROJECT" | "ALL";\n', '', 1)
+
+          start = app.find('function CloudFilesModal({')
+          end = app.find('type SortKey = "name" | "bpm" | "rating" | "manual";', start)
+          if start < 0 or end < 0:
+              raise SystemExit('Auxiliary modal block not found in App.tsx')
+          app = app[:start] + app[end:]
+
+          drop_call_anchor = '          filePath={beatFileDrop.filePath}\n          isDirectory={beatFileDrop.kind === "directory"}\n'
+          drop_call_replacement = (
+              '          filePath={beatFileDrop.filePath}\n'
+              '          fileName={fileNameFromPath(beatFileDrop.filePath)}\n'
+              '          fileExtension={extensionFromPath(beatFileDrop.filePath)}\n'
+              '          isDirectory={beatFileDrop.kind === "directory"}\n'
+          )
+          if drop_call_anchor not in app:
+              raise SystemExit('BeatFileDropModal call anchor not found')
+          app = app.replace(drop_call_anchor, drop_call_replacement, 1)
+          app_path.write_text(app, encoding='utf-8')
+
+          cloud_path = Path('src/features/downloads/components/CloudFilesModal.tsx')
+          cloud_path.parent.mkdir(parents=True, exist_ok=True)
+          cloud_path.write_text(r'''import ReactDOM from "react-dom";
+          import type { Beat } from "../../../types";
+          import type { CloudFileRecord } from "../../../lib/tauri";
+
+          export type BeatDownloadKind = "MP3" | "WAV" | "PROJECT" | "ALL";
+
+          export default function CloudFilesModal({
+            beat, files, busyId, downloadedIds, onDownload, onClose,
+          }: {
+            beat: Beat;
+            files: CloudFileRecord[];
+            busyId: string | null;
+            downloadedIds: Set<string>;
+            onDownload: (kind: BeatDownloadKind) => void;
+            onClose: () => void;
+          }) {
+            // Available Offline is a complete local package, not just a playback hint.
+            // Prefer the durable local paths when present so the Download UI keeps
+            // working on a cold start with no Telegram connection at all.
+            const hasMp3 = Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
+            const hasWav = Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
+            const hasProject = Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
+            const availableCount = Number(hasMp3) + Number(hasWav) + Number(hasProject);
+
+            const option = (
+              kind: BeatDownloadKind,
+              title: string,
+              sub: string,
+              available: boolean,
+            ) => {
+              const busy = busyId === kind;
+              const downloaded = downloadedIds.has(kind);
+              const disabled = !available || busyId !== null;
+              return (
+                <button
+                  key={kind}
+                  disabled={disabled}
+                  onClick={() => onDownload(kind)}
+                  style={{
+                    width: "100%",
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0,1fr) auto",
+                    alignItems: "center",
+                    gap: 18,
+                    textAlign: "left",
+                    border: "1px solid #282828",
+                    borderRadius: 12,
+                    padding: "15px 16px",
+                    marginTop: 9,
+                    background: available ? "#181818" : "#141414",
+                    color: available ? "#f0f0f0" : "#555",
+                    cursor: available && busyId === null ? "pointer" : "default",
+                    opacity: available ? 1 : .62,
+                    transition: "background 120ms ease, border-color 120ms ease, transform 120ms ease",
+                  }}
+                  onMouseEnter={e => {
+                    if (!available || busyId !== null) return;
+                    e.currentTarget.style.background = "#1d1d1d";
+                    e.currentTarget.style.borderColor = "#383838";
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = available ? "#181818" : "#141414";
+                    e.currentTarget.style.borderColor = "#282828";
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, lineHeight: 1.2, fontWeight: 650, letterSpacing: "-.01em" }}>{title}</div>
+                    <div style={{ fontSize: 10.5, lineHeight: 1.35, color: available ? "#777" : "#505050", marginTop: 4 }}>{sub}</div>
+                  </div>
+                  <div style={{
+                    minWidth: 78,
+                    textAlign: "right",
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    color: busy ? "#d7d7d7" : downloaded ? "#55d878" : available ? "#9b9b9b" : "#555",
+                    whiteSpace: "nowrap",
+                  }}>
+                    {busy ? "Downloading..." : downloaded ? "Downloaded" : available ? "Download" : "Unavailable"}
+                  </div>
+                </button>
+              );
+            };
+
+            return ReactDOM.createPortal(
+              <div
+                onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 20060,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 18,
+                  background: "rgba(0,0,0,.76)",
+                  backdropFilter: "blur(8px)",
+                  fontFamily: "'DM Sans',sans-serif",
+                }}
+              >
+                <div style={{
+                  width: 460,
+                  maxWidth: "100%",
+                  borderRadius: 16,
+                  background: "#111",
+                  border: "1px solid #292929",
+                  boxShadow: "0 24px 70px rgba(0,0,0,.48)",
+                  padding: "20px 20px 17px",
+                }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20, marginBottom: 15 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 16, lineHeight: 1.2, fontWeight: 700, color: "#f3f3f3", letterSpacing: "-.02em" }}>Download</div>
+                      <div style={{ color: "#727272", fontSize: 11, marginTop: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{beat.name}</div>
+                    </div>
+                    <button
+                      onClick={onClose}
+                      aria-label="Close download window"
+                      style={{
+                        border: 0,
+                        background: "transparent",
+                        color: "#8a8a8a",
+                        padding: "0 2px",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div style={{ borderTop: "1px solid #202020", paddingTop: 2 }}>
+                    {option("MP3", "MP3", "Master audio", hasMp3)}
+                    {option("WAV", "WAV", "Original high-quality audio", hasWav)}
+                    {option("PROJECT", "Full Project", "Project archive with included audio and samples", hasProject)}
+                    {option("ALL", "Download Everything", `${availableCount} available ${availableCount === 1 ? "asset" : "assets"} in a new folder`, availableCount > 0)}
+                  </div>
+
+                  <div style={{ color: "#555", fontSize: 9.5, lineHeight: 1.45, marginTop: 14, padding: "0 2px" }}>
+                    Downloads are independent copies and are not used by Beat Galer for playback or synchronization.
+                  </div>
+                </div>
+              </div>, document.body
+            );
+          }
+          '''.replace('\n          ', '\n').lstrip(), encoding='utf-8')
+
+          drop_path = Path('src/features/dragdrop/components/BeatFileDropModal.tsx')
+          drop_path.parent.mkdir(parents=True, exist_ok=True)
+          drop_path.write_text(r'''import { useEffect } from "react";
+          import ReactDOM from "react-dom";
+          import type { Beat } from "../../../types";
+
+          export type DroppedBeatFileRole = "main" | "wav" | "projectFolder" | "loop" | "stems";
+
+          export default function BeatFileDropModal({
+            beat,
+            filePath,
+            fileName,
+            fileExtension,
+            isDirectory,
+            onChoose,
+            onClose,
+          }: {
+            beat: Beat;
+            filePath: string;
+            fileName: string;
+            fileExtension: string;
+            isDirectory: boolean;
+            onChoose: (role: DroppedBeatFileRole) => void;
+            onClose: () => void;
+          }) {
+            const ext = fileExtension;
+            const maybeFolder = isDirectory;
+            const choices: Array<{ role: DroppedBeatFileRole; title: string; sub: string; disabled?: boolean }> = [
+              { role: "main", title: "MASTER MP3", sub: "Replace the beat's MASTER with this MP3", disabled: ext !== "mp3" },
+              { role: "wav", title: "WAV HQ", sub: "Add or replace the beat's high-quality WAV slot", disabled: ext !== "wav" },
+              { role: "loop", title: "Loop · Coming soon", sub: "Loop storage will be enabled in a future BeatGaler update", disabled: true },
+              { role: "projectFolder", title: "Add folder to Project", sub: "Keep this folder's name and place it inside PROJECT.zip", disabled: !maybeFolder },
+              { role: "stems", title: "Stems · Coming soon", sub: "Dedicated Stems storage will be enabled in a future BeatGaler update", disabled: true },
+            ];
+
+            useEffect(() => {
+              const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+              window.addEventListener("keydown", onKey);
+              return () => window.removeEventListener("keydown", onKey);
+            }, [onClose]);
+
+            return ReactDOM.createPortal(
+              <div
+                onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
+                style={{
+                  position: "fixed", inset: 0, zIndex: 20050, display: "flex",
+                  alignItems: "center", justifyContent: "center",
+                  background: "rgba(0,0,0,0.72)", backdropFilter: "blur(7px)",
+                  fontFamily: "'DM Sans',sans-serif",
+                }}
+              >
+                <div style={{
+                  width: 430, maxWidth: "calc(100vw - 32px)", borderRadius: 14,
+                  background: "#151515", border: "1px solid #2c2c2c",
+                  boxShadow: "0 24px 80px rgba(0,0,0,0.75)", padding: 18,
+                }}>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: "#eee", marginBottom: 5 }}>
+                    What are you adding?
+                  </div>
+                  <div style={{ color: "#777", fontSize: 12, marginBottom: 4 }}>{beat.name}</div>
+                  <div title={filePath} style={{ color: "#aaa", fontSize: 12, marginBottom: 16, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {fileName}
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                    {choices.map(choice => (
+                      <button
+                        key={choice.role}
+                        disabled={choice.disabled}
+                        onClick={() => onChoose(choice.role)}
+                        style={{
+                          width: "100%", display: "flex", alignItems: "center", gap: 12,
+                          borderRadius: 10, border: "1px solid #292929", padding: "11px 12px", textAlign: "left",
+                          background: "#1b1b1b", color: choice.disabled ? "#444" : "#ddd",
+                          cursor: choice.disabled ? "default" : "pointer", opacity: choice.disabled ? 0.55 : 1,
+                        }}
+                      >
+                        <span>
+                          <span style={{ display: "block", fontSize: 13, fontWeight: 650 }}>{choice.title}</span>
+                          <span style={{ display: "block", marginTop: 2, color: choice.disabled ? "#3d3d3d" : "#777", fontSize: 11 }}>{choice.sub}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+                    <button onClick={onClose} style={{ border: 0, background: "transparent", color: "#777", padding: "7px 10px", cursor: "pointer", fontSize: 12 }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            );
+          }
+          '''.replace('\n          ', '\n').lstrip(), encoding='utf-8')
+
+          test_path = Path('tests/component-dom/appAuxiliaryModals.test.tsx')
+          test_path.write_text(r'''// @vitest-environment jsdom
+          import React, { act } from "react";
+          import { createRoot, type Root } from "react-dom/client";
+          import { afterEach, describe, expect, it, vi } from "vitest";
+          import type { Beat } from "../../src/types";
+          import CloudFilesModal from "../../src/features/downloads/components/CloudFilesModal";
+          import BeatFileDropModal from "../../src/features/dragdrop/components/BeatFileDropModal";
+
+          (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+          function makeBeat(overrides: Partial<Beat> = {}): Beat {
+            return {
+              id: "beat-1",
+              name: "Purple Beat",
+              mp3_path: null,
+              wav_path: null,
+              flp_path: null,
+              als_path: null,
+              offline_available: false,
+              telegram_file_id: null,
+              ...overrides,
+            } as Beat;
+          }
+
+          let host: HTMLDivElement | null = null;
+          let root: Root | null = null;
+
+          async function render(element: React.ReactElement) {
+            host = document.createElement("div");
+            document.body.appendChild(host);
+            root = createRoot(host);
+            await act(async () => {
+              root!.render(element);
+            });
+          }
+
+          async function click(element: Element) {
+            await act(async () => {
+              element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            });
+          }
+
+          afterEach(async () => {
+            if (root) await act(async () => root!.unmount());
+            root = null;
+            host = null;
+            document.body.innerHTML = "";
+            vi.clearAllMocks();
+          });
+
+          describe("CloudFilesModal extraction", () => {
+            it("keeps the portal, download choices and Close action", async () => {
+              const onDownload = vi.fn();
+              const onClose = vi.fn();
+              const beat = makeBeat({ telegram_file_id: "remote-master" });
+
+              await render(
+                <CloudFilesModal
+                  beat={beat}
+                  files={[]}
+                  busyId={null}
+                  downloadedIds={new Set()}
+                  onDownload={onDownload}
+                  onClose={onClose}
+                />
+              );
+
+              expect(host?.querySelector("button")).toBeNull();
+              expect(document.body.textContent).toContain("Download Everything");
+              const buttons = Array.from(document.body.querySelectorAll("button"));
+              const mp3 = buttons.find(button => button.textContent?.includes("Master audio"));
+              const wav = buttons.find(button => button.textContent?.includes("Original high-quality audio"));
+              expect(mp3).toBeDefined();
+              expect((mp3 as HTMLButtonElement).disabled).toBe(false);
+              expect((wav as HTMLButtonElement).disabled).toBe(true);
+
+              await click(mp3!);
+              expect(onDownload).toHaveBeenCalledTimes(1);
+              expect(onDownload).toHaveBeenCalledWith("MP3");
+
+              const close = document.body.querySelector('button[aria-label="Close download window"]');
+              expect(close).not.toBeNull();
+              await click(close!);
+              expect(onClose).toHaveBeenCalledTimes(1);
+            });
+          });
+
+          describe("BeatFileDropModal extraction", () => {
+            it("keeps file-role availability, selection and Escape close", async () => {
+              const onChoose = vi.fn();
+              const onClose = vi.fn();
+
+              await render(
+                <BeatFileDropModal
+                  beat={makeBeat()}
+                  filePath="C:/drop/replacement.mp3"
+                  fileName="replacement.mp3"
+                  fileExtension="mp3"
+                  isDirectory={false}
+                  onChoose={onChoose}
+                  onClose={onClose}
+                />
+              );
+
+              expect(host?.querySelector("button")).toBeNull();
+              expect(document.body.textContent).toContain("What are you adding?");
+              expect(document.body.textContent).toContain("replacement.mp3");
+              const buttons = Array.from(document.body.querySelectorAll("button"));
+              const master = buttons.find(button => button.textContent?.includes("MASTER MP3"));
+              const wav = buttons.find(button => button.textContent?.includes("WAV HQ"));
+              const projectFolder = buttons.find(button => button.textContent?.includes("Add folder to Project"));
+              expect((master as HTMLButtonElement).disabled).toBe(false);
+              expect((wav as HTMLButtonElement).disabled).toBe(true);
+              expect((projectFolder as HTMLButtonElement).disabled).toBe(true);
+
+              await click(master!);
+              expect(onChoose).toHaveBeenCalledWith("main");
+
+              await act(async () => {
+                window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+              });
+              expect(onClose).toHaveBeenCalledTimes(1);
+            });
+
+            it("keeps the project-folder option available for directory drops", async () => {
+              const onChoose = vi.fn();
+              await render(
+                <BeatFileDropModal
+                  beat={makeBeat()}
+                  filePath="C:/drop/Project Assets"
+                  fileName="Project Assets"
+                  fileExtension=""
+                  isDirectory
+                  onChoose={onChoose}
+                  onClose={() => undefined}
+                />
+              );
+
+              const projectFolder = Array.from(document.body.querySelectorAll("button"))
+                .find(button => button.textContent?.includes("Add folder to Project"));
+              expect(projectFolder).toBeDefined();
+              expect((projectFolder as HTMLButtonElement).disabled).toBe(false);
+              await click(projectFolder!);
+              expect(onChoose).toHaveBeenCalledWith("projectFolder");
+            });
+          });
+          '''.replace('\n          ', '\n').lstrip(), encoding='utf-8')
+
+          extraction_test = Path('tests/integration/appAuxiliaryModalExtraction.test.ts')
+          extraction_test.write_text(r'''import { readFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          import { describe, expect, it } from "vitest";
+
+          const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+          const cloudModal = readFileSync(resolve(process.cwd(), "src/features/downloads/components/CloudFilesModal.tsx"), "utf8");
+          const dropModal = readFileSync(resolve(process.cwd(), "src/features/dragdrop/components/BeatFileDropModal.tsx"), "utf8");
+
+          describe("App auxiliary modal extraction", () => {
+            it("moves both auxiliary modal definitions to their feature owners", () => {
+              expect(app).toContain('from "./features/downloads/components/CloudFilesModal"');
+              expect(app).toContain('from "./features/dragdrop/components/BeatFileDropModal"');
+              expect(app).not.toContain("function CloudFilesModal({");
+              expect(app).not.toContain("function BeatFileDropModal({");
+              expect(cloudModal).toContain("ReactDOM.createPortal");
+              expect(dropModal).toContain("ReactDOM.createPortal");
+            });
+          });
+          '''.replace('\n          ', '\n').lstrip(), encoding='utf-8')
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run test:typecheck
+
+      - name: TypeScript unit tests
+        run: npm run test:unit:ts
+
+      - name: Component DOM tests
+        run: npm run test:component:dom
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      - name: Regression guards
+        run: npm run test:regressions
+
+      - name: Web build
+        run: npm run build:web
+
+      - name: Desktop-source build
+        run: npm run build
+
+      - name: Commit verified extraction and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/task-2-1-apply.yml
+          git add src/App.tsx src/features/downloads/components/CloudFilesModal.tsx src/features/dragdrop/components/BeatFileDropModal.tsx tests/component-dom/appAuxiliaryModals.test.tsx tests/integration/appAuxiliaryModalExtraction.test.ts
+          git commit -m "refactor: extract auxiliary modals"
+          git push origin HEAD:app-tsx-migration
