@@ -105,6 +105,7 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
   });
 
   it("captures fourteen local candidates once and keeps INDEX closed until every candidate reaches READY or FAILED", async () => {
+    localStorage.setItem("beatvault:sort:v2", "manual");
     updatePlaybackRoutingCacheFromManifest({
       beats: Array.from({ length: 20 }, (_, index) => manifestBeat(index + 1)),
       trash: [],
@@ -143,7 +144,9 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
   });
 
   it("retries a transient Direct startup failure without creating a second coordinator or changing its candidate set", async () => {
+    localStorage.setItem("beatvault:sort:v2", "manual");
     updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(1)], trash: [], deleted: [] });
+    updatePlaybackRoutingSort("manual");
     harness.deferred(1001).resolve();
     const coordinator = new WebStartupPlaybackCoordinator();
     const transport = harness.transports[0];
