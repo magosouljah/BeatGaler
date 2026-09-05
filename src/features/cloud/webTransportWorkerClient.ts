@@ -1,4 +1,5 @@
 import { playTrace } from "../playback/playTrace";
+import { isPlaybackMessageRouteSuspect, markPlaybackMessageRouteSuspect } from "../playback/webPlaybackRoutingSuspect";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
 import type {
@@ -30,6 +31,7 @@ const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
 export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
 const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
 const NON_RESUMABLE_PREFIX_ERROR = "Galer Cloud returned a non-resumable partial playback prefix.";
+const SUSPECT_ROUTE_ERROR = "Galer Cloud playback route is awaiting authoritative reconciliation.";
 
 function publishTransportInvalidated(): void {
   if (typeof window === "undefined") return;
@@ -50,6 +52,18 @@ function streamCancelledError(): DOMException {
   return new DOMException("Playback stream cancelled.", "AbortError");
 }
 
+function routeFailure(code: WebTransportErrorCode | undefined): boolean {
+  return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE";
+}
+
+function quarantinePlaybackRoute(messageId: number, code: WebTransportErrorCode | undefined): void {
+  if (!routeFailure(code)) return;
+  const beatIds = markPlaybackMessageRouteSuspect(messageId);
+  if (beatIds.length > 0) {
+    playTrace("WORKER_ROUTE_QUARANTINED", { message_id: messageId, beat_count: beatIds.length, code });
+  }
+}
+
 export class WebTransportWorkerError extends Error {
   constructor(message: string, readonly code?: WebTransportErrorCode) {
     super(message);
@@ -66,6 +80,7 @@ type PendingRequest = {
   onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void;
   onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void;
   prefetchOffsetBytes?: number;
+  prefetchMessageId?: number;
   invalidPrefetchMessageIds?: Set<number>;
   timeoutId: ReturnType<typeof setTimeout> | null;
   activeTimeoutMs: number | null;
@@ -203,6 +218,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       } else if (message.event === "prefetch-chunk") {
         this.onPrefetchChunk(pending, message.progress);
       } else if (message.event === "prefetch-terminal") {
+        if (message.terminal.status === "FAILED") {
+          quarantinePlaybackRoute(message.terminal.messageId, message.terminal.code);
+        }
         if (!pending.invalidPrefetchMessageIds?.has(message.terminal.messageId)) {
           pending.onPrefetchTerminal?.(message.terminal);
         }
@@ -229,6 +247,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       });
     }
     if (!message.ok) {
+      if (completed.operation === "prefetch" && completed.prefetchMessageId) {
+        quarantinePlaybackRoute(completed.prefetchMessageId, message.code);
+      }
       completed.reject(new WebTransportWorkerError(message.error, message.code));
       return;
     }
@@ -274,7 +295,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   private timeoutIndexRequest(requestId: string): void {
     const timedOut = this.takePending(requestId);
-    if (!timedOut) return;
+    if (!timOut) return;
     playTrace("WORKER_INDEX_ACTIVE_TIMEOUT", { request_id: requestId });
     timedOut.reject(new Error("Galer Cloud Web transport timed out during active get_index."));
     this.sendIndexCancel(requestId);
@@ -303,6 +324,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         onPrefetchChunk,
         onPrefetchTerminal,
         prefetchOffsetBytes: command.op === "prefetch" ? Math.max(0, Math.floor(Number(command.input.offsetBytes) || 0)) : undefined,
+        prefetchMessageId: command.op === "prefetch" ? Number(command.input.messageId) || undefined : undefined,
         invalidPrefetchMessageIds: command.op === "prefetch_batch" ? new Set<number>() : undefined,
         timeoutId,
         activeTimeoutMs,
@@ -392,6 +414,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+    if (isPlaybackMessageRouteSuspect(input.messageId)) {
+      return Promise.reject(new WebTransportWorkerError(SUSPECT_ROUTE_ERROR, "ROUTE_MISSING"));
+    }
     return this.request<WebTransportPrefetchResult>(
       { op: "prefetch", input },
       undefined,
@@ -407,19 +432,40 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     onTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
   ): WebTransportPrefetchBatchHandle {
     const requestId = crypto.randomUUID();
+    const suspectIds = new Set(
+      input.inputs.map(candidate => candidate.messageId).filter(isPlaybackMessageRouteSuspect),
+    );
+    const runnableInputs = input.inputs.filter(candidate => !suspectIds.has(candidate.messageId));
+    const suspectResults = Array.from(suspectIds, messageId => ({
+      ok: false as const,
+      messageId,
+      error: SUSPECT_ROUTE_ERROR,
+      code: "ROUTE_MISSING" as const,
+    }));
+    for (const messageId of suspectIds) {
+      queueMicrotask(() => onTerminal?.({
+        messageId,
+        status: "FAILED",
+        code: "ROUTE_MISSING",
+        error: SUSPECT_ROUTE_ERROR,
+      }));
+    }
+    const completed = runnableInputs.length === 0
+      ? Promise.resolve({ results: suspectResults })
+      : this.request<WebTransportPrefetchBatchResult>(
+          { op: "prefetch_batch", input: { ...input, inputs: runnableInputs } },
+          undefined,
+          undefined,
+          requestId,
+          null,
+          onChunk,
+          onTerminal,
+        ).then(result => ({ results: [...suspectResults, ...result.results] }));
     return {
-      completed: this.request<WebTransportPrefetchBatchResult>(
-        { op: "prefetch_batch", input },
-        undefined,
-        undefined,
-        requestId,
-        null,
-        onChunk,
-        onTerminal,
-      ),
-      cancelMessage: messageId => this.sendPrefetchControl(requestId, messageId),
+      completed,
+      cancelMessage: messageId => { if (!suspectIds.has(messageId)) this.sendPrefetchControl(requestId, messageId); },
       promoteMessage: messageId => this.focusPlayback(messageId),
-      cancel: () => this.sendPrefetchControl(requestId),
+      cancel: () => { if (runnableInputs.length > 0) this.sendPrefetchControl(requestId); },
     };
   }
 
