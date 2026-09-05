@@ -121,7 +121,6 @@ export class WebGalerCloudTransport {
     const candidates = normalizeStartupCandidates(startupCandidates);
     this.worker = new WebTransportWorkerClient();
     this.controller = new WebTransportController(this.worker, undefined, {
-      startupBeatIds: candidates.map(candidate => candidate.beatId),
       startupMessageIds: candidates.map(candidate => candidate.messageId),
     });
     playTrace("TRANSPORT_CODE_PREWARM_ENTER", { startup_beat_count: candidates.length });
