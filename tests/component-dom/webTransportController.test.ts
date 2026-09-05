@@ -142,6 +142,21 @@ describe("Galer Cloud Web transport lifecycle", () => {
     await controller.disconnect();
   });
 
+  it("keeps startup beat ids local and never sends them to Cloud reserve", async () => {
+    const { runtime, api } = harness();
+    const controller = new WebTransportController(runtime, api, {
+      startupBeatIds: ["beat-1", "beat-2"],
+      startupMessageIds: [501, 502],
+    });
+
+    const connected = await controller.connect();
+
+    expect(api.reserve).toHaveBeenCalledTimes(1);
+    expect(api.reserve).toHaveBeenCalledWith();
+    expect(runtime.initialize).toHaveBeenCalledWith(connected, [501, 502]);
+    await controller.disconnect();
+  });
+
   it("waits for in-flight activation before stopping when temp auth binding fails", async () => {
     const { controller, runtime, api } = harness();
     let finishActivate!: () => void;
