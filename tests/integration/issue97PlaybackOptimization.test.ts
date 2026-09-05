@@ -31,6 +31,27 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(routing).toContain("updatePlaybackRoutingSort");
   });
 
+  it("wires the real App caller to UI sort routing and authoritative reconcile", () => {
+    const app = source("src/App.tsx");
+
+    expect(app).toContain('import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";');
+    expect(app).toContain('import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";');
+
+    const sortState = app.indexOf("const [sortBy, setSortBy] = useState<SortKey>(() => loadCachedSort());");
+    const sortRouting = app.indexOf('useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");', sortState);
+    const reconcileCallback = app.indexOf("const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {", sortRouting);
+    const preserveArtwork = app.indexOf("const next = preserveLoadedArtwork(incoming, current);", reconcileCallback);
+    const updateLatest = app.indexOf("beatsLatestRef.current = next;", preserveArtwork);
+    const reconcileHook = app.indexOf('useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);', updateLatest);
+
+    expect(sortState).toBeGreaterThanOrEqual(0);
+    expect(sortRouting).toBeGreaterThan(sortState);
+    expect(reconcileCallback).toBeGreaterThan(sortRouting);
+    expect(preserveArtwork).toBeGreaterThan(reconcileCallback);
+    expect(updateLatest).toBeGreaterThan(preserveArtwork);
+    expect(reconcileHook).toBeGreaterThan(updateLatest);
+  });
+
   it("feeds authoritative Telegram manifest routes into the playback routing cache before materialization", () => {
     const library = source("src/features/library/webLibrary.ts");
 
@@ -70,9 +91,11 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
     const coordinatorAcquire = rememberedPreconnect.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
-    const coordinatorStart = rememberedPreconnect.indexOf("void coordinator.start().then(", coordinatorAcquire);
+    const coordinatorStart = rememberedPreconnect.indexOf("const startup = coordinator.start();", coordinatorAcquire);
+    const dispatched = rememberedPreconnect.indexOf('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")', coordinatorStart);
     expect(coordinatorAcquire).toBeGreaterThanOrEqual(0);
     expect(coordinatorStart).toBeGreaterThan(coordinatorAcquire);
+    expect(dispatched).toBeGreaterThan(coordinatorStart);
     expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
 
