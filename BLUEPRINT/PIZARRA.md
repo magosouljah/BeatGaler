@@ -12,6 +12,8 @@
 - Escalón actual → **1. Encontrar y usar**.
 - Problema principal actual → **Issue #97 / PR #129: startup + playback**.
 
+## hay un problema en el q los chats de chatgpt no pueden ver logs de los run de actions y no tengo idea porq pasa talvez hay demasiados - activo
+
 ## Siguientes 3 pasos del proyecto
 
 ### 1. Cerrar startup + playback
