@@ -55,6 +55,8 @@ export function invalidateWebPlaybackIntentForBeat(beatId: string | null | undef
 }
 
 export function invalidateAllWebPlaybackIntents(): void {
+  // Keep the bounded URL -> intent records so late Web URLs remain identifiable
+  // as stale. Clearing them would make shared useAudio treat those URLs as
+  // untracked/Desktop sources and accept them again after logout/invalidation.
   latestIntent = { id: ++nextIntentId, beatId: "" };
-  preparedByUrl.clear();
 }
