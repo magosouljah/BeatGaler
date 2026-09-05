@@ -142,10 +142,9 @@ describe("Galer Cloud Web transport lifecycle", () => {
     await controller.disconnect();
   });
 
-  it("keeps startup beat ids local and never sends them to Cloud reserve", async () => {
+  it("keeps startup message ids local and never sends playback routing to Cloud reserve", async () => {
     const { runtime, api } = harness();
     const controller = new WebTransportController(runtime, api, {
-      startupBeatIds: ["beat-1", "beat-2"],
       startupMessageIds: [501, 502],
     });
 
