@@ -53,9 +53,6 @@ export interface WebTransportSessionPublic {
   token_rotation_enabled: boolean;
   temp_auth_required: boolean;
   temp_auth: WebTransportTempAuthPublic;
-  startup_beat_ids?: string[];
-  startup_routes?: Record<string, number>;
-  routing_revision?: number;
 }
 
 export interface WebTransportSession extends WebTransportSessionPublic {
@@ -94,20 +91,6 @@ export interface WebTransportOperationResponse {
 }
 
 const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
-const MAX_STARTUP_BEAT_IDS = 14;
-
-function normalizeStartupBeatIds(values: readonly string[] | undefined): string[] {
-  const output: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values || []) {
-    const id = String(value || "").trim();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    output.push(id);
-    if (output.length >= MAX_STARTUP_BEAT_IDS) break;
-  }
-  return output;
-}
 
 export function isTransientWebTempAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -181,18 +164,6 @@ function sessionIdentity(
   };
 }
 
-function retainStartupRouting(
-  response: WebTransportSessionPublic,
-  bootstrap: WebTransportSessionPublic,
-): WebTransportSessionPublic {
-  return {
-    ...response,
-    startup_beat_ids: bootstrap.startup_beat_ids || [],
-    startup_routes: bootstrap.startup_routes || {},
-    routing_revision: Math.max(0, Number(bootstrap.routing_revision) || 0),
-  };
-}
-
 async function bindTemporarySession(
   bootstrap: WebTransportSessionPublic,
   metadata?: TempAuthMetadata,
@@ -209,7 +180,7 @@ async function bindTemporarySession(
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
       }));
-      const response = retainStartupRouting(rawResponse, safeBootstrap);
+      const response = rawResponse;
       if (
         response.session_id !== safeBootstrap.session_id ||
         response.generation !== safeBootstrap.generation ||
@@ -244,11 +215,10 @@ async function bindTemporarySession(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-/** Reserves/reuses the control-plane lease and resolves only the requested startup routes. */
-export async function reserveWebTransportSession(startupBeatIds: readonly string[] = []): Promise<WebTransportSessionPublic> {
+/** Reserves/reuses the control-plane lease. Playback routing never comes from Galer Cloud. */
+export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic> {
   return validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
     browserClientId: getWebClientId(),
-    startupBeatIds: normalizeStartupBeatIds(startupBeatIds),
   }));
 }
 
@@ -258,8 +228,8 @@ export async function bindWebTransportSession(bootstrap: WebTransportSessionPubl
 }
 
 /** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
-export async function prepareWebTransportSession(startupBeatIds: readonly string[] = []): Promise<WebTransportSession> {
-  return bindWebTransportSession(await reserveWebTransportSession(startupBeatIds));
+export async function prepareWebTransportSession(): Promise<WebTransportSession> {
+  return bindWebTransportSession(await reserveWebTransportSession());
 }
 
 export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
@@ -272,7 +242,7 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
       }));
-      const response = retainStartupRouting(rawResponse, session);
+      const response = rawResponse;
       if (
         response.session_id !== session.session_id ||
         response.generation !== session.generation ||
