@@ -302,7 +302,7 @@ describe("Web stale playback route recovery", () => {
     finishRefresh();
     const xResult = await x;
 
-    expect(xResult.url).toMatch(/^blob:beatgaler-superseded-/);
+    expect(xResult.url).toMatch(/^beatgaler-superseded:\d+$/);
     expect(harness.refresh).toHaveBeenCalledTimes(1);
     expect(harness.prepare.mock.calls.map(call => [call[0], call[1]])).toEqual([
       ["beat-x", 1500],
