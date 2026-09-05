@@ -34,7 +34,7 @@ describe("remembered Web Direct preconnect", () => {
     delete (window as any).__TAURI_INTERNALS__;
   });
 
-  it("dispatches coordinator.start synchronously when remembered session and CSRF are already available", async () => {
+  it("dispatches coordinator.start and its DISPATCHED trace synchronously when remembered session and CSRF are already available", async () => {
     let resolveStart!: () => void;
     mocks.start.mockReturnValue(new Promise<void>(resolve => { resolveStart = resolve; }));
 
@@ -43,11 +43,28 @@ describe("remembered Web Direct preconnect", () => {
     expect(mocks.getWebStartupPlaybackCoordinator).toHaveBeenCalledTimes(1);
     expect(mocks.start).toHaveBeenCalledTimes(1);
     expect(mocks.playTrace).toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
-    expect(mocks.playTrace).not.toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
+    expect(mocks.playTrace).toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
 
     resolveStart();
     await Promise.resolve();
+    expect(mocks.playTrace).not.toHaveBeenCalledWith(
+      "DIRECT_REMEMBERED_PRECONNECT_DEFERRED",
+      expect.objectContaining({ reason: "dispatch_failed" }),
+    );
+  });
+
+  it("reports an asynchronous startup failure without moving the original dispatch timestamp", async () => {
+    mocks.start.mockReturnValue(Promise.reject(new Error("network unavailable")));
+
+    preconnectRememberedWebDirect();
     expect(mocks.playTrace).toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mocks.playTrace).toHaveBeenCalledWith(
+      "DIRECT_REMEMBERED_PRECONNECT_DEFERRED",
+      { reason: "dispatch_failed", error_name: "Error" },
+    );
   });
 
   it("does not construct Direct when CSRF is unavailable and leaves restore to recover it", () => {
