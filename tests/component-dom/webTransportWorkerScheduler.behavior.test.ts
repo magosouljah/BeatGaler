@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => {
   type Transfer = {
@@ -35,15 +35,17 @@ const harness = vi.hoisted(() => {
   }
 
   const connection = new SessionConnection();
-  const getMessages = vi.fn(async (_chat: unknown, ids: number[]) => ids.map(id => ({
+  const missingIds = new Set<number>();
+  const getMessages = vi.fn(async (_chat: unknown, ids: number[]) => ids.map(id => missingIds.has(id) ? null : ({
     id,
     text: "",
     media: { type: "audio", mimeType: "audio/mpeg", fileSize: 200_000, messageId: id },
   })));
   const transfers: Transfer[] = [];
+  let peakActive = 0;
   const downloadChunk = vi.fn((options: any) => new Promise<Uint8Array>((resolve, reject) => {
     const messageId = Number(options.location?.messageId || 0);
-    const signal = options.abortSignal as AbortSignal;
+    const signal = (options.abortSignal as AbortSignal | undefined) ?? new AbortController().signal;
     const transfer: Transfer = {
       messageId,
       signal,
@@ -60,6 +62,7 @@ const harness = vi.hoisted(() => {
       },
     };
     transfers.push(transfer);
+    peakActive = Math.max(peakActive, transfers.filter(item => !item.settled).length);
     const abort = () => transfer.reject(new DOMException("aborted", "AbortError"));
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
@@ -92,8 +95,11 @@ const harness = vi.hoisted(() => {
     getMessages,
     downloadChunk,
     transfers,
+    missingIds,
     activeTransfers: () => transfers.filter(transfer => !transfer.settled),
     transfersFor: (messageId: number) => transfers.filter(transfer => transfer.messageId === messageId),
+    getPeakActive: () => peakActive,
+    resetObservations: () => { transfers.length = 0; peakActive = 0; missingIds.clear(); getMessages.mockClear(); downloadChunk.mockClear(); },
     WebCryptoProvider: class { constructor(public readonly options: unknown) {} },
   };
 });
@@ -129,6 +135,15 @@ function terminal(messageId: number, status?: string): any[] {
   );
 }
 
+async function drainBatch(requestId: string, maxTurns = 30): Promise<void> {
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    for (const transfer of harness.activeTransfers()) transfer.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (posted.some(message => message.requestId === requestId && message.ok === true)) return;
+  }
+  throw new Error(`Batch ${requestId} did not drain.`);
+}
+
 beforeAll(async () => {
   vi.stubGlobal("postMessage", (message: any) => posted.push(message));
   await import("../../src/features/cloud/webTransport.worker");
@@ -157,6 +172,12 @@ beforeAll(async () => {
   });
 });
 
+beforeEach(async () => {
+  harness.resetObservations();
+  await dispatchAndWait({ requestId: `scheduler-reset-${Math.random()}`, op: "playback_release", messageId: 10 });
+  await dispatchAndWait({ requestId: `scheduler-reset-99-${Math.random()}`, op: "playback_release", messageId: 99 });
+});
+
 afterAll(() => {
   globalThis.onmessage = originalOnMessage;
   vi.unstubAllGlobals();
@@ -180,9 +201,6 @@ describe("Worker playback scheduler with pending Telegram transfers", () => {
     const initiallyActive = harness.activeTransfers().map(transfer => transfer.messageId);
     expect(initiallyActive).toEqual(ids.slice(0, 7));
 
-    // Beat 10 is queued behind the seven active warms. Play must abort all
-    // unrelated active transfers and promote 10 immediately, without waiting
-    // for their natural completion.
     await dispatchAndWait({ requestId: "focus-10", op: "playback_focus", messageId: 10 });
     await vi.waitFor(() => expect(harness.activeTransfers().map(transfer => transfer.messageId)).toEqual([10]));
     for (const id of initiallyActive) {
@@ -194,15 +212,12 @@ describe("Worker playback scheduler with pending Telegram transfers", () => {
     await vi.waitFor(() => expect(terminal(10, "READY")).toHaveLength(1));
     await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(0));
 
-    // PLAY_STABLE opens only six warm lanes even though the physical pool has 7.
     await dispatchAndWait({ requestId: "stable-10", op: "playback_stable", messageId: 10 });
     await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(6));
     const stableIds = harness.activeTransfers().map(transfer => transfer.messageId);
     expect(new Set(stableIds).size).toBe(6);
     expect(stableIds).not.toContain(10);
 
-    // waiting=true is represented by focusPlayback again. Every unrelated warm
-    // must be physically aborted and no replacement warm may start while critical.
     await dispatchAndWait({ requestId: "waiting-10", op: "playback_focus", messageId: 10 });
     await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(0));
     for (const id of stableIds) expect(terminal(id, "FAILED")).toHaveLength(0);
@@ -210,20 +225,12 @@ describe("Worker playback scheduler with pending Telegram transfers", () => {
     await dispatchAndWait({ requestId: "stable-again-10", op: "playback_stable", messageId: 10 });
     await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(6));
 
-    // End/pause restores IDLE. Existing six are not restarted; one seventh lane
-    // joins them because the configured idle limit is seven.
     const beforeRelease = harness.activeTransfers().slice();
     await dispatchAndWait({ requestId: "release-10", op: "playback_release", messageId: 10 });
     await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(7));
     for (const transfer of beforeRelease) expect(transfer.signal.aborted).toBe(false);
 
-    // Drain the real batch so the test also proves PREEMPTED entries requeue and
-    // eventually reach READY instead of FAILED/cooldown.
-    for (let turn = 0; turn < 20; turn += 1) {
-      for (const transfer of harness.activeTransfers()) transfer.resolve();
-      await new Promise(resolve => setTimeout(resolve, 0));
-      if (posted.some(message => message.requestId === "warm-14" && message.ok === true)) break;
-    }
+    await drainBatch("warm-14");
     await vi.waitFor(() => expect(posted.some(message => message.requestId === "warm-14" && message.ok === true)).toBe(true));
 
     for (const id of ids) {
@@ -232,5 +239,59 @@ describe("Worker playback scheduler with pending Telegram transfers", () => {
     }
     expect(harness.transfersFor(1)).toHaveLength(2);
     expect(harness.transfersFor(10)).toHaveLength(1);
+  });
+
+  it("gives a Play outside startup14 foreground priority after physically preempting all startup warm", async () => {
+    const ids = Array.from({ length: 14 }, (_, index) => 101 + index);
+    dispatch({ requestId: "warm-outside", op: "prefetch_batch", input: { inputs: ids.map(messageId => ({ messageId, mimeType: "audio/mpeg" })), maxConcurrency: 7 } });
+    await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(7));
+    const startupTransfers = harness.activeTransfers().slice();
+
+    await dispatchAndWait({ requestId: "focus-99", op: "playback_focus", messageId: 99 });
+    await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(0));
+    for (const transfer of startupTransfers) expect(transfer.signal.aborted).toBe(true);
+
+    dispatch({ requestId: "outside-prefix", op: "prefetch", input: { messageId: 99, mimeType: "audio/mpeg", offsetBytes: 0 } });
+    await vi.waitFor(() => expect(harness.activeTransfers().map(transfer => transfer.messageId)).toEqual([99]));
+    harness.activeTransfers()[0].resolve();
+    await vi.waitFor(() => expect(posted.some(message => message.requestId === "outside-prefix" && message.ok === true)).toBe(true));
+    expect(harness.activeTransfers()).toHaveLength(0);
+
+    await dispatchAndWait({ requestId: "release-99", op: "playback_release", messageId: 99 });
+    await drainBatch("warm-outside");
+  });
+
+  it("publishes an individual missing target before the rest of its warm batch completes", async () => {
+    harness.missingIds.add(301);
+    dispatch({
+      requestId: "warm-missing",
+      op: "prefetch_batch",
+      input: { inputs: [301, 302].map(messageId => ({ messageId, mimeType: "audio/mpeg" })), maxConcurrency: 2 },
+    });
+
+    await vi.waitFor(() => expect(terminal(301, "FAILED")).toHaveLength(1));
+    expect(terminal(301)[0].terminal.code).toBe("ROUTE_MISSING");
+    await vi.waitFor(() => expect(harness.activeTransfers().map(transfer => transfer.messageId)).toEqual([302]));
+    expect(posted.some(message => message.requestId === "warm-missing" && message.ok === true)).toBe(false);
+
+    harness.activeTransfers()[0].resolve();
+    await vi.waitFor(() => expect(terminal(302, "READY")).toHaveLength(1));
+    await vi.waitFor(() => expect(posted.some(message => message.requestId === "warm-missing" && message.ok === true)).toBe(true));
+  });
+
+  it("never exceeds the configured seven physical lanes when simultaneous completions release queued work", async () => {
+    const ids = Array.from({ length: 21 }, (_, index) => 401 + index);
+    dispatch({ requestId: "warm-peak", op: "prefetch_batch", input: { inputs: ids.map(messageId => ({ messageId, mimeType: "audio/mpeg" })), maxConcurrency: 7 } });
+    await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(7));
+
+    for (let turn = 0; turn < 10; turn += 1) {
+      const active = harness.activeTransfers().slice();
+      active.forEach(transfer => transfer.resolve());
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(harness.getPeakActive()).toBeLessThanOrEqual(7);
+      if (posted.some(message => message.requestId === "warm-peak" && message.ok === true)) break;
+    }
+    await vi.waitFor(() => expect(posted.some(message => message.requestId === "warm-peak" && message.ok === true)).toBe(true));
+    expect(harness.getPeakActive()).toBe(7);
   });
 });
