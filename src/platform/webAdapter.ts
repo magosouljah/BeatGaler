@@ -16,6 +16,14 @@ import {
 } from "../features/playback/webVisiblePlaybackPrefetch";
 import { playTrace, observePlayStep } from "../features/playback/playTrace";
 import {
+  beginWebPlaybackIntent,
+  invalidateAllWebPlaybackIntents,
+  invalidateWebPlaybackIntentForBeat,
+  isCurrentWebPlaybackIntent,
+  rememberPreparedWebPlaybackUrl,
+  supersededWebPlaybackUrl,
+} from "../features/playback/webPlaybackIntent";
+import {
   deletePlaybackRoutes,
   readWebPlaybackRoutingCache,
   upsertPlaybackRouteFromBeat,
@@ -145,7 +153,11 @@ function rememberWebBeats(beats: readonly Beat[]): void {
 }
 
 function forgetWebBeats(ids: readonly string[]): void {
-  for (const id of ids) webBeatRegistry.delete(id);
+  for (const id of ids) {
+    webBeatRegistry.delete(id);
+    invalidateWebPlaybackIntentForBeat(id);
+    webPlaybackSources?.release(id);
+  }
   deletePlaybackRoutes(ids);
 }
 
@@ -205,6 +217,11 @@ function writeBooleanPreference(key: string, value: boolean): void {
 
 function unavailable(feature: string): never {
   throw new Error(`${feature} is not available in BeatGaler Web yet.`);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError" ||
+    error instanceof Error && error.name === "AbortError";
 }
 
 const webClientId = getWebClientId();
@@ -303,6 +320,7 @@ export const webAdapter: PlatformAdapter = {
   media: {
     resolveUrl(source) { return source; },
     async preparePlayback(beat) {
+      const intent = beginWebPlaybackIntent(beat.id);
       const master = beat.assets?.master;
       const messageId = webBeatMessageId(beat);
       rememberWebBeats([beat]);
@@ -311,15 +329,31 @@ export const webAdapter: PlatformAdapter = {
           beat_id: beat.id,
           message_id: messageId,
           mime_type: master?.mime_type || "audio/mpeg",
+          intent_id: intent.id,
         });
         const sources = await resolveWebPlaybackSources();
-        playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id });
-        const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg");
-        playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id });
-        return prepared;
+        if (!isCurrentWebPlaybackIntent(intent)) {
+          const url = supersededWebPlaybackUrl(intent);
+          return { url, completed: Promise.resolve() };
+        }
+        playTrace("ADAPTER_SOURCE_MANAGER_READY", { beat_id: beat.id, intent_id: intent.id });
+        try {
+          const prepared = await sources.prepare(beat.id, messageId, master?.mime_type || "audio/mpeg", intent.id);
+          rememberPreparedWebPlaybackUrl(prepared.url, intent);
+          playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id, intent_id: intent.id, current: isCurrentWebPlaybackIntent(intent) });
+          return prepared;
+        } catch (error) {
+          if (isAbortError(error) && !isCurrentWebPlaybackIntent(intent)) {
+            const url = supersededWebPlaybackUrl(intent);
+            playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id });
+            return { url, completed: Promise.resolve() };
+          }
+          throw error;
+        }
       }
       if (beat.playback_path.startsWith("blob:")) {
-        playTrace("ADAPTER_LOCAL_BLOB", { beat_id: beat.id });
+        playTrace("ADAPTER_LOCAL_BLOB", { beat_id: beat.id, intent_id: intent.id });
+        rememberPreparedWebPlaybackUrl(beat.playback_path, intent);
         return { url: beat.playback_path, completed: Promise.resolve() };
       }
       throw new Error("This MASTER must be migrated before it can play on Web.");
@@ -332,7 +366,10 @@ export const webAdapter: PlatformAdapter = {
       const [result] = await transport.downloadFiles([{ messageId, mimeType: artwork?.mime_type || "image/jpeg" }]);
       return result?.dataUrl ?? null;
     },
-    releasePlayback(beatId) { webPlaybackSources?.release(beatId); },
+    releasePlayback(beatId) {
+      invalidateWebPlaybackIntentForBeat(beatId);
+      webPlaybackSources?.release(beatId);
+    },
   },
   events: {
     async listen<T>(event: string, handler: PlatformEventHandler<T>): Promise<PlatformUnlisten> {
@@ -381,6 +418,7 @@ export const webAdapter: PlatformAdapter = {
       }
     },
     async disconnect() {
+      invalidateAllWebPlaybackIntents();
       resetVisiblePlaybackPrefetch();
       webPlaybackSources?.releaseAll();
       webPlaybackSources = null;
