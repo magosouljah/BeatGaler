@@ -145,6 +145,62 @@ describe("WebPlaybackSourceManager advanced scheduling behavior", () => {
     expect(focusPlayback).toHaveBeenCalledWith(77);
   });
 
+  it("promotes a target queued only in SourceManager without waiting for the active warm batch", async () => {
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:local-queued"), revokeObjectURL: vi.fn() });
+    const warm = warmHarness();
+    const focusPlayback = vi.fn(async () => {});
+    const prefetchFile = vi.fn(async (input: { messageId: number; mimeType: string; offsetBytes?: number }) => ({
+      messageId: input.messageId,
+      totalBytes: 200000,
+      mimeType: input.mimeType,
+      prefix: new ArrayBuffer(65536),
+      playableSeconds: 0,
+      targetMet: true,
+    }));
+    const streamFile = vi.fn(async () => ({ completed: new Promise<never>(() => {}), cancel: vi.fn() }));
+    const manager = new WebPlaybackSourceManager({
+      prefetchFiles: warm.prefetchFiles,
+      prefetchFile,
+      focusPlayback,
+      streamFile,
+    });
+
+    const activeWarm = manager.prefetch("beat-a", 101, "audio/mpeg", "visible");
+    await vi.waitFor(() => expect(warm.prefetchFiles).toHaveBeenCalledOnce());
+    expect(warm.prefetchFiles.mock.calls[0][0]).toEqual([{ messageId: 101, mimeType: "audio/mpeg", offsetBytes: 0 }]);
+
+    const queuedWarm = manager.prefetch("beat-b", 102, "audio/mpeg", "visible");
+    await Promise.resolve();
+    expect(warm.prefetchFiles).toHaveBeenCalledTimes(1);
+
+    const prepared = await manager.prepare("beat-b", 102, "audio/mpeg", 1);
+    await expect(queuedWarm).resolves.toBeUndefined();
+    expect(prepared.url).toBe("blob:local-queued");
+    expect(prefetchFile).toHaveBeenCalledTimes(1);
+    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 102, mimeType: "audio/mpeg", offsetBytes: 0 });
+    expect(warm.prefetchFiles).toHaveBeenCalledTimes(1);
+    expect(focusPlayback).toHaveBeenCalledWith(102);
+    expect(streamFile).toHaveBeenCalledWith(
+      { messageId: 102, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" },
+      expect.any(Function),
+    );
+
+    warm.emitChunk({
+      messageId: 101,
+      totalBytes: 200000,
+      mimeType: "audio/mpeg",
+      offsetBytes: 0,
+      chunk: new ArrayBuffer(65536),
+      downloadedBytes: 65536,
+      playableSeconds: 0,
+      targetMet: true,
+    });
+    warm.emitTerminal({ messageId: 101, status: "READY" });
+    warm.finish(batchResult(101, 65536, 200000));
+    await expect(activeWarm).resolves.toBeUndefined();
+  });
+
   it("uses a short EOF prefix as the complete file and performs no continuation", async () => {
     vi.stubGlobal("MediaSource", FakeMediaSource);
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:eof"), revokeObjectURL: vi.fn() });
