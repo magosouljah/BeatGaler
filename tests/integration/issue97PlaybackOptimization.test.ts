@@ -99,15 +99,24 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
 
-  it("makes late startup candidate configuration impossible", () => {
+  it("keeps startup routing local-only and makes late candidate configuration impossible", () => {
+    const session = source("src/features/cloud/webTransportSession.ts");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
     const controller = source("src/features/cloud/webTransportController.ts");
+    const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
 
+    expect(session).toContain("export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic>");
+    expect(session).not.toContain("startupBeatIds");
+    expect(session).not.toContain("startup_beat_ids");
     expect(transport).toContain("constructor(startupCandidates");
+    expect(transport).toContain("startupMessageIds: candidates.map(candidate => candidate.messageId)");
+    expect(transport).not.toContain("startup_routes");
     expect(controller).not.toContain("startupBeatIds");
     expect(controller).toContain("startupMessageIds: readonly number[]");
     expect(controller).not.toContain("configureStartupBeatIds(");
     expect(controller).not.toContain("CONTROLLER_STARTUP_IDS_LATE");
+    expect(protocol).not.toContain("startup_routes");
+    expect(protocol).not.toContain("routing_revision");
   });
 
   it("resolves startup MASTER media from local message ids with one Telegram vector", () => {
