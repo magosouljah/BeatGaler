@@ -20,6 +20,7 @@ import {
   type WebTransportPrefetchChunk,
   type WebTransportPrefetchInput,
   type WebTransportPrefetchResult,
+  type WebTransportPrefetchTerminal,
   type WebTransportProgress,
   type WebTransportStreamInput,
   type WebTransportStreamResult,
@@ -46,6 +47,12 @@ function positiveMessageId(value: unknown): number | null {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
+function nullableSize(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const size = Number(value);
+  return Number.isFinite(size) && size >= 0 ? size : null;
+}
+
 function normalizeStartupCandidates(candidates: readonly WebStartupWarmCandidate[]): WebStartupWarmCandidate[] {
   const seen = new Set<string>();
   const output: WebStartupWarmCandidate[] = [];
@@ -58,7 +65,7 @@ function normalizeStartupCandidates(candidates: readonly WebStartupWarmCandidate
       beatId,
       messageId,
       mimeType: String(candidate.mimeType || "").trim() || "audio/mpeg",
-      sizeBytes: Number.isFinite(Number(candidate.sizeBytes)) ? Math.max(0, Number(candidate.sizeBytes)) : null,
+      sizeBytes: nullableSize(candidate.sizeBytes),
     });
     if (output.length >= 14) break;
   }
@@ -86,6 +93,7 @@ export class WebGalerCloudTransport {
   private readonly uploadCheckpoints = new Map<string, Promise<WebTransportUploadResult>>();
   private playbackDataLanes = DEFAULT_PLAYBACK_DATA_LANES;
   private indexBarrier: () => Promise<void> = () => Promise.resolve();
+  private indexReadPromise: Promise<WebTransportLibraryIndexResult> | null = null;
 
   constructor(startupCandidates: readonly WebStartupWarmCandidate[] = []) {
     const candidates = normalizeStartupCandidates(startupCandidates);
@@ -162,29 +170,40 @@ export class WebGalerCloudTransport {
     );
   }
 
-  async getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
-    const started = Date.now();
-    playTrace("TRANSPORT_GET_INDEX_ENTER");
-    await this.indexBarrier();
-    const connectStarted = Date.now();
-    await this.controller.connect();
-    playTrace("TRANSPORT_GET_INDEX_CONNECTED", { wait_ms: Date.now() - connectStarted });
-    const operationStarted = Date.now();
-    const result = await this.controller.withOperation(
-      "get_index",
-      { objectType: "index", objectIds: ["pinned"] },
-      () => this.worker.getLibraryIndex(),
-    );
-    void reconcileWebTransportRouting(result.manifest).catch(error => {
-      playTrace("TRANSPORT_ROUTING_RECONCILE_DEFERRED", {
-        error_name: error instanceof Error ? error.name : "unknown",
+  getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+    if (this.indexReadPromise) {
+      playTrace("TRANSPORT_GET_INDEX_JOIN");
+      return this.indexReadPromise;
+    }
+    let pending!: Promise<WebTransportLibraryIndexResult>;
+    pending = (async () => {
+      const started = Date.now();
+      playTrace("TRANSPORT_GET_INDEX_ENTER");
+      await this.indexBarrier();
+      const connectStarted = Date.now();
+      await this.controller.connect();
+      playTrace("TRANSPORT_GET_INDEX_CONNECTED", { wait_ms: Date.now() - connectStarted });
+      const operationStarted = Date.now();
+      const result = await this.controller.withOperation(
+        "get_index",
+        { objectType: "index", objectIds: ["pinned"] },
+        () => this.worker.getLibraryIndex(),
+      );
+      void reconcileWebTransportRouting(result.manifest).catch(error => {
+        playTrace("TRANSPORT_ROUTING_RECONCILE_DEFERRED", {
+          error_name: error instanceof Error ? error.name : "unknown",
+        });
       });
+      playTrace("TRANSPORT_GET_INDEX_DONE", {
+        operation_ms: Date.now() - operationStarted,
+        total_ms: Date.now() - started,
+      });
+      return result;
+    })().finally(() => {
+      if (this.indexReadPromise === pending) this.indexReadPromise = null;
     });
-    playTrace("TRANSPORT_GET_INDEX_DONE", {
-      operation_ms: Date.now() - operationStarted,
-      total_ms: Date.now() - started,
-    });
-    return result;
+    this.indexReadPromise = pending;
+    return pending;
   }
 
   async downloadFiles(inputs: WebTransportDownloadInput[]): Promise<Array<WebTransportDownloadResult | null>> {
@@ -201,7 +220,7 @@ export class WebGalerCloudTransport {
           while (cursor < inputs.length) {
             const index = cursor++;
             try {
-              results[index] = await this.worker.download(inputs[index]);
+              results[index] = await this.worker.download({ ...inputs[index], purpose: inputs[index].purpose || "artwork" });
             } catch (error) {
               console.warn(`[web/library] artwork ${inputs[index].messageId} could not be hydrated`, error);
             }
@@ -228,6 +247,7 @@ export class WebGalerCloudTransport {
   async prefetchFiles(
     inputs: WebTransportPrefetchInput[],
     onChunk?: (progress: WebTransportPrefetchChunk) => void,
+    onTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
   ): Promise<WebTransportPrefetchFilesHandle> {
     if (inputs.length === 0) {
       return {
@@ -246,7 +266,7 @@ export class WebGalerCloudTransport {
     const workerBatch = this.worker.prefetchBatch({
       inputs,
       maxConcurrency: this.playbackDataLanes,
-    }, onChunk);
+    }, onChunk, onTerminal);
     const completed = workerBatch.completed.finally(() => {
       playTrace("TRANSPORT_PREFETCH_BATCH_DONE", { count: ids.length, total_ms: Date.now() - started });
     });
@@ -267,7 +287,7 @@ export class WebGalerCloudTransport {
     const connectStarted = Date.now();
     await this.controller.connect();
     playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
-    const stream = this.worker.stream(input, onChunk);
+    const stream = this.worker.stream({ ...input, purpose: input.purpose || "playback" }, onChunk);
     playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started });
     return {
       completed: stream.completed.finally(() => {
@@ -449,6 +469,7 @@ export class WebGalerCloudTransport {
 
   disconnect(): Promise<void> {
     this.uploadCheckpoints.clear();
+    this.indexReadPromise = null;
     return this.controller.disconnect();
   }
 }
@@ -461,6 +482,7 @@ export type {
   WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
+  WebTransportPrefetchTerminal,
   WebTransportProgress,
   WebTransportStreamInput,
   WebTransportStreamResult,
