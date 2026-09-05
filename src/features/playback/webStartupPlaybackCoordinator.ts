@@ -4,6 +4,7 @@ import { WebPlaybackSourceManager, type WebPlaybackTransport } from "./webPlayba
 import { playTrace } from "./playTrace";
 import {
   readWebPlaybackRoutingCache,
+  updatePlaybackRoutingSort,
   updatePlaybackRoutingStartupFromBeats,
   type WebPlaybackSort,
 } from "./webPlaybackRoutingCache";
@@ -34,13 +35,21 @@ function localSort(): WebPlaybackSort {
 }
 
 function startupCandidates(): WebStartupWarmCandidate[] {
-  // An already-persisted routing startup is the OPEN authority. Presentation
-  // cache is only a migration/bootstrap fallback and must not replace a full
-  // manifest-derived startup with the first rich page.
+  // The compact Telegram-derived routing projection remains authoritative, but
+  // the user's persisted presentation sort decides which 14 routes are startup.
+  // This also repairs a sort changed in the previous session before Direct starts.
+  const sort = localSort();
   let routing = readWebPlaybackRoutingCache();
+  if (routing.sortBy !== sort && routing.authoritative && (routing.order?.length || 0) > 0) {
+    updatePlaybackRoutingSort(sort);
+    routing = readWebPlaybackRoutingCache();
+  }
+
+  // Presentation cache is only a migration/bootstrap fallback and must never
+  // replace a full manifest-derived all-library projection with a rich page.
   if (routing.startup.length === 0) {
     const presentation = localPresentationBeats();
-    if (presentation.length > 0) routing = updatePlaybackRoutingStartupFromBeats(presentation, localSort());
+    if (presentation.length > 0) routing = updatePlaybackRoutingStartupFromBeats(presentation, sort);
   }
   return routing.startup.map(route => ({
     beatId: route.beatId,
@@ -66,7 +75,7 @@ export class WebStartupPlaybackCoordinator {
     this.transport.setIndexBarrier(() => this.waitUntilIndexAllowed());
     const coordinatedTransport: WebPlaybackTransport = {
       prefetchFile: input => this.transport.prefetchFile(input),
-      prefetchFiles: (inputs, onChunk) => this.transport.prefetchFiles(inputs, onChunk),
+      prefetchFiles: (inputs, onChunk, onTerminal) => this.transport.prefetchFiles(inputs, onChunk, onTerminal),
       focusPlayback: messageId => this.beginPlayback(messageId),
       markPlaybackStable: messageId => this.markPlaybackStable(messageId),
       releasePlaybackFocus: messageId => this.endPlayback(messageId),
