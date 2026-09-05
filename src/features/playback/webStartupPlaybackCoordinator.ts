@@ -1,6 +1,6 @@
 import type { Beat } from "../../types";
 import { WebGalerCloudTransport, type WebStartupWarmCandidate } from "../cloud/webGalerCloudTransport";
-import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../cloud/webTransportWorkerClient";
+import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../cloud/webTransportEvents";
 import { WebPlaybackSourceManager, type WebPlaybackTransport } from "./webPlaybackSource";
 import { playTrace } from "./playTrace";
 import {

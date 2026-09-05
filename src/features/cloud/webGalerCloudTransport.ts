@@ -87,6 +87,26 @@ function routingChangeForBeat(beat: Beat): Record<string, number | null> {
   return { [beat.id]: beatMasterMessageId(beat) };
 }
 
+function concatBuffers(parts: readonly ArrayBuffer[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(new Uint8Array(part), offset);
+    offset += part.byteLength;
+  }
+  return output;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const size = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += size) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + size));
+  }
+  return btoa(binary);
+}
+
 export class WebGalerCloudTransport {
   private readonly worker: WebTransportWorkerClient;
   private readonly controller: WebTransportController;
@@ -94,6 +114,8 @@ export class WebGalerCloudTransport {
   private playbackDataLanes = DEFAULT_PLAYBACK_DATA_LANES;
   private indexBarrier: () => Promise<void> = () => Promise.resolve();
   private indexReadPromise: Promise<WebTransportLibraryIndexResult> | null = null;
+  private playbackCritical = false;
+  private backgroundWaiters = new Set<() => void>();
 
   constructor(startupCandidates: readonly WebStartupWarmCandidate[] = []) {
     const candidates = normalizeStartupCandidates(startupCandidates);
@@ -114,22 +136,48 @@ export class WebGalerCloudTransport {
     this.indexBarrier = barrier;
   }
 
+  private setPlaybackCritical(critical: boolean): void {
+    if (this.playbackCritical === critical) return;
+    this.playbackCritical = critical;
+    playTrace(critical ? "BACKGROUND_PAUSED_PLAY" : "BACKGROUND_RESUMED_PLAY");
+    if (!critical) {
+      const waiters = Array.from(this.backgroundWaiters);
+      this.backgroundWaiters.clear();
+      for (const resolve of waiters) resolve();
+    }
+  }
+
+  private async waitUntilBackgroundAllowed(): Promise<void> {
+    while (this.playbackCritical) {
+      playTrace("BACKGROUND_WAIT_PLAY");
+      await new Promise<void>(resolve => this.backgroundWaiters.add(resolve));
+    }
+  }
+
   async connectPlaybackDataPlane(): Promise<void> {
     playTrace("DIRECT_START_DISPATCHED");
     await this.controller.connect();
     playTrace("DIRECT_MTPROTO_READY");
   }
 
-  focusPlayback(messageId: number): Promise<void> {
-    return this.worker.focusPlayback(messageId);
+  async focusPlayback(messageId: number): Promise<void> {
+    this.setPlaybackCritical(true);
+    try {
+      await this.worker.focusPlayback(messageId);
+    } catch (error) {
+      this.setPlaybackCritical(false);
+      throw error;
+    }
   }
 
-  markPlaybackStable(messageId: number): Promise<void> {
-    return this.worker.markPlaybackStable(messageId);
+  async markPlaybackStable(messageId: number): Promise<void> {
+    await this.worker.markPlaybackStable(messageId);
+    this.setPlaybackCritical(false);
   }
 
-  releasePlaybackFocus(messageId: number): Promise<void> {
-    return this.worker.releasePlaybackFocus(messageId);
+  async releasePlaybackFocus(messageId: number): Promise<void> {
+    await this.worker.releasePlaybackFocus(messageId).catch(() => {});
+    this.setPlaybackCritical(false);
   }
 
   private checkpointKey(input: { file: File; beatId: string; kind: string }): string {
@@ -219,10 +267,24 @@ export class WebGalerCloudTransport {
         await Promise.all(Array.from({ length: workerCount }, async () => {
           while (cursor < inputs.length) {
             const index = cursor++;
+            const input = inputs[index];
             try {
-              results[index] = await this.worker.download({ ...inputs[index], purpose: inputs[index].purpose || "artwork" });
+              const chunks: ArrayBuffer[] = [];
+              const stream = await this.streamFile({
+                messageId: input.messageId,
+                mimeType: input.mimeType || "image/jpeg",
+                purpose: "other",
+              }, chunk => {
+                chunks.push(chunk);
+              });
+              const result = await stream.completed;
+              const mimeType = String(result.mimeType || input.mimeType || "image/jpeg");
+              results[index] = {
+                messageId: input.messageId,
+                dataUrl: `data:${mimeType};base64,${bytesToBase64(concatBuffers(chunks))}`,
+              };
             } catch (error) {
-              console.warn(`[web/library] artwork ${inputs[index].messageId} could not be hydrated`, error);
+              console.warn(`[web/library] artwork ${input.messageId} could not be hydrated`, error);
             }
           }
         }));
@@ -283,18 +345,56 @@ export class WebGalerCloudTransport {
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
   ): Promise<{ completed: Promise<WebTransportStreamResult>; cancel(): void }> {
     const started = Date.now();
-    playTrace("TRANSPORT_STREAM_ENTER");
+    const purpose = input.purpose || "playback";
+    const background = purpose !== "playback";
+    playTrace("TRANSPORT_STREAM_ENTER", { purpose });
     const connectStarted = Date.now();
     await this.controller.connect();
-    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted });
-    const stream = this.worker.stream({ ...input, purpose: input.purpose || "playback" }, onChunk);
-    playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started });
-    return {
-      completed: stream.completed.finally(() => {
-        playTrace("TRANSPORT_STREAM_DONE", { total_ms: Date.now() - started });
-      }),
-      cancel: stream.cancel,
+    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted, purpose });
+
+    let lease: Awaited<ReturnType<WebTransportController["beginOperation"]>> | null = null;
+    if (purpose === "export") {
+      lease = await this.controller.beginOperation(
+        "export",
+        { objectType: "message", objectIds: [String(input.messageId)] },
+      );
+    }
+    if (background) await this.waitUntilBackgroundAllowed();
+
+    let leaseEnded = false;
+    const endLease = async () => {
+      if (!lease || leaseEnded) return;
+      leaseEnded = true;
+      await this.controller.endOperation(lease).catch(() => {});
     };
+
+    try {
+      const workerChunk = background
+        ? async (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => {
+            await this.waitUntilBackgroundAllowed();
+            await onChunk(chunk, downloadedBytes, totalBytes);
+            // WorkerClient sends stream_ack only after this promise resolves.
+            // Waiting again here physically stops Telegram from fetching another
+            // 64 KiB chunk if Play became critical while the consumer ran.
+            await this.waitUntilBackgroundAllowed();
+          }
+        : onChunk;
+      const stream = this.worker.stream({ ...input, purpose }, workerChunk);
+      playTrace("TRANSPORT_STREAM_WORKER_STARTED", { total_ms: Date.now() - started, purpose });
+      return {
+        completed: stream.completed.finally(async () => {
+          await endLease();
+          playTrace("TRANSPORT_STREAM_DONE", { total_ms: Date.now() - started, purpose });
+        }),
+        cancel: () => {
+          stream.cancel();
+          void endLease();
+        },
+      };
+    } catch (error) {
+      await endLease();
+      throw error;
+    }
   }
 
   async commitImportedBeat(
@@ -470,6 +570,7 @@ export class WebGalerCloudTransport {
   disconnect(): Promise<void> {
     this.uploadCheckpoints.clear();
     this.indexReadPromise = null;
+    this.setPlaybackCritical(false);
     return this.controller.disconnect();
   }
 }
