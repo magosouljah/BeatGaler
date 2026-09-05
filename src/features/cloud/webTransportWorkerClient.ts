@@ -52,6 +52,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private worker: Worker | null = null;
   private pending = new Map<string, PendingRequest>();
   private sessionStartupMessageIds: number[] = [];
+  private desiredPlaybackMessageId: number | null = null;
 
   constructor(
     private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
@@ -202,6 +203,15 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_primary_dcs: session.temp_primary_dcs,
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+
+    // initialize() replaces the MTProto client and resets Worker scheduler state.
+    // Reapply a focus that was requested while reserve/bind/activate were still
+    // pending before readiness is published to the controller.
+    const desiredPlaybackMessageId = this.desiredPlaybackMessageId;
+    if (desiredPlaybackMessageId !== null) {
+      await this.request<void>({ op: "playback_focus", messageId: desiredPlaybackMessageId });
+      playTrace("WORKER_PLAYBACK_FOCUS_REAPPLIED", { message_id: desiredPlaybackMessageId });
+    }
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {
@@ -269,15 +279,22 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   focusPlayback(messageId: number): Promise<void> {
-    return this.request<void>({ op: "playback_focus", messageId });
+    const id = Number(messageId || 0);
+    if (!Number.isSafeInteger(id) || id <= 0) return Promise.resolve();
+    this.desiredPlaybackMessageId = id;
+    return this.request<void>({ op: "playback_focus", messageId: id });
   }
 
   markPlaybackStable(messageId: number): Promise<void> {
-    return this.request<void>({ op: "playback_stable", messageId });
+    const id = Number(messageId || 0);
+    if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
+    return this.request<void>({ op: "playback_stable", messageId: id });
   }
 
   releasePlaybackFocus(messageId: number): Promise<void> {
-    return this.request<void>({ op: "playback_release", messageId });
+    const id = Number(messageId || 0);
+    if (this.desiredPlaybackMessageId === id) this.desiredPlaybackMessageId = null;
+    return this.request<void>({ op: "playback_release", messageId: id });
   }
 
   stream(
@@ -310,7 +327,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   async shutdown(): Promise<void> {
     const worker = this.worker;
-    if (!worker) return;
+    this.desiredPlaybackMessageId = null;
+    if (!worker) {
+      this.sessionStartupMessageIds = [];
+      return;
+    }
     await this.request({ op: "shutdown" }).catch(() => {});
     worker.terminate();
     this.worker = null;
