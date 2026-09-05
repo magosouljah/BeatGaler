@@ -58,18 +58,21 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
   it("starts Direct from remembered-session OPEN even when the local routing cache is empty", () => {
     const main = source("src/main.tsx");
+    const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
 
-    expect(main).toContain('import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";');
-    const coordinatorAcquire = main.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
-    const coordinatorStart = main.indexOf("void coordinator.start().then(", coordinatorAcquire);
-    const startupDispatch = main.indexOf("preconnectRememberedWebDirect();", coordinatorStart);
+    expect(main).toContain('import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";');
+    const startupDispatch = main.indexOf("preconnectRememberedWebDirect();");
     const reactRender = main.indexOf("ReactDOM.createRoot(", startupDispatch);
-    expect(coordinatorAcquire).toBeGreaterThanOrEqual(0);
-    expect(coordinatorStart).toBeGreaterThan(coordinatorAcquire);
-    expect(startupDispatch).toBeGreaterThan(coordinatorStart);
+    expect(startupDispatch).toBeGreaterThanOrEqual(0);
     expect(reactRender).toBeGreaterThan(startupDispatch);
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
+
+    expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
+    const coordinatorAcquire = rememberedPreconnect.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
+    const coordinatorStart = rememberedPreconnect.indexOf("void coordinator.start().then(", coordinatorAcquire);
+    expect(coordinatorAcquire).toBeGreaterThanOrEqual(0);
+    expect(coordinatorStart).toBeGreaterThan(coordinatorAcquire);
     expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
 
