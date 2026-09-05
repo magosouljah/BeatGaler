@@ -16,12 +16,24 @@ export interface CachedStartupPlaybackRoute extends CachedPlaybackRoute {
   beatId: string;
 }
 
+export interface CachedPlaybackOrderEntry {
+  beatId: string;
+  manualIndex: number;
+  rating: number;
+  bpm: number;
+  name: string;
+}
+
 export interface WebPlaybackRoutingCacheV1 {
   version: 1;
   routes: Record<string, CachedPlaybackRoute>;
   startup: CachedStartupPlaybackRoute[];
   sortBy: WebPlaybackSort;
   updatedAt: number;
+  /** True only after Telegram manifest reconciliation, never from presentation cache. */
+  authoritative?: boolean;
+  /** Compact all-library ordering projection; no rich Beat/artwork data. */
+  order?: CachedPlaybackOrderEntry[];
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -42,8 +54,15 @@ function positiveInteger(value: unknown): number | null {
 }
 
 function nullableSize(value: unknown): number | null {
+  // Number(null) === 0; that must not turn unknown Telegram size into a real 0.
+  if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function finiteNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function normalizeSort(value: unknown): WebPlaybackSort {
@@ -67,7 +86,7 @@ function defaultSort(): WebPlaybackSort {
 }
 
 function emptyCache(sortBy = defaultSort()): WebPlaybackRoutingCacheV1 {
-  return { version: 1, routes: {}, startup: [], sortBy, updatedAt: Date.now() };
+  return { version: 1, routes: {}, startup: [], sortBy, updatedAt: Date.now(), authoritative: false, order: [] };
 }
 
 function normalizedRoute(value: unknown): CachedPlaybackRoute | null {
@@ -80,6 +99,25 @@ function normalizedRoute(value: unknown): CachedPlaybackRoute | null {
     mimeType: text(row.mimeType) || "audio/mpeg",
     sizeBytes: nullableSize(row.sizeBytes),
   };
+}
+
+function normalizedOrder(value: unknown): CachedPlaybackOrderEntry[] {
+  const output: CachedPlaybackOrderEntry[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(value) ? value : []) {
+    const row = record(raw);
+    const beatId = text(row?.beatId);
+    if (!beatId || seen.has(beatId)) continue;
+    seen.add(beatId);
+    output.push({
+      beatId,
+      manualIndex: Math.max(0, Math.trunc(finiteNumber(row?.manualIndex))),
+      rating: finiteNumber(row?.rating),
+      bpm: finiteNumber(row?.bpm),
+      name: text(row?.name),
+    });
+  }
+  return output;
 }
 
 export function readWebPlaybackRoutingCache(): WebPlaybackRoutingCacheV1 {
@@ -114,6 +152,8 @@ export function readWebPlaybackRoutingCache(): WebPlaybackRoutingCacheV1 {
       startup,
       sortBy: normalizeSort(parsed.sortBy || defaultSort()),
       updatedAt: Number.isFinite(Number(parsed.updatedAt)) ? Number(parsed.updatedAt) : 0,
+      authoritative: parsed.authoritative === true,
+      order: normalizedOrder(parsed.order),
     };
   } catch {
     return emptyCache();
@@ -130,6 +170,8 @@ export function writeWebPlaybackRoutingCache(cache: WebPlaybackRoutingCacheV1): 
       startup: cache.startup.slice(0, WEB_STARTUP_PLAYBACK_ROUTE_LIMIT),
       sortBy: normalizeSort(cache.sortBy),
       updatedAt: Math.max(0, Number(cache.updatedAt) || Date.now()),
+      authoritative: cache.authoritative === true,
+      order: cache.order || [],
     } satisfies WebPlaybackRoutingCacheV1));
   } catch {}
 }
@@ -167,35 +209,62 @@ function deletedIds(manifest: JsonRecord): Set<string> {
     const id = text(row?.beat_id ?? row?.id);
     if (id) ids.add(id);
   }
+  for (const value of Array.isArray(manifest.trash) ? manifest.trash : []) {
+    const row = record(value);
+    const beat = record(row?.beat) || row;
+    const id = text(beat?.id);
+    if (id) ids.add(id);
+  }
   return ids;
 }
 
-function orderedManifestBeats(manifest: JsonRecord, sortBy: WebPlaybackSort): JsonRecord[] {
+function orderFromManifest(manifest: JsonRecord): CachedPlaybackOrderEntry[] {
   const deleted = deletedIds(manifest);
-  const beats = (Array.isArray(manifest.beats) ? manifest.beats : [])
-    .map(record)
-    .filter((beat): beat is JsonRecord => Boolean(beat && text(beat.id) && !deleted.has(text(beat.id))));
-  if (sortBy === "manual") return beats;
-  const manualIndex = new Map(beats.map((beat, index) => [text(beat.id), index]));
-  return beats.slice().sort((a, b) => {
-    if (sortBy === "bpm") return Number(a.bpm || 0) - Number(b.bpm || 0);
-    if (sortBy === "name") return text(a.name).localeCompare(text(b.name));
-    const ratingDiff = Number(b.rating || 0) - Number(a.rating || 0);
-    return ratingDiff || (manualIndex.get(text(a.id)) ?? 0) - (manualIndex.get(text(b.id)) ?? 0);
+  const output: CachedPlaybackOrderEntry[] = [];
+  for (const raw of Array.isArray(manifest.beats) ? manifest.beats : []) {
+    const beat = record(raw);
+    const beatId = text(beat?.id);
+    if (!beat || !beatId || deleted.has(beatId)) continue;
+    output.push({
+      beatId,
+      manualIndex: output.length,
+      rating: finiteNumber(beat.rating),
+      bpm: finiteNumber(beat.bpm),
+      name: text(beat.name),
+    });
+  }
+  return output;
+}
+
+function orderFromBeats(beats: readonly Beat[]): CachedPlaybackOrderEntry[] {
+  return beats.map((beat, manualIndex) => ({
+    beatId: beat.id,
+    manualIndex,
+    rating: finiteNumber(beat.rating),
+    bpm: finiteNumber(beat.bpm),
+    name: String(beat.name || "").trim(),
+  }));
+}
+
+function sortedOrder(order: readonly CachedPlaybackOrderEntry[], sortBy: WebPlaybackSort): CachedPlaybackOrderEntry[] {
+  if (sortBy === "manual") return order.slice().sort((a, b) => a.manualIndex - b.manualIndex);
+  return order.slice().sort((a, b) => {
+    if (sortBy === "bpm") return a.bpm - b.bpm || a.manualIndex - b.manualIndex;
+    if (sortBy === "name") return a.name.localeCompare(b.name) || a.manualIndex - b.manualIndex;
+    return b.rating - a.rating || a.manualIndex - b.manualIndex;
   });
 }
 
-function startupFromManifest(
-  manifest: JsonRecord,
+function startupFromOrder(
+  order: readonly CachedPlaybackOrderEntry[],
   routes: Record<string, CachedPlaybackRoute>,
   sortBy: WebPlaybackSort,
 ): CachedStartupPlaybackRoute[] {
   const startup: CachedStartupPlaybackRoute[] = [];
-  for (const beat of orderedManifestBeats(manifest, sortBy)) {
-    const beatId = text(beat.id);
-    const route = routes[beatId];
+  for (const item of sortedOrder(order, sortBy)) {
+    const route = routes[item.beatId];
     if (!route) continue;
-    startup.push({ beatId, ...route });
+    startup.push({ beatId: item.beatId, ...route });
     if (startup.length >= WEB_STARTUP_PLAYBACK_ROUTE_LIMIT) break;
   }
   return startup;
@@ -214,12 +283,15 @@ export function updatePlaybackRoutingCacheFromManifest(value: unknown): WebPlayb
     const route = routeFromManifestBeat(beat);
     if (route) routes[beatId] = route;
   }
+  const order = orderFromManifest(manifest);
   const cache: WebPlaybackRoutingCacheV1 = {
     version: 1,
     routes,
-    startup: startupFromManifest(manifest, routes, previous.sortBy),
+    startup: startupFromOrder(order, routes, previous.sortBy),
     sortBy: previous.sortBy,
     updatedAt: Date.now(),
+    authoritative: true,
+    order,
   };
   writeWebPlaybackRoutingCache(cache);
   return cache;
@@ -241,13 +313,33 @@ function routeFromBeat(beat: Beat): CachedPlaybackRoute | null {
   };
 }
 
+function upsertOrderEntry(cache: WebPlaybackRoutingCacheV1, beat: Beat): void {
+  const order = cache.order || [];
+  const existing = order.find(item => item.beatId === beat.id);
+  if (existing) {
+    existing.rating = finiteNumber(beat.rating);
+    existing.bpm = finiteNumber(beat.bpm);
+    existing.name = String(beat.name || "").trim();
+  } else {
+    const manualIndex = order.reduce((max, item) => Math.max(max, item.manualIndex), -1) + 1;
+    order.push({
+      beatId: beat.id,
+      manualIndex,
+      rating: finiteNumber(beat.rating),
+      bpm: finiteNumber(beat.bpm),
+      name: String(beat.name || "").trim(),
+    });
+  }
+  cache.order = order;
+}
+
 export function upsertPlaybackRouteFromBeat(beat: Beat): void {
   const route = routeFromBeat(beat);
   if (!route) return;
   const cache = readWebPlaybackRoutingCache();
   cache.routes[beat.id] = route;
-  const startup = cache.startup.find(item => item.beatId === beat.id);
-  if (startup) Object.assign(startup, route);
+  upsertOrderEntry(cache, beat);
+  cache.startup = startupFromOrder(cache.order || [], cache.routes, cache.sortBy);
   cache.updatedAt = Date.now();
   writeWebPlaybackRoutingCache(cache);
 }
@@ -257,7 +349,8 @@ export function deletePlaybackRoutes(beatIds: readonly string[]): void {
   const ids = new Set(beatIds.map(id => String(id || "").trim()).filter(Boolean));
   const cache = readWebPlaybackRoutingCache();
   for (const id of ids) delete cache.routes[id];
-  cache.startup = cache.startup.filter(item => !ids.has(item.beatId));
+  cache.order = (cache.order || []).filter(item => !ids.has(item.beatId));
+  cache.startup = startupFromOrder(cache.order, cache.routes, cache.sortBy);
   cache.updatedAt = Date.now();
   writeWebPlaybackRoutingCache(cache);
 }
@@ -268,34 +361,42 @@ export function updatePlaybackRoutingStartupFromBeats(
 ): WebPlaybackRoutingCacheV1 {
   const cache = readWebPlaybackRoutingCache();
   cache.sortBy = normalizeSort(sortBy);
-  const manualIndex = new Map(beats.map((beat, index) => [beat.id, index]));
-  const ordered = beats.slice().sort((a, b) => {
-    if (cache.sortBy === "manual") return (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
-    if (cache.sortBy === "bpm") return Number(a.bpm || 0) - Number(b.bpm || 0);
-    if (cache.sortBy === "name") return a.name.localeCompare(b.name);
-    const ratingDiff = Number(b.rating || 0) - Number(a.rating || 0);
-    return ratingDiff || (manualIndex.get(a.id) ?? 0) - (manualIndex.get(b.id) ?? 0);
-  });
-  cache.startup = [];
-  for (const beat of ordered) {
-    const route = cache.routes[beat.id] || routeFromBeat(beat);
-    if (!route) continue;
-    cache.routes[beat.id] = route;
-    cache.startup.push({ beatId: beat.id, ...route });
-    if (cache.startup.length >= WEB_STARTUP_PLAYBACK_ROUTE_LIMIT) break;
+
+  if (cache.authoritative && (cache.order?.length || 0) > 0) {
+    // A partial rich page must never replace the all-library Telegram projection.
+    cache.startup = startupFromOrder(cache.order || [], cache.routes, cache.sortBy);
+  } else {
+    cache.order = orderFromBeats(beats);
+    for (const beat of beats) {
+      const route = cache.routes[beat.id] || routeFromBeat(beat);
+      if (route) cache.routes[beat.id] = route;
+    }
+    cache.startup = startupFromOrder(cache.order, cache.routes, cache.sortBy);
   }
+
   cache.updatedAt = Date.now();
   writeWebPlaybackRoutingCache(cache);
   return cache;
 }
 
 export function updatePlaybackRoutingSort(sortBy: WebPlaybackSort, beats?: readonly Beat[]): void {
-  if (beats) {
-    updatePlaybackRoutingStartupFromBeats(beats, sortBy);
+  const normalized = normalizeSort(sortBy);
+  const cache = readWebPlaybackRoutingCache();
+  cache.sortBy = normalized;
+  if (cache.authoritative && (cache.order?.length || 0) > 0) {
+    cache.startup = startupFromOrder(cache.order || [], cache.routes, normalized);
+    cache.updatedAt = Date.now();
+    writeWebPlaybackRoutingCache(cache);
     return;
   }
-  const cache = readWebPlaybackRoutingCache();
-  cache.sortBy = normalizeSort(sortBy);
+  if (beats) {
+    updatePlaybackRoutingStartupFromBeats(beats, normalized);
+    return;
+  }
   cache.updatedAt = Date.now();
   writeWebPlaybackRoutingCache(cache);
+}
+
+export function isPlaybackRoutingAuthoritative(): boolean {
+  return readWebPlaybackRoutingCache().authoritative === true;
 }
