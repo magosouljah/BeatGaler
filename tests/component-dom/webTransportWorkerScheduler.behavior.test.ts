@@ -234,7 +234,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   harness.resetObservations();
-  await dispatchAndWait({ requestId: `scheduler-reset-${Math.random()}`, op: "playback_release", messageId: 10 });
+  await dispatchAndWait({ requestId: `scheduler-reset-${Math.random()}`, op: "playback_release", messageId: 3 });
+  await dispatchAndWait({ requestId: `scheduler-reset-10-${Math.random()}`, op: "playback_release", messageId: 10 });
   await dispatchAndWait({ requestId: `scheduler-reset-99-${Math.random()}`, op: "playback_release", messageId: 99 });
 });
 
@@ -299,6 +300,39 @@ describe("Worker playback scheduler with pending Telegram transfers", () => {
     }
     expect(harness.transfersFor(1)).toHaveLength(2);
     expect(harness.transfersFor(10)).toHaveLength(1);
+  });
+
+  it("keeps the physically active same-beat warm, aborts the other six lanes, and never restarts offset zero", async () => {
+    const ids = Array.from({ length: 14 }, (_, index) => index + 1);
+    dispatch({
+      requestId: "warm-active-target",
+      op: "prefetch_batch",
+      input: { inputs: ids.map(messageId => ({ messageId, mimeType: "audio/mpeg" })), maxConcurrency: 7 },
+    });
+    await vi.waitFor(() => expect(harness.activeTransfers()).toHaveLength(7));
+
+    const target = harness.transfersFor(3)[0];
+    expect(target).toBeTruthy();
+    const unrelated = harness.activeTransfers().filter(transfer => transfer.messageId !== 3);
+    expect(unrelated).toHaveLength(6);
+
+    await dispatchAndWait({ requestId: "focus-active-3", op: "playback_focus", messageId: 3 });
+    await vi.waitFor(() => expect(harness.activeTransfers().map(transfer => transfer.messageId)).toEqual([3]));
+
+    expect(target.signal.aborted).toBe(false);
+    for (const transfer of unrelated) {
+      expect(transfer.signal.aborted).toBe(true);
+      expect(terminal(transfer.messageId, "FAILED")).toHaveLength(0);
+    }
+    expect(harness.transfersFor(3)).toHaveLength(1);
+
+    target.resolve();
+    await vi.waitFor(() => expect(terminal(3, "READY")).toHaveLength(1));
+    expect(harness.transfersFor(3)).toHaveLength(1);
+
+    await dispatchAndWait({ requestId: "release-active-3", op: "playback_release", messageId: 3 });
+    await drainBatch("warm-active-target");
+    expect(harness.transfersFor(3)).toHaveLength(1);
   });
 
   it("gives a Play outside startup14 foreground priority after physically preempting all startup warm", async () => {
