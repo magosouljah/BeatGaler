@@ -70,7 +70,7 @@ function GlobalStyles() {
           opacity: 0;
         }
         to {
-          transform: translateX(0) scale(1);
+          transform: translateX(0);
           opacity: 1;
         }
       }
@@ -113,6 +113,11 @@ function GlobalStyles() {
         100% { transform: translateX(430%); opacity: .25; }
       }
 
+      @keyframes beatgaler-skeleton-pulse {
+        0%, 100% { opacity: .48; }
+        50% { opacity: .9; }
+      }
+
       .beatgaler-skeleton-block {
         background: #303030;
         border-radius: 8px;
@@ -122,11 +127,6 @@ function GlobalStyles() {
       .beatgaler-skeleton-title { width: 150px; height: 17px; margin-top: 12px; }
       .beatgaler-skeleton-tag { width: 72px; height: 17px; border-radius: 999px; }
       .beatgaler-skeleton-tag-short { width: 48px; }
-
-      @keyframes beatgaler-skeleton-pulse {
-        0%, 100% { opacity: .48; }
-        50% { opacity: .9; }
-      }
 
       @keyframes pgb1 { from { transform: scaleY(0.25); } to { transform: scaleY(1); } }
       @keyframes pgb2 { from { transform: scaleY(0.4); } to { transform: scaleY(0.9); } }
