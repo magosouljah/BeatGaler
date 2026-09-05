@@ -60,7 +60,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const main = source("src/main.tsx");
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
 
-    expect(main).toContain('import("./features/playback/webStartupPlaybackCoordinator")');
+    expect(main).toContain('import { getWebStartupPlaybackCoordinator } from "./features/playback/webStartupPlaybackCoordinator";');
     expect(main).toContain("getWebStartupPlaybackCoordinator().start()");
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
@@ -102,7 +102,14 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(prefetchBody).not.toContain("beginOperation");
     expect(prefetchBody).not.toContain("withOperation");
     expect(streamBody).toContain("this.worker.stream");
-    expect(streamBody).not.toContain("beginOperation");
+    const exportGuardStart = streamBody.indexOf('if (purpose === "export") {');
+    const exportGuardEnd = streamBody.indexOf("if (background)", exportGuardStart);
+    const exportGuardBody = streamBody.slice(exportGuardStart, exportGuardEnd);
+    const playbackBody = streamBody.slice(0, exportGuardStart) + streamBody.slice(exportGuardEnd);
+    expect(exportGuardStart).toBeGreaterThanOrEqual(0);
+    expect(exportGuardEnd).toBeGreaterThan(exportGuardStart);
+    expect(exportGuardBody).toContain("this.controller.beginOperation(");
+    expect(playbackBody).not.toContain("this.controller.beginOperation(");
     expect(streamBody).not.toContain("withOperation");
   });
 
@@ -140,7 +147,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(playback).toContain("prefetched.totalBytes <= prefetched.prefix.byteLength || prefetched.prefix.byteLength % 4096 === 0");
     expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
-    expect(playback).toContain("this.transport.streamFile({ messageId, mimeType, offsetBytes }, chunk => {");
+    expect(playback).toContain('this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback" }, chunk => {');
   });
 
   it("uses PLAY_CRITICAL zero-warm and PLAY_STABLE six-warm scheduling", () => {
@@ -153,7 +160,9 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(playback).toContain("PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS = 2");
     expect(playback).toContain("bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime)");
     expect(playback).toContain("this.transport.markPlaybackStable(entry.messageId)");
-    expect(playback).toContain("if (state.waiting)");
+    expect(playback).toContain("entry.playbackWaiting = Boolean(state.waiting)");
+    expect(playback).toContain("const isActive = entry.playbackPlaying || entry.playbackWaiting");
+    expect(playback).toContain('reason: entry.playbackWaiting ? "waiting" : "resume"');
     expect(playback).toContain("this.transport.focusPlayback(entry.messageId)");
   });
 
@@ -165,7 +174,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain("activeIndexAbortController");
     expect(worker).toContain("waitUntilIndexPriorityAllowed");
     expect(worker).toContain("abortSignal: controller.signal");
-    expect(worker).toContain('playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM")');
+    expect(worker).toContain('playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM", {');
+    expect(worker).toContain("request_id: activeIndexRequestId");
     expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN")');
   });
 
@@ -175,7 +185,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     const initialize = controller.indexOf("await this.runtime.initialize(session, this.startupMessageIds)");
     const publish = controller.indexOf("this.session = session", initialize);
-    const background = controller.indexOf("this.startBackgroundVerification(session)", publish);
+    const background = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration)", publish);
     expect(initialize).toBeGreaterThanOrEqual(0);
     expect(publish).toBeGreaterThan(initialize);
     expect(background).toBeGreaterThan(publish);
