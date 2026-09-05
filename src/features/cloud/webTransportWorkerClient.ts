@@ -46,6 +46,10 @@ function isReusablePlaybackPrefixEnd(offsetBytes: number, byteLength: number, to
   return end % PLAYBACK_PREFIX_ALIGNMENT_BYTES === 0;
 }
 
+function streamCancelledError(): DOMException {
+  return new DOMException("Playback stream cancelled.", "AbortError");
+}
+
 export class WebTransportWorkerError extends Error {
   constructor(message: string, readonly code?: WebTransportErrorCode) {
     super(message);
@@ -84,6 +88,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private pending = new Map<string, PendingRequest>();
   private sessionStartupMessageIds: number[] = [];
   private desiredPlaybackMessageId: number | null = null;
+  private credentialRefreshEpoch = 0;
+  private credentialRefreshPromise: Promise<void> | null = null;
 
   constructor(
     private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
@@ -342,7 +348,14 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {
-    await this.initialize(session, this.sessionStartupMessageIds);
+    this.credentialRefreshEpoch += 1;
+    const refresh = this.initialize(session, this.sessionStartupMessageIds);
+    this.credentialRefreshPromise = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.credentialRefreshPromise === refresh) this.credentialRefreshPromise = null;
+    }
   }
 
   async verifyIdentity(): Promise<void> {
@@ -433,10 +446,51 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     input: WebTransportStreamInput,
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>,
   ): WebTransportStreamHandle {
-    const requestId = crypto.randomUUID();
+    let cancelled = false;
+    let activeRequestId: string | null = null;
+    let confirmedOffset = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
+
+    const completed = (async (): Promise<WebTransportStreamResult> => {
+      while (true) {
+        if (cancelled) throw streamCancelledError();
+        const attemptRefreshEpoch = this.credentialRefreshEpoch;
+        const requestId = crypto.randomUUID();
+        activeRequestId = requestId;
+        try {
+          return await this.request<WebTransportStreamResult>(
+            { op: "stream", input: { ...input, offsetBytes: confirmedOffset } },
+            undefined,
+            async (chunk, downloadedBytes, totalBytes) => {
+              await onChunk(chunk, downloadedBytes, totalBytes);
+              confirmedOffset = Math.max(confirmedOffset, Math.floor(Number(downloadedBytes) || confirmedOffset));
+            },
+            requestId,
+          );
+        } catch (error) {
+          if (cancelled) throw streamCancelledError();
+          const refreshObserved = this.credentialRefreshEpoch !== attemptRefreshEpoch || this.credentialRefreshPromise !== null;
+          if (!refreshObserved) throw error;
+          const refresh = this.credentialRefreshPromise;
+          if (refresh) await refresh;
+          if (cancelled) throw streamCancelledError();
+          playTrace("WORKER_STREAM_REFRESH_RESUME", {
+            message_id: input.messageId,
+            offset_bytes: confirmedOffset,
+            refresh_epoch: this.credentialRefreshEpoch,
+          });
+        } finally {
+          if (activeRequestId === requestId) activeRequestId = null;
+        }
+      }
+    })();
+
     return {
-      completed: this.request<WebTransportStreamResult>({ op: "stream", input }, undefined, onChunk, requestId),
-      cancel: () => this.sendStreamControl("cancel", requestId),
+      completed,
+      cancel: () => {
+        if (cancelled) return;
+        cancelled = true;
+        if (activeRequestId) this.sendStreamControl("cancel", activeRequestId);
+      },
     };
   }
 
