@@ -60,6 +60,8 @@ rejectText(workflow, "x64-windows-static", "Telegram Bot API must not use the in
 
 const devLauncher = read("scripts/run-tauri.ps1");
 requireText(devLauncher, "prepare-windows-bot-api-runtime.ps1", "Desktop dev must prepare the pinned Bot API runtime before Tauri starts");
+requireText(devLauncher, '$env:BEATGALER_BOT_API_RUNTIME = $preparedBotApiRuntime', "Desktop dev must force runtime discovery to the bundle it just verified");
+requireText(devLauncher, "src-tauri\\resources\\windows\\telegram-bot-api.exe", "Desktop dev must select the staged Windows Bot API executable");
 const devRuntime = read("scripts/prepare-windows-bot-api-runtime.ps1");
 for (const [needle, message] of [
   ["supply-chain\\runtime-sources.json", "Dev runtime must use the canonical runtime source manifest"],
@@ -72,4 +74,4 @@ for (const [needle, message] of [
 ]) requireText(devRuntime, needle, message);
 rejectText(devRuntime, "D:\\BeatGalerBotAPI", "Dev runtime must not depend on the historical D:\\BeatGalerBotAPI build");
 
-console.log("PASS Windows packaging guard: pinned dynamic Telegram Bot API runtime + DLL bundle is prepared for dev, bundled for release, and digest-verified");
+console.log("PASS Windows packaging guard: pinned dynamic Telegram Bot API runtime + DLL bundle is prepared for dev, selected deterministically, bundled for release, and digest-verified");
