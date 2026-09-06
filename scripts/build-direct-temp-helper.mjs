@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -54,11 +54,14 @@ for (const [name, target] of aliases) {
   if (!existsSync(target)) throw new Error(`Missing ${name} target: ${target}`);
 }
 
+const helperOutputPath = path.join(root, "src-tauri", "direct-transport", "transport-helper.cjs");
+
 // Keep this bundle self-contained: packaged Desktop has no node_modules beside the helper.
 // Task 5.1: this source is also the deterministic trigger for the exact Desktop seam applicator.
-await build({
+// Generate in memory first so Cargo rebuilds do not touch Tauri's watched helper unless its bytes changed.
+const result = await build({
   entryPoints: [path.join(root, "src-tauri", "direct-transport", "transport-helper.source.mjs")],
-  outfile: path.join(root, "src-tauri", "direct-transport", "transport-helper.cjs"),
+  outfile: helperOutputPath,
   bundle: true,
   platform: "node",
   target: "node22",
@@ -66,6 +69,7 @@ await build({
   sourcemap: false,
   legalComments: "none",
   loader: { ".wasm": "binary" },
+  write: false,
   plugins: [{
     name: "beatgaler-mtcute-temp-auth-aliases",
     setup(buildApi) {
@@ -74,4 +78,15 @@ await build({
   }],
 });
 
-console.log("Built self-contained Desktop temporary-auth Direct helper.");
+if (result.outputFiles?.length !== 1) {
+  throw new Error(`Expected one bundled Desktop Direct helper output, got ${result.outputFiles?.length ?? 0}.`);
+}
+
+const nextHelper = Buffer.from(result.outputFiles[0].contents);
+const helperChanged = !existsSync(helperOutputPath) || !readFileSync(helperOutputPath).equals(nextHelper);
+if (helperChanged) {
+  writeFileSync(helperOutputPath, nextHelper);
+  console.log("Built self-contained Desktop temporary-auth Direct helper.");
+} else {
+  console.log("Desktop temporary-auth Direct helper unchanged; preserving existing file timestamp.");
+}
