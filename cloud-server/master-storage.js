@@ -80,13 +80,20 @@ async function createPrivateUserStorageGroup({ username }) {
       }));
     } catch (error) {
       const message = String(error?.errorMessage || error?.message || error);
-      if (!/TOPIC_NOT_MODIFIED/i.test(message)) throw error;
+      if (!/TOPIC_NOT_MODIFIED/i.test(message)) {
+        console.warn("[storage] storage group created but #general rename failed:", message);
+      }
     }
-    await client.invoke(new Api.channels.UpdatePinnedForumTopic({
-      channel,
-      topicId: 1,
-      pinned: true,
-    }));
+
+    try {
+      await client.invoke(new Api.channels.UpdatePinnedForumTopic({
+        channel,
+        topicId: 1,
+        pinned: true,
+      }));
+    } catch (error) {
+      console.warn("[storage] storage group created but #general pin failed:", error?.message || error);
+    }
 
     // Deliberately DO NOT add the manager/service bot here. MASTER owns the
     // vault. A single transport bot is added only while a BeatGaler session is

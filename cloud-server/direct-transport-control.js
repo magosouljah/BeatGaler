@@ -309,6 +309,14 @@ function leaseExpired(lease) {
   return Date.now() - parseTime(lease?.last_heartbeat_at) >= HEARTBEAT_TIMEOUT_MS;
 }
 
+function isDefinitiveMissingVaultError(error) {
+  const message = String(error?.errorMessage || error?.message || error || '').trim();
+  return (
+    message.includes('MASTER cannot find private vault') ||
+    /could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)
+  );
+}
+
 // Fair load-level FIFO:
 //   all bots get 1 vault before any bot gets 2;
 //   all bots get 2 before any bot gets 3; ...
@@ -1068,12 +1076,22 @@ async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
     await kickAndUnban(masterInfo.client, masterInfo.vault, botEntity);
     removed = true;
   } catch (error) {
-    mutateState(pool, state => {
-      state.bots[lease.bot_id].quarantined = true;
-      state.bots[lease.bot_id].quarantine_reason = `vault removal failed: ${error?.message || error}`;
-      if (state.leases[lease.session_id]) state.leases[lease.session_id].status = 'QUARANTINED';
-    });
-    throw new Error(`Transport cleanup could not be confirmed; bot retained for recovery: ${error?.message || error}`);
+    if (isDefinitiveMissingVaultError(error)) {
+      // A deleted vault has no remaining membership to clean up.
+      removed = true;
+      diag('SESSION_RELEASE_MISSING_VAULT', {
+        session_id: lease.session_id,
+        transport_id: lease.bot_id,
+        vault: lease.chat_id,
+      });
+    } else {
+      mutateState(pool, state => {
+        state.bots[lease.bot_id].quarantined = true;
+        state.bots[lease.bot_id].quarantine_reason = `vault removal failed: ${error?.message || error}`;
+        if (state.leases[lease.session_id]) state.leases[lease.session_id].status = 'QUARANTINED';
+      });
+      throw new Error(`Transport cleanup could not be confirmed; bot retained for recovery: ${error?.message || error}`);
+    }
   } finally {
     try { if (masterInfo?.client) await masterInfo.client.disconnect(); } catch (_) {}
   }
@@ -1082,6 +1100,13 @@ async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
   deleteLease(lease.session_id);
   runtimeSessions.delete(lease.session_id);
   mutateState(pool, state => {
+    // Repair only a quarantine caused by an earlier vault-removal failure.
+    // Do not clear unrelated quarantines such as failed token rotation.
+    const botState = state.bots[lease.bot_id];
+    if (String(botState?.quarantine_reason || '').startsWith('vault removal failed:')) {
+      botState.quarantined = false;
+      botState.quarantine_reason = null;
+    }
     state.bots[lease.bot_id].rotation_pending = TOKEN_ROTATION_ENABLED;
   });
   const rotation = TOKEN_ROTATION_ENABLED

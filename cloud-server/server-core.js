@@ -1144,6 +1144,53 @@ async function ensureEmptyIndexForStorage(_account) {
   return null;
 }
 
+function clearStorageBindingsForUser(user) {
+  const accountId = String(user?.id || '');
+  let changed = 0;
+
+  for (const [installationId, linked] of linkedAccounts.entries()) {
+    if (String(linked?.beatgalerAccountId || '') !== accountId) continue;
+
+    linkedAccounts.set(installationId, {
+      ...linked,
+      telegramUserId: null,
+      storageChatId: null,
+      storageChatTitle: null,
+    });
+    changed += 1;
+  }
+
+  if (changed) {
+    savePersistentData();
+    console.warn(`[storage] cleared ${changed} stale installation binding(s) for @${user.username}`);
+  }
+}
+
+function rebindStorageBindingsForUser(user) {
+  const accountId = String(user?.id || '');
+  const storageChatId = botApiChatIdFromStored(user.storageChatId);
+  let changed = 0;
+
+  for (const [installationId, linked] of linkedAccounts.entries()) {
+    if (String(linked?.beatgalerAccountId || '') !== accountId) continue;
+
+    linkedAccounts.set(installationId, {
+      ...linked,
+      beatgalerAccountId: user.id,
+      beatgalerUsername: user.username,
+      telegramUserId: storageChatId,
+      storageChatId,
+      storageChatTitle: user.storageChatTitle,
+    });
+    changed += 1;
+  }
+
+  if (changed) {
+    savePersistentData();
+    console.log(`[storage] rebound ${changed} installation binding(s) for @${user.username} -> ${storageChatId}`);
+  }
+}
+
 async function ensureUserStorage(user) {
   if (user.storageChatId) {
     const account = {
@@ -1167,6 +1214,7 @@ async function ensureUserStorage(user) {
           user.storageChatTitle = null;
           user.storageCreatedAt = null;
           saveAuthData();
+          clearStorageBindingsForUser(user);
           return ensureUserStorage(user);
         }
         console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
@@ -1198,6 +1246,7 @@ async function ensureUserStorage(user) {
         user.storageChatTitle = null;
         user.storageCreatedAt = null;
         saveAuthData();
+        clearStorageBindingsForUser(user);
         return ensureUserStorage(user);
       }
       throw error;
@@ -1217,6 +1266,7 @@ async function ensureUserStorage(user) {
   user.storageChatTitle = created.title;
   user.storageCreatedAt = Date.now();
   saveAuthData();
+  rebindStorageBindingsForUser(user);
 
   const account = {
     telegramUserId: botApiChatIdFromStored(user.storageChatId),
