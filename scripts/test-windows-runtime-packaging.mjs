@@ -12,12 +12,19 @@ function requireText(value, text, message) {
   if (!value.includes(text)) throw new Error(message);
 }
 
+function rejectText(value, text, message) {
+  if (value.includes(text)) throw new Error(message);
+}
+
 const windowsConfig = JSON.parse(read("src-tauri/tauri.windows-release.conf.json"));
 const resources = windowsConfig?.bundle?.resources ?? {};
 for (const [source, target] of [
   ["resources/windows/ffmpeg.exe", "ffmpeg.exe"],
   ["resources/windows/node.exe", "node.exe"],
   ["resources/windows/telegram-bot-api.exe", "telegram-bot-api.exe"],
+  ["resources/windows/libssl-3-x64.dll", "libssl-3-x64.dll"],
+  ["resources/windows/libcrypto-3-x64.dll", "libcrypto-3-x64.dll"],
+  ["resources/windows/z.dll", "z.dll"],
   ["direct-transport/transport-helper.cjs", "direct-transport/transport-helper.cjs"],
   ["direct-transport/runtime-watchdog.cjs", "direct-transport/runtime-watchdog.cjs"],
 ]) {
@@ -35,7 +42,11 @@ for (const [needle, message] of [
   ["BEATGALER_BOT_API_COMMIT", "Telegram Bot API source must come from the canonical runtime manifest"],
   ["BEATGALER_VCPKG_COMMIT", "vcpkg source must come from the canonical runtime manifest"],
   ["BEATGALER_FFMPEG_WINDOWS_ASSET", "FFmpeg source must come from the canonical runtime manifest"],
-  ["x64-windows-static", "Telegram Bot API must be built as a standalone static Windows executable"],
+  ["gperf:x64-windows openssl:x64-windows zlib:x64-windows", "Telegram Bot API must use the official Windows dynamic dependency triplet"],
+  ["-DVCPKG_TARGET_TRIPLET=x64-windows", "Telegram Bot API CMake build must use x64-windows"],
+  ["libssl-3-x64.dll", "Workflow must carry the OpenSSL runtime DLL"],
+  ["libcrypto-3-x64.dll", "Workflow must carry the OpenSSL crypto runtime DLL"],
+  ["z.dll", "Workflow must carry the zlib runtime DLL"],
   ['$resourceDir = "src-tauri/resources/windows"', "Workflow must stage runtimes in the Windows Tauri resource directory"],
   ["$resourceDir/ffmpeg.exe", "Workflow must stage ffmpeg.exe for Tauri"],
   ["$resourceDir/node.exe", "Workflow must stage node.exe for Tauri"],
@@ -45,5 +56,20 @@ for (const [needle, message] of [
   ["& $ffmpeg -version", "Installed FFmpeg must be executable"],
   ["& $bot --help", "Installed Telegram Bot API must be executable"],
 ]) requireText(workflow, needle, message);
+rejectText(workflow, "x64-windows-static", "Telegram Bot API must not use the incompatible x64-windows-static recipe");
 
-console.log("PASS Windows packaging guard: pinned FFmpeg, Node and Telegram Bot API runtimes are bundled and verified after NSIS installation");
+const devLauncher = read("scripts/run-tauri.ps1");
+requireText(devLauncher, "prepare-windows-bot-api-runtime.ps1", "Desktop dev must prepare the pinned Bot API runtime before Tauri starts");
+const devRuntime = read("scripts/prepare-windows-bot-api-runtime.ps1");
+for (const [needle, message] of [
+  ["supply-chain\\runtime-sources.json", "Dev runtime must use the canonical runtime source manifest"],
+  ['$triplet = "x64-windows"', "Dev runtime must use the known-good dynamic Windows triplet"],
+  ["telegram-bot-api.provenance.json", "Dev runtime must persist provenance instead of trusting an arbitrary ignored executable"],
+  ["libssl-3-x64.dll", "Dev runtime must stage libssl"],
+  ["libcrypto-3-x64.dll", "Dev runtime must stage libcrypto"],
+  ["z.dll", "Dev runtime must stage zlib"],
+  ["Get-FileHash", "Dev runtime provenance must verify file content hashes"],
+]) requireText(devRuntime, needle, message);
+rejectText(devRuntime, "D:\\BeatGalerBotAPI", "Dev runtime must not depend on the historical D:\\BeatGalerBotAPI build");
+
+console.log("PASS Windows packaging guard: pinned dynamic Telegram Bot API runtime + DLL bundle is prepared for dev, bundled for release, and digest-verified");

@@ -23,12 +23,12 @@
   "telegramBotApi": {
     "repository": "tdlib/telegram-bot-api",
     "commit": "adfd7f6a8e990272851777eeb3ae0def4216f161",
-    "verification": "source commit plus SHA-256 of each produced binary"
+    "verification": "source commit plus SHA-256 of the produced executable and runtime DLLs"
   },
   "vcpkg": {
     "repository": "microsoft/vcpkg",
     "commit": "7f3781e19cc7d4e4882a4caec01668c6f7b5c163",
-    "purpose": "Windows Bot API static build dependencies"
+    "purpose": "Windows Bot API x64-windows dynamic runtime dependencies"
   },
   "securityTools": {
     "cargoAudit": "0.22.2",
