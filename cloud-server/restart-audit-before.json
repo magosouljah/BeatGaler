@@ -1,0 +1,43 @@
+◇ injected env (22) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+{
+  "identity": {
+    "current_user": "beatgaler_dev",
+    "current_database": "beatgaler_cloud_dev",
+    "version": "PostgreSQL 18.3 (Ubuntu 18.3-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit"
+  },
+  "role": {
+    "rolname": "beatgaler_dev",
+    "rolcreatedb": true
+  },
+  "database": {
+    "datname": "beatgaler_cloud_dev",
+    "owner": "beatgaler_dev"
+  },
+  "marker": {
+    "snapshot_sha256": "d90fa567d36a9ba9e861e18fb95228daaf9b33ece7eae44970787bb0e8bc034b",
+    "state": "READY"
+  },
+  "configuredSnapshotMatches": true,
+  "counts": {
+    "users": 14,
+    "auth_sessions": 77,
+    "vaults": 12,
+    "transport_bots": 0,
+    "migrations": 9
+  },
+  "migrationResult": {
+    "applied": [],
+    "skipped": [
+      "0001",
+      "0002",
+      "0003",
+      "0004",
+      "0005",
+      "0006",
+      "0007",
+      "0008",
+      "0009"
+    ]
+  },
+  "expectedMigrationCount": 9
+}
