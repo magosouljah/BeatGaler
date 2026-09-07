@@ -57,7 +57,7 @@ if (/iterDialogs\s*\(|getDialogs\s*\(|GetDialogs/.test(helper)) fail('Transport 
 if (!helper.includes('TelegramClient')) fail('Desktop helper no longer uses the temporary MTProto client.');
 if (!helper.includes('apiHash: ""')) fail('Temporary MTProto client must keep apiHash empty.');
 if (!helper.includes('next.getMe()')) fail('Temporary MTProto getMe identity verification is missing.');
-if (!helper.includes('next.getChat(Number(session.chat_id))')) fail('Temporary MTProto vault verification is missing.');
+if (!helper.includes('getChat(Number(session.chat_id))')) fail('Temporary MTProto vault verification is missing.');
 if (!helper.includes('temp_auth_metadata') || !helper.includes('temp_auth_binding')) fail('Temporary auth metadata/binding handshake is missing.');
 if (!helper.includes('applyBoundTempSessionState')) fail('Bound MTProto session continuity is missing.');
 if (!/authKey:\s*imported\.authKey\.slice\(\)/.test(helper)) fail('Desktop helper must give mtcute its own temporary-auth key buffer before zeroing the handoff buffer.');
