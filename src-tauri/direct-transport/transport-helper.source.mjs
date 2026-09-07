@@ -31,6 +31,7 @@ const TEMP_TTL_SECONDS = 10 * 60;
 const RENEW_BEFORE_SECONDS = 120;
 const TIMEOUT_MS = 60_000;
 const PROD_DC_SUBDOMAINS = { 1: "pluto", 2: "venus", 3: "aurora", 4: "vesta", 5: "flora" };
+const transportStorage = new MemoryStorage();
 let client = null;
 let tempExpiresAt = 0;
 let session = null;
@@ -52,6 +53,34 @@ function emptyManifest() {
 }
 function longJson(value) { return { low: value.low, high: value.high, unsigned: Boolean(value.unsigned) }; }
 function longFromJson(value) { return new Long(value.low, value.high, Boolean(value.unsigned)); }
+function applyBoundTempSessionState(connection, sessionId, state) {
+  const active = connection?._session;
+  if (!active) throw new Error("Desktop Direct could not restore its bound temporary MTProto session.");
+  active._sessionId = longFromJson(sessionId);
+  active._seqNo = Number(state.seqNo);
+  active._lastMessageId = longFromJson(state.lastMessageId);
+  active._timeOffset = Number(state.timeOffset);
+  const salts = connection._salts || active._salts;
+  if (!salts) throw new Error("Desktop Direct could not restore its temporary server salt.");
+  salts.currentSalt = longFromJson(state.serverSalt);
+  active.queuedAcks = (state.queuedAcks || []).map(longFromJson);
+  active.recentOutgoingMsgIds?.add(longFromJson(state.bindMsgId));
+  for (const value of state.queuedAcks || []) active.recentIncomingMsgIds?.add(longFromJson(value));
+  active.lastSessionCreatedUid = longFromJson(state.lastSessionCreatedUid);
+  active.initConnectionCalled = false;
+}
+function installBoundTempConnectHook(sessionId, state, dcId) {
+  const prototype = SessionConnection.prototype;
+  const originalConnect = prototype.connect;
+  const wrappedConnect = function (...args) {
+    if (this?.params?.isMainConnection === true && this?.params?.isMainDcConnection === true && Number(this?.params?.dc?.id || 0) === dcId) {
+      applyBoundTempSessionState(this, sessionId, state);
+    }
+    return originalConnect.apply(this, args);
+  };
+  prototype.connect = wrappedConnect;
+  return () => { if (prototype.connect === wrappedConnect) prototype.connect = originalConnect; };
+}
 function fromBase64(value) { return new Uint8Array(Buffer.from(String(value || ""), "base64")); }
 function silentLogger(prefix = "") {
   return { prefix, mgr: { level: 0 }, create(child) { return silentLogger(prefix ? `${prefix}:${child}` : child); }, verbose() {}, debug() {}, info() {}, warn() {}, error() {} };
@@ -135,7 +164,13 @@ async function prepareTempAuth(dcId, apiId) {
         if (typeof result === "object") throw new Error(`Temporary authorization rejected: ${result.errorCode}:${result.errorMessage}`);
         if (result !== true) throw new Error("Temporary authorization was not accepted.");
         if (!authKeyBytes) throw new Error("Temporary authorization disappeared before import.");
-        return { authKey: authKeyBytes.slice(), expiresAt };
+        const active = connection._session;
+        return { authKey: authKeyBytes.slice(), expiresAt, sessionState: {
+          seqNo: Number(active._seqNo), lastMessageId: longJson(active._lastMessageId),
+          timeOffset: Number(active._timeOffset), serverSalt: longJson(tempServerSalt),
+          queuedAcks: Array.from(active.queuedAcks || [], longJson), bindMsgId: longJson(msgId),
+          lastSessionCreatedUid: longJson(active.lastSessionCreatedUid || Long.ZERO),
+        } };
       },
       async destroy() { authKeyBytes?.fill(0); authKeyBytes = null; await connection.destroy().catch(() => {}); },
     };
@@ -177,20 +212,22 @@ async function bindFreshTemporarySession(reason) {
     }
     const imported = await prepared.bind(binding);
     const next = new TelegramClient({
-      apiId, apiHash: "", storage: new MemoryStorage(),
+      apiId, apiHash: "", storage: transportStorage,
       crypto: new WebCryptoProvider({ wasmInput: new Response(wasmBytes, { headers: { "Content-Type": "application/wasm" } }) }),
-      disableUpdates: true,
+      disableUpdates: false,
     });
     try {
       await next.importSession({
         primaryDcs: { main: productionDc(Number(bound.temp_auth.dc_id)), media: productionDc(Number(bound.temp_auth.dc_id)) },
         self: { userId: Number(bound.temp_auth.expected_bot_id), isBot: true, isPremium: false, usernames: [] },
-        authKey: imported.authKey,
+        authKey: imported.authKey.slice(),
       }, true);
       imported.authKey.fill(0);
+      const restoreConnect = installBoundTempConnectHook(prepared.metadata.tempSessionId, imported.sessionState, Number(bound.temp_auth.dc_id));
+      try { await next.connect(); } finally { restoreConnect(); }
+      await next.startUpdatesLoop();
       const self = await next.getMe();
       if (!self?.isBot || String(self.id) !== String(bound.temp_auth.expected_bot_id)) throw new Error("Temporary authorization resolved to the wrong transport identity.");
-      await next.getChat(Number(session.chat_id));
     } catch (error) {
       await next.destroy().catch(() => {});
       throw error;
@@ -396,6 +433,7 @@ async function main() {
         case "replace_index": result = await replaceIndex(command); break;
         case "delete_messages": result = { ok: true, op, ...(await deleteMessages(command.message_ids || [])) }; break;
         case "ping": await ensureFreshTemporarySession(); result = { ok: true, op: "pong", temp_expires_at: tempExpiresAt }; break;
+        case "renew_temp_auth": await bindFreshTemporarySession("cloud-required"); result = { ok: true, op: "temp_auth_renewed", temp_expires_at: tempExpiresAt }; break;
         case "shutdown": result = { ok: true, op: "shutdown" }; closing = true; break;
         default: throw new Error(`Unsupported Direct operation: ${command.op}`);
       }

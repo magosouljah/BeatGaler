@@ -1145,6 +1145,10 @@ fn direct_read_helper_message(runtime: &mut DirectTransportRuntime, expected_req
         let Some(raw) = line.trim().strip_prefix(DIRECT_JSON_PREFIX) else { continue; };
         let value: Value = serde_json::from_str(raw)
             .map_err(|e| format!("Direct transport helper returned invalid JSON: {}", e))?;
+        if value.get("op").and_then(|v| v.as_str()) == Some("temp_auth_metadata") {
+            direct_bind_helper_temp_auth(runtime, &value)?;
+            continue;
+        }
         if let Some(expected) = expected_request_id {
             let got = value.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
             if got != expected { continue; }
@@ -1154,6 +1158,44 @@ fn direct_read_helper_message(runtime: &mut DirectTransportRuntime, expected_req
         }
         return Ok(value);
     }
+}
+
+fn direct_write_helper_control(runtime: &mut DirectTransportRuntime, command: &Value) -> Result<(), String> {
+    let mut encoded = serde_json::to_string(command).map_err(|e| e.to_string())?;
+    encoded.push('\n');
+    runtime.stdin.write_all(encoded.as_bytes())
+        .map_err(|e| format!("Direct transport helper control failed: {}", e))?;
+    runtime.stdin.flush().map_err(|e| format!("Direct transport helper control flush failed: {}", e))
+}
+
+fn direct_bind_helper_temp_auth(runtime: &mut DirectTransportRuntime, message: &Value) -> Result<(), String> {
+    let session_id = message.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let generation = message.get("generation").and_then(|v| v.as_i64()).unwrap_or(0);
+    let credential_version = message.get("credential_version").and_then(|v| v.as_i64()).unwrap_or(0);
+    let metadata = message.get("temp_auth_metadata").cloned()
+        .ok_or_else(|| "Direct transport helper returned no temporary-auth metadata.".to_string())?;
+    if session_id != runtime.session_id || generation != runtime.generation || credential_version != runtime.credential_version {
+        return Err("Direct transport helper returned mismatched temporary-auth lease metadata.".to_string());
+    }
+    eprintln!("[direct] TEMP_AUTH_METADATA session={} generation={}", session_id, generation);
+    let url = format!("{}/transport/session/start", telegram_cloud_api_base());
+    let response = post_json_cloud_auth_timeout(&url, &json!({
+        "beatgalerUserId": runtime.user_id,
+        "sessionId": runtime.session_id,
+        "generation": runtime.generation,
+        "credentialVersion": runtime.credential_version,
+        "tempAuthMetadata": metadata,
+    }), 45)?;
+    if response.get("mode").and_then(|v| v.as_str()) != Some("galer-direct-temp-mtproto")
+        || response.get("session_id").and_then(|v| v.as_str()) != Some(runtime.session_id.as_str())
+        || response.get("generation").and_then(|v| v.as_i64()) != Some(runtime.generation)
+        || response.get("credential_version").and_then(|v| v.as_i64()) != Some(runtime.credential_version)
+        || response.pointer("/temp_auth/binding").map(Value::is_object) != Some(true)
+    {
+        return Err("Galer Cloud changed the Direct lease while binding temporary authorization.".to_string());
+    }
+    eprintln!("[direct] TEMP_AUTH_BIND_ACCEPTED session={} generation={}", session_id, generation);
+    direct_write_helper_control(runtime, &json!({ "op": "temp_auth_binding", "session": response }))
 }
 
 fn direct_send_helper_command(runtime: &mut DirectTransportRuntime, mut command: Value) -> Result<Value, String> {
@@ -1170,10 +1212,6 @@ fn direct_send_helper_command(runtime: &mut DirectTransportRuntime, mut command:
 }
 
 fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransportRuntime, String> {
-    // The Bot API server MUST run on the same machine as the file paths used by
-    // this helper. BeatGaler owns the exact child and passes its dynamic loopback
-    // endpoint explicitly; the helper never guesses or trusts a fixed port.
-    let bot_api_base = ensure_local_bot_api(session)?;
     let helper = direct_helper_path().ok_or_else(|| {
         "Direct transport helper is missing. Expected src-tauri/direct-transport/transport-helper.cjs.".to_string()
     })?;
@@ -1183,12 +1221,8 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     let transport_id = session.get("transport_id").and_then(|v| v.as_str()).unwrap_or("transport").to_string();
     let generation = session.get("generation").and_then(|v| v.as_i64()).unwrap_or(0);
     let credential_version = session.get("credential_version").and_then(|v| v.as_i64()).unwrap_or(1);
-    let mut helper_session = session.clone();
-    if let Some(object) = helper_session.as_object_mut() {
-        object.insert("bot_api_base".to_string(), Value::String(bot_api_base));
-    }
     let payload = general_purpose::STANDARD.encode(
-        serde_json::to_vec(&helper_session).map_err(|e| format!("Could not encode direct session: {}", e))?
+        serde_json::to_vec(session).map_err(|e| format!("Could not encode direct session: {}", e))?
     );
 
     let mut command = Command::new(&node);
@@ -1221,10 +1255,8 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
         credential_version,
     };
 
-    // Two-phase activation with NO visible Telegram handshake message.
-    // The helper is an HTTP client for the Bot API server on localhost. It
-    // becomes "listening", MASTER adds/promotes the transport bot, and only
-    // then the helper verifies getMe/getChat and loads the pinned INDEX.
+    // The helper first emits temporary-key metadata. direct_read_helper_message
+    // binds it through Cloud before allowing the helper to announce listening.
     let listening = direct_read_helper_message(&mut runtime, None)?;
     if listening.get("op").and_then(|v| v.as_str()) != Some("listening") {
         let _ = runtime.child.kill();
@@ -1237,7 +1269,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     }
 
     // MASTER has now added/promoted and confirmed the assigned bot. Only now
-    // allow the local Bot API helper to call getChat. This explicit barrier
+    // allow the temporary MTProto helper to call getChat. This explicit barrier
     // prevents a fast helper from racing Telegram membership propagation.
     let activation = serde_json::to_string(&json!({ "op": "activate_ready" }))
         .map_err(|e| e.to_string())? + "\n";
@@ -1325,6 +1357,23 @@ fn start_direct_heartbeat_thread() {
                         } else {
                             eprintln!("[direct] HEARTBEAT_CREDENTIAL_REFRESHED");
                         }
+                    } else if response.get("temp_auth_required").and_then(|v| v.as_bool()) == Some(true) {
+                        // Do not wait behind a long transfer: that operation already
+                        // renews proactively in the helper. When idle, renew now using
+                        // the same metadata -> Cloud binding control exchange.
+                        if let Ok(mut guard) = direct_runtime_slot().try_lock() {
+                            if let Some(runtime) = guard.as_mut().filter(|runtime| {
+                                runtime.user_id == user_id
+                                    && runtime.session_id == session_id
+                                    && runtime.generation == generation
+                                    && runtime.credential_version == credential_version
+                            }) {
+                                match direct_send_helper_command(runtime, json!({ "op": "renew_temp_auth" })) {
+                                    Ok(_) => eprintln!("[direct] HEARTBEAT_TEMP_AUTH_RENEWED session={}", session_id),
+                                    Err(error) => eprintln!("[direct] HEARTBEAT_TEMP_AUTH_RENEW_FAILED reason={}", error),
+                                }
+                            }
+                        }
                     }
                 }
                 Err(error) => {
@@ -1357,15 +1406,8 @@ fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
             Some((runtime.user_id == user_id, exit_status))
         } else { None }
     };
-    // A healthy helper is not enough: the localhost server it talks to is a
-    // separate owned child. If that Bot API process crashed while Node stayed
-    // alive, reusing the helper would make every future operation fail forever.
-    // Rebuild both local pieces through the SAME server-side lease instead.
     let same_user_helper_alive = matches!(runtime_state, Some((true, None)));
-    if same_user_helper_alive && owned_local_bot_api_is_healthy() { return Ok(true); }
-    if same_user_helper_alive {
-        eprintln!("[direct] LOCAL_DATA_PLANE_UNHEALTHY helper_alive=true bot_api_healthy=false; rebuilding_same_lease=true");
-    }
+    if same_user_helper_alive { return Ok(true); }
 
     let old = {
         let mut guard = direct_runtime_slot().lock().map_err(|e| e.to_string())?;
@@ -1400,8 +1442,8 @@ fn ensure_direct_runtime(user_id: &str) -> Result<bool, String> {
     let body = json!({ "beatgalerUserId": user_id });
     let response = post_json_cloud_auth_timeout(&url, &body, 45)
         .map_err(|error| format!("BeatGaler Direct control plane unavailable: {}", error))?;
-    if response.get("mode").and_then(|v| v.as_str()) != Some("telegram-direct-botapi-local") {
-        return Err("Galer Cloud did not offer the required local storage transport.".to_string());
+    if response.get("mode").and_then(|v| v.as_str()) != Some("galer-direct-temp-mtproto") {
+        return Err("Galer Cloud did not offer the required temporary MTProto storage transport.".to_string());
     }
 
     let session_id = response.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1425,6 +1467,7 @@ enum DirectBeginDisposition {
     Ready(String),
     Expired,
     Refresh(Value),
+    TempAuthRequired,
     Wait(u64),
 }
 
@@ -1433,6 +1476,11 @@ fn classify_direct_begin_response(response: &Value) -> Result<DirectBeginDisposi
         return Ok(DirectBeginDisposition::Expired);
     }
     if response.get("refresh_required").and_then(|v| v.as_bool()) == Some(true) {
+        if response.get("temp_auth_required").and_then(|v| v.as_bool()) == Some(true)
+            && response.get("credential_refresh").is_none()
+        {
+            return Ok(DirectBeginDisposition::TempAuthRequired);
+        }
         let refresh = response.get("credential_refresh")
             .cloned()
             .ok_or_else(|| "Galer Cloud returned incomplete refreshed session information.".to_string())?;
@@ -1481,6 +1529,12 @@ fn direct_begin_operation(user_id: &str, kind: &str, scope: &Value) -> Result<(S
             }
             DirectBeginDisposition::Refresh(refresh) => {
                 replace_direct_runtime_from_session(user_id, &refresh)?;
+                continue;
+            }
+            DirectBeginDisposition::TempAuthRequired => {
+                let mut guard = direct_runtime_slot().lock().map_err(|e| e.to_string())?;
+                let runtime = guard.as_mut().ok_or_else(|| "Galer Storage local runtime is unavailable.".to_string())?;
+                direct_send_helper_command(runtime, json!({ "op": "renew_temp_auth" }))?;
                 continue;
             }
             DirectBeginDisposition::Wait(wait_ms) => {
@@ -14539,6 +14593,17 @@ mod direct_sleep_wake_unit_tests {
         assert_eq!(
             classify_direct_begin_response(&json!({"wait": true, "retry_after_ms": 99999})).unwrap(),
             DirectBeginDisposition::Wait(1000)
+        );
+    }
+
+    #[test]
+    fn temporary_auth_refresh_does_not_require_permanent_credentials() {
+        assert_eq!(
+            classify_direct_begin_response(&json!({
+                "refresh_required": true,
+                "temp_auth_required": true
+            })).unwrap(),
+            DirectBeginDisposition::TempAuthRequired
         );
     }
 }
