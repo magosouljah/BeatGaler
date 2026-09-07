@@ -9,6 +9,9 @@
       "resources/windows/ffmpeg.exe": "ffmpeg.exe",
       "resources/windows/node.exe": "node.exe",
       "resources/windows/telegram-bot-api.exe": "telegram-bot-api.exe",
+      "resources/windows/libssl-3-x64.dll": "libssl-3-x64.dll",
+      "resources/windows/libcrypto-3-x64.dll": "libcrypto-3-x64.dll",
+      "resources/windows/z.dll": "z.dll",
       "direct-transport/transport-helper.cjs": "direct-transport/transport-helper.cjs",
       "direct-transport/runtime-watchdog.cjs": "direct-transport/runtime-watchdog.cjs"
     }

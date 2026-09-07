@@ -7,6 +7,7 @@ const read = relative => readFileSync(path.join(root, relative), "utf8");
 const fail = message => { throw new Error(`Phase 9C/9D regression: ${message}`); };
 
 const app = read("src/App.tsx");
+const beatFileDropModal = read("src/features/dragdrop/components/BeatFileDropModal.tsx");
 const controller = read("src/features/dragdrop/htmlDropController.ts");
 const browserArtwork = read("src/features/dragdrop/browserArtwork.ts");
 const nativeExternalImage = read("src/features/dragdrop/nativeExternalImage.ts");
@@ -15,15 +16,15 @@ const rust = read("src-tauri/src/commands.rs");
 const wry = read("scripts/wry-patches/wry-0.54.2-drag_drop.rs");
 
 // 9C — existing beat slot updates.
-if (!app.includes('title: "MASTER MP3"') || !app.includes('role: "main"')) fail("existing-beat MASTER destination disappeared.");
-if (!app.includes('title: "WAV HQ"') || !app.includes('role: "wav"')) fail("existing-beat WAV HQ destination disappeared.");
+if (!beatFileDropModal.includes('title: "MASTER MP3"') || !beatFileDropModal.includes('role: "main"')) fail("existing-beat MASTER destination disappeared.");
+if (!beatFileDropModal.includes('title: "WAV HQ"') || !beatFileDropModal.includes('role: "wav"')) fail("existing-beat WAV HQ destination disappeared.");
 if (!app.includes('uploadDroppedFileToTelegram(beat, filePath, "MASTER")')) fail("MASTER replacement no longer writes the MASTER slot.");
 if (!app.includes('uploadDroppedFileToTelegram(beat, filePath, "WAV")')) fail("WAV add/replace no longer writes the WAV slot.");
 if (!app.includes('waitForUploadedBeatPlaybackReady(updated)')) fail("MASTER replacement no longer waits for playback readiness.");
 if (!app.includes('inspectProjectDropSource(filePath)')) fail("PROJECT auto-inspection disappeared.");
 if (!app.includes('updateProjectArchiveFromSource(beat, filePath, "projectFile")') && !app.includes('startProjectAssetUpdate(beat, filePath, "projectFile")')) fail("PROJECT file update route disappeared.");
 if (!app.includes('startProjectAssetUpdate(beat, filePath, "projectFolder")')) fail("PROJECT folder/Samples update route disappeared.");
-if (!app.includes('Add folder to Project')) fail("folder-to-PROJECT destination disappeared.");
+if (!beatFileDropModal.includes('Add folder to Project')) fail("folder-to-PROJECT destination disappeared.");
 if (!app.includes('Project file required')) fail("folder updates no longer require an existing PROJECT.");
 if (!app.includes('Replace PROJECT ZIP?') || !app.includes('Replace project file?')) fail("PROJECT replacement confirmation disappeared.");
 if (!app.includes('if (isBackupFolderPath(filePath))')) fail("direct Backup/Backups drop is no longer rejected.");

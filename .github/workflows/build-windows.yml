@@ -55,7 +55,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: runtime/windows-bot-api
-          key: telegram-bot-api-windows-static-${{ hashFiles('supply-chain/runtime-sources.json') }}
+          key: telegram-bot-api-windows-dynamic-${{ hashFiles('supply-chain/runtime-sources.json') }}
 
       - name: Build official pinned Bot API runtime
         if: steps.bot-api-cache.outputs.cache-hit != 'true'
@@ -71,22 +71,25 @@ jobs:
           if ((git -C runtime/vcpkg rev-parse HEAD).Trim() -ne $env:BEATGALER_VCPKG_COMMIT) { throw "vcpkg source commit mismatch" }
           & runtime/vcpkg/bootstrap-vcpkg.bat -disableMetrics
           if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed with exit code $LASTEXITCODE" }
-          & runtime/vcpkg/vcpkg.exe install gperf:x64-windows-static openssl:x64-windows-static zlib:x64-windows-static --clean-after-build
+          & runtime/vcpkg/vcpkg.exe install gperf:x64-windows openssl:x64-windows zlib:x64-windows --clean-after-build
           if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed with exit code $LASTEXITCODE" }
 
           cmake -S runtime/telegram-bot-api-source -B runtime/telegram-bot-api-build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$PWD/runtime/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DCMAKE_INSTALL_PREFIX="$PWD/runtime/telegram-bot-api-install"
           if ($LASTEXITCODE -ne 0) { throw "Telegram Bot API configure failed with exit code $LASTEXITCODE" }
           cmake --build runtime/telegram-bot-api-build --config Release --target install --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "Telegram Bot API build failed with exit code $LASTEXITCODE" }
 
-          $bot = Get-ChildItem runtime/telegram-bot-api-install,runtime/telegram-bot-api-build -Filter telegram-bot-api.exe -Recurse | Select-Object -First 1
-          if (-not $bot) { throw "The official build did not produce telegram-bot-api.exe" }
+          $runtimeFiles = @("telegram-bot-api.exe", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "z.dll")
           New-Item -ItemType Directory -Force runtime/windows-bot-api | Out-Null
-          Copy-Item -LiteralPath $bot.FullName -Destination runtime/windows-bot-api/telegram-bot-api.exe
+          foreach ($name in $runtimeFiles) {
+            $artifact = Get-ChildItem runtime/telegram-bot-api-install,runtime/telegram-bot-api-build -Filter $name -File -Recurse | Select-Object -First 1
+            if (-not $artifact) { throw "The official build did not produce required runtime file: $name" }
+            Copy-Item -LiteralPath $artifact.FullName -Destination "runtime/windows-bot-api/$name"
+          }
 
       - name: Stage and verify Windows runtimes
         shell: pwsh
@@ -98,7 +101,9 @@ jobs:
           $actualNodeVersion = (& $node --version).TrimStart('v')
           if ($actualNodeVersion -ne $env:BEATGALER_NODE_VERSION) { throw "Node runtime version mismatch: $actualNodeVersion" }
           Copy-Item -LiteralPath $node -Destination "$resourceDir/node.exe"
-          Copy-Item -LiteralPath "runtime/windows-bot-api/telegram-bot-api.exe" -Destination "$resourceDir/telegram-bot-api.exe"
+          foreach ($name in @("telegram-bot-api.exe", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "z.dll")) {
+            Copy-Item -LiteralPath "runtime/windows-bot-api/$name" -Destination "$resourceDir/$name"
+          }
 
           $ffmpegAsset = $env:BEATGALER_FFMPEG_WINDOWS_ASSET
           $ffmpegRepo = $env:BEATGALER_FFMPEG_REPOSITORY
@@ -120,6 +125,12 @@ jobs:
             $magic = [System.IO.File]::ReadAllBytes($item.FullName)[0..1]
             if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw "$runtime is not a Windows PE executable" }
           }
+          foreach ($runtime in @("$resourceDir/libssl-3-x64.dll", "$resourceDir/libcrypto-3-x64.dll", "$resourceDir/z.dll")) {
+            $item = Get-Item -LiteralPath $runtime -ErrorAction Stop
+            if ($item.Length -lt 32KB) { throw "$runtime is unexpectedly small: $($item.Length) bytes" }
+            $magic = [System.IO.File]::ReadAllBytes($item.FullName)[0..1]
+            if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw "$runtime is not a Windows PE DLL" }
+          }
           & "$resourceDir/ffmpeg.exe" -version
           if ($LASTEXITCODE -ne 0) { throw "Bundled ffmpeg.exe is not executable" }
           & "$resourceDir/node.exe" --version
@@ -136,7 +147,10 @@ jobs:
             --sources supply-chain/runtime-sources.json `
             ffmpeg=src-tauri/resources/windows/ffmpeg.exe `
             node=src-tauri/resources/windows/node.exe `
-            bot-api=src-tauri/resources/windows/telegram-bot-api.exe
+            bot-api=src-tauri/resources/windows/telegram-bot-api.exe `
+            bot-api-libssl=src-tauri/resources/windows/libssl-3-x64.dll `
+            bot-api-libcrypto=src-tauri/resources/windows/libcrypto-3-x64.dll `
+            bot-api-zlib=src-tauri/resources/windows/z.dll
 
       - name: Verify Windows packaging and Authenticode seam contracts
         shell: pwsh
@@ -192,7 +206,7 @@ jobs:
           $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "NSIS test installation failed with exit code $($process.ExitCode)" }
 
-          foreach ($relative in @("ffmpeg.exe", "node.exe", "telegram-bot-api.exe", "direct-transport/transport-helper.cjs", "direct-transport/runtime-watchdog.cjs")) {
+          foreach ($relative in @("ffmpeg.exe", "node.exe", "telegram-bot-api.exe", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "z.dll", "direct-transport/transport-helper.cjs", "direct-transport/runtime-watchdog.cjs")) {
             $installed = Join-Path $installDir $relative
             if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Installer omitted required runtime: $relative" }
           }
@@ -212,9 +226,11 @@ jobs:
           $stagedNodeHash = (Get-FileHash "src-tauri/resources/windows/node.exe" -Algorithm SHA256).Hash
           $installedNodeHash = (Get-FileHash $node -Algorithm SHA256).Hash
           if ($stagedNodeHash -ne $installedNodeHash) { throw "Installed Node digest differs from staged runtime" }
-          $stagedBotHash = (Get-FileHash "src-tauri/resources/windows/telegram-bot-api.exe" -Algorithm SHA256).Hash
-          $installedBotHash = (Get-FileHash $bot -Algorithm SHA256).Hash
-          if ($stagedBotHash -ne $installedBotHash) { throw "Installed Bot API digest differs from staged runtime" }
+          foreach ($relative in @("telegram-bot-api.exe", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "z.dll")) {
+            $stagedHash = (Get-FileHash "src-tauri/resources/windows/$relative" -Algorithm SHA256).Hash
+            $installedHash = (Get-FileHash (Join-Path $installDir $relative) -Algorithm SHA256).Hash
+            if ($stagedHash -ne $installedHash) { throw "Installed Bot API runtime digest differs for $relative" }
+          }
 
           if ("${{ inputs.release_intent }}" -eq "public") {
             $appCandidates = @(Get-ChildItem -LiteralPath $installDir -Filter *.exe -File | Where-Object {

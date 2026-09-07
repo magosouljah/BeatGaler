@@ -23,6 +23,20 @@ if (-not (Test-Path $tauriCli)) {
   throw "Tauri CLI was not found. Run npm install first."
 }
 
+# The Windows Bot API runtime is intentionally not committed. Prepare and
+# verify the pinned official dynamic bundle before Tauri can discover it.
+$botApiRuntimeScript = Join-Path $PSScriptRoot "prepare-windows-bot-api-runtime.ps1"
+& $botApiRuntimeScript
+if ($LASTEXITCODE -ne 0) {
+  throw "BeatGaler Telegram Bot API runtime preparation failed with exit code $LASTEXITCODE."
+}
+
+# A persistent developer override may point at an older runtime. For the
+# standard Desktop dev command, always launch the bundle we just verified.
+$preparedBotApiRuntime = (Resolve-Path (Join-Path $PSScriptRoot "..\src-tauri\resources\windows\telegram-bot-api.exe")).Path
+$env:BEATGALER_BOT_API_RUNTIME = $preparedBotApiRuntime
+Write-Host "BeatGaler dev Bot API runtime: $preparedBotApiRuntime"
+
 # BeatGaler Option 2: patch only WRY's existing WebView2 IDropTarget. This is
 # idempotent and preserves CF_HDROP as the zero-copy local filesystem fast path.
 $wryPatchScript = Join-Path $PSScriptRoot "patch-wry-pinterest.mjs"
