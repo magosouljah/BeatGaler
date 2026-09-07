@@ -31,6 +31,7 @@ const TEMP_TTL_SECONDS = 10 * 60;
 const RENEW_BEFORE_SECONDS = 120;
 const TIMEOUT_MS = 60_000;
 const PROD_DC_SUBDOMAINS = { 1: "pluto", 2: "venus", 3: "aurora", 4: "vesta", 5: "flora" };
+const transportStorage = new MemoryStorage();
 let client = null;
 let tempExpiresAt = 0;
 let session = null;
@@ -211,9 +212,9 @@ async function bindFreshTemporarySession(reason) {
     }
     const imported = await prepared.bind(binding);
     const next = new TelegramClient({
-      apiId, apiHash: "", storage: new MemoryStorage(),
+      apiId, apiHash: "", storage: transportStorage,
       crypto: new WebCryptoProvider({ wasmInput: new Response(wasmBytes, { headers: { "Content-Type": "application/wasm" } }) }),
-      disableUpdates: true,
+      disableUpdates: false,
     });
     try {
       await next.importSession({
@@ -224,9 +225,9 @@ async function bindFreshTemporarySession(reason) {
       imported.authKey.fill(0);
       const restoreConnect = installBoundTempConnectHook(prepared.metadata.tempSessionId, imported.sessionState, Number(bound.temp_auth.dc_id));
       try { await next.connect(); } finally { restoreConnect(); }
+      await next.startUpdatesLoop();
       const self = await next.getMe();
       if (!self?.isBot || String(self.id) !== String(bound.temp_auth.expected_bot_id)) throw new Error("Temporary authorization resolved to the wrong transport identity.");
-      await next.getChat(Number(session.chat_id));
     } catch (error) {
       await next.destroy().catch(() => {});
       throw error;
