@@ -11,7 +11,7 @@ const serverCore = read('cloud-server', 'server-core.js');
 const server = `${serverEntry}\n${serverCore}`;
 const master = read('cloud-server', 'master-storage.js');
 const control = read('cloud-server', 'direct-transport-control.js');
-const helper = read('src-tauri', 'direct-transport', 'transport-helper.cjs');
+const helper = read('src-tauri', 'direct-transport', 'transport-helper.source.mjs');
 const rust = read('src-tauri', 'src', 'commands.rs');
 const envExample = read('cloud-server', '.env.example');
 const docs = read('cloud-server', 'TELEGRAM-DIRECT-V5-BOTAPI.md');
@@ -52,25 +52,26 @@ if (!control.includes('active_vaults: leasesForBot(state, bot.id).length')) fail
 if (!control.includes("normalizedKind === 'replace_index'")) fail('Per-vault single-index swaps are no longer serialized across installations.');
 if (!control.includes("reason: 'index_busy'")) fail('Concurrent index writers no longer wait instead of racing index replacement.');
 
-// Local Bot API data plane: zero visible handshake and zero client MTProto bot login.
+// Temporary MTProto data plane: no permanent credentials or Local Bot API.
 if (/iterDialogs\s*\(|getDialogs\s*\(|GetDialogs/.test(helper)) fail('Transport helper enumerates dialogs.');
-if (/TelegramClient|StringSession|botAuthToken/.test(helper)) fail('Client helper still performs MTProto bot authentication.');
-if (!helper.includes("botApi(session, 'getMe'")) fail('Bot API Local getMe readiness check is missing.');
-if (!helper.includes("botApi(session, 'getChat'")) fail('Bot API Local getChat vault/index discovery is missing.');
-if (!helper.includes("botApi(session, 'sendDocument'")) fail('Bot API Local upload path is missing.');
-if (!helper.includes("botApi(session, 'getFile'")) fail('Bot API Local download path is missing.');
-if (!helper.includes("botApi(session, 'forwardMessage'")) fail('Cross-bot historical media resolver is missing.');
-if (!helper.includes('resolverChatId')) fail('Private resolver channel support is missing.');
-if (!control.includes('ensureBotApiResolverChat')) fail('Control plane no longer provisions the private transport resolver.');
+if (!helper.includes('TelegramClient')) fail('Desktop helper no longer uses the temporary MTProto client.');
+if (!helper.includes('apiHash: ""')) fail('Temporary MTProto client must keep apiHash empty.');
+if (!helper.includes('next.getMe()')) fail('Temporary MTProto getMe identity verification is missing.');
+if (!helper.includes('next.getChat(Number(session.chat_id))')) fail('Temporary MTProto vault verification is missing.');
+if (!helper.includes('temp_auth_metadata') || !helper.includes('temp_auth_binding')) fail('Temporary auth metadata/binding handshake is missing.');
+if (!helper.includes('applyBoundTempSessionState')) fail('Bound MTProto session continuity is missing.');
+for (const forbidden of ['bot_token', 'telegram_api_id', 'telegram_api_hash', 'credential_envelope', 'bot_api_base']) {
+  if (!helper.includes(`"${forbidden}"`)) fail(`Desktop helper no longer rejects ${forbidden}.`);
+}
 if (/handshake_marker|session\.marker|BEATGALER_HANDSHAKE_|beatgaler_transport@/.test(helper.replace(/\/\/.*$/gm, ''))) fail('Visible-message handshake returned to helper runtime.');
 if (/sendMessage\s*\([^\n]*beatgaler_(transport|ready)|handshakeMarker|handshake_marker/.test(control)) fail('Control plane still creates visible Telegram handshake messages.');
 
 // Single pinned index + delete-replaced-media semantics.
-if (!helper.includes("case 'replace_index'")) fail('Transport helper no longer owns index replacement.');
-if (!helper.includes('ensureIndex(session)')) fail('A brand-new vault no longer creates one empty index automatically.');
-if (!helper.includes("pinChatMessage")) fail('New Direct index is not pinned.');
-if (!helper.includes("deleteMessage")) fail('Old index/media deletion is missing.');
-if (!helper.includes('mergeDeletedTombstones(previous?.manifest || null, nextManifest)')) fail('Single-index swaps no longer inherit permanent-delete tombstones.');
+if (!helper.includes('case "replace_index"')) fail('Transport helper no longer owns index replacement.');
+if (!helper.includes('ensureIndex()')) fail('A brand-new vault no longer creates one empty index automatically.');
+if (!helper.includes('pinMessage')) fail('New Direct index is not pinned.');
+if (!helper.includes('deleteMessagesById')) fail('Old index/media deletion is missing.');
+if (!helper.includes('mergeDeleted(previous?.manifest, next)')) fail('Single-index swaps no longer inherit permanent-delete tombstones.');
 if (!helper.includes('previousRefs')) fail('Unreferenced replaced media deletion is missing.');
 if (!docs.includes('single library index')) fail('Single-index invariant is missing from V5 Direct docs.');
 if (!control.includes('recordIndexPointer')) fail('Control plane no longer records the tiny current-index pointer.');
@@ -86,8 +87,13 @@ if (!rust.includes('using that lock here would suppress heartbeats during')) fai
 if (!rust.includes('/transport/session/heartbeat')) fail('Desktop heartbeat route is missing.');
 if (!rust.includes('/transport/session/activate')) fail('Desktop membership-update activation is missing.');
 if (!rust.includes('/transport/operation/begin') || !rust.includes('/transport/operation/end')) fail('Desktop no longer gates every Direct operation.');
-if (!rust.includes('telegram-direct-botapi-local')) fail('Desktop does not require the Local Bot API transport mode.');
-if (!rust.includes('BeatGaler local data-plane runtime is missing from this installation.') || !rust.includes('Galer Storage is unavailable:')) fail('Direct fail-closed invariant disappeared.');
+if (!rust.includes('galer-direct-temp-mtproto')) fail('Desktop does not require temporary MTProto transport mode.');
+if (rust.slice(rust.indexOf('fn spawn_direct_helper'), rust.indexOf('fn kill_direct_runtime_without_releasing')).includes('ensure_local_bot_api')) fail('Desktop helper startup still launches Local Bot API.');
+if (rust.slice(rust.indexOf('fn spawn_direct_helper'), rust.indexOf('fn kill_direct_runtime_without_releasing')).includes('bot_api_base')) fail('Desktop bootstrap still injects bot_api_base.');
+if (!rust.includes('fn direct_bind_helper_temp_auth') || !rust.includes('"tempAuthMetadata": metadata')) fail('Rust metadata-to-binding bridge is missing.');
+if (!rust.includes('DirectBeginDisposition::TempAuthRequired') || !rust.includes('"op": "renew_temp_auth"')) fail('Temporary-auth renewal without credential_refresh is missing.');
+if (!rust.includes('HEARTBEAT_TEMP_AUTH_RENEWED')) fail('Heartbeat does not drive idle temporary-auth renewal.');
+if (!rust.includes('Galer Storage is unavailable:')) fail('Direct fail-closed invariant disappeared.');
 if (!rust.includes('DATA_PLANE_READY')) fail('Direct data-plane readiness diagnostic disappeared.');
 if (!rust.includes('"op": "replace_index"') || !rust.includes('"op": "get_index"')) fail('Desktop index path is no longer Direct.');
 if (!rust.includes('fn direct_move_beats_to_trash')) fail('Offline Trash no longer mutates the current index through the transport bot.');
@@ -102,4 +108,4 @@ for (const route of ['/transport/session/start', '/transport/session/activate', 
 const stopBlock = server.slice(server.indexOf('app.post("/transport/session/stop"'), server.indexOf('app.post("/transport/operation/begin"'));
 if (!stopBlock.includes('authenticatedTransportAccount(req, res)')) fail('Session stop is not authenticated.');
 
-console.log('PASS direct shared-pool guard: load-level FIFO sharing, 60s/5m leases, token revoke disabled for testing, Local Bot API data plane, private cross-bot resolver, single pinned index, diagnostics, and delete-replaced-media semantics are present.');
+console.log('PASS direct shared-pool guard: temporary MTProto bootstrap/binding/renewal, bound-session continuity, no Desktop permanent credentials, shared leases, and Direct INDEX operations are present.');
