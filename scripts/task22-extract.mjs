@@ -60,7 +60,7 @@ for (const forbidden of ["function SearchBar(", "function SortMenu(", "function 
   if (app.includes(forbidden)) throw new Error(`local definition remains: ${forbidden}`);
 }
 if (!app.includes('useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web")')) throw new Error("web sort routing changed");
-if (!app.includes('if (!platform.capabilities.playbackCache) return;')) throw new Error("playback cache guard was removed");
+if (!app.includes('if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;')) throw new Error("playback cache/session guard was removed");
 if (!app.includes("Math.min(isTauriAvailable ? 6 : 1, queue.length)")) throw new Error("playback warming concurrency was removed");
 if (!app.includes("ReactDOM.createPortal")) throw new Error("App still needs ReactDOM for tag rename dialog");
 
