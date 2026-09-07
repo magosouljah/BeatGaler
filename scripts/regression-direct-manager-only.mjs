@@ -60,6 +60,9 @@ if (!helper.includes('next.getMe()')) fail('Temporary MTProto getMe identity ver
 if (!helper.includes('next.getChat(Number(session.chat_id))')) fail('Temporary MTProto vault verification is missing.');
 if (!helper.includes('temp_auth_metadata') || !helper.includes('temp_auth_binding')) fail('Temporary auth metadata/binding handshake is missing.');
 if (!helper.includes('applyBoundTempSessionState')) fail('Bound MTProto session continuity is missing.');
+if (!/authKey:\s*imported\.authKey\.slice\(\)/.test(helper)) fail('Desktop helper must give mtcute its own temporary-auth key buffer before zeroing the handoff buffer.');
+if (/authKey:\s*imported\.authKey\s*,/.test(helper)) fail('Desktop helper reintroduced the aliased temporary-auth key that becomes zeroed after importSession.');
+if (!helper.includes('imported.authKey.fill(0)')) fail('Desktop helper no longer clears the temporary handoff auth-key buffer after importing a safe copy.');
 for (const forbidden of ['bot_token', 'telegram_api_id', 'telegram_api_hash', 'credential_envelope', 'bot_api_base']) {
   if (!helper.includes(`"${forbidden}"`)) fail(`Desktop helper no longer rejects ${forbidden}.`);
 }
