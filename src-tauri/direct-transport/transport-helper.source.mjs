@@ -68,12 +68,12 @@ class DeferredLike {
   constructor() { this.promise = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; }); }
 }
 
-async function makeManualConnection(provider, dcId) {
+async function makeManualConnection(provider, dcId, apiId) {
   class ManualSessionConnection extends SessionConnection { onConnected() {} }
   const connection = new ManualSessionConnection({
     crypto: provider,
     initConnection: {
-      _: "initConnection", apiId: 0, deviceModel: "BeatGaler Desktop temporary data plane",
+      _: "initConnection", apiId, deviceModel: "BeatGaler Desktop temporary data plane",
       systemVersion: `${process.platform} ${process.arch}`, appVersion: "0.8.0-alpha.1",
       systemLangCode: "en", langPack: "", langCode: "en", query: { _: "help.getNearestDc" },
     },
@@ -95,10 +95,10 @@ async function makeManualConnection(provider, dcId) {
   return connection;
 }
 
-async function prepareTempAuth(dcId) {
+async function prepareTempAuth(dcId, apiId) {
   const provider = new WebCryptoProvider({ wasmInput: new Response(wasmBytes, { headers: { "Content-Type": "application/wasm" } }) });
   await provider.initialize();
-  const connection = await makeManualConnection(provider, dcId);
+  const connection = await makeManualConnection(provider, dcId, apiId);
   let authKeyBytes = null;
   try {
     const [generatedTempKey, tempServerSalt] = await timeout(doAuthorization(connection, provider, TEMP_TTL_SECONDS), "temporary auth generation");
@@ -157,8 +157,9 @@ async function nextControlCommand(expectedOp) {
 
 async function bindFreshTemporarySession(reason) {
   const bootstrap = session?.temp_auth;
-  if (!bootstrap?.dc_id || !bootstrap?.expected_bot_id) throw new Error("Direct session has no temporary-auth bootstrap.");
-  const prepared = await prepareTempAuth(Number(bootstrap.dc_id));
+  const apiId = Number(bootstrap?.api_id);
+  if (!bootstrap?.dc_id || !bootstrap?.expected_bot_id || !Number.isInteger(apiId) || apiId <= 0) throw new Error("Direct session has no valid temporary-auth bootstrap.");
+  const prepared = await prepareTempAuth(Number(bootstrap.dc_id), apiId);
   try {
     emit({
       ok: true, op: "temp_auth_metadata", reason,
@@ -176,7 +177,7 @@ async function bindFreshTemporarySession(reason) {
     }
     const imported = await prepared.bind(binding);
     const next = new TelegramClient({
-      apiId: 0, apiHash: "", storage: new MemoryStorage(),
+      apiId, apiHash: "", storage: new MemoryStorage(),
       crypto: new WebCryptoProvider({ wasmInput: new Response(wasmBytes, { headers: { "Content-Type": "application/wasm" } }) }),
       disableUpdates: true,
     });

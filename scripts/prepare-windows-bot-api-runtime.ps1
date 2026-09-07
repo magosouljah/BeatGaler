@@ -57,7 +57,8 @@ function Test-StagedRuntime {
 }
 
 if (Test-StagedRuntime) {
-  $version = (& (Join-Path $resourceDir "telegram-bot-api.exe") --version 2>&1 | Out-String).Trim()
+  $botApiExe = Join-Path $resourceDir "telegram-bot-api.exe"
+  $version = (& cmd.exe /d /c ('"' + $botApiExe + '" --version 2>&1') | Out-String).Trim()
   if ($LASTEXITCODE -ne 0) { throw "Verified Telegram Bot API runtime could not report its version." }
   Write-Host "BeatGaler Telegram Bot API runtime verified: $version ($triplet, $botCommit)"
   return
