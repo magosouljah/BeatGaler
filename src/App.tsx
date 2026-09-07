@@ -905,7 +905,21 @@ function BeatGalerApp() {
 
         const flushedTrashCount = await flushOfflineTrashIntents();
         if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates();
-        let restored = await libraryStateManager.reloadAuthoritative();
+        let restored: Beat[] | null = null;
+        let restoreError: unknown = null;
+        // A single Direct INDEX attempt can lose the initial socket handoff.
+        for (let attempt = 0; attempt < 3 && restored === null; attempt += 1) {
+          try {
+            restored = await libraryStateManager.reloadAuthoritative();
+          } catch (error) {
+            restoreError = error;
+            if (attempt < 2) {
+              await new Promise(resolve => window.setTimeout(resolve, [500, 1500][attempt]));
+              if (cancelled) return;
+            }
+          }
+        }
+        if (restored === null) throw restoreError;
         if (cancelled) return;
 
         // The INDEX can outlive media if an older interrupted-upload cleanup
@@ -1103,6 +1117,8 @@ function BeatGalerApp() {
     const sourceId = getCloudClientId();
     const cloudBase = getResolvedCloudApiBase();
     let events: EventSource | null = null;
+    let eventReconnectTimer: number | null = null;
+    let eventReconnectDelayMs = 1000;
     let cancelled = false;
 
     const applyRemoteLibraryChange = async () => {
@@ -1201,7 +1217,7 @@ function BeatGalerApp() {
       })();
     };
 
-    void (async () => {
+    const connectEvents = async () => {
       const token = getBeatGalerAuthToken();
       if (!token) return;
       try {
@@ -1218,20 +1234,44 @@ function BeatGalerApp() {
           `&sourceId=${encodeURIComponent(sourceId)}` +
           `&ticket=${encodeURIComponent(String(body.ticket))}`;
         events = new EventSource(url);
+        events.onopen = () => { eventReconnectDelayMs = 1000; };
         events.addEventListener("ready", onReady);
         events.addEventListener("library_changed", onLibraryChanged);
         events.addEventListener("telegram_connected", onTelegramConnected);
         events.onerror = () => {
-          if (!cancelled) setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
+          // Event tickets are intentionally single-use. EventSource's built-in
+          // reconnect would reuse the consumed ticket and receive 401 forever,
+          // so close it and obtain a fresh ticket instead. SSE is only the push
+          // notification channel; its failure is not evidence that Telegram or
+          // the Cloud data plane is unreachable.
+          events?.close();
+          events = null;
+          if (cancelled || eventReconnectTimer !== null) return;
+          const delay = eventReconnectDelayMs;
+          eventReconnectDelayMs = Math.min(eventReconnectDelayMs * 2, 30000);
+          eventReconnectTimer = window.setTimeout(() => {
+            eventReconnectTimer = null;
+            void connectEvents();
+          }, delay);
         };
       } catch (error) {
         console.warn("BeatGaler event authorization failed:", error);
-        if (!cancelled) setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
+        if (!cancelled && eventReconnectTimer === null) {
+          const delay = eventReconnectDelayMs;
+          eventReconnectDelayMs = Math.min(eventReconnectDelayMs * 2, 30000);
+          eventReconnectTimer = window.setTimeout(() => {
+            eventReconnectTimer = null;
+            void connectEvents();
+          }, delay);
+        }
       }
-    })();
+    };
+
+    void connectEvents();
 
     return () => {
       cancelled = true;
+      if (eventReconnectTimer !== null) window.clearTimeout(eventReconnectTimer);
       events?.removeEventListener("ready", onReady);
       events?.removeEventListener("library_changed", onLibraryChanged);
       events?.removeEventListener("telegram_connected", onTelegramConnected);
@@ -1580,9 +1620,12 @@ function BeatGalerApp() {
   }, [waitForCookingReady]);
 
   const handleWarm = useCallback((beat: Beat) => {
-    if (!platform.capabilities.playbackCache) return;
+    // Cached cards can be visible before the authoritative INDEX is restored.
+    // Do not let viewport-driven audio range downloads compete with that INDEX
+    // read (or lazy artwork) on the single Direct transport session.
+    if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;
     void ensureWarmPlaybackUrl(beat);
-  }, [ensureWarmPlaybackUrl]);
+  }, [cloudSessionVerified, connectionState, ensureWarmPlaybackUrl]);
 
   const handlePlay = useCallback(async (beat: Beat) => {
     // Never let a stale card/queue callback bypass the upload readiness gate.
@@ -4648,7 +4691,13 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     if (filteredBeats.length === 0) return;
 
     const runId = ++progressiveRevealRunRef.current;
-    const queue = filteredBeats.filter(beat => !revealedBeatIds.has(beat.id));
+    // The Desktop restore model deliberately omits image_base64 and keeps the
+    // durable artwork reference in Rust cloud_metadata (not Beat.assets). A
+    // cache-only pass may already have revealed the card with its gradient, but
+    // the online pass must still hydrate every beat whose artwork is not loaded.
+    const queue = filteredBeats.filter(beat =>
+      !beat.image_base64 && !beat.image_preview_base64
+    );
     let cursor = 0;
     const workerCount = Math.min(isTauriAvailable ? 6 : 1, queue.length);
 
