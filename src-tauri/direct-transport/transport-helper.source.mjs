@@ -219,7 +219,7 @@ async function bindFreshTemporarySession(reason) {
       await next.importSession({
         primaryDcs: { main: productionDc(Number(bound.temp_auth.dc_id)), media: productionDc(Number(bound.temp_auth.dc_id)) },
         self: { userId: Number(bound.temp_auth.expected_bot_id), isBot: true, isPremium: false, usernames: [] },
-        authKey: imported.authKey,
+        authKey: imported.authKey.slice(),
       }, true);
       imported.authKey.fill(0);
       const restoreConnect = installBoundTempConnectHook(prepared.metadata.tempSessionId, imported.sessionState, Number(bound.temp_auth.dc_id));
