@@ -26,7 +26,21 @@ jobs:
       - run: npm run test:typecheck
       - run: npm run test:unit:ts
       - run: npm run test:component:dom
-      - run: npm run test:integration
+      - name: Run integration tests
+        id: integration
+        continue-on-error: true
+        run: npm run test:integration > task22-integration-failure.log 2>&1
+      - name: Persist integration failure
+        if: steps.integration.outcome == 'failure'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add task22-integration-failure.log
+          git commit -m "chore: capture task 2.2 integration failure"
+          git push origin HEAD:app-tsx-2.2
+      - name: Fail on integration error
+        if: steps.integration.outcome == 'failure'
+        run: exit 1
       - run: npm run test:regressions
       - run: npm run build:web
       - run: npm run build
