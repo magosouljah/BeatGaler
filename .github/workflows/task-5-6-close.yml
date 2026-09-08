@@ -1,0 +1,68 @@
+name: Task 5.6 Close
+
+on:
+  push:
+    branches: [v0.9.0-test-noche]
+    paths:
+      - .github/workflows/task-5-6-close.yml
+
+permissions:
+  contents: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - name: Verify implementation head and close docs
+        run: |
+          test "$(git branch --show-current)" = "v0.9.0-test-noche"
+          test "$(git rev-parse HEAD^)" = "92dedbc44ddd3014ac5e5165f3822df8714d67cd" || test "$(git rev-parse HEAD)" = "92dedbc44ddd3014ac5e5165f3822df8714d67cd"
+          grep -F 'useTagRename({ beats, setBeats, replaceTagFilter })' src/App.tsx
+          grep -F 'await renameTagEverywhere(oldTag, newTag, jobId)' src/features/tags/useTagRename.ts
+          grep -F 'Rename tag globally' src/features/tags/components/TagRenameDialog.tsx
+
+          python - <<'PY'
+          from pathlib import Path
+
+          roadmap = Path('migration/BeatGaler-roadmap-para-trabajar-con-IAs.md')
+          text = roadmap.read_text()
+          old = '### [ ] 5.6 — Separar el renombrado global de tags'
+          new = '### [x] 5.6 — Separar el renombrado global de tags'
+          if old not in text and new not in text:
+            raise SystemExit('task 5.6 roadmap line not found')
+          if old in text:
+            text = text.replace(old, new, 1)
+          roadmap.write_text(text)
+
+          register = Path('migration/Registro-de-avance.md')
+          reg = register.read_text().rstrip() + '\n'
+          marker = '### Registro — 5.6'
+          if marker not in reg:
+            reg += '''\n### Registro — 5.6\n\n```\nTarea: 5.6 — Separar el renombrado global de tags\nEstado: Terminada\nFecha: 2026-09-08\n\nBase\n\n- Rama: v0.9.0-test-noche\n- SHA inicial de esta ejecución: 3b27e6bee20cffdf763d3d5ccaee45b63a52ba85\n- Última tarea verificada: 5.5 — Separar papelera y restauración\n\nCambio realizado\n\n- Se creó `src/features/tags/useTagRename.ts` como dueño de la operación global de renombrado, sus estados de diálogo/progreso/error y la coordinación con el journal nativo existente.\n- Se creó `src/features/tags/components/TagRenameDialog.tsx` y el portal completo salió de `App.tsx` conservando etapas Name/Confirm, conteos, Cancel previo a ejecución, Back, estado Renaming y errores.\n- `App.tsx` ahora compone `useTagRename`, abre el flujo desde `TagColorMenu` y renderiza `TagRenameDialog`; dejó de poseer directamente `renameTagEverywhere`, los estados de renombrado y el callback de confirmación.\n- Se conserva el orden de metadata: solo cambia el valor de la etiqueta coincidente dentro del arreglo existente y se deduplican resultados igual que antes.\n- Tras éxito se conservan la actualización de los mismos beats, `replaceTagFilter(oldTag, newTag)` y `renameTagColor(oldTag, newTag)`.\n- Se conserva `registerJob`/`updateJob`, el mensaje `Preparing journal…`, la sanitización de errores y la recuperación delegada al servicio `renameTagEverywhere`.\n- No se inició 6.1.\n\nAdaptación de pruebas\n\n- Se añadió `tests/integration/appTagRenameExtraction.test.ts` para proteger ownership, actualización de beats, orden de metadata, filtros/colores, feedback de recuperación y comportamiento del diálogo.\n- No se desactivaron ni relajaron pruebas existentes.\n\nArchivos afectados\n\n- src/App.tsx\n- src/features/tags/useTagRename.ts\n- src/features/tags/components/TagRenameDialog.tsx\n- tests/integration/appTagRenameExtraction.test.ts\n- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md\n- migration/Registro-de-avance.md\n- migration/BeatGaler-agent-state.md\n\nComprobaciones ejecutadas\n\n- GitHub Actions `Task 5.6 Retry 2`, run 34249152808 — SUCCESS.\n- Artifact `migration-check-logs-task-5-6-34249152808-1`, `summary.txt` leído: PASS en todos los checks.\n- `git diff --check` — PASS antes de la matriz.\n- `npm run test:typecheck` — PASS.\n- `npm run test:unit:ts` — PASS.\n- `npm run test:component:dom` — PASS.\n- `npm run test:integration` — PASS.\n- `npm run test:regressions` — PASS.\n- `npm run build:web` — PASS.\n- `npm run build` — PASS.\n- SHA de implementación verificada: 92dedbc44ddd3014ac5e5165f3822df8714d67cd.\n\nComprobaciones no ejecutadas\n\n- `npm run check` — no requerido; la matriz ejecutó individualmente los checks aplicables del plan.\n- E2E completos de import/download/recovery — fuera del alcance del renombrado global de tags.\n- Prueba física Desktop Windows/macOS — no ejecutada; la ronda trabaja mediante GitHub Actions y no dispone de aplicación física interactiva.\n\nPrueba manual\n\n- No ejecutada ni inventada.\n- Desktop: abrir el menú de color de una etiqueta, elegir Renombrar, editar el nombre, comprobar Cancel y Back antes de ejecutar, confirmar y observar conteos/progreso; después verificar que los mismos beats contienen el nuevo tag y que filtro/color siguen al nombre nuevo.\n- Resultado esperado: mismo comportamiento anterior, mismo orden de metadata salvo el nombre reemplazado, operación bloqueada durante ejecución y error visible si el servicio falla.\n\nPendientes / fuera de alcance\n\n- 6.1 — Separar las descargas de exportación queda pendiente y no fue iniciado.\n- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 5.6.\n- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y permanece sin cambios.\n\nRiesgos previos relevantes\n\n- Ningún riesgo nuevo de producto quedó abierto por 5.6.\n\nHerramientas temporales restantes\n\n- Ninguna creada por 5.6 permanece tras el commit de cierre.\n\nFallos encontrados y causa\n\n- Run 34248696947: unit TS, component DOM, integration y regressions pasaron; typecheck y ambos builds fallaron porque el primer script de extracción eliminó el import compartido `sanitizeUserVisibleText` aunque `App.tsx` todavía lo usa en otras rutas. No se publicó implementación. Se clasificó como implementación temporal incorrecta.\n- Run 34248930428: reprodujo el mismo único fallo porque la corrección automática del script no coincidió con el texto generado; nuevamente no se publicó implementación.\n- Run 34249152808 preservó explícitamente el import compartido, toda la matriz quedó verde y publicó la implementación.\n\nVeredicto\n\nTerminada.\n\nEl renombrado global de tags, sus estados y su diálogo quedaron fuera de `App.tsx` conservando orden de metadata, actualización de filtros/colores, journal, feedback y errores.\n\nSiguiente tarea\n\n6.1 — Separar las descargas de exportación.\n\nNo iniciada.\n```\n'''
+          register.write_text(reg.rstrip() + '\n')
+
+          Path('migration/BeatGaler-agent-state.md').write_text('''# BeatGaler — Agent State\n\nFecha de ejecución: 2026-09-08\nRama de trabajo obligatoria: `v0.9.0-test-noche`\n\n## Estado actual\n\n- Tarea trabajada: **5.6 — Separar el renombrado global de tags**\n- Estado: **Terminada**\n- Última tarea terminada: **5.6 — Separar el renombrado global de tags**\n- SHA inicial de esta ejecución: `3b27e6bee20cffdf763d3d5ccaee45b63a52ba85`\n- SHA final de implementación verificada: `92dedbc44ddd3014ac5e5165f3822df8714d67cd`\n- Run de verificación principal: **34249152808 — SUCCESS**\n- Comprobaciones pendientes para 5.6: **ninguna**\n\n## Resultado verificado\n\n- `useTagRename` posee la operación global, estados de progreso/error, actualización de beats/filtros/colores y coordinación con el journal existente.\n- `TagRenameDialog` posee el diálogo de dos etapas, conteos, Cancel previo, Back, feedback busy y errores.\n- Run 34249152808 terminó PASS en typecheck, unit TS, component DOM, integration, regressions, build:web y build, además de `git diff --check` antes de la matriz.\n\n## Pendientes concretos / fuera de alcance\n\n- 6.1 — Separar las descargas de exportación queda pendiente y no fue iniciado.\n- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 5.6.\n- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y permanece sin cambios.\n- No deben quedar herramientas temporales creadas por 5.6 en el árbol final.\n\n## Siguiente tarea\n\n- **6.1 — Separar las descargas de exportación**\n- Estado: **Pendiente**\n- No iniciarla hasta la próxima ronda.\n''')
+          PY
+
+          rm -f .github/workflows/task-5-6-apply.yml
+          rm -f .github/workflows/task-5-6-retry.yml
+          rm -f .github/workflows/task-5-6-retry2.yml
+          rm -f .github/workflows/task-5-6-close.yml
+
+          grep -F '### [x] 5.6 — Separar el renombrado global de tags' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F '### [ ] 6.1 — Separar las descargas de exportación' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F '### Registro — 5.6' migration/Registro-de-avance.md
+          grep -F 'Estado: **Terminada**' migration/BeatGaler-agent-state.md
+          git diff --check
+      - name: Commit closure
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs(migration): close task 5.6"
+          git push origin HEAD:v0.9.0-test-noche
