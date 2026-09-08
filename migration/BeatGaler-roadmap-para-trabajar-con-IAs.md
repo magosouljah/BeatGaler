@@ -191,7 +191,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** las mismas entradas producen los mismos beats y en el mismo orden.
     
 
-### [ ] 3.4 — Separar selección y reordenamiento
+### [x] 3.4 — Separar selección y reordenamiento
 
 - **Hacer:** extraer selección individual, Shift, Select All, limpieza de selección y arrastre para ordenar tarjetas.
     

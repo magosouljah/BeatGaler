@@ -9,15 +9,23 @@
 
 ## Estado operativo
 
-- Tarea actual: `3.4 — Separar selección y reordenamiento`
-- Estado: `Pendiente`
-- Última tarea terminada: `3.3 — Separar búsqueda, filtros y etiquetas`
-- Último SHA de implementación de tarea terminado: `1c415f318ac5f0c7c466f3f4cbb9ab28a8369c11`
-- HEAD funcional de la rama nocturna antes de crear este contexto: `466811f80385768e8e3ae5bdf491d431891cd0ce`
-- Pendientes concretos: ejecutar únicamente 3.4 según roadmap y plan.
-- Comprobaciones pendientes de tareas anteriores: ninguna necesaria para reabrir 3.1, 3.2 o 3.3.
-- Siguiente tarea prevista después de 3.4: determinarla desde el roadmap solo cuando 3.4 quede realmente Terminada.
-- Fecha de inicialización: `2026-09-08`
+- Tarea trabajada: `3.4 — Separar selección y reordenamiento`
+- Estado: `Terminada`
+- Última tarea terminada: `3.4 — Separar selección y reordenamiento`
+- SHA inicial de esta ejecución: `811058e833071d41639993fa717c885eb1577cea`
+- SHA final de implementación verificada: `811058e833071d41639993fa717c885eb1577cea`
+- Pendientes concretos: ninguno de 3.4.
+- Comprobaciones pendientes: ninguna necesaria para reabrir 3.4.
+- Siguiente tarea: `4.1 — Separar la carga de portadas`
+- Estado de la siguiente tarea: `Pendiente`
+- Fecha de ejecución: `2026-09-08`
+
+## Evidencia de cierre de 3.4
+
+- Implementación: selección extraída a `src/features/selection/useBeatSelection.ts` y reordenamiento a `src/features/library/useLibraryReorder.ts`.
+- GitHub Actions: `Temporary Task 3.4 Apply`, run `34211720605`, resultado `success`.
+- Checks verdes: diff check, typecheck, unit TypeScript, component DOM, integration, regressions, build web y build.
+- El fallo previo del run `34211385742` ocurrió en `Prepare verified commit`; todos los checks de código anteriores habían pasado y la corrida posterior corrigió la publicación sin cambiar el contrato funcional.
 
 ## Regla de actualización
 
