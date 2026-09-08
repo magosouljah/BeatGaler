@@ -324,7 +324,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** cancelar el destino no descarga nada y cerrar el modal no interrumpe una descarga iniciada.
     
 
-### [ ] 6.2 — Separar recuperación y errores de uploads
+### [x] 6.2 — Separar recuperación y errores de uploads
 
 - **Hacer:** completar la extracción del registro de subidas interrumpidas y los detalles de error. Mantener sus llamadas desde los puntos actuales.
     

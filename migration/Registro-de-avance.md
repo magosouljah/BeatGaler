@@ -1751,3 +1751,107 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 6.2
+
+```
+Tarea: 6.2 — Separar recuperación y errores de uploads
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 6ff13625a6f4623d793e70bde21f655e7147b1d9
+- Última tarea verificada: 6.1 — Separar las descargas de exportación
+
+Cambio realizado
+
+- `src/features/cloud/interruptedUploadJournal.ts` pasó de poseer solo el marcador local a poseer también la reconciliación de una subida interrumpida contra el INDEX autoritativo.
+- La recuperación conserva la semántica fail-closed: un beat ya presente en el INDEX solo pierde el marcador local; si el INDEX no puede verificarse no se borra nada; si el rollback remoto/local falla el marcador permanece para un lanzamiento posterior.
+- `App.tsx` conserva el punto de llamada de startup y le entrega al módulo las dependencias concretas de sesión, base Cloud y purga local; dejó de contener la implementación de rollback.
+- Se creó `src/features/cloud/uploadErrorDetails.ts` como dueño de los detalles de error de sesión, fallo por etapa y preparación de playback posterior al upload, conservando mensajes, hints, etapa, plataforma y sanitización visible.
+- El estado `backgroundUploadErrors` y el pipeline siguen en App porque su extracción completa pertenece a 6.3/6.4; 6.2 solo mueve recuperación y construcción de detalles.
+- No se inició 6.3.
+
+Adaptación de pruebas
+
+- `tests/integration/appUploadRecoveryExtraction.test.ts` verifica con comportamiento ejecutable que un beat durable no se purga, autoridad desconocida difiere toda limpieza, un rollback fallido conserva el marcador y los detalles de error mantienen contexto útil/sanitizado.
+- `tests/integration/appMigrationCharacterization.test.ts` sigue protegiendo la recuperación fail-closed pero ahora apunta al owner real en `interruptedUploadJournal.ts` y reconoce `uploadErrorDetails.ts`.
+- `scripts/run-regressions.mjs` movió únicamente los guards de recovery al owner nuevo y añadió un guard del owner/sanitización de errores; no se debilitaron invariantes.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/cloud/interruptedUploadJournal.ts
+- src/features/cloud/uploadErrorDetails.ts
+- tests/integration/appUploadRecoveryExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 6.2 Apply`, run 34265690210 — SUCCESS.
+- Artifact `migration-check-logs-task-6-2-34265690210` — matriz completa publicada.
+- `npm ci` — PASS.
+- `git diff --check` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- SHA de implementación verificada: 9ffc4f260c2c3f3dde161c21723e929501880a04.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` — no ejecutado como wrapper; sus checks relevantes fueron ejecutados individualmente, incluyendo tests y build.
+- `npm run test:e2e:recovery` — no valida esta extracción productiva: `BEATGALER_E2E_RECOVERY=1` reemplaza `<App />` por `E2ERecoveryHarness`, un harness genérico que no importa `interruptedUploadJournal.ts` ni `uploadErrorDetails.ts`.
+- Prueba física Desktop Windows/macOS — no ejecutada; esta ronda trabaja directamente en GitHub Actions y no dispone de una app física interactiva.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Desktop: iniciar un import/upload, interrumpir el proceso antes del commit del INDEX y reiniciar; con autoridad Cloud disponible el beat incompleto debe limpiarse y mostrarse el aviso.
+- Desktop, caso durable: interrumpir después de que el INDEX ya contenga el beat pero antes de limpiar el marcador; al reiniciar no debe purgar media local/Cloud del beat confirmado.
+- Desktop, sin autoridad: iniciar con Cloud no verificable; el marcador debe conservarse y no debe borrarse el beat hasta un lanzamiento donde el INDEX pueda comprobarse.
+- Resultado esperado: ninguna subida confirmada se elimina por un marcador viejo y los errores siguen mostrando beat/etapa/plataforma/hint útil.
+
+Pendientes / fuera de alcance
+
+- 6.3 — Separar el proceso de subida de un beat queda pendiente y no fue iniciado.
+- El estado/cola completa de background uploads sigue en App y corresponde a 6.3/6.4.
+- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 6.2.
+- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` permanece fuera de alcance.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de integridad quedó abierto por 6.2; la limpieza destructiva sigue condicionada a autoridad conocida.
+
+Herramientas temporales restantes
+
+- Ninguna creada por 6.2 debe permanecer en el árbol final; el applier y workflow temporales se eliminan en el commit de cierre.
+
+Fallos encontrados y causa
+
+- Run 34264928942: el aplicador temporal falló antes de modificar código productivo porque una sustitución textual del bloque de error de sesión no coincidió; la matriz no llegó a ejecutarse y el artifact no pudo generarse. Se corrigió únicamente el tooling de aplicación.
+- Run 34265197531: el aplicador endurecido duplicó el encabezado `function BeatGalerApp()` al retirar la función local. Unit TS, component DOM, integration y regressions pasaron; typecheck y ambos builds fallaron en `src/App.tsx:126` con TS1144. Se corrigió únicamente esa transformación.
+- Run 34265464482: la transformación ya era sintácticamente válida, pero el import nuevo había retirado `readActiveCloudUploads` aunque App conserva una lectura del journal en startup. Unit TS, component DOM, integration y regressions pasaron; typecheck y ambos builds fallaron por TS2304 en `src/App.tsx:429`. Se preservó ese import, sin ampliar alcance.
+- Run 34265690210: aplicación corregida y matriz completa PASS.
+
+Veredicto
+
+Terminada.
+
+La recuperación de uploads y sus detalles de error quedaron fuera de App sin cambiar la frontera de autoridad: INDEX confirmado preserva el beat, autoridad desconocida difiere limpieza y un rollback fallido conserva el marcador.
+
+Siguiente tarea
+
+6.3 — Separar el proceso de subida de un beat.
+
+No iniciada.
+```

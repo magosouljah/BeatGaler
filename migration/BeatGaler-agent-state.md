@@ -5,30 +5,31 @@ Rama de trabajo obligatoria: `v0.9.0-test-noche`
 
 ## Estado actual
 
-- Tarea trabajada: **6.1 — Separar las descargas de exportación**
+- Tarea trabajada: **6.2 — Separar recuperación y errores de uploads**
 - Estado: **Terminada**
-- Última tarea terminada: **6.1 — Separar las descargas de exportación**
-- SHA inicial de esta ejecución: `58371aa0c291d18cf03b81b6a2adb6ed8c27ca31`
-- SHA final de implementación verificada: `de360cdfbf3be7029c5a4df80e097b367efa5e8e`
-- Run de verificación principal: **34263108889 — SUCCESS**
-- Comprobaciones pendientes para 6.1: **ninguna**
+- Última tarea terminada: **6.2 — Separar recuperación y errores de uploads**
+- SHA inicial de esta ejecución: `6ff13625a6f4623d793e70bde21f655e7147b1d9`
+- SHA final de implementación verificada: `9ffc4f260c2c3f3dde161c21723e929501880a04`
+- Run de verificación principal: **34265690210 — SUCCESS**
+- Comprobaciones pendientes para 6.2: **ninguna automatizada necesaria**
 
 ## Resultado verificado
 
-- `useBeatDownloads` posee estado/acciones de Cloud Files, selección de destino, routing Web/Desktop, seguimiento por `taskId` y listener Desktop.
-- Cancelar el destino no inicia worker ni estado runtime; cerrar el modal no elimina la tarea iniciada porque listener/tracking viven fuera de la UI.
-- Web reutiliza `platform.downloads`; Desktop conserva `startBackgroundDownload`, MP3/WAV/PROJECT/ALL, paquetes Offline y filenames `[BPM Key]`.
-- Run 34263108889 terminó PASS en npm ci, diff-check, typecheck, unit TS, component DOM, integration, regressions, build:web y build.
+- `interruptedUploadJournal.ts` posee marcador y reconciliación de recovery contra autoridad Cloud.
+- Un beat presente en el INDEX autoritativo nunca pasa por purga; un INDEX desconocido conserva todos los marcadores; un rollback fallido conserva el suyo.
+- `uploadErrorDetails.ts` posee los detalles de sesión, fallo por etapa y preparación de playback manteniendo información útil y sanitización visible.
+- App conserva los puntos de llamada actuales; pipeline/cola no se extrajeron en esta ronda.
+- Run 34265690210 terminó PASS en npm ci, diff-check, typecheck, unit TS, component DOM, integration, regressions, build:web y build.
 
 ## Pendientes concretos / fuera de alcance
 
-- 6.2 — Separar recuperación y errores de uploads queda pendiente y no fue iniciado.
-- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 6.1.
-- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y permanece sin cambios.
-- No deben quedar herramientas temporales creadas por 6.1 en el árbol final.
+- 6.3 — Separar el proceso de subida de un beat queda pendiente y no fue iniciado.
+- 6.4 — Separar la cola de uploads sigue después de 6.3.
+- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 6.2.
+- No deben quedar herramientas temporales creadas por 6.2 en el árbol final.
 
 ## Siguiente tarea
 
-- **6.2 — Separar recuperación y errores de uploads**
+- **6.3 — Separar el proceso de subida de un beat**
 - Estado: **Pendiente**
 - No iniciarla hasta la próxima ronda.
