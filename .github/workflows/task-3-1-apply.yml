@@ -1,13 +1,65 @@
 name: Temporary Task 3.1 Verify
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - app-tsx-3.1
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Task 3.1 verifier paused while the extraction is corrected."
+      - name: Checkout task branch
+        uses: actions/checkout@v4
+        with:
+          ref: app-tsx-3.1
+          fetch-depth: 0
+
+      - name: Use project Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply task 3.1 extraction
+        run: node scripts/apply-task-3-1.mjs
+
+      - name: Patch hygiene
+        run: git diff --check
+
+      - name: Typecheck
+        run: npm run test:typecheck
+
+      - name: TypeScript unit tests
+        run: npm run test:unit:ts
+
+      - name: Component DOM tests
+        run: npm run test:component:dom
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      - name: Regression guards
+        run: npm run test:regressions
+
+      - name: Web build
+        run: npm run build:web
+
+      - name: Desktop frontend build
+        run: npm run build
+
+      - name: Publish verified extraction and remove temporary tooling
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.tsx tests/integration/libraryStateExtraction.test.ts
+          git rm scripts/apply-task-3-1.mjs .github/workflows/task-3-1-apply.yml
+          git diff --cached --check
+          git commit -m "refactor(app): extract library state ownership"
+          git push origin HEAD:app-tsx-3.1
