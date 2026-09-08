@@ -1,0 +1,68 @@
+name: Temporary task 7.1 validator
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  validate-task-7-1:
+    if: contains(github.event.head_commit.message, '[validate-7.1]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Remove temporary task workflows before validation
+        id: cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/temp-task-7.1-apply.yml .github/workflows/temp-task-7.1-validate.yml
+          git commit -m "chore(migration): remove temporary task 7.1 workflows"
+          git push origin HEAD:v0.9.0-test-noche
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run complete migration checks
+        id: migration_checks
+        continue-on-error: true
+        run: node scripts/run-migration-checks-with-logs.mjs
+
+      - name: Upload readable migration logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/migration-check-logs/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Confirm tested remote HEAD
+        if: steps.migration_checks.outcome == 'success'
+        shell: bash
+        run: |
+          remote_sha="$(git ls-remote origin refs/heads/v0.9.0-test-noche | cut -f1)"
+          test "$remote_sha" = "${{ steps.cleanup.outputs.sha }}"
+          echo "Validated implementation SHA: $remote_sha"
+
+      - name: Fail workflow if migration checks failed
+        if: steps.migration_checks.outcome == 'failure'
+        run: |
+          echo "One or more migration checks failed. Read migration-check-logs-${{ github.run_id }}-${{ github.run_attempt }}."
+          exit 1
