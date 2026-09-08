@@ -12,7 +12,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
@@ -38,8 +38,9 @@ import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
 import { readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
 import { useCloudUploadQueue } from "./features/cloud/useCloudUploadQueue";
 import ImportReviewHost from "./features/import/components/ImportReviewHost";
-import { reviewSourceKey, useImportSession } from "./features/import/useImportSession";
+import { useImportSession } from "./features/import/useImportSession";
 import { useImportReview } from "./features/import/useImportReview";
+import { useImportDiscovery } from "./features/import/useImportDiscovery";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -196,12 +197,10 @@ function BeatGalerApp() {
   const [dropImportBatch, setDropImportBatch] = useState<ImportBatchPreview | null>(null);
   const [deferredImportBatch, setDeferredImportBatch] = useState<ImportBatchPreview | null>(null);
   const [audioConflictBatch, setAudioConflictBatch] = useState<ImportBatchPreview | null>(null);
-  const [reviewBootstrap, setReviewBootstrap] = useState<{ total: number | null } | null>(null);
   // Covers the WebView2 staging window that happens BEFORE importDroppedPaths
   // receives native paths. Without this state, the app can look frozen while
   // large dropped files are being copied into drop-staging.
   const [libraryDropStaging, setLibraryDropStaging] = useState(false);
-  const [reviewPreparationDone, setReviewPreparationDone] = useState(true);
   const [bulkSaveAllBusy, setBulkSaveAllBusy] = useState(false);
   const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string; kind: "file" | "directory" } | null>(null);
   const {
@@ -211,13 +210,6 @@ function BeatGalerApp() {
     skippedReviewSourceKeysRef,
     startReview,
   } = useImportSession();
-  // Background uploads can finish while the user is still reviewing other beats
-  // from the SAME drop-staging session. Keep a live ref so staging cleanup never
-  // deletes the remaining Review sources after the first upload succeeds.
-  const reviewPreparationRunRef = useRef(0);
-  const reviewPreparationPromiseRef = useRef<Promise<Beat[]> | null>(null);
-  // Cancels stale async import bootstrap work when Review is cancelled/replaced.
-  const importReviewRequestRunRef = useRef(0);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   // Prevent cached/local state from being pushed back to Telegram before this
@@ -294,6 +286,28 @@ function BeatGalerApp() {
     });
     return true;
   }, [connectionState]);
+
+  const {
+    reviewBootstrap,
+    reviewPreparationDone,
+    reviewPreparationPromiseRef,
+    importDroppedPaths,
+    cancelPendingReviewWork,
+    completeImmediateReviewPreparation,
+  } = useImportDiscovery({
+    dropImporting,
+    setDropImporting,
+    rejectOfflineMutation,
+    setDropActive,
+    setShowAdd,
+    setDeferredImportBatch,
+    setAudioConflictBatch,
+    setDropImportBatch,
+    setReviewQueue,
+    skippedReviewSourceKeysRef,
+    stagedImportPathsRef,
+    skeletonEnabled: REVIEW_SKELETON_ENABLED,
+  });
 
   const {
     backgroundUploadErrors,
@@ -995,19 +1009,6 @@ function BeatGalerApp() {
     // Upload begins only after Review → Save.
   }, [connectionState, startReview]);
 
-  const cancelPendingReviewWork = useCallback(() => {
-  importReviewRequestRunRef.current += 1;
-  reviewPreparationRunRef.current += 1;
-  reviewPreparationPromiseRef.current = null;
-  setReviewPreparationDone(true);
-  setReviewBootstrap(null);
-  setAudioConflictBatch(null);
-  setDeferredImportBatch(current => {
-    if (current?.batch_id) void discardImportReviewBatch(current.batch_id);
-    return null;
-  });
-}, []);
-
 const {
   skipCurrentReviewBeat,
   cancelReview,
@@ -1146,181 +1147,7 @@ const {
     setBulkSaveAllBusy(false);
   }, [cloudifyImportedBeats]);
 
-  const importDroppedPaths = useCallback(async (paths: string[]) => {
-    if (rejectOfflineMutation("Importing beats")) return;
-    const normalized = Array.from(new Set(paths.map(p => p.trim()).filter(Boolean)));
-    if (normalized.length === 0 || dropImporting) return;
 
-    const dropStarted = performance.now();
-    const diagRun = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    reviewPerfMark(`run=${diagRun} IMPORT_BEGIN path_count=${normalized.length} names=${normalized.map(fileNameFromPath).slice(0, 12).join("|")}`);
-    const requestRunId = ++importReviewRequestRunRef.current;
-    setDropImporting(true);
-    setReviewPreparationDone(false);
-    setDeferredImportBatch(null);
-    setAudioConflictBatch(null);
-    setDropImportBatch(null);
-    skippedReviewSourceKeysRef.current.clear();
-    if (REVIEW_SKELETON_ENABLED) {
-      setReviewBootstrap({ total: null });
-      reviewPerfMark(`run=${diagRun} SKELETON_STATE_REQUESTED elapsed_ms=${Math.round(performance.now() - dropStarted)}`);
-      requestAnimationFrame(() => reviewPerfMark(`run=${diagRun} SKELETON_FRAME elapsed_ms=${Math.round(performance.now() - dropStarted)}`));
-    }
-    console.info("[review-perf] DROP_RECEIVED 0 ms");
-
-    try {
-      // IMPORTANT: this creates only a cursor. It does not recursively scan the
-      // batch, count every beat, or inspect projects. That work is streamed by
-      // prepareNextImportReviewBeat one beat at a time.
-      reviewPerfMark(`run=${diagRun} STREAM_INVOKE_START elapsed_ms=${Math.round(performance.now() - dropStarted)}`);
-      const stream = await startImportReviewStream(normalized);
-      reviewPerfMark(`run=${diagRun} STREAM_INVOKE_END elapsed_ms=${Math.round(performance.now() - dropStarted)} batch=${stream.batch_id}`);
-      if (importReviewRequestRunRef.current !== requestRunId) {
-        void discardImportReviewBatch(stream.batch_id);
-        return;
-      }
-      stagedImportPathsRef.current.set(stream.batch_id, normalized);
-      console.info(`[review-perf] STREAM_READY ${Math.round(performance.now() - dropStarted)} ms`);
-
-      // Critical path: discover only until the FIRST normal playable audio is
-      // found, read its metadata/artwork, and stop. N intentionally remains
-      // unknown until the background worker reaches the end of the tree.
-      reviewPerfMark(`run=${diagRun} FIRST_PREPARE_INVOKE_START elapsed_ms=${Math.round(performance.now() - dropStarted)}`);
-      const firstStep = await prepareNextImportReviewBeat(stream.batch_id);
-      reviewPerfMark(`run=${diagRun} FIRST_PREPARE_INVOKE_END elapsed_ms=${Math.round(performance.now() - dropStarted)} has_beat=${Boolean(firstStep.beat)} discovery_complete=${firstStep.discovery_complete}`);
-      if (importReviewRequestRunRef.current !== requestRunId) {
-        stagedImportPathsRef.current.delete(stream.batch_id);
-        void discardImportReviewBatch(stream.batch_id);
-        return;
-      }
-
-      const first = firstStep.beat
-        ? { ...firstStep.beat, tags: cleanTags(firstStep.beat.tags || []).tags }
-        : null;
-
-      if (first) {
-        setShowAdd(false);
-        setReviewQueue({
-          beats: [first],
-          index: 0,
-          total: firstStep.total_normal,
-          batchId: stream.batch_id,
-          preparing: !firstStep.discovery_complete,
-        });
-        reviewPerfMark(`run=${diagRun} FIRST_REVIEW_STATE_SET elapsed_ms=${Math.round(performance.now() - dropStarted)} beat=${first.name}`);
-
-        // Diagnostic paint barrier: do not let Beat 2..N work begin until the
-        // first Review drawer had a real browser frame. This both proves whether
-        // background preparation was starving the first paint and guarantees the
-        // skeleton hands off directly to the real drawer with no blank flash.
-        await new Promise<void>(resolve => {
-          requestAnimationFrame(() => {
-            reviewPerfMark(`run=${diagRun} FIRST_REVIEW_FRAME elapsed_ms=${Math.round(performance.now() - dropStarted)} beat=${first.name}`);
-            resolve();
-          });
-        });
-        setReviewBootstrap(null);
-        reviewPerfMark(`run=${diagRun} BACKGROUND_ALLOWED elapsed_ms=${Math.round(performance.now() - dropStarted)}`);
-        console.info(`[review-perf] FIRST_REVIEW_READY ${Math.round(performance.now() - dropStarted)} ms`);
-      } else if (firstStep.discovery_complete) {
-        const summary = await getImportReviewBatchSummary(stream.batch_id);
-        setDeferredImportBatch(summary);
-        setReviewBootstrap(null);
-        setReviewPreparationDone(true);
-        if (summary.audio_conflicts.length > 0) {
-          setAudioConflictBatch(summary);
-        } else if (summary.pending.length > 0) {
-          setDropImportBatch(summary);
-        } else {
-          stagedImportPathsRef.current.delete(stream.batch_id);
-          setDeferredImportBatch(null);
-          await discardImportReviewBatch(stream.batch_id);
-          await appAlert({ title: "Nothing to import", message: "No playable beats were found in the dropped files." });
-        }
-        return;
-      }
-
-      const runId = ++reviewPreparationRunRef.current;
-      const preparation = (async () => {
-        const prepared: Beat[] = first ? [first] : [];
-        let step = firstStep;
-
-        // Continue exactly where Rust stopped. Each invoke searches only until
-        // the next normal beat, prepares that beat, then yields to the UI.
-        while (!step.discovery_complete && reviewPreparationRunRef.current === runId && importReviewRequestRunRef.current === requestRunId) {
-          await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-          const bgIndex = prepared.length + 1;
-          const bgStarted = performance.now();
-          reviewPerfMark(`run=${diagRun} BACKGROUND_PREPARE_START n=${bgIndex} elapsed_ms=${Math.round(bgStarted - dropStarted)}`);
-          step = await prepareNextImportReviewBeat(stream.batch_id);
-          reviewPerfMark(`run=${diagRun} BACKGROUND_PREPARE_END n=${bgIndex} step_ms=${Math.round(performance.now() - bgStarted)} elapsed_ms=${Math.round(performance.now() - dropStarted)} has_beat=${Boolean(step.beat)} done=${step.discovery_complete}`);
-          if (reviewPreparationRunRef.current !== runId || importReviewRequestRunRef.current !== requestRunId) break;
-
-          if (step.beat) {
-            const nextBeat = { ...step.beat, tags: cleanTags(step.beat.tags || []).tags };
-            prepared.push(nextBeat);
-            const sourceKey = reviewSourceKey(nextBeat);
-            setReviewQueue(q => {
-              if (!q || q.batchId !== stream.batch_id) return q;
-              if (sourceKey && skippedReviewSourceKeysRef.current.has(sourceKey)) return {
-                ...q,
-                total: step.total_normal ?? q.total,
-                preparing: !step.discovery_complete,
-              };
-              if (sourceKey && q.beats.some(item => reviewSourceKey(item) === sourceKey)) return q;
-              return {
-                ...q,
-                beats: [...q.beats, nextBeat],
-                total: step.total_normal ?? q.total,
-                preparing: !step.discovery_complete,
-              };
-            });
-          }
-        }
-
-        if (reviewPreparationRunRef.current !== runId || importReviewRequestRunRef.current !== requestRunId) {
-          return prepared;
-        }
-
-        const summary = await getImportReviewBatchSummary(stream.batch_id);
-        setDeferredImportBatch(summary);
-        setReviewPreparationDone(true);
-        console.info(`[review-perf] DISCOVERY_FINISHED ${Math.round(performance.now() - dropStarted)} ms (${summary.normal_count} normal, ${summary.audio_conflicts.length} conflict)`);
-        reviewPerfMark(`run=${diagRun} DISCOVERY_FINISHED elapsed_ms=${Math.round(performance.now() - dropStarted)} normal=${summary.normal_count} conflicts=${summary.audio_conflicts.length}`);
-
-        setReviewQueue(q => {
-          if (!q || q.batchId !== stream.batch_id) return q;
-          // The user may have already Saved/Skipped the last currently-known beat
-          // while discovery was still running. Once N is known, close any cursor
-          // that is already past the end instead of leaving an eternal skeleton.
-          if (q.index >= summary.normal_count) return null;
-          return { ...q, total: summary.normal_count, preparing: false };
-        });
-        return prepared;
-      })();
-      reviewPreparationPromiseRef.current = preparation;
-
-      void preparation.catch(async error => {
-        console.error("Background streaming Review preparation failed:", error);
-        if (reviewPreparationRunRef.current === runId && importReviewRequestRunRef.current === requestRunId) {
-          setReviewPreparationDone(true);
-          setReviewQueue(q => q && q.batchId === stream.batch_id ? { ...q, preparing: false } : q);
-          setReviewBootstrap(null);
-          await appAlert({ title: "Review preparation failed", message: String(error), danger: true });
-        }
-      });
-
-    } catch (error) {
-      reviewPerfMark(`run=${diagRun} IMPORT_ERROR elapsed_ms=${Math.round(performance.now() - dropStarted)} error=${String(error)}`);
-      console.error(error);
-      setReviewBootstrap(null);
-      setReviewPreparationDone(true);
-      await appAlert({ title: "Import failed", message: `Could not import the dropped files: ${String(error)}`, danger: true });
-    } finally {
-      setDropImporting(false);
-      setDropActive(false);
-    }
-  }, [dropImporting, rejectOfflineMutation]);
 
   useEffect(() => {
     if (!deferredImportBatch || !reviewPreparationDone || bulkSaveAllBusy) return;
@@ -1631,8 +1458,7 @@ const {
       const hydrated = await candidate.hydrated.catch(() => candidate.beat);
       const beat = { ...hydrated, tags: cleanTags(hydrated.tags || []).tags };
       setShowAdd(false);
-      setReviewPreparationDone(true);
-      setReviewBootstrap(null);
+      completeImmediateReviewPreparation();
       setDeferredImportBatch(null);
       setAudioConflictBatch(null);
       setDropImportBatch(null);

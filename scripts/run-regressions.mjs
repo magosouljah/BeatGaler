@@ -65,6 +65,7 @@ try {
   const uploadErrorDetails = readFileSync(path.join(root, "src", "features", "cloud", "uploadErrorDetails.ts"), "utf8");
   const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
   const cloudUploadQueue = readFileSync(path.join(root, "src", "features", "cloud", "useCloudUploadQueue.ts"), "utf8");
+  const importDiscovery = readFileSync(path.join(root, "src", "features", "import", "useImportDiscovery.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
@@ -301,13 +302,13 @@ try {
   const stageBytesIndex = htmlDropController.indexOf("await stageCapturedHtmlDrop(capturedDrop)", dropSkeletonIndex);
   if (dropSkeletonIndex < 0 || stageBytesIndex < 0 || dropSkeletonIndex > stageBytesIndex) fail("HTML fallback must paint feedback before it stages bytes.");
   if (!app.includes("DataTransfer File.arrayBuffer(), no drop-staging")) fail("Windows native import lost its explicit no-staging critical-path invariant.");
-  const skeletonIndex = app.indexOf("setReviewBootstrap({ total: null })");
-  const streamStartIndex = app.indexOf("await startImportReviewStream(normalized)", skeletonIndex);
+  const skeletonIndex = importDiscovery.indexOf("setReviewBootstrap({ total: null })");
+  const streamStartIndex = importDiscovery.indexOf("await services.startStream(normalized)", skeletonIndex);
   if (skeletonIndex < 0 || streamStartIndex < 0 || skeletonIndex > streamStartIndex) fail("Review skeleton no longer appears before streaming discovery starts.");
-  if (app.includes("await previewImportBatch(normalized)")) fail("Review regressed to full-batch discovery before Beat 1.");
-  if (!app.includes("await prepareNextImportReviewBeat(stream.batch_id)")) fail("Review no longer advances the streaming discovery one beat at a time.");
-  if (!app.includes("while (!step.discovery_complete") || !app.includes("FIRST_REVIEW_READY") || !app.includes("DISCOVERY_FINISHED")) fail("Streaming Review worker/perf instrumentation was removed.");
-  if (!app.includes("reviewPreparationPromiseRef.current")) fail("Save All no longer shares the sequential Review preparation worker.");
+  if ([app, importDiscovery].some(source => source.includes("await previewImportBatch(normalized)"))) fail("Review regressed to full-batch discovery before Beat 1.");
+  if (!importDiscovery.includes("startStream: startImportReviewStream") || !importDiscovery.includes("prepareNext: prepareNextImportReviewBeat") || !importDiscovery.includes("await services.prepareNext(stream.batch_id)")) fail("Review no longer advances the streaming discovery one beat at a time.");
+  if (!importDiscovery.includes("while (!step.discovery_complete") || !importDiscovery.includes("FIRST_REVIEW_READY") || !importDiscovery.includes("DISCOVERY_FINISHED")) fail("Streaming Review worker/perf instrumentation was removed.");
+  if (!importDiscovery.includes("const reviewPreparationPromiseRef = useRef<Promise<Beat[]> | null>(null)") || !app.includes("reviewPreparationPromiseRef.current")) fail("Save All no longer shares the sequential Review preparation worker.");
   if (!app.includes("setReviewQueue(null);") || !app.includes("cloudifyImportedBeats([currentUpdated])")) fail("Save All must close Review and upload the current beat without waiting for the rest.");
   if (!app.includes("Retry upload") && !beatCard.includes("Retry upload")) fail("Individual failed-upload Retry disappeared.");
   if (!cloudUploadQueue.includes('cloudifyImportedBeats([{ ...beat, cloud_status: "UPLOADING" }])')) fail("Individual Retry is no longer wired back into the checkpoint-aware upload pipeline.");

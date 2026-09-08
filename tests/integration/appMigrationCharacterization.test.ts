@@ -88,7 +88,7 @@ describe("App migration characterization contracts", () => {
   });
 
   it("keeps Review candidates outside the library until Save and preserves Skip versus Cancel", () => {
-    const add = section("const addBeatsAndReview = useCallback", "const cancelPendingReviewWork = useCallback");
+    const add = section("const addBeatsAndReview = useCallback", "const handleReviewedSaveAll = useCallback");
     expect(add).toContain("startReview(sanitized)");
     expect(add).not.toContain("setBeats(");
     expect(importSession).toContain("const [reviewQueue, setReviewQueue] = useState<ImportReviewQueueState | null>(null)");
