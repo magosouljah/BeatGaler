@@ -55,6 +55,7 @@ try {
   });
 
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+  const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
@@ -303,7 +304,7 @@ try {
   if (!reviewSkeleton.includes('right: 0') || !reviewSkeleton.includes('width: 340')) fail("Review skeleton no longer mirrors the existing right-side Review Drawer.");
   if (!drawerSource.includes("Skip beat") || !drawerSource.includes("Cancel import")) fail("Review no longer separates skipping one candidate from cancelling the remaining import.");
   if (!drawerSource.includes("onCloudMutationCommit") || !app.includes("commitDrawerCloudMutation")) fail("Drawer cloud changes can upload media without committing the authoritative INDEX.");
-  if (!app.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !app.includes("DRAWER_CLOUD_COMMIT_JOINED") || !app.includes("drawerMetadataCommitVerifiedRef") || !app.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");
+  if (!drawerCloudPersistence.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !drawerCloudPersistence.includes("DRAWER_CLOUD_COMMIT_JOINED") || !drawerCloudPersistence.includes("drawerMetadataCommitVerifiedRef") || !drawerCloudPersistence.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");
   if (!rustCommands.includes("PROJECT_PAIR_DECISION") || !rustCommands.includes("attach_root_project_files")) fail("Streaming import lost the unambiguous Ableton/FL Studio project pairing decision.");
   if (!rustCommands.includes("WARMUP_SKIPPED") || !rustCommands.includes("DIRECT_WARMUP_ACTIVE") || !rustCommands.includes("DIRECT_WARMUP_BACKOFF_UNTIL")) fail("Direct status polling can spawn repeated failing warmups again.");
   if (!rustCommands.includes("read_image_file_data_url") || !drawerSource.includes("handlePickArtwork")) fail("macOS artwork selection regressed to the unreliable WebView file reader.");
