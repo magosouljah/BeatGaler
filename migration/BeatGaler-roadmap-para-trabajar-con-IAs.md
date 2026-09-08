@@ -228,7 +228,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** Play repetido, cambio rápido de beat y limpiar caché durante una preparación no producen audio duplicado ni reutilizan rutas invalidadas.
     
 
-### [ ] 4.3 — Separar la cola y navegación
+### [x] 4.3 — Separar la cola y navegación
 
 - **Hacer:** extraer cola del usuario, siguiente/anterior, shuffle, repeat y avance al terminar una pista.
     

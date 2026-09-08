@@ -986,3 +986,97 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 4.3
+
+```
+Tarea: 4.3 — Separar la cola y navegación
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 73a87721c6c7f01e9c75741a4c028214affdc7ce
+- Última tarea verificada: 4.2 — Separar preparación y control del audio
+
+Cambio realizado
+
+- Se creó `src/features/playback/usePlaybackQueue.ts` como dueño de la cola explícita, navegación Next/Previous, shuffle, repeat y avance por final de pista.
+- `App.tsx` dejó de poseer `queueIds`, `shuffleEnabled`, `repeatMode`, `showQueue` y `lastHandledEndedSeqRef`; ahora compone el hook y pasa sus acciones/estado al Player.
+- Se conservó la prioridad de la cola explícita antes de la navegación normal.
+- Se conservó el comportamiento con filtros: si el beat actual está visible se navega por `displayedBeats`; si dejó de pertenecer al filtro se usa la biblioteca viva.
+- Se conservó Repeat One al terminar, Repeat Off al final de la lista, shuffle sin repetir inmediatamente el mismo índice cuando hay más de un beat y Previous con seek a cero cuando el progreso supera 0.05.
+- El guard de `endedSeq` sigue permitiendo un único avance por evento de fin.
+- La reconciliación de la cola contra la biblioteca viva se trasladó al hook, por lo que eliminar uno o varios beats purga automáticamente IDs inválidos y libera audio si el beat reproducido desaparece.
+- No se inició 5.1.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appPlaybackQueueExtraction.test.ts` para comprobar que el ownership salió de App y que permanecen los contratos críticos de cola explícita, filtros, repeat, shuffle, `endedSeq` y purga de IDs inválidos.
+- No se desactivaron pruebas existentes.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/playback/usePlaybackQueue.ts
+- tests/integration/appPlaybackQueueExtraction.test.ts
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary Task 4.3 Retry`, run 34223927012 — SUCCESS.
+- Artifact `migration-check-logs-task-4-3-34223927012`: `summary.txt` leído y todos los checks figuran PASS.
+- git diff --check — PASS.
+- npm run test:typecheck — PASS.
+- npm run test:unit:ts — PASS.
+- npm run test:component:dom — PASS.
+- npm run test:integration — PASS.
+- npm run test:regressions — PASS.
+- npm run build:web — PASS.
+- npm run build — PASS.
+- Commit de implementación verificada: 33c543769010941f49b1c1c3d5e2be7f9a8ae446.
+
+Comprobaciones no ejecutadas
+
+- npm run check — no requerido para esta extracción; sus checks relevantes se ejecutaron individualmente.
+- E2E completos de import/download/recovery — no aplican a cola/navegación.
+- Pruebas físicas nativas Windows/macOS — no necesarias para cerrar esta extracción; no cambiaron adapters ni comandos nativos.
+
+Prueba manual
+
+- No requerida como bloqueo de cierre. Los contratos observables de cola, navegación, repeat/shuffle, filtros y eliminación quedaron cubiertos por integración/regresiones y ambos builds.
+
+Pendientes / fuera de alcance
+
+- El riesgo previo de `handleRemoveBulk` con snapshots capturados permanece fuera de alcance y no fue modificado.
+- 5.1 — Separar guardado de metadata y artwork queda pendiente; no fue iniciada.
+
+Riesgos previos relevantes
+
+- Ninguno nuevo causado por 4.3.
+
+Herramientas temporales restantes
+
+- Ninguna al cerrar; los workflows temporales de 4.3 se eliminan en el commit de cierre.
+
+Fallos encontrados y causa
+
+- Run 34223774463 falló en `Apply task 4.3 extraction` antes de ejecutar checks. No generó `migration-check-logs-*` porque la matriz de checks no llegó a comenzar y no publicó código de producto. Se clasificó como fallo del applier temporal, no como regresión del producto.
+- El retry 34223927012 aplicó la misma extracción con guardas más robustas, ejecutó la matriz completa y terminó SUCCESS.
+- Run 34224295357 no creó jobs porque el primer finalizador documental contenía YAML inválido; no modificó código ni documentos.
+
+Veredicto
+
+Terminada.
+
+La cola y navegación quedaron fuera de App preservando prioridad explícita, filtros, Next/Previous, shuffle, repeat, avance único por fin de pista y purga de referencias inválidas al eliminar beats.
+
+Siguiente tarea
+
+5.1 — Separar guardado de metadata y artwork.
+
+No iniciada.
+```

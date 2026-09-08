@@ -1,36 +1,32 @@
-# BeatGaler Agent State
+# BeatGaler — Agent State
 
-## Seguridad de la ronda nocturna
+Fecha de ejecución: 2026-09-08
+Rama de trabajo obligatoria: `v0.9.0-test-noche`
 
-- Rama exclusiva: `v0.9.0-test-noche`
-- Prohibido modificar o avanzar `integration-v0.9.0-alpha.2`, `main` o ramas `app-tsx-*`.
-- Prohibido merge, rebase, cherry-pick, fast-forward hacia otras ramas o PR de integración durante la prueba.
-- Todos los commits y pushes de la ronda deben quedar únicamente en `v0.9.0-test-noche`.
+## Estado actual
 
-## Estado operativo
+- Tarea trabajada: **4.3 — Separar la cola y navegación**
+- Estado: **Terminada**
+- Última tarea terminada: **4.3 — Separar la cola y navegación**
+- SHA inicial de esta ejecución: `73a87721c6c7f01e9c75741a4c028214affdc7ce`
+- SHA final de implementación verificada: `33c543769010941f49b1c1c3d5e2be7f9a8ae446`
+- Run de verificación principal: **34223927012 — SUCCESS**
+- Comprobaciones pendientes para 4.3: **ninguna**
 
-- Tarea trabajada: `4.2 — Separar preparación y control del audio`
-- Estado: `Terminada`
-- Última tarea terminada: `4.2 — Separar preparación y control del audio`
-- SHA inicial de esta ejecución: `c67ddada2b9bde04ebaa052c6e9ef15876a55c1c`
-- SHA final de implementación verificada: `0a710ba25be4fc2ddad81f4cfe8383ba7e71e920`
-- Pendientes concretos: ninguno de 4.2.
-- Comprobaciones pendientes: ninguna necesaria para reabrir 4.2.
-- Siguiente tarea: `4.3 — Separar la cola y navegación`
-- Estado de la siguiente tarea: `Pendiente`
-- Fecha de ejecución: `2026-09-08`
+## Resultado verificado
 
-## Evidencia de cierre de 4.2
+- `usePlaybackQueue` posee cola explícita, Next/Previous, shuffle, repeat y `endedSeq`.
+- Se preservó la prioridad de la cola explícita y la navegación según filtros.
+- La cola se reconcilia con la biblioteca viva; IDs eliminados dejan de ser reproducibles y un beat reproducido que desaparece libera el audio.
+- `summary.txt` del artifact `migration-check-logs-task-4-3-34223927012` confirma PASS en diff-check, typecheck, unit TS, component DOM, integration, regressions, build:web y build.
 
-- Implementación: preparación, invalidación, eventos de audio y `handlePlay` extraídos a `src/features/playback/usePlaybackController.ts`.
-- GitHub Actions: `Temporary Task 4.2 Final 4`, run `34220274412`.
-- Artifact: `migration-check-logs-task-4-2-34220274412`, con todos los checks en PASS.
-- Commit de implementación verificada: `0a710ba25be4fc2ddad81f4cfe8383ba7e71e920`.
-- Se conserva una sola instancia de audio y las rutas distintas Web/Desktop.
+## Pendientes concretos / fuera de alcance
 
-## Regla de actualización
+- Riesgo previo de `handleRemoveBulk` con snapshots capturados: permanece sin cambios y fuera del alcance de 4.3.
+- No quedan herramientas temporales de 4.3 en el árbol tras el commit de cierre.
 
-Al cerrar cada ejecución:
-- si la tarea queda `Terminada`, marcar solo su `[x]` en el roadmap, agregar su registro al final de `Registro-de-avance.md` y dejar aquí la siguiente tarea como `Pendiente`;
-- si queda `En curso` o `Por verificar`, mantener esa misma tarea como tarea actual y registrar exactamente lo que falta;
-- nunca iniciar una segunda tarea en la misma ejecución.
+## Siguiente tarea
+
+- **5.1 — Separar guardado de metadata y artwork**
+- Estado: **Pendiente**
+- No iniciarla hasta la próxima ronda.
