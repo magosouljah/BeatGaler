@@ -361,7 +361,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** poder entender y modificar la revisión de importaciones sin entrar en la lógica cloud.
 
-### [ ] 7.1 — Separar Review y sus acciones básicas
+### [x] 7.1 — Separar Review y sus acciones básicas
 
 - **Hacer:** extraer candidatos, posición actual y acciones Save, Skip y Cancel; conectar Save con la cola de uploads.
     

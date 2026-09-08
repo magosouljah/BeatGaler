@@ -2028,3 +2028,113 @@ Veredicto:
 Siguiente tarea:
 - 7.1 — Separar Review y sus acciones básicas. No iniciada.
 ```
+
+### Registro — 7.1
+
+```
+Tarea: 7.1 — Separar Review y sus acciones básicas
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 182717a81061534658ab5b688e9808a5f38075f1
+- SHA de implementación validada: af916fd729d2ef6ceef16c8ce73b9caf84c4f657
+- Última tarea verificada: 6.4 — Separar la cola de uploads
+
+Cambio realizado
+
+- Se creó `src/features/import/useImportSession.ts` como owner del estado básico de Review: candidatos, posición actual, total/batch/preparing, snapshot vivo de la cola y fuentes omitidas.
+- Se creó `src/features/import/useImportReview.ts` como owner de las acciones básicas Save, Skip y Cancel.
+- Se creó `src/features/import/components/ImportReviewHost.tsx` como host del skeleton/Drawer de Review y su wiring básico.
+- `App.tsx` dejó de poseer directamente el estado/acciones/render básico de Review y ahora compone esos owners.
+- Save conserva el límite anterior: solo el beat guardado entra a la biblioteca y se entrega a `useCloudUploadQueue` mediante `cloudifyImportedBeats([updated])`.
+- Skip conserva candidatos fuera de la biblioteca, libera la fuente correspondiente cuando aplica y avanza el mismo cursor.
+- Cancel conserva beats ya guardados, libera únicamente la cola pendiente desde la posición actual, descarta el batch y protege staging todavía en uso.
+- El descubrimiento incremental permanece en App para 7.2; Save All/conflictos permanece en App para 7.3; la entrada Web permanece para 7.4.
+
+Adaptación de pruebas
+
+- Se añadió `tests/component-dom/importReviewBasics.test.tsx` para ejecutar Save, Skip y Cancel sobre dos/tres candidatos y comprobar biblioteca, cola de uploads, liberación, descarte y protección de staging.
+- `tests/integration/appMigrationCharacterization.test.ts` ahora sigue los contratos de Review en `useImportSession.ts`, `useImportReview.ts` e `ImportReviewHost.tsx` en vez de exigir que vivan físicamente en `App.tsx`.
+- `tests/integration/libraryStateExtraction.test.ts` conserva el contrato de timing de `beatsLatestRef` contando también la escritura legítimamente movida a `useImportReview.ts`.
+- No se relajó comportamiento para hacer pasar tests; las adaptaciones fueron por cambio legítimo de ownership.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/import/useImportSession.ts
+- src/features/import/useImportReview.ts
+- src/features/import/components/ImportReviewHost.tsx
+- tests/component-dom/importReviewBasics.test.tsx
+- tests/integration/appMigrationCharacterization.test.ts
+- tests/integration/libraryStateExtraction.test.ts
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary task 7.1 applier`, run 34284804500 — SUCCESS: `npm run test:typecheck` y `npx vitest run tests/component-dom/importReviewBasics.test.tsx --environment jsdom` PASS antes del commit de implementación inicial.
+- GitHub Actions `Temporary task 7.1 final validator`, run 34285851953 — SUCCESS.
+- Focused Review characterization en run 34285851953 — PASS.
+- Artifact `migration-check-logs-34285851953-1`, `summary.txt` leído: matriz completa PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- SHA de implementación validada por esa matriz: af916fd729d2ef6ceef16c8ce73b9caf84c4f657.
+- `git diff --check` desde el SHA inicial hasta el árbol de cierre — PASS antes del commit documental final.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` — no requerido como wrapper; la matriz ejecutó individualmente los checks aplicables.
+- E2E completos de import/upload — no usados como criterio de cierre de esta extracción básica; los contratos modificados quedaron cubiertos por component DOM, integración, regresiones y builds.
+- Prueba física Desktop/Web interactiva — no ejecutada ni inventada; GitHub Actions no proporciona esa interacción. No bloquea 7.1 porque no cambiaron adapters nativos/web y los contratos básicos quedaron ejecutados automáticamente.
+
+Prueba manual
+
+- No requerida como bloqueo.
+- Verificación opcional Desktop/Web: importar al menos dos beats; guardar el primero, omitir el segundo y repetir con un lote donde se guarde uno antes de Cancel.
+- Resultado esperado: solo los guardados aparecen en biblioteca/subida; Skip no añade el candidato; Cancel conserva lo ya guardado y no reabre/libera fuentes todavía necesarias incorrectamente.
+
+Pendientes / fuera de alcance
+
+- 7.2 — Separar descubrimiento incremental.
+- 7.3 — Separar Save All y conflictos.
+- 7.4 — Separar la entrada de importación web.
+- Las conexiones pequeñas de lectura entre `useCloudUploadQueue` y el estado de Review continúan cableadas desde App sin ampliar el alcance de 7.1.
+
+Riesgos previos relevantes
+
+- El riesgo previo de `handleRemoveBulk` con snapshots capturados permanece fuera de alcance y no fue modificado.
+- Ningún riesgo nuevo de producto quedó abierto por 7.1.
+
+Herramientas temporales restantes
+
+- Ninguna al cierre; los workflows temporales usados para aplicar/validar se eliminaron del árbol.
+
+Fallos encontrados y causa
+
+- Run 34284927727: `test:integration` falló porque dos tests existentes exigían que Review y una escritura de `beatsLatestRef` permanecieran físicamente en `App.tsx`; se clasificaron como pruebas acopladas al ownership anterior y se adaptaron al nuevo owner.
+- Run 34285267871: quedó una sola assertion nueva incorrecta al ordenar `cleanupUnusedStaging()` usando su primera aparición global; no fue regresión de producto.
+- Run 34285533759: quedó una sola assertion nueva incorrecta al tomar el primer `return null` de Cancel en lugar del retorno final posterior al cleanup; no fue regresión de producto.
+- Run 34285736877: workflow temporal inválido; GitHub no creó jobs y no modificó producto ni documentación.
+- Run 34285851953: focused checks y matriz completa PASS sobre el HEAD limpio validado.
+
+Veredicto
+
+Terminada.
+
+Review básico quedó fuera de `App.tsx`: candidatos/sesión, Save, Skip, Cancel y host tienen owners dedicados; los mismos beats entran o no a biblioteca/subida que antes, y Cancel conserva lo ya guardado.
+
+Siguiente tarea
+
+7.2 — Separar descubrimiento incremental.
+
+No iniciada.
+```
