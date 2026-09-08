@@ -27,8 +27,6 @@ jobs:
           grep -R -n -F 'onBeatClick={(beatId) => playBeat(beatId, { sort: playbackSort })}' src/App.tsx tests/integration || true
           grep -R -n -F 'function prepareCleanMp3Upload(' scripts/lib/prepare-clean-mp3.cjs src-tauri/direct-transport/transport-helper.cjs || true
       - name: Baseline suspect integration tests
-        id: baseline
-        continue-on-error: true
         run: |
           WEB_GUARD="$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
           test -n "$WEB_GUARD"
@@ -36,16 +34,9 @@ jobs:
       - name: Apply exact extraction
         run: node scripts/task22-extract.mjs
       - name: Post-extraction suspect integration tests
-        id: extracted
-        continue-on-error: true
         run: |
           WEB_GUARD="$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
           npx vitest run tests/integration/cleanMp3Cloud.test.ts "$WEB_GUARD"
-      - name: Report suspect comparison
-        run: |
-          echo "baseline=${{ steps.baseline.outcome }}"
-          echo "extracted=${{ steps.extracted.outcome }}"
-          test "${{ steps.baseline.outcome }}" = "success" -a "${{ steps.extracted.outcome }}" = "success"
       - run: npm run test:typecheck
       - run: npm run test:unit:ts
       - run: npm run test:component:dom
