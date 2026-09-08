@@ -58,7 +58,7 @@ describe("Desktop clean Cloud MP3 payload", () => {
 
   it("keeps the packaged Bot API helper wired to the same clean-MP3 seam", () => {
     const helper = fs.readFileSync(path.resolve("src-tauri/direct-transport/transport-helper.cjs"), "utf8");
-    expect(helper).toContain("prepareCleanMp3Upload");
+    expect(helper).toContain("prepareCleanMp3CloudUpload");
     expect(helper).toContain("id3v2PrefixLength");
     expect(helper).toContain("stripped_id3_bytes");
     expect(helper).toContain("clean.cleanup()");
