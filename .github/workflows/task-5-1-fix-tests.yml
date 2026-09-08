@@ -1,0 +1,71 @@
+name: Task 5.1 Adapt Ownership Tests
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-5-1-fix-tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  adapt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: v0.9.0-test-noche
+      - name: Adapt tests to extracted ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          integration = Path('tests/integration/issue97WebRoutingContract.test.ts')
+          s = integration.read_text()
+          app_decl = 'const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");\n'
+          persistence_decl = 'const drawerPersistence = readFileSync(resolve(process.cwd(), "src/features/edit/useDrawerCloudPersistence.ts"), "utf8");\n'
+          if persistence_decl not in s:
+              if app_decl not in s:
+                  raise SystemExit('integration app declaration anchor missing')
+              s = s.replace(app_decl, app_decl + persistence_decl, 1)
+          old_test = '''  it("does not install the legacy metadata-to-Tauri observer when browser cloud editing owns commits", () => {
+            const observer = section(
+              "// Web edits are explicit durable transactions through platform.editor.",
+              "useEffect(() => () => {",
+            );
+            expect(observer).toContain("if (platform.capabilities.browserCloudEditing) return;");
+            expect(observer).toContain("syncBeatMetadataToTelegram(latestBeat)");
+          });'''
+          new_test = '''  it("does not install the legacy metadata-to-Tauri observer when browser cloud editing owns commits", () => {
+            expect(drawerPersistence).toContain("if (browserCloudEditing) return;");
+            expect(drawerPersistence).toContain("syncBeatMetadataToTelegram(latestBeat)");
+          });'''
+          if old_test not in s:
+              raise SystemExit('integration observer assertion anchor missing')
+          integration.write_text(s.replace(old_test, new_test, 1))
+
+          regressions = Path('scripts/run-regressions.mjs')
+          r = regressions.read_text()
+          app_source = '  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");\n'
+          owner_source = '  const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");\n'
+          if owner_source not in r:
+              if app_source not in r:
+                  raise SystemExit('regression app source anchor missing')
+              r = r.replace(app_source, app_source + owner_source, 1)
+          old_guard = '  if (!app.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !app.includes("DRAWER_CLOUD_COMMIT_JOINED") || !app.includes("drawerMetadataCommitVerifiedRef") || !app.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");'
+          new_guard = '  if (!drawerCloudPersistence.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !drawerCloudPersistence.includes("DRAWER_CLOUD_COMMIT_JOINED") || !drawerCloudPersistence.includes("drawerMetadataCommitVerifiedRef") || !drawerCloudPersistence.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");'
+          if old_guard not in r:
+              raise SystemExit('regression dedupe guard anchor missing')
+          regressions.write_text(r.replace(old_guard, new_guard, 1))
+          PY
+          rm .github/workflows/task-5-1-fix-tests.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tests/integration/issue97WebRoutingContract.test.ts scripts/run-regressions.mjs .github/workflows/task-5-1-fix-tests.yml
+          git commit -m "test(app): follow extracted drawer persistence ownership"
+          git push origin HEAD:v0.9.0-test-noche
