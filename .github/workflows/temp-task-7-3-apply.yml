@@ -1,0 +1,88 @@
+name: Temporary task 7.3 apply
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/temp-task-7-3-apply.yml
+
+permissions:
+  contents: write
+
+env:
+  TARGET_BRANCH: v0.9.0-test-noche
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact task commit
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Verify exclusive branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/$TARGET_BRANCH)" = "$GITHUB_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply task 7.3 extraction
+        run: python3 scripts/temp-task-7-3-apply.py
+
+      - name: Remove temporary tooling before validation
+        shell: bash
+        run: |
+          rm -f scripts/temp-task-7-3-apply.py
+          rm -f .github/workflows/temp-task-7-3-apply.yml
+          git diff --check
+
+      - name: Run focused task 7.3 tests
+        run: npx vitest run tests/component-dom/importSaveAll.test.tsx tests/component-dom/importDiscovery.test.tsx tests/integration/appImportSaveAllExtraction.test.ts tests/integration/appImportDiscoveryExtraction.test.ts tests/integration/appMigrationCharacterization.test.ts
+
+      - name: Run migration matrix with readable logs
+        id: migration_checks
+        continue-on-error: true
+        run: node scripts/run-migration-checks-with-logs.mjs
+
+      - name: Upload migration check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-7-3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/migration-check-logs/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop if migration checks failed
+        if: steps.migration_checks.outcome == 'failure'
+        run: exit 1
+
+      - name: Publish only the tested tree to the test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$TARGET_BRANCH"
+          if [ "$(git rev-parse origin/$TARGET_BRANCH)" != "$GITHUB_SHA" ]; then
+            echo "Remote branch advanced during this run; refusing to overwrite concurrent work."
+            exit 2
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor(import): extract Save All and conflicts"
+          git push origin HEAD:"$TARGET_BRANCH"
