@@ -42,15 +42,23 @@ jobs:
 
       - name: Apply task 6.2 in runner workspace
         shell: bash
-        run: python .github/task-6-2.py apply
+        run: |
+          set -o pipefail
+          mkdir -p migration-check-logs
+          python .github/task-6-2-v2.py 2>&1 | tee migration-check-logs/apply.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then
+            echo "PASS apply" > migration-check-logs/summary.txt
+          else
+            echo "FAIL apply exit=${status}" > migration-check-logs/summary.txt
+            exit "$status"
+          fi
 
       - name: Run migration verification matrix
         id: checks
         shell: bash
         run: |
           set +e
-          mkdir -p migration-check-logs
-          : > migration-check-logs/summary.txt
           failed=0
 
           run_check() {
@@ -115,11 +123,27 @@ jobs:
             6ff13625a6f4623d793e70bde21f655e7147b1d9 \
             "$IMPLEMENTATION_SHA" \
             "$GITHUB_RUN_ID"
-          rm .github/task-6-2.py .github/workflows/task-6-2-apply.yml
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path("migration/Registro-de-avance.md")
+          text = path.read_text(encoding="utf-8")
+          run_id = os.environ["GITHUB_RUN_ID"]
+          old = f"- Ninguno en el run final {run_id}; la matriz aplicable quedó verde."
+          new = (
+              "- Run 34264928942: el aplicador temporal falló antes de modificar código productivo porque una sustitución textual del bloque de error de sesión no coincidió; la matriz no llegó a ejecutarse y el artifact no pudo generarse. Se corrigió únicamente el tooling de aplicación.\n"
+              f"- Run {run_id}: aplicación endurecida y matriz completa PASS."
+          )
+          if old not in text:
+              raise SystemExit("Could not patch task 6.2 failure history")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          rm .github/task-6-2.py .github/task-6-2-v2.py .github/workflows/task-6-2-apply.yml
           git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md \
             migration/Registro-de-avance.md \
             migration/BeatGaler-agent-state.md \
             .github/task-6-2.py \
+            .github/task-6-2-v2.py \
             .github/workflows/task-6-2-apply.yml
           git diff --cached --check
           git commit -m "docs(migration): close task 6.2"
