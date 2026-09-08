@@ -54,7 +54,7 @@ jobs:
                 .github/task-6-4-close.py \
                 .github/workflows/task-6-4-apply.yml \
                 .github/workflows/task-6-4-close.yml
-          git diff --check
+          git diff --check 2>&1 | tee -a migration-check-logs/prepare-close.log
           echo "PASS prepare-close" > migration-check-logs/summary.txt
 
       - name: Revalidate final executable state
