@@ -43,7 +43,8 @@ import { decodeArtworkDataUrl } from "./features/artwork/decodeArtworkDataUrl";
 import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, writeActiveCloudUploads, type ActiveCloudUpload } from "./features/cloud/interruptedUploadJournal";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
-import { clearCachedBeats, clearUploadPreviewCache, loadCachedBeats, loadCachedSort, preserveLoadedArtwork, saveCachedBeats, saveCachedSort } from "./features/library/libraryPresentationCache";
+import { clearCachedBeats, clearUploadPreviewCache, loadCachedSort, preserveLoadedArtwork, saveCachedSort } from "./features/library/libraryPresentationCache";
+import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
 import { playTrace } from "./features/playback/playTrace";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
@@ -165,18 +166,13 @@ async function rollbackInterruptedCloudUploads(beatgalerUserId: string, authorit
 }
 
 function BeatGalerApp() {
-  // Browser/localStorage library data is an instant-paint presentation cache.
-  // It may render before cloud authority resolves, but remains read-only until
-  // verification and is never allowed to overwrite the authoritative library.
-  const startupCachedBeatsRef = useRef<Beat[] | null>(null);
-  if (startupCachedBeatsRef.current === null) {
-    const cached = loadCachedBeats() ?? [];
-    const interruptedIds = new Set(readActiveCloudUploads().map(item => item.beatId));
-    startupCachedBeatsRef.current = interruptedIds.size > 0
-      ? cached.filter(beat => !interruptedIds.has(beat.id))
-      : cached;
-  }
-  const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);
+  const {
+    beats,
+    setBeats,
+    beatsLatestRef,
+    startupCachedBeatsRef,
+    initialLoading,
+  } = useLibraryState();
   const [openableCloudProjectIds, setOpenableCloudProjectIds] = useState<Set<string>>(new Set());
   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
   const cloudMetaTimersRef = useRef<Map<string, number>>(new Map());
@@ -184,12 +180,9 @@ function BeatGalerApp() {
   const cloudLibrarySnapshotRef = useRef<string | null>(null);
   const drawerMetadataCommitVerifiedRef = useRef<Map<string, string>>(new Map());
   const drawerMetadataCommitInFlightRef = useRef<Map<string, { fingerprint: string; promise: Promise<void> }>>(new Map());
-  const cacheSaveTimerRef = useRef<number | null>(null);
   const visibleLibraryFingerprintRef = useRef<string>("");
   const autoCloudUploadRef = useRef<Set<string>>(new Set());
   const backgroundUploadQueueRef = useRef<Beat[]>([]);
-  // Always holds the newest library snapshot for immediate cloud-index writes.
-  const beatsLatestRef = useRef<Beat[]>([]);
   // Definitive per-beat operation model. These states are intentionally session-local:
   // unfinished upload/download/playback work never resurrects after an app restart.
   // Stable Offline availability is re-hydrated from native durable BeatMeta instead.
@@ -277,7 +270,7 @@ function BeatGalerApp() {
     return () => window.clearTimeout(timer);
   }, [interruptedUploadNotices]);
 
-  const [loading, setLoading] = useState(() => loadCachedBeats() === null);
+  const [loading, setLoading] = useState(() => initialLoading);
   const [libraryRefreshing, setLibraryRefreshing] = useState(false);
   const [startupCookingGate, setStartupCookingGate] = useState(() => (startupCachedBeatsRef.current ?? []).length === 0);
   const [revealedBeatIds, setRevealedBeatIds] = useState<Set<string>>(() => new Set(
@@ -897,28 +890,11 @@ function BeatGalerApp() {
     };
   }, [setupDone, settings?.beatgaler_user_id]);
 
-  // localStorage is synchronous and blocks the UI thread. Debounce it and store
-  // a lightweight version without full artwork instead of serializing megabytes
-  // of base64 on every small metadata change.
-  useEffect(() => {
-    if (cacheSaveTimerRef.current) window.clearTimeout(cacheSaveTimerRef.current);
-
-    // Hiding the cloud library while disconnected is a view decision, not a
-    // destructive cache mutation. Preserve the last verified instant-paint cache.
-    if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;
-
-    cacheSaveTimerRef.current = window.setTimeout(() => {
-      cacheSaveTimerRef.current = null;
-      saveCachedBeats(beats);
-    }, 1500);
-
-    return () => {
-      if (cacheSaveTimerRef.current) {
-        window.clearTimeout(cacheSaveTimerRef.current);
-        cacheSaveTimerRef.current = null;
-      }
-    };
-  }, [beats, settings?.telegram_cloud_connected, cloudSessionVerified]);
+  useLibraryPresentationCache(
+    beats,
+    cloudSessionVerified,
+    settings,
+  );
 
   useEffect(() => {
     visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);

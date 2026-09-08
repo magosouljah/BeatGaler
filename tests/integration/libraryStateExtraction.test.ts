@@ -1,0 +1,34 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const owner = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryState.ts"), "utf8");
+
+describe("task 3.1 library-state extraction", () => {
+  it("moves the single library owner and presentation cache out of App", () => {
+    expect(app).toContain("} = useLibraryState();");
+    expect(app).not.toContain("const [beats, setBeats] = useState<Beat[]>");
+    expect(app).not.toContain("const startupCachedBeatsRef = useRef<Beat[] | null>");
+    expect(app).not.toContain("const beatsLatestRef = useRef<Beat[]>");
+    expect(owner).toContain("const [beats, setBeats] = useState<Beat[]>");
+    expect(owner).toContain("const startupCachedBeatsRef = useRef<Beat[] | null>(null)");
+    expect(owner).toContain("const beatsLatestRef = useRef<Beat[]>([])");
+    expect(app).toContain("useLibraryPresentationCache(");
+    expect(owner).toContain("saveCachedBeats(beats)");
+  });
+
+  it("preserves the old latest-snapshot timing instead of making every setter synchronous", () => {
+    expect(app).toContain("visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);\n    beatsLatestRef.current = beats;");
+    expect(owner).not.toContain("beatsLatestRef.current = beats");
+    expect((app.match(/beatsLatestRef\.current = next/g) ?? []).length).toBeGreaterThan(5);
+  });
+
+  it("keeps the presentation-cache guard and dependencies byte-for-byte equivalent", () => {
+    expect(app).toContain("useLibraryPresentationCache(\n    beats,\n    cloudSessionVerified,\n    settings,\n  );");
+    expect(owner).toContain("if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;");
+    expect(owner).toContain("[beats, settings?.telegram_cloud_connected, cloudSessionVerified]");
+    expect(owner).toContain("}, 1500);");
+    expect(owner).toContain("readActiveCloudUploads()");
+  });
+});
