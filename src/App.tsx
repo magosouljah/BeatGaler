@@ -1,4 +1,3 @@
-import { startupCacheContext } from "./features/perf/directStartupDiagnostics";
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import uploadCompleteWav from "./assets/status/upload-complete.wav";
 import downloadCompleteWav from "./assets/status/download-complete.wav";
@@ -40,6 +39,11 @@ import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop
 import SearchBar from "./features/library/components/SearchBar";
 import SortMenu, { type SortKey } from "./features/library/components/SortMenu";
 import TagColorMenu from "./features/tags/components/TagColorMenu";
+import { decodeArtworkDataUrl } from "./features/artwork/decodeArtworkDataUrl";
+import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, writeActiveCloudUploads, type ActiveCloudUpload } from "./features/cloud/interruptedUploadJournal";
+import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
+import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
+import { clearCachedBeats, clearUploadPreviewCache, loadCachedBeats, loadCachedSort, preserveLoadedArtwork, saveCachedBeats, saveCachedSort } from "./features/library/libraryPresentationCache";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
 import { playTrace } from "./features/playback/playTrace";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
@@ -72,26 +76,11 @@ function dismissBeatGalerStartupLoader(): void {
   loader.remove();
 }
 
-function fileNameFromPath(path: string) {
-  return path.replace(/\\/g, "/").split("/").pop() || path;
-}
-
-function extensionFromPath(path: string) {
-  const name = fileNameFromPath(path);
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
-}
-
 function reviewSourceKey(beat: Beat): string {
   return (beat.mp3_path || beat.wav_path || beat.playback_path || "")
     .replace(/\\/g, "/")
     .trim()
     .toLocaleLowerCase();
-}
-
-function isBackupFolderPath(path: string) {
-  const name = fileNameFromPath(path).trim().toLowerCase();
-  return name === "backup" || name === "backups";
 }
 
 const beatCloudUpdateBusyIds = new Set<string>();
@@ -122,57 +111,6 @@ function isRuntimeConflictError(error: unknown): boolean {
 }
 
 type ConnectionState = "checking" | "online" | "poor" | "offline";
-
-// Local cache so the library paints instantly on next launch instead of
-// showing a blank/loading screen while Rust re-scans disk. The real
-// loadLibrary() call still runs in the background and silently replaces
-// this once it resolves — this is purely a "show something now" cache,
-// never the source of truth.
-const LIBRARY_CACHE_KEY = "beatvault:library:v1";
-const SORT_CACHE_KEY = "beatvault:sort:v2";
-const INTERRUPTED_UPLOADS_KEY = "beatgaler:active-cloud-uploads:v1";
-
-type ActiveCloudUpload = {
-  beatId: string;
-  beatName: string;
-  stagingPaths: string[];
-};
-
-function activeUploadStagingPaths(beat: Beat): string[] {
-  return [
-    beat.mp3_path, beat.wav_path, beat.playback_path, beat.folder_path,
-    beat.samples_path, beat.stems_path, beat.flp_path, beat.als_path,
-    beat.loop_path, ...(beat.other_files ?? []),
-  ].filter((value): value is string => !!value);
-}
-
-function readActiveCloudUploads(): ActiveCloudUpload[] {
-  try {
-    const raw = localStorage.getItem(INTERRUPTED_UPLOADS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(item => item?.beatId && item?.beatName) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeActiveCloudUploads(items: ActiveCloudUpload[]): void {
-  try {
-    if (items.length === 0) localStorage.removeItem(INTERRUPTED_UPLOADS_KEY);
-    else localStorage.setItem(INTERRUPTED_UPLOADS_KEY, JSON.stringify(items));
-  } catch {}
-}
-
-function markCloudUploadActive(beat: Beat): void {
-  const current = readActiveCloudUploads().filter(item => item.beatId !== beat.id);
-  current.push({ beatId: beat.id, beatName: beat.name, stagingPaths: activeUploadStagingPaths(beat) });
-  writeActiveCloudUploads(current);
-}
-
-function clearCloudUploadActive(beatId: string): void {
-  writeActiveCloudUploads(readActiveCloudUploads().filter(item => item.beatId !== beatId));
-}
 
 async function rollbackInterruptedCloudUploads(beatgalerUserId: string, authoritativeBeatIds: Set<string> | null): Promise<string[]> {
   const pending = readActiveCloudUploads();
@@ -224,139 +162,6 @@ async function rollbackInterruptedCloudUploads(beatgalerUserId: string, authorit
 
   writeActiveCloudUploads(remaining);
   return rolledBack;
-}
-
-function loadCachedBeats(): Beat[] | null {
-  try {
-    const raw = localStorage.getItem(LIBRARY_CACHE_KEY);
-    if (!raw) {
-      playTrace("LIBRARY_CACHE_READ", { library_cache: "miss", ...startupCacheContext("miss") });
-      return null;
-    }
-    const parsed = JSON.parse(raw);
-    playTrace("LIBRARY_CACHE_READ", {
-      library_cache: Array.isArray(parsed) ? "hit" : "invalid",
-      ...startupCacheContext(Array.isArray(parsed) ? "hit" : "invalid"),
-      cached_card_count: Array.isArray(parsed) ? parsed.length : 0,
-    });
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    playTrace("LIBRARY_CACHE_READ", { library_cache: "unavailable_or_invalid", ...startupCacheContext("unavailable_or_invalid") });
-    return null;
-  }
-}
-
-function saveCachedBeats(beats: Beat[]) {
-  try {
-    // Never serialize full-resolution artwork into localStorage on every edit.
-    // The cache only exists for instant paint; SQLite/Telegram remain source of truth.
-    const lightweight = beats.map(beat => ({
-      ...beat,
-      image_base64: null,
-      // Artwork bytes live in Cache Storage as bounded thumbnails; keep the manifest metadata-only.
-      image_preview_base64: null,
-      other_files: [],
-    }));
-    localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(lightweight));
-  } catch {
-    // quota or disabled — ignore
-  }
-}
-
-function cloudBeatFingerprint(beat: Beat): string {
-  // IMPORTANT: image_base64/image_preview_base64 are presentation/cache state.
-  // Cloud artwork is tracked durably in Rust cloud_metadata. Including decoded
-  // image bytes here made startup artwork hydration look like nine independent
-  // metadata edits, causing an INDEX rewrite storm and Telegram 429s.
-  return [
-    beat.id,
-    beat.name,
-    String(beat.bpm ?? ""),
-    beat.key ?? "",
-    beat.tags.join("\u001f"),
-    String(beat.rating ?? 0),
-    beat.color ?? "",
-    beat.color2 ?? "",
-    beat.telegram_file_id ?? "",
-    String(beat.telegram_message_id ?? ""),
-  ].join("\u001e");
-}
-
-function drawerMetadataCommitFingerprint(beat: Beat): string {
-  const artwork = beat.image_base64 ?? "";
-  const artworkMark = artwork
-    ? `${artwork.length}:${artwork.slice(0, 32)}:${artwork.slice(-32)}`
-    : "";
-  return [
-    cloudBeatFingerprint(beat),
-    artworkMark,
-    JSON.stringify(beat.image_crop ?? null),
-  ].join("\u001d");
-}
-
-function libraryViewFingerprint(beats: Beat[]): string {
-  return beats.map(beat => [
-    beat.id,
-    beat.name,
-    beat.cloud_status ?? "",
-    beat.telegram_file_id ?? "",
-    String(beat.telegram_message_id ?? ""),
-    String(beat.bpm ?? ""),
-    beat.key ?? "",
-    beat.tags.join("\u001f"),
-    String(beat.rating ?? 0),
-  ].join("\u001d")).join("\u001c");
-}
-
-function loadCachedSort(): SortKey {
-  try {
-    const raw = localStorage.getItem(SORT_CACHE_KEY);
-    return raw === "name" || raw === "bpm" || raw === "rating" || raw === "manual" ? raw : "rating";
-  } catch {
-    return "rating";
-  }
-}
-
-function saveCachedSort(sortBy: SortKey) {
-  try { localStorage.setItem(SORT_CACHE_KEY, sortBy); } catch { /* quota or disabled — ignore */ }
-}
-
-function preserveLoadedArtwork(incoming: Beat[], current: Beat[]): Beat[] {
-  const previous = new Map(current.map(beat => [beat.id, beat]));
-  return incoming.map(beat => {
-    const old = previous.get(beat.id);
-    if (!old) return beat;
-    if (beat.image_base64 || beat.image_preview_base64) return beat;
-    const artwork = old.image_preview_base64 || old.image_base64;
-    return artwork
-      ? { ...beat, image_base64: old.image_base64 ?? null, image_preview_base64: old.image_preview_base64 ?? null }
-      : beat;
-  });
-}
-
-// Clear upload preview cache when library reload is requested via UI reload button
-// (This keeps reload button behavior explicit: refresh disk scan + clear derived previews)
-export function clearUploadPreviewCache() {
-  try { localStorage.removeItem('beatvault:upload-cache:v1'); } catch {}
-}
-
-function decodeArtworkDataUrl(src: string): Promise<boolean> {
-  return new Promise(resolve => {
-    const image = new Image();
-    let settled = false;
-    const done = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      resolve(ok);
-    };
-    image.onload = () => done(true);
-    image.onerror = () => done(false);
-    image.src = src;
-    if (typeof image.decode === "function") {
-      void image.decode().then(() => done(true)).catch(() => {});
-    }
-    window.setTimeout(() => done(false), 2500);
-  });
 }
 
 function BeatGalerApp() {
@@ -4057,7 +3862,7 @@ function BeatGalerApp() {
         return;
       }
 
-      try { localStorage.removeItem(LIBRARY_CACHE_KEY); } catch {}
+      clearCachedBeats();
       const browserOffline = typeof navigator !== "undefined" && navigator.onLine === false;
 
       if (settings?.telegram_cloud_connected && !browserOffline) {

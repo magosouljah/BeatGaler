@@ -132,7 +132,7 @@ describe("App migration characterization contracts", () => {
   });
 
   it("fails closed during interrupted-upload recovery until cloud authority is known", () => {
-    const recovery = section("async function rollbackInterruptedCloudUploads", "function loadCachedBeats");
+    const recovery = section("async function rollbackInterruptedCloudUploads", "function BeatGalerApp");
     expectOrdered(recovery, [
       "if (authoritativeBeatIds?.has(item.beatId))",
       "if (authoritativeBeatIds === null)",

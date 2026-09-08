@@ -55,6 +55,7 @@ try {
   });
 
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+  const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
@@ -425,7 +426,7 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   // Phase 11: recovery/corruption guard. A crash marker is never authority,
   // canonical INDEX wins, incomplete downloads/exports stay sidecar-only,
   // corrupt payloads fail closed, and durable control-plane state is atomic.
-  if (!app.includes("const INTERRUPTED_UPLOADS_KEY")) fail("Interrupted upload recovery marker disappeared.");
+  if (!interruptedUploadJournal.includes('const INTERRUPTED_UPLOADS_KEY = "beatgaler:active-cloud-uploads:v1"')) fail("Interrupted upload recovery marker disappeared or changed storage key.");
   if (!app.includes("authoritativeBeatIds?.has(item.beatId)")) fail("Upload recovery can no longer preserve a beat already committed to the authoritative INDEX.");
   if (!app.includes("authoritativeBeatIds === null")) fail("Upload recovery no longer fails closed when the authoritative INDEX cannot be verified.");
   if (!app.includes("remaining.push(item)")) fail("Failed upload rollback no longer keeps its recovery marker for a later launch.");
