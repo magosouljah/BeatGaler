@@ -1,0 +1,198 @@
+name: Temporary Task 4.2 Close
+
+on:
+  push:
+    branches: [v0.9.0-test-noche]
+    paths: [.github/workflows/task-4-2-close.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - name: Verify expected recovery state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "c67ddada2b9bde04ebaa052c6e9ef15876a55c1c"
+          grep -Fq '### [ ] 4.2 — Separar preparación y control del audio' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -Fq 'Siguiente tarea: `4.2 — Separar preparación y control del audio`' migration/BeatGaler-agent-state.md
+          test -f src/features/playback/usePlaybackController.ts
+          test -f tests/integration/appPlaybackExtraction.test.ts
+      - name: Close recovered task 4.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          roadmap = Path('migration/BeatGaler-roadmap-para-trabajar-con-IAs.md')
+          text = roadmap.read_text()
+          old = '### [ ] 4.2 — Separar preparación y control del audio'
+          new = '### [x] 4.2 — Separar preparación y control del audio'
+          assert text.count(old) == 1
+          roadmap.write_text(text.replace(old, new, 1))
+
+          registro = Path('migration/Registro-de-avance.md')
+          r = registro.read_text()
+          marker = '### Registro — 4.2'
+          assert marker not in r
+          entry = r'''
+
+### Registro — 4.2
+
+```
+Tarea: 4.2 — Separar preparación y control del audio
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución de recuperación: c67ddada2b9bde04ebaa052c6e9ef15876a55c1c
+- Última tarea verificada documentalmente al comenzar: 4.1 — Separar la carga de portadas
+- El pre-flight encontró que 4.2 ya estaba implementada y verificada en commits recientes, mientras roadmap, registro y agent-state todavía la mostraban Pendiente. Se trató como recuperación de una ejecución interrumpida; no se repitió la implementación.
+- Commit de implementación verificada: 0a710ba25be4fc2ddad81f4cfe8383ba7e71e920
+
+Cambio realizado
+
+- La preparación de playback, URLs temporales, promesas en vuelo, época de caché, eventos de audio y `handlePlay` viven en `src/features/playback/usePlaybackController.ts`.
+- Se conserva una sola instancia de `useAudio`, todavía propiedad de la composición de App y pasada al controlador.
+- Se conservan las rutas distintas Web/Desktop: Web usa `platform.media.preparePlayback`; Desktop conserva `prepareBeatForPlayback`, warm/cooking y estados runtime.
+- La invalidación de caché limpia URLs y promesas; además conserva el guard de época para impedir que una preparación iniciada antes de Clear Cache repueble una URL inválida.
+- La eliminación de Available Offline llama `invalidatePlaybackPreparation(beat.id)` para no reutilizar MASTER durable ni warm promise obsoletos.
+- `App.tsx` quedó como consumidor/compositor del controlador y ya no posee directamente las refs/callbacks extraídos.
+
+Adaptación de pruebas
+
+- `tests/integration/appPlaybackExtraction.test.ts` comprueba ownership fuera de App, eventos, invalidación, guard de preparación, rutas Web/Desktop y conexión a `prepareBeatForPlayback`.
+- `scripts/run-regressions.mjs`, `tests/integration/appMigrationCharacterization.test.ts` y `tests/integration/issue97RuntimeWebFollowup.test.ts` fueron adaptados al nuevo ownership sin eliminar los contratos protegidos.
+
+Archivos afectados por la implementación recuperada
+
+- src/App.tsx
+- src/features/playback/usePlaybackController.ts
+- tests/integration/appPlaybackExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- tests/integration/issue97RuntimeWebFollowup.test.ts
+- scripts/run-regressions.mjs
+
+Archivos afectados por este cierre
+
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+- eliminación de workflows temporales `task-4-2-final*.yml`
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary Task 4.2 Final 4`, run 34220274412 — SUCCESS.
+- Artifact `migration-check-logs-task-4-2-34220274412`, `summary.txt` revisado directamente.
+- git diff --check — PASS.
+- npm run test:typecheck — PASS.
+- npm run test:unit:ts — PASS.
+- npm run test:component:dom — PASS.
+- npm run test:integration — PASS.
+- npm run test:regressions — PASS.
+- npm run build:web — PASS.
+- npm run build — PASS.
+
+Comprobaciones no ejecutadas
+
+- npm run check — no requerido para esta extracción; los checks aplicables se ejecutaron individualmente.
+- E2E de import/download/recovery — no aplican directamente al traslado de ownership de playback.
+- Prueba física nativa Windows/macOS — no considerada bloqueante: los contratos de separación Web/Desktop y playback afectados quedaron cubiertos por integración/regresiones y ambos builds aplicables.
+
+Prueba manual
+
+- No requerida como bloqueo de cierre. Los criterios de Play repetido/cambio rápido/invalidation durante preparación están protegidos por el controlador, guards de runtime, una única instancia de audio y las regresiones existentes verificadas en el run citado.
+
+Pendientes / fuera de alcance
+
+- No se inició 4.3 ni se movió cola, siguiente/anterior, shuffle, repeat o avance al finalizar.
+- El riesgo histórico de `handleRemoveBulk` permanece fuera de alcance.
+
+Riesgos previos relevantes
+
+- Ninguno nuevo atribuido a 4.2 después del run verde final.
+
+Herramientas temporales restantes
+
+- Ninguna de 4.2 al cerrar esta recuperación; se eliminan `task-4-2-final.yml`, `task-4-2-final2.yml`, `task-4-2-final3.yml`, `task-4-2-final4.yml` y el workflow de cierre temporal.
+
+Fallos encontrados y causa
+
+- Run 34220059314 (`Temporary Task 4.2 Final 3`) falló durante la verificación previa al commit por una guarda de regresión todavía acoplada al ownership anterior de la invalidación de Available Offline. No demostró una regresión funcional; la guarda fue adaptada para verificar `invalidatePlaybackPreparation` en App y la limpieza de refs en el controlador.
+- Run 34220274412 repitió la extracción con esa adaptación y pasó todos los checks, publicando el commit verificado `0a710ba25be4fc2ddad81f4cfe8383ba7e71e920`.
+
+Veredicto
+
+Terminada.
+
+La responsabilidad de preparación/control del audio salió de App sin duplicar la instancia de audio y conserva bloqueos, rutas de plataforma e invalidación de URLs/promesas durante cambios de caché/offline.
+
+Siguiente tarea
+
+4.3 — Separar la cola y navegación.
+
+No iniciada.
+```
+'''
+          registro.write_text(r.rstrip() + entry + '\n')
+
+          state = Path('migration/BeatGaler-agent-state.md')
+          state.write_text('''# BeatGaler Agent State
+
+## Seguridad de la ronda nocturna
+
+- Rama exclusiva: `v0.9.0-test-noche`
+- Prohibido modificar o avanzar `integration-v0.9.0-alpha.2`, `main` o ramas `app-tsx-*`.
+- Prohibido merge, rebase, cherry-pick, fast-forward hacia otras ramas o PR de integración durante la prueba.
+- Todos los commits y pushes de la ronda deben quedar únicamente en `v0.9.0-test-noche`.
+
+## Estado operativo
+
+- Tarea trabajada: `4.2 — Separar preparación y control del audio`
+- Estado: `Terminada`
+- Última tarea terminada: `4.2 — Separar preparación y control del audio`
+- SHA inicial de esta ejecución: `c67ddada2b9bde04ebaa052c6e9ef15876a55c1c`
+- SHA final de implementación verificada: `0a710ba25be4fc2ddad81f4cfe8383ba7e71e920`
+- Pendientes concretos: ninguno de 4.2.
+- Comprobaciones pendientes: ninguna necesaria para reabrir 4.2.
+- Siguiente tarea: `4.3 — Separar la cola y navegación`
+- Estado de la siguiente tarea: `Pendiente`
+- Fecha de ejecución: `2026-09-08`
+
+## Evidencia de cierre de 4.2
+
+- Implementación: preparación, invalidación, eventos de audio y `handlePlay` extraídos a `src/features/playback/usePlaybackController.ts`.
+- GitHub Actions: `Temporary Task 4.2 Final 4`, run `34220274412`.
+- Artifact: `migration-check-logs-task-4-2-34220274412`; summary con diff-check, typecheck, unit TS, component DOM, integration, regressions, build web y build en PASS.
+- `useAudio` continúa siendo una única instancia; el controlador conserva caminos Web/Desktop y evita reusar URLs/promesas invalidadas.
+
+## Regla de actualización
+
+Al cerrar cada ejecución:
+- si la tarea queda `Terminada`, marcar solo su `[x]` en el roadmap, agregar su registro al final de `Registro-de-avance.md` y dejar aquí la siguiente tarea como `Pendiente`;
+- si queda `En curso` o `Por verificar`, mantener esa misma tarea como tarea actual y registrar exactamente lo que falta;
+- nunca iniciar una segunda tarea en la misma ejecución.
+''')
+          PY
+
+          rm -f .github/workflows/task-4-2-final.yml \
+                .github/workflows/task-4-2-final2.yml \
+                .github/workflows/task-4-2-final3.yml \
+                .github/workflows/task-4-2-final4.yml \
+                .github/workflows/task-4-2-close.yml
+
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'chore(migration): close recovered task 4.2'
+          git push origin HEAD:v0.9.0-test-noche
