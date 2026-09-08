@@ -91,5 +91,29 @@ new_browser = '''    if (kind === "MASTER" || kind === "WAV") {
   }, [handleBrowserBeatAssetDrop, transitionRuntime]);
 '''
 app = app[:browser_start] + new_browser + app[browser_end:]
-
 app_path.write_text(app)
+
+reg_path = Path("scripts/run-regressions.mjs")
+reg = reg_path.read_text()
+owner_anchor = '  const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");\n'
+owner_line = '  const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");\n'
+if owner_line not in reg:
+    if owner_anchor not in reg:
+        raise SystemExit("regression owner anchor not found")
+    reg = reg.replace(owner_anchor, owner_anchor + owner_line, 1)
+
+old_close_guard = '  if (!app.includes(\'setBeatFileDrop(null);\') || !app.includes(\'const runBeatCloudUpdate\')) fail("Long beat updates must close the chooser before background work starts.");'
+new_close_guard = '  if (!beatAssetUpdates.includes(\'setBeatFileDrop(null);\') || !beatAssetUpdates.includes(\'const runBeatCloudUpdate\')) fail("Long beat updates must close the chooser before background work starts.");'
+if old_close_guard in reg:
+    reg = reg.replace(old_close_guard, new_close_guard, 1)
+elif new_close_guard not in reg:
+    raise SystemExit("long update regression guard not found")
+
+old_success_guard = '  if (!app.includes(\'setBeatCloudUpdateBusy(beat.id, false, true)\')) fail("Successful existing-beat updates lost the success-phase event.");'
+new_success_guard = '  if (!beatAssetUpdates.includes(\'setBeatCloudUpdateBusy(beat.id, false, true)\')) fail("Successful existing-beat updates lost the success-phase event.");'
+if old_success_guard in reg:
+    reg = reg.replace(old_success_guard, new_success_guard, 1)
+elif new_success_guard not in reg:
+    raise SystemExit("success phase regression guard not found")
+
+reg_path.write_text(reg)
