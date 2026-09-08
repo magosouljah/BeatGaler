@@ -204,10 +204,11 @@ describe("Issue #97 production runtime follow-up", () => {
 
   it("routes browser drops through browser File owners, not Desktop path staging", () => {
     const app = source("src/App.tsx");
+    const uploadQueue = source("src/features/cloud/useCloudUploadQueue.ts");
     const controller = source("src/features/dragdrop/htmlDropController.ts");
     expect(app).toContain("onBrowserLibraryFileDrop: platform.capabilities.browserFileImport ? importDroppedBrowserFiles : undefined");
     expect(app).toContain("onBrowserBeatFileDrop: platform.capabilities.browserFileImport ? handleBrowserBeatFileDrop : undefined");
-    expect(app).toContain("platform.cloudData.commitImportedBeat(beat)");
+    expect(uploadQueue).toContain("platform.cloudData.commitImportedBeat(beat)");
     expect(controller).toContain("options.onBrowserBeatFileDrop");
   });
 

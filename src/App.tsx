@@ -1,5 +1,4 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import uploadCompleteWav from "./assets/status/upload-complete.wav";
 import type { Beat, AppSettings } from "./types";
 import BeatCard from "./components/BeatCard";
 import Drawer from "./components/Drawer";
@@ -14,7 +13,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
@@ -37,9 +36,8 @@ import SearchBar from "./features/library/components/SearchBar";
 import SortMenu from "./features/library/components/SortMenu";
 import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
-import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
-import { buildCloudSessionUnavailableDetail, buildPlaybackPreparationFailureDetail, buildUploadFailureDetail } from "./features/cloud/uploadErrorDetails";
-import { DesktopBeatUploadPipelineError, runDesktopBeatUploadPipeline } from "./features/cloud/desktopBeatUploadPipeline";
+import { readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
+import { useCloudUploadQueue } from "./features/cloud/useCloudUploadQueue";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -136,8 +134,6 @@ function BeatGalerApp() {
   const cloudLibraryTimerRef = useRef<number | null>(null);
   const cloudLibrarySnapshotRef = useRef<string | null>(null);
   const visibleLibraryFingerprintRef = useRef<string>("");
-  const autoCloudUploadRef = useRef<Set<string>>(new Set());
-  const backgroundUploadQueueRef = useRef<Beat[]>([]);
   const {
     beatRuntimeStates,
     beatRuntimeStatesRef,
@@ -145,15 +141,8 @@ function BeatGalerApp() {
     forgetRuntimeState,
     clearReconciledTrashRuntimeStates,
   } = useBeatRuntimeRegistry(beats, beatsLatestRef);
-  const backgroundUploadRunningRef = useRef(false);
-  // A manual Reload pressed during an import must never overwrite the optimistic
-  // in-flight rows with the older committed Telegram INDEX. Queue the reload and
-  // execute it after the batch commits instead.
-  const deferredLibraryReloadRef = useRef(false);
-  const uploadCompleteTimersRef = useRef<Map<string, number>>(new Map());
   const cloudPullInFlightRef = useRef(false);
   const stagedImportPathsRef = useRef<Map<string, string[]>>(new Map());
-  const [backgroundUploadErrors, setBackgroundUploadErrors] = useState<Record<string, string>>({});
   const [interruptedUploadNotices, setInterruptedUploadNotices] = useState<string[]>([]);
 
   useEffect(() => {
@@ -316,6 +305,28 @@ function BeatGalerApp() {
     });
     return true;
   }, [connectionState]);
+
+  const {
+    backgroundUploadErrors,
+    cloudifyImportedBeats,
+    retryBackgroundUpload,
+    getQueuedBeatsSnapshot,
+    deferLibraryReloadIfUploading,
+    deferredLibraryReloadRef,
+  } = useCloudUploadQueue({
+    settings,
+    setSettings,
+    setConnectionState,
+    setBeats,
+    beatsLatestRef,
+    beatRuntimeStatesRef,
+    transitionRuntime,
+    cloudLibrarySnapshotRef,
+    waitForUploadedBeatPlaybackReady,
+    rejectOfflineMutation,
+    isReviewActive: () => reviewQueueLatestRef.current !== null,
+    hasProtectedStaging: () => stagedImportPathsRef.current.size > 0,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -973,361 +984,6 @@ function BeatGalerApp() {
     });
   }, []);
 
-  const waitForCloudSessionWithBackoff = useCallback(async () => {
-    const delays = [0, 1000, 2000, 5000, 10000, 30000, 60000];
-    let lastError: unknown = null;
-
-    for (const delay of delays) {
-      if (delay > 0) await new Promise(resolve => window.setTimeout(resolve, delay));
-      try {
-        const status = await pollTelegramCloudStatus();
-        if (!status.reachable) {
-          lastError = new Error("Galer Cloud is temporarily unreachable.");
-          setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-          continue;
-        }
-        if (!status.connected) return { status, error: null as unknown };
-        setConnectionState("online");
-        return { status, error: null as unknown };
-      } catch (error) {
-        lastError = error;
-        setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-      }
-    }
-
-    return { status: { connected: Boolean(settings?.telegram_cloud_connected), reachable: false, username: settings?.telegram_cloud_username ?? null }, error: lastError };
-  }, [settings?.telegram_cloud_connected, settings?.telegram_cloud_username]);
-
-  const cloudifyImportedBeats = useCallback((newBeats: Beat[]) => {
-    if (newBeats.length === 0) return;
-
-    if (platform.capabilities.reviewBeatCloudCommit) {
-      for (const beat of newBeats) {
-        if (autoCloudUploadRef.current.has(beat.id)) continue;
-        autoCloudUploadRef.current.add(beat.id);
-        transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPLOAD" }, beat);
-        transitionRuntime(beat.id, { type: "SYNC_UPLOAD_STARTED" }, beat);
-        setBackgroundUploadErrors(current => {
-          if (!(beat.id in current)) return current;
-          const next = { ...current };
-          delete next[beat.id];
-          return next;
-        });
-        setBeats(current => {
-          const next = current.map(item => item.id === beat.id ? { ...item, cloud_status: "UPLOADING" } : item);
-          beatsLatestRef.current = next;
-          return next;
-        });
-
-        void platform.cloudData.commitImportedBeat(beat).then(committed => {
-          transitionRuntime(committed.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, committed);
-          setBackgroundUploadErrors(current => {
-            if (!(committed.id in current)) return current;
-            const next = { ...current };
-            delete next[committed.id];
-            return next;
-          });
-          setBeats(current => {
-            const next = current.map(item => item.id === committed.id ? committed : item);
-            beatsLatestRef.current = next;
-            return next;
-          });
-        }).catch(error => {
-          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-          transitionRuntime(beat.id, {
-            type: "SYNC_FAILED",
-            code: "WEB_IMPORT_FAILED",
-            message,
-            retryable: true,
-          }, beat);
-          setBackgroundUploadErrors(current => ({ ...current, [beat.id]: message }));
-          setBeats(current => {
-            const next = current.map(item => item.id === beat.id ? { ...item, cloud_status: "ERROR" } : item);
-            beatsLatestRef.current = next;
-            return next;
-          });
-        }).finally(() => {
-          autoCloudUploadRef.current.delete(beat.id);
-        });
-      }
-      return;
-    }
-
-    // Do not trust the React settings snapshot here. On macOS the Telegram
-    // callback/SSE can complete before this closure receives the updated
-    // settings value. The worker verifies the REAL backend session once.
-    // Queue work immediately but never await it from the review/save UI.
-    // One beat at a time keeps CPU/disk/network pressure predictable.
-    for (const beat of newBeats) {
-      const alreadyQueued = backgroundUploadQueueRef.current.some(item => item.id === beat.id);
-      if (alreadyQueued || autoCloudUploadRef.current.has(beat.id)) continue;
-      // Persist synchronously before network work begins. If the process exits
-      // before full cloud finalization, startup will roll this beat back.
-      markCloudUploadActive(beat);
-      backgroundUploadQueueRef.current.push(beat);
-      transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPLOAD" }, beat);
-      setBackgroundUploadErrors(current => {
-        if (!(beat.id in current)) return current;
-        const next = { ...current };
-        delete next[beat.id];
-        return next;
-      });
-      setBeats(current => current.map(b =>
-        b.id === beat.id ? { ...b, cloud_status: "UPLOADING" } : b
-      ));
-    }
-
-    if (backgroundUploadRunningRef.current) return;
-    backgroundUploadRunningRef.current = true;
-
-    window.setTimeout(() => {
-      void (async () => {
-        try {
-          // One explicit status check per background batch. This is NOT polling.
-          // pollTelegramCloudStatus also reconciles the Rust-side settings cache,
-          // which upload_beat_to_telegram validates before reading the local file.
-          const verified = await waitForCloudSessionWithBackoff();
-          const cloudSession = verified.status;
-          const sessionCheckError = verified.error;
-          if (sessionCheckError) {
-            console.warn("Background upload could not verify Telegram session after backoff:", sessionCheckError);
-          }
-
-          if (!cloudSession.connected || !cloudSession.reachable) {
-            const failed = backgroundUploadQueueRef.current.splice(0);
-            const { raw, detail } = buildCloudSessionUnavailableDetail(sessionCheckError);
-
-            setBackgroundUploadErrors(current => {
-              const next = { ...current };
-              for (const item of failed) next[item.id] = detail;
-              return next;
-            });
-            for (const item of failed) {
-              transitionRuntime(item.id, {
-                type: "SYNC_FAILED",
-                code: "TELEGRAM_SESSION_UNAVAILABLE",
-                message: raw,
-                retryable: true,
-              }, item);
-            }
-            setBeats(current => current.map(b =>
-              failed.some(item => item.id === b.id)
-                ? { ...b, cloud_status: "ERROR" }
-                : b
-            ));
-            return;
-          }
-
-          setSettings(current =>
-            current
-              ? {
-                  ...current,
-                  telegram_cloud_connected: true,
-                  telegram_cloud_username: cloudSession.username,
-                }
-              : current
-          );
-
-          while (backgroundUploadQueueRef.current.length > 0) {
-            const original = backgroundUploadQueueRef.current.shift()!;
-            if (autoCloudUploadRef.current.has(original.id)) continue;
-            autoCloudUploadRef.current.add(original.id);
-
-            transitionRuntime(original.id, { type: "SYNC_UPLOAD_STARTED" }, original);
-            try {
-              const pipelineResult = await runDesktopBeatUploadPipeline({
-                original,
-                dependencies: {
-                  uploadMaster: uploadBeatToTelegram,
-                  listCloudFiles: listCloudFilesForBeat,
-                  uploadWav: (beat, path) => uploadDroppedFileToTelegram(beat, path, "WAV"),
-                  getProjectStatus: getProjectCloudStatus,
-                  uploadProject: uploadProjectToTelegram,
-                  detachLocalSources: detachLocalSourcesAfterCloudUpload,
-                  syncMetadata: syncBeatMetadataToTelegram,
-                  commitSnapshot: (snapshot, reason) => libraryStateManager.commitSnapshot(snapshot, reason),
-                  clearUploadMarker: clearCloudUploadActive,
-                  waitForPlaybackReady: waitForUploadedBeatPlaybackReady,
-                },
-                actions: {
-                  onMasterUploaded: uploaded => {
-                    setBeats(current => current.map(b =>
-                      b.id === uploaded.id ? { ...uploaded, cloud_status: "UPLOADING" } : b
-                    ));
-                  },
-                  onDetached: detached => {
-                    setBackgroundUploadErrors(current => {
-                      if (!(detached.id in current)) return current;
-                      const next = { ...current };
-                      delete next[detached.id];
-                      return next;
-                    });
-
-                    // Upload completion and playback readiness are deliberately separate.
-                    // Keep the card blocked while metadata/INDEX finalization and cooking finish.
-                    setBeats(current => {
-                      const next = current.map(b =>
-                        b.id === detached.id ? { ...detached, cloud_status: "PLAYBACK_PREPARING" } : b
-                      );
-                      beatsLatestRef.current = next;
-                      return next;
-                    });
-                  },
-                  getLibrarySnapshot: () => beatsLatestRef.current,
-                  onIndexCommitted: (detached, indexSnapshot) => {
-                    cloudLibrarySnapshotRef.current = indexSnapshot
-                      .filter(item => !!item.telegram_file_id)
-                      .map(cloudBeatFingerprint)
-                      .join("\u001c");
-                    transitionRuntime(detached.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, detached);
-                  },
-                  onPlaybackPreparing: detached => {
-                    transitionRuntime(detached.id, { type: "PLAYBACK_PREPARING" }, detached);
-                  },
-                },
-              });
-
-              const detached = pipelineResult.beat;
-              const playbackReady = pipelineResult.playbackReady;
-
-              if (!playbackReady) {
-                const detail = buildPlaybackPreparationFailureDetail(detached.name);
-                setBackgroundUploadErrors(current => ({ ...current, [detached.id]: detail }));
-                transitionRuntime(detached.id, {
-                  type: "PLAYBACK_FAILED",
-                  code: "MASTER_PREPARE_TIMEOUT",
-                  message: detail,
-                  retryable: true,
-                }, detached);
-                setBeats(current => {
-                  const next = current.map(b => b.id === detached.id ? { ...detached, cloud_status: "ERROR" } : b);
-                  beatsLatestRef.current = next;
-                  return next;
-                });
-              } else {
-                transitionRuntime(detached.id, { type: "PLAYBACK_IDLE" }, detached);
-                // Green completion state is intentionally transient and UI-only,
-                // and now means something precise: the MASTER is actually playable.
-                setBeats(current => {
-                  const next = current.map(b =>
-                    b.id === detached.id ? { ...detached, cloud_status: "UPLOAD_COMPLETE" } : b
-                  );
-                  beatsLatestRef.current = next;
-                  return next;
-                });
-              }
-
-              // IMPORTANT: one HTML drop session can contain MANY beats. Never delete
-              // the whole drop-staging/<session> just because one beat finished.
-              if (
-                backgroundUploadQueueRef.current.length === 0 &&
-                reviewQueueLatestRef.current === null &&
-                stagedImportPathsRef.current.size === 0
-              ) {
-                await cleanupOrphanedDropStaging(beatsLatestRef.current);
-              }
-
-              if (playbackReady) {
-                try {
-                  const audio = new Audio(uploadCompleteWav);
-                  audio.volume = 0.22;
-                  void audio.play().catch(() => {});
-                } catch {}
-
-                const oldTimer = uploadCompleteTimersRef.current.get(detached.id);
-                if (oldTimer) window.clearTimeout(oldTimer);
-                const timer = window.setTimeout(() => {
-                  setBeats(current => {
-                    const next = current.map(b =>
-                      b.id === detached.id && b.cloud_status === "UPLOAD_COMPLETE"
-                        ? { ...b, cloud_status: "CLOUD_ONLY" }
-                        : b
-                    );
-                    beatsLatestRef.current = next;
-                    return next;
-                  });
-                  uploadCompleteTimersRef.current.delete(detached.id);
-                }, 1050);
-                uploadCompleteTimersRef.current.set(detached.id, timer);
-              }
-
-            } catch (error) {
-              const pipelineError = error instanceof DesktopBeatUploadPipelineError ? error : null;
-              const uploadStage = pipelineError?.stage ?? "Prepare upload";
-              const remoteUploadCompleted = pipelineError?.remoteUploadCompleted ?? false;
-              const syncCommitted = pipelineError?.syncCommitted ?? false;
-              const reportedError = pipelineError?.originalError ?? error;
-              console.warn(`Background Telegram upload failed for ${original.name} at ${uploadStage}:`, reportedError);
-
-              const detail = buildUploadFailureDetail({
-                beatName: original.name,
-                stage: uploadStage,
-                platform: navigator.platform || "unknown",
-                error: reportedError,
-              });
-
-              if (!syncCommitted) {
-                transitionRuntime(original.id, {
-                  type: "SYNC_FAILED",
-                  code: "UPLOAD_FAILED",
-                  message: detail,
-                  retryable: true,
-                }, original);
-              } else {
-                const runtime = beatRuntimeStatesRef.current[original.id];
-                if (runtime?.playback_state === "playback_preparing") {
-                  transitionRuntime(original.id, {
-                    type: "PLAYBACK_FAILED",
-                    code: "PLAYBACK_PREPARATION_FAILED",
-                    message: detail,
-                    retryable: true,
-                  }, original);
-                }
-              }
-              setBackgroundUploadErrors(current => ({ ...current, [original.id]: detail }));
-              setBeats(current => current.map(b =>
-                b.id === original.id
-                  ? {
-                      ...b,
-                      // A failure after durable media/INDEX finalization must expose
-                      // the Cloud copy rather than reclassifying it as an interrupted upload.
-                      cloud_status: remoteUploadCompleted ? "CLOUD_ONLY" : "ERROR",
-                    }
-                  : b
-              ));
-            } finally {
-              autoCloudUploadRef.current.delete(original.id);
-            }
-
-            // Yield between beats so React/WebView always gets a render opportunity.
-            await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-          }
-
-        } finally {
-          backgroundUploadRunningRef.current = false;
-          if (deferredLibraryReloadRef.current) {
-            deferredLibraryReloadRef.current = false;
-            window.dispatchEvent(new Event("beatgaler:deferred-library-reload"));
-          }
-        }
-      })();
-    }, 0);
-  }, [transitionRuntime, waitForUploadedBeatPlaybackReady, waitForCloudSessionWithBackoff]);
-
-  const retryBackgroundUpload = useCallback((beat: Beat) => {
-    if (rejectOfflineMutation("Retrying an upload")) return;
-    setBackgroundUploadErrors(current => {
-      if (!(beat.id in current)) return current;
-      const next = { ...current };
-      delete next[beat.id];
-      return next;
-    });
-    // cloudifyImportedBeats is checkpoint-aware: an existing MASTER/WAV/PROJECT
-    // is detected in Telegram and skipped, so retry resumes at the first missing
-    // stage instead of uploading the whole beat again.
-    cloudifyImportedBeats([{ ...beat, cloud_status: "UPLOADING" }]);
-  }, [cloudifyImportedBeats, rejectOfflineMutation]);
-
   const addBeatsAndReview = useCallback((newBeats: Beat[]) => {
     if (newBeats.length === 0) return;
     if (connectionState !== "online") {
@@ -1364,7 +1020,7 @@ function BeatGalerApp() {
         window.setTimeout(() => {
           void cleanupOrphanedDropStaging([
             ...beatsLatestRef.current,
-            ...backgroundUploadQueueRef.current,
+            ...getQueuedBeatsSnapshot(),
           ]);
         }, 0);
         return null;
@@ -1400,7 +1056,7 @@ function BeatGalerApp() {
       window.setTimeout(() => {
         const protectedBeats = [
           ...beatsLatestRef.current,
-          ...backgroundUploadQueueRef.current,
+          ...getQueuedBeatsSnapshot(),
         ];
         void cleanupOrphanedDropStaging(protectedBeats);
       }, 0);
@@ -2571,15 +2227,8 @@ function BeatGalerApp() {
     };
 
     try {
-      const uploadInFlight = backgroundUploadRunningRef.current || autoCloudUploadRef.current.size > 0;
-      if (uploadInFlight) {
-        // Critical safety rule: restoreLibraryFromTelegram reconciles SQLite to the
-        // committed INDEX. During an import that INDEX is intentionally older, so
-        // applying it would make the beats being uploaded disappear. Defer instead.
-        deferredLibraryReloadRef.current = true;
-        console.info(`[library-refresh] DEFERRED active_uploads=${autoCloudUploadRef.current.size}`);
-        return;
-      }
+      // Queue ownership includes active IDs and the pending Reload marker.
+      if (deferLibraryReloadIfUploading()) return;
 
       clearCachedBeats();
       const browserOffline = typeof navigator !== "undefined" && navigator.onLine === false;

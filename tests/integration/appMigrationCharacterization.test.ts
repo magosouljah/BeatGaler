@@ -7,6 +7,7 @@ const playbackController = readFileSync(resolve(process.cwd(), "src/features/pla
 const interruptedUploadJournal = readFileSync(resolve(process.cwd(), "src/features/cloud/interruptedUploadJournal.ts"), "utf8");
 const uploadErrorDetails = readFileSync(resolve(process.cwd(), "src/features/cloud/uploadErrorDetails.ts"), "utf8");
 const desktopBeatUploadPipeline = readFileSync(resolve(process.cwd(), "src/features/cloud/desktopBeatUploadPipeline.ts"), "utf8");
+const cloudUploadQueue = readFileSync(resolve(process.cwd(), "src/features/cloud/useCloudUploadQueue.ts"), "utf8");
 
 const migrationTargets = {
   uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/uploadErrorDetails.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
@@ -51,15 +52,13 @@ describe("App migration characterization contracts", () => {
   });
 
   it("keeps browser commit routing separate and preserves the Desktop per-beat durability boundary", () => {
-    const upload = section("const cloudifyImportedBeats = useCallback", "const retryBackgroundUpload = useCallback");
-
-    expectOrdered(upload, [
+    expectOrdered(cloudUploadQueue, [
       "if (platform.capabilities.reviewBeatCloudCommit)",
       "platform.cloudData.commitImportedBeat(beat)",
       "markCloudUploadActive(beat)",
     ]);
 
-    expect(upload).toContain("runDesktopBeatUploadPipeline({");
+    expect(cloudUploadQueue).toContain("runDesktopBeatUploadPipeline({");
     expectOrdered(desktopBeatUploadPipeline, [
       "uploaded = await dependencies.uploadMaster(uploaded)",
       "const existingFiles = await dependencies.listCloudFiles(uploaded.id)",
@@ -74,10 +73,11 @@ describe("App migration characterization contracts", () => {
     expect(desktopBeatUploadPipeline).toContain("remoteUploadCompleted = true");
     expect(desktopBeatUploadPipeline).toContain("syncCommitted = true");
 
-    expect(upload).toContain("if (!syncCommitted)");
-    expect(upload).toContain('cloud_status: remoteUploadCompleted ? "CLOUD_ONLY" : "ERROR"');
-    expect(upload).toContain("reviewQueueLatestRef.current === null");
-    expect(upload).toContain("stagedImportPathsRef.current.size === 0");
+    expect(cloudUploadQueue).toContain("if (!syncCommitted)");
+    expect(cloudUploadQueue).toContain('cloud_status: remoteUploadCompleted ? "CLOUD_ONLY" : "ERROR"');
+    expect(cloudUploadQueue).toContain("!isReviewActive()");
+    expect(cloudUploadQueue).toContain("!hasProtectedStaging()");
+    expect(app).toContain("useCloudUploadQueue({");
   });
 
   it("keeps Review candidates outside the library until Save and preserves Skip versus Cancel", () => {
@@ -104,19 +104,15 @@ describe("App migration characterization contracts", () => {
   it("defers manual Reload while uploads are active and consumes the deferred event after the queue drains", () => {
     const reload = section("const reloadLibrary = useCallback", "const applyBulkUpdate = useCallback");
     expectOrdered(reload, [
-      "const uploadInFlight = backgroundUploadRunningRef.current || autoCloudUploadRef.current.size > 0",
-      "deferredLibraryReloadRef.current = true",
+      "if (deferLibraryReloadIfUploading()) return",
       "const restored = await libraryStateManager.reloadAuthoritative()",
     ]);
     expect(reload).toContain('window.addEventListener("beatgaler:deferred-library-reload", runDeferredReload)');
 
-    const upload = section("const cloudifyImportedBeats = useCallback", "const retryBackgroundUpload = useCallback");
-    expectOrdered(upload, [
-      "backgroundUploadRunningRef.current = false",
-      "if (deferredLibraryReloadRef.current)",
-      "deferredLibraryReloadRef.current = false",
-      'window.dispatchEvent(new Event("beatgaler:deferred-library-reload"))',
-    ]);
+    const desktopFinally = cloudUploadQueue.indexOf("backgroundUploadRunningRef.current = false");
+    expect(desktopFinally).toBeGreaterThan(-1);
+    expect(cloudUploadQueue.indexOf("finishDeferredReloadIfIdle();", desktopFinally)).toBeGreaterThan(desktopFinally);
+    expect(cloudUploadQueue).toContain('window.dispatchEvent(new Event("beatgaler:deferred-library-reload"))');
   });
 
   it("keeps playback cache invalidation, real audio events and Web/Desktop preparation paths distinct", () => {

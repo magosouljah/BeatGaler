@@ -64,6 +64,7 @@ try {
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const uploadErrorDetails = readFileSync(path.join(root, "src", "features", "cloud", "uploadErrorDetails.ts"), "utf8");
   const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
+  const cloudUploadQueue = readFileSync(path.join(root, "src", "features", "cloud", "useCloudUploadQueue.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
@@ -252,10 +253,10 @@ try {
   if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
   if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) {") || !beatCard.includes("CARD_PLAY_REJECTED") || !beatCard.includes("onPlay(beat);")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
   if (!playbackController.includes('PLAY_BLOCKED_LOADING')) fail("Playback controller lost its defensive loading-state guard.");
-  if (!app.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
+  if (!cloudUploadQueue.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
   if (app.includes("beatsLatestRef.current = indexSnapshot;") || desktopBeatUploadPipeline.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
-  if (!app.includes('cloud_status: "UPLOAD_COMPLETE"')) fail("Background upload lost its transient completion state after playback readiness.");
-  if (!app.includes("waitForPlaybackReady: waitForUploadedBeatPlaybackReady")) fail("App no longer wires the real playback readiness gate into the Desktop upload pipeline.");
+  if (!cloudUploadQueue.includes('cloud_status: "UPLOAD_COMPLETE"')) fail("Background upload lost its transient completion state after playback readiness.");
+  if (!cloudUploadQueue.includes("waitForPlaybackReady: waitForUploadedBeatPlaybackReady")) fail("Cloud upload queue no longer wires the real playback readiness gate into the Desktop upload pipeline.");
   const detachedIndex = desktopBeatUploadPipeline.indexOf("actions.onDetached(detached)");
   const commitIndex = desktopBeatUploadPipeline.indexOf("await dependencies.commitSnapshot(indexSnapshot, `upload-beat:${detached.id}`)", detachedIndex);
   const clearMarkerIndex = desktopBeatUploadPipeline.indexOf("dependencies.clearUploadMarker(original.id)", commitIndex);
@@ -276,7 +277,7 @@ try {
   if (!runtimeStateMachine.includes("download_progress: number | null")) fail("Optional download progress runtime data was removed.");
   if (!runtimeStateMachine.includes("previous_state")) fail("Runtime errors no longer retain previous_state.");
   if (!runtimeStateMachine.includes("trash_sync_required")) fail("Offline Trash lost its explicit reconciliation bit.");
-  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !app.includes('type: "SYNC_UPLOAD_STARTED"') || !app.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
+  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
   if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
   if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
   if (!app.includes("useBeatRuntimeRegistry(beats, beatsLatestRef)")) fail("App flows are no longer connected to the extracted runtime registry.");
@@ -309,7 +310,7 @@ try {
   if (!app.includes("reviewPreparationPromiseRef.current")) fail("Save All no longer shares the sequential Review preparation worker.");
   if (!app.includes("setReviewQueue(null);") || !app.includes("cloudifyImportedBeats([currentUpdated])")) fail("Save All must close Review and upload the current beat without waiting for the rest.");
   if (!app.includes("Retry upload") && !beatCard.includes("Retry upload")) fail("Individual failed-upload Retry disappeared.");
-  if (!app.includes('cloudifyImportedBeats([{ ...beat, cloud_status: "UPLOADING" }])')) fail("Individual Retry is no longer wired back into the checkpoint-aware upload pipeline.");
+  if (!cloudUploadQueue.includes('cloudifyImportedBeats([{ ...beat, cloud_status: "UPLOADING" }])')) fail("Individual Retry is no longer wired back into the checkpoint-aware upload pipeline.");
   if (!rustCommands.includes("pub fn start_import_review_stream") || !rustCommands.includes("VecDeque") || !rustCommands.includes("discover_next_stream_group")) fail("Rust lost true incremental/shallow-first import discovery.");
   if (!rustCommands.includes("pub fn prepare_next_import_review_beat")) fail("Rust lost one-at-a-time Review preparation.");
   if (!rustCommands.includes("pub fn get_import_review_batch_summary")) fail("Streaming discovery can no longer publish its final N/conflicts.");
@@ -395,7 +396,7 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!rustCommands.includes('The incoming Offline BeatMeta is the authoritative LOCAL source map for')) fail("Export metadata resolution can discard durable Offline file paths again.");
   if (!rustCommands.includes('Available Offline owns a protected MASTER outside the temporary cache.')) fail("MP3 export lost local-first Offline precedence.");
   if (!rustCommands.includes('PROJECT follows the same local-first rule. Available Offline must')) fail("PROJECT/Everything export lost local-first Offline precedence.");
-  if (!app.includes('assets/status/upload-complete.wav') || !beatDownloadsForRuntime.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
+  if (!cloudUploadQueue.includes('assets/status/upload-complete.wav') || !beatDownloadsForRuntime.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into their runtime owners.");
   if (!offlineAvailability.includes('invalidatePlaybackPreparation(beat.id)') || !playbackController.includes('cookingPlaybackUrlRef.current.delete(beatId)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
   if (!playbackController.includes('cookingWarmPromisesRef.current.delete(beatId)')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");
   const removeOfflineUiStart = offlineAvailability.indexOf('if (beat.offline_available) {', offlineAvailability.indexOf('const handleToggleOffline'));
