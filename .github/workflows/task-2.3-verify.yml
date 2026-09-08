@@ -1,0 +1,41 @@
+name: Task 2.3 verify
+
+on:
+  push:
+    branches: [app-tsx-2.3]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: app-tsx-2.3
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - name: Apply exact helper extraction
+        run: node scripts/task23-extract.mjs
+      - run: npm run test:typecheck
+      - run: npm run test:unit:ts
+      - run: npm run test:component:dom
+      - run: npm run test:integration
+      - run: npm run test:regressions
+      - run: npm run build:web
+      - run: npm run build
+      - name: Commit verified task 2.3 extraction
+        run: |
+          rm -f scripts/task23-extract.mjs .github/workflows/task-2.3-verify.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor(app): extract auxiliary helpers"
+          git push origin HEAD:app-tsx-2.3
