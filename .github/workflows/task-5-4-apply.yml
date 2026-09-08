@@ -35,16 +35,14 @@ jobs:
         run: npm ci
 
       - name: Apply task 5.4 extraction
-        run: python3 .github/task-5-4-apply.py
+        run: |
+          python3 .github/task-5-4-apply.py
+          python3 .github/task-5-4-fix-tests.py
 
       - name: Run migration checks and save readable logs
-        id: migration_checks
-        continue-on-error: true
         run: node scripts/run-migration-checks-with-logs.mjs
 
       - name: Diff check
-        id: diff_check
-        continue-on-error: true
         run: git diff --check
 
       - name: Upload migration check logs
@@ -53,20 +51,18 @@ jobs:
         with:
           name: migration-check-logs-task-5-4-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/migration-check-logs/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
 
-      - name: Fail if migration checks failed
-        run: |
-          test "${{ steps.migration_checks.outcome }}" = "success"
-          test "${{ steps.diff_check.outcome }}" = "success"
+      - name: Enforce migration summary
+        run: grep -Fx "Migration checks: PASS" artifacts/migration-check-logs/summary.txt
 
       - name: Commit verified implementation
         run: |
-          rm .github/workflows/task-5-4-apply.yml .github/task-5-4-apply.py
+          rm .github/workflows/task-5-4-apply.yml .github/task-5-4-apply.py .github/task-5-4-fix-tests.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.tsx src/features/offline/useOfflineAvailability.ts tests/integration/appOfflineAvailabilityExtraction.test.ts .github/workflows/task-5-4-apply.yml .github/task-5-4-apply.py
+          git add src/App.tsx src/features/offline/useOfflineAvailability.ts tests/integration/appOfflineAvailabilityExtraction.test.ts tests/integration/appPlaybackExtraction.test.ts scripts/run-regressions.mjs .github/workflows/task-5-4-apply.yml .github/task-5-4-apply.py .github/task-5-4-fix-tests.py
           git diff --cached --check
           git commit -m "refactor(app): extract offline availability"
           test "$(git branch --show-current)" = "v0.9.0-test-noche"
