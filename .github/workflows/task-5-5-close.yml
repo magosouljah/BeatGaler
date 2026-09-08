@@ -20,6 +20,9 @@ jobs:
       - name: Update migration state
         run: python3 scripts/task-5-5-close-temp.py
 
+      - name: Normalize register EOF
+        run: python3 -c "from pathlib import Path; p=Path('migration/Registro-de-avance.md'); p.write_text(p.read_text().rstrip() + '\\n')"
+
       - name: Commit closure and remove temporary tooling
         run: |
           git config user.name "github-actions[bot]"
