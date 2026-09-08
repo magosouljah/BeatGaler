@@ -49,9 +49,14 @@ replacements = [
     ('if (!app.includes("const audioSafeBase = exportMeta"))', 'if (!beatDownloadsForExport.includes("const audioSafeBase = exportMeta"))'),
     ("if (!app.includes('chooseExportFilePath(`${audioSafeBase}.mp3`'))", "if (!beatDownloadsForExport.includes('chooseExportFilePath(`${audioSafeBase}.mp3`'))"),
     ("if (!app.includes('chooseExportFilePath(`${audioSafeBase}.wav`'))", "if (!beatDownloadsForExport.includes('chooseExportFilePath(`${audioSafeBase}.wav`'))"),
+    ("if (!app.includes('This beat was not made Available Offline. Reconnect to download its cloud files.'))", "if (!beatDownloadsForRuntime.includes('This beat was not made Available Offline. Reconnect to download its cloud files.'))"),
+    ("if (!app.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav'))", "if (!app.includes('assets/status/upload-complete.wav') || !beatDownloadsForRuntime.includes('assets/status/download-complete.wav'))"),
+    ("if (!app.includes('startBackgroundDownload(kind, beat, destination)'))", "if (!beatDownloadsForRuntime.includes('startBackgroundDownload(kind, beat, destination)'))"),
+    ("if (!app.includes('listen<BackgroundDownloadEvent>(\"beatgaler-download-event\"'))", "if (!beatDownloadsForRuntime.includes('listen<BackgroundDownloadEvent>(\"beatgaler-download-event\"'))"),
+    ("if (!app.includes('next.add(kind)'))", "if (!beatDownloadsForRuntime.includes('next.add(tracked.kind)'))"),
 ]
 for old, new in replacements:
     if regressions.count(old) != 1:
-        raise SystemExit(f"Could not move export regression guard exactly once: {old}")
+        raise SystemExit(f"Could not move download regression guard exactly once: {old}")
     regressions = regressions.replace(old, new, 1)
 regressions_path.write_text(regressions)
