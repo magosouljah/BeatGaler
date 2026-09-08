@@ -19,7 +19,9 @@ jobs:
           ref: v0.9.0-test-noche
           fetch-depth: 0
       - name: Update migration state
-        run: python3 scripts/task-5-3-close-temp.py
+        run: |
+          python3 scripts/task-5-3-close-temp.py
+          python3 -c "from pathlib import Path; p=Path('migration/Registro-de-avance.md'); p.write_text(p.read_text().rstrip() + '\\n')"
       - name: Validate and commit closure
         run: |
           git config user.name "github-actions[bot]"
