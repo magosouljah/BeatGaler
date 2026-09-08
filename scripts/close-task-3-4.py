@@ -137,6 +137,7 @@ Fallos encontrados y causa
 - Run 34211385742 terminó en failure únicamente en `Prepare verified commit`; todos los checks de código y builds anteriores habían pasado. Run 34211720605 corrigió la publicación y terminó en success.
 - Run 34213532632 no creó jobs porque el primer workflow temporal de cierre tenía YAML inválido; no ejecutó comandos ni modificó código/documentación.
 - Run 34213964984 falló antes de editar documentos porque el payload base64 del script temporal quedó truncado (`base64: invalid input`).
+- Run 34214167203 aplicó las ediciones solo en el runner pero `git diff --check` rechazó una línea en blanco extra al EOF de `Registro-de-avance.md`; no hubo commit ni push de esas ediciones.
 
 Veredicto
 
@@ -151,4 +152,4 @@ Siguiente tarea
 No iniciada.
 ```
 '''
-log.write_text(existing.rstrip() + entry + "\n", encoding="utf-8")
+log.write_text(existing.rstrip() + entry.rstrip() + "\n", encoding="utf-8")
