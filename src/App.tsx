@@ -6,7 +6,6 @@ import Player from "./components/Player";
 import AddBeatModal from "./components/AddBeatModal";
 import ImportDecisionsModal from "./components/ImportDecisionsModal";
 import ImportAudioConflictsModal from "./components/ImportAudioConflictsModal";
-import ReviewBeatSkeleton from "./components/ReviewBeatSkeleton";
 import SettingsPanel from "./components/SettingsPanel";
 import AccountGate, { getBeatGalerAuthToken, getResolvedCloudApiBase, logoutBeatGalerAccount } from "./components/AccountGate";
 import UploadModal from "./components/UploadModal";
@@ -38,6 +37,9 @@ import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
 import { readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
 import { useCloudUploadQueue } from "./features/cloud/useCloudUploadQueue";
+import ImportReviewHost from "./features/import/components/ImportReviewHost";
+import { reviewSourceKey, useImportSession } from "./features/import/useImportSession";
+import { useImportReview } from "./features/import/useImportReview";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -63,15 +65,6 @@ import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
 import { reviewPerfMark } from "./features/perf/reviewPerf";
 
-type ReviewQueueState = {
-  beats: Beat[];
-  index: number;
-  // Streaming discovery intentionally does not know N when Beat 1 appears.
-  total: number | null;
-  batchId: string | null;
-  preparing: boolean;
-};
-
 // Intentionally isolated: if real-world timings prove the skeleton unnecessary,
 // flipping/removing this one constant deletes the visual layer without touching
 // the staged Review architecture underneath it.
@@ -84,13 +77,6 @@ function dismissBeatGalerStartupLoader(): void {
   const loader = document.getElementById("beatgaler-startup-loader");
   if (!loader) return;
   loader.remove();
-}
-
-function reviewSourceKey(beat: Beat): string {
-  return (beat.mp3_path || beat.wav_path || beat.playback_path || "")
-    .replace(/\\/g, "/")
-    .trim()
-    .toLocaleLowerCase();
 }
 
 const beatCloudUpdateBusyIds = new Set<string>();
@@ -218,17 +204,20 @@ function BeatGalerApp() {
   const [reviewPreparationDone, setReviewPreparationDone] = useState(true);
   const [bulkSaveAllBusy, setBulkSaveAllBusy] = useState(false);
   const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string; kind: "file" | "directory" } | null>(null);
-  const [reviewQueue, setReviewQueue] = useState<ReviewQueueState | null>(null);
+  const {
+    reviewQueue,
+    setReviewQueue,
+    reviewQueueLatestRef,
+    skippedReviewSourceKeysRef,
+    startReview,
+  } = useImportSession();
   // Background uploads can finish while the user is still reviewing other beats
   // from the SAME drop-staging session. Keep a live ref so staging cleanup never
   // deletes the remaining Review sources after the first upload succeeds.
-  const reviewQueueLatestRef = useRef<ReviewQueueState | null>(null);
   const reviewPreparationRunRef = useRef(0);
   const reviewPreparationPromiseRef = useRef<Promise<Beat[]> | null>(null);
   // Cancels stale async import bootstrap work when Review is cancelled/replaced.
   const importReviewRequestRunRef = useRef(0);
-  const skippedReviewSourceKeysRef = useRef<Set<string>>(new Set());
-  useEffect(() => { reviewQueueLatestRef.current = reviewQueue; }, [reviewQueue]);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   // Prevent cached/local state from being pushed back to Telegram before this
@@ -1002,88 +991,41 @@ function BeatGalerApp() {
     // 2) duplicate-name checks compare only against committed library items.
     // 3) a re-dropped folder can never masquerade as an edit of the existing beat.
     setShowAdd(false);
-    setReviewQueue({ beats: sanitized, index: 0, total: sanitized.length, batchId: null, preparing: false });
+    startReview(sanitized);
     // Upload begins only after Review → Save.
-  }, [connectionState]);
+  }, [connectionState, startReview]);
 
-  const skipCurrentReviewBeat = useCallback(() => {
-    setReviewQueue(q => {
-      if (!q) return null;
-      const currentBeat = q.beats[q.index];
-      const sourceKey = currentBeat ? reviewSourceKey(currentBeat) : "";
-      if (sourceKey) skippedReviewSourceKeysRef.current.add(sourceKey);
-      if (platform.capabilities.reviewBeatCloudCommit && currentBeat) platform.importer.releaseBeat(currentBeat.id);
+  const cancelPendingReviewWork = useCallback(() => {
+  importReviewRequestRunRef.current += 1;
+  reviewPreparationRunRef.current += 1;
+  reviewPreparationPromiseRef.current = null;
+  setReviewPreparationDone(true);
+  setReviewBootstrap(null);
+  setAudioConflictBatch(null);
+  setDeferredImportBatch(current => {
+    if (current?.batch_id) void discardImportReviewBatch(current.batch_id);
+    return null;
+  });
+}, []);
 
-      const knownLast = q.total !== null && q.index >= q.total - 1;
-      if (knownLast && !q.preparing) {
-        // Skip means ONLY this beat. The global Cancel Import action is separate.
-        window.setTimeout(() => {
-          void cleanupOrphanedDropStaging([
-            ...beatsLatestRef.current,
-            ...getQueuedBeatsSnapshot(),
-          ]);
-        }, 0);
-        return null;
-      }
-      // If discovery is still running, advance into a skeleton for Beat N+1.
-      // The streaming worker will fill that exact slot as soon as it finds it.
-      return { ...q, index: q.index + 1 };
-    });
-  }, []);
-
-  const skipAllReviewQueue = useCallback(() => {
-    importReviewRequestRunRef.current += 1;
-    reviewPreparationRunRef.current += 1;
-    reviewPreparationPromiseRef.current = null;
-    skippedReviewSourceKeysRef.current.clear();
-    setReviewPreparationDone(true);
-    setReviewBootstrap(null);
-    setAudioConflictBatch(null);
-    setDeferredImportBatch(current => {
-      if (current?.batch_id) void discardImportReviewBatch(current.batch_id);
-      return null;
-    });
-
-    // Cancel means cancel the current review batch, not silently "skip" it.
-    // Beats already saved before the current position stay in the library;
-    // the current + remaining unsaved review candidates are removed.
-    setReviewQueue(q => {
-      if (!q) return null;
-      if (platform.capabilities.reviewBeatCloudCommit) {
-        for (const beat of q.beats.slice(q.index)) platform.importer.releaseBeat(beat.id);
-      }
-      if (q.batchId) void discardImportReviewBatch(q.batchId);
-      window.setTimeout(() => {
-        const protectedBeats = [
-          ...beatsLatestRef.current,
-          ...getQueuedBeatsSnapshot(),
-        ];
-        void cleanupOrphanedDropStaging(protectedBeats);
-      }, 0);
-      return null;
-    });
-  }, []);
-
-  const handleReviewedBeatSaved = useCallback((updated: Beat) => {
-    setBeats(bs => {
-      const exists = bs.some(b => b.id === updated.id);
-      const next = exists
-        ? bs.map(b => b.id === updated.id ? updated : b)
-        : [updated, ...bs];
-      beatsLatestRef.current = next;
-      return next;
-    });
-    setReviewQueue(q => {
-      if (!q) return null;
-      const nextBeats = q.beats.map(b => b.id === updated.id ? updated : b);
-      const knownLast = q.total !== null && q.index >= q.total - 1;
-      if (knownLast && !q.preparing) return null;
-      return { ...q, beats: nextBeats, index: q.index + 1 };
-    });
-
-    // Fire-and-forget. Save/next closes immediately; Telegram work is secondary.
-    cloudifyImportedBeats([updated]);
-  }, [cloudifyImportedBeats]);
+const {
+  skipCurrentReviewBeat,
+  cancelReview,
+  handleReviewedBeatSaved,
+} = useImportReview({
+  setBeats,
+  beatsLatestRef,
+  setReviewQueue,
+  skippedReviewSourceKeysRef,
+  cloudifyImportedBeats,
+  getQueuedBeatsSnapshot,
+  onCancelPendingWork: cancelPendingReviewWork,
+  releaseBeat: platform.capabilities.reviewBeatCloudCommit
+    ? beatId => platform.importer.releaseBeat(beatId)
+    : undefined,
+  discardBatch: batchId => discardImportReviewBatch(batchId),
+  cleanupStaging: protectedBeats => cleanupOrphanedDropStaging(protectedBeats),
+});
 
   const handleReviewedSaveAll = useCallback(async (currentUpdated: Beat) => {
     const queue = reviewQueueLatestRef.current;
@@ -2912,47 +2854,29 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         />
       )}
 
-      {libraryDropStaging && !reviewBootstrap && !reviewQueue && REVIEW_SKELETON_ENABLED && (
-        <ReviewBeatSkeleton current={1} total={null} />
-      )}
-
-      {reviewBootstrap && REVIEW_SKELETON_ENABLED && (
-        <ReviewBeatSkeleton current={1} total={reviewBootstrap.total} onCancel={skipAllReviewQueue} />
-      )}
-
-      {reviewQueue && !reviewQueue.beats[reviewQueue.index] && REVIEW_SKELETON_ENABLED && (
-        <ReviewBeatSkeleton current={reviewQueue.index + 1} total={reviewQueue.total} onCancel={skipAllReviewQueue} />
-      )}
-
-      {reviewQueue && reviewQueue.beats[reviewQueue.index] && (
-        <Drawer
-          beat={reviewQueue.beats[reviewQueue.index]}
-          mode="edit"
-          tagSuggestions={tagSuggestions}
-          reviewInfo={{ current: reviewQueue.index + 1, total: reviewQueue.total }}
-          closeAfterSave={false}
-          onClose={skipCurrentReviewBeat}
-          onSkipCurrent={skipCurrentReviewBeat}
-          onSkipAll={skipAllReviewQueue}
-          onSaveAll={platform.capabilities.reviewBeatCloudCommit ? undefined : handleReviewedSaveAll}
-          mutationAllowed={connectionState === "online"}
-          isReviewNameTaken={(candidateName, _currentBeatId) => {
-            const normalized = candidateName.trim().toLocaleLowerCase();
-            if (!normalized) return false;
-            // Use the live React state. The previous implementation used
-            // beatsLatestRef, which can lag behind immediately after adding a
-            // Review candidate and allowed duplicate names through.
-            return beats.some(existing =>
-              existing.name.trim().toLocaleLowerCase() === normalized
-            );
-          }}
-          onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}
-          onSaved={handleReviewedBeatSaved}
-          onReleaseAudio={() => {
-            if (audio.playingId === reviewQueue.beats[reviewQueue.index].id) releaseFile();
-          }}
-        />
-      )}
+      <ImportReviewHost
+  libraryDropStaging={libraryDropStaging}
+  reviewBootstrap={reviewBootstrap}
+  reviewQueue={reviewQueue}
+  skeletonEnabled={REVIEW_SKELETON_ENABLED}
+  tagSuggestions={tagSuggestions}
+  mutationAllowed={connectionState === "online"}
+  onSkipCurrent={skipCurrentReviewBeat}
+  onCancel={cancelReview}
+  onSaveAll={platform.capabilities.reviewBeatCloudCommit ? undefined : handleReviewedSaveAll}
+  isReviewNameTaken={(candidateName) => {
+    const normalized = candidateName.trim().toLocaleLowerCase();
+    if (!normalized) return false;
+    return beats.some(existing =>
+      existing.name.trim().toLocaleLowerCase() === normalized
+    );
+  }}
+  onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}
+  onSaved={handleReviewedBeatSaved}
+  onReleaseAudio={beat => {
+    if (audio.playingId === beat.id) releaseFile();
+  }}
+/>
 
       {beatFileDrop && (
         <BeatFileDropModal
