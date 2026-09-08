@@ -1,6 +1,6 @@
 import type { Beat } from "../../types";
 
-export function selectAllTags(beats: readonly Beat[]): string[] {
+export function selectTagFrequency(beats: readonly Beat[]): Map<string, number> {
   const tagFrequency = new Map<string, number>();
   for (const beat of beats) {
     const uniqueTags = new Set(
@@ -10,7 +10,13 @@ export function selectAllTags(beats: readonly Beat[]): string[] {
       tagFrequency.set(tag, (tagFrequency.get(tag) ?? 0) + 1);
     }
   }
+  return tagFrequency;
+}
 
+export function selectAllTags(
+  beats: readonly Beat[],
+  tagFrequency: ReadonlyMap<string, number> = selectTagFrequency(beats),
+): string[] {
   const displayByNormalized = new Map<string, string>();
   for (const beat of beats) {
     for (const rawTag of beat.tags) {
