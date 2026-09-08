@@ -206,7 +206,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** que audio y portadas tengan su propia lógica, sin depender de qué ventana esté abierta.
 
-### [ ] 4.1 — Separar la carga de portadas
+### [x] 4.1 — Separar la carga de portadas
 
 - **Hacer:** extraer hidratación, decodificación y reutilización de portadas.
     

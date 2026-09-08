@@ -793,3 +793,95 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 4.1
+
+```
+Tarea: 4.1 — Separar la carga de portadas
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial: ab25f9090d9e7ba322748b2ba344fa848fe34e9e
+- Última tarea verificada: 3.4 — Separar selección y reordenamiento
+
+Cambio realizado
+
+- Se extrajo `ensureArtworkReady` de `App.tsx` a `src/features/artwork/useArtworkHydration.ts`.
+- El nuevo hook posee las promesas de hidratación, deduplicación, lectura/escritura del thumbnail cache, decodificación y carga por `platform.media.loadArtwork`.
+- Se conservó el modo cache-only, el fallback de beats sin artwork y la invalidación por beat usada al restaurar desde Trash.
+- `App.tsx` conserva solo la composición necesaria para actualizar fingerprints de snapshots tras una hidratación de red, evitando que una carga visual parezca una edición.
+- Las limpiezas previas del mapa de promesas ahora llaman `clearArtworkHydration`.
+
+Adaptación de pruebas
+
+- `tests/component-dom/artworkHydration.test.tsx` cubre caché local sin red, deduplicación de carga remota, modo cache-only e invalidación por beat.
+- `tests/integration/artworkHydrationExtraction.test.ts` comprueba ownership fuera de App y que el hook no invoque guardado/commit cloud.
+- `tests/integration/appHelperExtraction.test.ts` dejó de exigir que App importe directamente el decoder de 2.3 y ahora comprueba que el nuevo dueño de hidratación reutiliza ese helper.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/artwork/useArtworkHydration.ts
+- tests/component-dom/artworkHydration.test.tsx
+- tests/integration/artworkHydrationExtraction.test.ts
+- tests/integration/appHelperExtraction.test.ts
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary Task 4.1 Apply`, run 34216453088 — SUCCESS.
+- npm ci — OK.
+- git diff --check — OK.
+- npm run test:typecheck — OK.
+- npm run test:unit:ts — OK.
+- npm run test:component:dom — OK.
+- npm run test:integration — OK.
+- npm run test:regressions — OK.
+- npm run build:web — OK.
+- npm run build — OK.
+
+Comprobaciones no ejecutadas
+
+- npm run check — no requerido para esta extracción; sus checks relevantes se ejecutaron individualmente.
+- E2E import/download/recovery — no aplican a hidratación de artwork.
+- Pruebas nativas físicas Windows/macOS — no necesarias: no cambiaron adapters ni comandos nativos.
+
+Prueba manual
+
+- No requerida como bloqueo de cierre; comportamiento de hidratación/caché y ausencia de side effects de guardado están cubiertos directamente.
+
+Pendientes / fuera de alcance
+
+- No se inició 4.2 ni se modificó playback.
+- El riesgo previo de `handleRemoveBulk` permanece fuera de alcance.
+
+Riesgos previos relevantes
+
+- Ninguno nuevo causado por 4.1.
+
+Herramientas temporales restantes
+
+- Ninguna: workflow y appliers temporales se eliminaron en el commit verificado.
+
+Fallos encontrados y causa
+
+- Run 34215971033 falló antes de los checks porque el primer applier omitió la invalidación por beat usada al restaurar desde Trash. No publicó implementación.
+- Run 34216207764 ejecutó los checks: component DOM falló por un mock nuevo incompatible con el hoisting de `vi.mock`; integration falló porque la prueba histórica de 2.3 estaba acoplada al import directo del decoder desde App. Ambos fallos eran de pruebas y se corrigieron preservando sus contratos.
+
+Veredicto
+
+Terminada.
+
+La carga visual de portadas conserva caché, decodificación, reutilización, invalidación y carga por plataforma sin convertir hidratación en edición o commit cloud.
+
+Siguiente tarea
+
+4.2 — Separar preparación y control del audio.
+
+No iniciada.
+```

@@ -9,23 +9,23 @@
 
 ## Estado operativo
 
-- Tarea trabajada: `3.4 — Separar selección y reordenamiento`
+- Tarea trabajada: `4.1 — Separar la carga de portadas`
 - Estado: `Terminada`
-- Última tarea terminada: `3.4 — Separar selección y reordenamiento`
-- SHA inicial de esta ejecución: `811058e833071d41639993fa717c885eb1577cea`
-- SHA final de implementación verificada: `811058e833071d41639993fa717c885eb1577cea`
-- Pendientes concretos: ninguno de 3.4.
-- Comprobaciones pendientes: ninguna necesaria para reabrir 3.4.
-- Siguiente tarea: `4.1 — Separar la carga de portadas`
+- Última tarea terminada: `4.1 — Separar la carga de portadas`
+- SHA inicial de esta ejecución: `ab25f9090d9e7ba322748b2ba344fa848fe34e9e`
+- SHA final de implementación verificada: `a6724bc506f698a6f4d2cf12e1b6bca2568630b9`
+- Pendientes concretos: ninguno de 4.1.
+- Comprobaciones pendientes: ninguna necesaria para reabrir 4.1.
+- Siguiente tarea: `4.2 — Separar preparación y control del audio`
 - Estado de la siguiente tarea: `Pendiente`
 - Fecha de ejecución: `2026-09-08`
 
-## Evidencia de cierre de 3.4
+## Evidencia de cierre de 4.1
 
-- Implementación: selección extraída a `src/features/selection/useBeatSelection.ts` y reordenamiento a `src/features/library/useLibraryReorder.ts`.
-- GitHub Actions: `Temporary Task 3.4 Apply`, run `34211720605`, resultado `success`.
-- Checks verdes: diff check, typecheck, unit TypeScript, component DOM, integration, regressions, build web y build.
-- El fallo previo del run `34211385742` ocurrió en `Prepare verified commit`; todos los checks de código anteriores habían pasado y la corrida posterior corrigió la publicación sin cambiar el contrato funcional.
+- Implementación: hidratación y reutilización de portadas extraídas a `src/features/artwork/useArtworkHydration.ts`.
+- GitHub Actions: `Temporary Task 4.1 Apply`, run `34216453088`.
+- Checks verdes requeridos: diff check, typecheck, unit TypeScript, component DOM, integration, regressions, build web y build.
+- La hidratación visual no llama guardado de metadata, commit de biblioteca ni sincronización cloud.
 
 ## Regla de actualización
 
