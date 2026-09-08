@@ -254,7 +254,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** una edición produce las mismas escrituras que antes y no se guarda dos veces por cambiar de módulo.
     
 
-### [ ] 5.2 — Separar reemplazo de archivos de un beat
+### [x] 5.2 — Separar reemplazo de archivos de un beat
 
 - **Hacer:** extraer las operaciones para actualizar MASTER, WAV y otros assets admitidos, incluyendo sus estados de trabajo.
     

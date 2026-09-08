@@ -1181,3 +1181,104 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 5.2
+
+```
+Tarea: 5.2 — Separar reemplazo de archivos de un beat
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 731c74df9c958d593184e71c0b9b5e21df71beae
+- Última tarea verificada: 5.1 — Separar guardado de metadata y artwork
+
+Cambio realizado
+
+- Se creó `src/features/edit/useBeatAssetUpdates.ts` como dueño de las actualizaciones de assets MASTER/WAV y del coordinador compartido `runBeatCloudUpdate`.
+- `App.tsx` dejó de implementar directamente la subida/reemplazo de MASTER y WAV y ahora compone `useBeatAssetUpdates`.
+- Desktop conserva la carga del slot correspondiente, actualización de biblioteca, commit autoritativo y espera de playback-ready del nuevo MASTER.
+- Web conserva la confirmación de reemplazo de MASTER, `platform.editor.commit`, actualización de biblioteca/Drawer y estados runtime.
+- Se conservaron bloqueo/busy del beat, cierre del chooser antes del trabajo largo, transiciones de éxito/conflicto/error, sonido de éxito y limpieza de staging en rechazo/finalización.
+- Las operaciones PROJECT continúan temporalmente compuestas por App usando el mismo `runBeatCloudUpdate`; extraer proyectos corresponde a 5.3 y no se inició.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appBeatAssetUpdatesExtraction.test.ts` para proteger el ownership de MASTER/WAV, confirmación, readiness, busy/runtime/cleanup y la frontera temporal con PROJECT.
+- `tests/integration/issue97WebRoutingContract.test.ts` dejó de usar `runBeatCloudUpdate` como marcador físico del final de la sección artwork y conserva el mismo contrato Web/Desktop.
+- `scripts/regression-phase9cd.mjs` y `scripts/run-regressions.mjs` siguen protegiendo los mismos contratos, leyendo MASTER/WAV y el coordinador desde su nuevo dueño legítimo.
+- No se debilitó ningún contrato para hacer pasar los tests.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/edit/useBeatAssetUpdates.ts
+- tests/integration/appBeatAssetUpdatesExtraction.test.ts
+- tests/integration/issue97WebRoutingContract.test.ts
+- scripts/regression-phase9cd.mjs
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 5.2 Apply`, run 34236380698, attempt 3 — SUCCESS.
+- Artifact `migration-check-logs-task-5-2-34236380698` de attempt 3 leído: `summary.txt` confirma PASS en toda la matriz.
+- npm run test:typecheck — PASS.
+- npm run test:unit:ts — PASS.
+- npm run test:component:dom — PASS.
+- npm run test:integration — PASS.
+- npm run test:regressions — PASS.
+- npm run build:web — PASS.
+- npm run build — PASS.
+- SHA de implementación verificada: acc3a14293104bfa62bd0f9cf34f28046378b72c.
+
+Comprobaciones no ejecutadas
+
+- npm run check — no requerido; los checks relevantes del plan fueron ejecutados individualmente por la matriz.
+- E2E completos de import/download/recovery — no aplican a la extracción del ownership de reemplazo MASTER/WAV.
+- Prueba física Desktop Windows/macOS — no ejecutada; la ronda opera mediante GitHub Actions y no dispone de app física interactiva.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Desktop: reemplazar MASTER, cancelar una confirmación aplicable, agregar/reemplazar WAV y provocar un error controlado de carga; comprobar card busy, liberación del chooser, readiness del MASTER y limpieza de staging.
+- Web: reemplazar MASTER y WAV y comprobar confirmación, actualización de Drawer/biblioteca y error visible.
+- Resultado esperado: mismo comportamiento observable y mismas escrituras que antes de la extracción, sin dejar staging ni estados busy colgados.
+
+Pendientes / fuera de alcance
+
+- 5.3 — Separar proyectos permanece pendiente y no fue iniciada.
+- El riesgo previo de `handleRemoveBulk` con snapshots capturados permanece fuera de alcance y sin cambios.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de producto identificado por 5.2.
+- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y permanece sin cambios.
+
+Herramientas temporales restantes
+
+- Ninguna creada por 5.2 permanece tras el commit de cierre; el workflow y scripts temporales de esta tarea se eliminan al finalizar.
+
+Fallos encontrados y causa
+
+- Run 34236149086 no creó jobs por una definición inicial inválida del workflow temporal; no aplicó cambios de producto.
+- Run 34236380698, attempt 1: integration y regressions fallaron. La prueba nueva usaba `node:test` bajo Vitest y dos guards existentes estaban acoplados a que responsabilidades vivieran físicamente en `App.tsx`; typecheck, unit, DOM y ambos builds ya pasaban. Se corrigieron las pruebas/guards sin cambiar el contrato.
+- Run 34236380698, attempt 2: solo regressions falló porque un guard adicional exigía `const runBeatCloudUpdate` y el evento de éxito en `App.tsx`; ambos contratos ya vivían en `useBeatAssetUpdates.ts`. Se adaptó ese guard al nuevo ownership.
+- Run 34236380698, attempt 3: toda la matriz terminó PASS.
+
+Veredicto
+
+Terminada.
+
+El reemplazo de MASTER/WAV y sus estados de trabajo quedó fuera de App preservando confirmaciones, rutas Web/Desktop, preparación del MASTER, bloqueo del beat, errores y cleanup.
+
+Siguiente tarea
+
+5.3 — Separar proyectos.
+
+No iniciada.
+```

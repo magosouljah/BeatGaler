@@ -5,29 +5,29 @@ Rama de trabajo obligatoria: `v0.9.0-test-noche`
 
 ## Estado actual
 
-- Tarea trabajada: **5.1 — Separar guardado de metadata y artwork**
+- Tarea trabajada: **5.2 — Separar reemplazo de archivos de un beat**
 - Estado: **Terminada**
-- Última tarea terminada: **5.1 — Separar guardado de metadata y artwork**
-- SHA inicial de esta ejecución: `d2afff16996ef1bff658d4604c75b9e1eb8609a9`
-- SHA final de implementación verificada: `90c981976d0e23499d50be80b54e96ef51eeaf7c`
-- Run de verificación principal: **34231857530 — SUCCESS**
-- Comprobaciones pendientes para 5.1: **ninguna**
+- Última tarea terminada: **5.2 — Separar reemplazo de archivos de un beat**
+- SHA inicial de esta ejecución: `731c74df9c958d593184e71c0b9b5e21df71beae`
+- SHA final de implementación verificada: `acc3a14293104bfa62bd0f9cf34f28046378b72c`
+- Run de verificación principal: **34236380698, attempt 3 — SUCCESS**
+- Comprobaciones pendientes para 5.2: **ninguna**
 
 ## Resultado verificado
 
-- `useDrawerCloudPersistence` posee el observer Desktop, el debounce de 700 ms, el commit metadata/artwork + INDEX y los refs que deduplican guardados del Drawer.
-- Web conserva la salida temprana del observer legado y Desktop conserva su ruta de sincronización y estados runtime.
-- `Drawer.tsx` continúa conectado mediante el mismo callback y no fue reorganizado.
-- `summary.txt` del artifact `migration-check-logs-task-5-1-34231857530` confirma PASS en diff-check, typecheck, unit TS, component DOM, integration, regressions, build:web y build.
+- `useBeatAssetUpdates` posee el coordinador de actualizaciones y las rutas MASTER/WAV Desktop y Web.
+- Se conservaron confirmación de reemplazo de MASTER, busy/runtime, commits, espera playback-ready y limpieza de staging.
+- PROJECT continúa conectado mediante el mismo coordinador como dependencia temporal hasta 5.3; no fue extraído en esta ronda.
+- `summary.txt` del artifact `migration-check-logs-task-5-2-34236380698` de attempt 3 confirma PASS en typecheck, unit TS, component DOM, integration, regressions, build:web y build.
 
 ## Pendientes concretos / fuera de alcance
 
-- Riesgo previo de `handleRemoveBulk` con snapshots capturados: permanece sin cambios y fuera del alcance de 5.1.
+- Riesgo previo de `handleRemoveBulk` con snapshots capturados: permanece sin cambios y fuera del alcance de 5.2.
 - El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y permanece sin cambios.
-- No quedan herramientas temporales creadas por 5.1 en el árbol tras el commit de cierre.
+- No quedan herramientas temporales creadas por 5.2 en el árbol tras el commit de cierre.
 
 ## Siguiente tarea
 
-- **5.2 — Separar reemplazo de archivos de un beat**
+- **5.3 — Separar proyectos**
 - Estado: **Pendiente**
 - No iniciarla hasta la próxima ronda.
