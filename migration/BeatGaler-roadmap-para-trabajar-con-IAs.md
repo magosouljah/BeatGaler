@@ -313,7 +313,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** las operaciones de fondo continúan correctamente aunque se cierren ventanas.
 
-### [ ] 6.1 — Separar las descargas de exportación
+### [x] 6.1 — Separar las descargas de exportación
 
 - **Hacer:** extraer selección de destino, arranque de descargas, seguimiento de tareas y listener de resultados.
     
