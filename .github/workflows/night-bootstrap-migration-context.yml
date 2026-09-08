@@ -1,0 +1,72 @@
+name: Night bootstrap migration context
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+
+permissions:
+  contents: write
+
+concurrency:
+  group: night-bootstrap-migration-context
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated night branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Decode persistent migration context
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const zlib = require('node:zlib');
+
+          const files = [
+            ['.night-bootstrap/roadmap.zlib.b64', 'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md'],
+            ['.night-bootstrap/plan.zlib.b64', 'migration/BeatGaler-plan-de-migracion.md'],
+            ['.night-bootstrap/registro.zlib.b64', 'migration/Registro-de-avance.md'],
+          ];
+
+          fs.mkdirSync('migration', { recursive: true });
+          for (const [source, target] of files) {
+            const encoded = fs.readFileSync(source, 'utf8').trim();
+            const decoded = zlib.inflateSync(Buffer.from(encoded, 'base64'));
+            fs.writeFileSync(target, decoded);
+          }
+          NODE
+
+      - name: Verify initial migration state
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F '### [x] 3.1 — Separar el estado de la biblioteca' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F '### [x] 3.2 — Separar los estados de operación por beat' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F '### [x] 3.3 — Separar búsqueda, filtros y etiquetas' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F '### [ ] 3.4 — Separar selección y reordenamiento' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F 'Tarea 3.3 — Separar búsqueda, filtros y etiquetas' migration/Registro-de-avance.md
+          grep -F 'migration-check-logs-*' migration/BeatGaler-plan-de-migracion.md
+          grep -F 'Tarea actual: `3.4 — Separar selección y reordenamiento`' migration/BeatGaler-agent-state.md
+
+      - name: Commit final persistent context and remove bootstrap tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .night-bootstrap
+          rm -f .github/workflows/night-bootstrap-migration-context.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'chore(migration): bootstrap nightly migration context'
+          git push origin HEAD:v0.9.0-test-noche
