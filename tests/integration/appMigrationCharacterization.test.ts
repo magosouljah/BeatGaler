@@ -108,8 +108,8 @@ describe("App migration characterization contracts", () => {
       "queue.beats.slice(queue.index)",
       "if (queue.batchId) void discardBatch(queue.batchId);",
       "cleanupUnusedStaging();",
-      "return null;",
     ]);
+    expect(cancel.lastIndexOf("return null;")).toBeGreaterThan(cancel.indexOf("cleanupUnusedStaging();"));
 
     const save = sourceSection(importReview, "const handleReviewedBeatSaved = useCallback", "\n  return {\n", "useImportReview.ts Save");
     expectOrdered(save, [
