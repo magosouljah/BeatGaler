@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply task 5.4 extraction
+      - name: Apply task 5.4 extraction and ownership-aware guards
         run: |
           python3 .github/task-5-4-apply.py
           python3 .github/task-5-4-fix-tests.py
