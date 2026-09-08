@@ -55,7 +55,8 @@ jobs:
           retention-days: 7
 
       - name: Enforce migration summary
-        run: grep -Fx "Migration checks: PASS" artifacts/migration-check-logs/summary.txt
+        run: |
+          grep -Fx "Migration checks: PASS" artifacts/migration-check-logs/summary.txt
 
       - name: Commit verified implementation
         run: |
