@@ -1,0 +1,126 @@
+name: Task 6.2 Apply
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-6-2-apply.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-tsx-nightly-v0.9.0-test-noche
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Verify branch and execution base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "v0.9.0-test-noche"
+          git merge-base --is-ancestor 6ff13625a6f4623d793e70bde21f655e7147b1d9 HEAD
+          git status --short
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Apply task 6.2 in runner workspace
+        shell: bash
+        run: python .github/task-6-2.py apply
+
+      - name: Run migration verification matrix
+        id: checks
+        shell: bash
+        run: |
+          set +e
+          mkdir -p migration-check-logs
+          : > migration-check-logs/summary.txt
+          failed=0
+
+          run_check() {
+            name="$1"
+            shift
+            echo "===== ${name} ====="
+            "$@" >"migration-check-logs/${name}.log" 2>&1
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "PASS ${name}" | tee -a migration-check-logs/summary.txt
+            else
+              echo "FAIL ${name} exit=${status}" | tee -a migration-check-logs/summary.txt
+              failed=1
+            fi
+          }
+
+          run_check npm-ci npm ci
+          run_check diff-check git diff --check
+          run_check typecheck npm run test:typecheck
+          run_check unit-ts npm run test:unit:ts
+          run_check component-dom npm run test:component:dom
+          run_check integration npm run test:integration
+          run_check regressions npm run test:regressions
+          run_check build-web npm run build:web
+          run_check build npm run build
+
+          cat migration-check-logs/summary.txt
+          exit "$failed"
+
+      - name: Upload migration check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-6-2-${{ github.run_id }}
+          path: migration-check-logs/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Commit verified implementation
+        if: steps.checks.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.tsx \
+            src/features/cloud/interruptedUploadJournal.ts \
+            src/features/cloud/uploadErrorDetails.ts \
+            tests/integration/appUploadRecoveryExtraction.test.ts \
+            tests/integration/appMigrationCharacterization.test.ts \
+            scripts/run-regressions.mjs
+          git commit -m "refactor(cloud): extract upload recovery details"
+          implementation_sha="$(git rev-parse HEAD)"
+          echo "IMPLEMENTATION_SHA=${implementation_sha}" >> "$GITHUB_ENV"
+
+      - name: Finalize migration documents and remove temporary tooling
+        if: steps.checks.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/task-6-2.py finalize \
+            6ff13625a6f4623d793e70bde21f655e7147b1d9 \
+            "$IMPLEMENTATION_SHA" \
+            "$GITHUB_RUN_ID"
+          rm .github/task-6-2.py .github/workflows/task-6-2-apply.yml
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md \
+            migration/Registro-de-avance.md \
+            migration/BeatGaler-agent-state.md \
+            .github/task-6-2.py \
+            .github/workflows/task-6-2-apply.yml
+          git diff --cached --check
+          git commit -m "docs(migration): close task 6.2"
+          git push origin HEAD:v0.9.0-test-noche
