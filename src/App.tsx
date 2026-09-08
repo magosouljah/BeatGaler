@@ -53,6 +53,7 @@ import { useLibraryPresentationCache, useLibraryState } from "./features/library
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
 import { usePlaybackController } from "./features/playback/usePlaybackController";
 import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
+import { useDrawerCloudPersistence } from "./features/edit/useDrawerCloudPersistence";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
@@ -181,11 +182,8 @@ function BeatGalerApp() {
   } = useLibraryState();
   const [openableCloudProjectIds, setOpenableCloudProjectIds] = useState<Set<string>>(new Set());
   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
-  const cloudMetaTimersRef = useRef<Map<string, number>>(new Map());
   const cloudLibraryTimerRef = useRef<number | null>(null);
   const cloudLibrarySnapshotRef = useRef<string | null>(null);
-  const drawerMetadataCommitVerifiedRef = useRef<Map<string, string>>(new Map());
-  const drawerMetadataCommitInFlightRef = useRef<Map<string, { fingerprint: string; promise: Promise<void> }>>(new Map());
   const visibleLibraryFingerprintRef = useRef<string>("");
   const autoCloudUploadRef = useRef<Set<string>>(new Set());
   const backgroundUploadQueueRef = useRef<Beat[]>([]);
@@ -2120,89 +2118,18 @@ function BeatGalerApp() {
     }
   }, [refreshOpenableCloudProjects, rejectOfflineMutation, transitionRuntime]);
 
-  useEffect(() => {
-    // Web edits are explicit durable transactions through platform.editor.
-    // Never let the legacy Desktop metadata observer invoke Tauri from Web.
-    if (platform.capabilities.browserCloudEditing) return;
-    if (connectionState !== "online" || !cloudSessionVerified) return;
-    const next = new Map<string, string>();
-    for (const beat of beats) {
-      if (!beat.telegram_file_id) continue;
-      next.set(beat.id, cloudBeatFingerprint(beat));
-    }
-
-    const previous = cloudMetaSnapshotRef.current;
-    cloudMetaSnapshotRef.current = next;
-    if (previous === null) return;
-
-    for (const beat of beats) {
-      if (!beat.telegram_file_id) continue;
-      const currentSnapshot = next.get(beat.id)!;
-      if (previous.get(beat.id) === currentSnapshot) continue;
-
-      const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-      if (runtime.sync_state === "synced") transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
-
-      const oldTimer = cloudMetaTimersRef.current.get(beat.id);
-      if (oldTimer) window.clearTimeout(oldTimer);
-
-      const timer = window.setTimeout(() => {
-        cloudMetaTimersRef.current.delete(beat.id);
-        const latestBeat = beatsLatestRef.current.find(item => item.id === beat.id) ?? beat;
-        const latestRuntime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(latestBeat);
-        if (latestRuntime.sync_state === "pending_update") {
-          transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, latestBeat);
-        }
-
-        void (async () => {
-          try {
-            await syncBeatMetadataToTelegram(latestBeat);
-
-            // Metadata/artwork is one logical cloud transaction. Publish the
-            // authoritative INDEX immediately after the artwork upload so the
-            // new artwork reference becomes durable before the old artwork
-            // message is reclaimed. This also prevents Refresh from observing
-            // the old index after the UI already shows the new cover.
-            const indexSnapshot = beatsLatestRef.current.map(item =>
-              item.id === latestBeat.id ? latestBeat : item
-            );
-            await libraryStateManager.commitSnapshot(indexSnapshot, "upload-batch");
-
-            // The explicit transaction above owns this commit. Cancel any
-            // trailing observer timer/event that was scheduled by the artwork
-            // upload itself, then seed both snapshots with the committed view
-            // so it cannot produce a duplicate INDEX a moment later.
-            if (cloudLibraryTimerRef.current) {
-              window.clearTimeout(cloudLibraryTimerRef.current);
-              cloudLibraryTimerRef.current = null;
-            }
-            cloudLibrarySnapshotRef.current = indexSnapshot
-              .filter(item => !!item.telegram_file_id)
-              .map(cloudBeatFingerprint)
-              .join("\u001c");
-            cloudMetaSnapshotRef.current?.set(latestBeat.id, cloudBeatFingerprint(latestBeat));
-
-            const after = beatRuntimeStatesRef.current[beat.id];
-            if (after?.sync_state === "updating") transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, latestBeat);
-          } catch (error) {
-            console.warn("Telegram metadata sync failed:", error);
-            const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-            const after = beatRuntimeStatesRef.current[beat.id];
-            if (after?.sync_state === "updating" || after?.sync_state === "pending_update") {
-              if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, latestBeat);
-              else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "METADATA_SYNC_FAILED", message, retryable: true }, latestBeat);
-            }
-          }
-        })();
-      }, 700);
-      cloudMetaTimersRef.current.set(beat.id, timer);
-    }
-  }, [beats, connectionState, cloudSessionVerified, transitionRuntime]);
-
-  useEffect(() => () => {
-    for (const timer of cloudMetaTimersRef.current.values()) window.clearTimeout(timer);
-    cloudMetaTimersRef.current.clear();
-  }, []);
+  const { commitDrawerCloudMutation } = useDrawerCloudPersistence({
+  beats,
+  browserCloudEditing: platform.capabilities.browserCloudEditing,
+  connectionState,
+  cloudSessionVerified,
+  beatsLatestRef,
+  beatRuntimeStatesRef,
+  transitionRuntime,
+  cloudMetaSnapshotRef,
+  cloudLibraryTimerRef,
+  cloudLibrarySnapshotRef,
+});
 
   // V7: INDEX writes are explicit transactions only.
   // There is deliberately no generic "beats changed => rewrite Telegram" observer.
@@ -2232,66 +2159,7 @@ function BeatGalerApp() {
     if (drawer?.beat.id === updated.id) setDrawer(d => d ? { ...d, beat: updated } : null);
   }, [connectionState, drawer, transitionRuntime]);
 
-  const commitDrawerCloudMutation = useCallback(async (
-    updated: Beat,
-    options: { syncMetadata: boolean; reason: string },
-  ) => {
-    const dedupeMetadata = options.syncMetadata && options.reason === "drawer-metadata-save";
-    const metadataFingerprint = dedupeMetadata ? drawerMetadataCommitFingerprint(updated) : null;
-    if (metadataFingerprint && drawerMetadataCommitVerifiedRef.current.get(updated.id) === metadataFingerprint) {
-      reviewPerfMark(`DRAWER_CLOUD_COMMIT_SKIPPED beat_id=${updated.id} reason=${options.reason} cause=already-verified`);
-      void diagnosticLog("drawer-save", "CLOUD_COMMIT_SKIPPED", `beat_id=${updated.id} reason=${options.reason} cause=already-verified`);
-      return;
-    }
-    const existing = drawerMetadataCommitInFlightRef.current.get(updated.id);
-    if (metadataFingerprint && existing?.fingerprint === metadataFingerprint) {
-      reviewPerfMark(`DRAWER_CLOUD_COMMIT_JOINED beat_id=${updated.id} reason=${options.reason}`);
-      await existing.promise;
-      return;
-    }
 
-    const commitPromise = (async () => {
-      const started = performance.now();
-      reviewPerfMark(
-        `DRAWER_CLOUD_COMMIT_BEGIN beat_id=${updated.id} reason=${options.reason} sync_metadata=${options.syncMetadata}`,
-      );
-      if (options.syncMetadata) {
-        await syncBeatMetadataToTelegram(updated);
-        reviewPerfMark(`DRAWER_CLOUD_METADATA_OK beat_id=${updated.id} reason=${options.reason}`);
-      }
-      const snapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
-      await libraryStateManager.commitSnapshot(snapshot, options.reason);
-
-      // Seed the explicit transaction snapshots before Drawer publishes its React
-      // state update. Otherwise the metadata observer can mistake that same save
-      // for a second independent transaction and upload/commit it again.
-      if (cloudLibraryTimerRef.current) {
-        window.clearTimeout(cloudLibraryTimerRef.current);
-        cloudLibraryTimerRef.current = null;
-      }
-      cloudLibrarySnapshotRef.current = snapshot
-        .filter(item => !!item.telegram_file_id)
-        .map(cloudBeatFingerprint)
-        .join("\u001c");
-      cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));
-      if (metadataFingerprint) {
-        drawerMetadataCommitVerifiedRef.current.set(updated.id, metadataFingerprint);
-      }
-      reviewPerfMark(
-        `DRAWER_CLOUD_COMMIT_OK beat_id=${updated.id} reason=${options.reason} elapsed_ms=${Math.round(performance.now() - started)}`,
-      );
-    })();
-
-    if (metadataFingerprint) {
-      drawerMetadataCommitInFlightRef.current.set(updated.id, { fingerprint: metadataFingerprint, promise: commitPromise });
-    }
-    try {
-      await commitPromise;
-    } finally {
-      const current = drawerMetadataCommitInFlightRef.current.get(updated.id);
-      if (current?.promise === commitPromise) drawerMetadataCommitInFlightRef.current.delete(updated.id);
-    }
-  }, []);
 
   const handleToggleOffline = useCallback(async (beat: Beat) => {
     if (offlineBusyIds.has(beat.id)) return;
