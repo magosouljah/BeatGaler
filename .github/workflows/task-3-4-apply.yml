@@ -157,7 +157,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm scripts/apply-task-3-4.mjs
+          git rm -f scripts/apply-task-3-4.mjs
           git add src/App.tsx src/features/selection/useBeatSelection.ts src/features/library/useLibraryReorder.ts tests/component-dom/beatSelection.test.tsx tests/integration/selectionReorderExtraction.test.ts tests/integration/libraryViewExtraction.test.ts
           git status --short
           git commit -m "refactor(app): extract selection and library reorder"
