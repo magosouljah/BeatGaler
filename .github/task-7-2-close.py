@@ -124,7 +124,7 @@ Siguiente tarea
 No iniciada.
 ```
 '''
-registro_path.write_text(registro.rstrip() + entry + '\n', encoding='utf-8')
+registro_path.write_text((registro.rstrip() + entry).rstrip() + '\n', encoding='utf-8')
 
 agent = '''# BeatGaler — Agent State
 
