@@ -1386,3 +1386,106 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 5.4
+
+```
+Tarea: 5.4 — Separar Available Offline
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: ef21985dd5c027dfadbb143a8c2a5a413fef5347
+- Última tarea verificada: 5.3 — Separar proyectos
+
+Cambio realizado
+
+- Se creó `src/features/offline/useOfflineAvailability.ts` como owner de creación y eliminación de paquetes Available Offline, incluido `offlineBusyIds` y el flujo completo de `handleToggleOffline`.
+- `App.tsx` dejó de llamar directamente `makeBeatAvailableOffline` y `removeBeatOfflineAvailability`; ahora compone `useOfflineAvailability` con conexiones explícitas a biblioteca, runtime y playback.
+- Se conservó la separación entre paquete durable y caché temporal: al quitar disponibilidad se libera el audio activo cuando corresponde y se llama `invalidatePlaybackPreparation(beat.id)` antes de borrar el paquete durable.
+- Online, quitar Available Offline conserva metadata/artwork vivos, limpia únicamente rutas locales y vuelve a preparar la ruta cloud; offline, el beat se elimina de la biblioteca visible tras retirar su único paquete durable.
+- Crear el paquete conserva `DOWNLOAD_STARTED`/`DOWNLOAD_SUCCEEDED`/`DOWNLOAD_FAILED`, `SET_OFFLINE_AVAILABLE`, artwork ya cargado y el sonido de finalización.
+- No se modificaron los comandos nativos que almacenan los paquetes bajo almacenamiento durable ni `loadOfflineLibrary`; esta tarea solo cambió ownership/composición React.
+- No se inició 5.5.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appOfflineAvailabilityExtraction.test.ts` para caracterizar ownership, creación/eliminación durable, estados runtime, invalidación previa y resultados online/offline.
+- `tests/integration/appPlaybackExtraction.test.ts` ahora busca el call site de invalidación en el nuevo owner Offline y sigue exigiendo que la implementación de invalidación pertenezca al playback controller.
+- `scripts/run-regressions.mjs` se adaptó para seguir `SET_OFFLINE_AVAILABLE` y el bloque de retirada en `useOfflineAvailability.ts`; conserva las mismas exigencias de Fast Play, warm promises, limpieza de rutas locales y persistencia nativa.
+- No se relajó ningún contrato para hacer pasar los checks.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/offline/useOfflineAvailability.ts
+- tests/integration/appOfflineAvailabilityExtraction.test.ts
+- tests/integration/appPlaybackExtraction.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 5.4 Apply`, run 34243725534 — SUCCESS.
+- Artifact `migration-check-logs-task-5-4-34243725534-1`, `summary.txt` leído: PASS en todos los checks.
+- `git diff --check` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- SHA de implementación verificada: 3b437aee8454b392e832b8bce65485be731e045b.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` — no necesario; la matriz de migración ejecutó individualmente los checks aplicables y quedó completamente verde.
+- E2E completos de import/upload/download — fuera del alcance de esta extracción de ownership Offline.
+- Prueba física Desktop Windows/macOS con reinicio sin red — no disponible en GitHub Actions. No se considera bloqueo porque la implementación nativa durable, `offline_beats`, `loadOfflineLibrary` y la precedencia de paquetes Offline no cambiaron; sus invariantes existentes permanecen protegidas por regressions y ambos builds.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Desktop: marcar un beat Available Offline, cerrar completamente la aplicación, cortar la red, reabrir y reproducir/abrir los assets incluidos; después reconectar, quitar Available Offline y comprobar que el beat sigue online sin rutas locales obsoletas.
+- Resultado esperado: el paquete sobrevive al reinicio sin red; al retirarlo online se conserva el beat cloud y al retirarlo estando offline desaparece de la biblioteca Offline actual.
+
+Pendientes / fuera de alcance
+
+- 5.5 — Separar papelera y restauración queda pendiente y no fue iniciada.
+- El riesgo previo de `handleRemoveBulk` con snapshots capturados permanece fuera de alcance y sin cambios.
+
+Riesgos previos relevantes
+
+- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y no fue modificado.
+- Ningún riesgo nuevo de producto quedó abierto por 5.4.
+
+Herramientas temporales restantes
+
+- Ninguna creada por 5.4 debe permanecer al cerrar; el workflow/script de aplicación ya fueron eliminados y el finalizador se elimina en el commit de cierre.
+
+Fallos encontrados y causa
+
+- Run 34242040393: YAML inválido antes de crear jobs; fallo de tooling, sin cambios de producto.
+- Run 34242602495: el payload base64 del applier temporal estaba corrupto y falló antes de los checks; fallo de tooling, sin commit de producto.
+- Run 34242903767: `summary.txt` mostró integration y regressions FAIL. El test nuevo usaba una ruta incompatible con el modo Vitest y guards existentes estaban acoplados a que el call site Offline permaneciera físicamente en App. Se clasificó como prueba nueva incorrecta + pruebas existentes acopladas a implementación interna legítimamente movida.
+- Run 34243249623: YAML inválido en el retry, sin jobs ni cambios de producto.
+- Run 34243311415: tras la primera adaptación quedaron typecheck/unit/DOM/integration/builds PASS y solo regressions FAIL porque un segundo guard de retirada Offline todavía inspeccionaba `App.tsx`; se trasladó al nuevo owner manteniendo el contrato.
+- Run 34243725534: matriz completa y `git diff --check` PASS; commit de implementación publicado.
+
+Veredicto
+
+Terminada.
+
+Available Offline quedó fuera de App conservando paquetes durables, runtime, invalidación de Fast Play antes de borrar, y la diferencia observable entre retirada online y offline.
+
+Siguiente tarea
+
+5.5 — Separar papelera y restauración.
+
+No iniciada.
+```

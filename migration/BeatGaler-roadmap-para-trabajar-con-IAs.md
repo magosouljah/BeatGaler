@@ -276,7 +276,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** abrir, actualizar y reemplazar proyectos funciona igual y sus indicadores se actualizan.
     
 
-### [ ] 5.4 — Separar Available Offline
+### [x] 5.4 — Separar Available Offline
 
 - **Hacer:** extraer creación y eliminación de paquetes offline.
     
