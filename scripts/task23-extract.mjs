@@ -51,8 +51,8 @@ const functionNames = new Set([
 const requiredConstants = new Set(["LIBRARY_CACHE_KEY", "SORT_CACHE_KEY", "INTERRUPTED_UPLOADS_KEY"]);
 const ranges = [];
 const foundFunctions = new Set();
+const foundConstants = new Set();
 let foundActiveCloudUpload = false;
-let foundCacheConstants = false;
 
 for (const statement of sourceFile.statements) {
   if (ts.isFunctionDeclaration(statement) && statement.name && functionNames.has(statement.name.text)) {
@@ -71,9 +71,13 @@ for (const statement of sourceFile.statements) {
     const names = statement.declarationList.declarations
       .map(declaration => ts.isIdentifier(declaration.name) ? declaration.name.text : null)
       .filter(Boolean);
-    if (names.length === requiredConstants.size && names.every(name => requiredConstants.has(name))) {
-      foundCacheConstants = true;
-      ranges.push({ start: statement.getFullStart(), end: statement.getEnd(), label: "storage keys" });
+    const matched = names.filter(name => requiredConstants.has(name));
+    if (matched.length > 0) {
+      if (matched.length !== names.length) {
+        throw new Error(`storage key declaration unexpectedly shares a statement: ${names.join(", ")}`);
+      }
+      for (const name of matched) foundConstants.add(name);
+      ranges.push({ start: statement.getFullStart(), end: statement.getEnd(), label: `storage key ${matched.join(",")}` });
     }
   }
 }
@@ -82,7 +86,9 @@ for (const name of functionNames) {
   if (!foundFunctions.has(name)) throw new Error(`2.3 helper declaration not found: ${name}`);
 }
 if (!foundActiveCloudUpload) throw new Error("ActiveCloudUpload declaration not found");
-if (!foundCacheConstants) throw new Error("storage key declaration group not found");
+for (const name of requiredConstants) {
+  if (!foundConstants.has(name)) throw new Error(`storage key declaration not found: ${name}`);
+}
 
 const ordered = ranges.sort((a, b) => a.start - b.start);
 const merged = [];
