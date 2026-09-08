@@ -3,6 +3,22 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
+
+const mocks = vi.hoisted(() => ({
+  loadCachedBeats: vi.fn(),
+  saveCachedBeats: vi.fn(),
+  readActiveCloudUploads: vi.fn(),
+}));
+
+vi.mock("../../src/features/library/libraryPresentationCache", () => ({
+  loadCachedBeats: mocks.loadCachedBeats,
+  saveCachedBeats: mocks.saveCachedBeats,
+}));
+
+vi.mock("../../src/features/cloud/interruptedUploadJournal", () => ({
+  readActiveCloudUploads: mocks.readActiveCloudUploads,
+}));
+
 import {
   useLibraryPresentationCache,
   useLibraryState,
@@ -11,8 +27,6 @@ import {
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const LIBRARY_CACHE_KEY = "beatvault:library:v1";
-const INTERRUPTED_UPLOADS_KEY = "beatgaler:active-cloud-uploads:v1";
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 let latestState: LibraryState | null = null;
@@ -40,7 +54,9 @@ async function render(verified: boolean, connected: boolean | null) {
 }
 
 beforeEach(() => {
-  localStorage.clear();
+  mocks.loadCachedBeats.mockReset().mockReturnValue([]);
+  mocks.saveCachedBeats.mockReset();
+  mocks.readActiveCloudUploads.mockReset().mockReturnValue([]);
   latestState = null;
 });
 
@@ -50,16 +66,13 @@ afterEach(async () => {
   host?.remove();
   host = null;
   latestState = null;
-  localStorage.clear();
   vi.useRealTimers();
 });
 
 describe("useLibraryState", () => {
   it("uses one presentation library while hiding interrupted-upload cache rows", async () => {
-    localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify([beat("ready"), beat("interrupted")]));
-    localStorage.setItem(INTERRUPTED_UPLOADS_KEY, JSON.stringify([
-      { beatId: "interrupted", beatName: "Interrupted", stagingPaths: [] },
-    ]));
+    mocks.loadCachedBeats.mockReturnValue([beat("ready"), beat("interrupted")]);
+    mocks.readActiveCloudUploads.mockReturnValue([{ beatId: "interrupted" }]);
 
     await render(false, true);
 
@@ -73,17 +86,17 @@ describe("useLibraryState", () => {
 
   it("writes the presentation cache only after cloud authority is verified", async () => {
     vi.useFakeTimers();
-    localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify([beat("cached")]));
+    mocks.loadCachedBeats.mockReturnValue([beat("cached")]);
     await render(false, true);
 
     await act(async () => {
       latestState!.setBeats([beat("fresh")]);
     });
     await act(async () => { vi.advanceTimersByTime(2000); });
-    expect(JSON.parse(localStorage.getItem(LIBRARY_CACHE_KEY) ?? "[]").map((item: Beat) => item.id)).toEqual(["cached"]);
+    expect(mocks.saveCachedBeats).not.toHaveBeenCalled();
 
     await render(true, true);
     await act(async () => { vi.advanceTimersByTime(1500); });
-    expect(JSON.parse(localStorage.getItem(LIBRARY_CACHE_KEY) ?? "[]").map((item: Beat) => item.id)).toEqual(["fresh"]);
+    expect(mocks.saveCachedBeats).toHaveBeenLastCalledWith([expect.objectContaining({ id: "fresh" })]);
   });
 });
