@@ -1,0 +1,90 @@
+name: Temporary Task 4.2 Final 4
+on:
+  push:
+    branches: [v0.9.0-test-noche]
+    paths: [.github/workflows/task-4-2-final4.yml]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply task 4.2 extraction
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('.github/workflows/task-4-2-final3.yml').read_text()
+          marker="          python - <<'PY'\n"; start=text.index(marker)+len(marker); end=text.index("\n          PY",start)
+          script='\n'.join(line[10:] if line.startswith('          ') else line for line in text[start:end].splitlines())
+          exec(compile(script,'<extract>','exec'),{})
+          p=Path('scripts/run-regressions.mjs'); s=p.read_text()
+          old1='if (!app.includes(\'cookingPlaybackUrlRef.current.delete(beat.id)\')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");'
+          old2='if (!app.includes(\'cookingWarmPromisesRef.current.delete(beat.id)\')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");'
+          assert old1 in s and old2 in s
+          s=s.replace(old1,'if (!app.includes(\'invalidatePlaybackPreparation(beat.id)\') || !playbackController.includes(\'cookingPlaybackUrlRef.current.delete(beatId)\')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");',1)
+          s=s.replace(old2,'if (!playbackController.includes(\'cookingWarmPromisesRef.current.delete(beatId)\')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");',1)
+          p.write_text(s)
+          PY
+          cat > tests/integration/appPlaybackExtraction.test.ts <<'EOF'
+          import { readFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          import { describe, expect, it } from "vitest";
+          const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+          const controllerSource = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
+          describe("App playback extraction", () => {
+            it("moves playback preparation, invalidation, audio events and play routing out of App", () => {
+              expect(appSource).toContain('usePlaybackController({');
+              expect(appSource).toContain('invalidatePlaybackPreparation(beat.id)');
+              expect(appSource).not.toContain('const ensureWarmPlaybackUrl = useCallback');
+              expect(appSource).not.toContain('APP_HANDLE_PLAY_ENTER');
+              expect(appSource).not.toContain('beatgaler:playback-cache-cleared');
+              expect(appSource).not.toContain('cookingPlaybackUrlRef');
+              expect(controllerSource).toContain('beatgaler:playback-cache-cleared');
+              expect(controllerSource).toContain('beatgaler:audio-playing');
+              expect(controllerSource).toContain('invalidatePlaybackPreparation');
+              expect(controllerSource).toContain('PLAY_BLOCKED_LOADING');
+              expect(controllerSource).toContain('playbackCacheEpochRef.current !== cacheEpoch');
+              expect(controllerSource).toContain('APP_HANDLE_PLAY_ENTER');
+              expect(controllerSource).toContain('if (!isTauriAvailable)');
+              expect(controllerSource).toContain('prepareBeatForPlayback(beat)');
+            });
+          });
+          EOF
+      - name: Checks
+        shell: bash
+        run: |
+          mkdir -p migration-check-logs; : > migration-check-logs/summary.txt; failed=0
+          run_check() { name="$1"; shift; echo "== $name ==" | tee -a migration-check-logs/summary.txt; if "$@" > "migration-check-logs/$name.log" 2>&1; then echo "PASS $name" | tee -a migration-check-logs/summary.txt; else echo "FAIL $name" | tee -a migration-check-logs/summary.txt; failed=1; fi; }
+          run_check diff-check git diff --check
+          run_check typecheck npm run test:typecheck
+          run_check unit-ts npm run test:unit:ts
+          run_check component-dom npm run test:component:dom
+          run_check integration npm run test:integration
+          run_check regressions npm run test:regressions
+          run_check build-web npm run build:web
+          run_check build npm run build
+          exit "$failed"
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-4-2-${{ github.run_id }}
+          path: migration-check-logs/
+      - name: Commit implementation
+        if: success()
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/App.tsx src/features/playback/usePlaybackController.ts tests/integration/appPlaybackExtraction.test.ts tests/integration/appMigrationCharacterization.test.ts tests/integration/issue97RuntimeWebFollowup.test.ts scripts/run-regressions.mjs
+          git commit -m "refactor(app): extract playback controller"
+          git push origin HEAD:v0.9.0-test-noche
