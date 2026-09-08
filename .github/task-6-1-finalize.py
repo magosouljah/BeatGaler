@@ -125,7 +125,7 @@ Siguiente tarea
 No iniciada.
 ```
 '''
-register_path.write_text(register.rstrip() + entry + "\n")
+register_path.write_text(register.rstrip() + entry.rstrip() + "\n")
 
 state_path = Path("migration/BeatGaler-agent-state.md")
 state_path.write_text(r'''# BeatGaler — Agent State
