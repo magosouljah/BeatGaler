@@ -14,7 +14,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import AccountGate, { getBeatGalerAuthToken, getResolvedCloudApiBase, logoutBeatGalerAccount } from "./components/AccountGate";
 import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
-import { SearchIcon, PlusIcon, Artwork } from "./components/ui";
+import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
 import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
@@ -25,7 +25,7 @@ import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortab
 import ReactDOM from "react-dom";
 import { appAlert, appConfirm } from "./lib/dialog";
 import { sanitizeUserVisibleText } from "./lib/userVisibleError";
-import { useTagColors, setTagColor, renameTagColor, TAG_COLOR_PALETTE } from "./lib/tagColors";
+import { useTagColors, setTagColor, renameTagColor } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
 import { cleanTags, validateBpm, validateMusicKey } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
@@ -37,6 +37,9 @@ import { installHtmlDropController } from "./features/dragdrop/htmlDropControlle
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
 import CloudFilesModal, { type BeatDownloadKind } from "./features/downloads/components/CloudFilesModal";
 import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";
+import SearchBar from "./features/library/components/SearchBar";
+import SortMenu, { type SortKey } from "./features/library/components/SortMenu";
+import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
 import { playTrace } from "./features/playback/playTrace";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
@@ -119,196 +122,6 @@ function isRuntimeConflictError(error: unknown): boolean {
 }
 
 type ConnectionState = "checking" | "online" | "poor" | "offline";
-
-type SortKey = "name" | "bpm" | "rating" | "manual";
-
-function SearchBar({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const hasText = value.trim().length > 0;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      {open && (
-        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-          <input autoFocus value={value} onChange={e => onChange(e.target.value)}
-            onBlur={() => { if (!hasText) setOpen(false); }}
-            placeholder="Search beats…"
-            style={{ background: "#181818", border: "1px solid #252525", borderRadius: 8, padding: "6px 32px 6px 12px", color: "#fff", fontSize: 13, width: 220, outline: "none" }} />
-          {hasText && (
-            <button
-              onMouseDown={e => { e.preventDefault(); onChange(""); }}
-              style={{ position: "absolute", right: 6, background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
-              onMouseEnter={e => (e.currentTarget.style.color = "#aaa")}
-              onMouseLeave={e => (e.currentTarget.style.color = "#555")}
-            ></button>
-          )}
-        </div>
-      )}
-      <button onClick={() => setOpen(o => !o)}
-        style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: open ? "#ccc" : "#444", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <SearchIcon />
-      </button>
-    </div>
-  );
-}
-
-function SortMenu({ value, onChange }: { value: SortKey; onChange: (v: SortKey) => void }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocMouseDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (!rootRef.current?.contains(target)) setOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDocMouseDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", onDocMouseDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  const options: { key: SortKey; label: string }[] = [
-    { key: "name", label: "Name" },
-    { key: "bpm", label: "BPM" },
-    { key: "rating", label: "Rating" },
-    { key: "manual", label: "Manual" },
-  ];
-
-  const activeLabel = options.find(o => o.key === value)?.label ?? "Sort";
-
-  return (
-    <div ref={rootRef} style={{ position: "relative" }}>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(v => !v);
-        }}
-        style={{
-          minWidth: 0,
-          height: 32,
-          padding: "0 18px 0 10px",
-          borderRadius: 8,
-          background: open ? "#222" : "#161616",
-          border: `1px solid ${open ? "#323232" : "#1e1e1e"}`,
-          color: open ? "#d2d2d2" : "#8a8a8a",
-          fontSize: 11,
-          cursor: "pointer",
-          outline: "none",
-          display: "flex",
-          position: "relative",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <span>{activeLabel}</span>
-        <span style={{ fontSize: 9, opacity: 0.75, position: "absolute", right: 6 }}></span>
-      </button>
-
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            top: 36,
-            right: 0,
-            zIndex: 120,
-            width: "fit-content",
-            minWidth: 0,
-            background: "rgba(24,24,24,0.96)",
-            backdropFilter: "blur(12px)",
-            border: "1px solid #2a2a2a",
-            borderRadius: 10,
-            padding: "4px 0",
-            boxShadow: "0 12px 30px rgba(0,0,0,0.6)",
-          }}
-        >
-          {options.map((opt) => {
-            const active = opt.key === value;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => {
-                  onChange(opt.key);
-                  setOpen(false);
-                }}
-                style={{
-                  width: "auto",
-                  border: "none",
-                  background: "transparent",
-                  color: active ? "#f1f1f1" : "#bebebe",
-                  cursor: "pointer",
-                  textAlign: "center",
-                  padding: "7px 8px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 11,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span>{opt.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TagColorMenu({
-  x, y, current, onSelect, onRename, onClose,
-}: {
-  x: number; y: number; current: string | null;
-  onSelect: (hex: string | null) => void; onRename: () => void; onClose: () => void;
-}) {
-  React.useEffect(() => {
-    const onAnyClick = () => onClose();
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("beatcard:close-menus", onClose);
-    setTimeout(() => window.addEventListener("click", onAnyClick), 10);
-    window.addEventListener("contextmenu", onAnyClick, true);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("beatcard:close-menus", onClose);
-      window.removeEventListener("click", onAnyClick);
-      window.removeEventListener("contextmenu", onAnyClick, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, []);
-
-  return ReactDOM.createPortal(
-    <div onClick={e => e.stopPropagation()} style={{
-      position: "fixed", top: y, left: x, zIndex: 9999,
-      background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 10,
-      padding: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.85)",
-    }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-        {TAG_COLOR_PALETTE.map(c => (
-          <button key={c.key} onClick={() => onSelect(c.hex)} title={c.label}
-            style={{
-              width: 24, height: 24, borderRadius: "50%", background: c.hex,
-              border: current === c.hex ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
-              cursor: "pointer", padding: 0,
-            }} />
-        ))}
-      </div>
-      <button onClick={() => onSelect(null)}
-        style={{ marginTop: 8, width: "100%", padding: "5px 0", background: "transparent", border: "1px solid #333", borderRadius: 6, color: "#999", fontSize: 11, cursor: "pointer" }}>
-        Ninguno
-      </button>
-      <button onClick={onRename}
-        style={{ marginTop: 6, width: "100%", padding: "6px 0", background: "#222", border: "1px solid #383838", borderRadius: 6, color: "#ddd", fontSize: 11, cursor: "pointer" }}>
-        Renombrar…
-      </button>
-    </div>,
-    document.body
-  );
-}
 
 // Local cache so the library paints instantly on next launch instead of
 // showing a blank/loading screen while Rust re-scans disk. The real
