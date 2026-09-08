@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import type { Beat } from "../../types";
+import type { AppSettings, Beat } from "../../types";
 import { readActiveCloudUploads } from "../cloud/interruptedUploadJournal";
 import { loadCachedBeats, saveCachedBeats } from "./libraryPresentationCache";
 
@@ -50,7 +50,7 @@ export function useLibraryState(): LibraryState {
 export function useLibraryPresentationCache(
   beats: Beat[],
   cloudSessionVerified: boolean,
-  cloudPresentationBlocked: boolean,
+  settings: AppSettings | null,
 ): void {
   const cacheSaveTimerRef = useRef<number | null>(null);
 
@@ -62,7 +62,7 @@ export function useLibraryPresentationCache(
 
     // Hiding the cloud library while disconnected is a view decision, not a
     // destructive cache mutation. Preserve the last verified instant-paint cache.
-    if (!cloudSessionVerified || cloudPresentationBlocked) return;
+    if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;
 
     cacheSaveTimerRef.current = window.setTimeout(() => {
       cacheSaveTimerRef.current = null;
@@ -75,5 +75,5 @@ export function useLibraryPresentationCache(
         cacheSaveTimerRef.current = null;
       }
     };
-  }, [beats, cloudPresentationBlocked, cloudSessionVerified]);
+  }, [beats, settings?.telegram_cloud_connected, cloudSessionVerified]);
 }
