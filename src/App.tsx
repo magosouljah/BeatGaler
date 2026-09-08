@@ -52,6 +52,7 @@ import { useTagFilters } from "./features/tags/useTagFilters";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
 import { usePlaybackController } from "./features/playback/usePlaybackController";
+import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
@@ -332,12 +333,6 @@ function BeatGalerApp() {
     handleDragEnd,
     handleDragCancel,
   } = useLibraryReorder({ sortBy, setSortBy, setBeats });
-  const [shuffleEnabled, setShuffleEnabled] = useState(false);
-  const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off");
-  const [showQueue, setShowQueue] = useState(false);
-  const [queueIds, setQueueIds] = useState<string[]>([]);
-  const lastHandledEndedSeqRef = useRef(0);
-
   const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();
   const { clearPlaybackPreparation, ensureWarmPlaybackUrl, handlePlay, handleWarm, invalidatePlaybackPreparation, waitForUploadedBeatPlaybackReady } = usePlaybackController({
     audio,
@@ -935,7 +930,7 @@ function BeatGalerApp() {
         setDrawer(null);
         setShowAdd(false);
         setShowSettings(false);
-        setShowQueue(false);
+        closeQueue();
         setShowUpload(null);
       }
       if (e.key === " " && !isTyping) { e.preventDefault(); togglePauseRef.current(); }
@@ -1096,7 +1091,6 @@ function BeatGalerApp() {
     if (deleted.size > 0) {
       const next = beats.filter(b => !deleted.has(b.id));
       setBeats(next);
-      setQueueIds(q => q.filter(id => !deleted.has(id)));
 
       // Offline Trash is a reversible local state, not a stale whole-index write.
       // On reconnect the server will move the CURRENT online beat objects by id.
@@ -1140,10 +1134,6 @@ function BeatGalerApp() {
     }
     clearSelection();
   }, [selectedIds, beats, connectionState, forgetRuntimeState, transitionRuntime]);
-
-  const addToQueue = useCallback((beat: Beat) => {
-    setQueueIds((ids) => (ids.includes(beat.id) ? ids : [...ids, beat.id]));
-  }, []);
 
   const addBeats = useCallback((newBeats: Beat[]) => {
     setBeats(bs => {
@@ -3567,7 +3557,6 @@ function BeatGalerApp() {
       const nextLibrary = beatsLatestRef.current.filter(item => item.id !== beat.id);
       beatsLatestRef.current = nextLibrary;
       setBeats(nextLibrary);
-      setQueueIds(ids => ids.filter(id => id !== beat.id));
 
       if (connectionState === "online" && beat.telegram_file_id) {
         try {
@@ -3654,6 +3643,30 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
 
   const filteredBeatIdsKey = filteredBeats.map(beat => beat.id).join("|");
   const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));
+
+  const {
+    shuffleEnabled,
+    repeatMode,
+    showQueue,
+    queuedBeats,
+    addToQueue,
+    handleNext,
+    handlePrev,
+    closeQueue,
+    toggleQueue,
+    toggleShuffle,
+    cycleRepeat,
+    playQueueIndex,
+  } = usePlaybackQueue({
+    beats,
+    displayedBeats,
+    playingId: audio.playingId,
+    progress: audio.progress,
+    endedSeq: audio.endedSeq,
+    handlePlay,
+    seek,
+    releaseFile,
+  });
 
   const revealBeat = useCallback((beatId: string) => {
     setRevealedBeatIds(current => {
@@ -3763,112 +3776,6 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     ensureArtworkReady, revealBeat,
   ]);
 
-
-  // The player/queue must never outlive the authoritative gallery. This also
-  // prevents Next/Previous from navigating cached beats after Trash/Delete All
-  // or after Refresh confirms an empty INDEX.
-  useEffect(() => {
-    const liveIds = new Set(beats.map(beat => beat.id));
-    setQueueIds(ids => ids.filter(id => liveIds.has(id)));
-    if (audio.playingId && !liveIds.has(audio.playingId)) releaseFile();
-    if (beats.length === 0) {
-      setShowQueue(false);
-    }
-  }, [beats, audio.playingId, releaseFile]);
-
-  const playbackQueue = useMemo(() => {
-    if (!audio.playingId) return displayedBeats;
-    if (displayedBeats.some((b) => b.id === audio.playingId)) return displayedBeats;
-    return beats;
-  }, [audio.playingId, displayedBeats, beats]);
-
-  const currentQueueIndex = useMemo(
-    () => playbackQueue.findIndex((b) => b.id === audio.playingId),
-    [playbackQueue, audio.playingId]
-  );
-
-  const playFromQueueIndex = useCallback((index: number) => {
-    if (index < 0 || index >= playbackQueue.length) return;
-    const target = playbackQueue[index];
-    if (target) handlePlay(target);
-  }, [playbackQueue, handlePlay]);
-
-  const handleNext = useCallback((fromEnded = false) => {
-    if (beats.length === 0) return;
-    if (queueIds.length > 0) {
-      const nextId = queueIds[0];
-      const nextBeat = beats.find((b) => b.id === nextId);
-      setQueueIds((ids) => ids.slice(1));
-      if (nextBeat) {
-        handlePlay(nextBeat);
-        return;
-      }
-    }
-
-    if (playbackQueue.length === 0) return;
-    if (currentQueueIndex === -1) {
-      playFromQueueIndex(0);
-      return;
-    }
-
-    if (fromEnded && repeatMode === "one") {
-      playFromQueueIndex(currentQueueIndex);
-      return;
-    }
-
-    if (shuffleEnabled) {
-      if (playbackQueue.length === 1) {
-        if (!fromEnded || repeatMode !== "off") playFromQueueIndex(0);
-        return;
-      }
-      let nextIndex = currentQueueIndex;
-      while (nextIndex === currentQueueIndex) {
-        nextIndex = Math.floor(Math.random() * playbackQueue.length);
-      }
-      playFromQueueIndex(nextIndex);
-      return;
-    }
-
-    let nextIndex = currentQueueIndex + 1;
-    if (nextIndex >= playbackQueue.length) {
-      if (fromEnded && repeatMode === "off") return;
-      nextIndex = 0;
-    }
-    playFromQueueIndex(nextIndex);
-  }, [queueIds, beats, handlePlay, playbackQueue, currentQueueIndex, repeatMode, shuffleEnabled, playFromQueueIndex]);
-
-  const handlePrev = useCallback(() => {
-    if (beats.length === 0 || playbackQueue.length === 0) return;
-    if (audio.progress > 0.05) {
-      seek(0);
-      return;
-    }
-    if (shuffleEnabled && playbackQueue.length > 1) {
-      let prevIndex = currentQueueIndex;
-      while (prevIndex === currentQueueIndex) {
-        prevIndex = Math.floor(Math.random() * playbackQueue.length);
-      }
-      playFromQueueIndex(prevIndex);
-      return;
-    }
-    if (currentQueueIndex <= 0) {
-      playFromQueueIndex(playbackQueue.length - 1);
-      return;
-    }
-    playFromQueueIndex(currentQueueIndex - 1);
-  }, [playbackQueue, audio.progress, seek, shuffleEnabled, currentQueueIndex, playFromQueueIndex]);
-
-  useEffect(() => {
-    if (audio.endedSeq === 0) return;
-    if (audio.endedSeq <= lastHandledEndedSeqRef.current) return;
-    lastHandledEndedSeqRef.current = audio.endedSeq;
-    handleNext(true);
-  }, [audio.endedSeq, handleNext]);
-
-  const queuedBeats = useMemo(() => {
-    const map = new Map(beats.map((b) => [b.id, b] as const));
-    return queueIds.map((id) => map.get(id)).filter(Boolean) as Beat[];
-  }, [queueIds, beats]);
 
   const currentBeat = beats.find(b => b.id === audio.playingId);
   const selectedBeats = beats.filter(b => selectedIds.has(b.id));
@@ -4499,15 +4406,10 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           onPrev={handlePrev}
           onNext={() => handleNext(false)}
           onVolumeChange={setVolume}
-          onToggleShuffle={() => setShuffleEnabled((v) => !v)}
-          onCycleRepeat={() => setRepeatMode((m) => (m === "off" ? "all" : m === "all" ? "one" : "off"))}
-          onToggleQueue={() => setShowQueue((v) => !v)}
-          onPlayQueueIndex={(index) => {
-            const target = queuedBeats[index];
-            if (!target) return;
-            handlePlay(target);
-            setQueueIds((ids) => ids.filter((id) => id !== target.id));
-          }}
+          onToggleShuffle={toggleShuffle}
+          onCycleRepeat={cycleRepeat}
+          onToggleQueue={toggleQueue}
+          onPlayQueueIndex={playQueueIndex}
           canAddBeat={platform.capabilities.browserFileImport || platform.capabilities.nativeFilesystemDrop}
           onAddBeat={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}
           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })}
