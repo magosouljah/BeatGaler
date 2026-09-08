@@ -32,6 +32,7 @@ jobs:
           : > migration-check-logs/summary.txt
           failed=0
 
+          # Apply the extraction, then only the fixes demonstrated by earlier check artifacts.
           python .github/task-6-1-apply.py > migration-check-logs/apply.log 2>&1
           apply_status=$?
           if [ "$apply_status" -eq 0 ]; then
