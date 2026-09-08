@@ -54,6 +54,7 @@ import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSor
 import { usePlaybackController } from "./features/playback/usePlaybackController";
 import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
 import { useDrawerCloudPersistence } from "./features/edit/useDrawerCloudPersistence";
+import { useBeatAssetUpdates } from "./features/edit/useBeatAssetUpdates";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
@@ -2334,47 +2335,23 @@ function BeatGalerApp() {
   }, [updateBeat, rejectOfflineMutation, connectionState, transitionRuntime]);
 
 
-  const runBeatCloudUpdate = useCallback((beat: Beat, filePath: string, work: () => Promise<void>) => {
-    if (rejectOfflineMutation("Updating beat files")) {
-      setBeatFileDrop(null);
-      void cleanupStagedDropPaths([filePath]);
-      return;
-    }
-    // Once the user chose a destination, the chooser is done. The long Telegram/
-    // ZIP task belongs to the beat card, not to a blocking modal.
-    setBeatFileDrop(null);
-    setBeatCloudUpdateBusy(beat.id, true);
-    const before = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-    if (before.sync_state === "synced") transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
-    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
-
-    void (async () => {
-      let succeeded = false;
-      try {
-        await work();
-        transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, beat);
-        succeeded = true;
-        setBeatCloudUpdateBusy(beat.id, false, true);
-        try {
-          const audio = new Audio(uploadCompleteWav);
-          audio.volume = 0.72;
-          void audio.play().catch(() => {});
-        } catch {}
-      } catch (error) {
-        console.error(error);
-        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-        if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
-        else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "BEAT_UPDATE_FAILED", message, retryable: true }, beat);
-        setBeatCloudUpdateBusy(beat.id, false, false);
-        await appAlert({ title: "Beat update failed", message, danger: true });
-      } finally {
-        // Drag/drop roots are private staging copies. The user can keep working
-        // while the task runs, then the staging is reclaimed regardless of outcome.
-        await cleanupStagedDropPaths([filePath]).catch(() => {});
-        if (!succeeded) setBeatCloudUpdateBusy(beat.id, false, false);
-      }
-    })();
-  }, [rejectOfflineMutation, transitionRuntime]);
+  const {
+    runBeatCloudUpdate,
+    startMasterAssetUpdate,
+    startWavAssetUpdate,
+    handleBrowserBeatAssetDrop,
+  } = useBeatAssetUpdates({
+    rejectOfflineMutation,
+    setBeatFileDrop,
+    setBeatCloudUpdateBusy,
+    beatRuntimeStatesRef,
+    transitionRuntime,
+    beatsLatestRef,
+    cloudLibrarySnapshotRef,
+    setBeats,
+    setDrawer,
+    waitForUploadedBeatPlaybackReady,
+  });
 
   const hasStoredProject = useCallback(async (beat: Beat) => {
     const status = await getProjectCloudStatus(beat);
@@ -2489,30 +2466,13 @@ function BeatGalerApp() {
 
     if (role === "main") {
       if (ext !== "mp3") return;
-      runBeatCloudUpdate(beat, filePath, async () => {
-        await uploadDroppedFileToTelegram(beat, filePath, "MASTER");
-        const refreshed = await loadLibrary();
-        beatsLatestRef.current = refreshed;
-        setBeats(refreshed);
-        const cloudBacked = refreshed.filter(item => !!item.telegram_file_id);
-        cloudLibrarySnapshotRef.current = cloudBacked.map(cloudBeatFingerprint).join("\u001c");
-        await libraryStateManager.commitSnapshot(refreshed, "dropped-master");
-
-        const updated = refreshed.find(item => item.id === beat.id);
-        if (updated?.telegram_file_id) {
-          const ready = await waitForUploadedBeatPlaybackReady(updated);
-          if (!ready) throw new Error("The new MASTER uploaded, but did not become playback-ready in time.");
-        }
-      });
+      startMasterAssetUpdate(beat, filePath);
       return;
     }
 
     if (role === "wav") {
       if (ext !== "wav") return;
-      runBeatCloudUpdate(beat, filePath, async () => {
-        await uploadDroppedFileToTelegram(beat, filePath, "WAV");
-        await libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync");
-      });
+      startWavAssetUpdate(beat, filePath);
       return;
     }
 
@@ -2529,7 +2489,7 @@ function BeatGalerApp() {
       }
       startProjectAssetUpdate(beat, filePath, "projectFolder");
     }
-  }, [beatFileDrop, hasStoredProject, runBeatCloudUpdate, startProjectAssetUpdate, waitForUploadedBeatPlaybackReady]);
+  }, [beatFileDrop, hasStoredProject, startMasterAssetUpdate, startProjectAssetUpdate, startWavAssetUpdate]);
 
 
   const importDroppedBrowserFiles = useCallback(async (files: File[]) => {
@@ -2587,21 +2547,14 @@ function BeatGalerApp() {
       return false;
     }
 
-    if (kind === "MASTER" && beat.telegram_file_id) {
-      const replace = await appConfirm({
-        title: "Replace MASTER?",
-        message: `Replace the current MASTER for "${beat.name}" with ${file.name}?`,
-        confirmLabel: "Replace",
-        cancelLabel: "Cancel",
-        danger: true,
-      });
-      if (!replace) return false;
+    if (kind === "MASTER" || kind === "WAV") {
+      return handleBrowserBeatAssetDrop(beat, file, kind);
     }
 
     transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
     transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
     try {
-      const committed = await platform.editor.commit(beat, beat, { [kind]: file });
+      const committed = await platform.editor.commit(beat, beat, { PROJECT: file });
       setBeats(current => {
         const next = current.map(item => item.id === committed.id ? committed : item);
         beatsLatestRef.current = next;
@@ -2615,7 +2568,7 @@ function BeatGalerApp() {
       transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "WEB_FILE_UPDATE_FAILED", message, retryable: true }, beat);
       throw error;
     }
-  }, [transitionRuntime]);
+  }, [handleBrowserBeatAssetDrop, transitionRuntime]);
 
   // Browser/Pinterest controller. Windows desktop keeps the existing single native
   // owner. macOS keeps HTML enabled for browser artwork while local Finder drops
