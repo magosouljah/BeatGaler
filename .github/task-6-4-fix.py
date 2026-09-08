@@ -78,9 +78,9 @@ new_guard = '''  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUE
 regressions = replace_once(regressions, old_guard, new_guard, "runtime flow owner regression")
 regressions = replace_once(
     regressions,
-    '''  if (!app.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
+    '''  if (!app.includes('assets/status/upload-complete.wav') || !beatDownloadsForRuntime.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
 ''',
-    '''  if (!cloudUploadQueue.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into their runtime owners.");
+    '''  if (!cloudUploadQueue.includes('assets/status/upload-complete.wav') || !beatDownloadsForRuntime.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into their runtime owners.");
 ''',
     "completion sound owner regression",
 )
