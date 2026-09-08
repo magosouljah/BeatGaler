@@ -78,3 +78,12 @@ new_guard = '''  const runtimeFlowOwners = `${app}\n${cloudUploadQueue}`;
 '''
 regressions = replace_once(regressions, old_guard, new_guard, "runtime flow owner regression")
 write("scripts/run-regressions.mjs", regressions)
+
+main_tool = read(".github/task-6-4.py")
+main_tool = replace_once(
+    main_tool,
+    '- .github/task-6-4.py — temporal, eliminado al cerrar.\\n- .github/workflows/task-6-4-apply.yml — temporal, eliminado al cerrar.\\n',
+    '- .github/task-6-4.py — temporal, eliminado al cerrar.\\n- .github/task-6-4-fix.py — temporal, creado para adaptar pruebas estáticas acopladas al owner anterior y eliminado al cerrar.\\n- .github/workflows/task-6-4-apply.yml — temporal, eliminado al cerrar.\\n',
+    "record corrective tool in Registro template",
+)
+write(".github/task-6-4.py", main_tool)
