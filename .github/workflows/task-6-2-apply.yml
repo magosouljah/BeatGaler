@@ -45,7 +45,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p migration-check-logs
-          python .github/task-6-2-v2.py 2>&1 | tee migration-check-logs/apply.log
+          python .github/task-6-2-v3.py 2>&1 | tee migration-check-logs/apply.log
           status=${PIPESTATUS[0]}
           if [ "$status" -eq 0 ]; then
             echo "PASS apply" > migration-check-logs/summary.txt
@@ -132,18 +132,20 @@ jobs:
           old = f"- Ninguno en el run final {run_id}; la matriz aplicable quedó verde."
           new = (
               "- Run 34264928942: el aplicador temporal falló antes de modificar código productivo porque una sustitución textual del bloque de error de sesión no coincidió; la matriz no llegó a ejecutarse y el artifact no pudo generarse. Se corrigió únicamente el tooling de aplicación.\n"
-              f"- Run {run_id}: aplicación endurecida y matriz completa PASS."
+              "- Run 34265197531: el aplicador endurecido sí generó el cambio, pero duplicó el encabezado `function BeatGalerApp()` al retirar la función local. Unit TS, component DOM, integration y regressions pasaron; typecheck y ambos builds fallaron en `src/App.tsx:126` con TS1144. Se corrigió únicamente esa transformación.\n"
+              f"- Run {run_id}: aplicación corregida y matriz completa PASS."
           )
           if old not in text:
               raise SystemExit("Could not patch task 6.2 failure history")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
-          rm .github/task-6-2.py .github/task-6-2-v2.py .github/workflows/task-6-2-apply.yml
+          rm .github/task-6-2.py .github/task-6-2-v2.py .github/task-6-2-v3.py .github/workflows/task-6-2-apply.yml
           git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md \
             migration/Registro-de-avance.md \
             migration/BeatGaler-agent-state.md \
             .github/task-6-2.py \
             .github/task-6-2-v2.py \
+            .github/task-6-2-v3.py \
             .github/workflows/task-6-2-apply.yml
           git diff --cached --check
           git commit -m "docs(migration): close task 6.2"
