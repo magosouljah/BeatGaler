@@ -37,7 +37,8 @@ import SearchBar from "./features/library/components/SearchBar";
 import SortMenu from "./features/library/components/SortMenu";
 import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
-import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, writeActiveCloudUploads, type ActiveCloudUpload } from "./features/cloud/interruptedUploadJournal";
+import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
+import { buildCloudSessionUnavailableDetail, buildPlaybackPreparationFailureDetail, buildUploadFailureDetail } from "./features/cloud/uploadErrorDetails";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -121,58 +122,6 @@ function isRuntimeConflictError(error: unknown): boolean {
 }
 
 type ConnectionState = "checking" | "online" | "poor" | "offline";
-
-async function rollbackInterruptedCloudUploads(beatgalerUserId: string, authoritativeBeatIds: Set<string> | null): Promise<string[]> {
-  const pending = readActiveCloudUploads();
-  if (pending.length === 0) return [];
-
-  const rolledBack: string[] = [];
-  const remaining: ActiveCloudUpload[] = [];
-  const base = getResolvedCloudApiBase();
-  const token = getBeatGalerAuthToken();
-
-  for (const item of pending) {
-    // A recovery marker is only evidence that the process died mid-flow.
-    // Telegram INDEX is authoritative: if the beat is already present there,
-    // the upload was durable and MUST NOT be rolled back. Clear only the stale
-    // local marker and keep the beat/media intact.
-    if (authoritativeBeatIds?.has(item.beatId)) {
-      console.info(`[upload-recovery] marker cleared for durable beat ${item.beatId}`);
-      continue;
-    }
-
-    // If we could not verify the authoritative INDEX, fail closed: keep the
-    // marker for a later launch instead of guessing and deleting anything.
-    if (authoritativeBeatIds === null) {
-      remaining.push(item);
-      continue;
-    }
-
-    try {
-      const response = await fetch(`${base}/beats/delete-topic`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ beatgalerUserId, beatId: item.beatId }),
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(text || `HTTP ${response.status}`);
-      }
-
-      await purgeInterruptedUploadLocal(item.beatId, item.stagingPaths);
-      rolledBack.push(item.beatName);
-    } catch (error) {
-      console.warn(`Could not roll back interrupted upload ${item.beatName}:`, error);
-      remaining.push(item);
-    }
-  }
-
-  writeActiveCloudUploads(remaining);
-  return rolledBack;
-}
 
 function BeatGalerApp() {
   const {
@@ -485,10 +434,13 @@ function BeatGalerApp() {
             console.warn("Could not verify Telegram INDEX before interrupted-upload cleanup; cleanup deferred safely:", error);
           }
 
-          const rolledBackNames = await rollbackInterruptedCloudUploads(
-            local.beatgaler_user_id,
-            recoveryAuthorityIds,
-          );
+          const rolledBackNames = await rollbackInterruptedCloudUploads({
+            beatgalerUserId: local.beatgaler_user_id,
+            authoritativeBeatIds: recoveryAuthorityIds,
+            cloudApiBase: getResolvedCloudApiBase(),
+            authToken: getBeatGalerAuthToken(),
+            purgeLocal: purgeInterruptedUploadLocal,
+          });
           if (!cancelled && rolledBackNames.length > 0) setInterruptedUploadNotices(rolledBackNames);
         }
 
@@ -1142,23 +1094,7 @@ function BeatGalerApp() {
 
           if (!cloudSession.connected || !cloudSession.reachable) {
             const failed = backgroundUploadQueueRef.current.splice(0);
-            const raw = sessionCheckError instanceof Error
-              ? sessionCheckError.message
-              : sessionCheckError != null
-                ? String(sessionCheckError)
-                : "BeatGaler could not verify cloud access for this installation.";
-
-            const detail = [
-              "UPLOAD FAILED",
-              "Stage: Verify cloud session",
-              "",
-              raw,
-              "",
-              "Checks:",
-              "• Confirm the Windows cloud-server and Tailscale Funnel are running.",
-              "• Confirm this BeatGaler installation is signed in to the intended account.",
-              "• Sign out and back in if this installation is attached to the wrong account.",
-            ].join("\n");
+            const { raw, detail } = buildCloudSessionUnavailableDetail(sessionCheckError);
 
             setBackgroundUploadErrors(current => {
               const next = { ...current };
@@ -1294,13 +1230,7 @@ function BeatGalerApp() {
               transitionRuntime(detached.id, { type: "PLAYBACK_PREPARING" }, detached);
               const playbackReady = await waitForUploadedBeatPlaybackReady(detached);
               if (!playbackReady) {
-                const detail = [
-                  "PLAYBACK PREPARATION FAILED",
-                  `Beat: ${detached.name}`,
-                  "",
-                  "The media upload and Galer Library index are already committed, but BeatGaler could not warm the new MASTER for playback within 15 seconds.",
-                  "The beat was left in Cloud safely; retrying later should not require re-uploading the file.",
-                ].join("\n");
+                const detail = buildPlaybackPreparationFailureDetail(detached.name);
                 setBackgroundUploadErrors(current => ({ ...current, [detached.id]: detail }));
                 transitionRuntime(detached.id, {
                   type: "PLAYBACK_FAILED",
@@ -1366,55 +1296,12 @@ function BeatGalerApp() {
             } catch (error) {
               console.warn(`Background Telegram upload failed for ${original.name} at ${uploadStage}:`, error);
 
-              const raw = error instanceof Error
-                ? error.message
-                : typeof error === "string"
-                  ? error
-                  : (() => {
-                      try { return JSON.stringify(error); }
-                      catch { return String(error); }
-                    })();
-
-              const lower = raw.toLowerCase();
-              let hint = "Unexpected failure. The exact raw error is included below.";
-              if (lower.includes("encoder unavailable") || lower.includes("bundled ffmpeg") || lower.includes("could not start wav -> mp3")) {
-                hint = "This WAV needs a MASTER MP3, but BeatGaler could not start its bundled MP3 encoder. The installer/build must include ffmpeg; the user should not need to install it manually.";
-              } else if (lower.includes("wav -> mp3") || lower.includes("master generation") || lower.includes("conversion failed")) {
-                hint = "BeatGaler found the WAV but could not create the temporary 320 kbps MASTER MP3. The raw converter error is shown below.";
-              } else if (
-                lower.includes("wav source could not be read") ||
-                lower.includes("os error 3") ||
-                lower.includes("file not found") ||
-                lower.includes("no usable audio source") ||
-                lower.includes("no longer exists")
-              ) {
-                hint = "The local source audio disappeared before BeatGaler could upload it. For drag/drop batches this means the temporary drop-staging source is missing; BeatGaler now keeps shared staging alive until every pending/review beat is finished.";
-              } else if (lower.includes("temp") || lower.includes("prepare cloud audio copy") || lower.includes("metadata") || lower.includes("id3")) {
-                hint = "BeatGaler failed while creating its temporary upload copy or embedding metadata. Check file permissions, free disk space, and whether the source audio is a valid MP3/WAV.";
-              } else if (lower.includes("failed to start curl")) {
-                hint = "BeatGaler could not start the system HTTP client. On macOS the app now explicitly uses /usr/bin/curl; if this still appears, the system curl executable is unavailable.";
-              } else if (lower.includes("could not reach") || lower.includes("timed out") || lower.includes("couldn't connect") || lower.includes("connection")) {
-                hint = "BeatGaler could not complete the request to the Cloud server. Check Internet connectivity and that the BeatGaler Cloud server is running.";
-              } else if (lower.includes("http 400") || lower.includes("not connected for this beatgaler installation")) {
-                hint = "The server received the request but could not verify cloud access for this BeatGaler installation. Sign out and back in, then retry.";
-              } else if (lower.includes("413") || lower.includes("too large")) {
-                hint = "The server rejected the file because it exceeded the configured upload limit.";
-              } else if (lower.includes("invalid json") || lower.includes("<!doctype") || lower.includes("<html")) {
-                hint = "The endpoint returned something other than BeatGaler JSON. This can indicate a tunnel/proxy error page or an unexpected server response.";
-              } else if (lower.includes("telegram")) {
-                hint = "The request reached the cloud portion of the flow. Read the server error below for the exact rejection.";
-              }
-
-              const detail = [
-                "UPLOAD FAILED",
-                `Beat: ${original.name}`,
-                `Stage: ${uploadStage}`,
-                `Platform: ${navigator.platform || "unknown"}`,
-                "",
-                hint,
-                "",
-                `Error detail: ${sanitizeUserVisibleText(raw, "Unknown error")}`,
-              ].join("\n");
+              const detail = buildUploadFailureDetail({
+                beatName: original.name,
+                stage: uploadStage,
+                platform: navigator.platform || "unknown",
+                error,
+              });
 
               if (!syncCommitted) {
                 transitionRuntime(original.id, {

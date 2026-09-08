@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const playbackController = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
+const interruptedUploadJournal = readFileSync(resolve(process.cwd(), "src/features/cloud/interruptedUploadJournal.ts"), "utf8");
+const uploadErrorDetails = readFileSync(resolve(process.cwd(), "src/features/cloud/uploadErrorDetails.ts"), "utf8");
 
 const migrationTargets = {
-  uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
+  uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/uploadErrorDetails.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
   review: { tasks: ["7.1", "7.2", "7.3", "7.4"], owners: ["src/features/import/useImportReview.ts", "src/features/import/useImportDiscovery.ts", "src/features/import/useImportSaveAll.ts", "src/features/import/useBrowserImport.ts"] },
   reload: { tasks: ["9.2"], owners: ["src/features/library/useLibraryReload.ts"] },
   audio: { tasks: ["4.2", "4.3"], owners: ["src/features/playback/usePlaybackController.ts", "src/features/playback/usePlaybackPreparation.ts", "src/features/playback/usePlaybackQueue.ts"] },
@@ -131,14 +133,17 @@ describe("App migration characterization contracts", () => {
   });
 
   it("fails closed during interrupted-upload recovery until cloud authority is known", () => {
-    const recovery = section("async function rollbackInterruptedCloudUploads", "function BeatGalerApp");
-    expectOrdered(recovery, [
+    expectOrdered(interruptedUploadJournal, [
       "if (authoritativeBeatIds?.has(item.beatId))",
       "if (authoritativeBeatIds === null)",
-      "const response = await fetch(`${base}/beats/delete-topic`",
-      "await purgeInterruptedUploadLocal(item.beatId, item.stagingPaths)",
+      "const response = await fetchImpl(`${cloudApiBase}/beats/delete-topic`",
+      "await purgeLocal(item.beatId, item.stagingPaths)",
       "writeActiveCloudUploads(remaining)",
     ]);
-    expect(recovery).toContain("remaining.push(item)");
+    expect(interruptedUploadJournal).toContain("remaining.push(item)");
+    expect(app).toContain("rollbackInterruptedCloudUploads({");
+    expect(app).not.toContain("async function rollbackInterruptedCloudUploads");
+    expect(uploadErrorDetails).toContain("buildUploadFailureDetail");
+    expect(uploadErrorDetails).toContain("buildPlaybackPreparationFailureDetail");
   });
 });
