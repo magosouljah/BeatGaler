@@ -287,7 +287,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** un paquete funciona después de reiniciar sin red y quitarlo conserva la conducta actual online/offline.
     
 
-### [ ] 5.5 — Separar papelera y restauración
+### [x] 5.5 — Separar papelera y restauración
 
 - **Hacer:** extraer borrado individual/masivo y el callback de restauración que hoy vive dentro de Settings.
     
