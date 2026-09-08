@@ -167,5 +167,19 @@ if (recoveryCount !== 1) {
 }
 characterization = characterization.replace(oldRecoverySection, newRecoverySection);
 
+const regressionsPath = "scripts/run-regressions.mjs";
+let regressions = readFileSync(regressionsPath, "utf8");
+const appReadAnchor = '  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");';
+const journalReadAnchor = `${appReadAnchor}\n  const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");`;
+const appReadCount = regressions.split(appReadAnchor).length - 1;
+if (appReadCount !== 1) throw new Error(`regression App source read: expected 1 anchor, found ${appReadCount}`);
+regressions = regressions.replace(appReadAnchor, journalReadAnchor);
+const oldMarkerGuard = '  if (!app.includes("const INTERRUPTED_UPLOADS_KEY")) fail("Interrupted upload recovery marker disappeared.");';
+const newMarkerGuard = '  if (!interruptedUploadJournal.includes(\'const INTERRUPTED_UPLOADS_KEY = "beatgaler:active-cloud-uploads:v1"\')) fail("Interrupted upload recovery marker disappeared or changed storage key.");';
+const markerGuardCount = regressions.split(oldMarkerGuard).length - 1;
+if (markerGuardCount !== 1) throw new Error(`Phase 11 marker regression: expected 1 old guard, found ${markerGuardCount}`);
+regressions = regressions.replace(oldMarkerGuard, newMarkerGuard);
+
 writeFileSync(appPath, app);
 writeFileSync(characterizationPath, characterization);
+writeFileSync(regressionsPath, regressions);
