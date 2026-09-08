@@ -372,7 +372,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** guardar, omitir y cancelar afectan exactamente a los mismos beats que antes.
     
 
-### [ ] 7.2 — Separar descubrimiento incremental
+### [x] 7.2 — Separar descubrimiento incremental
 
 - **Hacer:** extraer búsqueda/preparación progresiva de beats desde rutas y carpetas.
     

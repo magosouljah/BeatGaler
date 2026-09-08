@@ -4,41 +4,38 @@
 
 - Fecha de ejecución: 2026-09-08
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `7.1 — Separar Review y sus acciones básicas`
+- Tarea trabajada: `7.2 — Separar descubrimiento incremental`
 - Estado: `Terminada`
-- Última tarea terminada: `7.1 — Separar Review y sus acciones básicas`
+- Última tarea terminada: `7.2 — Separar descubrimiento incremental`
 
 ## Base de esta ejecución
 
-- SHA inicial: `182717a81061534658ab5b688e9808a5f38075f1`
-- SHA de implementación validada: `af916fd729d2ef6ceef16c8ce73b9caf84c4f657`
-- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `b2574250a08e480039f8b77f180c10be152ce27a`
-- Run de validación final: `34285851953` — `Temporary task 7.1 final validator` — `SUCCESS`
+- SHA inicial: `01e4c439ef4e251a5c94d0d46b907bfdf0745e3b`
+- SHA de implementación validada: `8923a1790b9dd0d126760ae54908678a44f78025`
+- HEAD después de retirar el artifact generado por CI y antes del cierre documental: `d993cabe4a4aaf3c661cb68afd604734a529720f`
+- Run de implementación final: `34287602453` — `Temporary task 7.2 retry 3` — `SUCCESS`
+- El SHA final real de la ronda es el HEAD remoto que debe leerse nuevamente después de este cierre documental; no se anticipa dentro del propio commit de cierre.
 
 ## Resultado verificado
 
-- `useImportSession.ts` posee candidatos, posición y estado básico de la sesión Review.
-- `useImportReview.ts` posee Save, Skip y Cancel.
-- `ImportReviewHost.tsx` posee el render básico de skeleton/Drawer y su wiring de Review.
-- Los candidatos permanecen fuera de la biblioteca hasta Save.
-- Save entrega únicamente el beat guardado a la cola de uploads.
-- Skip no añade el candidato y conserva el mismo avance/liberación.
-- Cancel conserva beats ya guardados, descarta/libera únicamente lo pendiente y protege staging todavía en uso.
-- La matriz completa de migración pasó sobre `af916fd729d2ef6ceef16c8ce73b9caf84c4f657`.
+- `useImportDiscovery.ts` posee el descubrimiento/preparación progresiva y sus generaciones de cancelación.
+- Beat 1 se publica antes de que termine el escaneo completo; el resto continúa secuencialmente en background después de un frame.
+- Cancel/reemplazo invalidan trabajo obsoleto; un resultado tardío se descarta y no reabre Review.
+- Save All sigue esperando la misma promesa de preparación y permanece en App hasta 7.3.
+- La entrada Web permanece en App hasta 7.4 y usa una conexión mínima para cerrar el estado visual de discovery.
+- La matriz completa pasó sobre la implementación validada y el guard nativo sigue comprobando que las rutas originales entran al stream incremental.
 
 ## Pendientes concretos
 
-- `7.2 — Separar descubrimiento incremental`.
-- Save All/conflictos permanecen para 7.3.
-- La entrada Web permanece para 7.4.
-- Las conexiones pequeñas de lectura Review ↔ upload queue siguen cableadas desde App mientras se completa la Parte 7.
+- `7.3 — Separar Save All y conflictos`.
+- `7.4 — Separar la entrada de importación web` permanece posterior a 7.3.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 7.1.
+- Ninguna necesaria para cerrar 7.2.
 
 ## Siguiente tarea
 
-- `7.2 — Separar descubrimiento incremental`
+- `7.3 — Separar Save All y conflictos`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.
