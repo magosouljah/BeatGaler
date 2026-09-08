@@ -28,6 +28,18 @@ downloads_path.write_text(downloads.replace(old_builder, new_builder, 1))
 
 regressions_path = Path("scripts/run-regressions.mjs")
 regressions = regressions_path.read_text()
+
+runtime_marker = '  const runtimeStateMachine = readFileSync(path.join(root, "src", "features", "state", "beatRuntimeState.ts"), "utf8");'
+runtime_owner_line = '  const beatDownloadsForRuntime = readFileSync(path.join(root, "src", "features", "downloads", "useBeatDownloads.ts"), "utf8");'
+if regressions.count(runtime_marker) != 1:
+    raise SystemExit("Could not find runtime state regression marker exactly once")
+regressions = regressions.replace(runtime_marker, runtime_marker + "\n" + runtime_owner_line, 1)
+old_runtime_guard = '  if (!app.includes(\'transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }\') || !app.includes(\'type: "SYNC_UPLOAD_STARTED"\') || !app.includes(\'type: "PLAYBACK_PREPARING"\') || !app.includes(\'type: "DOWNLOAD_STARTED"\')) fail("App flows are no longer wired to the definitive runtime state machine.");'
+new_runtime_guard = '  if (!app.includes(\'transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }\') || !app.includes(\'type: "SYNC_UPLOAD_STARTED"\') || !app.includes(\'type: "PLAYBACK_PREPARING"\') || !beatDownloadsForRuntime.includes(\'type: "DOWNLOAD_STARTED"\')) fail("App flows are no longer wired to the definitive runtime state machine.");'
+if regressions.count(old_runtime_guard) != 1:
+    raise SystemExit("Could not move runtime download guard exactly once")
+regressions = regressions.replace(old_runtime_guard, new_runtime_guard, 1)
+
 marker = '  const rustCommandsForExport = readFileSync(path.join(root, "src-tauri", "src", "commands.rs"), "utf8");'
 owner_line = '  const beatDownloadsForExport = readFileSync(path.join(root, "src", "features", "downloads", "useBeatDownloads.ts"), "utf8");'
 if regressions.count(marker) != 1:
