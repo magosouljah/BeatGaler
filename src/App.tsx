@@ -15,7 +15,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
@@ -56,6 +56,7 @@ import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
 import { useDrawerCloudPersistence } from "./features/edit/useDrawerCloudPersistence";
 import { useBeatAssetUpdates } from "./features/edit/useBeatAssetUpdates";
 import { useBeatProjects } from "./features/projects/useBeatProjects";
+import { useOfflineAvailability } from "./features/offline/useOfflineAvailability";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
@@ -305,7 +306,6 @@ function BeatGalerApp() {
   const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
     typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "checking"
   );
-  const [offlineBusyIds, setOfflineBusyIds] = useState<Set<string>>(new Set());
   const [setupDone, setSetupDone] = useState(false);
   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);
 
@@ -335,6 +335,18 @@ function BeatGalerApp() {
     cloudSessionVerified,
     connectionState,
     isBeatCloudUpdateBusy: beatId => beatCloudUpdateBusyIds.has(beatId),
+  });
+  const { offlineBusyIds, handleToggleOffline } = useOfflineAvailability({
+    connectionState,
+    audioPlayingId: audio.playingId,
+    releaseFile,
+    invalidatePlaybackPreparation,
+    ensureWarmPlaybackUrl,
+    beatRuntimeStatesRef,
+    transitionRuntime,
+    setBeats,
+    setDrawer,
+    setRevealedBeatIds,
   });
 
   // Keep a ref to togglePause so the keydown handler never goes stale
@@ -2062,111 +2074,6 @@ function BeatGalerApp() {
   }, [connectionState, drawer, transitionRuntime]);
 
 
-
-  const handleToggleOffline = useCallback(async (beat: Beat) => {
-    if (offlineBusyIds.has(beat.id)) return;
-    if (!beat.offline_available && connectionState !== "online") {
-      await appAlert({ title: "Internet required", message: "Connect to the internet once to download this beat for Offline mode." });
-      return;
-    }
-
-    setOfflineBusyIds(current => new Set(current).add(beat.id));
-    let offlineOwnsDownloadState = false;
-    if (!beat.offline_available) {
-      const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-      if (runtime.download_state !== "downloading") {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_STARTED" }, beat);
-        offlineOwnsDownloadState = true;
-      }
-    }
-    try {
-      if (beat.offline_available) {
-        // The Offline fast path may have memoized the durable MASTER path under
-        // the same telegram_file_id used by the cloud beat. Remove that memo
-        // before deleting the package or the next Play would reuse a dead local
-        // file and incorrectly report the Cloud MASTER as unavailable.
-        if (audio.playingId === beat.id) releaseFile();
-        invalidatePlaybackPreparation(beat.id);
-
-        await removeBeatOfflineAvailability(beat.id);
-        transitionRuntime(beat.id, { type: "SET_OFFLINE_AVAILABLE", available: false }, beat);
-
-        if (connectionState !== "online") {
-          // In an Offline-only library, removing the durable package means the
-          // beat is no longer eligible to be shown at all. Remove the card in
-          // the same transaction instead of leaving a visible but unusable beat.
-          setBeats(current => current.filter(item => item.id !== beat.id));
-          setRevealedBeatIds(current => {
-            const next = new Set(current);
-            next.delete(beat.id);
-            return next;
-          });
-        } else {
-          // Remove Offline is a local-storage operation only. Keep the live Beat
-          // object as the metadata/artwork authority and clear only paths owned by
-          // the durable Offline package. Re-loading SQLite here can replace newer
-          // in-memory artwork/metadata with an older or incomplete materialized row.
-          const withoutOfflinePaths = (item: Beat): Beat => ({
-            ...item,
-            offline_available: false,
-            folder_path: "",
-            mp3_path: "",
-            wav_path: null,
-            playback_path: "",
-            stems_path: null,
-            samples_path: null,
-            flp_path: null,
-            als_path: null,
-            other_files: [],
-            loop_path: null,
-          });
-          const cloudBeat = withoutOfflinePaths(beat);
-          setBeats(current => current.map(item => item.id === beat.id ? withoutOfflinePaths(item) : item));
-          setDrawer(current => current?.beat.id === beat.id
-            ? { ...current, beat: withoutOfflinePaths(current.beat) }
-            : current);
-
-          // Re-enter Download Cooking immediately while online. This is only a
-          // lightweight enqueue; it prevents the first post-Remove Play from
-          // racing an old Offline source and restores the normal cloud fast path.
-          if (cloudBeat.telegram_file_id) {
-            void ensureWarmPlaybackUrl(cloudBeat);
-          }
-        }
-      } else {
-        const offline = await makeBeatAvailableOffline(beat);
-        if (offlineOwnsDownloadState) transitionRuntime(beat.id, { type: "DOWNLOAD_SUCCEEDED" }, offline);
-        transitionRuntime(beat.id, { type: "SET_OFFLINE_AVAILABLE", available: true }, offline);
-        setBeats(current => current.map(item => item.id === beat.id ? {
-          ...item,
-          offline_available: true,
-          image_base64: item.image_base64 || offline.image_base64,
-          image_preview_base64: item.image_preview_base64 || offline.image_preview_base64,
-        } : item));
-        try {
-          const audio = new Audio(downloadCompleteWav);
-          audio.volume = 0.68;
-          void audio.play().catch(() => {});
-        } catch {}
-      }
-    } catch (error) {
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-      if (offlineOwnsDownloadState) {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "OFFLINE_DOWNLOAD_FAILED", message, retryable: true }, beat);
-      }
-      await appAlert({
-        title: beat.offline_available ? "Could not remove offline copy" : "Offline download failed",
-        message,
-        danger: true,
-      });
-    } finally {
-      setOfflineBusyIds(current => {
-        const next = new Set(current);
-        next.delete(beat.id);
-        return next;
-      });
-    }
-  }, [audio.playingId, connectionState, ensureWarmPlaybackUrl, offlineBusyIds, releaseFile, transitionRuntime]);
 
   const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {
     if (rejectOfflineMutation("Changing artwork")) return;

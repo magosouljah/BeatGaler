@@ -58,6 +58,7 @@ try {
   const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");
   const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");
   const beatProjects = readFileSync(path.join(root, "src", "features", "projects", "useBeatProjects.ts"), "utf8");
+  const offlineAvailability = readFileSync(path.join(root, "src", "features", "offline", "useOfflineAvailability.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
@@ -264,7 +265,7 @@ try {
   if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
   if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
   if (!app.includes("useBeatRuntimeRegistry(beats, beatsLatestRef)")) fail("App flows are no longer connected to the extracted runtime registry.");
-  if (!app.includes('type: "SYNC_DELETE_STARTED"') || !app.includes('type: "SET_TRASH_SYNC_REQUIRED"') || !app.includes('type: "SET_OFFLINE_AVAILABLE"')) fail("Delete/Trash/Offline flows are no longer wired to the definitive runtime registry.");
+  if (!app.includes('type: "SYNC_DELETE_STARTED"') || !app.includes('type: "SET_TRASH_SYNC_REQUIRED"') || !offlineAvailability.includes('type: "SET_OFFLINE_AVAILABLE"')) fail("Delete/Trash/Offline flows are no longer wired to the definitive runtime registry.");
   console.log("PASS runtime-state guard: sync/download/playback are independent, Offline is orthogonal, errors remember previous_state, and App flows are wired");
 
   // Bulk Import + instant Review regression shield. Review must become visible
@@ -380,11 +381,11 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!rustCommands.includes('Available Offline owns a protected MASTER outside the temporary cache.')) fail("MP3 export lost local-first Offline precedence.");
   if (!rustCommands.includes('PROJECT follows the same local-first rule. Available Offline must')) fail("PROJECT/Everything export lost local-first Offline precedence.");
   if (!app.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
-  if (!app.includes('invalidatePlaybackPreparation(beat.id)') || !playbackController.includes('cookingPlaybackUrlRef.current.delete(beatId)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
+  if (!offlineAvailability.includes('invalidatePlaybackPreparation(beat.id)') || !playbackController.includes('cookingPlaybackUrlRef.current.delete(beatId)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
   if (!playbackController.includes('cookingWarmPromisesRef.current.delete(beatId)')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");
-  const removeOfflineUiStart = app.indexOf('if (beat.offline_available) {', app.indexOf('const handleToggleOffline'));
-  const removeOfflineUiEnd = app.indexOf('} else {\n        const offline = await makeBeatAvailableOffline(beat);', removeOfflineUiStart);
-  const removeOfflineUiBlock = removeOfflineUiEnd > removeOfflineUiStart ? app.slice(removeOfflineUiStart, removeOfflineUiEnd) : '';
+  const removeOfflineUiStart = offlineAvailability.indexOf('if (beat.offline_available) {', offlineAvailability.indexOf('const handleToggleOffline'));
+  const removeOfflineUiEnd = offlineAvailability.indexOf('} else {\n        const offline = await makeBeatAvailableOffline(beat);', removeOfflineUiStart);
+  const removeOfflineUiBlock = removeOfflineUiEnd > removeOfflineUiStart ? offlineAvailability.slice(removeOfflineUiStart, removeOfflineUiEnd) : '';
   if (removeOfflineUiBlock.includes('await loadLibrary()')) fail("Remove from Available Offline must not replace the live Beat with a SQLite rehydrate.");
   if (!removeOfflineUiBlock.includes('const withoutOfflinePaths = (item: Beat): Beat => ({')) fail("Remove from Available Offline lost its metadata-preserving local-path cleanup.");
   if (!removeOfflineUiBlock.includes('...item,\n            offline_available: false')) fail("Remove from Available Offline must preserve the live Beat object before clearing Offline state.");
