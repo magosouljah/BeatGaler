@@ -1,0 +1,52 @@
+name: Task 6.1 Finalize
+
+on:
+  push:
+    branches: [v0.9.0-test-noche]
+    paths:
+      - .github/workflows/task-6-1-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Update migration records
+        run: python .github/task-6-1-finalize.py
+
+      - name: Verify documentation patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(grep -Fxc '### [x] 6.1 — Separar las descargas de exportación' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md)" -eq 1
+          test "$(grep -Fxc '### Registro — 6.1' migration/Registro-de-avance.md)" -eq 1
+          grep -Fq 'Última tarea terminada: **6.1 — Separar las descargas de exportación**' migration/BeatGaler-agent-state.md
+          grep -Fq '6.2 — Separar recuperación y errores de uploads' migration/BeatGaler-agent-state.md
+
+      - name: Commit task 6.1 closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/task-6-1-finalize.yml .github/task-6-1-finalize.py
+          git add -A
+          git diff --cached --check
+          actual="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' \
+            .github/task-6-1-finalize.py \
+            .github/workflows/task-6-1-finalize.yml \
+            migration/BeatGaler-agent-state.md \
+            migration/BeatGaler-roadmap-para-trabajar-con-IAs.md \
+            migration/Registro-de-avance.md | sort)"
+          test "$actual" = "$expected"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs(migration): close task 6.1"
+          git push origin HEAD:v0.9.0-test-noche
