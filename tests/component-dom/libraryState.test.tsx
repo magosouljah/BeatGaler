@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Beat } from "../../src/types";
+import type { AppSettings, Beat } from "../../src/types";
 
 const mocks = vi.hoisted(() => ({
   loadCachedBeats: vi.fn(),
@@ -35,21 +35,21 @@ function beat(id: string): Beat {
   return { id, name: id, tags: [], other_files: [] } as unknown as Beat;
 }
 
-function Harness({ verified, blocked }: { verified: boolean; blocked: boolean }) {
+function Harness({ verified, settings }: { verified: boolean; settings: AppSettings | null }) {
   const state = useLibraryState();
-  useLibraryPresentationCache(state.beats, verified, blocked);
+  useLibraryPresentationCache(state.beats, verified, settings);
   latestState = state;
   return <div data-testid="ids">{state.beats.map(item => item.id).join(",")}</div>;
 }
 
-async function render(verified: boolean, blocked: boolean) {
+async function render(verified: boolean, settings: AppSettings | null) {
   if (!host) {
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
   }
   await act(async () => {
-    root!.render(<Harness verified={verified} blocked={blocked} />);
+    root!.render(<Harness verified={verified} settings={settings} />);
   });
 }
 
@@ -74,7 +74,7 @@ describe("useLibraryState", () => {
     mocks.loadCachedBeats.mockReturnValue([beat("ready"), beat("interrupted")]);
     mocks.readActiveCloudUploads.mockReturnValue([{ beatId: "interrupted" }]);
 
-    await render(false, false);
+    await render(false, null);
 
     expect(host!.querySelector('[data-testid="ids"]')?.textContent).toBe("ready");
     expect(latestState!.startupCachedBeatsRef.current?.map(item => item.id)).toEqual(["ready"]);
@@ -84,10 +84,10 @@ describe("useLibraryState", () => {
     expect(latestState!.beatsLatestRef.current).toEqual([]);
   });
 
-  it("writes the presentation cache only after cloud authority is verified and presentation is allowed", async () => {
+  it("keeps the original verified-cloud presentation-cache guard", async () => {
     vi.useFakeTimers();
     mocks.loadCachedBeats.mockReturnValue([beat("cached")]);
-    await render(false, false);
+    await render(false, null);
 
     await act(async () => {
       latestState!.setBeats([beat("fresh")]);
@@ -95,11 +95,29 @@ describe("useLibraryState", () => {
     await act(async () => { vi.advanceTimersByTime(2000); });
     expect(mocks.saveCachedBeats).not.toHaveBeenCalled();
 
-    await render(true, true);
+    await render(true, {
+      beats_folder: null,
+      incomplete_warnings_enabled: true,
+      custom_cursor_enabled: true,
+    });
     await act(async () => { vi.advanceTimersByTime(1500); });
     expect(mocks.saveCachedBeats).not.toHaveBeenCalled();
 
-    await render(true, false);
+    await render(true, {
+      beats_folder: null,
+      incomplete_warnings_enabled: true,
+      custom_cursor_enabled: true,
+      telegram_cloud_connected: false,
+    });
+    await act(async () => { vi.advanceTimersByTime(1500); });
+    expect(mocks.saveCachedBeats).not.toHaveBeenCalled();
+
+    await render(true, {
+      beats_folder: null,
+      incomplete_warnings_enabled: true,
+      custom_cursor_enabled: true,
+      telegram_cloud_connected: true,
+    });
     await act(async () => { vi.advanceTimersByTime(1500); });
     expect(mocks.saveCachedBeats).toHaveBeenLastCalledWith([expect.objectContaining({ id: "fresh" })]);
   });
