@@ -20,9 +20,20 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-Path('src/features/import/useImportDiscovery.ts').write_text(
-    extract_heredoc('src/features/import/useImportDiscovery.ts'), encoding='utf-8'
+discovery_source = extract_heredoc('src/features/import/useImportDiscovery.ts')
+discovery_source = replace_once(
+    discovery_source,
+    '  const cancelPendingReviewWork = useCallback(() => {\n',
+    '  const completeImmediateReviewPreparation = useCallback(() => {\n    setReviewPreparationDone(true);\n    setReviewBootstrap(null);\n  }, []);\n\n  const cancelPendingReviewWork = useCallback(() => {\n',
+    'immediate review handoff',
 )
+discovery_source = replace_once(
+    discovery_source,
+    '    cancelPendingReviewWork,\n  };\n',
+    '    cancelPendingReviewWork,\n    completeImmediateReviewPreparation,\n  };\n',
+    'discovery return handoff',
+)
+Path('src/features/import/useImportDiscovery.ts').write_text(discovery_source, encoding='utf-8')
 Path('tests/component-dom/importDiscovery.test.tsx').write_text(
     extract_heredoc('tests/component-dom/importDiscovery.test.tsx'), encoding='utf-8'
 )
@@ -84,6 +95,7 @@ inserted = '''  }, [connectionState]);
     reviewPreparationPromiseRef,
     importDroppedPaths,
     cancelPendingReviewWork,
+    completeImmediateReviewPreparation,
   } = useImportDiscovery({
     dropImporting,
     setDropImporting,
@@ -114,6 +126,12 @@ discovery_start = app.index('  const importDroppedPaths = useCallback(async (pat
 discovery_end_marker = '\n\n  useEffect(() => {\n    if (!deferredImportBatch || !reviewPreparationDone || bulkSaveAllBusy) return;'
 discovery_end = app.index(discovery_end_marker, discovery_start)
 app = app[:discovery_start] + app[discovery_end:]
+app = replace_once(
+    app,
+    '      setReviewPreparationDone(true);\n      setReviewBootstrap(null);\n      setDeferredImportBatch(null);\n',
+    '      completeImmediateReviewPreparation();\n      setDeferredImportBatch(null);\n',
+    'browser immediate review handoff',
+)
 app_path.write_text(app, encoding='utf-8')
 
 characterization_path = Path('tests/integration/appMigrationCharacterization.test.ts')
