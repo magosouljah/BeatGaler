@@ -1587,3 +1587,100 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 5.6
+
+```
+Tarea: 5.6 — Separar el renombrado global de tags
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 3b27e6bee20cffdf763d3d5ccaee45b63a52ba85
+- Última tarea verificada: 5.5 — Separar papelera y restauración
+
+Cambio realizado
+
+- Se creó `src/features/tags/useTagRename.ts` como dueño de la operación global de renombrado, sus estados de diálogo/progreso/error y la coordinación con el journal nativo existente.
+- Se creó `src/features/tags/components/TagRenameDialog.tsx` y el portal completo salió de `App.tsx` conservando etapas Name/Confirm, conteos, Cancel previo a ejecución, Back, estado Renaming y errores.
+- `App.tsx` ahora compone `useTagRename`, abre el flujo desde `TagColorMenu` y renderiza `TagRenameDialog`; dejó de poseer directamente `renameTagEverywhere`, los estados de renombrado y el callback de confirmación.
+- Se conserva el orden de metadata: solo cambia el valor de la etiqueta coincidente dentro del arreglo existente y se deduplican resultados igual que antes.
+- Tras éxito se conservan la actualización de los mismos beats, `replaceTagFilter(oldTag, newTag)` y `renameTagColor(oldTag, newTag)`.
+- Se conserva `registerJob`/`updateJob`, el mensaje `Preparing journal…`, la sanitización de errores y la recuperación delegada al servicio `renameTagEverywhere`.
+- No se inició 6.1.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appTagRenameExtraction.test.ts` para proteger ownership, actualización de beats, orden de metadata, filtros/colores, feedback de recuperación y comportamiento del diálogo.
+- No se desactivaron ni relajaron pruebas existentes.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/tags/useTagRename.ts
+- src/features/tags/components/TagRenameDialog.tsx
+- tests/integration/appTagRenameExtraction.test.ts
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 5.6 Retry 2`, run 34249152808 — SUCCESS.
+- Artifact `migration-check-logs-task-5-6-34249152808-1`, `summary.txt` leído: PASS en todos los checks.
+- `git diff --check` — PASS antes de la matriz.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- SHA de implementación verificada: 92dedbc44ddd3014ac5e5165f3822df8714d67cd.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` — no requerido; la matriz ejecutó individualmente los checks aplicables del plan.
+- E2E completos de import/download/recovery — fuera del alcance del renombrado global de tags.
+- Prueba física Desktop Windows/macOS — no ejecutada; la ronda trabaja mediante GitHub Actions y no dispone de aplicación física interactiva.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Desktop: abrir el menú de color de una etiqueta, elegir Renombrar, editar el nombre, comprobar Cancel y Back antes de ejecutar, confirmar y observar conteos/progreso; después verificar que los mismos beats contienen el nuevo tag y que filtro/color siguen al nombre nuevo.
+- Resultado esperado: mismo comportamiento anterior, mismo orden de metadata salvo el nombre reemplazado, operación bloqueada durante ejecución y error visible si el servicio falla.
+
+Pendientes / fuera de alcance
+
+- 6.1 — Separar las descargas de exportación queda pendiente y no fue iniciado.
+- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 5.6.
+- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` ya existía antes de esta ronda y permanece sin cambios.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de producto quedó abierto por 5.6.
+
+Herramientas temporales restantes
+
+- Ninguna creada por 5.6 permanece tras el commit de cierre.
+
+Fallos encontrados y causa
+
+- Run 34248696947: unit TS, component DOM, integration y regressions pasaron; typecheck y ambos builds fallaron porque el primer script de extracción eliminó el import compartido `sanitizeUserVisibleText` aunque `App.tsx` todavía lo usa en otras rutas. No se publicó implementación. Se clasificó como implementación temporal incorrecta.
+- Run 34248930428: reprodujo el mismo único fallo porque la corrección automática del script no coincidió con el texto generado; nuevamente no se publicó implementación.
+- Run 34249152808 preservó explícitamente el import compartido, toda la matriz quedó verde y publicó la implementación.
+
+Veredicto
+
+Terminada.
+
+El renombrado global de tags, sus estados y su diálogo quedaron fuera de `App.tsx` conservando orden de metadata, actualización de filtros/colores, journal, feedback y errores.
+
+Siguiente tarea
+
+6.1 — Separar las descargas de exportación.
+
+No iniciada.
+```

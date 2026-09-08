@@ -298,7 +298,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** borrar y restaurar funciona igual online/offline y los beats eliminados no reaparecen por una recarga indebida.
     
 
-### [ ] 5.6 — Separar el renombrado global de tags
+### [x] 5.6 — Separar el renombrado global de tags
 
 - **Hacer:** extraer operación, estados de progreso/error y diálogo de renombrado.
     
