@@ -33,3 +33,4 @@ jobs:
           git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md scripts/close-task-3-4.py .github/workflows/task-3-4-close.yml .github/workflows/task-3-4-close-v2.yml
           git commit -m 'chore(migration): close task 3.4 state'
           git push origin HEAD:v0.9.0-test-noche
+          # formatting retry
