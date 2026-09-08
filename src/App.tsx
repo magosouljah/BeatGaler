@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import uploadCompleteWav from "./assets/status/upload-complete.wav";
-import downloadCompleteWav from "./assets/status/download-complete.wav";
 import type { Beat, AppSettings } from "./types";
 import BeatCard from "./components/BeatCard";
 import Drawer from "./components/Drawer";
@@ -15,10 +14,9 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
-import { listen } from "@tauri-apps/api/event";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { appAlert, appConfirm } from "./lib/dialog";
@@ -32,7 +30,8 @@ import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeEx
 import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
 import { installHtmlDropController } from "./features/dragdrop/htmlDropController";
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
-import CloudFilesModal, { type BeatDownloadKind } from "./features/downloads/components/CloudFilesModal";
+import CloudFilesModal from "./features/downloads/components/CloudFilesModal";
+import { useBeatDownloads } from "./features/downloads/useBeatDownloads";
 import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";
 import SearchBar from "./features/library/components/SearchBar";
 import SortMenu from "./features/library/components/SortMenu";
@@ -280,18 +279,6 @@ function BeatGalerApp() {
   const [reviewPreparationDone, setReviewPreparationDone] = useState(true);
   const [bulkSaveAllBusy, setBulkSaveAllBusy] = useState(false);
   const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string; kind: "file" | "directory" } | null>(null);
-  const [cloudFilesBeat, setCloudFilesBeat] = useState<Beat | null>(null);
-  const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
-  const [cloudFilesBusyId, setCloudFilesBusyId] = useState<string | null>(null);
-  const [cloudFilesDownloadedIds, setCloudFilesDownloadedIds] = useState<Set<string>>(new Set());
-  const [cloudFilesDownloadError, setCloudFilesDownloadError] = useState<string | null>(null);
-  const [cloudDownloadNotice, setCloudDownloadNotice] = useState<{
-    taskId: string;
-    kind: BeatDownloadKind;
-    beatName: string;
-    status: "downloading" | "completed";
-  } | null>(null);
-  const backgroundDownloadRuntimeOwnersRef = useRef<Set<string>>(new Set());
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueState | null>(null);
   // Background uploads can finish while the user is still reviewing other beats
   // from the SAME drop-staging session. Keep a live ref so staging cleanup never
@@ -311,6 +298,18 @@ function BeatGalerApp() {
   const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
     typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "checking"
   );
+  const {
+    cloudFilesBeat,
+    cloudFiles,
+    cloudFilesBusyId,
+    cloudFilesDownloadedIds,
+    cloudFilesDownloadError,
+    cloudDownloadNotice,
+    handleCloudFiles,
+    handleGetCloudFile,
+    closeCloudFiles,
+    dismissDownloadError,
+  } = useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime });
   const [setupDone, setSetupDone] = useState(false);
   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);
 
@@ -2707,150 +2706,6 @@ function BeatGalerApp() {
     };
   }, [handleAutoProjectDrop, handleDropArtwork, importDroppedPaths]);
 
-  const handleCloudFiles = useCallback(async (beat: Beat) => {
-    // Exporting/downloading is read-only. A durable Available Offline package
-    // must remain fully usable without Telegram: MP3/WAV/PROJECT/Everything are
-    // copied from its local protected files. Only cloud-only beats need network.
-    if (connectionState !== "online" && !beat.offline_available) {
-      await appAlert({
-        title: "Files unavailable offline",
-        message: "This beat was not made Available Offline. Reconnect to download its cloud files.",
-      });
-      return;
-    }
-    try {
-      const files = await listCloudFilesForBeat(beat.id);
-      setCloudFiles(files);
-      setCloudFilesDownloadedIds(new Set());
-      setCloudFilesDownloadError(null);
-      setCloudFilesBeat(beat);
-    } catch (error) {
-      await appAlert({ title: "Cloud files", message: String(error), danger: true });
-    }
-  }, [connectionState]);
-
-  const handleGetCloudFile = useCallback(async (kind: BeatDownloadKind) => {
-    const beat = cloudFilesBeat;
-    if (!beat || cloudFilesBusyId) return;
-
-    const safeBase = (beat.name || "Beat")
-      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
-      .replace(/[. ]+$/g, "")
-      .trim() || "Beat";
-
-    const exportMeta = [String(beat.bpm || "").trim(), String(beat.key || "").trim()]
-      .filter(Boolean)
-      .join(" ");
-    const audioSafeBase = exportMeta && !safeBase.endsWith(`[${exportMeta}]`)
-      ? `${safeBase} [${exportMeta}]`
-      : safeBase;
-
-    let ownsRuntimeDownloadState = false;
-    try {
-      setCloudFilesDownloadError(null);
-
-      let destination: string | null = null;
-      if (kind === "MP3") destination = await chooseExportFilePath(`${audioSafeBase}.mp3`, "mp3");
-      else if (kind === "WAV") destination = await chooseExportFilePath(`${audioSafeBase}.wav`, "wav");
-      else if (kind === "PROJECT") destination = await chooseExportFilePath(`${safeBase}.zip`, "zip");
-      else destination = await chooseExportFolder();
-
-      if (!destination) return;
-
-      // This invoke only STARTS a Rust worker thread and returns immediately.
-      // All Telegram/network/ZIP/copy/metadata work happens after this point
-      // outside the Tauri UI thread, so the Downloads modal can be closed and
-      // the rest of BeatGaler stays interactive.
-      const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-      if (runtime.download_state !== "downloading") {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_STARTED" }, beat);
-        ownsRuntimeDownloadState = true;
-      }
-      const taskId = await startBackgroundDownload(kind, beat, destination);
-      if (ownsRuntimeDownloadState) backgroundDownloadRuntimeOwnersRef.current.add(taskId);
-      setCloudFilesBusyId(kind);
-      setCloudDownloadNotice({
-        taskId,
-        kind,
-        beatName: beat.name || "Beat",
-        status: "downloading",
-      });
-    } catch (error) {
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-      if (ownsRuntimeDownloadState) {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "DOWNLOAD_START_FAILED", message, retryable: true }, beat);
-      }
-      setCloudFilesBusyId(null);
-      setCloudDownloadNotice(null);
-      setCloudFilesDownloadError(message);
-    }
-  }, [cloudFilesBeat, cloudFilesBusyId, transitionRuntime]);
-
-  useEffect(() => {
-    if (!isTauriAvailable) return;
-
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-
-    void listen<BackgroundDownloadEvent>("beatgaler-download-event", event => {
-      if (disposed) return;
-      const payload = event.payload;
-      const kind = payload.kind as BeatDownloadKind;
-
-      const ownsRuntimeDownloadState = backgroundDownloadRuntimeOwnersRef.current.delete(payload.task_id);
-      if (payload.status === "error") {
-        const message = sanitizeUserVisibleText(payload.error || "Download failed.", "Download failed.");
-        if (ownsRuntimeDownloadState) {
-          transitionRuntime(payload.beat_id, { type: "DOWNLOAD_FAILED", code: "DOWNLOAD_FAILED", message, retryable: true });
-        }
-        setCloudFilesBusyId(current => current === kind ? null : current);
-        setCloudDownloadNotice(current => current?.taskId === payload.task_id ? null : current);
-        setCloudFilesDownloadError(message);
-        return;
-      }
-
-      if (ownsRuntimeDownloadState) {
-        transitionRuntime(payload.beat_id, { type: "DOWNLOAD_SUCCEEDED" });
-      }
-
-      setCloudFilesBusyId(current => current === kind ? null : current);
-      setCloudFilesDownloadedIds(prev => {
-        const next = new Set(prev);
-        // Status reflects the action the user chose. Download Everything only
-        // marks the Everything row; it must not make MP3/WAV/Project look like
-        // they were individually downloaded.
-        next.add(kind);
-        return next;
-      });
-
-      try {
-        const audio = new Audio(downloadCompleteWav);
-        audio.volume = 0.68;
-        void audio.play().catch(() => {});
-      } catch {}
-
-      setCloudDownloadNotice({
-        taskId: payload.task_id,
-        kind,
-        beatName: payload.beat_name || "Beat",
-        status: "completed",
-      });
-      window.setTimeout(() => {
-        setCloudDownloadNotice(current =>
-          current?.taskId === payload.task_id && current.status === "completed" ? null : current
-        );
-      }, 1000);
-    }).then(stop => {
-      if (disposed) stop();
-      else unlisten = stop;
-    }).catch(error => console.warn("Background download listener failed:", error));
-
-    return () => {
-      disposed = true;
-      if (unlisten) unlisten();
-    };
-  }, [transitionRuntime]);
-
   const reloadLibrary = useCallback(async () => {
     // Pre-Direct BeatGaler reload used a full loading state and then replaced the
     // rendered library from the durable source. Keep that authoritative behavior,
@@ -3174,7 +3029,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           <button
             type="button"
             aria-label="Close download error"
-            onClick={() => setCloudFilesDownloadError(null)}
+            onClick={dismissDownloadError}
             style={{
               position: "absolute", top: 8, right: 8, width: 24, height: 24, border: "none",
               borderRadius: 6, background: "transparent", color: "#ff9d9d", cursor: "pointer",
@@ -3516,7 +3371,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           busyId={cloudFilesBusyId}
           downloadedIds={cloudFilesDownloadedIds}
           onDownload={handleGetCloudFile}
-          onClose={() => setCloudFilesBeat(null)}
+          onClose={closeCloudFiles}
         />
       )}
 

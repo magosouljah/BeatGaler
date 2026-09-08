@@ -17,9 +17,9 @@ export default function CloudFilesModal({
   // Available Offline is a complete local package, not just a playback hint.
   // Prefer the durable local paths when present so the Download UI keeps
   // working on a cold start with no Telegram connection at all.
-  const hasMp3 = Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
-  const hasWav = Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
-  const hasProject = Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
+  const hasMp3 = Boolean(beat.assets?.master) || Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
+  const hasWav = Boolean(beat.assets?.wav) || Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
+  const hasProject = Boolean(beat.assets?.project) || Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
   const availableCount = Number(hasMp3) + Number(hasWav) + Number(hasProject);
 
   const option = (

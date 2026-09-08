@@ -1,6 +1,4 @@
-from pathlib import Path
-
-HOOK = r'''import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import downloadCompleteWav from "../../assets/status/download-complete.wav";
 import type { Beat } from "../../types";
 import { appAlert } from "../../lib/dialog";
@@ -52,12 +50,10 @@ function safeBeatBaseName(beat: Beat): { safeBase: string; audioSafeBase: string
   const exportMeta = [String(beat.bpm || "").trim(), String(beat.key || "").trim()]
     .filter(Boolean)
     .join(" ");
-  return {
-    safeBase,
-    audioSafeBase: exportMeta && !safeBase.endsWith(`[${exportMeta}]`)
-      ? `${safeBase} [${exportMeta}]`
-      : safeBase,
-  };
+  const audioSafeBase = exportMeta && !safeBase.endsWith(`[${exportMeta}]`)
+    ? `${safeBase} [${exportMeta}]`
+    : safeBase;
+  return { safeBase, audioSafeBase };
 }
 
 export function useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime }: Params) {
@@ -273,146 +269,3 @@ export function useBeatDownloads({ connectionState, beatRuntimeStatesRef, transi
     dismissDownloadError,
   };
 }
-'''
-
-TEST = r'''import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-
-const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-const downloads = readFileSync(resolve(process.cwd(), "src/features/downloads/useBeatDownloads.ts"), "utf8");
-const modal = readFileSync(resolve(process.cwd(), "src/features/downloads/components/CloudFilesModal.tsx"), "utf8");
-
-function expectOrdered(source: string, markers: string[]): void {
-  let previous = -1;
-  for (const marker of markers) {
-    const index = source.indexOf(marker);
-    expect(index, `Missing download contract marker: ${marker}`).toBeGreaterThan(previous);
-    previous = index;
-  }
-}
-
-describe("App beat download extraction", () => {
-  it("moves export state, destination selection, task start and result listener out of App", () => {
-    expect(app).toContain("useBeatDownloads");
-    expect(app).toContain("const {\n    cloudFilesBeat,");
-    expect(app).not.toContain("const handleGetCloudFile = useCallback");
-    expect(app).not.toContain('"beatgaler-download-event"');
-    expect(app).not.toContain("startBackgroundDownload");
-    expect(downloads).toContain("const handleGetCloudFile = useCallback");
-    expect(downloads).toContain('platform.events.listen<BackgroundDownloadEvent>("beatgaler-download-event"');
-  });
-
-  it("does not start a native export or claim runtime ownership when destination selection is cancelled", () => {
-    expectOrdered(downloads, [
-      "destination = await chooseExportFilePath",
-      "if (!destination) return;",
-      'transitionRuntime(beat.id, { type: "DOWNLOAD_STARTED" }, beat)',
-      "startBackgroundDownload(kind, beat, destination)",
-    ]);
-  });
-
-  it("keeps background task ownership alive outside the modal and settles only tracked task IDs", () => {
-    expect(downloads).toContain("trackedDownloadsRef = useRef<Map<string, TrackedDownload>>(new Map())");
-    expect(downloads).toContain("if (!trackedDownloadsRef.current.has(payload.task_id)) return");
-    expect(downloads).toContain("trackedDownloadsRef.current.get(taskId)");
-    expect(downloads).toContain("cloudFilesBeatRef.current?.id !== tracked.beatId");
-    expect(downloads).toContain("if (tracked.ownsRuntimeDownloadState)");
-    expect(downloads).toContain('type: "DOWNLOAD_SUCCEEDED"');
-    expect(downloads).toContain('type: "DOWNLOAD_FAILED"');
-    expect(app).toContain("onClose={closeCloudFiles}");
-  });
-
-  it("routes Web exports through the existing web downloads manager and treats picker cancellation as a no-op", () => {
-    expect(downloads).toContain('if (platform.kind === "web")');
-    expect(downloads).toContain("platform.downloads.start(beat, kind)");
-    expect(downloads).toContain("task.completed.then(result =>");
-    expect(downloads).toContain("if (result.cancelled) cancelTrackedDownloadUi(task.id)");
-    expect(modal).toContain("beat.assets?.master");
-    expect(modal).toContain("beat.assets?.wav");
-    expect(modal).toContain("beat.assets?.project");
-  });
-});
-'''
-
-app_path = Path("src/App.tsx")
-text = app_path.read_text()
-
-
-def replace_once(old: str, new: str) -> None:
-    global text
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"Expected exactly one App.tsx match, got {count}: {old[:100]!r}")
-    text = text.replace(old, new, 1)
-
-
-if "### [ ] 6.1 — Separar las descargas de exportación" not in Path("migration/BeatGaler-roadmap-para-trabajar-con-IAs.md").read_text():
-    raise SystemExit("Task 6.1 is not pending on this branch")
-if Path("src/features/downloads/useBeatDownloads.ts").exists():
-    raise SystemExit("Task 6.1 implementation file already exists; refusing to duplicate it")
-
-replace_once('import downloadCompleteWav from "./assets/status/download-complete.wav";\n', '')
-replace_once('listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer,', 'downloadCloudFileToCache, downloadProjectToCache, revealInExplorer,')
-replace_once('getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile,', 'getCloudClientId, copyExportFile,')
-replace_once('type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview,', 'type CloudFileType, type ImportBatchPreview,')
-replace_once('import { listen } from "@tauri-apps/api/event";\n', '')
-replace_once(
-    'import CloudFilesModal, { type BeatDownloadKind } from "./features/downloads/components/CloudFilesModal";\n',
-    'import CloudFilesModal from "./features/downloads/components/CloudFilesModal";\nimport { useBeatDownloads } from "./features/downloads/useBeatDownloads";\n',
-)
-
-state_start = text.index('  const [cloudFilesBeat, setCloudFilesBeat] = useState<Beat | null>(null);')
-state_end_marker = '  const backgroundDownloadRuntimeOwnersRef = useRef<Set<string>>(new Set());\n'
-state_end = text.index(state_end_marker, state_start) + len(state_end_marker)
-text = text[:state_start] + text[state_end:]
-
-connection_marker = '''  const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
-    typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "checking"
-  );
-'''
-hook_call = '''  const {
-    cloudFilesBeat,
-    cloudFiles,
-    cloudFilesBusyId,
-    cloudFilesDownloadedIds,
-    cloudFilesDownloadError,
-    cloudDownloadNotice,
-    handleCloudFiles,
-    handleGetCloudFile,
-    closeCloudFiles,
-    dismissDownloadError,
-  } = useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime });
-'''
-replace_once(connection_marker, connection_marker + hook_call)
-
-block_start = text.index('  const handleCloudFiles = useCallback')
-block_end = text.index('  const reloadLibrary = useCallback', block_start)
-text = text[:block_start] + text[block_end:]
-
-replace_once('onClick={() => setCloudFilesDownloadError(null)}', 'onClick={dismissDownloadError}')
-replace_once('onClose={() => setCloudFilesBeat(null)}', 'onClose={closeCloudFiles}')
-app_path.write_text(text)
-
-modal_path = Path("src/features/downloads/components/CloudFilesModal.tsx")
-modal = modal_path.read_text()
-old = '''  const hasMp3 = Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
-  const hasWav = Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
-  const hasProject = Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
-'''
-new = '''  const hasMp3 = Boolean(beat.assets?.master) || Boolean(beat.telegram_file_id) || Boolean(beat.offline_available && beat.mp3_path);
-  const hasWav = Boolean(beat.assets?.wav) || Boolean(beat.offline_available && beat.wav_path) || files.some(file => file.file_type === "WAV");
-  const hasProject = Boolean(beat.assets?.project) || Boolean(beat.offline_available && (beat.flp_path || beat.als_path)) || files.some(file => file.file_type === "PROJECT");
-'''
-if modal.count(old) != 1:
-    raise SystemExit("Expected CloudFilesModal availability block once")
-modal_path.write_text(modal.replace(old, new, 1))
-
-Path("src/features/downloads/useBeatDownloads.ts").write_text(HOOK)
-Path("tests/integration/appBeatDownloadsExtraction.test.ts").write_text(TEST)
-
-final_app = app_path.read_text()
-if 'const handleGetCloudFile = useCallback' in final_app or '"beatgaler-download-event"' in final_app:
-    raise SystemExit("Download ownership still remains in App.tsx")
-if 'useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime })' not in final_app:
-    raise SystemExit("App composition does not call useBeatDownloads")

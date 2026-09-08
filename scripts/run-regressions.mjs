@@ -183,10 +183,11 @@ try {
   // Export metadata regression shield. Cloud downloads must preserve source
   // metadata instead of rebuilding WAV tags from scratch, while the default
   // MP3/WAV filename carries the current [BPM Key] suffix.
+  const beatDownloadsForExport = readFileSync(path.join(root, "src", "features", "downloads", "useBeatDownloads.ts"), "utf8");
   const rustCommandsForExport = readFileSync(path.join(root, "src-tauri", "src", "commands.rs"), "utf8");
-  if (!app.includes("const audioSafeBase = exportMeta")) fail("Download dialog lost the [BPM Key] audio filename builder.");
-  if (!app.includes('chooseExportFilePath(`${audioSafeBase}.mp3`')) fail("MP3 download default filename lost BPM/key metadata.");
-  if (!app.includes('chooseExportFilePath(`${audioSafeBase}.wav`')) fail("WAV download default filename lost BPM/key metadata.");
+  if (!beatDownloadsForExport.includes("const audioSafeBase = exportMeta")) fail("Download dialog lost the [BPM Key] audio filename builder.");
+  if (!beatDownloadsForExport.includes('chooseExportFilePath(`${audioSafeBase}.mp3`')) fail("MP3 download default filename lost BPM/key metadata.");
+  if (!beatDownloadsForExport.includes('chooseExportFilePath(`${audioSafeBase}.wav`')) fail("WAV download default filename lost BPM/key metadata.");
   if (!rustCommandsForExport.includes("Metadata export is an OVERLAY, never a destructive rebuild")) fail("Audio export stopped preserving unrelated source ID3 metadata.");
   if (!rustCommandsForExport.includes("fn merge_existing_genre")) fail("Audio export lost source + BeatGaler genre/tag merging.");
   if (!rustCommandsForExport.includes("build_wav_list_info_chunk_preserving")) fail("WAV export lost RIFF INFO preservation.");
@@ -261,6 +262,7 @@ try {
   // Definitive beat runtime state architecture. These are independent machines,
   // not one overloaded status string, and they remain session-local by design.
   const runtimeStateMachine = readFileSync(path.join(root, "src", "features", "state", "beatRuntimeState.ts"), "utf8");
+  const beatDownloadsForRuntime = readFileSync(path.join(root, "src", "features", "downloads", "useBeatDownloads.ts"), "utf8");
   const runtimeRegistry = readFileSync(path.join(root, "src", "features", "state", "useBeatRuntimeRegistry.ts"), "utf8");
   for (const stateName of ["pending_upload", "uploading", "synced", "pending_update", "updating", "deleting", "error", "conflict", "downloading", "idle", "playback_preparing", "playing"]) {
     if (!runtimeStateMachine.includes(`"${stateName}"`)) fail(`Definitive runtime state missing: ${stateName}`);
@@ -269,7 +271,7 @@ try {
   if (!runtimeStateMachine.includes("download_progress: number | null")) fail("Optional download progress runtime data was removed.");
   if (!runtimeStateMachine.includes("previous_state")) fail("Runtime errors no longer retain previous_state.");
   if (!runtimeStateMachine.includes("trash_sync_required")) fail("Offline Trash lost its explicit reconciliation bit.");
-  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !app.includes('type: "SYNC_UPLOAD_STARTED"') || !app.includes('type: "PLAYBACK_PREPARING"') || !app.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
+  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !app.includes('type: "SYNC_UPLOAD_STARTED"') || !app.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
   if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
   if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
   if (!app.includes("useBeatRuntimeRegistry(beats, beatsLatestRef)")) fail("App flows are no longer connected to the extracted runtime registry.");
@@ -384,11 +386,11 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (openProjectBlock.includes('if !settings.telegram_cloud_connected')) fail("Open Project reintroduced a hard online requirement even when a durable Offline PROJECT exists.");
   if (!app.includes('beat.offline_available && (beat.has_flp || beat.has_als)')) fail("Offline PROJECT cards can lose Open Project merely because the cloud-project indicator has not refreshed.");
   if (app.includes('rejectOfflineMutation("Downloading cloud files")')) fail("Available Offline exports are incorrectly blocked as an offline mutation.");
-  if (!app.includes('This beat was not made Available Offline. Reconnect to download its cloud files.')) fail("Offline Download must distinguish a protected local package from a cloud-only beat.");
+  if (!beatDownloadsForRuntime.includes('This beat was not made Available Offline. Reconnect to download its cloud files.')) fail("Offline Download must distinguish a protected local package from a cloud-only beat.");
   if (!rustCommands.includes('The incoming Offline BeatMeta is the authoritative LOCAL source map for')) fail("Export metadata resolution can discard durable Offline file paths again.");
   if (!rustCommands.includes('Available Offline owns a protected MASTER outside the temporary cache.')) fail("MP3 export lost local-first Offline precedence.");
   if (!rustCommands.includes('PROJECT follows the same local-first rule. Available Offline must')) fail("PROJECT/Everything export lost local-first Offline precedence.");
-  if (!app.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
+  if (!app.includes('assets/status/upload-complete.wav') || !beatDownloadsForRuntime.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
   if (!offlineAvailability.includes('invalidatePlaybackPreparation(beat.id)') || !playbackController.includes('cookingPlaybackUrlRef.current.delete(beatId)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
   if (!playbackController.includes('cookingWarmPromisesRef.current.delete(beatId)')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");
   const removeOfflineUiStart = offlineAvailability.indexOf('if (beat.offline_available) {', offlineAvailability.indexOf('const handleToggleOffline'));
@@ -436,9 +438,9 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!openProject10.includes('ensure_project_working_copy')) fail("Open Project no longer downloads/reuses the canonical PROJECT working copy.");
   if (!rustCommands.includes('if !project_zip_is_valid(&workspace)')) fail("Downloaded PROJECT ZIP is no longer validated before use.");
   if (!rustCommands.includes('project-workspaces')) fail("PROJECT working copies lost their isolated temporary workspace.");
-  if (!app.includes('startBackgroundDownload(kind, beat, destination)')) fail("Downloads UI no longer starts the native background worker.");
-  if (!app.includes('listen<BackgroundDownloadEvent>("beatgaler-download-event"')) fail("Downloads UI lost native completion/error event handling.");
-  if (!app.includes('next.add(kind)')) fail("Download completion status no longer marks only the action the user actually requested.");
+  if (!beatDownloadsForRuntime.includes('startBackgroundDownload(kind, beat, destination)')) fail("Downloads UI no longer starts the native background worker.");
+  if (!beatDownloadsForRuntime.includes('listen<BackgroundDownloadEvent>("beatgaler-download-event"')) fail("Downloads UI lost native completion/error event handling.");
+  if (!beatDownloadsForRuntime.includes('next.add(tracked.kind)')) fail("Download completion status no longer marks only the action the user actually requested.");
   console.log("PASS Phase 10 downloads/project guard: background worker, atomic exports, unique Everything folders, local-first slots, PROJECT validation/open, and completion/error UI are protected");
 
   // Phase 11: recovery/corruption guard. A crash marker is never authority,
