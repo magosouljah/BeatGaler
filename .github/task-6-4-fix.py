@@ -71,10 +71,9 @@ issue97 = replace_once(
 write("tests/integration/issue97RuntimeWebFollowup.test.ts", issue97)
 
 regressions = read("scripts/run-regressions.mjs")
-old_guard = '''  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !app.includes('type: "SYNC_UPLOAD_STARTED"') || !app.includes('type: "PLAYBACK_PREPARING"') || !app.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
+old_guard = '''  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !app.includes('type: "SYNC_UPLOAD_STARTED"') || !app.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
 '''
-new_guard = '''  const runtimeFlowOwners = `${app}\n${cloudUploadQueue}`;
-  if (!runtimeFlowOwners.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !runtimeFlowOwners.includes('type: "SYNC_UPLOAD_STARTED"') || !runtimeFlowOwners.includes('type: "PLAYBACK_PREPARING"') || !runtimeFlowOwners.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
+new_guard = '''  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
 '''
 regressions = replace_once(regressions, old_guard, new_guard, "runtime flow owner regression")
 write("scripts/run-regressions.mjs", regressions)
