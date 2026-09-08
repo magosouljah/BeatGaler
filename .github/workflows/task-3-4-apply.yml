@@ -32,6 +32,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Patch temporary applier
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/apply-task-3-4.mjs")
+          text = path.read_text()
+          text = text.replace(
+              'import type { SortKey } from "./libraryPresentationCache";',
+              'import type { SortKey } from "./components/SortMenu";'
+          )
+          needle = 'if (app.includes("setSelectedIds") || app.includes("setAnchorIdx") || app.includes("setActiveDragId")) {'
+          cleanup = '''app = app.replace(/^(\\s*)setSelectedIds\\(new Set\\(\\)\\);\\n/gm, "$1clearSelection();\\n");
+          app = app.replace(/^\\s*setSelectMode\\(false\\);\\n/gm, "");
+          app = app.replace(/^\\s*setAnchorIdx\\(null\\);\\n/gm, "");
+
+          '''
+          if needle not in text:
+              raise SystemExit("Could not locate task 3.4 ownership assertion")
+          text = text.replace(needle, cleanup + needle, 1)
+          path.write_text(text)
+          PY
+
       - name: Apply task 3.4
         run: node scripts/apply-task-3-4.mjs
 
@@ -106,6 +129,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          mkdir -p migration-check-logs
           cat > migration-check-logs/summary.txt <<EOF
           git diff --check: ${{ steps.diffcheck.outcome }}
           npm run test:typecheck: ${{ steps.typecheck.outcome }}
