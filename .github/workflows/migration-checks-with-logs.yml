@@ -26,8 +26,8 @@ jobs:
         continue-on-error: true
         run: node scripts/run-migration-checks-with-logs.mjs
 
-      - name: Upload migration check logs
-        if: always()
+      - name: Upload migration check logs after failure
+        if: steps.migration_checks.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: migration-check-logs-${{ github.run_id }}-${{ github.run_attempt }}
