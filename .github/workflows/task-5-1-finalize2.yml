@@ -24,6 +24,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -c "from pathlib import Path; p=Path('migration/Registro-de-avance.md'); p.write_text(p.read_text().rstrip(chr(10)) + chr(10))"
           rm -f .github/workflows/task-5-1-checks.yml
           rm -f .github/workflows/task-5-1-finalize.yml
           rm -f .github/workflows/task-5-1-finalize2.yml
