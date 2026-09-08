@@ -306,6 +306,66 @@ Siguiente tarea:
 - No iniciada.
 ```
 
+
+
+### Registro — 2.3
+
+```
+Tarea: 2.3 — Separar las funciones auxiliares
+Estado: Terminada
+Fecha: 2026-09-08
+Rama y commit de partida: app-tsx-2.2 @ 3f3c98576b2afb7e692956ede807a367da5ce269
+Referencia del cambio realizado: app-tsx-2.3 @ e6d95657356afc1380c980dd8a2b249791d1e82b — refactor(app): extract auxiliary helpers
+
+Qué cambió:
+- Se extrajeron de App.tsx helpers de caché/presentación de biblioteca, fingerprints de metadata, journal de uploads interrumpidos, rutas de drag & drop y decodificación de artwork.
+- Se crearon `libraryPresentationCache.ts`, `libraryFingerprints.ts`, `interruptedUploadJournal.ts`, `pathHelpers.ts` y `decodeArtworkDataUrl.ts`.
+- Se conservaron las claves de almacenamiento, formatos, resultados y el comportamiento fail-closed existente.
+- `clearUploadPreviewCache` y los demás consumidores relevantes quedaron apuntando a sus nuevos dueños.
+- Las guardas de regresión que dependían de la ubicación física en App.tsx se adaptaron al nuevo módulo sin debilitar el contrato.
+- No se cambió comportamiento Web/Desktop ni se inició 3.1.
+- El workflow y script temporales usados para aplicar/verificar 2.3 fueron eliminados del árbol final.
+
+Archivos afectados:
+- src/App.tsx
+- src/features/artwork/decodeArtworkDataUrl.ts
+- src/features/cloud/interruptedUploadJournal.ts
+- src/features/dragdrop/pathHelpers.ts
+- src/features/library/libraryFingerprints.ts
+- src/features/library/libraryPresentationCache.ts
+- tests/integration/appHelperExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- scripts/run-regressions.mjs
+
+Comprobaciones ejecutadas y resultado:
+- npm ci: OK.
+- npm run test:typecheck: OK.
+- npm run test:unit:ts: OK.
+- npm run test:component:dom: OK.
+- npm run test:integration: OK.
+- npm run test:regressions: OK.
+- npm run build:web: OK.
+- npm run build: OK.
+- Verificación final de Task 2.3: OK.
+- Commit final verificado: e6d95657356afc1380c980dd8a2b249791d1e82b.
+
+Pruebas manuales y plataforma:
+- No se requirió una prueba manual bloqueante para cerrar 2.3.
+- La tarea fue una extracción de helpers sin cambio observable de UI o flujo.
+
+Pendientes o fallos previos:
+- No queda una verificación necesaria pendiente para 2.3.
+- Los hallazgos de concurrencia/snapshots ya documentados en el plan permanecen fuera de alcance.
+
+Conexiones temporales que quedan:
+- Ninguna.
+- El workflow/script temporal de 2.3 fue eliminado antes del commit final.
+
+Siguiente tarea:
+- 3.1 — Separar el estado de la biblioteca.
+- No iniciada en ese momento.
+```
+
 ### Registro — 3.1
 
 ```
@@ -416,63 +476,6 @@ Siguiente tarea:
 - No iniciada.
 ```
 
-### Registro — 2.3
-
-```
-Tarea: 2.3 — Separar las funciones auxiliares
-Estado: Terminada
-Fecha: 2026-09-08
-Rama y commit de partida: app-tsx-2.2 @ 3f3c98576b2afb7e692956ede807a367da5ce269
-Referencia del cambio realizado: app-tsx-2.3 @ e6d95657356afc1380c980dd8a2b249791d1e82b — refactor(app): extract auxiliary helpers
-
-Qué cambió:
-- Se extrajeron de App.tsx helpers de caché/presentación de biblioteca, fingerprints de metadata, journal de uploads interrumpidos, rutas de drag & drop y decodificación de artwork.
-- Se crearon `libraryPresentationCache.ts`, `libraryFingerprints.ts`, `interruptedUploadJournal.ts`, `pathHelpers.ts` y `decodeArtworkDataUrl.ts`.
-- Se conservaron las claves de almacenamiento, formatos, resultados y el comportamiento fail-closed existente.
-- `clearUploadPreviewCache` y los demás consumidores relevantes quedaron apuntando a sus nuevos dueños.
-- Las guardas de regresión que dependían de la ubicación física en App.tsx se adaptaron al nuevo módulo sin debilitar el contrato.
-- No se cambió comportamiento Web/Desktop ni se inició 3.1.
-- El workflow y script temporales usados para aplicar/verificar 2.3 fueron eliminados del árbol final.
-
-Archivos afectados:
-- src/App.tsx
-- src/features/artwork/decodeArtworkDataUrl.ts
-- src/features/cloud/interruptedUploadJournal.ts
-- src/features/dragdrop/pathHelpers.ts
-- src/features/library/libraryFingerprints.ts
-- src/features/library/libraryPresentationCache.ts
-- tests/integration/appHelperExtraction.test.ts
-- tests/integration/appMigrationCharacterization.test.ts
-- scripts/run-regressions.mjs
-
-Comprobaciones ejecutadas y resultado:
-- npm ci: OK.
-- npm run test:typecheck: OK.
-- npm run test:unit:ts: OK.
-- npm run test:component:dom: OK.
-- npm run test:integration: OK.
-- npm run test:regressions: OK.
-- npm run build:web: OK.
-- npm run build: OK.
-- Verificación final de Task 2.3: OK.
-- Commit final verificado: e6d95657356afc1380c980dd8a2b249791d1e82b.
-
-Pruebas manuales y plataforma:
-- No se requirió una prueba manual bloqueante para cerrar 2.3.
-- La tarea fue una extracción de helpers sin cambio observable de UI o flujo.
-
-Pendientes o fallos previos:
-- No queda una verificación necesaria pendiente para 2.3.
-- Los hallazgos de concurrencia/snapshots ya documentados en el plan permanecen fuera de alcance.
-
-Conexiones temporales que quedan:
-- Ninguna.
-- El workflow/script temporal de 2.3 fue eliminado antes del commit final.
-
-Siguiente tarea:
-- 3.1 — Separar el estado de la biblioteca.
-- No iniciada en ese momento.
-```
 
 ### Registro — 3.2
 
