@@ -1,0 +1,46 @@
+name: Task 5.1 Adapt Dedupe Regression
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-5-1-fix-regression.yml
+
+permissions:
+  contents: write
+
+jobs:
+  adapt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: v0.9.0-test-noche
+      - name: Move regression assertion to new owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/run-regressions.mjs')
+          s = p.read_text()
+          owner = '  const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");\n'
+          anchor = '  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");\n'
+          if owner not in s:
+              if anchor not in s:
+                  raise SystemExit('app source anchor missing')
+              s = s.replace(anchor, anchor + owner, 1)
+          old = 'if (!app.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !app.includes("DRAWER_CLOUD_COMMIT_JOINED") || !app.includes("drawerMetadataCommitVerifiedRef") || !app.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");'
+          new = 'if (!drawerCloudPersistence.includes("DRAWER_CLOUD_COMMIT_SKIPPED") || !drawerCloudPersistence.includes("DRAWER_CLOUD_COMMIT_JOINED") || !drawerCloudPersistence.includes("drawerMetadataCommitVerifiedRef") || !drawerCloudPersistence.includes("drawerMetadataCommitInFlightRef")) fail("Drawer metadata saves can issue duplicate Telegram/INDEX commits again.");'
+          if old not in s:
+              raise SystemExit('dedupe guard anchor missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/task-5-1-fix-regression.yml .github/workflows/task-5-1-fix-tests.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/run-regressions.mjs .github/workflows/task-5-1-fix-regression.yml .github/workflows/task-5-1-fix-tests.yml
+          git commit -m "test(app): follow drawer dedupe ownership"
+          git push origin HEAD:v0.9.0-test-noche
