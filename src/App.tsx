@@ -15,12 +15,12 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, reorderBeats, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
-import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
+import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
+import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import ReactDOM from "react-dom";
 import { appAlert, appConfirm } from "./lib/dialog";
 import { sanitizeUserVisibleText } from "./lib/userVisibleError";
@@ -46,6 +46,8 @@ import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFinge
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
 import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";
 import { useLibraryViewState } from "./features/library/useLibraryViewState";
+import { useLibraryReorder } from "./features/library/useLibraryReorder";
+import { useBeatSelection } from "./features/selection/useBeatSelection";
 import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "./features/tags/tagSelectors";
 import { useTagFilters } from "./features/tags/useTagFilters";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
@@ -308,10 +310,21 @@ function BeatGalerApp() {
   const [setupDone, setSetupDone] = useState(false);
   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);
 
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [selectMode, setSelectMode] = useState(false);
-  const [anchorIdx, setAnchorIdx] = useState<number | null>(null);
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const {
+    selectedIds,
+    selectMode,
+    toggleSelection,
+    toggleSelectAll,
+    finishSelection,
+    clearSelection,
+  } = useBeatSelection(beats);
+  const {
+    sensors,
+    activeDragId,
+    handleDragStart,
+    handleDragEnd,
+    handleDragCancel,
+  } = useLibraryReorder({ sortBy, setSortBy, setBeats });
   const [shuffleEnabled, setShuffleEnabled] = useState(false);
   const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off");
   const [showQueue, setShowQueue] = useState(false);
@@ -978,8 +991,7 @@ function BeatGalerApp() {
         // on whatever element/button was last interacted with.
         (document.activeElement as HTMLElement | null)?.blur();
         window.getSelection()?.removeAllRanges();
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        clearSelection();
         setDrawer(null);
         setShowAdd(false);
         setShowSettings(false);
@@ -1499,9 +1511,7 @@ function BeatGalerApp() {
         danger: true,
       });
     }
-    setSelectedIds(new Set());
-    setSelectMode(false);
-    setAnchorIdx(null);
+    clearSelection();
   }, [selectedIds, beats, connectionState, forgetRuntimeState, transitionRuntime]);
 
   const addToQueue = useCallback((beat: Beat) => {
@@ -2593,7 +2603,7 @@ function BeatGalerApp() {
     setRevealedBeatIds(new Set());
     setCloudSessionVerified(false);
     setBeats([]);
-    setSelectedIds(new Set());
+    clearSelection();
     setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : current);
   }, [releaseFile]);
 
@@ -3891,9 +3901,7 @@ function BeatGalerApp() {
       ));
       return { ...b, ...updates, tags: mergedTags };
     }));
-    setSelectedIds(new Set());
-    setSelectMode(false);
-    setAnchorIdx(null);
+    clearSelection();
   }, [selectedIds]);
 
   const deleteBeat = useCallback(async (beat: Beat) => {
@@ -3973,28 +3981,6 @@ function BeatGalerApp() {
     }
   }, [audio.playingId, releaseFile, connectionState, forgetRuntimeState, transitionRuntime]);
 
-  const handleToggleSelect = useCallback((beat: Beat, e: React.MouseEvent, currentFiltered: Beat[]) => {
-    const idx = currentFiltered.findIndex(b => b.id === beat.id);
-    if (idx < 0) return;
-
-    if (e.shiftKey && anchorIdx !== null) {
-      const lo = Math.min(idx, anchorIdx);
-      const hi = Math.max(idx, anchorIdx);
-      // Windows-style range selection: replace the previous range instead of
-      // adding to it. The anchor stays fixed until a non-shift click.
-      setSelectedIds(new Set(currentFiltered.slice(lo, hi + 1).map(b => b.id)));
-    } else {
-      setSelectedIds(current => {
-        const next = new Set(current);
-        next.has(beat.id) ? next.delete(beat.id) : next.add(beat.id);
-        return next;
-      });
-      setAnchorIdx(idx);
-    }
-
-    if (!selectMode) setSelectMode(true);
-  }, [anchorIdx, selectMode]);
-  
   const tagColors = useTagColors();
 
 const confirmTagRename = useCallback(async () => {
@@ -4029,45 +4015,6 @@ const confirmTagRename = useCallback(async () => {
 const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   toggleTagFilter(tag, e.altKey ? "exclude" : "include");
 }, [toggleTagFilter]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { delay: 140, tolerance: 6 },
-    })
-  );
-
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    const id = String(event.active.id);
-    setActiveDragId(id);
-    if (sortBy !== "rating") setSortBy("manual");
-  }, [sortBy]);
-
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const activeId = String(event.active.id);
-    const overId = event.over ? String(event.over.id) : null;
-    setActiveDragId(null);
-    if (!overId || activeId === overId) return;
-
-    setBeats((current) => {
-      const oldIndex = current.findIndex((b) => b.id === activeId);
-      const newIndex = current.findIndex((b) => b.id === overId);
-      if (oldIndex === -1 || newIndex === -1) return current;
-
-      if (sortBy === "rating") {
-        const moved = current[oldIndex];
-        const target = current[newIndex];
-        if (moved.rating !== target.rating) return current;
-      }
-
-      const next = arrayMove(current, oldIndex, newIndex);
-      reorderBeats(next.map((b) => b.id)).catch(console.error);
-      return next;
-    });
-  }, [sortBy]);
-
-  const handleDragCancel = useCallback(() => {
-    setActiveDragId(null);
-  }, []);
 
   const tagFrequency = useMemo(() => selectTagFrequency(beats), [beats]);
   const allTags = useMemo(() => selectAllTags(beats, tagFrequency), [beats, tagFrequency]);
@@ -4198,14 +4145,9 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   useEffect(() => {
     const liveIds = new Set(beats.map(beat => beat.id));
     setQueueIds(ids => ids.filter(id => liveIds.has(id)));
-    setSelectedIds(ids => {
-      const next = new Set(Array.from(ids).filter(id => liveIds.has(id)));
-      return next.size === ids.size ? ids : next;
-    });
     if (audio.playingId && !liveIds.has(audio.playingId)) releaseFile();
     if (beats.length === 0) {
       setShowQueue(false);
-      setAnchorIdx(null);
     }
   }, [beats, audio.playingId, releaseFile]);
 
@@ -4445,22 +4387,19 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           {selectMode ? (
             <>
               <button
-                onClick={() => {
-                  const allSelected = displayedBeats.every(b => selectedIds.has(b.id));
-                  setSelectedIds(allSelected ? new Set() : new Set(displayedBeats.map(b => b.id)));
-                }}
+                onClick={() => toggleSelectAll(displayedBeats)}
                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#888", fontSize: 12, cursor: "pointer" }}>
                 {displayedBeats.length > 0 && displayedBeats.every(b => selectedIds.has(b.id)) ? "Deselect All" : "Select All"}
               </button>
               <button
-                onClick={() => { setSelectMode(false); setSelectedIds(new Set()); setAnchorIdx(null); }}
+                onClick={finishSelection}
                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#ccc", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
                 Done
               </button>
             </>
           ) : (
             <button
-              onClick={() => setSelectMode(true)}
+              onClick={() => toggleSelection(null, false, displayedBeats)}
               style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #1e1e1e", color: "#555", fontSize: 12, cursor: "pointer" }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#aaa"; (e.currentTarget as HTMLElement).style.borderColor = "#2a2a2a"; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "#555"; (e.currentTarget as HTMLElement).style.borderColor = "#1e1e1e"; }}>
@@ -4486,7 +4425,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>
             Remove all
           </button>
-          <button onClick={() => { setSelectedIds(new Set()); setSelectMode(false); setAnchorIdx(null); }}
+          <button onClick={finishSelection}
             style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", fontSize: 12, cursor: "pointer" }}>
             Cancel
           </button>
@@ -4668,7 +4607,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
                     onOpenProject={handleOpenProject}
                     onUpdateProject={handleUpdateProject}
                     onCloudFiles={handleCloudFiles}
-                    onToggleSelect={(b, e) => handleToggleSelect(b, e, filteredBeats)}
+                    onToggleSelect={(b, e) => toggleSelection(b, e.shiftKey, filteredBeats)}
                     animDelay={0}
                   />
                 ))}
@@ -4772,7 +4711,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           beat={drawer.beat}
           mode={drawer.mode}
           tagSuggestions={tagSuggestions}
-          onClose={() => { setDrawer(null); setSelectedIds(new Set()); setSelectMode(false); setAnchorIdx(null); }}
+          onClose={() => { setDrawer(null); clearSelection(); }}
           onSaved={updateBeat}
           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) releaseFile(); }}
           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}

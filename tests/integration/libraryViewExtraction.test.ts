@@ -30,9 +30,8 @@ describe("task 3.3 extraction wiring", () => {
     expect(app).toContain('useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web")');
   });
 
-  it("does not begin task 3.4 selection/reorder extraction", () => {
-    expect(app).toContain("const handleToggleSelect = useCallback");
-    expect(app).toContain("const handleDragEnd = useCallback");
-    expect(app).toContain("reorderBeats(next.map((b) => b.id))");
+  it("hands task 3.4 selection/reorder ownership to its dedicated modules", () => {
+    expect(app).toContain("useBeatSelection(beats)");
+    expect(app).toContain("useLibraryReorder({ sortBy, setSortBy, setBeats })");
   });
 });
