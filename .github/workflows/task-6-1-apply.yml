@@ -95,3 +95,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "refactor(app): extract beat downloads"
           git push origin HEAD:v0.9.0-test-noche
+
+# Retry after moving the remaining download guards to useBeatDownloads owner.
