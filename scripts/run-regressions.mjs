@@ -59,6 +59,7 @@ try {
   const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");
   const beatProjects = readFileSync(path.join(root, "src", "features", "projects", "useBeatProjects.ts"), "utf8");
   const offlineAvailability = readFileSync(path.join(root, "src", "features", "offline", "useOfflineAvailability.ts"), "utf8");
+  const trashActions = readFileSync(path.join(root, "src", "features", "trash", "useTrashActions.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
@@ -236,6 +237,13 @@ try {
   if (emptyTrashBlock[0].includes("confirm(")) fail("Beat Empty Trash reintroduced a blocking native confirmation dialog.");
   if (!emptyTrashBlock[0].includes("void (async () =>")) fail("Beat Empty Trash must enqueue/reconcile in background without blocking the click handler.");
   console.log("PASS remove/trash guard: names are human-readable; Empty Trash never blocks UI, retries transient Cloud enqueue, and permanent deletes cannot resurrect");
+  if (!app.includes('useTrashActions({') || !app.includes('onBeatRestored={handleBeatRestored}')) fail("App.tsx is no longer wired to the extracted Trash actions owner.");
+  if (app.includes('const deleteBeat = useCallback') || app.includes('const handleRemoveBulk = useCallback') || app.includes('recordOfflineTrashIntent(') || app.includes('removeBeatFromLibrary(')) fail("App.tsx reclaimed Trash mutation ownership.");
+  if (!trashActions.includes('const deleteBeat = useCallback') || !trashActions.includes('const handleRemoveBulk = useCallback') || !trashActions.includes('const handleBeatRestored = useCallback')) fail("useTrashActions lost delete, bulk delete, or restore ownership.");
+  if (!trashActions.includes('libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash")') || !trashActions.includes('libraryStateManager.commitSnapshot(next, "bulk-remove")')) fail("Trash actions lost their explicit INDEX commit boundaries.");
+  const restoredHandler = trashActions.slice(trashActions.indexOf('const handleBeatRestored = useCallback'));
+  if (restoredHandler.includes('commitSnapshot(')) fail("Trash restore reintroduced a duplicate renderer-built INDEX publish.");
+  console.log("PASS task 5.5 ownership guard: delete/bulk/restore live in useTrashActions and restore does not double-publish INDEX");
 
   const playbackReadiness = readFileSync(path.join(root, "src", "features", "playback", "playbackReadiness.ts"), "utf8");
   if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
@@ -265,7 +273,7 @@ try {
   if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
   if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
   if (!app.includes("useBeatRuntimeRegistry(beats, beatsLatestRef)")) fail("App flows are no longer connected to the extracted runtime registry.");
-  if (!app.includes('type: "SYNC_DELETE_STARTED"') || !app.includes('type: "SET_TRASH_SYNC_REQUIRED"') || !offlineAvailability.includes('type: "SET_OFFLINE_AVAILABLE"')) fail("Delete/Trash/Offline flows are no longer wired to the definitive runtime registry.");
+  if (!trashActions.includes('type: "SYNC_DELETE_STARTED"') || !trashActions.includes('type: "SET_TRASH_SYNC_REQUIRED"') || !offlineAvailability.includes('type: "SET_OFFLINE_AVAILABLE"')) fail("Delete/Trash/Offline flows are no longer wired to the definitive runtime registry.");
   console.log("PASS runtime-state guard: sync/download/playback are independent, Offline is orthogonal, errors remember previous_state, and App flows are wired");
 
   // Bulk Import + instant Review regression shield. Review must become visible
