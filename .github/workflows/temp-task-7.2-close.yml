@@ -1,0 +1,45 @@
+name: Temporary task 7.2 close
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+
+permissions:
+  contents: write
+
+jobs:
+  close-task-7-2:
+    if: contains(github.event.head_commit.message, '[close-7.2]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - name: Apply documentation closure
+        run: python .github/task-7-2-close.py
+      - name: Verify closure consistency
+        run: |
+          git diff --check
+          grep -F '### [x] 7.2 — Separar descubrimiento incremental' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F '### [ ] 7.3 — Separar Save All y conflictos' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+          grep -F 'Tarea: 7.2 — Separar descubrimiento incremental' migration/Registro-de-avance.md
+          grep -F 'Estado: `Terminada`' migration/BeatGaler-agent-state.md
+          test ! -e .github/task-7-2-close.py
+          test ! -e .github/workflows/temp-task-7.2-close.yml
+      - name: Commit documentation closure
+        id: closure
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs(migration): close task 7.2"
+          git push origin HEAD:v0.9.0-test-noche
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Confirm remote closure HEAD
+        run: |
+          remote_sha="$(git ls-remote origin refs/heads/v0.9.0-test-noche | cut -f1)"
+          test "$remote_sha" = "${{ steps.closure.outputs.sha }}"
+          echo "Final closure SHA: $remote_sha"
