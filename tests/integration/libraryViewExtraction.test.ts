@@ -13,7 +13,8 @@ describe("task 3.3 extraction wiring", () => {
     expect(app).toContain("useLibraryViewState()");
     expect(app).toContain("useTagFilters()");
     expect(app).toContain("selectFilteredAndSortedBeats(");
-    expect(app).toContain("selectAllTags(beats)");
+    expect(app).toContain("selectTagFrequency(beats)");
+    expect(app).toContain("selectAllTags(beats, tagFrequency)");
     expect(app).toContain("selectTagSuggestions(beats)");
     expect(app).not.toContain('const [search, setSearch] = useState("")');
     expect(app).not.toContain("const [includedTags, setIncludedTags]");
@@ -21,6 +22,7 @@ describe("task 3.3 extraction wiring", () => {
     expect(libraryView).toContain("saveCachedSort(sortBy)");
     expect(tagFilters).toContain("toggleTagFilter");
     expect(librarySelectors).toContain('if (sortBy === "rating")');
+    expect(tagSelectors).toContain("selectTagFrequency");
     expect(tagSelectors).toContain("displayByNormalized");
   });
 
