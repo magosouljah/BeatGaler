@@ -1,0 +1,32 @@
+name: Task 5.3 Close
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-5-3-close.yml
+
+permissions:
+  contents: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - name: Update migration state
+        run: python3 scripts/task-5-3-close-temp.py
+      - name: Validate and commit closure
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md
+          git rm scripts/task-5-3-close-temp.py .github/workflows/task-5-3-close.yml
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "docs(migration): close task 5.3"
+          git push origin HEAD:v0.9.0-test-noche
