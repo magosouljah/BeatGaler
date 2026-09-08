@@ -111,7 +111,7 @@ describe("App migration characterization contracts", () => {
       "return null;",
     ]);
 
-    const save = sourceSection(importReview, "const handleReviewedBeatSaved = useCallback", "return {", "useImportReview.ts Save");
+    const save = sourceSection(importReview, "const handleReviewedBeatSaved = useCallback", "\n  return {\n", "useImportReview.ts Save");
     expectOrdered(save, [
       "setBeats(current => {",
       "beatsLatestRef.current = next;",
