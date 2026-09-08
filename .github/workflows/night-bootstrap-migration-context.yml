@@ -27,21 +27,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .night-bootstrap/chunks/plan.part* > /tmp/plan.b64
-          cat .night-bootstrap/chunks/registro.part* > /tmp/registro.b64
+          : > /tmp/plan.zlib
+          for f in .night-bootstrap/chunks/plan.part*; do
+            base64 --decode "$f" >> /tmp/plan.zlib
+          done
+          : > /tmp/registro.zlib
+          for f in .night-bootstrap/chunks/registro.part*; do
+            base64 --decode "$f" >> /tmp/registro.zlib
+          done
           node <<'NODE'
           const fs = require('node:fs');
           const zlib = require('node:zlib');
-          const files = [
-            ['.night-bootstrap/roadmap.zlib.b64', 'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md'],
-            ['/tmp/plan.b64', 'migration/BeatGaler-plan-de-migracion.md'],
-            ['/tmp/registro.b64', 'migration/Registro-de-avance.md'],
-          ];
           fs.mkdirSync('migration', { recursive: true });
-          for (const [source, target] of files) {
-            const encoded = fs.readFileSync(source, 'utf8').trim();
-            fs.writeFileSync(target, zlib.inflateSync(Buffer.from(encoded, 'base64')));
-          }
+          fs.writeFileSync(
+            'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md',
+            zlib.inflateSync(Buffer.from(fs.readFileSync('.night-bootstrap/roadmap.zlib.b64', 'utf8').trim(), 'base64'))
+          );
+          fs.writeFileSync(
+            'migration/BeatGaler-plan-de-migracion.md',
+            zlib.inflateSync(fs.readFileSync('/tmp/plan.zlib'))
+          );
+          fs.writeFileSync(
+            'migration/Registro-de-avance.md',
+            zlib.inflateSync(fs.readFileSync('/tmp/registro.zlib'))
+          );
 
           const roadmapPath = 'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md';
           let roadmap = fs.readFileSync(roadmapPath, 'utf8');
