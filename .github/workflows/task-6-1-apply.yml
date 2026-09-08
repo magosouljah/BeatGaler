@@ -51,6 +51,24 @@ jobs:
               raise SystemExit("Could not restore shared listCloudFilesForBeat import exactly once")
           app_path.write_text(app.replace(old_import, new_import, 1))
 
+          downloads_path = Path("src/features/downloads/useBeatDownloads.ts")
+          downloads = downloads_path.read_text()
+          old_builder = '''  return {
+    safeBase,
+    audioSafeBase: exportMeta && !safeBase.endsWith(`[${exportMeta}]`)
+      ? `${safeBase} [${exportMeta}]`
+      : safeBase,
+  };
+'''
+          new_builder = '''  const audioSafeBase = exportMeta && !safeBase.endsWith(`[${exportMeta}]`)
+    ? `${safeBase} [${exportMeta}]`
+    : safeBase;
+  return { safeBase, audioSafeBase };
+'''
+          if downloads.count(old_builder) != 1:
+              raise SystemExit("Could not preserve the original [BPM Key] filename builder exactly once")
+          downloads_path.write_text(downloads.replace(old_builder, new_builder, 1))
+
           regressions_path = Path("scripts/run-regressions.mjs")
           regressions = regressions_path.read_text()
           marker = '  const rustCommandsForExport = readFileSync(path.join(root, "src-tauri", "src", "commands.rs"), "utf8");'
