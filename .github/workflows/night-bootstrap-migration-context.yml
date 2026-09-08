@@ -23,34 +23,28 @@ jobs:
           ref: v0.9.0-test-noche
           fetch-depth: 0
 
-      - name: Rebuild persistent migration context
+      - name: Rebuild and verify persistent migration context
         shell: bash
         run: |
           set -euo pipefail
-          : > /tmp/plan.zlib
-          for f in .night-bootstrap/chunks/plan.part*; do
-            base64 --decode "$f" >> /tmp/plan.zlib
-          done
-          : > /tmp/registro.zlib
-          for f in .night-bootstrap/chunks/registro.part*; do
-            base64 --decode "$f" >> /tmp/registro.zlib
-          done
+          cat .night-bootstrap/chunks/plan.part* > /tmp/plan.b64
+          cat .night-bootstrap/chunks/registro.part* > /tmp/registro.b64
+          printf '%s  %s\n' 'a6549dffc05d7adf5ba131516b4f0adef736770ee1f2e242ca18dde88b44569a' '/tmp/plan.b64' | sha256sum -c -
+          printf '%s  %s\n' '9d6280e7e8d688f8bbd83bd07d31b9a4741243d2ae6562259da3afbef9aeaf68' '/tmp/registro.b64' | sha256sum -c -
+          printf '%s  %s\n' 'fe5de1eb70e111cf616e3490b7fc1cb7c04aa3ce2b87b954e2182b2bb6da5724' '.night-bootstrap/roadmap.zlib.b64' | sha256sum -c -
           node <<'NODE'
           const fs = require('node:fs');
           const zlib = require('node:zlib');
           fs.mkdirSync('migration', { recursive: true });
-          fs.writeFileSync(
-            'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md',
-            zlib.inflateSync(Buffer.from(fs.readFileSync('.night-bootstrap/roadmap.zlib.b64', 'utf8').trim(), 'base64'))
-          );
-          fs.writeFileSync(
-            'migration/BeatGaler-plan-de-migracion.md',
-            zlib.inflateSync(fs.readFileSync('/tmp/plan.zlib'))
-          );
-          fs.writeFileSync(
-            'migration/Registro-de-avance.md',
-            zlib.inflateSync(fs.readFileSync('/tmp/registro.zlib'))
-          );
+          const files = [
+            ['.night-bootstrap/roadmap.zlib.b64', 'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md'],
+            ['/tmp/plan.b64', 'migration/BeatGaler-plan-de-migracion.md'],
+            ['/tmp/registro.b64', 'migration/Registro-de-avance.md'],
+          ];
+          for (const [source, target] of files) {
+            const encoded = fs.readFileSync(source, 'utf8').trim();
+            fs.writeFileSync(target, zlib.inflateSync(Buffer.from(encoded, 'base64')));
+          }
 
           const roadmapPath = 'migration/BeatGaler-roadmap-para-trabajar-con-IAs.md';
           let roadmap = fs.readFileSync(roadmapPath, 'utf8');
