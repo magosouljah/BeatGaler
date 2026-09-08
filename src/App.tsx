@@ -37,13 +37,17 @@ import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/d
 import CloudFilesModal, { type BeatDownloadKind } from "./features/downloads/components/CloudFilesModal";
 import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";
 import SearchBar from "./features/library/components/SearchBar";
-import SortMenu, { type SortKey } from "./features/library/components/SortMenu";
+import SortMenu from "./features/library/components/SortMenu";
 import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { decodeArtworkDataUrl } from "./features/artwork/decodeArtworkDataUrl";
 import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, writeActiveCloudUploads, type ActiveCloudUpload } from "./features/cloud/interruptedUploadJournal";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
-import { clearCachedBeats, clearUploadPreviewCache, loadCachedSort, preserveLoadedArtwork, saveCachedSort } from "./features/library/libraryPresentationCache";
+import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
+import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";
+import { useLibraryViewState } from "./features/library/useLibraryViewState";
+import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "./features/tags/tagSelectors";
+import { useTagFilters } from "./features/tags/useTagFilters";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
 import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
 import { playTrace } from "./features/playback/playTrace";
@@ -227,14 +231,18 @@ function BeatGalerApp() {
   // the Fast Play map with a URL backed by files that were just deleted.
   const playbackCacheEpochRef = useRef(0);
   const artworkLoadPromisesRef = useRef<Map<string, Promise<boolean>>>(new Map());
-  const [search, setSearch] = useState("");
-  const [includedTags, setIncludedTags] = useState<Set<string>>(new Set());
-  const [excludedTags, setExcludedTags] = useState<Set<string>>(new Set());
+  const { search, setSearch, sortBy, setSortBy } = useLibraryViewState();
+  const {
+    includedTags,
+    excludedTags,
+    clearTagFilters,
+    toggleTagFilter,
+    replaceTagFilter,
+  } = useTagFilters();
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
   const [tagRename, setTagRename] = useState<{ oldTag: string; newTag: string; stage: "name" | "confirm" } | null>(null);
   const [tagRenameBusy, setTagRenameBusy] = useState(false);
   const [tagRenameError, setTagRenameError] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<SortKey>(() => loadCachedSort());
   useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");
   const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {
     setBeats(current => {
@@ -838,10 +846,6 @@ function BeatGalerApp() {
     visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);
     beatsLatestRef.current = beats;
   }, [beats]);
-
-  useEffect(() => {
-    saveCachedSort(sortBy);
-  }, [sortBy]);
 
 
 
@@ -4010,8 +4014,7 @@ const confirmTagRename = useCallback(async () => {
       const renamed = beat.tags.map(t => t.trim().toLowerCase() === oldTag ? newTag : t);
       return { ...beat, tags: Array.from(new Set(renamed)) };
     }));
-    setIncludedTags(s => new Set([...s].map(t => t.trim().toLowerCase() === oldTag ? newTag : t)));
-    setExcludedTags(s => new Set([...s].map(t => t.trim().toLowerCase() === oldTag ? newTag : t)));
+    replaceTagFilter(oldTag, newTag);
     renameTagColor(oldTag, newTag);
     setTagRename(null);
   } catch (e) {
@@ -4021,27 +4024,11 @@ const confirmTagRename = useCallback(async () => {
   } finally {
     setTagRenameBusy(false);
   }
-}, [tagRename]);
+}, [tagRename, replaceTagFilter]);
 
 const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
-  if (e.altKey) {
-    // Alt/Option + click -> excluir (o quitar si ya estaba excluido)
-    setExcludedTags(s => {
-      const n = new Set(s);
-      n.has(tag) ? n.delete(tag) : n.add(tag);
-      return n;
-    });
-    setIncludedTags(s => { const n = new Set(s); n.delete(tag); return n; });
-  } else {
-    // Click normal -> incluir (o quitar si ya estaba incluido)
-    setIncludedTags(s => {
-      const n = new Set(s);
-      n.has(tag) ? n.delete(tag) : n.add(tag);
-      return n;
-    });
-    setExcludedTags(s => { const n = new Set(s); n.delete(tag); return n; });
-  }
-}, []);
+  toggleTagFilter(tag, e.altKey ? "exclude" : "include");
+}, [toggleTagFilter]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -4082,75 +4069,16 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     setActiveDragId(null);
   }, []);
 
-  // Global tag usage, normalized and counted once per beat. This is only a
-  // presentation ranking: the order stored in ID3 metadata is left untouched.
-  const tagFrequency = useMemo(() => {
-    const freq = new Map<string, number>();
-    for (const beat of beats) {
-      const uniqueTags = new Set(
-        beat.tags.map(tag => tag.trim().toLowerCase()).filter(Boolean)
-      );
-      for (const tag of uniqueTags) {
-        freq.set(tag, (freq.get(tag) ?? 0) + 1);
-      }
-    }
-    return freq;
-  }, [beats]);
-
-  const allTags = useMemo(() => {
-    const displayByNormalized = new Map<string, string>();
-    for (const beat of beats) {
-      for (const rawTag of beat.tags) {
-        const normalized = rawTag.trim().toLowerCase();
-        if (normalized && !displayByNormalized.has(normalized)) {
-          displayByNormalized.set(normalized, rawTag.trim());
-        }
-      }
-    }
-    return [...displayByNormalized.entries()]
-      .sort(([a], [b]) =>
-        (tagFrequency.get(b) ?? 0) - (tagFrequency.get(a) ?? 0) || a.localeCompare(b)
-      )
-      .map(([, display]) => display);
-  }, [beats, tagFrequency]);
-
-  const tagSuggestions = useMemo(() => {
-    const freq = new Map<string, number>();
-    for (const beat of beats) {
-      for (const tag of beat.tags) {
-        const normalized = tag.trim().toLowerCase();
-        if (!normalized) continue;
-        freq.set(normalized, (freq.get(normalized) ?? 0) + 1);
-      }
-    }
-    return [...freq.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([tag]) => tag);
-  }, [beats]);
-
-  const manualOrderIndex = useMemo(() => {
-    const index = new Map<string, number>();
-    beats.forEach((b, i) => index.set(b.id, i));
-    return index;
-  }, [beats]);
-
-  const filteredBeats = beats
-    .filter(b => {
-      const q = search.trim().toLowerCase();
-      return (!q || b.name.toLowerCase().includes(q) || b.tags.some(t => t.includes(q)) || b.key.toLowerCase().includes(q) || String(b.bpm).includes(q))
-        && (includedTags.size === 0 || [...includedTags].every(t => b.tags.includes(t)))
-        && (excludedTags.size === 0 || ![...excludedTags].some(t => b.tags.includes(t)));
-    })
-    .sort((a, b) => {
-      if (sortBy === "manual") return 0;
-      if (sortBy === "bpm") return Number(a.bpm || 0) - Number(b.bpm || 0);
-      if (sortBy === "rating") {
-        const ratingDiff = b.rating - a.rating;
-        if (ratingDiff !== 0) return ratingDiff;
-        return (manualOrderIndex.get(a.id) ?? 0) - (manualOrderIndex.get(b.id) ?? 0);
-      }
-      return a.name.localeCompare(b.name);
-    });
+  const tagFrequency = useMemo(() => selectTagFrequency(beats), [beats]);
+  const allTags = useMemo(() => selectAllTags(beats, tagFrequency), [beats, tagFrequency]);
+  const tagSuggestions = useMemo(() => selectTagSuggestions(beats), [beats]);
+  const filteredBeats = selectFilteredAndSortedBeats(
+    beats,
+    search,
+    includedTags,
+    excludedTags,
+    sortBy,
+  );
 
   const filteredBeatIdsKey = filteredBeats.map(beat => beat.id).join("|");
   const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));
@@ -4568,7 +4496,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
       {/* Tag filter */}
 <div style={{ padding: "7px 24px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: "1px solid #111", flexShrink: 0 }}>
   <button
-    onClick={() => { setIncludedTags(new Set()); setExcludedTags(new Set()); }}
+    onClick={clearTagFilters}
     style={{
       padding: "4px 12px", borderRadius: 20,
       background: (!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "transparent",

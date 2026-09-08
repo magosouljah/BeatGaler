@@ -33,19 +33,23 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
   it("wires the real App caller to UI sort routing and authoritative reconcile", () => {
     const app = source("src/App.tsx");
+    const libraryViewState = source("src/features/library/useLibraryViewState.ts");
 
+    expect(app).toContain('import { useLibraryViewState } from "./features/library/useLibraryViewState";');
     expect(app).toContain('import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";');
     expect(app).toContain('import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";');
+    expect(libraryViewState).toContain("const [sortBy, setSortBy] = useState<SortKey>(() => loadCachedSort());");
+    expect(libraryViewState).toContain("saveCachedSort(sortBy);");
 
-    const sortState = app.indexOf("const [sortBy, setSortBy] = useState<SortKey>(() => loadCachedSort());");
-    const sortRouting = app.indexOf('useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");', sortState);
+    const viewState = app.indexOf("const { search, setSearch, sortBy, setSortBy } = useLibraryViewState();");
+    const sortRouting = app.indexOf('useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");', viewState);
     const reconcileCallback = app.indexOf("const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {", sortRouting);
     const preserveArtwork = app.indexOf("const next = preserveLoadedArtwork(incoming, current);", reconcileCallback);
     const updateLatest = app.indexOf("beatsLatestRef.current = next;", preserveArtwork);
     const reconcileHook = app.indexOf('useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);', updateLatest);
 
-    expect(sortState).toBeGreaterThanOrEqual(0);
-    expect(sortRouting).toBeGreaterThan(sortState);
+    expect(viewState).toBeGreaterThanOrEqual(0);
+    expect(sortRouting).toBeGreaterThan(viewState);
     expect(reconcileCallback).toBeGreaterThan(sortRouting);
     expect(preserveArtwork).toBeGreaterThan(reconcileCallback);
     expect(updateLatest).toBeGreaterThan(preserveArtwork);
