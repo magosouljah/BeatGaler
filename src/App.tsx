@@ -15,16 +15,15 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
-import ReactDOM from "react-dom";
 import { appAlert, appConfirm } from "./lib/dialog";
 import { sanitizeUserVisibleText } from "./lib/userVisibleError";
-import { useTagColors, setTagColor, renameTagColor } from "./lib/tagColors";
+import { useTagColors, setTagColor } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
 import { cleanTags, validateBpm, validateMusicKey } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
@@ -49,6 +48,8 @@ import { useLibraryReorder } from "./features/library/useLibraryReorder";
 import { useBeatSelection } from "./features/selection/useBeatSelection";
 import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "./features/tags/tagSelectors";
 import { useTagFilters } from "./features/tags/useTagFilters";
+import { useTagRename } from "./features/tags/useTagRename";
+import TagRenameDialog from "./features/tags/components/TagRenameDialog";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
 import { usePlaybackController } from "./features/playback/usePlaybackController";
@@ -249,9 +250,12 @@ function BeatGalerApp() {
     replaceTagFilter,
   } = useTagFilters();
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
-  const [tagRename, setTagRename] = useState<{ oldTag: string; newTag: string; stage: "name" | "confirm" } | null>(null);
-  const [tagRenameBusy, setTagRenameBusy] = useState(false);
-  const [tagRenameError, setTagRenameError] = useState<string | null>(null);
+  const {
+    tagRename, tagRenameBusy, tagRenameError, affectedCount: tagRenameAffectedCount,
+    affectedMp3Count: tagRenameMp3Count, affectedWavCount: tagRenameWavCount,
+    openTagRename, setNewTag: setTagRenameNewTag, continueTagRename, backTagRename,
+    cancelTagRename, confirmTagRename,
+  } = useTagRename({ beats, setBeats, replaceTagFilter });
   useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");
   const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {
     setBeats(current => {
@@ -2989,35 +2993,6 @@ function BeatGalerApp() {
 
   const tagColors = useTagColors();
 
-const confirmTagRename = useCallback(async () => {
-  if (!tagRename) return;
-  const oldTag = tagRename.oldTag.trim().toLowerCase();
-  const newTag = tagRename.newTag.trim().toLowerCase();
-  if (!oldTag || !newTag || oldTag === newTag) return;
-  const jobId = `tag-rename-${Date.now()}`;
-  setTagRenameBusy(true);
-  setTagRenameError(null);
-  registerJob(jobId, `Rename “${oldTag}” → “${newTag}”`, "tag-rename");
-  updateJob(jobId, { status: "processing", progress: 0, message: "Preparing journal…" });
-  try {
-    await renameTagEverywhere(oldTag, newTag, jobId);
-    setBeats(current => current.map(beat => {
-      if (!beat.tags.some(t => t.trim().toLowerCase() === oldTag)) return beat;
-      const renamed = beat.tags.map(t => t.trim().toLowerCase() === oldTag ? newTag : t);
-      return { ...beat, tags: Array.from(new Set(renamed)) };
-    }));
-    replaceTagFilter(oldTag, newTag);
-    renameTagColor(oldTag, newTag);
-    setTagRename(null);
-  } catch (e) {
-    const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Could not rename tag.");
-    setTagRenameError(message);
-    updateJob(jobId, { status: "error", message });
-  } finally {
-    setTagRenameBusy(false);
-  }
-}, [tagRename, replaceTagFilter]);
-
 const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   toggleTagFilter(tag, e.altKey ? "exclude" : "include");
 }, [toggleTagFilter]);
@@ -3400,56 +3375,29 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     current={tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}
     onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }}
     onRename={() => {
-      const oldTag = tagColorMenu.tag.trim().toLowerCase();
+      openTagRename(tagColorMenu.tag);
       setTagColorMenu(null);
-      setTagRename({ oldTag, newTag: oldTag, stage: "name" });
-      setTagRenameError(null);
     }}
     onClose={() => setTagColorMenu(null)}
   />
 )}
 
 
-{tagRename && (() => {
-  const normalizedOld = tagRename.oldTag.trim().toLowerCase();
-  const affected = beats.filter(b => b.tags.some(t => t.trim().toLowerCase() === normalizedOld));
-  const mp3Count = affected.filter(b => !!b.mp3_path).length;
-  const wavCount = affected.filter(b => !!b.wav_path).length;
-  return ReactDOM.createPortal(
-    <>
-      <div style={{ position: "fixed", inset: 0, zIndex: 10020, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(5px)" }} />
-      <div style={{ position: "fixed", zIndex: 10021, width: 430, maxWidth: "calc(100vw - 32px)", left: "50%", top: "50%", transform: "translate(-50%,-50%)", background: "#121212", border: "1px solid #292929", borderRadius: 14, padding: 22, boxShadow: "0 28px 90px rgba(0,0,0,.8)" }}>
-        <div style={{ fontSize: 16, color: "#eee", fontWeight: 600 }}>Rename tag globally</div>
-        {tagRename.stage === "name" ? (
-          <>
-            <div style={{ marginTop: 8, fontSize: 12, color: "#777" }}>The original metadata order will be preserved; only the matching tag name changes.</div>
-            <input autoFocus value={tagRename.newTag} onChange={e => setTagRename({ ...tagRename, newTag: e.target.value })}
-              onKeyDown={e => { if (e.key === "Enter" && tagRename.newTag.trim() && tagRename.newTag.trim().toLowerCase() !== normalizedOld) setTagRename({ ...tagRename, stage: "confirm" }); }}
-              style={{ width: "100%", marginTop: 16, padding: "10px 12px", borderRadius: 8, border: "1px solid #333", background: "#191919", color: "#fff", outline: "none" }} />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-              <button onClick={() => setTagRename(null)} style={{ padding: "8px 13px", borderRadius: 7, border: "1px solid #333", background: "transparent", color: "#999", cursor: "pointer" }}>Cancel</button>
-              <button disabled={!tagRename.newTag.trim() || tagRename.newTag.trim().toLowerCase() === normalizedOld} onClick={() => setTagRename({ ...tagRename, stage: "confirm" })} style={{ padding: "8px 13px", borderRadius: 7, border: 0, background: "#eee", color: "#111", cursor: "pointer" }}>Continue</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ marginTop: 14, padding: 14, borderRadius: 9, background: "#191919", color: "#aaa", fontSize: 12, lineHeight: 1.7 }}>
-              <div><b style={{ color: "#ddd" }}>{normalizedOld}</b> → <b style={{ color: "#ddd" }}>{tagRename.newTag.trim().toLowerCase()}</b></div>
-              <div style={{ marginTop: 8 }}>This will rewrite metadata in:</div>
-              <div> {affected.length} beats</div><div> {mp3Count} MP3 files</div><div> {wavCount} WAV files</div>
-              <div style={{ marginTop: 8, color: "#fbbf24" }}>Do not close Beat Galer while it is running. A recovery journal will roll back an interrupted operation on the next start.</div>
-            </div>
-            {tagRenameError && <div style={{ marginTop: 10, color: "#f87171", fontSize: 11 }}>{tagRenameError}</div>}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-              <button disabled={tagRenameBusy} onClick={() => setTagRename({ ...tagRename, stage: "name" })} style={{ padding: "8px 13px", borderRadius: 7, border: "1px solid #333", background: "transparent", color: "#999", cursor: "pointer" }}>Back</button>
-              <button disabled={tagRenameBusy || affected.length === 0} onClick={confirmTagRename} style={{ padding: "8px 13px", borderRadius: 7, border: 0, background: "#ef4444", color: "#fff", cursor: "pointer" }}>{tagRenameBusy ? "Renaming…" : "Rename everywhere"}</button>
-            </div>
-          </>
-        )}
-      </div>
-    </>, document.body
-  );
-})()}
+{tagRename && (
+  <TagRenameDialog
+    rename={tagRename}
+    busy={tagRenameBusy}
+    error={tagRenameError}
+    affectedCount={tagRenameAffectedCount}
+    mp3Count={tagRenameMp3Count}
+    wavCount={tagRenameWavCount}
+    onNewTagChange={setTagRenameNewTag}
+    onContinue={continueTagRename}
+    onBack={backTagRename}
+    onCancel={cancelTagRename}
+    onConfirm={confirmTagRename}
+  />
+)}
 
       {/* Grid — OS file drag-drop */}
       <div
