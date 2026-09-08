@@ -86,7 +86,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 ### [x] 1.1 — Confirmar el punto de partida
 
-- **Hacer:** comprobar rama, commit y cambios locales; comparar el estado actual con el análisis original y preparar una rama de trabajo conservando los cambios existentes.
+- **Hacer:** comprobar rama, commit y estado versionado en GitHub; comparar el estado actual con el análisis original y preparar una rama de trabajo conservando los cambios existentes.
     
 - **Archivos:** repositorio y documentos de planificación. Todavía no mover código de la app.
     
