@@ -248,6 +248,7 @@ try {
   // Definitive beat runtime state architecture. These are independent machines,
   // not one overloaded status string, and they remain session-local by design.
   const runtimeStateMachine = readFileSync(path.join(root, "src", "features", "state", "beatRuntimeState.ts"), "utf8");
+  const runtimeRegistry = readFileSync(path.join(root, "src", "features", "state", "useBeatRuntimeRegistry.ts"), "utf8");
   for (const stateName of ["pending_upload", "uploading", "synced", "pending_update", "updating", "deleting", "error", "conflict", "downloading", "idle", "playback_preparing", "playing"]) {
     if (!runtimeStateMachine.includes(`"${stateName}"`)) fail(`Definitive runtime state missing: ${stateName}`);
   }
@@ -256,7 +257,10 @@ try {
   if (!runtimeStateMachine.includes("previous_state")) fail("Runtime errors no longer retain previous_state.");
   if (!runtimeStateMachine.includes("trash_sync_required")) fail("Offline Trash lost its explicit reconciliation bit.");
   if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !app.includes('type: "SYNC_UPLOAD_STARTED"') || !app.includes('type: "PLAYBACK_PREPARING"') || !app.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
-  if (!app.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved into persisted Beat metadata; transient work must stay session-local.");
+  if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
+  if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
+  if (!app.includes("useBeatRuntimeRegistry(beats, beatsLatestRef)")) fail("App flows are no longer connected to the extracted runtime registry.");
+  if (!app.includes('type: "SYNC_DELETE_STARTED"') || !app.includes('type: "SET_TRASH_SYNC_REQUIRED"') || !app.includes('type: "SET_OFFLINE_AVAILABLE"')) fail("Delete/Trash/Offline flows are no longer wired to the definitive runtime registry.");
   console.log("PASS runtime-state guard: sync/download/playback are independent, Offline is orthogonal, errors remember previous_state, and App flows are wired");
 
   // Bulk Import + instant Review regression shield. Review must become visible
