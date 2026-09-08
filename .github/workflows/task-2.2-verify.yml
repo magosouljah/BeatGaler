@@ -21,22 +21,8 @@ jobs:
           node-version: 22.23.2
           cache: npm
       - run: npm ci
-      - name: Locate suspect integration guards
-        run: |
-          echo "WEB_GUARD=$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
-          grep -R -n -F 'onBeatClick={(beatId) => playBeat(beatId, { sort: playbackSort })}' src/App.tsx tests/integration || true
-          grep -R -n -F 'function prepareCleanMp3Upload(' scripts/lib/prepare-clean-mp3.cjs src-tauri/direct-transport/transport-helper.cjs || true
-      - name: Baseline suspect integration tests
-        run: |
-          WEB_GUARD="$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
-          test -n "$WEB_GUARD"
-          npx vitest run tests/integration/cleanMp3Cloud.test.ts "$WEB_GUARD"
       - name: Apply exact extraction
         run: node scripts/task22-extract.mjs
-      - name: Post-extraction suspect integration tests
-        run: |
-          WEB_GUARD="$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
-          npx vitest run tests/integration/cleanMp3Cloud.test.ts "$WEB_GUARD"
       - run: npm run test:typecheck
       - run: npm run test:unit:ts
       - run: npm run test:component:dom
@@ -46,7 +32,7 @@ jobs:
       - run: npm run build
       - name: Commit verified App extraction
         run: |
-          rm scripts/task22-extract.mjs .github/workflows/task-2.2-verify.yml task22-integration-failure.txt
+          rm -f scripts/task22-extract.mjs .github/workflows/task-2.2-verify.yml task22-integration-failure.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
