@@ -376,103 +376,58 @@ Rama y commit de partida: app-tsx-2.3 @ e6d95657356afc1380c980dd8a2b249791d1e82b
 Referencia del cambio realizado: app-tsx-3.1 @ 55bc640df3bd78b16d07a749f7c111b8e5e90a7c — refactor(app): extract library state ownership
 
 Qué cambió:
-
 - Se confirmó que 2.3 estaba terminada antes de comenzar.
-    
 - Se creó `src/features/library/useLibraryState.ts` como dueño del estado principal de la biblioteca.
-    
 - `beats`, `setBeats`, `beatsLatestRef` y `startupCachedBeatsRef` dejaron de ser administrados directamente por App.tsx.
-    
 - Se extrajo también la persistencia de la caché de presentación mediante `useLibraryPresentationCache`.
-    
 - Se conservó exactamente el comportamiento inicial de carga desde caché y el filtrado de uploads interrumpidos.
-    
-- Se conservaron los momentos existentes en los que `beatsLatestRef.current` se actualiza de forma síncrona dentro de operaciones específicas.
-    
-- No se convirtió `setBeats` en un setter que actualice automáticamente `beatsLatestRef`.
-    
+- Se conservaron los momentos existentes en los que `beatsLatestRef.current` se actualiza de forma síncrona dentro de operaciones específicas.  
+- No se convirtió `setBeats` en un setter que actualice automáticamente `beatsLatestRef`.  
 - Se conservó la actualización normal de `beatsLatestRef` desde el efecto dependiente de `[beats]`.
-    
 - Se mantuvo exactamente la guarda previa de persistencia de caché y su debounce de 1500 ms.
-    
 - Se adaptaron las pruebas que inspeccionaban directamente App.tsx para que sigan la responsabilidad hasta su nuevo dueño.
-    
 - El regression guard de startup que todavía buscaba el estado dentro de App.tsx se actualizó para inspeccionar `useLibraryState.ts`, sin eliminar ni debilitar la comprobación.
-    
 - No se modificó el comportamiento funcional Web/Desktop ni se inició la tarea 3.2.
-    
 
 Archivos afectados:
-
 - src/App.tsx
-    
 - src/features/library/useLibraryState.ts
-    
 - tests/component-dom/libraryState.test.tsx
-    
 - tests/component-dom/startupRevealArchitecture.test.ts
-    
 - tests/integration/libraryStateExtraction.test.ts
-    
 - scripts/run-regressions.mjs
-    
 
 Comprobaciones ejecutadas y resultado:
-
 - git diff --check: OK.
-    
-- npm run test:typecheck: OK.
-    
+- npm run test:typecheck: OK. 
 - npm run test:unit:ts: OK.
-    
 - npm run test:component:dom: OK.
-    
 - npm run test:integration: OK.
-    
 - npm run test:regressions: OK.
-    
 - npm run build:web: OK.
-    
 - npm run build: OK.
     
 - Verificación específica de conservación de llamadas `setBeats`: OK.
-    
 - Verificación específica de conservación de asignaciones síncronas a `beatsLatestRef.current`: OK.
-    
 - Workflow definitivo de Task 3.1 / run 34192537105: OK.
-    
 - Commit final verificado: 55bc640df3bd78b16d07a749f7c111b8e5e90a7c.
-    
 
 Pruebas manuales y plataforma:
-
 - No se requirió una prueba manual bloqueante para cerrar 3.1.
-    
 - La extracción quedó cubierta por pruebas de componente, integración, regresión y builds Web/Desktop.
-    
 - No se declaró ninguna comprobación manual no ejecutada como si hubiera sido realizada.
-    
 
 Pendientes o fallos previos:
-
 - No queda una verificación automatizada necesaria pendiente para cerrar 3.1.
-    
 - `handleRemoveBulk` conserva un posible riesgo previo relacionado con el uso de un snapshot capturado de `beats`; no se modificó porque está fuera del alcance de 3.1.
-    
 - Continuar adaptando las pruebas que dependan de la ubicación física del código cuando las responsabilidades futuras salgan de App.tsx.
-    
 
 Conexiones temporales que quedan:
-
 - Ninguna.
-    
 - El workflow y el script temporales utilizados para aplicar/verificar 3.1 fueron eliminados antes del commit final.
-    
 
 Siguiente tarea:
-
-- 3.2 — Separar estados de runtime.
-    
+- 3.2 — Separar estados de runtime. 
 - No iniciada.
 ```
 
