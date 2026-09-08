@@ -63,6 +63,36 @@ if (latestAssignmentsAfter !== latestAssignmentsBefore) {
 
 writeFileSync(appPath, app);
 
+const regressionPath = "scripts/run-regressions.mjs";
+let regressions = readFileSync(regressionPath, "utf8");
+
+function replaceRegressionOnce(label, before, after) {
+  const first = regressions.indexOf(before);
+  if (first < 0) throw new Error(`Task 3.1 regression patch failed: missing ${label}`);
+  if (regressions.indexOf(before, first + before.length) >= 0) throw new Error(`Task 3.1 regression patch failed: duplicate ${label}`);
+  regressions = regressions.slice(0, first) + after + regressions.slice(first + before.length);
+}
+
+replaceRegressionOnce(
+  "library state regression source",
+  '  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");',
+  '  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");\n  const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");',
+);
+
+replaceRegressionOnce(
+  "startup manifest owner guard",
+  '  if (!app.includes(\'const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);\')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");',
+  '  if (!libraryStateOwner.includes(\'const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);\')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");',
+);
+
+replaceRegressionOnce(
+  "verified presentation cache owner guard",
+  '  if (!app.includes(\'if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;\')) fail("Unverified cached presentation can overwrite the saved verified manifest.");',
+  '  if (!libraryStateOwner.includes(\'if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;\')) fail("Unverified cached presentation can overwrite the saved verified manifest.");',
+);
+
+writeFileSync(regressionPath, regressions);
+
 writeFileSync("tests/integration/libraryStateExtraction.test.ts", `import { readFileSync } from "node:fs";\nimport { resolve } from "node:path";\nimport { describe, expect, it } from "vitest";\n\nconst app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");\nconst owner = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryState.ts"), "utf8");\n\ndescribe("task 3.1 library-state extraction", () => {\n  it("moves the single library owner and presentation cache out of App", () => {\n    expect(app).toContain("} = useLibraryState();");\n    expect(app).not.toContain("const [beats, setBeats] = useState<Beat[]>");\n    expect(app).not.toContain("const startupCachedBeatsRef = useRef<Beat[] | null>");\n    expect(app).not.toContain("const beatsLatestRef = useRef<Beat[]>");\n    expect(owner).toContain("const [beats, setBeats] = useState<Beat[]>");\n    expect(owner).toContain("const startupCachedBeatsRef = useRef<Beat[] | null>(null)");\n    expect(owner).toContain("const beatsLatestRef = useRef<Beat[]>([])");\n    expect(app).toContain("useLibraryPresentationCache(");\n    expect(owner).toContain("saveCachedBeats(beats)");\n  });\n\n  it("preserves the old latest-snapshot timing instead of making every setter synchronous", () => {\n    expect(app).toContain("visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);\\n    beatsLatestRef.current = beats;");\n    expect(owner).not.toContain("beatsLatestRef.current = beats");\n    expect((app.match(/beatsLatestRef\\.current = next/g) ?? []).length).toBeGreaterThan(5);\n  });\n\n  it("keeps the presentation-cache guard and dependencies byte-for-byte equivalent", () => {\n    expect(app).toContain("useLibraryPresentationCache(\\n    beats,\\n    cloudSessionVerified,\\n    settings,\\n  );");\n    expect(owner).toContain("if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;");\n    expect(owner).toContain("[beats, settings?.telegram_cloud_connected, cloudSessionVerified]");\n    expect(owner).toContain("}, 1500);");\n    expect(owner).toContain("readActiveCloudUploads()");\n  });\n});\n`);
 
 console.log(`Task 3.1 patch applied. setBeats calls preserved: ${setBeatsCallsAfter}; latest assignments preserved: ${latestAssignmentsAfter}.`);
