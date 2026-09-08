@@ -21,11 +21,15 @@ const migrationTargets = {
   platformRouting: { tasks: ["4.2", "6.3", "7.4", "8.2", "8.3"], owners: ["src/features/playback/usePlaybackController.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/import/useBrowserImport.ts", "src/features/dragdrop/useHtmlLibraryDrop.ts", "src/features/dragdrop/useNativeLibraryDrop.ts"] },
 } as const;
 
+function sourceSection(source: string, startMarker: string, endMarker: string, label: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) throw new Error(`Could not find ${label} section: ${startMarker} -> ${endMarker}`);
+  return source.slice(start, end);
+}
+
 function section(startMarker: string, endMarker: string): string {
-  const start = app.indexOf(startMarker);
-  const end = app.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end < 0) throw new Error(`Could not find App.tsx section: ${startMarker} -> ${endMarker}`);
-  return app.slice(start, end);
+  return sourceSection(app, startMarker, endMarker, "App.tsx");
 }
 
 function expectOrdered(source: string, markers: string[]): void {
@@ -91,18 +95,24 @@ describe("App migration characterization contracts", () => {
     expect(importSession).toContain("setReviewQueue({");
     expect(importSession).not.toContain("setBeats(");
 
-    expectOrdered(importReview, [
-      "const skipCurrentReviewBeat = useCallback",
+    const skip = sourceSection(importReview, "const skipCurrentReviewBeat = useCallback", "const cancelReview = useCallback", "useImportReview.ts Skip");
+    expectOrdered(skip, [
       "setReviewQueue(queue => {",
       "if (currentBeat) releaseBeat?.(currentBeat.id);",
       "return { ...queue, index: queue.index + 1 };",
-      "const cancelReview = useCallback",
+    ]);
+
+    const cancel = sourceSection(importReview, "const cancelReview = useCallback", "const handleReviewedBeatSaved = useCallback", "useImportReview.ts Cancel");
+    expectOrdered(cancel, [
       "onCancelPendingWork();",
       "queue.beats.slice(queue.index)",
       "if (queue.batchId) void discardBatch(queue.batchId);",
       "cleanupUnusedStaging();",
       "return null;",
-      "const handleReviewedBeatSaved = useCallback",
+    ]);
+
+    const save = sourceSection(importReview, "const handleReviewedBeatSaved = useCallback", "return {", "useImportReview.ts Save");
+    expectOrdered(save, [
       "setBeats(current => {",
       "beatsLatestRef.current = next;",
       "setReviewQueue(queue => {",
