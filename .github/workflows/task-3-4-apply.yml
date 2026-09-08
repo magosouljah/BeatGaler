@@ -152,12 +152,16 @@ jobs:
         if: steps.diffcheck.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.unit.outcome != 'success' || steps.component.outcome != 'success' || steps.integration.outcome != 'success' || steps.regressions.outcome != 'success' || steps.buildweb.outcome != 'success' || steps.build.outcome != 'success'
         run: exit 1
 
-      - name: Commit verified extraction
+      - name: Prepare verified commit
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm scripts/apply-task-3-4.mjs
           git add src/App.tsx src/features/selection/useBeatSelection.ts src/features/library/useLibraryReorder.ts tests/component-dom/beatSelection.test.tsx tests/integration/selectionReorderExtraction.test.ts tests/integration/libraryViewExtraction.test.ts
+          git status --short
           git commit -m "refactor(app): extract selection and library reorder"
-          git push origin HEAD:v0.9.0-test-noche
+
+      - name: Push verified commit
+        shell: bash
+        run: git push origin HEAD:v0.9.0-test-noche
