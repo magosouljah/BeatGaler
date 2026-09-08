@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync("src/App.tsx", "utf8");
+const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
 const beatCard = readFileSync("src/components/BeatCard.tsx", "utf8");
 const webAdapter = readFileSync("src/platform/webAdapter.ts", "utf8");
 const viteConfig = readFileSync("vite.config.ts", "utf8");
@@ -10,8 +11,11 @@ const nginx = readFileSync("deploy/web/beatgaler.com.conf", "utf8");
 
 describe("Issue #97 startup reveal architecture", () => {
   it("boots the presentation layer from the last verified lightweight manifest", () => {
-    expect(app).toContain("useState<Beat[]>(() => startupCachedBeatsRef.current ?? [])");
-    expect(app).toContain("if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;");
+    expect(app).toContain("} = useLibraryState();");
+    expect(libraryStateOwner).toContain("useState<Beat[]>(() => startupCachedBeatsRef.current ?? [])");
+    expect(app).toContain("useLibraryPresentationCache(");
+    expect(libraryStateOwner).toContain("if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;");
+    expect(libraryStateOwner).toContain("[beats, settings?.telegram_cloud_connected, cloudSessionVerified]");
   });
 
   it("reserves every filtered beat slot while revealing only artwork-ready cards", () => {
