@@ -21,8 +21,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/task42-finalize.py')
+          s = p.read_text()
+          old = "register_path.write_text(register + entry + '\\n')"
+          new = "register_path.write_text((register + entry).rstrip() + '\\n')"
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+          PY
           python scripts/task42-finalize.py
-          rm -f .github/workflows/task-4-2-final.yml .github/workflows/task-4-2-final2.yml .github/workflows/task-4-2-final3.yml .github/workflows/task-4-2-final4.yml .github/workflows/task-4-2-finalize.yml scripts/task42-finalize.py
+          rm -f .github/workflows/task-4-2-final.yml .github/workflows/task-4-2-final2.yml .github/workflows/task-4-2-final3.yml .github/workflows/task-4-2-final4.yml .github/workflows/task-4-2-finalize.yml .github/workflows/task-4-2-close.yml scripts/task42-finalize.py
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
