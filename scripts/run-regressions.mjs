@@ -56,6 +56,7 @@ try {
 
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
   const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");
+  const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
@@ -158,9 +159,9 @@ try {
   if (!app.includes('const autoResult = await handleAutoProjectDrop(beat, root.path)')) fail("Recognized project files/ZIPs must bypass the redundant role chooser.");
   if (!controller.includes('onBeatFileStagingChange?.(beatId, true)') || !app.includes('onBeatFileStagingChange: (beatId, active)')) fail("Beat-card loading must begin before WebView2 copies/inspects a large PROJECT ZIP.");
   if (!app.includes('Replace PROJECT ZIP?') || !app.includes('Replace project file?')) fail("Existing PROJECT replacement lost its explicit Replace/Cancel confirmation.");
-  if (!app.includes('setBeatFileDrop(null);') || !app.includes('const runBeatCloudUpdate')) fail("Long beat updates must close the chooser before background work starts.");
+  if (!beatAssetUpdates.includes('setBeatFileDrop(null);') || !beatAssetUpdates.includes('const runBeatCloudUpdate')) fail("Long beat updates must close the chooser before background work starts.");
   if (!playbackController.includes('isBeatCloudUpdateBusy(inputBeat.id)')) fail("Queue/direct Play can bypass a running slot/project update.");
-  if (!app.includes('setBeatCloudUpdateBusy(beat.id, false, true)')) fail("Successful existing-beat updates lost the success-phase event.");
+  if (!beatAssetUpdates.includes('setBeatCloudUpdateBusy(beat.id, false, true)')) fail("Successful existing-beat updates lost the success-phase event.");
   if (!beatCard.includes('slotUpdateComplete') || !beatCard.includes('detail.success')) fail("BeatCard lost the green completion animation for existing-beat updates.");
   if (!tauriClient.includes('inspect_project_drop_source') || !tauriClient.includes('"projectFile" | "projectFolder"')) fail("Tauri client lost smart PROJECT drop inspection/update kinds.");
   if (!rustLib.includes('inspect_project_drop_source')) fail("Tauri invoke handler lost PROJECT drop inspection.");
