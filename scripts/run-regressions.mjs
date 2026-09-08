@@ -63,6 +63,7 @@ try {
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const uploadErrorDetails = readFileSync(path.join(root, "src", "features", "cloud", "uploadErrorDetails.ts"), "utf8");
+  const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
@@ -252,11 +253,14 @@ try {
   if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) {") || !beatCard.includes("CARD_PLAY_REJECTED") || !beatCard.includes("onPlay(beat);")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
   if (!playbackController.includes('PLAY_BLOCKED_LOADING')) fail("Playback controller lost its defensive loading-state guard.");
   if (!app.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
-  if (app.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
-  const preparingIndex = app.indexOf('cloud_status: "PLAYBACK_PREPARING"');
-  const readyGateIndex = app.indexOf("await waitForUploadedBeatPlaybackReady(detached)", preparingIndex);
-  const completeIndex = app.indexOf('cloud_status: "UPLOAD_COMPLETE"', readyGateIndex);
-  if (preparingIndex < 0 || readyGateIndex < 0 || completeIndex < 0 || !(preparingIndex < readyGateIndex && readyGateIndex < completeIndex)) fail("Upload completion must occur only after the real playback readiness gate.");
+  if (app.includes("beatsLatestRef.current = indexSnapshot;") || desktopBeatUploadPipeline.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
+  if (!app.includes('cloud_status: "UPLOAD_COMPLETE"')) fail("Background upload lost its transient completion state after playback readiness.");
+  if (!app.includes("waitForPlaybackReady: waitForUploadedBeatPlaybackReady")) fail("App no longer wires the real playback readiness gate into the Desktop upload pipeline.");
+  const detachedIndex = desktopBeatUploadPipeline.indexOf("actions.onDetached(detached)");
+  const commitIndex = desktopBeatUploadPipeline.indexOf("await dependencies.commitSnapshot(indexSnapshot, `upload-beat:${detached.id}`)", detachedIndex);
+  const clearMarkerIndex = desktopBeatUploadPipeline.indexOf("dependencies.clearUploadMarker(original.id)", commitIndex);
+  const readyGateIndex = desktopBeatUploadPipeline.indexOf("await dependencies.waitForPlaybackReady(detached)", clearMarkerIndex);
+  if (detachedIndex < 0 || commitIndex < 0 || clearMarkerIndex < 0 || readyGateIndex < 0 || !(detachedIndex < commitIndex && commitIndex < clearMarkerIndex && clearMarkerIndex < readyGateIndex)) fail("Upload durability boundary must remain detach -> INDEX commit -> clear recovery marker -> playback readiness.");
   if (!rustCommands.includes("Any explicit enqueue is a retry signal")) fail("Rust Download Cooking must revive transient post-upload failures on explicit warm retry.");
   console.log("PASS upload/play guard: first Play waits for real MASTER readiness and loading beats stay non-interactive");
 

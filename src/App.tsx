@@ -39,6 +39,7 @@ import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
 import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
 import { buildCloudSessionUnavailableDetail, buildPlaybackPreparationFailureDetail, buildUploadFailureDetail } from "./features/cloud/uploadErrorDetails";
+import { DesktopBeatUploadPipelineError, runDesktopBeatUploadPipeline } from "./features/cloud/desktopBeatUploadPipeline";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -1132,103 +1133,63 @@ function BeatGalerApp() {
             if (autoCloudUploadRef.current.has(original.id)) continue;
             autoCloudUploadRef.current.add(original.id);
 
-            let uploadStage = "Prepare upload";
-            let remoteUploadCompleted = false;
-            let syncCommitted = false;
             transitionRuntime(original.id, { type: "SYNC_UPLOAD_STARTED" }, original);
             try {
-              let uploaded = original;
+              const pipelineResult = await runDesktopBeatUploadPipeline({
+                original,
+                dependencies: {
+                  uploadMaster: uploadBeatToTelegram,
+                  listCloudFiles: listCloudFilesForBeat,
+                  uploadWav: (beat, path) => uploadDroppedFileToTelegram(beat, path, "WAV"),
+                  getProjectStatus: getProjectCloudStatus,
+                  uploadProject: uploadProjectToTelegram,
+                  detachLocalSources: detachLocalSourcesAfterCloudUpload,
+                  syncMetadata: syncBeatMetadataToTelegram,
+                  commitSnapshot: (snapshot, reason) => libraryStateManager.commitSnapshot(snapshot, reason),
+                  clearUploadMarker: clearCloudUploadActive,
+                  waitForPlaybackReady: waitForUploadedBeatPlaybackReady,
+                },
+                actions: {
+                  onMasterUploaded: uploaded => {
+                    setBeats(current => current.map(b =>
+                      b.id === uploaded.id ? { ...uploaded, cloud_status: "UPLOADING" } : b
+                    ));
+                  },
+                  onDetached: detached => {
+                    setBackgroundUploadErrors(current => {
+                      if (!(detached.id in current)) return current;
+                      const next = { ...current };
+                      delete next[detached.id];
+                      return next;
+                    });
 
-              // MASTER: only upload when the beat does not already own one.
-              if (!uploaded.telegram_file_id) {
-                uploadStage = "Upload MASTER audio";
-                uploaded = await uploadBeatToTelegram(uploaded);
-                setBeats(current => current.map(b =>
-                  b.id === uploaded.id ? { ...uploaded, cloud_status: "UPLOADING" } : b
-                ));
-              }
-
-              uploadStage = "Read existing cloud file slots";
-              const existingFiles = await listCloudFilesForBeat(uploaded.id);
-              const hasCloudWav = existingFiles.some(file => file.file_type === "WAV");
-
-              if (uploaded.wav_path && !hasCloudWav) {
-                uploadStage = "Upload WAV HQ";
-                await uploadDroppedFileToTelegram(uploaded, uploaded.wav_path, "WAV");
-              }
-
-              const hasProjectSource =
-                !!uploaded.flp_path || !!uploaded.als_path || uploaded.has_flp || uploaded.has_als;
-
-              if (hasProjectSource) {
-                uploadStage = "Check PROJECT cloud state";
-                const currentProject = await getProjectCloudStatus(uploaded);
-                if (!currentProject?.synced) {
-                  uploadStage = "Build and upload PROJECT.zip";
-                  await uploadProjectToTelegram(uploaded);
-                }
-              }
-
-              // Every required Telegram slot is now durable. Anything that fails
-              // below this point is local finalization and must not make the UI imply
-              // that the remote upload itself is still pending.
-              remoteUploadCompleted = true;
-
-              // Only detach local import sources after every required cloud slot succeeds.
-              uploadStage = "Finalize cloud copy and detach local sources";
-              const detached = await detachLocalSourcesAfterCloudUpload(uploaded.id);
-
-              setBackgroundUploadErrors(current => {
-                if (!(detached.id in current)) return current;
-                const next = { ...current };
-                delete next[detached.id];
-                return next;
+                    // Upload completion and playback readiness are deliberately separate.
+                    // Keep the card blocked while metadata/INDEX finalization and cooking finish.
+                    setBeats(current => {
+                      const next = current.map(b =>
+                        b.id === detached.id ? { ...detached, cloud_status: "PLAYBACK_PREPARING" } : b
+                      );
+                      beatsLatestRef.current = next;
+                      return next;
+                    });
+                  },
+                  getLibrarySnapshot: () => beatsLatestRef.current,
+                  onIndexCommitted: (detached, indexSnapshot) => {
+                    cloudLibrarySnapshotRef.current = indexSnapshot
+                      .filter(item => !!item.telegram_file_id)
+                      .map(cloudBeatFingerprint)
+                      .join("\u001c");
+                    transitionRuntime(detached.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, detached);
+                  },
+                  onPlaybackPreparing: detached => {
+                    transitionRuntime(detached.id, { type: "PLAYBACK_PREPARING" }, detached);
+                  },
+                },
               });
 
-              // Upload completion and playback readiness are deliberately separate.
-              // The Telegram send can finish a moment before its new MASTER can be
-              // downloaded back. Keep the card blocked until Download Cooking has
-              // enough real bytes for a reliable first Play.
-              setBeats(current => {
-                const next = current.map(b =>
-                  b.id === detached.id ? { ...detached, cloud_status: "PLAYBACK_PREPARING" } : b
-                );
-                beatsLatestRef.current = next;
-                return next;
-              });
+              const detached = pipelineResult.beat;
+              const playbackReady = pipelineResult.playbackReady;
 
-              // Artwork is part of the logical beat upload. Finish it BEFORE the
-              // single authoritative index commit so MP3 + WAV + PROJECT + artwork
-              // + metadata become visible in Telegram with one INDEX replacement.
-              uploadStage = "Sync artwork and metadata";
-              await syncBeatMetadataToTelegram(detached);
-
-              // Durability boundary is PER BEAT, matching the proven pre-V7 behavior.
-              // The LibraryStateManager still serializes all INDEX writes, so concurrent
-              // imports cannot race; however, a finished beat never waits for the rest
-              // of the batch before becoming authoritative.
-              uploadStage = "Commit beat to authoritative INDEX";
-              const indexSnapshot = beatsLatestRef.current.map(beat =>
-                beat.id === detached.id
-                  ? { ...detached, cloud_status: "CLOUD_ONLY" }
-                  : beat
-              );
-              await libraryStateManager.commitSnapshot(indexSnapshot, `upload-beat:${detached.id}`);
-              cloudLibrarySnapshotRef.current = indexSnapshot
-                .filter(item => !!item.telegram_file_id)
-                .map(cloudBeatFingerprint)
-                .join("\u001c");
-              syncCommitted = true;
-              transitionRuntime(detached.id, { type: "SYNC_UPLOAD_SUCCEEDED" }, detached);
-
-              // Critical: once Telegram media + INDEX are committed, this beat is no
-              // longer interruptible. Clear its marker immediately, before playback
-              // warming or before the next beat in the batch starts.
-              clearCloudUploadActive(original.id);
-
-              uploadStage = "Prepare uploaded MASTER for first Play";
-              transitionRuntime(detached.id, { type: "PLAYBACK_PREPARING" }, detached);
-              const playbackReady = await waitForUploadedBeatPlaybackReady(detached);
               if (!playbackReady) {
                 const detail = buildPlaybackPreparationFailureDetail(detached.name);
                 setBackgroundUploadErrors(current => ({ ...current, [detached.id]: detail }));
@@ -1257,10 +1218,7 @@ function BeatGalerApp() {
               }
 
               // IMPORTANT: one HTML drop session can contain MANY beats. Never delete
-              // the whole drop-staging/<session> just because one beat finished: that
-              // would erase the source files of the remaining queued/review beats.
-              // Clean orphan sessions only when this background batch is drained and
-              // there is no active Review/import decision still depending on staging.
+              // the whole drop-staging/<session> just because one beat finished.
               if (
                 backgroundUploadQueueRef.current.length === 0 &&
                 reviewQueueLatestRef.current === null &&
@@ -1294,13 +1252,18 @@ function BeatGalerApp() {
               }
 
             } catch (error) {
-              console.warn(`Background Telegram upload failed for ${original.name} at ${uploadStage}:`, error);
+              const pipelineError = error instanceof DesktopBeatUploadPipelineError ? error : null;
+              const uploadStage = pipelineError?.stage ?? "Prepare upload";
+              const remoteUploadCompleted = pipelineError?.remoteUploadCompleted ?? false;
+              const syncCommitted = pipelineError?.syncCommitted ?? false;
+              const reportedError = pipelineError?.originalError ?? error;
+              console.warn(`Background Telegram upload failed for ${original.name} at ${uploadStage}:`, reportedError);
 
               const detail = buildUploadFailureDetail({
                 beatName: original.name,
                 stage: uploadStage,
                 platform: navigator.platform || "unknown",
-                error,
+                error: reportedError,
               });
 
               if (!syncCommitted) {
@@ -1326,8 +1289,8 @@ function BeatGalerApp() {
                 b.id === original.id
                   ? {
                       ...b,
-                      // If Telegram already has every required slot, expose the
-                      // durable cloud state even when local cleanup/finalization failed.
+                      // A failure after durable media/INDEX finalization must expose
+                      // the Cloud copy rather than reclassifying it as an interrupted upload.
                       cloud_status: remoteUploadCompleted ? "CLOUD_ONLY" : "ERROR",
                     }
                   : b

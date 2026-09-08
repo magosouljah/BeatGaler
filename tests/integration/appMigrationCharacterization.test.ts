@@ -6,6 +6,7 @@ const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const playbackController = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
 const interruptedUploadJournal = readFileSync(resolve(process.cwd(), "src/features/cloud/interruptedUploadJournal.ts"), "utf8");
 const uploadErrorDetails = readFileSync(resolve(process.cwd(), "src/features/cloud/uploadErrorDetails.ts"), "utf8");
+const desktopBeatUploadPipeline = readFileSync(resolve(process.cwd(), "src/features/cloud/desktopBeatUploadPipeline.ts"), "utf8");
 
 const migrationTargets = {
   uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/uploadErrorDetails.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
@@ -58,17 +59,20 @@ describe("App migration characterization contracts", () => {
       "markCloudUploadActive(beat)",
     ]);
 
-    expectOrdered(upload, [
-      "uploaded = await uploadBeatToTelegram(uploaded)",
-      "const existingFiles = await listCloudFilesForBeat(uploaded.id)",
-      "await uploadDroppedFileToTelegram(uploaded, uploaded.wav_path, \"WAV\")",
-      "await uploadProjectToTelegram(uploaded)",
-      "const detached = await detachLocalSourcesAfterCloudUpload(uploaded.id)",
-      "await syncBeatMetadataToTelegram(detached)",
-      "await libraryStateManager.commitSnapshot(indexSnapshot, `upload-beat:${detached.id}`)",
-      "clearCloudUploadActive(original.id)",
-      "const playbackReady = await waitForUploadedBeatPlaybackReady(detached)",
+    expect(upload).toContain("runDesktopBeatUploadPipeline({");
+    expectOrdered(desktopBeatUploadPipeline, [
+      "uploaded = await dependencies.uploadMaster(uploaded)",
+      "const existingFiles = await dependencies.listCloudFiles(uploaded.id)",
+      "await dependencies.uploadWav(uploaded, uploaded.wav_path)",
+      "await dependencies.uploadProject(uploaded)",
+      "const detached = await dependencies.detachLocalSources(uploaded.id)",
+      "await dependencies.syncMetadata(detached)",
+      "await dependencies.commitSnapshot(indexSnapshot, `upload-beat:${detached.id}`)",
+      "dependencies.clearUploadMarker(original.id)",
+      "const playbackReady = await dependencies.waitForPlaybackReady(detached)",
     ]);
+    expect(desktopBeatUploadPipeline).toContain("remoteUploadCompleted = true");
+    expect(desktopBeatUploadPipeline).toContain("syncCommitted = true");
 
     expect(upload).toContain("if (!syncCommitted)");
     expect(upload).toContain('cloud_status: remoteUploadCompleted ? "CLOUD_ONLY" : "ERROR"');
