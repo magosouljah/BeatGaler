@@ -33,6 +33,7 @@ jobs:
           test "$(git branch --show-current)" = "v0.9.0-test-noche"
           git merge-base --is-ancestor 0ef4255d528e726dd278ba7389575f6d260fe333 HEAD
           test -f .github/task-6-4.py
+          test -f .github/task-6-4-fix.py
           git status --short
 
       - name: Setup Node
@@ -46,7 +47,10 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p migration-check-logs
-          python .github/task-6-4.py apply 2>&1 | tee migration-check-logs/apply.log
+          {
+            python .github/task-6-4.py apply
+            python .github/task-6-4-fix.py
+          } 2>&1 | tee migration-check-logs/apply.log
           status=${PIPESTATUS[0]}
           if [ "$status" -eq 0 ]; then
             echo "PASS apply" > migration-check-logs/summary.txt
@@ -97,6 +101,7 @@ jobs:
             src/features/cloud/useCloudUploadQueue.ts \
             tests/integration/appCloudUploadQueueExtraction.test.ts \
             tests/integration/appMigrationCharacterization.test.ts \
+            tests/integration/issue97RuntimeWebFollowup.test.ts \
             scripts/run-regressions.mjs
           git diff --cached --check
           git commit -m "refactor(cloud): extract upload queue"
@@ -116,7 +121,7 @@ jobs:
             0ef4255d528e726dd278ba7389575f6d260fe333 \
             "$IMPLEMENTATION_SHA" \
             "$GITHUB_RUN_ID"
-          rm .github/task-6-4.py .github/workflows/task-6-4-apply.yml
+          rm .github/task-6-4.py .github/task-6-4-fix.py .github/workflows/task-6-4-apply.yml
           git diff --check
 
       - name: Revalidate after tooling removal
@@ -159,6 +164,7 @@ jobs:
           git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md \
             migration/Registro-de-avance.md \
             .github/task-6-4.py \
+            .github/task-6-4-fix.py \
             .github/workflows/task-6-4-apply.yml
           git diff --cached --check
           git commit -m "docs(migration): close task 6.4 tooling"
