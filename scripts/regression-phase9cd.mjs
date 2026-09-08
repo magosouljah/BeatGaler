@@ -7,6 +7,7 @@ const read = relative => readFileSync(path.join(root, relative), "utf8");
 const fail = message => { throw new Error(`Phase 9C/9D regression: ${message}`); };
 
 const app = read("src/App.tsx");
+const assetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");
 const beatFileDropModal = read("src/features/dragdrop/components/BeatFileDropModal.tsx");
 const controller = read("src/features/dragdrop/htmlDropController.ts");
 const browserArtwork = read("src/features/dragdrop/browserArtwork.ts");
@@ -18,9 +19,9 @@ const wry = read("scripts/wry-patches/wry-0.54.2-drag_drop.rs");
 // 9C — existing beat slot updates.
 if (!beatFileDropModal.includes('title: "MASTER MP3"') || !beatFileDropModal.includes('role: "main"')) fail("existing-beat MASTER destination disappeared.");
 if (!beatFileDropModal.includes('title: "WAV HQ"') || !beatFileDropModal.includes('role: "wav"')) fail("existing-beat WAV HQ destination disappeared.");
-if (!app.includes('uploadDroppedFileToTelegram(beat, filePath, "MASTER")')) fail("MASTER replacement no longer writes the MASTER slot.");
-if (!app.includes('uploadDroppedFileToTelegram(beat, filePath, "WAV")')) fail("WAV add/replace no longer writes the WAV slot.");
-if (!app.includes('waitForUploadedBeatPlaybackReady(updated)')) fail("MASTER replacement no longer waits for playback readiness.");
+if (!assetUpdates.includes('uploadDroppedFileToTelegram(beat, filePath, "MASTER")')) fail("MASTER replacement no longer writes the MASTER slot.");
+if (!assetUpdates.includes('uploadDroppedFileToTelegram(beat, filePath, "WAV")')) fail("WAV add/replace no longer writes the WAV slot.");
+if (!assetUpdates.includes('waitForUploadedBeatPlaybackReady(updated)')) fail("MASTER replacement no longer waits for playback readiness.");
 if (!app.includes('inspectProjectDropSource(filePath)')) fail("PROJECT auto-inspection disappeared.");
 if (!app.includes('updateProjectArchiveFromSource(beat, filePath, "projectFile")') && !app.includes('startProjectAssetUpdate(beat, filePath, "projectFile")')) fail("PROJECT file update route disappeared.");
 if (!app.includes('startProjectAssetUpdate(beat, filePath, "projectFolder")')) fail("PROJECT folder/Samples update route disappeared.");
@@ -29,8 +30,9 @@ if (!app.includes('Project file required')) fail("folder updates no longer requi
 if (!app.includes('Replace PROJECT ZIP?') || !app.includes('Replace project file?')) fail("PROJECT replacement confirmation disappeared.");
 if (!app.includes('if (isBackupFolderPath(filePath))')) fail("direct Backup/Backups drop is no longer rejected.");
 if (!app.includes('Backup folders were skipped from')) fail("nested Backup/Backups filtering no longer reaches the user.");
-if (!app.includes('libraryStateManager.commitSnapshot(refreshed, "dropped-master")')) fail("MASTER replacement lost its authoritative library commit.");
-if (!app.includes('libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync")')) fail("WAV/PROJECT updates lost an authoritative commit.");
+if (!assetUpdates.includes('libraryStateManager.commitSnapshot(refreshed, "dropped-master")')) fail("MASTER replacement lost its authoritative library commit.");
+if (!assetUpdates.includes('libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync")')) fail("WAV update lost its authoritative commit.");
+if (!app.includes('libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync")')) fail("PROJECT updates lost an authoritative commit.");
 if (!tauriClient.includes('update_project_archive_from_source')) fail("Tauri client lost PROJECT archive mutation.");
 if (!rust.includes('pub fn update_project_archive_from_source') && !rust.includes('pub async fn update_project_archive_from_source')) fail("Rust lost PROJECT archive mutation.");
 if (!rust.includes('is_forbidden_project_component') || !rust.includes('write_project_directory_zip') || !rust.includes('Backup/old.logicx')) fail("PROJECT mutation lost cross-platform Backup/Backups filtering.");
