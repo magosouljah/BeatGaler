@@ -21,32 +21,41 @@ jobs:
           node-version: 22.23.2
           cache: npm
       - run: npm ci
+      - name: Locate suspect integration guards
+        run: |
+          echo "WEB_GUARD=$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
+          grep -R -n -F 'onBeatClick={(beatId) => playBeat(beatId, { sort: playbackSort })}' src/App.tsx tests/integration || true
+          grep -R -n -F 'function prepareCleanMp3Upload(' scripts/lib/prepare-clean-mp3.cjs src-tauri/direct-transport/transport-helper.cjs || true
+      - name: Baseline suspect integration tests
+        id: baseline
+        continue-on-error: true
+        run: |
+          WEB_GUARD="$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
+          test -n "$WEB_GUARD"
+          npx vitest run tests/integration/cleanMp3Cloud.test.ts "$WEB_GUARD"
       - name: Apply exact extraction
         run: node scripts/task22-extract.mjs
+      - name: Post-extraction suspect integration tests
+        id: extracted
+        continue-on-error: true
+        run: |
+          WEB_GUARD="$(grep -RlF 'routes web beat clicks through playbackSort' tests/integration | head -n 1)"
+          npx vitest run tests/integration/cleanMp3Cloud.test.ts "$WEB_GUARD"
+      - name: Report suspect comparison
+        run: |
+          echo "baseline=${{ steps.baseline.outcome }}"
+          echo "extracted=${{ steps.extracted.outcome }}"
+          test "${{ steps.baseline.outcome }}" = "success" -a "${{ steps.extracted.outcome }}" = "success"
       - run: npm run test:typecheck
       - run: npm run test:unit:ts
       - run: npm run test:component:dom
-      - name: Run integration tests
-        id: integration
-        continue-on-error: true
-        run: npm run test:integration > task22-integration-failure.txt 2>&1
-      - name: Persist integration failure
-        if: steps.integration.outcome == 'failure'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add task22-integration-failure.txt
-          git commit -m "chore: capture task 2.2 integration failure"
-          git push origin HEAD:app-tsx-2.2
-      - name: Fail on integration error
-        if: steps.integration.outcome == 'failure'
-        run: exit 1
+      - run: npm run test:integration
       - run: npm run test:regressions
       - run: npm run build:web
       - run: npm run build
       - name: Commit verified App extraction
         run: |
-          rm scripts/task22-extract.mjs .github/workflows/task-2.2-verify.yml
+          rm scripts/task22-extract.mjs .github/workflows/task-2.2-verify.yml task22-integration-failure.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
