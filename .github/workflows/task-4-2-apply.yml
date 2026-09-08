@@ -1,0 +1,351 @@
+name: Temporary Task 4.2 Apply
+
+on:
+  push:
+    branches: [v0.9.0-test-noche]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'chore(migration): run task 4.2 apply'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Extract playback controller
+        shell: bash
+        run: |
+          cat > src/features/playback/usePlaybackController.ts <<'EOF'
+          import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+          import type { Beat } from "../../types";
+          import type { AudioState } from "../../hooks/useAudio";
+          import { platform } from "../../platform";
+          import { appAlert } from "../../lib/dialog";
+          import { sanitizeUserVisibleText } from "../../lib/userVisibleError";
+          import { downloadCookingDiagnosticEvent, getDownloadCookingStatus, isTauriAvailable, prepareBeatForPlayback, warmBeatForPlayback } from "../../lib/tauri";
+          import { createBeatRuntimeState, type BeatRuntimeEvent, type BeatRuntimeState } from "../state/beatRuntimeState";
+          import { isBeatPlaybackBlocked } from "./playbackReadiness";
+          import { playTrace } from "./playTrace";
+
+          type TransitionRuntime = (beatId: string, event: BeatRuntimeEvent, beatHint?: Beat) => void;
+
+          export type PlaybackControllerOptions = {
+            audio: AudioState;
+            play: (beatId: string, paths: string[]) => void;
+            beatsLatestRef: MutableRefObject<Beat[]>;
+            beatRuntimeStatesRef: MutableRefObject<Record<string, BeatRuntimeState>>;
+            transitionRuntime: TransitionRuntime;
+            setBeats: Dispatch<SetStateAction<Beat[]>>;
+            cloudSessionVerified: boolean;
+            connectionState: "checking" | "online" | "poor" | "offline";
+            isBeatCloudUpdateBusy: (beatId: string) => boolean;
+          };
+
+          export function usePlaybackController({
+            audio,
+            play,
+            beatsLatestRef,
+            beatRuntimeStatesRef,
+            transitionRuntime,
+            setBeats,
+            cloudSessionVerified,
+            connectionState,
+            isBeatCloudUpdateBusy,
+          }: PlaybackControllerOptions) {
+            const cookingPlaybackUrlRef = useRef<Map<string, { telegramFileId: string; url: string }>>(new Map());
+            const cookingWarmPromisesRef = useRef<Map<string, Promise<string | null>>>(new Map());
+            const playbackCacheEpochRef = useRef(0);
+
+            const clearPlaybackPreparation = useCallback(() => {
+              playbackCacheEpochRef.current += 1;
+              cookingPlaybackUrlRef.current.clear();
+              cookingWarmPromisesRef.current.clear();
+            }, []);
+
+            useEffect(() => {
+              window.addEventListener("beatgaler:playback-cache-cleared", clearPlaybackPreparation);
+              return () => window.removeEventListener("beatgaler:playback-cache-cleared", clearPlaybackPreparation);
+            }, [clearPlaybackPreparation]);
+
+            useEffect(() => {
+              const onAudioPlaying = (event: Event) => {
+                const beatId = (event as CustomEvent<{ beatId?: string | null }>).detail?.beatId ?? null;
+                if (!beatId) return;
+                const runtime = beatRuntimeStatesRef.current[beatId];
+                if (runtime?.playback_state === "playback_preparing") transitionRuntime(beatId, { type: "PLAYBACK_PLAYING" });
+              };
+              const onAudioIdle = (event: Event) => {
+                const beatId = (event as CustomEvent<{ beatId?: string | null }>).detail?.beatId ?? null;
+                if (!beatId) return;
+                const runtime = beatRuntimeStatesRef.current[beatId];
+                if (runtime && runtime.playback_state !== "idle") transitionRuntime(beatId, { type: "PLAYBACK_IDLE" });
+              };
+              const onAudioUnavailable = (event: Event) => {
+                const beatId = (event as CustomEvent<{ beatId?: string | null }>).detail?.beatId ?? null;
+                if (beatId) {
+                  const runtime = beatRuntimeStatesRef.current[beatId];
+                  if (runtime?.playback_state === "playback_preparing" || runtime?.playback_state === "playing") {
+                    transitionRuntime(beatId, { type: "PLAYBACK_FAILED", code: "AUDIO_SOURCE_UNAVAILABLE", message: "Cloud audio unavailable. The MASTER file could not be loaded from cloud storage.", retryable: true });
+                  }
+                }
+                void appAlert({ title: "Beat unavailable", message: "Cloud audio unavailable. The MASTER file could not be loaded from cloud storage.", danger: true });
+              };
+              window.addEventListener("beatgaler:audio-playing", onAudioPlaying);
+              window.addEventListener("beatgaler:audio-idle", onAudioIdle);
+              window.addEventListener("beatgaler:audio-unavailable", onAudioUnavailable);
+              return () => {
+                window.removeEventListener("beatgaler:audio-playing", onAudioPlaying);
+                window.removeEventListener("beatgaler:audio-idle", onAudioIdle);
+                window.removeEventListener("beatgaler:audio-unavailable", onAudioUnavailable);
+              };
+            }, [beatRuntimeStatesRef, transitionRuntime]);
+
+            const previousAudioBeatIdRef = useRef<string | null>(null);
+            useEffect(() => {
+              const previous = previousAudioBeatIdRef.current;
+              if (previous && previous !== audio.playingId) transitionRuntime(previous, { type: "PLAYBACK_IDLE" });
+              previousAudioBeatIdRef.current = audio.playingId;
+            }, [audio.playingId, transitionRuntime]);
+
+            const previousEndedSeqRef = useRef(audio.endedSeq);
+            useEffect(() => {
+              if (audio.endedSeq === previousEndedSeqRef.current) return;
+              previousEndedSeqRef.current = audio.endedSeq;
+              if (audio.playingId) transitionRuntime(audio.playingId, { type: "PLAYBACK_IDLE" });
+            }, [audio.endedSeq, audio.playingId, transitionRuntime]);
+
+            const ensureWarmPlaybackUrl = useCallback((beat: Beat): Promise<string | null> => {
+              if (!beat.telegram_file_id) return Promise.resolve(null);
+              const cacheEpoch = playbackCacheEpochRef.current;
+              const existing = cookingPlaybackUrlRef.current.get(beat.id);
+              if (existing?.telegramFileId === beat.telegram_file_id) return Promise.resolve(existing.url);
+              const inFlight = cookingWarmPromisesRef.current.get(beat.id);
+              if (inFlight) return inFlight;
+              const fileId = beat.telegram_file_id;
+              const promise = (beat.offline_available ? prepareBeatForPlayback(beat).then(ready => ready.playback_path || null) : warmBeatForPlayback(beat))
+                .then(prewarmUrl => {
+                  if (!prewarmUrl || playbackCacheEpochRef.current !== cacheEpoch) return null;
+                  const url = prewarmUrl.replace(/[?&]prewarm=1(?:&|$)/, "").replace(/[?&]$/, "");
+                  cookingPlaybackUrlRef.current.set(beat.id, { telegramFileId: fileId, url });
+                  return url;
+                })
+                .catch(error => {
+                  console.debug("Playback warm skipped:", error);
+                  return null;
+                })
+                .finally(() => cookingWarmPromisesRef.current.delete(beat.id));
+              cookingWarmPromisesRef.current.set(beat.id, promise);
+              return promise;
+            }, []);
+
+            const waitForCookingReady = useCallback(async (beat: Beat, timeoutMs = 12000): Promise<boolean> => {
+              if (beat.offline_available || !beat.telegram_file_id) return true;
+              const started = performance.now();
+              while (performance.now() - started < timeoutMs) {
+                try {
+                  const status = await getDownloadCookingStatus();
+                  const entry = status.entries.find(item => item.beat_id === beat.id);
+                  const urlReady = cookingPlaybackUrlRef.current.get(beat.id)?.telegramFileId === beat.telegram_file_id;
+                  if (entry && !entry.failed && urlReady && (entry.complete || entry.downloaded_bytes >= status.ready_bytes)) return true;
+                  if (entry?.failed) return false;
+                } catch {}
+                await new Promise(resolve => window.setTimeout(resolve, 90));
+              }
+              return false;
+            }, []);
+
+            const waitForUploadedBeatPlaybackReady = useCallback(async (beat: Beat, timeoutMs = 15000): Promise<boolean> => {
+              if (!beat.telegram_file_id) return false;
+              const started = performance.now();
+              void downloadCookingDiagnosticEvent("UPLOAD_PLAYBACK_GATE_BEGIN", beat.id, beat.name, "").catch(() => {});
+              while (performance.now() - started < timeoutMs) {
+                try {
+                  const prewarmUrl = await warmBeatForPlayback(beat);
+                  if (prewarmUrl) {
+                    const url = prewarmUrl.replace(/[?&]prewarm=1(?:&|$)/, "").replace(/[?&]$/, "");
+                    cookingPlaybackUrlRef.current.set(beat.id, { telegramFileId: beat.telegram_file_id, url });
+                  }
+                  if (await waitForCookingReady(beat, 1400)) {
+                    void downloadCookingDiagnosticEvent("UPLOAD_PLAYBACK_GATE_READY", beat.id, beat.name, `wait_ms=${(performance.now() - started).toFixed(1)}`).catch(() => {});
+                    return true;
+                  }
+                } catch (error) {
+                  console.debug(`Post-upload playback warm retry for ${beat.name}:`, error);
+                }
+                await new Promise(resolve => window.setTimeout(resolve, 180));
+              }
+              void downloadCookingDiagnosticEvent("UPLOAD_PLAYBACK_GATE_TIMEOUT", beat.id, beat.name, `wait_ms=${(performance.now() - started).toFixed(1)}`).catch(() => {});
+              return false;
+            }, [waitForCookingReady]);
+
+            const handleWarm = useCallback((beat: Beat) => {
+              if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;
+              void ensureWarmPlaybackUrl(beat);
+            }, [cloudSessionVerified, connectionState, ensureWarmPlaybackUrl]);
+
+            const handlePlay = useCallback(async (inputBeat: Beat) => {
+              let beat = beatsLatestRef.current.find(item => item.id === inputBeat.id) ?? inputBeat;
+              playTrace("APP_HANDLE_PLAY_ENTER", { beat_id: inputBeat.id, render_status: inputBeat.cloud_status || null, latest_status: beat.cloud_status || null, slot_busy: isBeatCloudUpdateBusy(inputBeat.id) });
+              if (isBeatCloudUpdateBusy(inputBeat.id) || isBeatPlaybackBlocked(inputBeat) || isBeatPlaybackBlocked(beat)) {
+                const blocked = isBeatPlaybackBlocked(beat) ? beat : inputBeat;
+                const reason = isBeatCloudUpdateBusy(inputBeat.id) ? "SLOT_UPDATE" : String(blocked.cloud_status || "");
+                playTrace("APP_HANDLE_PLAY_BLOCKED", { beat_id: blocked.id, reason });
+                void downloadCookingDiagnosticEvent("PLAY_BLOCKED_LOADING", blocked.id, blocked.name, reason).catch(() => {});
+                return;
+              }
+              if (!isTauriAvailable) {
+                try {
+                  if (audio.playingId && audio.playingId !== beat.id) platform.media.releasePlayback(audio.playingId);
+                  playTrace("APP_PREPARE_BEGIN", { beat_id: beat.id });
+                  const prepared = await platform.media.preparePlayback(beat);
+                  playTrace("APP_PREPARE_READY", { beat_id: beat.id, url_scheme: String(prepared.url || "").split(":")[0] || null });
+                  void prepared.completed.catch(error => { console.warn(`[web/playback] stream failed beat_id=${beat.id}`, error); platform.media.releasePlayback(beat.id); });
+                  playTrace("APP_AUDIO_PLAY_CALL", { beat_id: beat.id });
+                  play(beat.id, [prepared.url]);
+                } catch (error) {
+                  playTrace("APP_PREPARE_ERROR", { beat_id: beat.id, error_name: error instanceof Error ? error.name : "unknown" });
+                  platform.media.releasePlayback(beat.id);
+                  await appAlert({ title: "Beat unavailable", message: sanitizeUserVisibleText(error instanceof Error ? error.message : String(error), "Cloud audio unavailable."), danger: true });
+                }
+                return;
+              }
+              const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
+              const syncStillBlocksPlayback = runtime.sync_state === "pending_upload" || runtime.sync_state === "deleting" || (runtime.sync_state === "uploading" && !beat.telegram_file_id);
+              if (syncStillBlocksPlayback || runtime.playback_state === "playback_preparing") {
+                void downloadCookingDiagnosticEvent("PLAY_BLOCKED_RUNTIME_STATE", beat.id, beat.name, `${runtime.sync_state}/${runtime.playback_state}/master=${beat.telegram_file_id ? 1 : 0}`).catch(() => {});
+                return;
+              }
+              const startingPlaybackSession = audio.playingId !== beat.id || runtime.playback_state === "idle" || runtime.playback_state === "error";
+              if (startingPlaybackSession) {
+                if (audio.playingId && audio.playingId !== beat.id) transitionRuntime(audio.playingId, { type: "PLAYBACK_IDLE" });
+                transitionRuntime(beat.id, { type: "PLAYBACK_PREPARING" }, beat);
+              }
+              const clickedAt = performance.now();
+              void downloadCookingDiagnosticEvent("PLAY_CLICK", beat.id, beat.name, "").catch(() => {});
+              if (beat.telegram_file_id) {
+                const cooked = cookingPlaybackUrlRef.current.get(beat.id);
+                if (cooked && cooked.telegramFileId === beat.telegram_file_id) {
+                  void downloadCookingDiagnosticEvent("PLAY_FAST_PATH", beat.id, beat.name, `prepare_ms=${(performance.now() - clickedAt).toFixed(1)}`).catch(() => {});
+                  play(beat.id, [cooked.url]);
+                  return;
+                }
+              }
+              const playbackNeedsCloudDownload = Boolean(beat.telegram_file_id && !beat.offline_available);
+              let playbackOwnsDownloadState = false;
+              if (playbackNeedsCloudDownload) {
+                const downloadRuntime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
+                if (downloadRuntime.download_state !== "downloading") {
+                  transitionRuntime(beat.id, { type: "DOWNLOAD_STARTED" }, beat);
+                  playbackOwnsDownloadState = true;
+                }
+              }
+              try {
+                const ready = await prepareBeatForPlayback(beat);
+                void downloadCookingDiagnosticEvent("PLAY_PREPARED", beat.id, beat.name, `prepare_ms=${(performance.now() - clickedAt).toFixed(1)}`).catch(() => {});
+                if (ready.telegram_file_id && ready.playback_path) cookingPlaybackUrlRef.current.set(ready.id, { telegramFileId: ready.telegram_file_id, url: ready.playback_path });
+                if (ready.cloud_status !== beat.cloud_status) setBeats(bs => bs.map(b => b.id === ready.id ? { ...b, cloud_status: ready.cloud_status } : b));
+                const playbackSources = ready.telegram_file_id ? [ready.playback_path] : [ready.playback_path, ready.mp3_path, ready.wav_path ?? ""];
+                if (playbackOwnsDownloadState) transitionRuntime(beat.id, { type: "DOWNLOAD_SUCCEEDED" }, ready);
+                play(ready.id, playbackSources);
+              } catch (error: unknown) {
+                const message = sanitizeUserVisibleText(error instanceof Error ? error.message : String(error), "Cloud audio unavailable.");
+                if (playbackOwnsDownloadState) transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "PLAYBACK_DOWNLOAD_FAILED", message, retryable: true }, beat);
+                if (startingPlaybackSession) transitionRuntime(beat.id, { type: "PLAYBACK_FAILED", code: "PLAYBACK_PREPARE_FAILED", message, retryable: true }, beat);
+                await appAlert({ title: "Beat unavailable", message, danger: true });
+              }
+            }, [audio.playingId, beatRuntimeStatesRef, beatsLatestRef, isBeatCloudUpdateBusy, play, setBeats, transitionRuntime]);
+
+            return { clearPlaybackPreparation, handlePlay, handleWarm, waitForUploadedBeatPlaybackReady };
+          }
+          EOF
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/App.tsx')
+          s = p.read_text()
+          s = s.replace('import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";\n', '')
+          s = s.replace('import { playTrace } from "./features/playback/playTrace";\n', '')
+          s = s.replace('import { createBeatRuntimeState } from "./features/state/beatRuntimeState";\n', '')
+          anchor = 'import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";\n'
+          s = s.replace(anchor, anchor + 'import { usePlaybackController } from "./features/playback/usePlaybackController";\n')
+          old_refs = '''  const cookingPlaybackUrlRef = useRef<Map<string, { telegramFileId: string; url: string }>>(new Map());\n  const cookingWarmPromisesRef = useRef<Map<string, Promise<string | null>>>(new Map());\n  // Incremented whenever temporary playback cache is cleared. Warm promises\n  // capture the epoch so a promise started before Clear cache cannot repopulate\n  // the Fast Play map with a URL backed by files that were just deleted.\n  const playbackCacheEpochRef = useRef(0);\n'''
+          assert old_refs in s
+          s = s.replace(old_refs, '')
+          audio_anchor = '  const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();\n'
+          hook = '''  const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();\n  const { clearPlaybackPreparation, handlePlay, handleWarm, waitForUploadedBeatPlaybackReady } = usePlaybackController({\n    audio,\n    play,\n    beatsLatestRef,\n    beatRuntimeStatesRef,\n    transitionRuntime,\n    setBeats,\n    cloudSessionVerified,\n    connectionState,\n    isBeatCloudUpdateBusy: beatId => beatCloudUpdateBusyIds.has(beatId),\n  });\n'''
+          assert audio_anchor in s
+          s = s.replace(audio_anchor, hook, 1)
+          s = s.replace('      cookingWarmPromisesRef.current.clear();\n      cookingPlaybackUrlRef.current.clear();', '      clearPlaybackPreparation();')
+          s = s.replace('          cookingWarmPromisesRef.current.clear();\n          cookingPlaybackUrlRef.current.clear();', '          clearPlaybackPreparation();')
+          start = s.index('  useEffect(() => {\n    const onPlaybackCacheCleared = () => {')
+          mid = s.index('  useEffect(() => {\n    const onTelegramConnected = (event: Event) => {', start)
+          s = s[:start] + s[mid:]
+          start = s.index('  const ensureWarmPlaybackUrl = useCallback((beat: Beat): Promise<string | null> => {')
+          end = s.index('  const handleUpload = useCallback((beat: Beat) => {', start)
+          s = s[:start] + s[end:]
+          p.write_text(s)
+          PY
+      - name: Add focused architecture check
+        shell: bash
+        run: |
+          cat > tests/integration/appPlaybackExtraction.test.ts <<'EOF'
+          import { readFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          import { describe, expect, it } from "vitest";
+
+          const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+          const controllerSource = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
+
+          describe("App playback extraction", () => {
+            it("moves playback preparation, cache invalidation, audio events and play routing out of App", () => {
+              expect(appSource).toContain('usePlaybackController({');
+              expect(appSource).not.toContain('const ensureWarmPlaybackUrl = useCallback');
+              expect(appSource).not.toContain('APP_HANDLE_PLAY_ENTER');
+              expect(appSource).not.toContain('beatgaler:playback-cache-cleared');
+              expect(controllerSource).toContain('beatgaler:playback-cache-cleared');
+              expect(controllerSource).toContain('beatgaler:audio-playing');
+              expect(controllerSource).toContain('APP_HANDLE_PLAY_ENTER');
+              expect(controllerSource).toContain('if (!isTauriAvailable)');
+              expect(controllerSource).toContain('prepareBeatForPlayback(beat)');
+            });
+          });
+          EOF
+      - name: Checks
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p migration-check-logs
+          : > migration-check-logs/summary.txt
+          run_check() { name="$1"; shift; echo "== $name ==" | tee -a migration-check-logs/summary.txt; if "$@" > "migration-check-logs/$name.log" 2>&1; then echo "PASS $name" | tee -a migration-check-logs/summary.txt; else echo "FAIL $name" | tee -a migration-check-logs/summary.txt; cat "migration-check-logs/$name.log"; return 1; fi; }
+          run_check diff-check git diff --check
+          run_check typecheck npm run test:typecheck
+          run_check unit-ts npm run test:unit:ts
+          run_check component-dom npm run test:component:dom
+          run_check integration npm run test:integration
+          run_check regressions npm run test:regressions
+          run_check build-web npm run build:web
+          run_check build npm run build
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-4-2-${{ github.run_id }}
+          path: migration-check-logs/
+      - name: Commit verified implementation
+        if: success()
+        shell: bash
+        run: |
+          rm .github/workflows/task-4-2-apply.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/App.tsx src/features/playback/usePlaybackController.ts tests/integration/appPlaybackExtraction.test.ts .github/workflows/task-4-2-apply.yml
+          git commit -m "refactor(app): extract playback controller"
+          git push origin HEAD:v0.9.0-test-noche
