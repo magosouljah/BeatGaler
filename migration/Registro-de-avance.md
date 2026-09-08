@@ -1855,3 +1855,101 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 6.3
+
+```
+Tarea: 6.3 — Separar el proceso de subida de un beat
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 988a0e2af912a06a0d186008de8f6b0a3d28f64e
+- SHA de implementación validada: 92760230798fcd8ca1464ea0eff3a07389939562
+- Última tarea verificada: 6.2 — Separar recuperación y errores de uploads
+
+Cambio realizado
+
+- Se creó `src/features/cloud/desktopBeatUploadPipeline.ts` como dueño de la secuencia asíncrona Desktop por beat.
+- El pipeline recibe dependencias y acciones explícitas; `cloudifyImportedBeats` conserva la cola, la verificación de sesión, la ruta Web y la coordinación entre beats.
+- Se preservó el orden MASTER → WAV → PROJECT → detach local → metadata/artwork → commit del INDEX por beat → limpieza del marcador → preparación de playback.
+- Retry conserva checkpoints: un MASTER existente, WAV ya presente y PROJECT sincronizado se omiten en lugar de subirse de nuevo.
+- La frontera durable queda explícita: después del commit del INDEX se marca `syncCommitted`, se limpia el marcador y solo entonces se prepara playback. Un fallo posterior conserva `remoteUploadCompleted=true`/`syncCommitted=true` y no convierte la subida durable en una interrupción recuperable.
+- La cola completa, IDs activos, drenado y Reload diferido permanecen en App para 6.4. La ruta Web `platform.cloudData.commitImportedBeat` no se movió.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appDesktopBeatUploadPipelineExtraction.test.ts` con pruebas ejecutables de checkpoints de retry, orden INDEX→marker→playback, fallo antes del límite durable y fallo de playback después del commit.
+- `tests/integration/appMigrationCharacterization.test.ts` ahora sigue la secuencia Desktop en su nuevo owner y conserva en App las guardas de routing Web/cola.
+- `scripts/run-regressions.mjs` sigue protegiendo PLAYBACK_PREPARING/UPLOAD_COMPLETE y ahora verifica en el pipeline el orden detach → INDEX commit → clear marker → playback readiness.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/cloud/desktopBeatUploadPipeline.ts
+- tests/integration/appDesktopBeatUploadPipelineExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 6.3 Apply`, run 34270478542 — SUCCESS.
+- Artifact `migration-check-logs-task-6-3-34270478542` generado con la matriz completa.
+- `npm ci` — PASS.
+- `git diff --check` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- Los checks anteriores validaron el SHA de implementación `92760230798fcd8ca1464ea0eff3a07389939562`.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` — no requerido para esta extracción; la matriz ejecutó individualmente los checks aplicables del plan.
+- E2E completos de import/download/recovery — no se usaron como evidencia de 6.3 porque los harness existentes no ejercitan directamente este pipeline extraído.
+- Prueba física Desktop Windows/macOS — no ejecutada; la ronda trabaja mediante GitHub Actions sin una aplicación física interactiva.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Desktop sugerido: interrumpir/reintentar después de MASTER, WAV y PROJECT; comprobar que los slots existentes no se repiten. Provocar además un fallo de preparación de playback después del commit del INDEX.
+- Resultado esperado: retry continúa desde el primer checkpoint faltante; tras un commit durable, un fallo de playback deja el beat en Cloud y no restaura el marcador de recuperación.
+
+Pendientes / fuera de alcance
+
+- 6.4 — Separar la cola de uploads queda pendiente y no fue iniciada.
+- La verificación de sesión, secuencialidad de la cola, IDs activos, timers de finalización, limpieza de staging al drenar y Reload diferido permanecen en App para 6.4.
+- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 6.3.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de integridad quedó abierto por 6.3.
+
+Herramientas temporales restantes
+
+- Ninguna creada por 6.3 debe permanecer tras el commit de cierre; el applier y workflow temporales se eliminan al finalizar.
+
+Fallos encontrados y causa
+
+- Ninguno en el run final 34270478542; la matriz aplicable quedó verde.
+
+Veredicto
+
+Terminada.
+
+El proceso Desktop por beat salió de `App.tsx` conservando checkpoints, frontera durable por beat y separación entre commit Cloud y preparación de playback.
+
+Siguiente tarea
+
+6.4 — Separar la cola de uploads.
+
+No iniciada.
+```

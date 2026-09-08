@@ -335,7 +335,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** una subida confirmada permanece intacta tras reiniciar, y los errores conservan información útil.
     
 
-### [ ] 6.3 — Separar el proceso de subida de un beat
+### [x] 6.3 — Separar el proceso de subida de un beat
 
 - **Hacer:** extraer la secuencia asíncrona de escritorio como una unidad con entradas y acciones explícitas; el coordinador actual sigue llamándola.
     
