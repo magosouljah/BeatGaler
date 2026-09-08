@@ -32,7 +32,9 @@ jobs:
         run: npm ci
 
       - name: Apply task 3.3 extraction
-        run: node scripts/apply-task-3-3.mjs
+        run: |
+          node scripts/apply-task-3-3.mjs
+          node scripts/fix-task-3-3-frequency.mjs
 
       - name: Patch hygiene
         run: git diff --check
@@ -63,7 +65,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/App.tsx
-          git rm scripts/apply-task-3-3.mjs .github/workflows/task-3-3-apply.yml
+          git rm scripts/apply-task-3-3.mjs scripts/fix-task-3-3-frequency.mjs .github/workflows/task-3-3-apply.yml
           git diff --cached --check
           git commit -m "refactor(app): extract library search filters and tags"
           git push origin HEAD:app-tsx-3.3
