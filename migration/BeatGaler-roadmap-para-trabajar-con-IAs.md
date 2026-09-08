@@ -265,7 +265,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** reemplazar o cancelar un archivo mantiene el resultado actual, incluido el tratamiento de errores.
     
 
-### [ ] 5.3 — Separar proyectos
+### [x] 5.3 — Separar proyectos
 
 - **Hacer:** extraer apertura, subida, actualización, reemplazo e indicadores de disponibilidad de proyectos.
     
