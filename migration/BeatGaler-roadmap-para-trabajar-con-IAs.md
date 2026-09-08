@@ -217,7 +217,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** las portadas aparecen igual y una recarga visual no dispara guardados adicionales.
     
 
-### [ ] 4.2 — Separar preparación y control del audio
+### [x] 4.2 — Separar preparación y control del audio
 
 - **Hacer:** extraer preparación, URLs temporales, invalidación de caché, eventos y `handlePlay`.
     
