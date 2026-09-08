@@ -1,36 +1,41 @@
 # BeatGaler — Agent State
 
-Fecha de ejecución: 2026-09-08
-Rama de trabajo obligatoria: `v0.9.0-test-noche`
+## Contexto
 
-## Estado actual
+- Fecha de ejecución: 2026-09-08
+- Rama de trabajo: `v0.9.0-test-noche`
+- Tarea trabajada: `6.4 — Separar la cola de uploads`
+- Estado: `Terminada`
+- Última tarea terminada: `6.4 — Separar la cola de uploads`
 
-- Tarea trabajada: **6.3 — Separar el proceso de subida de un beat**
-- Estado: **Terminada**
-- Última tarea terminada: **6.3 — Separar el proceso de subida de un beat**
-- SHA inicial de esta ejecución: `988a0e2af912a06a0d186008de8f6b0a3d28f64e`
-- SHA de implementación validada: `92760230798fcd8ca1464ea0eff3a07389939562`
-- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `92760230798fcd8ca1464ea0eff3a07389939562`
-- Run de verificación principal: **34270478542 — SUCCESS**
-- Comprobaciones pendientes para 6.3: **ninguna automatizada necesaria**
+## Base de esta ejecución
+
+- SHA inicial: `0ef4255d528e726dd278ba7389575f6d260fe333`
+- SHA de implementación validada: `f9b7029a807966837c39e0844dac03c063024ce3`
+- SHA de cierre revalidado tras eliminar tooling temporal: `5d95ad88da98526475003d750dc287212767c06c`
+- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `5d95ad88da98526475003d750dc287212767c06c`
+- Run de cierre: `34283423653` — `Task 6.4 Close` — matriz de cierre `SUCCESS`
 
 ## Resultado verificado
 
-- `desktopBeatUploadPipeline.ts` posee la secuencia Desktop por beat con dependencias/acciones explícitas.
-- Retry omite MASTER/WAV/PROJECT ya durables y conserva el primer checkpoint faltante.
-- El INDEX se confirma por beat antes de limpiar el marcador de recuperación; el marcador se limpia antes de preparar playback.
-- Un fallo de playback posterior conserva la subida durable y no la reclasifica como subida interrumpida.
-- App conserva la cola, la verificación de sesión, la ruta Web, el drenado, staging y Reload diferido para 6.4.
-- Run 34270478542 terminó PASS en npm ci, diff-check, typecheck, unit TS, component DOM, integration, regressions, build:web y build.
+- `useCloudUploadQueue.ts` es dueño de cola, IDs activos, errores, retry, timers y Reload diferido.
+- Desktop conserva FIFO/secuencialidad y delega cada beat al pipeline 6.3.
+- Web conserva `platform.cloudData.commitImportedBeat`.
+- App conserva wiring y dos lecturas temporales hacia Review/staging.
+- El Reload pendiente se consume solo cuando no quedan uploads activos ni en cola.
+- La matriz completa pasó sobre `f9b7029a807966837c39e0844dac03c063024ce3` y volvió a pasar después de eliminar todo el tooling temporal y escribir roadmap/registro.
 
-## Pendientes concretos / fuera de alcance
+## Pendientes concretos
 
-- 6.4 — Separar la cola de uploads queda pendiente y no fue iniciada.
-- El riesgo previo de `handleRemoveBulk` con el snapshot `beats` capturado permanece sin cambios y fuera del alcance de 6.3.
-- No deben quedar herramientas temporales creadas por 6.3 en el árbol final.
+- `7.1 — Separar Review y sus acciones básicas`.
+- Sustituir `isReviewActive` / `hasProtectedStaging` cuando Review tenga owner propio.
+
+## Comprobaciones pendientes
+
+- Ninguna necesaria para cerrar 6.4.
 
 ## Siguiente tarea
 
-- **6.4 — Separar la cola de uploads**
-- Estado: **Pendiente**
-- No iniciarla hasta la próxima ronda.
+- `7.1 — Separar Review y sus acciones básicas`
+- Estado: `Pendiente`
+- No iniciar hasta la próxima ronda.
