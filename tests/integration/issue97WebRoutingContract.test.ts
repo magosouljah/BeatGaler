@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const drawerPersistence = readFileSync(resolve(process.cwd(), "src/features/edit/useDrawerCloudPersistence.ts"), "utf8");
 
 function section(startMarker: string, endMarker: string): string {
   const start = app.indexOf(startMarker);
@@ -29,12 +30,8 @@ describe("Issue #97 Web routing contracts", () => {
   });
 
   it("does not install the legacy metadata-to-Tauri observer when browser cloud editing owns commits", () => {
-    const observer = section(
-      "// Web edits are explicit durable transactions through platform.editor.",
-      "useEffect(() => () => {",
-    );
-    expect(observer).toContain("if (platform.capabilities.browserCloudEditing) return;");
-    expect(observer).toContain("syncBeatMetadataToTelegram(latestBeat)");
+    expect(drawerPersistence).toContain("if (browserCloudEditing) return;");
+    expect(drawerPersistence).toContain("syncBeatMetadataToTelegram(latestBeat)");
   });
 
   it("keeps an online transient startup authority failure visible but read-only", () => {
