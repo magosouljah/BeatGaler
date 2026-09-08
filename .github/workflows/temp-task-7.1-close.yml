@@ -1,0 +1,43 @@
+name: Temporary task 7.1 closer
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+
+permissions:
+  contents: write
+
+jobs:
+  close-task-7-1:
+    if: contains(github.event.head_commit.message, '[close-7.1]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Close roadmap, register and agent state
+        env:
+          INITIAL_SHA: 182717a81061534658ab5b688e9808a5f38075f1
+          VALIDATED_SHA: af916fd729d2ef6ceef16c8ce73b9caf84c4f657
+          REG_Z: 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
+          AGENT_Z: eNqdVb1y40YM7v0UmHF7kvUv6jrZVuLMZC435l1SSuASlPe85DK7S9lKlSpPcFW6PECKG3dp9Sb3JAGWlC2nuzTSaBf48OH7gNU5XBKG79GQg6+/f4bllqoAacBAZ2fn53Blq0CPwZ6d9eA7UncIOQF9ItUofXiq3sJoMJr1BoveIOGIWyxjQHCY4Sf7Fja7QX/RH/QC+dCrrLqjDYd9QEfYBWGOHDbvD2P5lGp06OCWdpoeYA++8YBKaVuRh+zwl9cKvWCsfMBcKnwgV+qKYeT08KcJmjmEtsLx6n9UkOYv0VPsl2udNC1apDdL0JVWGg2DD5PRfDjHZDiYDafjyWyaYDbNZklCi2SQ4LQYJ4P5tBhuukzG1GVtqGSxMWLCDo3OW6pYLIazIp+PFvmIipkiKoYzlSiaj7OFwiKZqEkxm84F7Wa1vAZHpQ0WbObJ7VgVZlZSrjGgFCBA/vBS1HAbXjkdGodQsDRGTlE873nxnKuv1z9dpqvbn1fXa6a6XkuV26aSwJZjyzdmc/h4MkqmyXS4mI43UWA2pKwtS7xnF/w9iPBtqTY9WNcFph+vrlZp2mp9S74xYinsyOmCTcjj0G0aTz8IYEjJe3apH/wGauuJQGGVR0T/Rk50y2wf/WKg1kzbNe7Jx+vW+P4r6O7sBTnFHb2B9F7XDHeFlSITM07Db6wPnPJ4zCHDRlQ5L9JJYX9PhoKtLq4dPvCVzBs8aKerrVy/kPnR+pN+oObRxYoUsdINOeyayHRmtA2kEO5QplKISrp8A9voaItw+Icns/OeWWW84bBt0OWiCgqOsiZCNrWxmPuIIM1WfH/4gnnMe6bDrJWt4nDJeal9yXE7keXC6IzpReUFpdXqJVxqe9jjc322KucZRBewy31F11huncvGH3uoHTe7ZRkDbkWyYHPcHf5mGhU03kbhEEoMTv/GRWWnQmys1NuOFdToD0/gbeboG3arH6fy/ZGLl5aUYyt9nMp5f/TqOZGemszpUqJlATk2brfZPNuzNOaCUQqj1X8sFgxelHHXj/jITwH8QtlL1DFo0gZFQvTYPls1/doQ+9YuOam4390L9/WPz53NwEENa6m3DddUmBniKpLjOW1Z1xDZOz7id+9ZTZ6U92wXce3uL6FkWzJUx9pHiUSYd+xSUyEIY49OY0tbkROV+C1oMVLm0HocX+pvlfT0/X+2SE7f2e5Vdt1+MPnaHZ4e5U/B2SrH/tm/KhxuKg==
+        run: |
+          set -euo pipefail
+          export OBSERVED_SHA="$(git rev-parse HEAD)"
+          python -c 'from pathlib import Path; p=Path("migration/BeatGaler-roadmap-para-trabajar-con-IAs.md"); t=p.read_text(encoding="utf-8"); old="### [ ] 7.1 — Separar Review y sus acciones básicas"; new="### [x] 7.1 — Separar Review y sus acciones básicas"; assert t.count(old)==1, t.count(old); p.write_text(t.replace(old,new,1),encoding="utf-8")'
+          python -c 'import base64,zlib,os; from pathlib import Path; p=Path("migration/Registro-de-avance.md"); t=p.read_text(encoding="utf-8"); entry=zlib.decompress(base64.b64decode(os.environ["REG_Z"])).decode(); assert "### Registro — 7.1" not in t; p.write_text(t.rstrip()+entry,encoding="utf-8")'
+          python -c 'import base64,zlib,os; from pathlib import Path; data=zlib.decompress(base64.b64decode(os.environ["AGENT_Z"])).decode().replace("__OBSERVED_SHA__",os.environ["OBSERVED_SHA"]); Path("migration/BeatGaler-agent-state.md").write_text(data,encoding="utf-8")'
+          git rm .github/workflows/temp-task-7.1-close.yml
+          actual="$(git diff --name-only "$VALIDATED_SHA" | sort)"
+          expected="$(printf '%s\n' migration/BeatGaler-agent-state.md migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md | sort)"
+          test "$actual" = "$expected"
+          git diff --check "$INITIAL_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md
+          git commit -m "docs(migration): close task 7.1"
+          git push origin HEAD:v0.9.0-test-noche
