@@ -35,21 +35,21 @@ function beat(id: string): Beat {
   return { id, name: id, tags: [], other_files: [] } as unknown as Beat;
 }
 
-function Harness({ verified, connected }: { verified: boolean; connected: boolean | null }) {
+function Harness({ verified, blocked }: { verified: boolean; blocked: boolean }) {
   const state = useLibraryState();
-  useLibraryPresentationCache(state.beats, verified, connected);
+  useLibraryPresentationCache(state.beats, verified, blocked);
   latestState = state;
   return <div data-testid="ids">{state.beats.map(item => item.id).join(",")}</div>;
 }
 
-async function render(verified: boolean, connected: boolean | null) {
+async function render(verified: boolean, blocked: boolean) {
   if (!host) {
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
   }
   await act(async () => {
-    root!.render(<Harness verified={verified} connected={connected} />);
+    root!.render(<Harness verified={verified} blocked={blocked} />);
   });
 }
 
@@ -74,7 +74,7 @@ describe("useLibraryState", () => {
     mocks.loadCachedBeats.mockReturnValue([beat("ready"), beat("interrupted")]);
     mocks.readActiveCloudUploads.mockReturnValue([{ beatId: "interrupted" }]);
 
-    await render(false, true);
+    await render(false, false);
 
     expect(host!.querySelector('[data-testid="ids"]')?.textContent).toBe("ready");
     expect(latestState!.startupCachedBeatsRef.current?.map(item => item.id)).toEqual(["ready"]);
@@ -84,10 +84,10 @@ describe("useLibraryState", () => {
     expect(latestState!.beatsLatestRef.current).toEqual([]);
   });
 
-  it("writes the presentation cache only after cloud authority is verified", async () => {
+  it("writes the presentation cache only after cloud authority is verified and presentation is allowed", async () => {
     vi.useFakeTimers();
     mocks.loadCachedBeats.mockReturnValue([beat("cached")]);
-    await render(false, true);
+    await render(false, false);
 
     await act(async () => {
       latestState!.setBeats([beat("fresh")]);
@@ -96,6 +96,10 @@ describe("useLibraryState", () => {
     expect(mocks.saveCachedBeats).not.toHaveBeenCalled();
 
     await render(true, true);
+    await act(async () => { vi.advanceTimersByTime(1500); });
+    expect(mocks.saveCachedBeats).not.toHaveBeenCalled();
+
+    await render(true, false);
     await act(async () => { vi.advanceTimersByTime(1500); });
     expect(mocks.saveCachedBeats).toHaveBeenLastCalledWith([expect.objectContaining({ id: "fresh" })]);
   });

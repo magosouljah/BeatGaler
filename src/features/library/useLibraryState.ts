@@ -50,7 +50,7 @@ export function useLibraryState(): LibraryState {
 export function useLibraryPresentationCache(
   beats: Beat[],
   cloudSessionVerified: boolean,
-  telegramCloudConnected: boolean | null | undefined,
+  cloudPresentationBlocked: boolean,
 ): void {
   const cacheSaveTimerRef = useRef<number | null>(null);
 
@@ -62,7 +62,7 @@ export function useLibraryPresentationCache(
 
     // Hiding the cloud library while disconnected is a view decision, not a
     // destructive cache mutation. Preserve the last verified instant-paint cache.
-    if (!cloudSessionVerified || telegramCloudConnected === false) return;
+    if (!cloudSessionVerified || cloudPresentationBlocked) return;
 
     cacheSaveTimerRef.current = window.setTimeout(() => {
       cacheSaveTimerRef.current = null;
@@ -75,5 +75,5 @@ export function useLibraryPresentationCache(
         cacheSaveTimerRef.current = null;
       }
     };
-  }, [beats, telegramCloudConnected, cloudSessionVerified]);
+  }, [beats, cloudPresentationBlocked, cloudSessionVerified]);
 }
