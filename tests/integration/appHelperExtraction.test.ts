@@ -24,6 +24,7 @@ const cache = readFileSync(resolve(root, "src/features/library/libraryPresentati
 const fingerprints = readFileSync(resolve(root, "src/features/library/libraryFingerprints.ts"), "utf8");
 const journal = readFileSync(resolve(root, "src/features/cloud/interruptedUploadJournal.ts"), "utf8");
 const artworkDecode = readFileSync(resolve(root, "src/features/artwork/decodeArtworkDataUrl.ts"), "utf8");
+const artworkHydration = readFileSync(resolve(root, "src/features/artwork/useArtworkHydration.ts"), "utf8");
 
 function beat(overrides: Partial<Beat> = {}): Beat {
   return {
@@ -56,11 +57,12 @@ describe("App 2.3 helper extraction", () => {
       "./features/library/libraryPresentationCache",
       "./features/library/libraryFingerprints",
       "./features/cloud/interruptedUploadJournal",
-      "./features/artwork/decodeArtworkDataUrl",
       "./features/dragdrop/pathHelpers",
     ]) {
       expect(app).toContain(importPath);
     }
+
+    expect(artworkHydration).toContain('from "./decodeArtworkDataUrl"');
 
     for (const localDefinition of [
       "function fileNameFromPath(",

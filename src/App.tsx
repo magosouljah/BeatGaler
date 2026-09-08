@@ -28,7 +28,6 @@ import { useTagColors, setTagColor, renameTagColor } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
 import { cleanTags, validateBpm, validateMusicKey } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
-import { cacheArtworkThumbnail, readCachedArtworkThumbnail } from "./features/artwork/artworkThumbnailCache";
 import { artworkFileToDataUrl } from "./features/dragdrop/browserArtwork";
 import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeExternalImage";
 import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
@@ -39,7 +38,7 @@ import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop
 import SearchBar from "./features/library/components/SearchBar";
 import SortMenu from "./features/library/components/SortMenu";
 import TagColorMenu from "./features/tags/components/TagColorMenu";
-import { decodeArtworkDataUrl } from "./features/artwork/decodeArtworkDataUrl";
+import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
 import { clearCloudUploadActive, markCloudUploadActive, readActiveCloudUploads, writeActiveCloudUploads, type ActiveCloudUpload } from "./features/cloud/interruptedUploadJournal";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
@@ -232,7 +231,22 @@ function BeatGalerApp() {
   // capture the epoch so a promise started before Clear cache cannot repopulate
   // the Fast Play map with a URL backed by files that were just deleted.
   const playbackCacheEpochRef = useRef(0);
-  const artworkLoadPromisesRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const handleArtworkHydratedFromNetwork = useCallback((next: Beat[], beatId: string) => {
+    const hydrated = next.find(item => item.id === beatId);
+    if (hydrated && cloudMetaSnapshotRef.current) {
+      cloudMetaSnapshotRef.current.set(beatId, cloudBeatFingerprint(hydrated));
+    }
+    if (cloudLibrarySnapshotRef.current !== null) {
+      cloudLibrarySnapshotRef.current = next
+        .filter(item => !!item.telegram_file_id)
+        .map(cloudBeatFingerprint)
+        .join("\u001c");
+    }
+  }, []);
+  const { ensureArtworkReady, clearArtworkHydration, invalidateArtworkHydration } = useArtworkHydration({
+    setBeats,
+    onNetworkHydrated: handleArtworkHydratedFromNetwork,
+  });
   const { search, setSearch, sortBy, setSortBy } = useLibraryViewState();
   const {
     includedTags,
@@ -579,7 +593,7 @@ function BeatGalerApp() {
       progressiveRevealRunRef.current += 1;
       cookingWarmPromisesRef.current.clear();
       cookingPlaybackUrlRef.current.clear();
-      artworkLoadPromisesRef.current.clear();
+      clearArtworkHydration();
       setStartupCookingGate(false);
     };
 
@@ -772,7 +786,7 @@ function BeatGalerApp() {
           startupCookingResolvedRef.current = false;
           startupPipelineStartedRef.current = false;
           startupEnginePrimeReadyRef.current = false;
-          artworkLoadPromisesRef.current.clear();
+          clearArtworkHydration();
           cookingWarmPromisesRef.current.clear();
           cookingPlaybackUrlRef.current.clear();
           progressiveRevealRunRef.current += 1;
@@ -1044,67 +1058,6 @@ function BeatGalerApp() {
     });
 
     cookingWarmPromisesRef.current.set(beat.id, promise);
-    return promise;
-  }, []);
-
-  const ensureArtworkReady = useCallback((beat: Beat, allowNetwork = true): Promise<boolean> => {
-    const promiseKey = allowNetwork ? beat.id : `${beat.id}:cache`;
-    const existingPromise = artworkLoadPromisesRef.current.get(promiseKey);
-    if (existingPromise) return existingPromise;
-
-    const promise = (async () => {
-      const existing = beat.image_preview_base64 || beat.image_base64;
-      if (existing) {
-        const decoded = await decodeArtworkDataUrl(existing);
-        if (decoded) void cacheArtworkThumbnail(beat, existing).catch(() => {});
-        return decoded;
-      }
-
-      const cachedArtwork = await readCachedArtworkThumbnail(beat).catch(() => null);
-      if (cachedArtwork) {
-        const decoded = await decodeArtworkDataUrl(cachedArtwork);
-        if (decoded) {
-          setBeats(current => current.map(item => item.id === beat.id
-            ? { ...item, image_base64: cachedArtwork, image_preview_base64: null }
-            : item));
-          return true;
-        }
-      }
-
-      const hasArtworkReference = Boolean(beat.assets?.artwork?.object_id);
-      if (!allowNetwork) return !hasArtworkReference;
-
-      try {
-        const artwork = await platform.media.loadArtwork(beat);
-        if (!artwork) return true; // This beat genuinely has no artwork; gradient fallback is ready.
-        const presentationArtwork = await cacheArtworkThumbnail(beat, artwork).catch(() => artwork);
-        const decoded = await decodeArtworkDataUrl(presentationArtwork);
-        if (!decoded) return false;
-        setBeats(current => {
-          const next = current.map(item => item.id === beat.id
-            ? { ...item, image_base64: presentationArtwork, image_preview_base64: null }
-            : item);
-          const hydrated = next.find(item => item.id === beat.id);
-          if (hydrated && cloudMetaSnapshotRef.current) {
-            cloudMetaSnapshotRef.current.set(beat.id, cloudBeatFingerprint(hydrated));
-          }
-          if (cloudLibrarySnapshotRef.current !== null) {
-            cloudLibrarySnapshotRef.current = next
-              .filter(item => !!item.telegram_file_id)
-              .map(cloudBeatFingerprint)
-              .join("\u001c");
-          }
-          return next;
-        });
-        return true;
-      } catch (error) {
-        console.warn(`Artwork warm failed for ${beat.name}:`, error);
-        return false;
-      }
-    })();
-
-    artworkLoadPromisesRef.current.set(promiseKey, promise);
-    void promise.then(ok => { if (!ok) artworkLoadPromisesRef.current.delete(promiseKey); });
     return promise;
   }, []);
 
@@ -2599,7 +2552,7 @@ function BeatGalerApp() {
     progressiveRevealRunRef.current += 1;
     cookingPlaybackUrlRef.current.clear();
     cookingWarmPromisesRef.current.clear();
-    artworkLoadPromisesRef.current.clear();
+    clearArtworkHydration();
     setRevealedBeatIds(new Set());
     setCloudSessionVerified(false);
     setBeats([]);
@@ -4700,7 +4653,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
             // Trash stores the Cloud artwork reference, not decoded image bytes.
             // Force a fresh hydration even if this beat had a memoized artwork
             // promise earlier in the same app session before it was trashed.
-            artworkLoadPromisesRef.current.delete(beat.id);
+            invalidateArtworkHydration(beat.id);
             void ensureArtworkReady(beat);
           }}
         />
