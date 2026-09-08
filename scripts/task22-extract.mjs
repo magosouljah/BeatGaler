@@ -64,4 +64,15 @@ if (!app.includes('if (!platform.capabilities.playbackCache || !cloudSessionVeri
 if (!app.includes("Math.min(isTauriAvailable ? 6 : 1, queue.length)")) throw new Error("playback warming concurrency was removed");
 if (!app.includes("ReactDOM.createPortal")) throw new Error("App still needs ReactDOM for tag rename dialog");
 
+const runtimeFollowupPath = "tests/integration/issue97RuntimeWebFollowup.test.ts";
+let runtimeFollowup = readFileSync(runtimeFollowupPath, "utf8");
+const staleWebWarmGuard = `expect(app).toContain("if (!platform.capabilities.playbackCache) return;");`;
+const currentWebWarmGuard = `expect(app).toContain('if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;');`;
+const staleWebWarmGuardCount = runtimeFollowup.split(staleWebWarmGuard).length - 1;
+if (staleWebWarmGuardCount !== 1) {
+  throw new Error(`issue97 Web warming guard: expected exactly 1 stale assertion, found ${staleWebWarmGuardCount}`);
+}
+runtimeFollowup = runtimeFollowup.replace(staleWebWarmGuard, currentWebWarmGuard);
+
 writeFileSync(path, app);
+writeFileSync(runtimeFollowupPath, runtimeFollowup);
