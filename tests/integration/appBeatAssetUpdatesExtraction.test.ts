@@ -28,9 +28,8 @@ describe("Beat asset update extraction", () => {
     expect(assetUpdates).toContain("cleanupStagedDropPaths([filePath])");
   });
 
-  it("leaves project operations temporarily composed by App for task 5.3", () => {
-    expect(app).toContain("startProjectAssetUpdate");
-    expect(app).toContain("startProjectZipReplacement");
-    expect(app).toContain("platform.editor.commit(beat, beat, { PROJECT: file })");
+  it("keeps project operations outside the asset-update owner", () => {
+    expect(assetUpdates).not.toContain("startProjectAssetUpdate");
+    expect(assetUpdates).not.toContain("PROJECT: file");
   });
 });

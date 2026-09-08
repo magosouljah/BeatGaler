@@ -15,7 +15,7 @@ import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, openBeatProject, updateProjectArchiveFromSource, inspectProjectDropSource, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, makeBeatAvailableOffline, removeBeatOfflineAvailability, recordOfflineTrashIntent, flushOfflineTrashIntents, removeBeatFromLibrary, readBeatMeta, getSettings, saveBeatMeta, renameTagEverywhere, startImportReviewStream, getImportReviewBatchSummary, prepareNextImportReviewBeat, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, getProjectCloudStatus, uploadDroppedFileToTelegram, listCloudFilesForBeat, downloadCloudFileToCache, downloadProjectToCache, startBackgroundDownload, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, detachLocalSourcesAfterCloudUpload, purgeInterruptedUploadLocal, getCloudClientId, chooseExportFilePath, chooseExportFolder, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type CloudFileRecord, type BackgroundDownloadEvent, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { listen } from "@tauri-apps/api/event";
@@ -55,12 +55,11 @@ import { usePlaybackController } from "./features/playback/usePlaybackController
 import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
 import { useDrawerCloudPersistence } from "./features/edit/useDrawerCloudPersistence";
 import { useBeatAssetUpdates } from "./features/edit/useBeatAssetUpdates";
+import { useBeatProjects } from "./features/projects/useBeatProjects";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
 import { reviewPerfMark } from "./features/perf/reviewPerf";
-
-type AutoProjectDropResult = "not-project" | "handled" | "started";
 
 type ReviewQueueState = {
   beats: Beat[];
@@ -181,7 +180,6 @@ function BeatGalerApp() {
     startupCachedBeatsRef,
     initialLoading,
   } = useLibraryState();
-  const [openableCloudProjectIds, setOpenableCloudProjectIds] = useState<Set<string>>(new Set());
   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);
   const cloudLibraryTimerRef = useRef<number | null>(null);
   const cloudLibrarySnapshotRef = useRef<string | null>(null);
@@ -288,12 +286,6 @@ function BeatGalerApp() {
     status: "downloading" | "completed";
   } | null>(null);
   const backgroundDownloadRuntimeOwnersRef = useRef<Set<string>>(new Set());
-  const [projectUpdateNotice, setProjectUpdateNotice] = useState<string | null>(null);
-  useEffect(() => {
-    if (!projectUpdateNotice) return;
-    const timer = window.setTimeout(() => setProjectUpdateNotice(null), 9000);
-    return () => window.clearTimeout(timer);
-  }, [projectUpdateNotice]);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueState | null>(null);
   // Background uploads can finish while the user is still reviewing other beats
   // from the SAME drop-staging session. Keep a live ref so staging cleanup never
@@ -974,71 +966,6 @@ function BeatGalerApp() {
       message: "Files are fetched into temporary storage automatically when needed.",
     });
   }, []);
-
-  const handleUploadProjectTelegram = useCallback(async (beat: Beat) => {
-    if (rejectOfflineMutation("Uploading a project")) return;
-    transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
-    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
-    try {
-      await uploadProjectToTelegram(beat);
-      await libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync");
-      transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, beat);
-      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
-      await appAlert({
-        title: "Project synced to Galer Cloud",
-        message: `${beat.name}.zip is stored in Galer Cloud as one PROJECT file.`,
-      });
-    } catch (e: any) {
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");
-      if (isRuntimeConflictError(e)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
-      else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "PROJECT_UPLOAD_FAILED", message, retryable: true }, beat);
-      await appAlert({ title: "Project upload failed", message, danger: true });
-    }
-  }, [rejectOfflineMutation, transitionRuntime]);
-
-  const handleOpenProject = useCallback(async (beat: Beat) => {
-    if (connectionState !== "online" && !beat.offline_available) {
-      await appAlert({
-        title: "Project unavailable offline",
-        message: "This project was not downloaded with Available Offline. Reconnect to open it.",
-      });
-      return;
-    }
-    try {
-      await openBeatProject(beat);
-      await appAlert({
-        title: "Project opened",
-        message: "Save normally in FL Studio. When you want those changes stored in Galer Cloud, return to BeatGaler and choose “Update Project”.",
-      });
-    } catch (e: any) {
-      await appAlert({ title: "Project unavailable", message: String(e?.message || e), danger: true });
-    }
-  }, [connectionState]);
-
-  const handleUpdateProject = useCallback(async (beat: Beat) => {
-    if (rejectOfflineMutation("Updating a project")) return;
-    transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
-    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
-    try {
-      await uploadProjectToTelegram(beat);
-      await libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync");
-      transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, beat);
-      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
-      await appAlert({
-        title: "Project updated",
-        message: "The current PROJECT.zip has been synced to Galer Cloud.",
-      });
-    } catch (e: any) {
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");
-      if (isRuntimeConflictError(e)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
-      else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "PROJECT_UPDATE_FAILED", message, retryable: true }, beat);
-      await appAlert({
-        title: "Project update failed",
-        message,
-        danger: true,
-      });
-    }
-  }, [rejectOfflineMutation, transitionRuntime]);
 
   const handleUploadBulk = useCallback(() => {
     if (rejectOfflineMutation("Bulk upload")) return;
@@ -2016,32 +1943,6 @@ function BeatGalerApp() {
     void discardImportReviewBatch(batchId);
   }, [deferredImportBatch, reviewPreparationDone, bulkSaveAllBusy, reviewBootstrap, reviewQueue, audioConflictBatch, dropImportBatch]);
 
-  const refreshOpenableCloudProjects = useCallback(async () => {
-    try {
-      const t = await import("./lib/tauri");
-      const ids = await t.listOpenableCloudProjectBeatIds();
-      setOpenableCloudProjectIds(new Set(ids));
-    } catch (error) {
-      console.warn("Could not refresh Open Project indicators", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshOpenableCloudProjects();
-  }, [beats, refreshOpenableCloudProjects]);
-
-
-  useEffect(() => {
-    const refresh = () => { void refreshOpenableCloudProjects(); };
-    window.addEventListener("beatgaler:project-cloud-changed", refresh);
-    window.addEventListener("beatgaler:project-cloud-updated", refresh);
-    return () => {
-      window.removeEventListener("beatgaler:project-cloud-changed", refresh);
-      window.removeEventListener("beatgaler:project-cloud-updated", refresh);
-    };
-  }, [refreshOpenableCloudProjects]);
-
-
   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
     if (rejectOfflineMutation("Updating beat files")) return true;
     if (isBackupFolderPath(folderPath)) {
@@ -2102,7 +2003,7 @@ function BeatGalerApp() {
         await t.syncBeatMetadataToTelegram(updated);
       }
 
-      await refreshOpenableCloudProjects();
+      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
       await libraryStateManager.commitSnapshot(beatsLatestRef.current.map(item => item.id === beat.id ? updated : item), "metadata-update");
       transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);
       setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
@@ -2117,7 +2018,7 @@ function BeatGalerApp() {
     } finally {
       setBeatCloudUpdateBusy(beat.id, false);
     }
-  }, [refreshOpenableCloudProjects, rejectOfflineMutation, transitionRuntime]);
+  }, [rejectOfflineMutation, transitionRuntime]);
 
   const { commitDrawerCloudMutation } = useDrawerCloudPersistence({
   beats,
@@ -2353,109 +2254,28 @@ function BeatGalerApp() {
     waitForUploadedBeatPlaybackReady,
   });
 
-  const hasStoredProject = useCallback(async (beat: Beat) => {
-    const status = await getProjectCloudStatus(beat);
-    return status.valid || status.part_count > 0 || status.local_exists || status.state !== "LOCAL";
-  }, []);
-
-  const startProjectAssetUpdate = useCallback((beat: Beat, filePath: string, kind: "projectFile" | "projectFolder") => {
-    runBeatCloudUpdate(beat, filePath, async () => {
-      // A normal project folder may contain old Backup/Backups directories. They
-      // are filtered from PROJECT.zip, but tell the user after the successful
-      // update instead of silently dropping those files.
-      const inspection = kind === "projectFolder"
-        ? await inspectProjectDropSource(filePath).catch(() => null)
-        : null;
-      if (inspection && !inspection.valid) {
-        throw new Error(inspection.reason || "This project folder could not be inspected.");
-      }
-      if (inspection?.has_backups) {
-        setProjectUpdateNotice(
-          `Backup folders were found in “${fileNameFromPath(filePath)}”. BeatGaler will skip them and continue with the project update.`
-        );
-      }
-
-      await updateProjectArchiveFromSource(beat, filePath, kind);
-      await uploadProjectToTelegram(beat);
-      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
-      await libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync");
-
-      if (inspection?.has_backups) {
-        setProjectUpdateNotice(
-          `Backup folders were skipped from “${fileNameFromPath(filePath)}” and were not added to PROJECT.zip.`
-        );
-      }
-    });
-  }, [runBeatCloudUpdate]);
-
-  const startProjectZipReplacement = useCallback((beat: Beat, filePath: string) => {
-    runBeatCloudUpdate(beat, filePath, async () => {
-      await uploadDroppedFileToTelegram(beat, filePath, "PROJECT");
-      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
-      await libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync");
-    });
-  }, [runBeatCloudUpdate]);
-
-  const handleAutoProjectDrop = useCallback(async (beat: Beat, filePath: string): Promise<AutoProjectDropResult> => {
-    const ext = extensionFromPath(filePath);
-    const obviousProjectSource = ext === "zip" || ["flp", "als", "logicx", "ptx", "ptf"].includes(ext);
-    if (!obviousProjectSource) return "not-project";
-
-    let inspection;
-    try {
-      inspection = await inspectProjectDropSource(filePath);
-    } catch (error) {
-      setBeatCloudUpdateBusy(beat.id, false, false);
-      await cleanupStagedDropPaths([filePath]).catch(() => {});
-      await appAlert({ title: "Project check failed", message: String(error), danger: true });
-      return "handled";
-    }
-
-    if (inspection.kind !== "zip" && inspection.kind !== "project_file") {
-      return "not-project";
-    }
-
-    if (!inspection.valid) {
-      setBeatCloudUpdateBusy(beat.id, false, false);
-      await cleanupStagedDropPaths([filePath]).catch(() => {});
-      await appAlert({
-        title: inspection.kind === "zip" ? "Invalid PROJECT" : "Project check failed",
-        message: inspection.reason || "The project could not be validated.",
-        danger: true,
-      });
-      return "handled";
-    }
-
-    const existing = await hasStoredProject(beat).catch(() => false);
-    if (existing) {
-      // Inspection/staging has finished. Stop the card animation while the user is
-      // making a Replace/Cancel choice; Replace starts the real update animation.
-      setBeatCloudUpdateBusy(beat.id, false, false);
-      const replace = await appConfirm({
-        title: inspection.kind === "zip" ? "Replace PROJECT ZIP?" : "Replace project file?",
-        message: inspection.kind === "zip"
-          ? `"${beat.name}" already has a PROJECT ZIP. Replace it with ${fileNameFromPath(filePath)}?`
-          : `"${beat.name}" already has a project file. Replace it with ${fileNameFromPath(filePath)}?`,
-        confirmLabel: "Replace",
-        cancelLabel: "Cancel",
-        danger: true,
-      });
-      if (!replace) {
-        await cleanupStagedDropPaths([filePath]).catch(() => {});
-        return "handled";
-      }
-    }
-
-    if (inspection.has_backups) {
-      setProjectUpdateNotice(
-        `Backup folders were found in “${fileNameFromPath(filePath)}”. BeatGaler will skip them and continue with the PROJECT ZIP.`
-      );
-    }
-
-    if (inspection.kind === "zip") startProjectZipReplacement(beat, filePath);
-    else startProjectAssetUpdate(beat, filePath, "projectFile");
-    return "started";
-  }, [hasStoredProject, startProjectAssetUpdate, startProjectZipReplacement]);
+  const {
+    openableCloudProjectIds,
+    projectUpdateNotice,
+    dismissProjectUpdateNotice,
+    hasStoredProject,
+    startProjectAssetUpdate,
+    handleAutoProjectDrop,
+    handleBrowserProjectDrop,
+    handleUploadProjectTelegram,
+    handleOpenProject,
+    handleUpdateProject,
+  } = useBeatProjects({
+    beats,
+    connectionState,
+    rejectOfflineMutation,
+    transitionRuntime,
+    beatsLatestRef,
+    setBeats,
+    setDrawer,
+    runBeatCloudUpdate,
+    setBeatCloudUpdateBusy,
+  });
 
   const handleDroppedBeatFileRole = useCallback(async (role: DroppedBeatFileRole) => {
     if (!beatFileDrop) return;
@@ -2551,24 +2371,8 @@ function BeatGalerApp() {
       return handleBrowserBeatAssetDrop(beat, file, kind);
     }
 
-    transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
-    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
-    try {
-      const committed = await platform.editor.commit(beat, beat, { PROJECT: file });
-      setBeats(current => {
-        const next = current.map(item => item.id === committed.id ? committed : item);
-        beatsLatestRef.current = next;
-        return next;
-      });
-      setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);
-      transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);
-      return false;
-    } catch (error) {
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-      transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "WEB_FILE_UPDATE_FAILED", message, retryable: true }, beat);
-      throw error;
-    }
-  }, [handleBrowserBeatAssetDrop, transitionRuntime]);
+    return handleBrowserProjectDrop(beat, file);
+  }, [handleBrowserBeatAssetDrop, handleBrowserProjectDrop]);
 
   // Browser/Pinterest controller. Windows desktop keeps the existing single native
   // owner. macOS keeps HTML enabled for browser artwork while local Finder drops
@@ -3649,7 +3453,7 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
           <button
             type="button"
             aria-label="Close project notice"
-            onClick={() => setProjectUpdateNotice(null)}
+            onClick={dismissProjectUpdateNotice}
             style={{
               position: "absolute", top: 7, right: 8, width: 24, height: 24, border: "none",
               borderRadius: 6, background: "transparent", color: "#d8bd67", cursor: "pointer",

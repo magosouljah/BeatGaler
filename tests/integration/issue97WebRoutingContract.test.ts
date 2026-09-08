@@ -16,7 +16,7 @@ describe("Issue #97 Web routing contracts", () => {
   it("routes browser artwork through the browser-editing capability before any Desktop-only metadata path", () => {
     const artwork = section(
       "const handleDropArtwork = useCallback",
-      "const hasStoredProject = useCallback",
+      "const {\n    runBeatCloudUpdate,",
     );
     const webBranch = artwork.indexOf("if (platform.capabilities.browserCloudEditing)");
     const webCommit = artwork.indexOf("platform.editor.commit(beat, updated, {})");

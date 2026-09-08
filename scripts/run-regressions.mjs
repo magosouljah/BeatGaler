@@ -57,6 +57,7 @@ try {
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
   const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");
   const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");
+  const beatProjects = readFileSync(path.join(root, "src", "features", "projects", "useBeatProjects.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
@@ -155,10 +156,10 @@ try {
   if (!uploadBeatBlock.includes('final_cloud_display_name_after_review')) fail("Cloud upload lost the Telegram-authoritative duplicate-name gate.");
   if (beatFileDropModal.includes('projectSamples') || beatFileDropModal.includes('projectAudio') || beatFileDropModal.includes('role: "other"')) fail("Existing-beat drop chooser reintroduced Samples/Audio split or Other.");
   if (!beatFileDropModal.includes('Loop · Coming soon') || !beatFileDropModal.includes('Stems · Coming soon')) fail("Loop/Stems must remain visible as Coming soon, not active upload destinations.");
-  if (!app.includes('inspectProjectDropSource(filePath)')) fail("Project files/ZIPs lost automatic destination inspection.");
+  if (!beatProjects.includes('inspectProjectDropSource(filePath)')) fail("Project files/ZIPs lost automatic destination inspection.");
   if (!app.includes('const autoResult = await handleAutoProjectDrop(beat, root.path)')) fail("Recognized project files/ZIPs must bypass the redundant role chooser.");
   if (!controller.includes('onBeatFileStagingChange?.(beatId, true)') || !app.includes('onBeatFileStagingChange: (beatId, active)')) fail("Beat-card loading must begin before WebView2 copies/inspects a large PROJECT ZIP.");
-  if (!app.includes('Replace PROJECT ZIP?') || !app.includes('Replace project file?')) fail("Existing PROJECT replacement lost its explicit Replace/Cancel confirmation.");
+  if (!beatProjects.includes('Replace PROJECT ZIP?') || !beatProjects.includes('Replace project file?')) fail("Existing PROJECT replacement lost its explicit Replace/Cancel confirmation.");
   if (!beatAssetUpdates.includes('setBeatFileDrop(null);') || !beatAssetUpdates.includes('const runBeatCloudUpdate')) fail("Long beat updates must close the chooser before background work starts.");
   if (!playbackController.includes('isBeatCloudUpdateBusy(inputBeat.id)')) fail("Queue/direct Play can bypass a running slot/project update.");
   if (!beatAssetUpdates.includes('setBeatCloudUpdateBusy(beat.id, false, true)')) fail("Successful existing-beat updates lost the success-phase event.");
@@ -172,7 +173,7 @@ try {
   if (!rustProjectCommands.includes('"projectfolder" =>') || !rustProjectCommands.includes('("prefix", format!("{}/", folder_name))')) fail("Generic project folders must preserve their original folder name inside PROJECT.zip.");
   if (!rustProjectCommands.includes("#[tauri::command(async)]\npub fn update_project_archive_from_source")) fail("PROJECT archive mutation must run as an async Tauri command so the UI remains usable during large ZIP work.");
   if (!rustProjectCommands.includes('is_forbidden_project_component') || !rustProjectCommands.includes('copy_project_zip_entries(source, &mut writer, zip_name_has_forbidden_component)')) fail("PROJECT ZIP mutation lost Backup/Backups filtering.");
-  if (!app.includes('Backup folders were found in') || !app.includes('Backup folders were skipped from') || !tauriClient.includes('has_backups: boolean')) fail("Nested Backup/Backups filtering must be surfaced before and after project updates.");
+  if (!beatProjects.includes('Backup folders were found in') || !beatProjects.includes('Backup folders were skipped from') || !tauriClient.includes('has_backups: boolean')) fail("Nested Backup/Backups filtering must be surfaced before and after project updates.");
   if (!rustProjectCommands.includes('filtered_project_zip_for_upload') || !rustProjectCommands.includes('if !has_backups { return Ok(None); }')) fail("PROJECT ZIPs with Backup/Backups must continue through a filtered temporary upload copy instead of being rejected.");
   if (rustProjectCommands.includes('Remove that backup folder from the ZIP and try again.')) fail("PROJECT ZIPs with Backup/Backups must not be rejected; BeatGaler should skip those folders.");
   console.log("PASS project-drop guard: beat target survives WebView2 drop, ZIP inspection shows loading, valid project types auto-route, and Backup folders are skipped (including inside ZIPs) with notice");
