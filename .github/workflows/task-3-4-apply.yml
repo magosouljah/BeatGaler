@@ -1,0 +1,139 @@
+name: Temporary Task 3.4 Apply
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-3-4-apply.yml
+  workflow_dispatch:
+
+concurrency:
+  group: task-3-4-v0.9.0-test-noche
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply task 3.4
+        run: node scripts/apply-task-3-4.mjs
+
+      - name: Prepare logs
+        run: mkdir -p migration-check-logs
+
+      - name: Diff check
+        id: diffcheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          git diff --check 2>&1 | tee migration-check-logs/git-diff-check.log
+
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:typecheck 2>&1 | tee migration-check-logs/test-typecheck.log
+
+      - name: Unit TypeScript
+        id: unit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:unit:ts 2>&1 | tee migration-check-logs/test-unit-ts.log
+
+      - name: Component DOM
+        id: component
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:component:dom 2>&1 | tee migration-check-logs/test-component-dom.log
+
+      - name: Integration
+        id: integration
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee migration-check-logs/test-integration.log
+
+      - name: Regressions
+        id: regressions
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:regressions 2>&1 | tee migration-check-logs/test-regressions.log
+
+      - name: Build web
+        id: buildweb
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build:web 2>&1 | tee migration-check-logs/build-web.log
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee migration-check-logs/build.log
+
+      - name: Write summary
+        if: always()
+        shell: bash
+        run: |
+          cat > migration-check-logs/summary.txt <<EOF
+          git diff --check: ${{ steps.diffcheck.outcome }}
+          npm run test:typecheck: ${{ steps.typecheck.outcome }}
+          npm run test:unit:ts: ${{ steps.unit.outcome }}
+          npm run test:component:dom: ${{ steps.component.outcome }}
+          npm run test:integration: ${{ steps.integration.outcome }}
+          npm run test:regressions: ${{ steps.regressions.outcome }}
+          npm run build:web: ${{ steps.buildweb.outcome }}
+          npm run build: ${{ steps.build.outcome }}
+          EOF
+
+      - name: Upload migration check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-3-4-${{ github.run_id }}
+          path: migration-check-logs/
+
+      - name: Fail if verification failed
+        if: steps.diffcheck.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.unit.outcome != 'success' || steps.component.outcome != 'success' || steps.integration.outcome != 'success' || steps.regressions.outcome != 'success' || steps.buildweb.outcome != 'success' || steps.build.outcome != 'success'
+        run: exit 1
+
+      - name: Commit verified extraction and remove temporary tooling
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm scripts/apply-task-3-4.mjs .github/workflows/task-3-4-apply.yml
+          git add src/App.tsx src/features/selection/useBeatSelection.ts src/features/library/useLibraryReorder.ts tests/component-dom/beatSelection.test.tsx tests/integration/selectionReorderExtraction.test.ts tests/integration/libraryViewExtraction.test.ts
+          git commit -m "refactor(app): extract selection and library reorder"
+          git push origin HEAD:v0.9.0-test-noche
