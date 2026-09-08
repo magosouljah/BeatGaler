@@ -8,6 +8,9 @@ const interruptedUploadJournal = readFileSync(resolve(process.cwd(), "src/featur
 const uploadErrorDetails = readFileSync(resolve(process.cwd(), "src/features/cloud/uploadErrorDetails.ts"), "utf8");
 const desktopBeatUploadPipeline = readFileSync(resolve(process.cwd(), "src/features/cloud/desktopBeatUploadPipeline.ts"), "utf8");
 const cloudUploadQueue = readFileSync(resolve(process.cwd(), "src/features/cloud/useCloudUploadQueue.ts"), "utf8");
+const importSession = readFileSync(resolve(process.cwd(), "src/features/import/useImportSession.ts"), "utf8");
+const importReview = readFileSync(resolve(process.cwd(), "src/features/import/useImportReview.ts"), "utf8");
+const importReviewHost = readFileSync(resolve(process.cwd(), "src/features/import/components/ImportReviewHost.tsx"), "utf8");
 
 const migrationTargets = {
   uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/uploadErrorDetails.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
@@ -81,24 +84,36 @@ describe("App migration characterization contracts", () => {
   });
 
   it("keeps Review candidates outside the library until Save and preserves Skip versus Cancel", () => {
-    const add = section("const addBeatsAndReview = useCallback", "const skipCurrentReviewBeat = useCallback");
-    expect(add).toContain("setReviewQueue({ beats: sanitized, index: 0");
+    const add = section("const addBeatsAndReview = useCallback", "const cancelPendingReviewWork = useCallback");
+    expect(add).toContain("startReview(sanitized)");
     expect(add).not.toContain("setBeats(");
+    expect(importSession).toContain("const [reviewQueue, setReviewQueue] = useState<ImportReviewQueueState | null>(null)");
+    expect(importSession).toContain("setReviewQueue({");
+    expect(importSession).not.toContain("setBeats(");
 
-    const skip = section("const skipCurrentReviewBeat = useCallback", "const skipAllReviewQueue = useCallback");
-    expect(skip).toContain("platform.importer.releaseBeat(currentBeat.id)");
-    expect(skip).toContain("return { ...q, index: q.index + 1 }");
-
-    const cancel = section("const skipAllReviewQueue = useCallback", "const handleReviewedBeatSaved = useCallback");
-    expectOrdered(cancel, [
-      "q.beats.slice(q.index)",
-      "platform.importer.releaseBeat(beat.id)",
-      "cleanupOrphanedDropStaging(protectedBeats)",
+    expectOrdered(importReview, [
+      "const skipCurrentReviewBeat = useCallback",
+      "setReviewQueue(queue => {",
+      "if (currentBeat) releaseBeat?.(currentBeat.id);",
+      "return { ...queue, index: queue.index + 1 };",
+      "const cancelReview = useCallback",
+      "onCancelPendingWork();",
+      "queue.beats.slice(queue.index)",
+      "if (queue.batchId) void discardBatch(queue.batchId);",
+      "cleanupUnusedStaging();",
+      "return null;",
+      "const handleReviewedBeatSaved = useCallback",
+      "setBeats(current => {",
+      "beatsLatestRef.current = next;",
+      "setReviewQueue(queue => {",
+      "cloudifyImportedBeats([updated]);",
     ]);
-    expect(cancel.lastIndexOf("return null")).toBeGreaterThan(cancel.indexOf("cleanupOrphanedDropStaging(protectedBeats)"));
 
-    const save = section("const handleReviewedBeatSaved = useCallback", "const handleReviewedSaveAll = useCallback");
-    expectOrdered(save, ["setBeats(bs =>", "setReviewQueue(q =>", "cloudifyImportedBeats([updated])"]);
+    expect(app).toContain("} = useImportSession();");
+    expect(app).toContain("} = useImportReview({");
+    expect(app).toContain("<ImportReviewHost");
+    expect(importReviewHost).toContain("onSkipAll={onCancel}");
+    expect(importReviewHost).toContain("onSaved={onSaved}");
   });
 
   it("defers manual Reload while uploads are active and consumes the deferred event after the queue drains", () => {
