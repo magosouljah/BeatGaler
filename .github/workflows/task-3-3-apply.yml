@@ -35,6 +35,7 @@ jobs:
         run: |
           node scripts/apply-task-3-3.mjs
           node scripts/fix-task-3-3-frequency.mjs
+          node scripts/fix-task-3-3-issue97-test.mjs
 
       - name: Patch hygiene
         run: git diff --check
@@ -64,8 +65,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.tsx
-          git rm scripts/apply-task-3-3.mjs scripts/fix-task-3-3-frequency.mjs .github/workflows/task-3-3-apply.yml
+          git add src/App.tsx tests/integration/issue97PlaybackOptimization.test.ts
+          git rm scripts/apply-task-3-3.mjs scripts/fix-task-3-3-frequency.mjs scripts/fix-task-3-3-issue97-test.mjs .github/workflows/task-3-3-apply.yml
           git diff --cached --check
           git commit -m "refactor(app): extract library search filters and tags"
           git push origin HEAD:app-tsx-3.3
