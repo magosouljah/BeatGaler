@@ -1080,3 +1080,104 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 5.1
+
+```
+Tarea: 5.1 — Separar guardado de metadata y artwork
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: d2afff16996ef1bff658d4604c75b9e1eb8609a9
+- Última tarea verificada: 4.3 — Separar la cola y navegación
+
+Cambio realizado
+
+- Se creó `src/features/edit/useDrawerCloudPersistence.ts` como dueño del observer de metadata Desktop, su debounce por beat de 700 ms, la sincronización metadata/artwork, el commit del INDEX y la deduplicación de commits del Drawer.
+- `App.tsx` dejó de poseer los timers y refs de deduplicación y ahora compone `useDrawerCloudPersistence`, conservando el mismo callback `commitDrawerCloudMutation` que ya consume `Drawer.tsx`.
+- Se preservaron las condiciones Web/Desktop: Web retorna antes del observer legado y mantiene sus commits explícitos por `platform.editor`; Desktop conserva el observer, estados runtime y sincronización Telegram/INDEX.
+- Se preservó el orden de guardado: metadata/artwork primero cuando corresponde, después snapshot autoritativo del INDEX y finalmente siembra de fingerprints para evitar un segundo guardado.
+- `Drawer.tsx` no fue reorganizado y las operaciones de reemplazo de MASTER/WAV/assets permanecen fuera de esta extracción.
+
+Adaptación de pruebas
+
+- `tests/integration/issue97WebRoutingContract.test.ts` sigue protegiendo que Web no instala el observer Desktop, pero ahora inspecciona el módulo que realmente posee esa responsabilidad.
+- `scripts/run-regressions.mjs` sigue exigiendo los marcadores y refs de deduplicación, pero los busca en `useDrawerCloudPersistence.ts` en vez de exigir que permanezcan físicamente en `App.tsx`.
+- Estas adaptaciones corrigieron acoplamientos a ubicación interna; no se relajaron los contratos protegidos.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/edit/useDrawerCloudPersistence.ts
+- tests/integration/issue97WebRoutingContract.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 5.1 Apply`, run 34230769729 — SUCCESS.
+- GitHub Actions `Task 5.1 Migration Checks`, run 34230888488 — FAILURE inicial. Artifact `migration-check-logs-task-5-1-34230888488` leído: typecheck, unit TS, component DOM, build:web y build PASS; integration/regressions fallaron por assertions acopladas a la ubicación anterior; diff-check no pudo resolver el SHA inicial por checkout shallow.
+- GitHub Actions `Task 5.1 Adapt Dedupe Regression`, run 34231568800 — SUCCESS.
+- GitHub Actions `Task 5.1 Migration Checks`, run 34231857530 — SUCCESS. Artifact `migration-check-logs-task-5-1-34231857530`, `summary.txt` leído: todos los checks PASS.
+- git diff --check d2afff16996ef1bff658d4604c75b9e1eb8609a9..HEAD — PASS.
+- npm run test:typecheck — PASS.
+- npm run test:unit:ts — PASS.
+- npm run test:component:dom — PASS.
+- npm run test:integration — PASS.
+- npm run test:regressions — PASS.
+- npm run build:web — PASS.
+- npm run build — PASS.
+- SHA de implementación/verificación: 90c981976d0e23499d50be80b54e96ef51eeaf7c.
+
+Comprobaciones no ejecutadas
+
+- npm run check — no necesario para esta extracción; los checks relevantes del wrapper se ejecutaron individualmente y quedaron verdes.
+- E2E completos de import/download/recovery — no aplican al ownership de metadata/artwork del Drawer.
+- Prueba física Desktop Windows/macOS — no ejecutada porque esta ronda opera mediante GitHub Actions y no dispone de una aplicación física interactiva; no es requisito de cierre dado que routing, dedupe, integración, regresiones y ambos builds quedaron cubiertos automáticamente.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Desktop: abrir un beat, cambiar metadata y/o artwork, guardar, recargar la biblioteca y comprobar persistencia y una sola transacción lógica metadata/artwork + INDEX.
+- Web: editar metadata/artwork y comprobar que sigue la ruta `platform.editor`, sin invocar el observer Tauri Desktop.
+- Resultado esperado: mismo estado persistido que antes de la extracción y ausencia de un segundo commit duplicado.
+
+Pendientes / fuera de alcance
+
+- 5.2 — Separar reemplazo de archivos de un beat permanece pendiente y no fue iniciada.
+- El riesgo previo de `handleRemoveBulk` con snapshots capturados permanece fuera de alcance y sin cambios.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de producto identificado por 5.1.
+- Existe previamente `.github/workflows/probe-task-5.1-productive-temp-auth-compile.yml`; no pertenece a esta extracción y no se modificó ni eliminó.
+
+Herramientas temporales restantes
+
+- Ninguna creada por esta ronda permanece en el árbol final.
+- El workflow histórico `probe-task-5.1-productive-temp-auth-compile.yml` permanece porque ya existía antes de esta ejecución.
+
+Fallos encontrados y causa
+
+- Run 34230888488: integration y regressions fallaron porque dos pruebas existentes estaban acopladas a que el observer y las refs de dedupe vivieran físicamente en `App.tsx`. El comportamiento protegido seguía presente en el nuevo módulo; se adaptaron las pruebas al nuevo ownership sin debilitarlas.
+- En ese mismo run, `diff-check` falló por `Invalid revision range` porque el workflow temporal usaba checkout shallow; se corrigió a `fetch-depth: 0`.
+- Run 34231349409: el primer applier de adaptación de tests falló antes de publicar cambios porque su búsqueda textual exacta no encontró el bloque; fue un fallo de tooling temporal, no del producto.
+- Run 34232243698: el primer finalizador documental fue rechazado por GitHub antes de crear jobs; no ejecutó comandos ni modificó documentación/producto.
+
+Veredicto
+
+Terminada.
+
+El guardado de metadata/artwork y su protección contra duplicados quedaron fuera de `App.tsx` conservando orden, debounce, condiciones Web/Desktop y las mismas escrituras lógicas verificadas por integración, regresiones y builds.
+
+Siguiente tarea
+
+5.2 — Separar reemplazo de archivos de un beat.
+
+No iniciada.
+```

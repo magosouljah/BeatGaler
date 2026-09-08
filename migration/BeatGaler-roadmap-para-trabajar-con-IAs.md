@@ -243,7 +243,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** localizar con facilidad dónde se edita, actualiza o elimina un beat.
 
-### [ ] 5.1 — Separar guardado de metadata y artwork
+### [x] 5.1 — Separar guardado de metadata y artwork
 
 - **Hacer:** extraer edición y commit del Drawer junto con el mecanismo que evita guardados duplicados y el observer de metadata de escritorio.
     
