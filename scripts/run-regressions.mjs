@@ -68,8 +68,9 @@ try {
   const runTauriScript = readFileSync(path.join(root, "scripts", "run-tauri.ps1"), "utf8");
   const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   const audioHook = readFileSync(path.join(root, "src", "hooks", "useAudio.ts"), "utf8");
-  if (!audioHook.includes('beatgaler:audio-playing') || !app.includes('window.addEventListener("beatgaler:audio-playing"')) fail("Playback runtime no longer waits for the real HTMLAudioElement playing event.");
-  if (app.includes('transitionRuntime(beat.id, { type: "PLAYBACK_PLAYING" }, beat);') || app.includes('transitionRuntime(beat.id, { type: "PLAYBACK_PLAYING" }, ready);')) fail("Playback state is marked playing before audio actually starts.");
+  const playbackController = readFileSync(path.join(root, "src", "features", "playback", "usePlaybackController.ts"), "utf8");
+  if (!audioHook.includes('beatgaler:audio-playing') || !playbackController.includes('window.addEventListener("beatgaler:audio-playing"')) fail("Playback runtime no longer waits for the real HTMLAudioElement playing event.");
+  if ([app, playbackController].some(source => source.includes('transitionRuntime(beat.id, { type: "PLAYBACK_PLAYING" }, beat);') || source.includes('transitionRuntime(beat.id, { type: "PLAYBACK_PLAYING" }, ready);'))) fail("Playback state is marked playing before audio actually starts.");
 
   const tauriConfig = readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8");
   if (!tauriConfig.includes('"dragDropEnabled": true')) fail("Windows native filesystem drag/drop is not enabled in Tauri config.");
@@ -157,7 +158,7 @@ try {
   if (!controller.includes('onBeatFileStagingChange?.(beatId, true)') || !app.includes('onBeatFileStagingChange: (beatId, active)')) fail("Beat-card loading must begin before WebView2 copies/inspects a large PROJECT ZIP.");
   if (!app.includes('Replace PROJECT ZIP?') || !app.includes('Replace project file?')) fail("Existing PROJECT replacement lost its explicit Replace/Cancel confirmation.");
   if (!app.includes('setBeatFileDrop(null);') || !app.includes('const runBeatCloudUpdate')) fail("Long beat updates must close the chooser before background work starts.");
-  if (!app.includes('beatCloudUpdateBusyIds.has(beat.id)')) fail("Queue/direct Play can bypass a running slot/project update.");
+  if (!playbackController.includes('isBeatCloudUpdateBusy(inputBeat.id)')) fail("Queue/direct Play can bypass a running slot/project update.");
   if (!app.includes('setBeatCloudUpdateBusy(beat.id, false, true)')) fail("Successful existing-beat updates lost the success-phase event.");
   if (!beatCard.includes('slotUpdateComplete') || !beatCard.includes('detail.success')) fail("BeatCard lost the green completion animation for existing-beat updates.");
   if (!tauriClient.includes('inspect_project_drop_source') || !tauriClient.includes('"projectFile" | "projectFolder"')) fail("Tauri client lost smart PROJECT drop inspection/update kinds.");
@@ -235,7 +236,7 @@ try {
   const playbackReadiness = readFileSync(path.join(root, "src", "features", "playback", "playbackReadiness.ts"), "utf8");
   if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
   if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) {") || !beatCard.includes("CARD_PLAY_REJECTED") || !beatCard.includes("onPlay(beat);")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
-  if (!app.includes('PLAY_BLOCKED_LOADING')) fail("App handlePlay lost its defensive loading-state guard.");
+  if (!playbackController.includes('PLAY_BLOCKED_LOADING')) fail("Playback controller lost its defensive loading-state guard.");
   if (!app.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
   if (app.includes("beatsLatestRef.current = indexSnapshot;")) fail("Manifest serialization must not overwrite the live PLAYBACK_PREPARING state in beatsLatestRef.");
   const preparingIndex = app.indexOf('cloud_status: "PLAYBACK_PREPARING"');
@@ -340,8 +341,8 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!rustCommands.includes('Offline packages live under app_data/offline')) fail("Clear cache lost the explicit Offline-storage separation invariant.");
   if (!rustCommands.includes('The Rust cooker survives a WebView refresh')) fail("Clear cache no longer resets stale in-memory Download Cooking state.");
   if (!tauriClient.includes('beatgaler:playback-cache-cleared')) fail("Clear cache no longer invalidates the WebView Fast Play memo.");
-  if (!app.includes('playbackCacheEpochRef.current += 1') || !app.includes('cookingPlaybackUrlRef.current.clear()')) fail("Clear cache can leave stale Fast Play URLs alive in App.tsx.");
-  if (!app.includes('playbackCacheEpochRef.current !== cacheEpoch')) fail("A pre-Clear-cache warm promise can repopulate a stale playback URL.");
+  if (!playbackController.includes('playbackCacheEpochRef.current += 1') || !playbackController.includes('cookingPlaybackUrlRef.current.clear()')) fail("Clear cache can leave stale Fast Play URLs alive in playback controller.");
+  if (!playbackController.includes('playbackCacheEpochRef.current !== cacheEpoch')) fail("A pre-Clear-cache warm promise can repopulate a stale playback URL.");
   if (!rustCommands.includes('state.data_dir.join("offline")')) fail("Offline files are no longer stored outside temporary playback cache.");
   if (!rustCommands.includes('ARTWORK:{}:{}') || !rustCommands.includes('PROJECT:{}') || !rustCommands.includes('FILE:{}:{}:{}')) fail("Offline fingerprint no longer tracks artwork/project/file source changes for future refresh logic.");
   if (!rustCommands.includes('Explicit Offline pins outrank temporary cache and network streaming.')) fail("Playback lost durable Offline precedence.");
@@ -376,8 +377,8 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!rustCommands.includes('Available Offline owns a protected MASTER outside the temporary cache.')) fail("MP3 export lost local-first Offline precedence.");
   if (!rustCommands.includes('PROJECT follows the same local-first rule. Available Offline must')) fail("PROJECT/Everything export lost local-first Offline precedence.");
   if (!app.includes('assets/status/upload-complete.wav') || !app.includes('assets/status/download-complete.wav')) fail("User-supplied upload/download completion sounds are not wired into App.tsx.");
-  if (!app.includes('cookingPlaybackUrlRef.current.delete(beat.id)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
-  if (!app.includes('cookingWarmPromisesRef.current.delete(beat.id)')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");
+  if (!app.includes('invalidatePlaybackPreparation(beat.id)') || !playbackController.includes('cookingPlaybackUrlRef.current.delete(beatId)')) fail("Remove from Available Offline can leave a dead durable MASTER URL in the Fast Play Path.");
+  if (!playbackController.includes('cookingWarmPromisesRef.current.delete(beatId)')) fail("Remove from Available Offline can reuse a stale Offline warm promise instead of re-entering Cloud cooking.");
   const removeOfflineUiStart = app.indexOf('if (beat.offline_available) {', app.indexOf('const handleToggleOffline'));
   const removeOfflineUiEnd = app.indexOf('} else {\n        const offline = await makeBeatAvailableOffline(beat);', removeOfflineUiStart);
   const removeOfflineUiBlock = removeOfflineUiEnd > removeOfflineUiStart ? app.slice(removeOfflineUiStart, removeOfflineUiEnd) : '';

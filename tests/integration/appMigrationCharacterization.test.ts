@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const playbackController = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
 
 const migrationTargets = {
   uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
@@ -113,22 +114,20 @@ describe("App migration characterization contracts", () => {
   });
 
   it("keeps playback cache invalidation, real audio events and Web/Desktop preparation paths distinct", () => {
-    const audioEvents = section("const onPlaybackCacheCleared = () =>", "const previousAudioBeatIdRef = useRef");
-    expectOrdered(audioEvents, [
+    expectOrdered(playbackController, [
       "playbackCacheEpochRef.current += 1",
       "cookingPlaybackUrlRef.current.clear()",
       "cookingWarmPromisesRef.current.clear()",
     ]);
-    expect(audioEvents).toContain('window.addEventListener("beatgaler:audio-playing", onAudioPlaying)');
-    expect(audioEvents).toContain('transitionRuntime(beatId, { type: "PLAYBACK_PLAYING" })');
-
-    const play = section("const handlePlay = useCallback", "const handleUpload = useCallback");
-    expectOrdered(play, [
+    expect(playbackController).toContain('window.addEventListener("beatgaler:audio-playing", onAudioPlaying)');
+    expect(playbackController).toContain('transitionRuntime(beatId, { type: "PLAYBACK_PLAYING" })');
+    expectOrdered(playbackController, [
       "if (!isTauriAvailable)",
       "const prepared = await platform.media.preparePlayback(beat)",
       "const ready = await prepareBeatForPlayback(beat)",
     ]);
-    expect(play).toContain("platform.media.releasePlayback(beat.id)");
+    expect(playbackController).toContain("platform.media.releasePlayback(beat.id)");
+    expect(app).toContain("usePlaybackController({");
   });
 
   it("fails closed during interrupted-upload recovery until cloud authority is known", () => {

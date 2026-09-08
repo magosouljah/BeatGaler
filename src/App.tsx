@@ -50,9 +50,8 @@ import { useBeatSelection } from "./features/selection/useBeatSelection";
 import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "./features/tags/tagSelectors";
 import { useTagFilters } from "./features/tags/useTagFilters";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
-import { isBeatPlaybackBlocked } from "./features/playback/playbackReadiness";
-import { playTrace } from "./features/playback/playTrace";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
+import { usePlaybackController } from "./features/playback/usePlaybackController";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
@@ -225,12 +224,6 @@ function BeatGalerApp() {
   const startupPipelineStartedRef = useRef(false);
   const startupEnginePrimeReadyRef = useRef(false);
   const progressiveRevealRunRef = useRef(0);
-  const cookingPlaybackUrlRef = useRef<Map<string, { telegramFileId: string; url: string }>>(new Map());
-  const cookingWarmPromisesRef = useRef<Map<string, Promise<string | null>>>(new Map());
-  // Incremented whenever temporary playback cache is cleared. Warm promises
-  // capture the epoch so a promise started before Clear cache cannot repopulate
-  // the Fast Play map with a URL backed by files that were just deleted.
-  const playbackCacheEpochRef = useRef(0);
   const handleArtworkHydratedFromNetwork = useCallback((next: Beat[], beatId: string) => {
     const hydrated = next.find(item => item.id === beatId);
     if (hydrated && cloudMetaSnapshotRef.current) {
@@ -346,6 +339,17 @@ function BeatGalerApp() {
   const lastHandledEndedSeqRef = useRef(0);
 
   const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();
+  const { clearPlaybackPreparation, ensureWarmPlaybackUrl, handlePlay, handleWarm, invalidatePlaybackPreparation, waitForUploadedBeatPlaybackReady } = usePlaybackController({
+    audio,
+    play,
+    beatsLatestRef,
+    beatRuntimeStatesRef,
+    transitionRuntime,
+    setBeats,
+    cloudSessionVerified,
+    connectionState,
+    isBeatCloudUpdateBusy: beatId => beatCloudUpdateBusyIds.has(beatId),
+  });
 
   // Keep a ref to togglePause so the keydown handler never goes stale
   const togglePauseRef = useRef(togglePause);
@@ -591,8 +595,7 @@ function BeatGalerApp() {
       startupPipelineStartedRef.current = false;
       startupEnginePrimeReadyRef.current = false;
       progressiveRevealRunRef.current += 1;
-      cookingWarmPromisesRef.current.clear();
-      cookingPlaybackUrlRef.current.clear();
+      clearPlaybackPreparation();
       clearArtworkHydration();
       setStartupCookingGate(false);
     };
@@ -787,8 +790,7 @@ function BeatGalerApp() {
           startupPipelineStartedRef.current = false;
           startupEnginePrimeReadyRef.current = false;
           clearArtworkHydration();
-          cookingWarmPromisesRef.current.clear();
-          cookingPlaybackUrlRef.current.clear();
+          clearPlaybackPreparation();
           progressiveRevealRunRef.current += 1;
           setStartupCookingGate(false);
           setCloudSessionVerified(false);
@@ -902,82 +904,6 @@ function BeatGalerApp() {
   // only allowed from explicit Telegram connection/startup flows below.
 
   useEffect(() => {
-    const onPlaybackCacheCleared = () => {
-      playbackCacheEpochRef.current += 1;
-      cookingPlaybackUrlRef.current.clear();
-      cookingWarmPromisesRef.current.clear();
-    };
-    window.addEventListener("beatgaler:playback-cache-cleared", onPlaybackCacheCleared);
-    return () => window.removeEventListener("beatgaler:playback-cache-cleared", onPlaybackCacheCleared);
-  }, []);
-
-  // `playing` means the browser audio element actually reached its Playing
-  // event. Do not mark playback as playing merely because we assigned a src.
-  useEffect(() => {
-    const onAudioPlaying = (event: Event) => {
-      const beatId = (event as CustomEvent<{ beatId?: string | null }>).detail?.beatId ?? null;
-      if (!beatId) return;
-      const runtime = beatRuntimeStatesRef.current[beatId];
-      if (runtime?.playback_state === "playback_preparing") {
-        transitionRuntime(beatId, { type: "PLAYBACK_PLAYING" });
-      }
-    };
-    const onAudioIdle = (event: Event) => {
-      const beatId = (event as CustomEvent<{ beatId?: string | null }>).detail?.beatId ?? null;
-      if (!beatId) return;
-      const runtime = beatRuntimeStatesRef.current[beatId];
-      if (runtime && runtime.playback_state !== "idle") {
-        transitionRuntime(beatId, { type: "PLAYBACK_IDLE" });
-      }
-    };
-    window.addEventListener("beatgaler:audio-playing", onAudioPlaying);
-    window.addEventListener("beatgaler:audio-idle", onAudioIdle);
-    return () => {
-      window.removeEventListener("beatgaler:audio-playing", onAudioPlaying);
-      window.removeEventListener("beatgaler:audio-idle", onAudioIdle);
-    };
-  }, [transitionRuntime]);
-
-  useEffect(() => {
-    const onAudioUnavailable = (event: Event) => {
-      const beatId = (event as CustomEvent<{ beatId?: string | null }>).detail?.beatId ?? null;
-      if (beatId) {
-        const runtime = beatRuntimeStatesRef.current[beatId];
-        if (runtime?.playback_state === "playback_preparing" || runtime?.playback_state === "playing") {
-          transitionRuntime(beatId, {
-            type: "PLAYBACK_FAILED",
-            code: "AUDIO_SOURCE_UNAVAILABLE",
-            message: "Cloud audio unavailable. The MASTER file could not be loaded from cloud storage.",
-            retryable: true,
-          });
-        }
-      }
-      void appAlert({
-        title: "Beat unavailable",
-        message: "Cloud audio unavailable. The MASTER file could not be loaded from cloud storage.",
-        danger: true,
-      });
-    };
-
-    window.addEventListener("beatgaler:audio-unavailable", onAudioUnavailable);
-    return () => window.removeEventListener("beatgaler:audio-unavailable", onAudioUnavailable);
-  }, [transitionRuntime]);
-
-  const previousAudioBeatIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previous = previousAudioBeatIdRef.current;
-    if (previous && previous !== audio.playingId) transitionRuntime(previous, { type: "PLAYBACK_IDLE" });
-    previousAudioBeatIdRef.current = audio.playingId;
-  }, [audio.playingId, transitionRuntime]);
-
-  const previousEndedSeqRef = useRef(audio.endedSeq);
-  useEffect(() => {
-    if (audio.endedSeq === previousEndedSeqRef.current) return;
-    previousEndedSeqRef.current = audio.endedSeq;
-    if (audio.playingId) transitionRuntime(audio.playingId, { type: "PLAYBACK_IDLE" });
-  }, [audio.endedSeq, audio.playingId, transitionRuntime]);
-
-  useEffect(() => {
     const onTelegramConnected = (event: Event) => {
       const detail = (event as CustomEvent<{ connected?: boolean; username?: string | null }>).detail;
       if (!detail?.connected) return;
@@ -1017,258 +943,6 @@ function BeatGalerApp() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []); // empty deps — safe because we use ref
-
-  const ensureWarmPlaybackUrl = useCallback((beat: Beat): Promise<string | null> => {
-    if (!beat.telegram_file_id) return Promise.resolve(null);
-
-    const cacheEpoch = playbackCacheEpochRef.current;
-    const existing = cookingPlaybackUrlRef.current.get(beat.id);
-    if (existing?.telegramFileId === beat.telegram_file_id) return Promise.resolve(existing.url);
-
-    const inFlight = cookingWarmPromisesRef.current.get(beat.id);
-    if (inFlight) return inFlight;
-
-    if (beat.offline_available) {
-      const fileId = beat.telegram_file_id;
-      const promise = prepareBeatForPlayback(beat).then(ready => {
-        if (!ready.playback_path || playbackCacheEpochRef.current !== cacheEpoch) return null;
-        cookingPlaybackUrlRef.current.set(beat.id, { telegramFileId: fileId, url: ready.playback_path });
-        return ready.playback_path;
-      }).catch(error => {
-        console.warn("Offline playback preparation failed:", error);
-        return null;
-      }).finally(() => {
-        cookingWarmPromisesRef.current.delete(beat.id);
-      });
-      cookingWarmPromisesRef.current.set(beat.id, promise);
-      return promise;
-    }
-
-    const fileId = beat.telegram_file_id;
-    const promise = warmBeatForPlayback(beat).then(prewarmUrl => {
-      if (!prewarmUrl || playbackCacheEpochRef.current !== cacheEpoch) return null;
-      const url = prewarmUrl.replace(/[?&]prewarm=1(?:&|$)/, "").replace(/[?&]$/, "");
-      cookingPlaybackUrlRef.current.set(beat.id, { telegramFileId: fileId, url });
-      return url;
-    }).catch(error => {
-      console.debug("Download Cooking warm skipped:", error);
-      return null;
-    }).finally(() => {
-      cookingWarmPromisesRef.current.delete(beat.id);
-    });
-
-    cookingWarmPromisesRef.current.set(beat.id, promise);
-    return promise;
-  }, []);
-
-  const waitForCookingReady = useCallback(async (beat: Beat, timeoutMs = 12000): Promise<boolean> => {
-    if (beat.offline_available || !beat.telegram_file_id) return true;
-    const started = performance.now();
-    while (performance.now() - started < timeoutMs) {
-      try {
-        const status = await getDownloadCookingStatus();
-        const entry = status.entries.find(item => item.beat_id === beat.id);
-        const urlReady = cookingPlaybackUrlRef.current.get(beat.id)?.telegramFileId === beat.telegram_file_id;
-        if (entry && !entry.failed && urlReady && (entry.complete || entry.downloaded_bytes >= status.ready_bytes)) return true;
-        if (entry?.failed) return false;
-      } catch {}
-      await new Promise(resolve => window.setTimeout(resolve, 90));
-    }
-    return false;
-  }, []);
-
-  const waitForUploadedBeatPlaybackReady = useCallback(async (beat: Beat, timeoutMs = 15000): Promise<boolean> => {
-    if (!beat.telegram_file_id) return false;
-
-    const started = performance.now();
-    void downloadCookingDiagnosticEvent("UPLOAD_PLAYBACK_GATE_BEGIN", beat.id, beat.name, "").catch(() => {});
-
-    while (performance.now() - started < timeoutMs) {
-      try {
-        // Re-issue WARM explicitly on every retry. A newly-uploaded Telegram
-        // document can be briefly unavailable to the download endpoint even
-        // though sendDocument already returned its file_id. Rust revives a
-        // previously failed cooker entry when this explicit warm is requested.
-        const prewarmUrl = await warmBeatForPlayback(beat);
-        if (prewarmUrl) {
-          const url = prewarmUrl.replace(/[?&]prewarm=1(?:&|$)/, "").replace(/[?&]$/, "");
-          cookingPlaybackUrlRef.current.set(beat.id, { telegramFileId: beat.telegram_file_id, url });
-        }
-
-        if (await waitForCookingReady(beat, 1400)) {
-          void downloadCookingDiagnosticEvent(
-            "UPLOAD_PLAYBACK_GATE_READY",
-            beat.id,
-            beat.name,
-            `wait_ms=${(performance.now() - started).toFixed(1)}`
-          ).catch(() => {});
-          return true;
-        }
-      } catch (error) {
-        console.debug(`Post-upload playback warm retry for ${beat.name}:`, error);
-      }
-
-      await new Promise(resolve => window.setTimeout(resolve, 180));
-    }
-
-    void downloadCookingDiagnosticEvent(
-      "UPLOAD_PLAYBACK_GATE_TIMEOUT",
-      beat.id,
-      beat.name,
-      `wait_ms=${(performance.now() - started).toFixed(1)}`
-    ).catch(() => {});
-    return false;
-  }, [waitForCookingReady]);
-
-  const handleWarm = useCallback((beat: Beat) => {
-    // Cached cards can be visible before the authoritative INDEX is restored.
-    // Do not let viewport-driven audio range downloads compete with that INDEX
-    // read (or lazy artwork) on the single Direct transport session.
-    if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;
-    void ensureWarmPlaybackUrl(beat);
-  }, [cloudSessionVerified, connectionState, ensureWarmPlaybackUrl]);
-
-  const handlePlay = useCallback(async (beat: Beat) => {
-    // Never let a stale card/queue callback bypass the upload readiness gate.
-    // Read the latest Beat object because upload state can change after the
-    // caller captured its render-time object.
-    const latestBeat = beatsLatestRef.current.find(item => item.id === beat.id) ?? beat;
-    playTrace("APP_HANDLE_PLAY_ENTER", {
-      beat_id: beat.id,
-      render_status: beat.cloud_status || null,
-      latest_status: latestBeat.cloud_status || null,
-      slot_busy: beatCloudUpdateBusyIds.has(beat.id),
-    });
-    if (beatCloudUpdateBusyIds.has(beat.id) || isBeatPlaybackBlocked(beat) || isBeatPlaybackBlocked(latestBeat)) {
-      const blocked = isBeatPlaybackBlocked(latestBeat) ? latestBeat : beat;
-      const reason = beatCloudUpdateBusyIds.has(beat.id) ? "SLOT_UPDATE" : String(blocked.cloud_status || "");
-      playTrace("APP_HANDLE_PLAY_BLOCKED", { beat_id: blocked.id, reason });
-      void downloadCookingDiagnosticEvent("PLAY_BLOCKED_LOADING", blocked.id, blocked.name, reason).catch(() => {});
-      return;
-    }
-    beat = latestBeat;
-
-    // Web playback uses the browser MTProto streaming adapter.
-    // Never fall through to the native Tauri playback/cache path.
-    if (!isTauriAvailable) {
-      try {
-        if (audio.playingId && audio.playingId !== beat.id) {
-          platform.media.releasePlayback(audio.playingId);
-        }
-
-        playTrace("APP_PREPARE_BEGIN", { beat_id: beat.id });
-        const prepared = await platform.media.preparePlayback(beat);
-        playTrace("APP_PREPARE_READY", { beat_id: beat.id, url_scheme: String(prepared.url || "").split(":")[0] || null });
-
-        void prepared.completed.catch(error => {
-          console.warn(`[web/playback] stream failed beat_id=${beat.id}`, error);
-          platform.media.releasePlayback(beat.id);
-        });
-
-        playTrace("APP_AUDIO_PLAY_CALL", { beat_id: beat.id });
-        play(beat.id, [prepared.url]);
-      } catch (error) {
-        playTrace("APP_PREPARE_ERROR", { beat_id: beat.id, error_name: error instanceof Error ? error.name : "unknown" });
-        platform.media.releasePlayback(beat.id);
-        await appAlert({
-          title: "Beat unavailable",
-          message: sanitizeUserVisibleText(
-            error instanceof Error ? error.message : String(error),
-            "Cloud audio unavailable."
-          ),
-          danger: true,
-        });
-      }
-      return;
-    }
-
-    const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-    // Sync and playback are independent state machines. In V7 a beat can stay in
-    // sync_state=uploading until the ONE final batch INDEX commit even though its
-    // MASTER is already durable and Download Cooking has made it playable. Do not
-    // hold an already-ready beat hostage to the rest of the batch. cloud_status
-    // (UPLOADING / PLAYBACK_PREPARING) remains the authoritative readiness gate.
-    const syncStillBlocksPlayback =
-      runtime.sync_state === "pending_upload" ||
-      runtime.sync_state === "deleting" ||
-      (runtime.sync_state === "uploading" && !beat.telegram_file_id);
-    if (syncStillBlocksPlayback || runtime.playback_state === "playback_preparing") {
-      void downloadCookingDiagnosticEvent(
-        "PLAY_BLOCKED_RUNTIME_STATE",
-        beat.id,
-        beat.name,
-        `${runtime.sync_state}/${runtime.playback_state}/master=${beat.telegram_file_id ? 1 : 0}`
-      ).catch(() => {});
-      return;
-    }
-
-    const startingPlaybackSession = audio.playingId !== beat.id || runtime.playback_state === "idle" || runtime.playback_state === "error";
-    if (startingPlaybackSession) {
-      if (audio.playingId && audio.playingId !== beat.id) transitionRuntime(audio.playingId, { type: "PLAYBACK_IDLE" });
-      transitionRuntime(beat.id, { type: "PLAYBACK_PREPARING" }, beat);
-    }
-
-    const clickedAt = performance.now();
-    void downloadCookingDiagnosticEvent("PLAY_CLICK", beat.id, beat.name, "").catch(() => {});
-
-    // FAST PATH: a visible Cloud beat already has a localhost playback URL.
-    // Set audio.src immediately. The localhost request itself promotes the beat
-    // to HOT inside Rust, so no invoke/filesystem/network work is needed first.
-    if (beat.telegram_file_id) {
-      const cooked = cookingPlaybackUrlRef.current.get(beat.id);
-      if (cooked && cooked.telegramFileId === beat.telegram_file_id) {
-        void downloadCookingDiagnosticEvent("PLAY_FAST_PATH", beat.id, beat.name, `prepare_ms=${(performance.now() - clickedAt).toFixed(1)}`).catch(() => {});
-        play(beat.id, [cooked.url]);
-        return;
-      }
-    }
-
-    // Fallback for a beat that was clicked before it ever became WARM, or for
-    // local/pre-cloud audio. This path preserves the existing safety behavior.
-    const playbackNeedsCloudDownload = Boolean(beat.telegram_file_id && !beat.offline_available);
-    let playbackOwnsDownloadState = false;
-    if (playbackNeedsCloudDownload) {
-      const downloadRuntime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-      if (downloadRuntime.download_state !== "downloading") {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_STARTED" }, beat);
-        playbackOwnsDownloadState = true;
-      }
-    }
-    try {
-      const ready = await prepareBeatForPlayback(beat);
-      void downloadCookingDiagnosticEvent("PLAY_PREPARED", beat.id, beat.name, `prepare_ms=${(performance.now() - clickedAt).toFixed(1)}`).catch(() => {});
-      if (ready.telegram_file_id && ready.playback_path) {
-        cookingPlaybackUrlRef.current.set(ready.id, { telegramFileId: ready.telegram_file_id, url: ready.playback_path });
-      }
-      // `ready.playback_path` may point at BeatGaler's private cloud cache. Do
-      // not copy that transient path into the library state/localStorage.
-      if (ready.cloud_status !== beat.cloud_status) {
-        setBeats(bs => bs.map(b => b.id === ready.id ? { ...b, cloud_status: ready.cloud_status } : b));
-      }
-      // Once a Cloud MASTER exists, it is the ONLY playback source. Do not
-      // silently fall back to an old local MP3/WAV if the cloud file is missing.
-      const playbackSources = ready.telegram_file_id
-        ? [ready.playback_path]
-        : [ready.playback_path, ready.mp3_path, ready.wav_path ?? ""];
-      if (playbackOwnsDownloadState) {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_SUCCEEDED" }, ready);
-      }
-      play(ready.id, playbackSources);
-    } catch (e: any) {
-      const message = sanitizeUserVisibleText(String(e?.message || e), "Cloud audio unavailable.");
-      if (playbackOwnsDownloadState) {
-        transitionRuntime(beat.id, { type: "DOWNLOAD_FAILED", code: "PLAYBACK_DOWNLOAD_FAILED", message, retryable: true }, beat);
-      }
-      if (startingPlaybackSession) {
-        transitionRuntime(beat.id, { type: "PLAYBACK_FAILED", code: "PLAYBACK_PREPARE_FAILED", message, retryable: true }, beat);
-      }
-      await appAlert({
-        title: "Beat unavailable",
-        message,
-        danger: true,
-      });
-    }
-  }, [audio.playingId, play, transitionRuntime]);
 
   const handleUpload = useCallback((beat: Beat) => {
     if (rejectOfflineMutation("Uploading to YouTube")) return;
@@ -2550,8 +2224,7 @@ function BeatGalerApp() {
     await logoutBeatGalerAccount().catch(() => {});
     releaseFile();
     progressiveRevealRunRef.current += 1;
-    cookingPlaybackUrlRef.current.clear();
-    cookingWarmPromisesRef.current.clear();
+    clearPlaybackPreparation();
     clearArtworkHydration();
     setRevealedBeatIds(new Set());
     setCloudSessionVerified(false);
@@ -2653,8 +2326,7 @@ function BeatGalerApp() {
         // before deleting the package or the next Play would reuse a dead local
         // file and incorrectly report the Cloud MASTER as unavailable.
         if (audio.playingId === beat.id) releaseFile();
-        cookingPlaybackUrlRef.current.delete(beat.id);
-        cookingWarmPromisesRef.current.delete(beat.id);
+        invalidatePlaybackPreparation(beat.id);
 
         await removeBeatOfflineAvailability(beat.id);
         transitionRuntime(beat.id, { type: "SET_OFFLINE_AVAILABLE", available: false }, beat);
