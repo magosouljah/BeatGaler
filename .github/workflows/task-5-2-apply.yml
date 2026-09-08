@@ -1,5 +1,6 @@
 name: Task 5.2 Apply
 
+# Retry after adapting tests to the extracted ownership.
 on:
   push:
     branches:
