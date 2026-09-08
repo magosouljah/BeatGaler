@@ -1953,3 +1953,78 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 6.4
+
+```
+Tarea: 6.4 — Separar la cola de uploads
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base:
+- Rama: v0.9.0-test-noche
+- SHA inicial: 0ef4255d528e726dd278ba7389575f6d260fe333
+- SHA de implementación validada: f9b7029a807966837c39e0844dac03c063024ce3
+- Última tarea verificada: 6.3 — Separar el proceso de subida de un beat.
+
+Cambio realizado:
+- Se extrajo de App.tsx la cola de uploads a src/features/cloud/useCloudUploadQueue.ts.
+- El hook es dueño de cola Desktop, IDs activos, errores por beat, retry, timers de finalización y Reload diferido.
+- Desktop conserva FIFO/secuencialidad y cada beat sigue pasando por runDesktopBeatUploadPipeline de 6.3.
+- Web conserva platform.cloudData.commitImportedBeat como ruta separada.
+- Review/import siguen en App.tsx; la cola solo consulta dos conexiones pequeñas de lectura para proteger staging.
+- Reload delega el diferimiento al hook y el evento existente se dispara solo cuando no queda trabajo de upload activo o en cola.
+
+Adaptación de pruebas:
+- Se agregó appCloudUploadQueueExtraction.test.ts para ownership, orden, Web/Desktop, staging, retry y Reload.
+- appMigrationCharacterization.test.ts, issue97RuntimeWebFollowup.test.ts y run-regressions.mjs siguen al owner real después de la extracción.
+- Los fallos iniciales de integration/regressions fueron clasificados como pruebas/guardas estáticas acopladas a App.tsx; no requirieron cambiar la lógica de producción extraída.
+
+Archivos afectados:
+- src/App.tsx
+- src/features/cloud/useCloudUploadQueue.ts
+- tests/integration/appCloudUploadQueueExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- tests/integration/issue97RuntimeWebFollowup.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+- tooling temporal .github/task-6-4*.py y workflows task-6-4-*.yml — eliminado al cierre.
+
+Comprobaciones ejecutadas:
+- Task 6.4 Apply / run 34275548952 / attempt 3: matriz de implementación completa PASS antes de publicar f9b7029a807966837c39e0844dac03c063024ce3.
+- npm ci: PASS.
+- git diff --check: PASS.
+- npm run test:typecheck: PASS.
+- npm run test:unit:ts: PASS.
+- npm run test:component:dom: PASS.
+- npm run test:integration: PASS.
+- npm run test:regressions: PASS.
+- npm run build:web: PASS.
+- npm run build: PASS.
+- Task 6.4 Close / run 34283423653: repite la misma matriz después de eliminar todo el tooling temporal y escribir roadmap/registro.
+
+Comprobaciones no ejecutadas:
+- Prueba manual Desktop física: no requerida para esta extracción estructural; la matriz automatizada cubre los contratos modificados.
+- E2E completos ajenos al alcance de 6.4: no ejecutados.
+
+Prueba manual:
+- No requerida.
+
+Pendientes / fuera de alcance:
+- 7.1 — Separar Review y sus acciones básicas.
+- Cuando Review tenga owner propio, sustituir las conexiones temporales isReviewActive / hasProtectedStaging sin perder protección de staging.
+
+Riesgos previos relevantes:
+- Se conserva la frontera durable del pipeline 6.3.
+
+Herramientas temporales restantes:
+- Ninguna al cierre.
+
+Veredicto:
+- Terminada, sujeto a PASS de la revalidación de cierre del run 34283423653.
+
+Siguiente tarea:
+- 7.1 — Separar Review y sus acciones básicas. No iniciada.
+```

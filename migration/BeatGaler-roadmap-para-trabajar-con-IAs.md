@@ -346,7 +346,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** retry respeta archivos ya subidos y un fallo de reproducción posterior no elimina una subida durable.
     
 
-### [ ] 6.4 — Separar la cola de uploads
+### [x] 6.4 — Separar la cola de uploads
 
 - **Hacer:** extraer cola, IDs activos, reintentos y finalización; conectar el proceso de 6.3 y la ruta web existente.
     
