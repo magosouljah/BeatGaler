@@ -27,7 +27,9 @@ jobs:
           test "$(git rev-parse 3b437aee8454b392e832b8bce65485be731e045b^{commit})" = "3b437aee8454b392e832b8bce65485be731e045b"
 
       - name: Close task 5.4 documentation
-        run: python3 .github/task-5-4-close.py
+        run: |
+          python3 .github/task-5-4-close.py
+          python3 .github/task-5-4-close-fix.py
 
       - name: Verify closure diff
         run: |
@@ -38,10 +40,10 @@ jobs:
 
       - name: Commit closure and remove temporary tooling
         run: |
-          rm .github/workflows/task-5-4-close.yml .github/task-5-4-close.py
+          rm .github/workflows/task-5-4-close.yml .github/task-5-4-close.py .github/task-5-4-close-fix.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md .github/workflows/task-5-4-close.yml .github/task-5-4-close.py
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md .github/workflows/task-5-4-close.yml .github/task-5-4-close.py .github/task-5-4-close-fix.py
           git diff --cached --check
           git commit -m "docs(migration): close task 5.4"
           test "$(git branch --show-current)" = "v0.9.0-test-noche"
