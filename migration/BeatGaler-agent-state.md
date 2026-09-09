@@ -4,40 +4,41 @@
 
 - Fecha de ejecución: 2026-09-09
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `9.4 — Separar reconexión y eventos cloud`
+- Tarea trabajada: `9.5 — Separar la aparición de tarjetas`
 - Estado: `Terminada`
-- Última tarea terminada: `9.4 — Separar reconexión y eventos cloud`
+- Última tarea terminada: `9.5 — Separar la aparición de tarjetas`
 
 ## Base de esta ejecución
 
-- SHA inicial: `c63684fd296a21e7d2b2387e5549e103e112f7a7`
-- SHA de implementación validada: `41961ce716911b0044cecffb1b4ad34e94a05f2a`
-- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `cf0c19024cc4459c7d57061c797fac4669debb49`
-- Run de implementación verde: `34326576043` — `Temporary Task 9.4 Retry 2`.
-- Run final de revalidación: `34327027988` — `Temporary Task 9.4 Close`.
-- Artifact final: `migration-check-logs-task-9-4-close-34327027988`.
+- SHA inicial: `aa2f88cf7ea06a0a84dfb13d5f172c6bd6ba3f2b`
+- SHA de implementación validada: `39e6663fd6f48eaeb76723894e700347d0e98665`
 - El SHA final real de la ronda se relee desde GitHub después de esta escritura y no se autorreferencia aquí.
 
 ## Resultado verificado
 
-- `src/features/session/useConnectivity.ts` posee listeners online/offline, recuperación autoritativa, backoff y reconciliación de Trash offline.
-- `src/features/cloud/useCloudLibraryEvents.ts` posee ticket SSE, EventSource, eventos ready/library_changed/telegram_connected, in-flight guard, cleanup y reconexión con ticket fresco.
-- Startup, Reload y SSE siguen siendo flujos separados.
-- SSE verifica autoridad antes de hidratar y no introduce rutas de commit/upload/sync.
-- No quedan listeners online/offline ni EventSource propios de 9.4 dentro de `App.tsx`; App compone ambos owners.
-- Typecheck, unit TS, component DOM, integración, regresiones y builds Web/Desktop pasaron sobre el árbol ejecutable correspondiente a `41961ce716911b0044cecffb1b4ad34e94a05f2a`.
+- `src/features/startup/useLibraryReveal.ts` posee el revelado cache-first, el gate de autoridad y el revelado progresivo de artwork.
+- `src/features/startup/startupLoader.ts` posee la retirada del indicador de arranque.
+- `App.tsx` compone `useLibraryReveal` y conserva únicamente las conexiones necesarias con carga, sesión, artwork y presentación.
+- La aparición de tarjetas sigue gobernada por título/artwork y no espera preparación de audio.
+- El arranque offline sigue validando `loadOfflineLibrary()` antes de exponer la biblioteca.
+- Las guardas estructurales que antes buscaban esta responsabilidad dentro de `App.tsx` ahora verifican al dueño extraído.
+- Pasaron la caracterización enfocada de 9.5, typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop frontend sobre el árbol ejecutable de `39e6663fd6f48eaeb76723894e700347d0e98665`.
+- `e2e:core` no existe y no es un gate del plan. Los E2E adicionales están reservados por el plan para hitos de import/drop y para el cierre global.
 
 ## Pendientes concretos
 
-- `9.5 — Separar la aparición de tarjetas`.
+- `10.1 — Extraer la estructura visual restante`.
+- `10.2 — Dejar la composición mínima`.
+- `10.3 — Retirar restos y conexiones temporales`.
+- `10.4 — Comprobar el resultado completo`.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 9.4.
-- Prueba física Desktop/Web no ejecutada ni inventada; no quedó como bloqueo por la cobertura automatizada de listeners, estados, autoridad, cleanup y builds.
+- Ninguna necesaria para cerrar 9.5.
+- Los E2E y la validación amplia de cierre corresponden a 10.4; no se adelantaron ni se inventaron en esta tarea.
 
 ## Siguiente tarea
 
-- `9.5 — Separar la aparición de tarjetas`
+- `10.1 — Extraer la estructura visual restante`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

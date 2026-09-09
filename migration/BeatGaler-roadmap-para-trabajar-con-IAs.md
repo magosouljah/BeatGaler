@@ -490,7 +490,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** desconectar/reconectar y recibir cambios remotos no duplica listeners ni modifica las reglas de commits.
     
 
-### [ ] 9.5 — Separar la aparición de tarjetas
+### [x] 9.5 — Separar la aparición de tarjetas
 
 - **Hacer:** extraer revelado progresivo y retirada del indicador de arranque.
     

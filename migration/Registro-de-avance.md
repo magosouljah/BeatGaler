@@ -3181,3 +3181,16 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+## 2026-09-09 — Tarea 9.5 — Separar la aparición de tarjetas
+
+- **Estado:** Terminada.
+- **SHA inicial de la ronda:** `aa2f88cf7ea06a0a84dfb13d5f172c6bd6ba3f2b`.
+- **SHA de implementación validada:** `39e6663fd6f48eaeb76723894e700347d0e98665`.
+- **Cambio realizado:** se extrajeron el revelado cache-first/progresivo y la retirada del loader desde `App.tsx` hacia `src/features/startup/useLibraryReveal.ts` y `startupLoader.ts`, conservando el gate de autoridad, el orden del arranque offline y la independencia entre aparición de tarjetas y preparación de audio.
+- **Pruebas adaptadas:** las guardas de `startupRevealArchitecture` e `issue97RuntimeWebFollowup` verifican ahora al dueño real de la responsabilidad; se añadió caracterización enfocada `appLibraryRevealExtraction.test.ts`.
+- **Comprobaciones:** caracterización enfocada 9.5, `npm run test:typecheck`, `npm run test:unit:ts`, `npm run test:component:dom`, `npm run test:integration`, `npm run test:regressions`, `npm run build:web` y `npm run build`, todas verdes antes del commit de implementación.
+- **E2E:** el intento previo `npm run e2e:core` era inválido porque ese script no existe. El plan no exige un E2E adicional para 9.5; los E2E ampliados corresponden a import/drop y al cierre.
+- **Limpieza:** se retiraron workflows, helper y logs temporales usados para diagnosticar 9.5.
+- **Siguiente tarea:** `10.1 — Extraer la estructura visual restante`.
+
