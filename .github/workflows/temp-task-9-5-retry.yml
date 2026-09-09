@@ -1,4 +1,4 @@
-name: Temporary Task 9.5 Retry
+name: Temporary Task 9.5 Diagnostic
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  retry-and-validate:
+  diagnose-component-dom:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +21,13 @@ jobs:
         shell: bash
         run: |
           parent="$(git rev-parse HEAD^)"
-          test "$parent" = "25e8c326ff95d125ddb758d77d5da1258c8e2bbf" || { echo "Unexpected base: $parent"; exit 1; }
+          test "$parent" = "7d740c9a81450c046875dd54ec2a99e7981c35c6" || { echo "Unexpected base: $parent"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
           cache: npm
       - run: npm ci
-      - name: Reapply extraction with loader import fix
+      - name: Reapply task 9.5 candidate
         shell: bash
         run: |
           python3 <<'PY'
@@ -40,7 +40,6 @@ jobs:
               lines.append(line[10:] if line.startswith('          ') else line)
           code = '\n'.join(lines) + '\n'
           exec(compile(code, '<task-9-5-apply>', 'exec'), {'__name__': '__main__'})
-
           app_path = Path('src/App.tsx')
           app = app_path.read_text()
           anchor = 'import { useLibraryReveal } from "./features/startup/useLibraryReveal";\n'
@@ -48,21 +47,20 @@ jobs:
           app = app.replace(anchor, anchor + 'import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";\n', 1)
           app_path.write_text(app)
           PY
-      - name: Focused 9.5 tests
-        run: npx vitest run tests/integration/appLibraryRevealExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts --environment jsdom
-      - run: npm run test:typecheck
-      - run: npm run test:unit:ts
-      - run: npm run test:component:dom
-      - run: npm run test:integration
-      - run: npm run test:regressions
-      - run: npm run build:web
-      - run: npm run build
-      - name: Commit validated implementation and remove temporary workflows
+      - name: Capture component DOM failure
         shell: bash
         run: |
-          rm .github/workflows/temp-task-9-5-apply.yml .github/workflows/temp-task-9-5-retry.yml
+          set +e
+          npm run test:component:dom > task-9-5-component.log 2>&1
+          code=$?
+          echo "EXIT_CODE=$code" >> task-9-5-component.log
+          cat task-9-5-component.log
+          exit 0
+      - name: Publish diagnostic log on test branch only
+        shell: bash
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.tsx src/features/startup/useLibraryReveal.ts src/features/startup/startupLoader.ts tests/integration/appLibraryRevealExtraction.test.ts scripts/run-regressions.mjs .github/workflows/temp-task-9-5-apply.yml .github/workflows/temp-task-9-5-retry.yml
-          git commit -m "refactor(startup): extract library reveal"
+          git add task-9-5-component.log
+          git commit -m "chore(migration): capture task 9.5 component failure"
           git push origin HEAD:v0.9.0-test-noche
