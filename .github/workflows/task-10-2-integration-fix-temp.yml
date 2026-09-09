@@ -5,6 +5,7 @@ on:
     branches: [v0.9.0-test-noche]
     paths:
       - .github/workflows/task-10-2-integration-fix-temp.yml
+      - scripts/task-10-2-refactor-temp.cjs
 
 permissions:
   contents: write
