@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const app = readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
+const app = readFileSync(resolve(process.cwd(), "src/features/edit/useBeatEditing.ts"), "utf8").replaceAll("../", "./");
 const drawerPersistence = readFileSync(resolve(process.cwd(), "src/features/edit/useDrawerCloudPersistence.ts"), "utf8");
 const startupBootstrap = readFileSync(resolve(process.cwd(), "src/features/startup/useStartupBootstrap.ts"), "utf8");
 
@@ -14,14 +14,14 @@ function sourceSection(source: string, startMarker: string, endMarker: string, l
 }
 
 function section(startMarker: string, endMarker: string): string {
-  return sourceSection(app, startMarker, endMarker, "App.tsx");
+  return sourceSection(app, startMarker, endMarker, "useBeatEditing.ts");
 }
 
 describe("Issue #97 Web routing contracts", () => {
   it("routes browser artwork through the browser-editing capability before any Desktop-only metadata path", () => {
     const artwork = section(
       "const handleDropArtwork = useCallback",
-      "const {\n    runBeatCloudUpdate,",
+      "  const applyBulkUpdate = useCallback",
     );
     const webBranch = artwork.indexOf("if (platform.capabilities.browserCloudEditing)");
     const webCommit = artwork.indexOf("platform.editor.commit(beat, updated, {})");

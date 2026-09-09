@@ -61,6 +61,9 @@ try {
     readFileSync(path.join(root, "src", "features", "startup", "useCloudLibraryRecovery.ts"), "utf8"),
     readFileSync(path.join(root, "src", "features", "cloud", "useCloudBeatTransfer.ts"), "utf8"),
     readFileSync(path.join(root, "src", "features", "import", "useImportEntry.ts"), "utf8"),
+    readFileSync(path.join(root, "src", "features", "edit", "useBeatEditing.ts"), "utf8"),
+    readFileSync(path.join(root, "src", "features", "dragdrop", "useBeatFileDropRouting.ts"), "utf8"),
+    readFileSync(path.join(root, "src", "features", "cloud", "beatCloudUpdateBusy.ts"), "utf8"),
   ].join("\n").replaceAll("../", "./");
   const app = `${appEntry}\n${composition}\n${rootDomainOwners}`;
   const appShell = readFileSync(path.join(root, "src", "app", "AppShell.tsx"), "utf8");

@@ -8,7 +8,8 @@ const fail = message => { throw new Error(`Phase 9C/9D regression: ${message}`);
 
 const appEntry = read("src/App.tsx");
 const composition = read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
-const app = `${appEntry}\n${composition}`;
+const beatFileDropRouting = read("src/features/dragdrop/useBeatFileDropRouting.ts").replaceAll("../", "./");
+const app = `${appEntry}\n${composition}\n${beatFileDropRouting}`;
 const nativeDropOwner = read("src/features/dragdrop/useNativeLibraryDrop.ts");
 const assetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");
 const projects = read("src/features/projects/useBeatProjects.ts");

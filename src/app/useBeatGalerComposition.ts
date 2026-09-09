@@ -75,21 +75,14 @@ import { useMutationAvailability } from "../features/session/useMutationAvailabi
 import { useCloudLibraryRecovery } from "../features/startup/useCloudLibraryRecovery";
 import { useCloudBeatTransfer } from "../features/cloud/useCloudBeatTransfer";
 import { useImportEntry } from "../features/import/useImportEntry";
+import { useBeatEditing } from "../features/edit/useBeatEditing";
+import { useBeatFileDropRouting } from "../features/dragdrop/useBeatFileDropRouting";
+import { isBeatCloudUpdateBusy, setBeatCloudUpdateBusy } from "../features/cloud/beatCloudUpdateBusy";
 
 // Intentionally isolated: if real-world timings prove the skeleton unnecessary,
 // flipping/removing this one constant deletes the visual layer without touching
 // the staged Review architecture underneath it.
 const REVIEW_SKELETON_ENABLED = true;
-
-const beatCloudUpdateBusyIds = new Set<string>();
-
-function setBeatCloudUpdateBusy(beatId: string, active: boolean, success = false) {
-  if (active) beatCloudUpdateBusyIds.add(beatId);
-  else beatCloudUpdateBusyIds.delete(beatId);
-  window.dispatchEvent(new CustomEvent("beatgaler:beat-cloud-busy", {
-    detail: { beatId, active, success }
-  }));
-}
 
 function formatCloudBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -263,7 +256,7 @@ export function useBeatGalerComposition() {
     setBeats,
     cloudSessionVerified,
     connectionState,
-    isBeatCloudUpdateBusy: beatId => beatCloudUpdateBusyIds.has(beatId),
+    isBeatCloudUpdateBusy,
   });
   const { offlineBusyIds, handleToggleOffline } = useOfflineAvailability({
     connectionState,
@@ -435,12 +428,6 @@ useCloudLibraryEvents({
     transitionRuntime,
     setBeats,
   });
-
-  const handleEditBulk = useCallback(() => {
-    if (rejectOfflineMutation("Editing metadata")) return;
-    const firstSelected = beats.find(b => selectedIds.has(b.id));
-    if (firstSelected) setDrawer({ beat: firstSelected, mode: "edit" });
-  }, [beats, selectedIds, rejectOfflineMutation]);
 
   const { deleteBeat, handleRemoveBulk, handleBeatRestored } = useTrashActions({
     beats,
@@ -646,84 +633,22 @@ const {
     clearSelection,
   });
 
-  const updateBeat = useCallback((updated: Beat) => {
-    if (updated.telegram_file_id && connectionState === "online") {
-      const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);
-      if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);
-    }
-    setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
-    if (drawer?.beat.id === updated.id) setDrawer(d => d ? { ...d, beat: updated } : null);
-  }, [connectionState, drawer, transitionRuntime]);
-
-
-
-  const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {
-    if (rejectOfflineMutation("Changing artwork")) return;
-
-    const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };
-
-    if (platform.capabilities.browserCloudEditing) {
-      // Publish the browser-decoded artwork immediately, then commit it through
-      // the Web editor/Direct transport. No Tauri metadata path participates.
-      updateBeat(updated);
-      transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);
-      try {
-        const committed = await platform.editor.commit(beat, updated, {});
-        setBeats(current => {
-          const next = current.map(item => item.id === committed.id ? committed : item);
-          beatsLatestRef.current = next;
-          return next;
-        });
-        setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);
-        transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);
-      } catch (error) {
-        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-        transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);
-        throw error;
-      }
-      return;
-    }
-
-    // Desktop keeps its existing native metadata/artwork transaction.
-    await saveBeatMeta({
-      mp3_path: beat.mp3_path,
-      wav_path: beat.wav_path,
-      bpm: beat.bpm,
-      key: beat.key,
-      tags: beat.tags,
-      rating: beat.rating,
-      image_base64: imageBase64,
-      update_filename: false,
-    });
-
-    updateBeat(updated);
-
-    if (updated.telegram_file_id && connectionState === "online") {
-      const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);
-      if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);
-      transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);
-      try {
-        await syncBeatMetadataToTelegram(updated);
-        const indexSnapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);
-        await libraryStateManager.commitSnapshot(indexSnapshot, "upload-batch");
-        if (cloudLibraryTimerRef.current) {
-          window.clearTimeout(cloudLibraryTimerRef.current);
-          cloudLibraryTimerRef.current = null;
-        }
-        cloudLibrarySnapshotRef.current = indexSnapshot
-          .filter(item => !!item.telegram_file_id)
-          .map(cloudBeatFingerprint)
-          .join("\u001c");
-        cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));
-        transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);
-      } catch (error) {
-        const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-        transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);
-        throw error;
-      }
-    }
-  }, [updateBeat, rejectOfflineMutation, connectionState, transitionRuntime]);
-
+  const { handleEditBulk, updateBeat, handleDropArtwork, applyBulkUpdate } = useBeatEditing({
+    beats,
+    selectedIds,
+    clearSelection,
+    drawer,
+    setDrawer,
+    rejectOfflineMutation,
+    connectionState,
+    beatRuntimeStatesRef,
+    transitionRuntime,
+    setBeats,
+    beatsLatestRef,
+    cloudLibraryTimerRef,
+    cloudLibrarySnapshotRef,
+    cloudMetaSnapshotRef,
+  });
 
   const {
     runBeatCloudUpdate,
@@ -766,40 +691,14 @@ const {
     setBeatCloudUpdateBusy,
   });
 
-  const handleDroppedBeatFileRole = useCallback(async (role: DroppedBeatFileRole) => {
-    if (!beatFileDrop) return;
-    const { beat, filePath } = beatFileDrop;
-    const ext = extensionFromPath(filePath);
-
-    if (role === "loop" || role === "stems") return;
-
-    if (role === "main") {
-      if (ext !== "mp3") return;
-      startMasterAssetUpdate(beat, filePath);
-      return;
-    }
-
-    if (role === "wav") {
-      if (ext !== "wav") return;
-      startWavAssetUpdate(beat, filePath);
-      return;
-    }
-
-    if (role === "projectFolder") {
-      const existing = await hasStoredProject(beat).catch(() => false);
-      if (!existing) {
-        await cleanupStagedDropPaths([filePath]).catch(() => {});
-        setBeatFileDrop(null);
-        await appAlert({
-          title: "Project file required",
-          message: "Add a .flp, .als, .logicx, .ptx/.ptf file or a valid PROJECT ZIP first. Then folders can be added to that PROJECT.zip using their original folder name.",
-        });
-        return;
-      }
-      startProjectAssetUpdate(beat, filePath, "projectFolder");
-    }
-  }, [beatFileDrop, hasStoredProject, startMasterAssetUpdate, startProjectAssetUpdate, startWavAssetUpdate]);
-
+  const { handleDroppedBeatFileRole } = useBeatFileDropRouting({
+    beatFileDrop,
+    setBeatFileDrop,
+    hasStoredProject,
+    startMasterAssetUpdate,
+    startWavAssetUpdate,
+    startProjectAssetUpdate,
+  });
 
   useHtmlLibraryDrop({
     nativeDropAvailable: isTauriAvailable,
@@ -830,34 +729,6 @@ const {
     handleAutoProjectDrop,
     importDroppedPaths,
   });
-
-  const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {
-    setBeats(bs => bs.map(b => {
-      if (!selectedIds.has(b.id)) return b;
-      if (!updates.tags) return { ...b, ...updates };
-
-      const normalizedInput = Array.from(new Set(
-        updates.tags.map(t => t.trim().toLowerCase()).filter(Boolean)
-      ));
-
-      if (options?.tagsMode === "replace") {
-        return { ...b, ...updates, tags: normalizedInput };
-      }
-
-      if (options?.tagsMode === "remove") {
-        const removeSet = new Set(normalizedInput);
-        const remainingTags = b.tags.filter(tag => !removeSet.has(tag.trim().toLowerCase()));
-        return { ...b, ...updates, tags: remainingTags };
-      }
-
-      const mergedTags = Array.from(new Set(
-        [...b.tags, ...normalizedInput].map(t => t.trim().toLowerCase()).filter(Boolean)
-      ));
-      return { ...b, ...updates, tags: mergedTags };
-    }));
-    clearSelection();
-  }, [selectedIds]);
-
 
   const tagColors = useTagColors();
 

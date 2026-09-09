@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-const appSource = readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
+const appSource = [
+  readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/features/edit/useBeatEditing.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/features/dragdrop/useBeatFileDropRouting.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/features/cloud/beatCloudUpdateBusy.ts"), "utf8"),
+].join("\n").replaceAll("../", "./");
 const controllerSource = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
 const offlineSource = readFileSync(resolve(process.cwd(), "src/features/offline/useOfflineAvailability.ts"), "utf8");
 describe("App playback extraction", () => {

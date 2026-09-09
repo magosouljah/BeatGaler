@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-const app = readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
+const app = [
+  readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/features/edit/useBeatEditing.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/features/dragdrop/useBeatFileDropRouting.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/features/cloud/beatCloudUpdateBusy.ts"), "utf8"),
+].join("\n").replaceAll("../", "./");
 const projects = readFileSync(resolve(process.cwd(), "src/features/projects/useBeatProjects.ts"), "utf8");
 describe("Beat project extraction", () => {
   it("moves project ownership outside App", () => { expect(app).toContain("useBeatProjects({"); expect(app).not.toContain("const handleOpenProject = useCallback"); expect(app).not.toContain("const startProjectAssetUpdate = useCallback"); expect(projects).toContain("const handleOpenProject = useCallback"); expect(projects).toContain("const startProjectAssetUpdate = useCallback"); });
