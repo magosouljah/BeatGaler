@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const playbackController = readFileSync(resolve(process.cwd(), "src/features/playback/usePlaybackController.ts"), "utf8");
 const interruptedUploadJournal = readFileSync(resolve(process.cwd(), "src/features/cloud/interruptedUploadJournal.ts"), "utf8");
 const uploadErrorDetails = readFileSync(resolve(process.cwd(), "src/features/cloud/uploadErrorDetails.ts"), "utf8");
@@ -124,7 +125,7 @@ describe("App migration characterization contracts", () => {
 
     expect(app).toContain("} = useImportSession();");
     expect(app).toContain("} = useImportReview({");
-    expect(app).toContain("<ImportReviewHost");
+    expect(appShell).toContain("<ImportReviewHost");
     expect(importReviewHost).toContain("onSkipAll={onCancel}");
     expect(importReviewHost).toContain("onSaved={onSaved}");
     expectOrdered(importSaveAll, [

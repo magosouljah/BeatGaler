@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const reload = readFileSync(
   resolve(process.cwd(), "src/features/library/useLibraryReload.ts"),
   "utf8"
@@ -71,10 +72,10 @@ describe("task 9.2 library Reload extraction", () => {
   it("keeps the existing refresh feedback and manual button behavior", () => {
     expect(reload).toContain("const [libraryRefreshing, setLibraryRefreshing] = useState(false)");
     expect(reload).toContain("if (elapsed < 320)");
-    expect(app).toContain("disabled={loading || libraryRefreshing}");
-    expect(app).toContain('animation: libraryRefreshing ? "beatgaler-refresh-spin .62s linear infinite" : "none"');
-    expect(app).toContain("clearUploadPreviewCache(); void reloadLibrary();");
-    expect(app).toContain(
+    expect(appShell).toContain("disabled={loading || libraryRefreshing}");
+    expect(appShell).toContain('animation: libraryRefreshing ? "beatgaler-refresh-spin .62s linear infinite" : "none"');
+    expect(appShell).toContain("clearUploadPreviewCache(); void reloadLibrary();");
+    expect(appShell).toContain(
       'title={deferredLibraryReloadRef.current ? "Reload queued until uploads finish" : "Reload Library"}'
     );
   });

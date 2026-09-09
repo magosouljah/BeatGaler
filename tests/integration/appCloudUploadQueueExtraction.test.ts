@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const queue = readFileSync(resolve(process.cwd(), "src/features/cloud/useCloudUploadQueue.ts"), "utf8");
 const reload = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryReload.ts"), "utf8");
 
@@ -65,6 +66,6 @@ describe("task 6.4 cloud upload queue extraction", () => {
 
   it("keeps failed-upload retry connected to the checkpoint-aware queue", () => {
     expect(queue).toContain('cloudifyImportedBeats([{ ...beat, cloud_status: "UPLOADING" }])');
-    expect(app).toContain("onRetryUpload={retryBackgroundUpload}");
+    expect(appShell).toContain("onRetryUpload={retryBackgroundUpload}");
   });
 });

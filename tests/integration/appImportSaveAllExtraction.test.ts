@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const discovery = readFileSync(resolve(process.cwd(), "src/features/import/useImportDiscovery.ts"), "utf8");
 const saveAll = readFileSync(resolve(process.cwd(), "src/features/import/useImportSaveAll.ts"), "utf8");
 const host = readFileSync(resolve(process.cwd(), "src/features/import/components/ImportReviewHost.tsx"), "utf8");
@@ -61,6 +62,6 @@ describe("task 7.3 Save All/conflict extraction", () => {
     expect(host).toContain("export function ImportResolutionHost");
     expect(host).toContain("<ImportAudioConflictsModal");
     expect(host).toContain("<ImportDecisionsModal");
-    expect(app).toContain("<ImportResolutionHost");
+    expect(appShell).toContain("<ImportResolutionHost");
   });
 });

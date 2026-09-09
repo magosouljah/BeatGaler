@@ -72,9 +72,9 @@ describe("Issue #97 production runtime follow-up", () => {
   });
 
   it("keeps visible cloud cards playable while authority is still checking", () => {
-    const app = source("src/App.tsx");
+    const appShell = source("src/app/AppShell.tsx");
     const card = source("src/components/BeatCard.tsx");
-    expect(app).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
+    expect(appShell).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
     expect(card).toContain("if (!playbackInteractive || playbackBlocked) {");
     expect(card).toContain("onPlay(beat);");
   });

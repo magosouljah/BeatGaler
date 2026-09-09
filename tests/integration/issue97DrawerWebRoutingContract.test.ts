@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const drawer = readFileSync(resolve(process.cwd(), "src/components/Drawer.tsx"), "utf8");
 
 describe("Issue #97 Drawer Web routing contracts", () => {
@@ -13,7 +14,7 @@ describe("Issue #97 Drawer Web routing contracts", () => {
 
   it("does not give the Web Drawer the Desktop cloud commit owner", () => {
     const marker = "onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}";
-    expect(app.split(marker).length - 1).toBe(2);
+    expect(appShell.split(marker).length - 1).toBe(2);
   });
 
   it("does not probe the Desktop cloud-file bridge when the browser-editing capability owns Drawer", () => {

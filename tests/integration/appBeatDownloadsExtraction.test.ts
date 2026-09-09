@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const downloads = readFileSync(resolve(process.cwd(), "src/features/downloads/useBeatDownloads.ts"), "utf8");
 const modal = readFileSync(resolve(process.cwd(), "src/features/downloads/components/CloudFilesModal.tsx"), "utf8");
 
@@ -43,7 +44,7 @@ describe("App beat download extraction", () => {
     expect(downloads).toContain("if (tracked.ownsRuntimeDownloadState)");
     expect(downloads).toContain('type: "DOWNLOAD_SUCCEEDED"');
     expect(downloads).toContain('type: "DOWNLOAD_FAILED"');
-    expect(app).toContain("onClose={closeCloudFiles}");
+    expect(appShell).toContain("onClose={closeCloudFiles}");
   });
 
   it("routes Web exports through the existing web downloads manager and treats picker cancellation as a no-op", () => {

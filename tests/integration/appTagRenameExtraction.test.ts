@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 
 const app = fs.readFileSync("src/App.tsx", "utf8");
+const appShell = fs.readFileSync("src/app/AppShell.tsx", "utf8");
 const hook = fs.readFileSync("src/features/tags/useTagRename.ts", "utf8");
 const dialog = fs.readFileSync("src/features/tags/components/TagRenameDialog.tsx", "utf8");
 
@@ -27,7 +28,7 @@ describe("App tag rename extraction", () => {
   });
 
   it("moves the dialog while preserving pre-run cancel, back, busy and error feedback", () => {
-    expect(app).toContain('<TagRenameDialog');
+    expect(appShell).toContain('<TagRenameDialog');
     expect(app).not.toContain('Rename tag globally</div>');
     expect(dialog).toContain('Rename tag globally');
     expect(dialog).toContain('onClick={onCancel}');

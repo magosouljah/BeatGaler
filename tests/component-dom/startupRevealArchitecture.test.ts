@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync("src/App.tsx", "utf8");
+const appShell = readFileSync("src/app/AppShell.tsx", "utf8");
 const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");
 const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
 const libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.ts", "utf8");
@@ -21,10 +22,10 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("reserves every filtered beat slot while revealing only artwork-ready cards", () => {
-    expect(app).toContain("<SortableContext items={filteredBeats.map((b) => b.id)}");
-    expect(app).toContain("visible={revealedBeatIds.has(beat.id)}");
-    expect(app).toContain('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}');
-    expect(app).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
+    expect(appShell).toContain("<SortableContext items={filteredBeats.map(");
+    expect(appShell).toContain("visible={revealedBeatIds.has(beat.id)}");
+    expect(appShell).toContain('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}');
+    expect(appShell).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
     expect(beatCard).toContain('visibility: visible ? "visible" : "hidden"');
     expect(beatCard).toContain('pointerEvents: visible ? "auto" : "none"');
     expect(beatCard).toContain("if (!visible || !playbackInteractive || !hasEnteredViewport || !beat.telegram_file_id) return;");
@@ -36,7 +37,7 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("renders Empty Gallery only after online authority is verified", () => {
-    expect(app).toContain('cloudSessionVerified && connectionState === "online" ? (');
+    expect(appShell).toContain('cloudSessionVerified && connectionState === "online" ? (');
   });
 
   it("keeps Web auth to one gate while preserving Desktop AccountGate", () => {

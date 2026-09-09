@@ -55,6 +55,7 @@ try {
   });
 
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+  const appShell = readFileSync(path.join(root, "src", "app", "AppShell.tsx"), "utf8");
   const customCursor = readFileSync(path.join(root, "src", "features", "session", "useCustomCursor.ts"), "utf8");
   const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");
   const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");
@@ -253,7 +254,7 @@ try {
   if (emptyTrashBlock[0].includes("confirm(")) fail("Beat Empty Trash reintroduced a blocking native confirmation dialog.");
   if (!emptyTrashBlock[0].includes("void (async () =>")) fail("Beat Empty Trash must enqueue/reconcile in background without blocking the click handler.");
   console.log("PASS remove/trash guard: names are human-readable; Empty Trash never blocks UI, retries transient Cloud enqueue, and permanent deletes cannot resurrect");
-  if (!app.includes('useTrashActions({') || !app.includes('onBeatRestored={handleBeatRestored}')) fail("App.tsx is no longer wired to the extracted Trash actions owner.");
+  if (!app.includes('useTrashActions({') || !appShell.includes('onBeatRestored={handleBeatRestored}')) fail("App/AppShell no longer compose the extracted Trash actions owner.");
   if (app.includes('const deleteBeat = useCallback') || app.includes('const handleRemoveBulk = useCallback') || app.includes('recordOfflineTrashIntent(') || app.includes('removeBeatFromLibrary(')) fail("App.tsx reclaimed Trash mutation ownership.");
   if (!trashActions.includes('const deleteBeat = useCallback') || !trashActions.includes('const handleRemoveBulk = useCallback') || !trashActions.includes('const handleBeatRestored = useCallback')) fail("useTrashActions lost delete, bulk delete, or restore ownership.");
   if (!trashActions.includes('libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash")') || !trashActions.includes('libraryStateManager.commitSnapshot(next, "bulk-remove")')) fail("Trash actions lost their explicit INDEX commit boundaries.");
@@ -356,9 +357,9 @@ try {
   if (!libraryReveal.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
   if (!startupBootstrap.includes('if (!status.reachable)') || !connectivity.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!libraryStateOwner.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
-  if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
+  if (!appShell.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
   if (!beatCard.includes('pointerEvents: visible ? "auto" : "none"')) fail("Visible cached cards lost the pointer path required for progressive playback.");
-if (!app.includes('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}')) fail("Cached cards lost the non-destructive playback gate while cloud authority is verifying.");
+if (!appShell.includes('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}')) fail("Cached cards lost the non-destructive playback gate while cloud authority is verifying.");
 if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (interactive && selectMode)') || !beatCard.includes('dragEnabled && interactive')) fail("Cached presentation can mutate before authority verification.");
   if (!libraryStateOwner.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");
   if (!startupBootstrap.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
@@ -402,7 +403,7 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (openProjectStart < 0 || openProjectEnd < 0) fail("Could not locate open_beat_project for Offline regression coverage.");
   const openProjectBlock = rustCommands.slice(openProjectStart, openProjectEnd);
   if (openProjectBlock.includes('if !settings.telegram_cloud_connected')) fail("Open Project reintroduced a hard online requirement even when a durable Offline PROJECT exists.");
-  if (!app.includes('beat.offline_available && (beat.has_flp || beat.has_als)')) fail("Offline PROJECT cards can lose Open Project merely because the cloud-project indicator has not refreshed.");
+  if (!appShell.includes('beat.offline_available && (beat.has_flp || beat.has_als)')) fail("Offline PROJECT cards can lose Open Project merely because the cloud-project indicator has not refreshed.");
   if (app.includes('rejectOfflineMutation("Downloading cloud files")')) fail("Available Offline exports are incorrectly blocked as an offline mutation.");
   if (!beatDownloadsForRuntime.includes('This beat was not made Available Offline. Reconnect to download its cloud files.')) fail("Offline Download must distinguish a protected local package from a cloud-only beat.");
   if (!rustCommands.includes('The incoming Offline BeatMeta is the authoritative LOCAL source map for')) fail("Export metadata resolution can discard durable Offline file paths again.");
