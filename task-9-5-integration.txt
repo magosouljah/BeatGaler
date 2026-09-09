@@ -1,0 +1,1851 @@
+
+> beat-galer@0.9.0-alpha.2 test:integration
+> vitest run tests/integration --environment jsdom
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90m/home/runner/work/BeatGaler/BeatGaler[39m
+
+ [32m✓[39m tests/integration/issue97PlaybackOptimization.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreloads the authority before reading the restored local library
+[22m[39m[library-tx] BEGIN kind=reload seq=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreloads the authority before reading the restored local library
+[22m[39m[library-tx] END kind=reload seq=1 ms=2
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mcoalesces concurrent authoritative reloads instead of queueing the same startup read twice
+[22m[39m[library-tx] BEGIN kind=reload seq=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mcoalesces concurrent authoritative reloads instead of queueing the same startup read twice
+[22m[39m[library-tx] END kind=reload seq=1 ms=2
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mcoalesces concurrent authoritative reloads instead of queueing the same startup read twice
+[22m[39m[library-tx] BEGIN kind=reload seq=2
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mcoalesces concurrent authoritative reloads instead of queueing the same startup read twice
+[22m[39m[library-tx] END kind=reload seq=2 ms=0
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mserializes competing commits so the second INDEX transaction cannot overtake the first
+[22m[39m[library-tx] BEGIN kind=commit seq=1
+[library-tx] COMMIT reason=first beats=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mserializes competing commits so the second INDEX transaction cannot overtake the first
+[22m[39m[library-tx] END kind=commit seq=1 ms=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mserializes competing commits so the second INDEX transaction cannot overtake the first
+[22m[39m[library-tx] BEGIN kind=commit seq=2
+[library-tx] COMMIT reason=second beats=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mserializes competing commits so the second INDEX transaction cannot overtake the first
+[22m[39m[library-tx] END kind=commit seq=2 ms=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mfreezes the commit candidate before waiting, including nested tag arrays
+[22m[39m[library-tx] BEGIN kind=commit seq=1
+[library-tx] COMMIT reason=freeze-test beats=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mfreezes the commit candidate before waiting, including nested tag arrays
+[22m[39m[library-tx] END kind=commit seq=1 ms=2
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreleases the transaction queue after a failed commit so later work can continue
+[22m[39m[library-tx] BEGIN kind=commit seq=1
+[library-tx] COMMIT reason=bad beats=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreleases the transaction queue after a failed commit so later work can continue
+[22m[39m[library-tx] END kind=commit seq=1 ms=0
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreleases the transaction queue after a failed commit so later work can continue
+[22m[39m[library-tx] BEGIN kind=commit seq=2
+[library-tx] COMMIT reason=good beats=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreleases the transaction queue after a failed commit so later work can continue
+[22m[39m[library-tx] END kind=commit seq=2 ms=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreturns defensive verified snapshots instead of exposing the stored authority candidate
+[22m[39m[library-tx] BEGIN kind=commit seq=1
+[library-tx] COMMIT reason=verified-copy beats=1
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2mLibraryStateManager ↔ platform integration[2m > [22m[2mreturns defensive verified snapshots instead of exposing the stored authority candidate
+[22m[39m[library-tx] END kind=commit seq=1 ms=0
+
+ [31m❯[39m tests/integration/issue97RuntimeWebFollowup.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 35[2mms[22m[39m
+   [32m✓[39m Issue #97 production runtime follow-up[2m > [22mreplaces a stale installation topic id with the vault-resolved topic after artwork upload[32m 10[2mms[22m[39m
+   [32m✓[39m Issue #97 production runtime follow-up[2m > [22mkeeps visible cloud cards playable while authority is still checking[32m 1[2mms[22m[39m
+   [32m✓[39m Issue #97 production runtime follow-up[2m > [22mreveals a remembered local cache before auth restore and singleflights the duplicated gate restore[32m 1[2mms[22m[39m
+   [32m✓[39m Issue #97 production runtime follow-up[2m > [22mreturns the first MSE URL before Direct stream admission and dispatches remembered Direct before React mount[32m 3[2mms[22m[39m
+   [32m✓[39m Issue #97 production runtime follow-up[2m > [22mresolves an existing beat topic by vault rather than installation[32m 1[2mms[22m[39m
+   [32m✓[39m Issue #97 production runtime follow-up[2m > [22mroutes browser drops through browser File owners, not Desktop path staging[32m 1[2mms[22m[39m
+[31m   [31m×[31m Issue #97 production runtime follow-up[2m > [22mdoes not let Web card warming queue native cooking ahead of Play[39m[32m 16[2mms[22m[39m
+[31m     → expected 'import React, { useState, useCallback…' to contain 'Math.min(isTauriAvailable ? 6 : 1, qu…'[39m
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2marms the shared audio element synchronously for delayed Safari cloud playback
+[22m[39m[play-trace] {"beat_id":null,"context_id":"65lucccn","t_ms":1317.8,"time_origin_ms":1788952952630.925,"ts_ms":1788952953948.7,"stage":"AUDIO_EVENT_PLAY"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mconverts file paths and falls back to the next source after a browser audio error
+[22m[39m[play-trace] {"beat_id":"beat-1","paused":true,"context_id":"2eouanwo","t_ms":1350.5,"time_origin_ms":1788952952630.925,"ts_ms":1788952953981.4,"stage":"AUDIO_PLAY_FUNCTION_ENTER"}
+[play-trace] {"beat_id":"beat-1","url_scheme":"asset","context_id":"2eouanwo","t_ms":1350.9,"time_origin_ms":1788952952630.925,"ts_ms":1788952953981.9,"stage":"AUDIO_SRC_SET"}
+[play-trace] {"beat_id":"beat-1","context_id":"2eouanwo","t_ms":1351,"time_origin_ms":1788952952630.925,"ts_ms":1788952953981.9,"stage":"AUDIO_PLAY_PROMISE_BEGIN"}
+[play-trace] {"beat_id":"beat-1","context_id":"2eouanwo","t_ms":1351.1,"time_origin_ms":1788952952630.925,"ts_ms":1788952953982.1,"stage":"AUDIO_EVENT_PLAY"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mconverts file paths and falls back to the next source after a browser audio error
+[22m[39m[play-trace] {"beat_id":"beat-1","context_id":"2eouanwo","t_ms":1356.3,"time_origin_ms":1788952952630.925,"ts_ms":1788952953987.2,"stage":"AUDIO_PLAY_PROMISE_RESOLVED"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mconverts file paths and falls back to the next source after a browser audio error
+[22m[39m[play-trace] {"beat_id":"beat-1","media_error":null,"priming":false,"context_id":"2eouanwo","t_ms":1358.1,"time_origin_ms":1788952952630.925,"ts_ms":1788952953989,"stage":"AUDIO_EVENT_ERROR"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mconverts file paths and falls back to the next source after a browser audio error
+[22m[39m[play-trace] {"beat_id":"beat-1","context_id":"2eouanwo","t_ms":1358.5,"time_origin_ms":1788952952630.925,"ts_ms":1788952953989.4,"stage":"AUDIO_EVENT_PLAY"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mtoggles pause when Play is requested again for the currently selected beat
+[22m[39m[play-trace] {"beat_id":"beat-1","paused":true,"context_id":"f3bhu77f","t_ms":1385.7,"time_origin_ms":1788952952630.925,"ts_ms":1788952954016.6,"stage":"AUDIO_PLAY_FUNCTION_ENTER"}
+[play-trace] {"beat_id":"beat-1","url_scheme":"asset","context_id":"f3bhu77f","t_ms":1386.1,"time_origin_ms":1788952952630.925,"ts_ms":1788952954017,"stage":"AUDIO_SRC_SET"}
+[play-trace] {"beat_id":"beat-1","context_id":"f3bhu77f","t_ms":1386.2,"time_origin_ms":1788952952630.925,"ts_ms":1788952954017.1,"stage":"AUDIO_PLAY_PROMISE_BEGIN"}
+[play-trace] {"beat_id":"beat-1","context_id":"f3bhu77f","t_ms":1386.3,"time_origin_ms":1788952952630.925,"ts_ms":1788952954017.2,"stage":"AUDIO_EVENT_PLAY"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mtoggles pause when Play is requested again for the currently selected beat
+[22m[39m[play-trace] {"beat_id":"beat-1","context_id":"f3bhu77f","t_ms":1389.4,"time_origin_ms":1788952952630.925,"ts_ms":1788952954020.3,"stage":"AUDIO_PLAY_PROMISE_RESOLVED"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mtoggles pause when Play is requested again for the currently selected beat
+[22m[39m[play-trace] {"beat_id":"beat-1","paused":false,"context_id":"f3bhu77f","t_ms":1390.4,"time_origin_ms":1788952952630.925,"ts_ms":1788952954021.3,"stage":"AUDIO_PLAY_FUNCTION_ENTER"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mreleases the browser file handle and resets playback state before Windows rename flows
+[22m[39m[play-trace] {"beat_id":"beat-1","paused":true,"context_id":"07qrw1xh","t_ms":1406.7,"time_origin_ms":1788952952630.925,"ts_ms":1788952954037.6,"stage":"AUDIO_PLAY_FUNCTION_ENTER"}
+[play-trace] {"beat_id":"beat-1","url_scheme":"asset","context_id":"07qrw1xh","t_ms":1406.9,"time_origin_ms":1788952952630.925,"ts_ms":1788952954037.8,"stage":"AUDIO_SRC_SET"}
+[play-trace] {"beat_id":"beat-1","context_id":"07qrw1xh","t_ms":1407,"time_origin_ms":1788952952630.925,"ts_ms":1788952954037.9,"stage":"AUDIO_PLAY_PROMISE_BEGIN"}
+[play-trace] {"beat_id":"beat-1","context_id":"07qrw1xh","t_ms":1407,"time_origin_ms":1788952952630.925,"ts_ms":1788952954038,"stage":"AUDIO_EVENT_PLAY"}
+
+[90mstdout[2m | tests/integration/coreIntegration.test.tsx[2m > [22m[2museAudio ↔ platform integration[2m > [22m[2mreleases the browser file handle and resets playback state before Windows rename flows
+[22m[39m[play-trace] {"beat_id":"beat-1","context_id":"07qrw1xh","t_ms":1409.5,"time_origin_ms":1788952952630.925,"ts_ms":1788952954040.5,"stage":"AUDIO_PLAY_PROMISE_RESOLVED"}
+
+ [32m✓[39m tests/integration/coreIntegration.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 272[2mms[22m[39m
+ [32m✓[39m tests/integration/appMigrationCharacterization.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/integration/appDesktopBeatUploadPipelineExtraction.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/integration/appHelperExtraction.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mkeeps the last verified snapshot reproducible but does not report a failed reload as authoritative
+[22m[39m[library-tx] BEGIN kind=reload seq=1
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mkeeps the last verified snapshot reproducible but does not report a failed reload as authoritative
+[22m[39m[library-tx] END kind=reload seq=1 ms=2
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mkeeps the last verified snapshot reproducible but does not report a failed reload as authoritative
+[22m[39m[library-tx] BEGIN kind=reload seq=2
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mkeeps the last verified snapshot reproducible but does not report a failed reload as authoritative
+[22m[39m[library-tx] END kind=reload seq=2 ms=1
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"span_id":1,"context_id":"deirhz91","t_ms":992.9,"time_origin_ms":1788952954723.633,"ts_ms":1788952955716.5,"stage":"SESSION_START_BOOTSTRAP_BEGIN"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"request_kind":"SESSION_START_BOOTSTRAP","server_trace_available":false,"context_id":"deirhz91","t_ms":1002.3,"time_origin_ms":1788952954723.633,"ts_ms":1788952955726,"stage":"SERVER_SESSION_TRACE"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"span_id":1,"elapsed_ms":10,"context_id":"deirhz91","t_ms":1002.8,"time_origin_ms":1788952954723.633,"ts_ms":1788952955726.5,"stage":"SESSION_START_BOOTSTRAP_DONE"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":1,"span_id":2,"context_id":"deirhz91","t_ms":1003.6,"time_origin_ms":1788952954723.633,"ts_ms":1788952955727.2,"stage":"TEMP_AUTH_PREPARE_BEGIN"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":1,"span_id":2,"elapsed_ms":0.5,"context_id":"deirhz91","t_ms":1004.1,"time_origin_ms":1788952954723.633,"ts_ms":1788952955727.8,"stage":"TEMP_AUTH_PREPARE_ERROR"}
+
+[90mstderr[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[web/temp-auth] transient handshake failure; retrying with fresh temp auth attempt=2
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":2,"span_id":3,"context_id":"deirhz91","t_ms":1005.2,"time_origin_ms":1788952954723.633,"ts_ms":1788952955728.8,"stage":"TEMP_AUTH_PREPARE_BEGIN"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":2,"span_id":3,"elapsed_ms":0.6,"context_id":"deirhz91","t_ms":1005.8,"time_origin_ms":1788952954723.633,"ts_ms":1788952955729.4,"stage":"TEMP_AUTH_PREPARE_DONE"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"span_id":4,"context_id":"deirhz91","t_ms":1005.9,"time_origin_ms":1788952954723.633,"ts_ms":1788952955729.6,"stage":"SESSION_START_BIND_BEGIN"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"request_kind":"SESSION_START_BIND","server_trace_available":false,"context_id":"deirhz91","t_ms":1008.9,"time_origin_ms":1788952954723.633,"ts_ms":1788952955732.5,"stage":"SERVER_SESSION_TRACE"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"span_id":4,"elapsed_ms":3.1,"context_id":"deirhz91","t_ms":1009.1,"time_origin_ms":1788952954723.633,"ts_ms":1788952955732.7,"stage":"SESSION_START_BIND_DONE"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":2,"span_id":5,"context_id":"deirhz91","t_ms":1009.2,"time_origin_ms":1788952954723.633,"ts_ms":1788952955732.9,"stage":"TEMP_AUTH_BIND_BEGIN"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":2,"span_id":5,"elapsed_ms":0.3,"context_id":"deirhz91","t_ms":1009.5,"time_origin_ms":1788952954723.633,"ts_ms":1788952955733.2,"stage":"TEMP_AUTH_BIND_DONE"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":2,"span_id":6,"context_id":"deirhz91","t_ms":1009.7,"time_origin_ms":1788952954723.633,"ts_ms":1788952955733.3,"stage":"TEMP_AUTH_DESTROY_BEGIN"}
+
+[90mstdout[2m | tests/integration/issue97Resilience.test.ts[2m > [22m[2mIssue #97 reload/temp-auth resilience[2m > [22m[2mretries invalid nonce with a fresh temp-auth object while preserving the lease identity
+[22m[39m[play-trace] {"attempt":2,"span_id":6,"elapsed_ms":0.3,"context_id":"deirhz91","t_ms":1010,"time_origin_ms":1788952954723.633,"ts_ms":1788952955733.6,"stage":"TEMP_AUTH_DESTROY_DONE"}
+
+ [32m✓[39m tests/integration/issue97Resilience.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+[90mstdout[2m | tests/integration/appUploadRecoveryExtraction.test.ts[2m > [22m[2mtask 6.2 upload recovery extraction[2m > [22m[2mpreserves a beat already confirmed by the authoritative INDEX and only rolls back the incomplete beat
+[22m[39m[upload-recovery] marker cleared for durable beat durable
+
+[90mstderr[2m | tests/integration/appUploadRecoveryExtraction.test.ts[2m > [22m[2mtask 6.2 upload recovery extraction[2m > [22m[2mkeeps the recovery marker when remote rollback fails
+[22m[39mCould not roll back interrupted upload Interrupted Beat: Error: temporary failure
+    at rollbackInterruptedCloudUploads [90m(/home/runner/work/BeatGaler/BeatGaler/[39msrc/features/cloud/interruptedUploadJournal.ts:96:15[90m)[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+    at [90m/home/runner/work/BeatGaler/BeatGaler/[39mtests/integration/appUploadRecoveryExtraction.test.ts:79:24
+    at [90mfile:///home/runner/work/BeatGaler/BeatGaler/[39mnode_modules/[4m@vitest/runner[24m/dist/chunk-hooks.js:752:20
+
+ [32m✓[39m tests/integration/appConnectivityCloudEventsExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/integration/appUploadRecoveryExtraction.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m tests/integration/appNativeDropTargetsExtraction.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m tests/integration/appImportDiscoveryExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/integration/issue97StartupRoutingRuntime.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/integration/appImportSaveAllExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m tests/integration/appCloudUploadQueueExtraction.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m tests/integration/appLibraryReloadExtraction.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/appSessionExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/appBeatDownloadsExtraction.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/appNativeLibraryDropExtraction.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/appHtmlLibraryDropExtraction.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/integration/appStartupBootstrapExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/appBrowserImportExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+[90mstdout[2m | tests/integration/useAudioDuplicatePlay.test.tsx[2m > [22m[2museAudio duplicate Play protection[2m > [22m[2mdoes not reload the same MediaSource when Play is clicked again before current data exists
+[22m[39m[play-trace] {"beat_id":"beat-1","ready_state":0,"paused":true,"context_id":"yj7ttlp1","t_ms":1065.8,"time_origin_ms":1788952959620.541,"ts_ms":1788952960686.4,"stage":"AUDIO_PLAY_FUNCTION_ENTER"}
+[play-trace] {"beat_id":"beat-1","ready_state":0,"url_scheme":"blob","context_id":"yj7ttlp1","t_ms":1068,"time_origin_ms":1788952959620.541,"ts_ms":1788952960688.5,"stage":"AUDIO_SRC_SET"}
+[play-trace] {"beat_id":"beat-1","context_id":"yj7ttlp1","t_ms":1068.2,"time_origin_ms":1788952959620.541,"ts_ms":1788952960688.7,"stage":"AUDIO_PLAY_PROMISE_BEGIN"}
+[play-trace] {"beat_id":"beat-1","ready_state":0,"context_id":"yj7ttlp1","t_ms":1068.4,"time_origin_ms":1788952959620.541,"ts_ms":1788952960688.9,"stage":"AUDIO_EVENT_PLAY"}
+[play-trace] {"beat_id":"beat-1","ready_state":0,"paused":false,"context_id":"yj7ttlp1","t_ms":1068.9,"time_origin_ms":1788952959620.541,"ts_ms":1788952960689.5,"stage":"AUDIO_PLAY_FUNCTION_ENTER"}
+[play-trace] {"beat_id":"beat-1","context_id":"yj7ttlp1","t_ms":1069.1,"time_origin_ms":1788952959620.541,"ts_ms":1788952960689.6,"stage":"AUDIO_PLAY_PROMISE_RESOLVED"}
+
+ [32m✓[39m tests/integration/useAudioDuplicatePlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m tests/integration/issue97WebRoutingContract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/cleanMp3Cloud.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m tests/integration/appLibraryRevealExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/libraryStateExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/issue97RuntimeTraceContract.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/libraryViewSelectors.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/integration/issue97IndexPriority.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/appTagRenameExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/libraryViewExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/id3BrowserParser.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/integration/appOfflineAvailabilityExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m tests/integration/appBeatAssetUpdatesExtraction.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/integration/appPlaybackExtraction.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/issue97DrawerWebRoutingContract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/selectionReorderExtraction.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/appBeatProjectsExtraction.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/integration/appPlaybackQueueExtraction.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/integration/appAuxiliaryModalExtraction.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m tests/integration/artworkHydrationExtraction.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+TAP version 13
+# Subtest: two concurrent callers serialize to one winning index
+ok 1 - two concurrent callers serialize to one winning index
+  ---
+  duration_ms: 8.003887
+  type: 'test'
+  ...
+# Subtest: retry is idempotent and returns the same winner
+ok 2 - retry is idempotent and returns the same winner
+  ---
+  duration_ms: 5.634925
+  type: 'test'
+  ...
+# Subtest: existing index is never overwritten
+ok 3 - existing index is never overwritten
+  ---
+  duration_ms: 0.358885
+  type: 'test'
+  ...
+# Subtest: provider failure does not report success or publish a pointer
+ok 4 - provider failure does not report success or publish a pointer
+  ---
+  duration_ms: 0.704637
+  type: 'test'
+  ...
+# Subtest: durability failure cleans the candidate and does not report success
+ok 5 - durability failure cleans the candidate and does not report success
+  ---
+  duration_ms: 5.679228
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 25.342065
+ [32m✓[39m tests/integration/atomic-library-index-ci.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 66[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/integration/issue97RuntimeWebFollowup.test.ts[2m > [22mIssue #97 production runtime follow-up[2m > [22mdoes not let Web card warming queue native cooking ahead of Play
+[31m[1mAssertionError[22m: expected 'import React, { useState, useCallback…' to contain 'Math.min(isTauriAvailable ? 6 : 1, qu…'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- Math.min(isTauriAvailable ? 6 : 1, queue.length)[39m
+[31m+ import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";[39m
+[31m+ import type { Beat } from "./types";[39m
+[31m+ import BeatCard from "./components/BeatCard";[39m
+[31m+ import Drawer from "./components/Drawer";[39m
+[31m+ import Player from "./components/Player";[39m
+[31m+ import AddBeatModal from "./components/AddBeatModal";[39m
+[31m+ import SettingsPanel from "./components/SettingsPanel";[39m
+[31m+ import AccountGate, { logoutBeatGalerAccount } from "./components/AccountGate";[39m
+[31m+ import UploadModal from "./components/UploadModal";[39m
+[31m+ import JobStatusBar from "./components/JobStatusBar";[39m
+[31m+ import { PlusIcon, Artwork } from "./components/ui";[39m
+[31m+ import { useAudio } from "./hooks/useAudio";[39m
+[31m+ import { loadLibrary, readBeatMeta, saveBeatMeta, discardImportReviewBatch, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, type CloudFileType, isTauriAvailable } from "./lib/tauri";[39m
+[31m+ import { libraryStateManager } from "./lib/libraryStateManager";[39m
+[31m+ import { platform } from "./platform";[39m
+[31m+ import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";[39m
+[31m+ import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";[39m
+[31m+ import { appAlert, appConfirm } from "./lib/dialog";[39m
+[31m+ import { sanitizeUserVisibleText } from "./lib/userVisibleError";[39m
+[31m+ import { useTagColors, setTagColor } from "./lib/tagColors";[39m
+[31m+ import { registerJob, updateJob } from "./lib/jobStore";[39m
+[31m+ import { cleanTags } from "./lib/metadataValidation";[39m
+[31m+ import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";[39m
+[31m+ import CloudFilesModal from "./features/downloads/components/CloudFilesModal";[39m
+[31m+ import { useBeatDownloads } from "./features/downloads/useBeatDownloads";[39m
+[31m+ import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";[39m
+[31m+ import SearchBar from "./features/library/components/SearchBar";[39m
+[31m+ import SortMenu from "./features/library/components/SortMenu";[39m
+[31m+ import TagColorMenu from "./features/tags/components/TagColorMenu";[39m
+[31m+ import { useArtworkHydration } from "./features/artwork/useArtworkHydration";[39m
+[31m+ import { useCloudUploadQueue } from "./features/cloud/useCloudUploadQueue";[39m
+[31m+ import ImportReviewHost, { ImportResolutionHost } from "./features/import/components/ImportReviewHost";[39m
+[31m+ import { useImportSession } from "./features/import/useImportSession";[39m
+[31m+ import { useImportReview } from "./features/import/useImportReview";[39m
+[31m+ import { useImportDiscovery } from "./features/import/useImportDiscovery";[39m
+[31m+ import { useImportSaveAll } from "./features/import/useImportSaveAll";[39m
+[31m+ import { useBrowserImport } from "./features/import/useBrowserImport";[39m
+[31m+ import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";[39m
+[31m+ import { useHtmlLibraryDrop } from "./features/dragdrop/useHtmlLibraryDrop";[39m
+[31m+ import { useNativeLibraryDrop } from "./features/dragdrop/useNativeLibraryDrop";[39m
+[31m+ import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";[39m
+[31m+ import { clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";[39m
+[31m+ import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";[39m
+[31m+ import { useLibraryViewState } from "./features/library/useLibraryViewState";[39m
+[31m+ import { useLibraryReorder } from "./features/library/useLibraryReorder";[39m
+[31m+ import { useBeatSelection } from "./features/selection/useBeatSelection";[39m
+[31m+ import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "./features/tags/tagSelectors";[39m
+[31m+ import { useTagFilters } from "./features/tags/useTagFilters";[39m
+[31m+ import { useTagRename } from "./features/tags/useTagRename";[39m
+[31m+ import TagRenameDialog from "./features/tags/components/TagRenameDialog";[39m
+[31m+ import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";[39m
+[31m+ import { useLibraryReload } from "./features/library/useLibraryReload";[39m
+[31m+ import { useStartupBootstrap } from "./features/startup/useStartupBootstrap";[39m
+[31m+ import { useLibraryReveal } from "./features/startup/useLibraryReveal";[39m
+[31m+ import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";[39m
+[31m+ import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";[39m
+[31m+ import { usePlaybackController } from "./features/playback/usePlaybackController";[39m
+[31m+ import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";[39m
+[31m+ import { useDrawerCloudPersistence } from "./features/edit/useDrawerCloudPersistence";[39m
+[31m+ import { useBeatAssetUpdates } from "./features/edit/useBeatAssetUpdates";[39m
+[31m+ import { useBeatProjects } from "./features/projects/useBeatProjects";[39m
+[31m+ import { useOfflineAvailability } from "./features/offline/useOfflineAvailability";[39m
+[31m+ import { useTrashActions } from "./features/trash/useTrashActions";[39m
+[31m+ import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";[39m
+[31m+ import { createBeatRuntimeState } from "./features/state/beatRuntimeState";[39m
+[31m+ import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";[39m
+[31m+ import { useSessionState } from "./features/session/useSessionState";[39m
+[31m+ import { useSessionActions } from "./features/session/useSessionActions";[39m
+[31m+ import { useCustomCursor } from "./features/session/useCustomCursor";[39m
+[31m+ import { useConnectivity } from "./features/session/useConnectivity";[39m
+[31m+ import { useCloudLibraryEvents } from "./features/cloud/useCloudLibraryEvents";[39m
+[31m+[39m
+[31m+ // Intentionally isolated: if real-world timings prove the skeleton unnecessary,[39m
+[31m+ // flipping/removing this one constant deletes the visual layer without touching[39m
+[31m+ // the staged Review architecture underneath it.[39m
+[31m+ const REVIEW_SKELETON_ENABLED = true;[39m
+[31m+[39m
+[31m+ const beatCloudUpdateBusyIds = new Set<string>();[39m
+[31m+[39m
+[31m+ function setBeatCloudUpdateBusy(beatId: string, active: boolean, success = false) {[39m
+[31m+   if (active) beatCloudUpdateBusyIds.add(beatId);[39m
+[31m+   else beatCloudUpdateBusyIds.delete(beatId);[39m
+[31m+   window.dispatchEvent(new CustomEvent("beatgaler:beat-cloud-busy", {[39m
+[31m+     detail: { beatId, active, success }[39m
+[31m+   }));[39m
+[31m+ }[39m
+[31m+[39m
+[31m+ function formatCloudBytes(bytes: number) {[39m
+[31m+   if (!bytes) return "0 B";[39m
+[31m+   const units = ["B", "KB", "MB", "GB"];[39m
+[31m+   let n = bytes; let i = 0;[39m
+[31m+   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }[39m
+[31m+   return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;[39m
+[31m+ }[39m
+[31m+[39m
+[31m+ function runtimeErrorMessage(error: unknown): string {[39m
+[31m+   return error instanceof Error ? error.message : String(error);[39m
+[31m+ }[39m
+[31m+[39m
+[31m+ function isRuntimeConflictError(error: unknown): boolean {[39m
+[31m+   const message = runtimeErrorMessage(error).toLowerCase();[39m
+[31m+   return message.includes("409") || message.includes("conflict") || message.includes("revision mismatch") || message.includes("version mismatch");[39m
+[31m+ }[39m
+[31m+[39m
+[31m+ function BeatGalerApp() {[39m
+[31m+   const {[39m
+[31m+     beats,[39m
+[31m+     setBeats,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     startupCachedBeatsRef,[39m
+[31m+     initialLoading,[39m
+[31m+   } = useLibraryState();[39m
+[31m+   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);[39m
+[31m+   const cloudLibraryTimerRef = useRef<number | null>(null);[39m
+[31m+   const cloudLibrarySnapshotRef = useRef<string | null>(null);[39m
+[31m+   const visibleLibraryFingerprintRef = useRef<string>("");[39m
+[31m+   const {[39m
+[31m+     beatRuntimeStates,[39m
+[31m+     beatRuntimeStatesRef,[39m
+[31m+     transitionRuntime,[39m
+[31m+     forgetRuntimeState,[39m
+[31m+     clearReconciledTrashRuntimeStates,[39m
+[31m+   } = useBeatRuntimeRegistry(beats, beatsLatestRef);[39m
+[31m+   const stagedImportPathsRef = useRef<Map<string, string[]>>(new Map());[39m
+[31m+   const [loading, setLoading] = useState(() => initialLoading);[39m
+[31m+   const startupCookingResolvedRef = useRef(false);[39m
+[31m+   const startupPipelineStartedRef = useRef(false);[39m
+[31m+   const startupEnginePrimeReadyRef = useRef(false);[39m
+[31m+   const handleArtworkHydratedFromNetwork = useCallback((next: Beat[], beatId: string) => {[39m
+[31m+     const hydrated = next.find(item => item.id === beatId);[39m
+[31m+     if (hydrated && cloudMetaSnapshotRef.current) {[39m
+[31m+       cloudMetaSnapshotRef.current.set(beatId, cloudBeatFingerprint(hydrated));[39m
+[31m+     }[39m
+[31m+     if (cloudLibrarySnapshotRef.current !== null) {[39m
+[31m+       cloudLibrarySnapshotRef.current = next[39m
+[31m+         .filter(item => !!item.telegram_file_id)[39m
+[31m+         .map(cloudBeatFingerprint)[39m
+[31m+         .join("\u001c");[39m
+[31m+     }[39m
+[31m+   }, []);[39m
+[31m+   const { ensureArtworkReady, clearArtworkHydration, invalidateArtworkHydration } = useArtworkHydration({[39m
+[31m+     setBeats,[39m
+[31m+     onNetworkHydrated: handleArtworkHydratedFromNetwork,[39m
+[31m+   });[39m
+[31m+   const { search, setSearch, sortBy, setSortBy } = useLibraryViewState();[39m
+[31m+   const {[39m
+[31m+     includedTags,[39m
+[31m+     excludedTags,[39m
+[31m+     clearTagFilters,[39m
+[31m+     toggleTagFilter,[39m
+[31m+     replaceTagFilter,[39m
+[31m+   } = useTagFilters();[39m
+[31m+   const filteredBeats = selectFilteredAndSortedBeats([39m
+[31m+     beats,[39m
+[31m+     search,[39m
+[31m+     includedTags,[39m
+[31m+     excludedTags,[39m
+[31m+     sortBy,[39m
+[31m+   );[39m
+[31m+[39m
+[31m+   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);[39m
+[31m+   const {[39m
+[31m+     tagRename, tagRenameBusy, tagRenameError, affectedCount: tagRenameAffectedCount,[39m
+[31m+     affectedMp3Count: tagRenameMp3Count, affectedWavCount: tagRenameWavCount,[39m
+[31m+     openTagRename, setNewTag: setTagRenameNewTag, continueTagRename, backTagRename,[39m
+[31m+     cancelTagRename, confirmTagRename,[39m
+[31m+   } = useTagRename({ beats, setBeats, replaceTagFilter });[39m
+[31m+   useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");[39m
+[31m+   const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {[39m
+[31m+     setBeats(current => {[39m
+[31m+       const next = preserveLoadedArtwork(incoming, current);[39m
+[31m+       beatsLatestRef.current = next;[39m
+[31m+       return next;[39m
+[31m+     });[39m
+[31m+   }, []);[39m
+[31m+   useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);[39m
+[31m+   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);[39m
+[31m+   const [showAdd, setShowAdd] = useState(false);[39m
+[31m+   const [dropActive, setDropActive] = useState(false);[39m
+[31m+   const [dropImporting, setDropImporting] = useState(false);[39m
+[31m+   // Covers the WebView2 staging window that happens BEFORE importDroppedPaths[39m
+[31m+   // receives native paths. Without this state, the app can look frozen while[39m
+[31m+   // large dropped files are being copied into drop-staging.[39m
+[31m+   const [libraryDropStaging, setLibraryDropStaging] = useState(false);[39m
+[31m+   const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string; kind: "file" | "directory" } | null>(null);[39m
+[31m+   const {[39m
+[31m+     reviewQueue,[39m
+[31m+     setReviewQueue,[39m
+[31m+     reviewQueueLatestRef,[39m
+[31m+     skippedReviewSourceKeysRef,[39m
+[31m+     startReview,[39m
+[31m+   } = useImportSession();[39m
+[31m+   const [showSettings, setShowSettings] = useState(false);[39m
+[31m+   const {[39m
+[31m+     settings,[39m
+[31m+     setSettings,[39m
+[31m+     setupDone,[39m
+[31m+     setSetupDone,[39m
+[31m+     connectionState,[39m
+[31m+     setConnectionState,[39m
+[31m+     cloudSessionVerified,[39m
+[31m+     setCloudSessionVerified,[39m
+[31m+   } = useSessionState();[39m
+[31m+   const {[39m
+[31m+     startupCookingGate,[39m
+[31m+     setStartupCookingGate,[39m
+[31m+     revealedBeatIds,[39m
+[31m+     setRevealedBeatIds,[39m
+[31m+     progressiveRevealRunRef,[39m
+[31m+   } = useLibraryReveal({[39m
+[31m+     initialCachedBeats: startupCachedBeatsRef.current ?? [],[39m
+[31m+     filteredBeats,[39m
+[31m+     loading,[39m
+[31m+     settings,[39m
+[31m+     cloudSessionVerified,[39m
+[31m+     connectionState,[39m
+[31m+     ensureArtworkReady,[39m
+[31m+     startupCookingResolvedRef,[39m
+[31m+     startupPipelineStartedRef,[39m
+[31m+     nativeParallelism: isTauriAvailable ? 6 : 1,[39m
+[31m+   });[39m
+[31m+   const {[39m
+[31m+     cloudFilesBeat,[39m
+[31m+     cloudFiles,[39m
+[31m+     cloudFilesBusyId,[39m
+[31m+     cloudFilesDownloadedIds,[39m
+[31m+     cloudFilesDownloadError,[39m
+[31m+     cloudDownloadNotice,[39m
+[31m+     handleCloudFiles,[39m
+[31m+     handleGetCloudFile,[39m
+[31m+     closeCloudFiles,[39m
+[31m+     dismissDownloadError,[39m
+[31m+   } = useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime });[39m
+[31m+   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     selectedIds,[39m
+[31m+     selectMode,[39m
+[31m+     toggleSelection,[39m
+[31m+     toggleSelectAll,[39m
+[31m+     finishSelection,[39m
+[31m+     clearSelection,[39m
+[31m+   } = useBeatSelection(beats);[39m
+[31m+   const {[39m
+[31m+     sensors,[39m
+[31m+     activeDragId,[39m
+[31m+     handleDragStart,[39m
+[31m+     handleDragEnd,[39m
+[31m+     handleDragCancel,[39m
+[31m+   } = useLibraryReorder({ sortBy, setSortBy, setBeats });[39m
+[31m+   const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();[39m
+[31m+   const { clearPlaybackPreparation, ensureWarmPlaybackUrl, handlePlay, handleWarm, invalidatePlaybackPreparation, waitForUploadedBeatPlaybackReady } = usePlaybackController({[39m
+[31m+     audio,[39m
+[31m+     play,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     beatRuntimeStatesRef,[39m
+[31m+     transitionRuntime,[39m
+[31m+     setBeats,[39m
+[31m+     cloudSessionVerified,[39m
+[31m+     connectionState,[39m
+[31m+     isBeatCloudUpdateBusy: beatId => beatCloudUpdateBusyIds.has(beatId),[39m
+[31m+   });[39m
+[31m+   const { offlineBusyIds, handleToggleOffline } = useOfflineAvailability({[39m
+[31m+     connectionState,[39m
+[31m+     audioPlayingId: audio.playingId,[39m
+[31m+     releaseFile,[39m
+[31m+     invalidatePlaybackPreparation,[39m
+[31m+     ensureWarmPlaybackUrl,[39m
+[31m+     beatRuntimeStatesRef,[39m
+[31m+     transitionRuntime,[39m
+[31m+     setBeats,[39m
+[31m+     setDrawer,[39m
+[31m+     setRevealedBeatIds,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   // Keep a ref to togglePause so the keydown handler never goes stale[39m
+[31m+   const togglePauseRef = useRef(togglePause);[39m
+[31m+   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);[39m
+[31m+[39m
+[31m+   const rejectOfflineMutation = useCallback((action: string): boolean => {[39m
+[31m+     if (connectionState === "online") return false;[39m
+[31m+     void appAlert({[39m
+[31m+       title: connectionState === "offline" ? "Offline" : "Connection unavailable",[39m
+[31m+       message: `${action} requires an internet connection. Offline mode is read-only except for moving beats to Trash.`,[39m
+[31m+     });[39m
+[31m+     return true;[39m
+[31m+   }, [connectionState]);[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     reviewBootstrap,[39m
+[31m+     reviewPreparationDone,[39m
+[31m+     reviewPreparationPromiseRef,[39m
+[31m+     deferredImportBatch,[39m
+[31m+     setDeferredImportBatch,[39m
+[31m+     importDroppedPaths,[39m
+[31m+     cancelPendingReviewWork,[39m
+[31m+     completeImmediateReviewPreparation,[39m
+[31m+   } = useImportDiscovery({[39m
+[31m+     dropImporting,[39m
+[31m+     setDropImporting,[39m
+[31m+     rejectOfflineMutation,[39m
+[31m+     setDropActive,[39m
+[31m+     setShowAdd,[39m
+[31m+     setReviewQueue,[39m
+[31m+     skippedReviewSourceKeysRef,[39m
+[31m+     stagedImportPathsRef,[39m
+[31m+     skeletonEnabled: REVIEW_SKELETON_ENABLED,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     backgroundUploadErrors,[39m
+[31m+     cloudifyImportedBeats,[39m
+[31m+     retryBackgroundUpload,[39m
+[31m+     getQueuedBeatsSnapshot,[39m
+[31m+     deferLibraryReloadIfUploading,[39m
+[31m+     deferredLibraryReloadRef,[39m
+[31m+   } = useCloudUploadQueue({[39m
+[31m+     settings,[39m
+[31m+     setSettings,[39m
+[31m+     setConnectionState,[39m
+[31m+     setBeats,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     beatRuntimeStatesRef,[39m
+[31m+     transitionRuntime,[39m
+[31m+     cloudLibrarySnapshotRef,[39m
+[31m+     waitForUploadedBeatPlaybackReady,[39m
+[31m+     rejectOfflineMutation,[39m
+[31m+     isReviewActive: () => reviewQueueLatestRef.current !== null,[39m
+[31m+     hasProtectedStaging: () => stagedImportPathsRef.current.size > 0,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+[39m
+[31m+   const { libraryRefreshing, reloadLibrary } = useLibraryReload({[39m
+[31m+     telegramCloudConnected: Boolean(settings?.telegram_cloud_connected),[39m
+[31m+     beatsLatestRef,[39m
+[31m+     setBeats,[39m
+[31m+     setConnectionState,[39m
+[31m+     setCloudSessionVerified,[39m
+[31m+     cloudMetaSnapshotRef,[39m
+[31m+     cloudLibrarySnapshotRef,[39m
+[31m+     startupCookingResolvedRef,[39m
+[31m+     startupPipelineStartedRef,[39m
+[31m+     progressiveRevealRunRef,[39m
+[31m+     setRevealedBeatIds,[39m
+[31m+     setStartupCookingGate,[39m
+[31m+     setLoading,[39m
+[31m+     deferLibraryReloadIfUploading,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const { interruptedUploadNotices, dismissInterruptedUploadNotices } = useStartupBootstrap({[39m
+[31m+     startupCachedBeatsRef,[39m
+[31m+     cloudMetaSnapshotRef,[39m
+[31m+     cloudLibrarySnapshotRef,[39m
+[31m+     startupCookingResolvedRef,[39m
+[31m+     startupPipelineStartedRef,[39m
+[31m+     startupEnginePrimeReadyRef,[39m
+[31m+     progressiveRevealRunRef,[39m
+[31m+     setBeats,[39m
+[31m+     setSettings,[39m
+[31m+     setSetupDone,[39m
+[31m+     setLoading,[39m
+[31m+     setConnectionState,[39m
+[31m+     setCloudSessionVerified,[39m
+[31m+     setStartupCookingGate,[39m
+[31m+     setRevealedBeatIds,[39m
+[31m+     clearReconciledTrashRuntimeStates,[39m
+[31m+     dismissStartupLoader: dismissBeatGalerStartupLoader,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+[39m
+[31m+ useConnectivity({[39m
+[31m+   setupDone,[39m
+[31m+   setConnectionState,[39m
+[31m+   setCloudSessionVerified,[39m
+[31m+   setSettings,[39m
+[31m+   setBeats,[39m
+[31m+   cloudMetaSnapshotRef,[39m
+[31m+   cloudLibrarySnapshotRef,[39m
+[31m+   startupCookingResolvedRef,[39m
+[31m+   startupPipelineStartedRef,[39m
+[31m+   startupEnginePrimeReadyRef,[39m
+[31m+   progressiveRevealRunRef,[39m
+[31m+   clearReconciledTrashRuntimeStates,[39m
+[31m+   clearPlaybackPreparation,[39m
+[31m+   clearArtworkHydration,[39m
+[31m+   setStartupCookingGate,[39m
+[31m+ });[39m
+[31m+[39m
+[31m+   useCustomCursor(settings?.custom_cursor_enabled ?? true);[39m
+[31m+[39m
+[31m+[39m
+[31m+[39m
+[31m+ // BeatGaler synchronization remains push-based. SSE only notifies the app;[39m
+[31m+ // the extracted owner verifies authority before hydrating library state.[39m
+[31m+ useCloudLibraryEvents({[39m
+[31m+   setupDone,[39m
+[31m+   beatgalerUserId: settings?.beatgaler_user_id ?? null,[39m
+[31m+   setConnectionState,[39m
+[31m+   setCloudSessionVerified,[39m
+[31m+   setSettings,[39m
+[31m+   setBeats,[39m
+[31m+   cloudMetaSnapshotRef,[39m
+[31m+   cloudLibrarySnapshotRef,[39m
+[31m+   visibleLibraryFingerprintRef,[39m
+[31m+   startupCookingResolvedRef,[39m
+[31m+   startupPipelineStartedRef,[39m
+[31m+   startupEnginePrimeReadyRef,[39m
+[31m+   progressiveRevealRunRef,[39m
+[31m+   clearReconciledTrashRuntimeStates,[39m
+[31m+   clearArtworkHydration,[39m
+[31m+   clearPlaybackPreparation,[39m
+[31m+   setStartupCookingGate,[39m
+[31m+ });[39m
+[31m+[39m
+[31m+   useLibraryPresentationCache([39m
+[31m+     beats,[39m
+[31m+     cloudSessionVerified,[39m
+[31m+     settings,[39m
+[31m+   );[39m
+[31m+[39m
+[31m+   useEffect(() => {[39m
+[31m+     visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);[39m
+[31m+     beatsLatestRef.current = beats;[39m
+[31m+   }, [beats]);[39m
+[31m+[39m
+[31m+[39m
+[31m+[39m
+[31m+   // One-time recovery for a cloud-only library after Telegram login/startup.[39m
+[31m+   // No timer, no permanent synchronization.[39m
+[31m+   const beatGalerCloudRecoveryAttemptedRef = useRef(false);[39m
+[31m+[39m
+[31m+   const recoverTelegramLibraryOnceIfEmpty = useCallback(async () => {[39m
+[31m+     if (beatGalerCloudRecoveryAttemptedRef.current) return;[39m
+[31m+     if (beats.length !== 0) return;[39m
+[31m+[39m
+[31m+     beatGalerCloudRecoveryAttemptedRef.current = true;[39m
+[31m+     try {[39m
+[31m+       const restored = await libraryStateManager.reloadAuthoritative();[39m
+[31m+       if (restored.length > 0) {[39m
+[31m+         setBeats(current => current.length === 0 ? restored : current);[39m
+[31m+       }[39m
+[31m+     } catch (error) {[39m
+[31m+       console.warn("Telegram library one-time recovery skipped:", error);[39m
+[31m+     }[39m
+[31m+   }, [beats.length]);[39m
+[31m+[39m
+[31m+   // IMPORTANT: an empty library is a valid, authoritative state (for example[39m
+[31m+   // immediately after Remove All). Never infer "Telegram recovery" merely from[39m
+[31m+   // beats.length === 0; doing so races the pending trash/index commit and can[39m
+[31m+   // resurrect the just-removed cards with their artwork unloaded. Recovery is[39m
+[31m+   // only allowed from explicit Telegram connection/startup flows below.[39m
+[31m+[39m
+[31m+   useEffect(() => {[39m
+[31m+     const onTelegramConnected = (event: Event) => {[39m
+[31m+       const detail = (event as CustomEvent<{ connected?: boolean; username?: string | null }>).detail;[39m
+[31m+       if (!detail?.connected) return;[39m
+[31m+[39m
+[31m+       setSettings(current => current ? {[39m
+[31m+         ...current,[39m
+[31m+         telegram_cloud_connected: true,[39m
+[31m+         telegram_cloud_username: detail.username ?? current.telegram_cloud_username ?? null,[39m
+[31m+       } : current);[39m
+[31m+[39m
+[31m+       void recoverTelegramLibraryOnceIfEmpty();[39m
+[31m+     };[39m
+[31m+[39m
+[31m+     window.addEventListener("beatgaler:telegram-connected", onTelegramConnected);[39m
+[31m+     return () => window.removeEventListener("beatgaler:telegram-connected", onTelegramConnected);[39m
+[31m+   }, [recoverTelegramLibraryOnceIfEmpty]);[39m
+[31m+[39m
+[31m+   // Global keyboard shortcuts — stable handler via ref[39m
+[31m+   useEffect(() => {[39m
+[31m+     const handler = (e: KeyboardEvent) => {[39m
+[31m+       const tag = (e.target as HTMLElement).tagName;[39m
+[31m+       const isTyping = tag === "INPUT" || tag === "TEXTAREA";[39m
+[31m+       if (e.key === "Escape") {[39m
+[31m+         // Prevent Escape from leaving a focus ring or text selection behind[39m
+[31m+         // on whatever element/button was last interacted with.[39m
+[31m+         (document.activeElement as HTMLElement | null)?.blur();[39m
+[31m+         window.getSelection()?.removeAllRanges();[39m
+[31m+         clearSelection();[39m
+[31m+         setDrawer(null);[39m
+[31m+         setShowAdd(false);[39m
+[31m+         setShowSettings(false);[39m
+[31m+         closeQueue();[39m
+[31m+         setShowUpload(null);[39m
+[31m+       }[39m
+[31m+       if (e.key === " " && !isTyping) { e.preventDefault(); togglePauseRef.current(); }[39m
+[31m+     };[39m
+[31m+     window.addEventListener("keydown", handler);[39m
+[31m+     return () => window.removeEventListener("keydown", handler);[39m
+[31m+   }, []); // empty deps — safe because we use ref[39m
+[31m+[39m
+[31m+   const handleUpload = useCallback((beat: Beat) => {[39m
+[31m+     if (rejectOfflineMutation("Uploading to YouTube")) return;[39m
+[31m+     setShowUpload({ initialBeat: beat, selectedIds: undefined });[39m
+[31m+   }, [rejectOfflineMutation]);[39m
+[31m+[39m
+[31m+   const handleUploadTelegram = useCallback(async (beat: Beat) => {[39m
+[31m+     if (rejectOfflineMutation("Uploading a beat")) return;[39m
+[31m+     const existingCloudBeat = Boolean(beat.telegram_file_id);[39m
+[31m+     transitionRuntime(beat.id, { type: existingCloudBeat ? "SYNC_QUEUE_UPDATE" : "SYNC_QUEUE_UPLOAD" }, beat);[39m
+[31m+     transitionRuntime(beat.id, { type: existingCloudBeat ? "SYNC_UPDATE_STARTED" : "SYNC_UPLOAD_STARTED" }, beat);[39m
+[31m+     try {[39m
+[31m+       const updated = await uploadBeatToTelegram(beat);[39m
+[31m+       await syncBeatMetadataToTelegram(updated);[39m
+[31m+       transitionRuntime(updated.id, { type: existingCloudBeat ? "SYNC_UPDATE_SUCCEEDED" : "SYNC_UPLOAD_SUCCEEDED" }, updated);[39m
+[31m+       setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));[39m
+[31m+     } catch (e: any) {[39m
+[31m+       const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");[39m
+[31m+       if (existingCloudBeat && isRuntimeConflictError(e)) {[39m
+[31m+         transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);[39m
+[31m+       } else {[39m
+[31m+         transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "TELEGRAM_UPLOAD_FAILED", message, retryable: true }, beat);[39m
+[31m+       }[39m
+[31m+       await appAlert({[39m
+[31m+         title: "Cloud upload failed",[39m
+[31m+         message,[39m
+[31m+         danger: true,[39m
+[31m+       });[39m
+[31m+     }[39m
+[31m+   }, [rejectOfflineMutation, transitionRuntime]);[39m
+[31m+[39m
+[31m+   const handleDownloadTelegram = useCallback(async (_beat: Beat) => {[39m
+[31m+     await appAlert({[39m
+[31m+       title: "Cloud-only library",[39m
+[31m+       message: "Files are fetched into temporary storage automatically when needed.",[39m
+[31m+     });[39m
+[31m+   }, []);[39m
+[31m+[39m
+[31m+   const handleUploadBulk = useCallback(() => {[39m
+[31m+     if (rejectOfflineMutation("Bulk upload")) return;[39m
+[31m+     setShowUpload({ initialBeat: null, selectedIds: Array.from(selectedIds) });[39m
+[31m+   }, [selectedIds, rejectOfflineMutation]);[39m
+[31m+[39m
+[31m+   const handleEditBulk = useCallback(() => {[39m
+[31m+     if (rejectOfflineMutation("Editing metadata")) return;[39m
+[31m+     const firstSelected = beats.find(b => selectedIds.has(b.id));[39m
+[31m+     if (firstSelected) setDrawer({ beat: firstSelected, mode: "edit" });[39m
+[31m+   }, [beats, selectedIds, rejectOfflineMutation]);[39m
+[31m+[39m
+[31m+   const { deleteBeat, handleRemoveBulk, handleBeatRestored } = useTrashActions({[39m
+[31m+     beats,[39m
+[31m+     setBeats,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     selectedIds,[39m
+[31m+     clearSelection,[39m
+[31m+     connectionState,[39m
+[31m+     audioPlayingId: audio.playingId,[39m
+[31m+     releaseFile,[39m
+[31m+     beatRuntimeStatesRef,[39m
+[31m+     transitionRuntime,[39m
+[31m+     forgetRuntimeState,[39m
+[31m+     cloudMetaSnapshotRef,[39m
+[31m+     cloudLibrarySnapshotRef,[39m
+[31m+     invalidateArtworkHydration,[39m
+[31m+     ensureArtworkReady,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const addBeats = useCallback((newBeats: Beat[]) => {[39m
+[31m+     setBeats(bs => {[39m
+[31m+       const existing = new Set(bs.map(b => b.mp3_path));[39m
+[31m+       const next = [...newBeats.filter(b => !existing.has(b.mp3_path)), ...bs];[39m
+[31m+       beatsLatestRef.current = next;[39m
+[31m+       return next;[39m
+[31m+     });[39m
+[31m+   }, []);[39m
+[31m+[39m
+[31m+   const addBeatsAndReview = useCallback((newBeats: Beat[]) => {[39m
+[31m+     if (newBeats.length === 0) return;[39m
+[31m+     if (connectionState !== "online") {[39m
+[31m+       void appAlert({[39m
+[31m+         title: "Internet connection required",[39m
+[31m+         message: "BeatGaler does not import new beats while offline. Reconnect and import them again.",[39m
+[31m+       });[39m
+[31m+       void cleanupOrphanedDropStaging(beatsLatestRef.current);[39m
+[31m+       return;[39m
+[31m+     }[39m
+[31m+     const sanitized = newBeats.map(beat => ({ ...beat, tags: cleanTags(beat.tags || []).tags }));[39m
+[31m+[39m
+[31m+     // Review candidates are NOT library beats yet.[39m
+[31m+     // Keeping them out of `beats` means:[39m
+[31m+     // 1) Cancel leaves absolutely nothing behind.[39m
+[31m+     // 2) duplicate-name checks compare only against committed library items.[39m
+[31m+     // 3) a re-dropped folder can never masquerade as an edit of the existing beat.[39m
+[31m+     setShowAdd(false);[39m
+[31m+     startReview(sanitized);[39m
+[31m+     // Upload begins only after Review → Save.[39m
+[31m+   }, [connectionState, startReview]);[39m
+[31m+[39m
+[31m+ const {[39m
+[31m+   skipCurrentReviewBeat,[39m
+[31m+   cancelReview,[39m
+[31m+   handleReviewedBeatSaved,[39m
+[31m+ } = useImportReview({[39m
+[31m+   setBeats,[39m
+[31m+   beatsLatestRef,[39m
+[31m+   setReviewQueue,[39m
+[31m+   skippedReviewSourceKeysRef,[39m
+[31m+   cloudifyImportedBeats,[39m
+[31m+   getQueuedBeatsSnapshot,[39m
+[31m+   onCancelPendingWork: cancelPendingReviewWork,[39m
+[31m+   releaseBeat: platform.capabilities.reviewBeatCloudCommit[39m
+[31m+     ? beatId => platform.importer.releaseBeat(beatId)[39m
+[31m+     : undefined,[39m
+[31m+   discardBatch: batchId => discardImportReviewBatch(batchId),[39m
+[31m+   cleanupStaging: protectedBeats => cleanupOrphanedDropStaging(protectedBeats),[39m
+[31m+ });[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     audioConflictBatch,[39m
+[31m+     dropImportBatch,[39m
+[31m+     resetImportResolutionState,[39m
+[31m+     handleReviewedSaveAll,[39m
+[31m+     cancelAudioConflicts,[39m
+[31m+     resolveAudioConflicts,[39m
+[31m+     closeImportDecisions,[39m
+[31m+     importResolvedDecisions,[39m
+[31m+   } = useImportSaveAll({[39m
+[31m+     setBeats,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     reviewQueue,[39m
+[31m+     setReviewQueue,[39m
+[31m+     reviewQueueLatestRef,[39m
+[31m+     reviewBootstrap,[39m
+[31m+     reviewPreparationDone,[39m
+[31m+     reviewPreparationPromiseRef,[39m
+[31m+     deferredImportBatch,[39m
+[31m+     setDeferredImportBatch,[39m
+[31m+     stagedImportPathsRef,[39m
+[31m+     setDropImporting,[39m
+[31m+     cloudifyImportedBeats,[39m
+[31m+     addBeatsAndReview,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const { importDroppedBrowserFiles } = useBrowserImport({[39m
+[31m+     dropImporting,[39m
+[31m+     setDropImporting,[39m
+[31m+     rejectOfflineMutation,[39m
+[31m+     setDropActive,[39m
+[31m+     setShowAdd,[39m
+[31m+     setReviewQueue,[39m
+[31m+     completeImmediateReviewPreparation,[39m
+[31m+     resetImportResolutionState,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {[39m
+[31m+     if (rejectOfflineMutation("Updating beat files")) return true;[39m
+[31m+     if (isBackupFolderPath(folderPath)) {[39m
+[31m+       await appAlert({[39m
+[31m+         title: "Backup folder skipped",[39m
+[31m+         message: "BeatGaler keeps Backup/Backups folders out of PROJECT.zip so old project copies are not uploaded.",[39m
+[31m+       });[39m
+[31m+       return true;[39m
+[31m+     }[39m
+[31m+[39m
+[31m+     const t = await import("./lib/tauri");[39m
+[31m+[39m
+[31m+     let preview;[39m
+[31m+     try {[39m
+[31m+       preview = await t.inspectBeatUpdateFolder(folderPath);[39m
+[31m+     } catch {[39m
+[31m+       return false;[39m
+[31m+     }[39m
+[31m+[39m
+[31m+     let replaceMaster = false;[39m
+[31m+     if (preview.has_mp3) {[39m
+[31m+       const alreadyHasMaster = Boolean(beat.telegram_file_id) || Boolean(beat.mp3_path?.trim());[39m
+[31m+       if (alreadyHasMaster) {[39m
+[31m+         const incoming = preview.mp3_filename || "the incoming MP3";[39m
+[31m+         const confirmed = window.confirm([39m
+[31m+           `Replace current MASTER for "${beat.name}"?\n\n` +[39m
+[31m+           `${incoming} will become the new MASTER.\n` +[39m
+[31m+           `Its BPM, key, tags, rating and artwork will replace the current metadata.\n\n` +[39m
+[31m+           `WAV and project files from this folder will also be added or updated.`[39m
+[31m+         );[39m
+[31m+         if (!confirmed) return true;[39m
+[31m+       }[39m
+[31m+       replaceMaster = true;[39m
+[31m+     }[39m
+[31m+[39m
+[31m+     setBeatCloudUpdateBusy(beat.id, true);[39m
+[31m+     const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);[39m
+[31m+     if (runtime.sync_state === "synced") transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);[39m
+[31m+     transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);[39m
+[31m+     try {[39m
+[31m+       let updated = await t.mergeFolderIntoExistingBeat(beat, folderPath, replaceMaster);[39m
+[31m+       setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));[39m
+[31m+[39m
+[31m+       if (replaceMaster) {[39m
+[31m+         updated = await t.uploadBeatToTelegram(updated);[39m
+[31m+         setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));[39m
+[31m+       }[39m
+[31m+[39m
+[31m+       if (preview.has_wav && updated.wav_path) {[39m
+[31m+         await t.uploadDroppedFileToTelegram(updated, updated.wav_path, "WAV");[39m
+[31m+       }[39m
+[31m+[39m
+[31m+       if (preview.has_project_assets) {[39m
+[31m+         await t.uploadProjectToTelegram(updated);[39m
+[31m+       }[39m
+[31m+[39m
+[31m+       if (replaceMaster && updated.telegram_file_id) {[39m
+[31m+         await t.syncBeatMetadataToTelegram(updated);[39m
+[31m+       }[39m
+[31m+[39m
+[31m+       window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));[39m
+[31m+       await libraryStateManager.commitSnapshot(beatsLatestRef.current.map(item => item.id === beat.id ? updated : item), "metadata-update");[39m
+[31m+       transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);[39m
+[31m+       setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));[39m
+[31m+       return true;[39m
+[31m+     } catch (error) {[39m
+[31m+       console.error(error);[39m
+[31m+       const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");[39m
+[31m+       if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);[39m
+[31m+       else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "FOLDER_UPDATE_FAILED", message, retryable: true }, beat);[39m
+[31m+       alert(`Could not update "${beat.name}" from the dropped folder: ${message}`);[39m
+[31m+       return true;[39m
+[31m+     } finally {[39m
+[31m+       setBeatCloudUpdateBusy(beat.id, false);[39m
+[31m+     }[39m
+[31m+   }, [rejectOfflineMutation, transitionRuntime]);[39m
+[31m+[39m
+[31m+   const { commitDrawerCloudMutation } = useDrawerCloudPersistence({[39m
+[31m+   beats,[39m
+[31m+   browserCloudEditing: platform.capabilities.browserCloudEditing,[39m
+[31m+   connectionState,[39m
+[31m+   cloudSessionVerified,[39m
+[31m+   beatsLatestRef,[39m
+[31m+   beatRuntimeStatesRef,[39m
+[31m+   transitionRuntime,[39m
+[31m+   cloudMetaSnapshotRef,[39m
+[31m+   cloudLibraryTimerRef,[39m
+[31m+   cloudLibrarySnapshotRef,[39m
+[31m+ });[39m
+[31m+[39m
+[31m+   // V7: INDEX writes are explicit transactions only.[39m
+[31m+   // There is deliberately no generic "beats changed => rewrite Telegram" observer.[39m
+[31m+   // Upload, metadata, Trash/Restore and project/file operations commit through[39m
+[31m+   // libraryStateManager at their actual logical commit boundary. This prevents[39m
+[31m+   // render/cache hydration from becoming an accidental cloud mutation.[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     handleIncompleteWarningsChanged,[39m
+[31m+     handleCustomCursorChanged,[39m
+[31m+     handleFolderChanged,[39m
+[31m+     handleDisconnectTelegramAccount,[39m
+[31m+   } = useSessionActions({[39m
+[31m+     setSettings,[39m
+[31m+     setCloudSessionVerified,[39m
+[31m+     logoutAccount: logoutBeatGalerAccount,[39m
+[31m+     releaseFile,[39m
+[31m+     progressiveRevealRunRef,[39m
+[31m+     clearPlaybackPreparation,[39m
+[31m+     clearArtworkHydration,[39m
+[31m+     setRevealedBeatIds,[39m
+[31m+     setBeats,[39m
+[31m+     clearSelection,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const updateBeat = useCallback((updated: Beat) => {[39m
+[31m+     if (updated.telegram_file_id && connectionState === "online") {[39m
+[31m+       const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);[39m
+[31m+       if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);[39m
+[31m+     }[39m
+[31m+     setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));[39m
+[31m+     if (drawer?.beat.id === updated.id) setDrawer(d => d ? { ...d, beat: updated } : null);[39m
+[31m+   }, [connectionState, drawer, transitionRuntime]);[39m
+[31m+[39m
+[31m+[39m
+[31m+[39m
+[31m+   const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {[39m
+[31m+     if (rejectOfflineMutation("Changing artwork")) return;[39m
+[31m+[39m
+[31m+     const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };[39m
+[31m+[39m
+[31m+     if (platform.capabilities.browserCloudEditing) {[39m
+[31m+       // Publish the browser-decoded artwork immediately, then commit it through[39m
+[31m+       // the Web editor/Direct transport. No Tauri metadata path participates.[39m
+[31m+       updateBeat(updated);[39m
+[31m+       transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);[39m
+[31m+       try {[39m
+[31m+         const committed = await platform.editor.commit(beat, updated, {});[39m
+[31m+         setBeats(current => {[39m
+[31m+           const next = current.map(item => item.id === committed.id ? committed : item);[39m
+[31m+           beatsLatestRef.current = next;[39m
+[31m+           return next;[39m
+[31m+         });[39m
+[31m+         setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);[39m
+[31m+         transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);[39m
+[31m+       } catch (error) {[39m
+[31m+         const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");[39m
+[31m+         transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);[39m
+[31m+         throw error;[39m
+[31m+       }[39m
+[31m+       return;[39m
+[31m+     }[39m
+[31m+[39m
+[31m+     // Desktop keeps its existing native metadata/artwork transaction.[39m
+[31m+     await saveBeatMeta({[39m
+[31m+       mp3_path: beat.mp3_path,[39m
+[31m+       wav_path: beat.wav_path,[39m
+[31m+       bpm: beat.bpm,[39m
+[31m+       key: beat.key,[39m
+[31m+       tags: beat.tags,[39m
+[31m+       rating: beat.rating,[39m
+[31m+       image_base64: imageBase64,[39m
+[31m+       update_filename: false,[39m
+[31m+     });[39m
+[31m+[39m
+[31m+     updateBeat(updated);[39m
+[31m+[39m
+[31m+     if (updated.telegram_file_id && connectionState === "online") {[39m
+[31m+       const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);[39m
+[31m+       if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);[39m
+[31m+       transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);[39m
+[31m+       try {[39m
+[31m+         await syncBeatMetadataToTelegram(updated);[39m
+[31m+         const indexSnapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);[39m
+[31m+         await libraryStateManager.commitSnapshot(indexSnapshot, "upload-batch");[39m
+[31m+         if (cloudLibraryTimerRef.current) {[39m
+[31m+           window.clearTimeout(cloudLibraryTimerRef.current);[39m
+[31m+           cloudLibraryTimerRef.current = null;[39m
+[31m+         }[39m
+[31m+         cloudLibrarySnapshotRef.current = indexSnapshot[39m
+[31m+           .filter(item => !!item.telegram_file_id)[39m
+[31m+           .map(cloudBeatFingerprint)[39m
+[31m+           .join("\u001c");[39m
+[31m+         cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));[39m
+[31m+         transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);[39m
+[31m+       } catch (error) {[39m
+[31m+         const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");[39m
+[31m+         transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);[39m
+[31m+         throw error;[39m
+[31m+       }[39m
+[31m+     }[39m
+[31m+   }, [updateBeat, rejectOfflineMutation, connectionState, transitionRuntime]);[39m
+[31m+[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     runBeatCloudUpdate,[39m
+[31m+     startMasterAssetUpdate,[39m
+[31m+     startWavAssetUpdate,[39m
+[31m+     handleBrowserBeatAssetDrop,[39m
+[31m+   } = useBeatAssetUpdates({[39m
+[31m+     rejectOfflineMutation,[39m
+[31m+     setBeatFileDrop,[39m
+[31m+     setBeatCloudUpdateBusy,[39m
+[31m+     beatRuntimeStatesRef,[39m
+[31m+     transitionRuntime,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     cloudLibrarySnapshotRef,[39m
+[31m+     setBeats,[39m
+[31m+     setDrawer,[39m
+[31m+     waitForUploadedBeatPlaybackReady,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     openableCloudProjectIds,[39m
+[31m+     projectUpdateNotice,[39m
+[31m+     dismissProjectUpdateNotice,[39m
+[31m+     hasStoredProject,[39m
+[31m+     startProjectAssetUpdate,[39m
+[31m+     handleAutoProjectDrop,[39m
+[31m+     handleBrowserProjectDrop,[39m
+[31m+     handleUploadProjectTelegram,[39m
+[31m+     handleOpenProject,[39m
+[31m+     handleUpdateProject,[39m
+[31m+   } = useBeatProjects({[39m
+[31m+     beats,[39m
+[31m+     connectionState,[39m
+[31m+     rejectOfflineMutation,[39m
+[31m+     transitionRuntime,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     setBeats,[39m
+[31m+     setDrawer,[39m
+[31m+     runBeatCloudUpdate,[39m
+[31m+     setBeatCloudUpdateBusy,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const handleDroppedBeatFileRole = useCallback(async (role: DroppedBeatFileRole) => {[39m
+[31m+     if (!beatFileDrop) return;[39m
+[31m+     const { beat, filePath } = beatFileDrop;[39m
+[31m+     const ext = extensionFromPath(filePath);[39m
+[31m+[39m
+[31m+     if (role === "loop" || role === "stems") return;[39m
+[31m+[39m
+[31m+     if (role === "main") {[39m
+[31m+       if (ext !== "mp3") return;[39m
+[31m+       startMasterAssetUpdate(beat, filePath);[39m
+[31m+       return;[39m
+[31m+     }[39m
+[31m+[39m
+[31m+     if (role === "wav") {[39m
+[31m+       if (ext !== "wav") return;[39m
+[31m+       startWavAssetUpdate(beat, filePath);[39m
+[31m+       return;[39m
+[31m+     }[39m
+[31m+[39m
+[31m+     if (role === "projectFolder") {[39m
+[31m+       const existing = await hasStoredProject(beat).catch(() => false);[39m
+[31m+       if (!existing) {[39m
+[31m+         await cleanupStagedDropPaths([filePath]).catch(() => {});[39m
+[31m+         setBeatFileDrop(null);[39m
+[31m+         await appAlert({[39m
+[31m+           title: "Project file required",[39m
+[31m+           message: "Add a .flp, .als, .logicx, .ptx/.ptf file or a valid PROJECT ZIP first. Then folders can be added to that PROJECT.zip using their original folder name.",[39m
+[31m+         });[39m
+[31m+         return;[39m
+[31m+       }[39m
+[31m+       startProjectAssetUpdate(beat, filePath, "projectFolder");[39m
+[31m+     }[39m
+[31m+   }, [beatFileDrop, hasStoredProject, startMasterAssetUpdate, startProjectAssetUpdate, startWavAssetUpdate]);[39m
+[31m+[39m
+[31m+[39m
+[31m+   useHtmlLibraryDrop({[39m
+[31m+     nativeDropAvailable: isTauriAvailable,[39m
+[31m+     browserFileImport: platform.capabilities.browserFileImport,[39m
+[31m+     reviewSkeletonEnabled: REVIEW_SKELETON_ENABLED,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     setDropActive,[39m
+[31m+     setBeatCloudUpdateBusy,[39m
+[31m+     setBeatFileDrop,[39m
+[31m+     setLibraryDropStaging,[39m
+[31m+     handleDropArtwork,[39m
+[31m+     handleAutoProjectDrop,[39m
+[31m+     handleBrowserBeatAssetDrop,[39m
+[31m+     handleBrowserProjectDrop,[39m
+[31m+     importDroppedBrowserFiles,[39m
+[31m+     importDroppedPaths,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   useNativeLibraryDrop({[39m
+[31m+     nativeDropAvailable: isTauriAvailable,[39m
+[31m+     reviewSkeletonEnabled: REVIEW_SKELETON_ENABLED,[39m
+[31m+     beatsLatestRef,[39m
+[31m+     setDropActive,[39m
+[31m+     setBeatCloudUpdateBusy,[39m
+[31m+     setBeatFileDrop,[39m
+[31m+     setLibraryDropStaging,[39m
+[31m+     handleDropArtwork,[39m
+[31m+     handleAutoProjectDrop,[39m
+[31m+     importDroppedPaths,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+   const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {[39m
+[31m+     setBeats(bs => bs.map(b => {[39m
+[31m+       if (!selectedIds.has(b.id)) return b;[39m
+[31m+       if (!updates.tags) return { ...b, ...updates };[39m
+[31m+[39m
+[31m+       const normalizedInput = Array.from(new Set([39m
+[31m+         updates.tags.map(t => t.trim().toLowerCase()).filter(Boolean)[39m
+[31m+       ));[39m
+[31m+[39m
+[31m+       if (options?.tagsMode === "replace") {[39m
+[31m+         return { ...b, ...updates, tags: normalizedInput };[39m
+[31m+       }[39m
+[31m+[39m
+[31m+       if (options?.tagsMode === "remove") {[39m
+[31m+         const removeSet = new Set(normalizedInput);[39m
+[31m+         const remainingTags = b.tags.filter(tag => !removeSet.has(tag.trim().toLowerCase()));[39m
+[31m+         return { ...b, ...updates, tags: remainingTags };[39m
+[31m+       }[39m
+[31m+[39m
+[31m+       const mergedTags = Array.from(new Set([39m
+[31m+         [...b.tags, ...normalizedInput].map(t => t.trim().toLowerCase()).filter(Boolean)[39m
+[31m+       ));[39m
+[31m+       return { ...b, ...updates, tags: mergedTags };[39m
+[31m+     }));[39m
+[31m+     clearSelection();[39m
+[31m+   }, [selectedIds]);[39m
+[31m+[39m
+[31m+[39m
+[31m+   const tagColors = useTagColors();[39m
+[31m+[39m
+[31m+ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {[39m
+[31m+   toggleTagFilter(tag, e.altKey ? "exclude" : "include");[39m
+[31m+ }, [toggleTagFilter]);[39m
+[31m+[39m
+[31m+   const tagFrequency = useMemo(() => selectTagFrequency(beats), [beats]);[39m
+[31m+   const allTags = useMemo(() => selectAllTags(beats, tagFrequency), [beats, tagFrequency]);[39m
+[31m+   const tagSuggestions = useMemo(() => selectTagSuggestions(beats), [beats]);[39m
+[31m+   const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));[39m
+[31m+[39m
+[31m+   const {[39m
+[31m+     shuffleEnabled,[39m
+[31m+     repeatMode,[39m
+[31m+     showQueue,[39m
+[31m+     queuedBeats,[39m
+[31m+     addToQueue,[39m
+[31m+     handleNext,[39m
+[31m+     handlePrev,[39m
+[31m+     closeQueue,[39m
+[31m+     toggleQueue,[39m
+[31m+     toggleShuffle,[39m
+[31m+     cycleRepeat,[39m
+[31m+     playQueueIndex,[39m
+[31m+   } = usePlaybackQueue({[39m
+[31m+     beats,[39m
+[31m+     displayedBeats,[39m
+[31m+     playingId: audio.playingId,[39m
+[31m+     progress: audio.progress,[39m
+[31m+     endedSeq: audio.endedSeq,[39m
+[31m+     handlePlay,[39m
+[31m+     seek,[39m
+[31m+     releaseFile,[39m
+[31m+   });[39m
+[31m+[39m
+[31m+[39m
+[31m+[39m
+[31m+   const currentBeat = beats.find(b => b.id === audio.playingId);[39m
+[31m+   const selectedBeats = beats.filter(b => selectedIds.has(b.id));[39m
+[31m+   const activeDragBeat = activeDragId ? beats.find(b => b.id === activeDragId) ?? null : null;[39m
+[31m+[39m
+[31m+   return ([39m
+[31m+     <div[39m
+[31m+       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}[39m
+[31m+     >[39m
+[31m+       {(connectionState === "poor" || connectionState === "offline") && ([39m
+[31m+         <div style={{[39m
+[31m+           position: "fixed", top: 62, left: "50%", transform: "translateX(-50%)", zIndex: 20200,[39m
+[31m+           maxWidth: "min(620px, calc(100vw - 36px))", padding: "10px 14px", borderRadius: 10,[39m
+[31m+           border: "1px solid #7a6525", background: "#302913", color: "#f0d77d",[39m
+[31m+           boxShadow: "0 12px 34px rgba(0,0,0,.4)", fontSize: 11.5, lineHeight: 1.4, textAlign: "center",[39m
+[31m+         }}>[39m
+[31m+           {connectionState === "offline"[39m
+[31m+             ? "You're offline. This session can keep using already prepared audio; after restart only beats with the green Offline check are shown."[39m
+[31m+             : "Poor connection. BeatGaler is retrying automatically; cloud actions may take longer."}[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+       {cloudFilesDownloadError && ([39m
+[31m+         <div style={{[39m
+[31m+           position: "fixed", top: 62, right: 18, zIndex: 20140, width: 360, maxWidth: "calc(100vw - 36px)",[39m
+[31m+           padding: "12px 42px 12px 14px", borderRadius: 10, border: "1px solid #7a2525",[39m
+[31m+           background: "#351414", color: "#ffd7d7", boxShadow: "0 14px 44px rgba(0,0,0,.65)",[39m
+[31m+           fontSize: 12, lineHeight: 1.5,[39m
+[31m+         }}>[39m
+[31m+           <button[39m
+[31m+             type="button"[39m
+[31m+             aria-label="Close download error"[39m
+[31m+             onClick={dismissDownloadError}[39m
+[31m+             style={{[39m
+[31m+               position: "absolute", top: 8, right: 8, width: 24, height: 24, border: "none",[39m
+[31m+               borderRadius: 6, background: "transparent", color: "#ff9d9d", cursor: "pointer",[39m
+[31m+               fontSize: 16, lineHeight: "24px", padding: 0, textAlign: "center",[39m
+[31m+             }}[39m
+[31m+           >×</button>[39m
+[31m+           <div style={{ fontWeight: 700, marginBottom: 3 }}>Download failed</div>[39m
+[31m+           <div>{cloudFilesDownloadError}</div>[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+       {projectUpdateNotice && ([39m
+[31m+         <div style={{[39m
+[31m+           position: "fixed", top: cloudDownloadNotice ? 116 : 62, right: 18, zIndex: 20130,[39m
+[31m+           width: 360, maxWidth: "calc(100vw - 36px)", padding: "11px 38px 11px 14px",[39m
+[31m+           borderRadius: 10, border: "1px solid #66521f", background: "#2d2714",[39m
+[31m+           color: "#f1d783", boxShadow: "0 14px 44px rgba(0,0,0,.45)", fontSize: 12, lineHeight: 1.45,[39m
+[31m+         }}>[39m
+[31m+           <button[39m
+[31m+             type="button"[39m
+[31m+             aria-label="Close project notice"[39m
+[31m+             onClick={dismissProjectUpdateNotice}[39m
+[31m+             style={{[39m
+[31m+               position: "absolute", top: 7, right: 8, width: 24, height: 24, border: "none",[39m
+[31m+               borderRadius: 6, background: "transparent", color: "#d8bd67", cursor: "pointer",[39m
+[31m+               fontSize: 16, lineHeight: "24px", padding: 0, textAlign: "center",[39m
+[31m+             }}[39m
+[31m+           >×</button>[39m
+[31m+           <div style={{ fontWeight: 700, marginBottom: 2 }}>Project notice</div>[39m
+[31m+           <div>{projectUpdateNotice}</div>[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+       {cloudDownloadNotice && ([39m
+[31m+         <div style={{[39m
+[31m+           position: "fixed", top: 62, right: 18, zIndex: 20120, width: 340, maxWidth: "calc(100vw - 36px)",[39m
+[31m+           padding: "11px 14px", borderRadius: 10,[39m
+[31m+           border: cloudDownloadNotice.status === "completed" ? "1px solid #257a3d" : "1px solid #303030",[39m
+[31m+           background: cloudDownloadNotice.status === "completed" ? "#12351d" : "#171717",[39m
+[31m+           color: cloudDownloadNotice.status === "completed" ? "#8ff0aa" : "#e8e8e8",[39m
+[31m+           boxShadow: "0 14px 44px rgba(0,0,0,.45)", fontSize: 12, lineHeight: 1.45,[39m
+[31m+         }}>[39m
+[31m+           {cloudDownloadNotice.status === "downloading" ? ([39m
+[31m+             cloudDownloadNotice.kind === "ALL"[39m
+[31m+               ? <>Downloading everything from &quot;{cloudDownloadNotice.beatName}&quot;...</>[39m
+[31m+               : cloudDownloadNotice.kind === "PROJECT"[39m
+[31m+                 ? <>Downloading Full Project from &quot;{cloudDownloadNotice.beatName}&quot;...</>[39m
+[31m+                 : <>Downloading {cloudDownloadNotice.kind} from &quot;{cloudDownloadNotice.beatName}&quot;...</>[39m
+[31m+           ) : ([39m
+[31m+             cloudDownloadNotice.kind === "ALL"[39m
+[31m+               ? <>Downloaded everything from &quot;{cloudDownloadNotice.beatName}&quot;.</>[39m
+[31m+               : cloudDownloadNotice.kind === "PROJECT"[39m
+[31m+                 ? <>Downloaded Full Project from &quot;{cloudDownloadNotice.beatName}&quot;.</>[39m
+[31m+                 : <>Downloaded {cloudDownloadNotice.kind} from &quot;{cloudDownloadNotice.beatName}&quot;.</>[39m
+[31m+           )}[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+       {interruptedUploadNotices.length > 0 && ([39m
+[31m+         <div style={{[39m
+[31m+           position: "fixed", top: 62, right: 18, zIndex: 20000, width: 360, maxWidth: "calc(100vw - 36px)",[39m
+[31m+           padding: "12px 42px 12px 14px", borderRadius: 10, border: "1px solid #7a2525",[39m
+[31m+           background: "#351414", color: "#ffd7d7", boxShadow: "0 14px 44px rgba(0,0,0,.55)",[39m
+[31m+           fontSize: 12, lineHeight: 1.5,[39m
+[31m+         }}>[39m
+[31m+           <button[39m
+[31m+             type="button"[39m
+[31m+             aria-label="Close notification"[39m
+[31m+             title="Close"[39m
+[31m+             onClick={dismissInterruptedUploadNotices}[39m
+[31m+             style={{[39m
+[31m+               position: "absolute", top: 8, right: 8, width: 24, height: 24, border: "none",[39m
+[31m+               borderRadius: 6, background: "transparent", color: "#ff9d9d", cursor: "pointer",[39m
+[31m+               fontSize: 16, lineHeight: "24px", padding: 0, textAlign: "center",[39m
+[31m+             }}[39m
+[31m+           >[39m
+[31m+             ×[39m
+[31m+           </button>[39m
+[31m+           {interruptedUploadNotices.map(name => ([39m
+[31m+             <div key={name}>Your last upload of &quot;{name}&quot; was interrupted. The incomplete upload was removed.</div>[39m
+[31m+           ))}[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+       {/* Top bar */}[39m
+[31m+       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 24px", height: 50, flexShrink: 0, borderBottom: "1px solid #111" }}>[39m
+[31m+         <span style={{ fontWeight: 400, fontSize: 14, color: "#aaa", letterSpacing: 0.3 }}>beat galer</span>[39m
+[31m+         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>[39m
+[31m+           <SearchBar value={search} onChange={setSearch} />[39m
+[31m+           <SortMenu value={sortBy} onChange={setSortBy} />[39m
+[31m+           {/* Settings gear */}[39m
+[31m+           <button[39m
+[31m+             onClick={() => setShowSettings(true)}[39m
+[31m+             title="Settings"[39m
+[31m+             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: "#444", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}[39m
+[31m+             onMouseEnter={e => (e.currentTarget.style.color = "#aaa")}[39m
+[31m+             onMouseLeave={e => (e.currentTarget.style.color = "#444")}[39m
+[31m+           >[39m
+[31m+             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">[39m
+[31m+               <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />[39m
+[31m+               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.3.72.6 1 .3.27.68.4 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7.6Z"[39m
+[31m+                 stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />[39m
+[31m+             </svg></button>[39m
+[31m+           <button[39m
+[31m+             onClick={() => { clearUploadPreviewCache(); void reloadLibrary(); }}[39m
+[31m+             title={deferredLibraryReloadRef.current ? "Reload queued until uploads finish" : "Reload Library"}[39m
+[31m+             disabled={loading || libraryRefreshing}[39m
+[31m+             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: (loading || libraryRefreshing) ? "#666" : "#444", cursor: (loading || libraryRefreshing) ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}[39m
+[31m+             onMouseEnter={e => { if (!loading && !libraryRefreshing) e.currentTarget.style.color = "#aaa"; }}[39m
+[31m+             onMouseLeave={e => { e.currentTarget.style.color = (loading || libraryRefreshing) ? "#666" : "#444"; }}[39m
+[31m+           ><span style={{ display: "inline-block", animation: libraryRefreshing ? "beatgaler-refresh-spin .62s linear infinite" : "none" }}>↻</span></button>[39m
+[31m+           {/* Apple-style Select / Select All / Done */}[39m
+[31m+           {selectMode ? ([39m
+[31m+             <>[39m
+[31m+               <button[39m
+[31m+                 onClick={() => toggleSelectAll(displayedBeats)}[39m
+[31m+                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#888", fontSize: 12, cursor: "pointer" }}>[39m
+[31m+                 {displayedBeats.length > 0 && displayedBeats.every(b => selectedIds.has(b.id)) ? "Deselect All" : "Select All"}[39m
+[31m+               </button>[39m
+[31m+               <button[39m
+[31m+                 onClick={finishSelection}[39m
+[31m+                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#ccc", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>[39m
+[31m+                 Done[39m
+[31m+               </button>[39m
+[31m+             </>[39m
+[31m+           ) : ([39m
+[31m+             <button[39m
+[31m+               onClick={() => toggleSelection(null, false, displayedBeats)}[39m
+[31m+               style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #1e1e1e", color: "#555", fontSize: 12, cursor: "pointer" }}[39m
+[31m+               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#aaa"; (e.currentTarget as HTMLElement).style.borderColor = "#2a2a2a"; }}[39m
+[31m+               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "#555"; (e.currentTarget as HTMLElement).style.borderColor = "#1e1e1e"; }}>[39m
+[31m+               Select[39m
+[31m+             </button>[39m
+[31m+           )}[39m
+[31m+         </div>[39m
+[31m+       </div>[39m
+[31m+[39m
+[31m+       {/* Selection toolbar */}[39m
+[31m+       {selectedIds.size > 0 && ([39m
+[31m+         <div style={{ padding: "0 24px", height: 40, display: "flex", alignItems: "center", gap: 12, background: "#111", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>[39m
+[31m+           <span style={{ fontSize: 12, color: "#888" }}>{selectedIds.size} selected</span>[39m
+[31m+           <button onClick={handleEditBulk}[39m
+[31m+             style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>[39m
+[31m+             Edit all[39m
+[31m+           </button>[39m
+[31m+           <button onClick={handleUploadBulk}[39m
+[31m+             style={{ padding: "5px 14px", background: "#202020", border: "1px solid #2e2e2e", borderRadius: 6, color: "#e0e0e0", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>[39m
+[31m+             Upload to YouTube[39m
+[31m+           </button>[39m
+[31m+           <button onClick={handleRemoveBulk}[39m
+[31m+             style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>[39m
+[31m+             Remove all[39m
+[31m+           </button>[39m
+[31m+           <button onClick={finishSelection}[39m
+[31m+             style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", fontSize: 12, cursor: "pointer" }}>[39m
+[31m+             Cancel[39m
+[31m+           </button>[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       {/* Tag filter */}[39m
+[31m+ <div style={{ padding: "7px 24px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: "1px solid #111", flexShrink: 0 }}>[39m
+[31m+   <button[39m
+[31m+     onClick={clearTagFilters}[39m
+[31m+     style={{[39m
+[31m+       padding: "4px 12px", borderRadius: 20,[39m
+[31m+       background: (!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "transparent",[39m
+[31m+       border: `1px solid ${(!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "#1e1e1e"}`,[39m
+[31m+       color: (!includedTags.size && !excludedTags.size) ? "#000" : "#444", fontSize: 12, cursor: "pointer",[39m
+[31m+     }}>All</button>[39m
+[31m+   {allTags.map(t => {[39m
+[31m+     const color = tagColors[t.trim().toLowerCase()];[39m
+[31m+     const included = includedTags.has(t);[39m
+[31m+     const excluded = excludedTags.has(t);[39m
+[31m+     const bg = excluded ? "rgba(248,113,113,0.14)" : included ? (color ?? "#e5e5e5") : (color ? `${color}22` : "transparent");[39m
+[31m+     const border = excluded ? "#7f1d1d" : included ? (color ?? "#e5e5e5") : (color ? `${color}55` : "#1e1e1e");[39m
+[31m+     const text = excluded ? "#f87171" : included ? (color ? "#fff" : "#000") : (color ?? "#444");[39m
+[31m+     return ([39m
+[31m+       <button key={t}[39m
+[31m+         onClick={(e) => handleTagClick(t, e)}[39m
+[31m+         onContextMenu={(e) => {[39m
+[31m+           e.preventDefault();[39m
+[31m+           window.dispatchEvent(new Event("beatcard:close-menus"));[39m
+[31m+           setTagColorMenu({ tag: t, x: e.clientX, y: e.clientY });[39m
+[31m+         }}[39m
+[31m+         style={{[39m
+[31m+           padding: "4px 12px", borderRadius: 20, background: bg,[39m
+[31m+           border: `1px solid ${border}`, color: text, fontSize: 12, cursor: "pointer",[39m
+[31m+           textDecoration: excluded ? "line-through" : "none",[39m
+[31m+           display: "inline-flex", alignItems: "center", gap: 5,[39m
+[31m+         }}>[39m
+[31m+         {t}[39m
+[31m+       </button>[39m
+[31m+     );[39m
+[31m+   })}[39m
+[31m+ </div>[39m
+[31m+[39m
+[31m+ {tagColorMenu && ([39m
+[31m+   <TagColorMenu[39m
+[31m+     x={tagColorMenu.x}[39m
+[31m+     y={tagColorMenu.y}[39m
+[31m+     current={tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}[39m
+[31m+     onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }}[39m
+[31m+     onRename={() => {[39m
+[31m+       openTagRename(tagColorMenu.tag);[39m
+[31m+       setTagColorMenu(null);[39m
+[31m+     }}[39m
+[31m+     onClose={() => setTagColorMenu(null)}[39m
+[31m+   />[39m
+[31m+ )}[39m
+[31m+[39m
+[31m+[39m
+[31m+ {tagRename && ([39m
+[31m+   <TagRenameDialog[39m
+[31m+     rename={tagRename}[39m
+[31m+     busy={tagRenameBusy}[39m
+[31m+     error={tagRenameError}[39m
+[31m+     affectedCount={tagRenameAffectedCount}[39m
+[31m+     mp3Count={tagRenameMp3Count}[39m
+[31m+     wavCount={tagRenameWavCount}[39m
+[31m+     onNewTagChange={setTagRenameNewTag}[39m
+[31m+     onContinue={continueTagRename}[39m
+[31m+     onBack={backTagRename}[39m
+[31m+     onCancel={cancelTagRename}[39m
+[31m+     onConfirm={confirmTagRename}[39m
+[31m+   />[39m
+[31m+ )}[39m
+[31m+[39m
+[31m+       {/* Grid — OS file drag-drop */}[39m
+[31m+       <div[39m
+[31m+         data-library-scroll="true"[39m
+[31m+         aria-busy={startupCookingGate || (connectionState === "online" && !cloudSessionVerified)}[39m
+[31m+         style={{ flex: 1, position: "relative", overflowY: "auto", padding: "28px 24px", paddingBottom: currentBeat ? 90 : 28, opacity: libraryRefreshing ? 0.82 : 1, transform: libraryRefreshing ? "scale(0.997)" : "scale(1)", transition: "opacity 150ms ease, transform 150ms ease" }}[39m
+[31m+[39m
+[31m+       >[39m
+[31m+         {libraryRefreshing && ([39m
+[31m+           <div aria-hidden="true" style={{ position: "sticky", top: -28, left: 0, right: 0, height: 2, zIndex: 20, overflow: "hidden", pointerEvents: "none" }}>[39m
+[31m+             <div style={{ width: "28%", height: "100%", background: "rgba(255,255,255,.38)", animation: "beatgaler-refresh-line .72s ease-in-out infinite" }} />[39m
+[31m+           </div>[39m
+[31m+         )}[39m
+[31m+         {filteredBeats.length === 0 ? ([39m
+[31m+           <div style={{ textAlign: "center", paddingTop: 92, color: "#383838" }}>[39m
+[31m+             {beats.length === 0 ? ([39m
+[31m+               cloudSessionVerified && connectionState === "online" ? ([39m
+[31m+                 <div>[39m
+[31m+                   <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>Empty Gallery</div>[39m
+[31m+                   <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Add a beat to start your library.</div>[39m
+[31m+                 </div>[39m
+[31m+               ) : connectionState === "offline" || connectionState === "poor" ? ([39m
+[31m+                 <div>[39m
+[31m+                   <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>No offline beats available</div>[39m
+[31m+                   <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Reconnect to verify your Galer Cloud library.</div>[39m
+[31m+                 </div>[39m
+[31m+               ) : ([39m
+[31m+                 <div aria-label="Loading beat library" style={{ minHeight: 1 }} />[39m
+[31m+               )[39m
+[31m+             ) : <div style={{ fontSize: 13 }}>No beats match your search</div>}[39m
+[31m+           </div>[39m
+[31m+         ) : ([39m
+[31m+           <DndContext[39m
+[31m+             sensors={sensors}[39m
+[31m+             collisionDetection={closestCenter}[39m
+[31m+             onDragStart={handleDragStart}[39m
+[31m+             onDragEnd={handleDragEnd}[39m
+[31m+             onDragCancel={handleDragCancel}[39m
+[31m+           >[39m
+[31m+             <SortableContext items={filteredBeats.map((b) => b.id)} strategy={rectSortingStrategy}>[39m
+[31m+               <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>[39m
+[31m+                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "28px 22px", alignContent: "flex-start", maxWidth: 1300 }}>[39m
+[31m+                 {filteredBeats.map((beat, i) => ([39m
+[31m+                   <BeatCard[39m
+[31m+                     key={beat.id}[39m
+[31m+                     beat={beat}[39m
+[31m+                     visible={revealedBeatIds.has(beat.id)}[39m
+[31m+                     interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}[39m
+[31m+                     playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}[39m
+[31m+                     openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}[39m
+[31m+                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}[39m
+[31m+                     tagFrequency={tagFrequency}[39m
+[31m+                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}[39m
+[31m+                     playing={audio.playingId === beat.id && audio.isPlaying}[39m
+[31m+                     selected={selectedIds.has(beat.id)}[39m
+[31m+                     selectedCount={selectedIds.size}[39m
+[31m+                     selectMode={selectMode}[39m
+[31m+                     dragEnabled={!selectMode && platform.capabilities.manualLibraryReorder}[39m
+[31m+                     networkOnline={connectionState === "online"}[39m
+[31m+                     offlineBusy={offlineBusyIds.has(beat.id)}[39m
+[31m+                     canUseOfflinePackage={platform.capabilities.offlinePackage}[39m
+[31m+                     canUseLocalHelper={platform.capabilities.localHelper}[39m
+[31m+                     canInspectNativeProject={platform.capabilities.openProjectInDaw}[39m
+[31m+                     onToggleOffline={handleToggleOffline}[39m
+[31m+                     onRetryUpload={retryBackgroundUpload}[39m
+[31m+                     onBulkEdit={handleEditBulk}[39m
+[31m+                     onBulkUpload={handleUploadBulk}[39m
+[31m+                     onBulkDelete={handleRemoveBulk}[39m
+[31m+                     onPlay={handlePlay}[39m
+[31m+                     onWarm={handleWarm}[39m
+[31m+                     onDetail={b => setDrawer({ beat: b, mode: "detail" })}[39m
+[31m+                     onEdit={b => { if (!rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}[39m
+[31m+                     onDelete={deleteBeat}[39m
+[31m+                     onAddToQueue={addToQueue}[39m
+[31m+                     onUpload={handleUpload}[39m
+[31m+                     onUploadTelegram={handleUploadTelegram}[39m
+[31m+                     onDownloadTelegram={handleDownloadTelegram}[39m
+[31m+                     onUploadProjectTelegram={handleUploadProjectTelegram}[39m
+[31m+                     onOpenProject={handleOpenProject}[39m
+[31m+                     onUpdateProject={handleUpdateProject}[39m
+[31m+                     onCloudFiles={handleCloudFiles}[39m
+[31m+                     onToggleSelect={(b, e) => toggleSelection(b, e.shiftKey, filteredBeats)}[39m
+[31m+                     animDelay={0}[39m
+[31m+                   />[39m
+[31m+                 ))}[39m
+[31m+                 </div>[39m
+[31m+               </div>[39m
+[31m+             </SortableContext>[39m
+[31m+             <DragOverlay>[39m
+[31m+               {activeDragBeat ? ([39m
+[31m+                 <div style={{ width: 160, borderRadius: 12, transform: "scale(1.02)", boxShadow: "0 20px 40px rgba(0,0,0,0.6)" }}>[39m
+[31m+                   <Artwork beat={activeDragBeat} size={160} playing={false} />[39m
+[31m+                 </div>[39m
+[31m+               ) : null}[39m
+[31m+             </DragOverlay>[39m
+[31m+           </DndContext>[39m
+[31m+         )}[39m
+[31m+       </div>[39m
+[31m+[39m
+[31m+       {/* + Add beat */}[39m
+[31m+       {!currentBeat && ([39m
+[31m+         <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 45 }}>[39m
+[31m+           <button onClick={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}[39m
+[31m+             style={{ padding: "9px 20px", borderRadius: 40, background: "#161616", border: "1px solid #242424", color: "#777", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 4px 24px rgba(0,0,0,0.6)" }}[39m
+[31m+             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#202020"; (e.currentTarget as HTMLElement).style.color = "#ccc"; }}[39m
+[31m+             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#161616"; (e.currentTarget as HTMLElement).style.color = "#777"; }}>[39m
+[31m+             <PlusIcon size={11} /> Add beat[39m
+[31m+           </button>[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       {cloudFilesBeat && ([39m
+[31m+         <CloudFilesModal[39m
+[31m+           beat={cloudFilesBeat}[39m
+[31m+           files={cloudFiles}[39m
+[31m+           busyId={cloudFilesBusyId}[39m
+[31m+           downloadedIds={cloudFilesDownloadedIds}[39m
+[31m+           onDownload={handleGetCloudFile}[39m
+[31m+           onClose={closeCloudFiles}[39m
+[31m+         />[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       {showAdd && <AddBeatModal onClose={() => setShowAdd(false)} onAdd={addBeatsAndReview} existingBeats={beats} />}[39m
+[31m+[39m
+[31m+       {showSettings && ([39m
+[31m+         <SettingsPanel[39m
+[31m+           currentFolder={settings?.beats_folder ?? null}[39m
+[31m+           showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}[39m
+[31m+           onIncompleteWarningsChanged={handleIncompleteWarningsChanged}[39m
+[31m+           customCursorEnabled={settings?.custom_cursor_enabled ?? true}[39m
+[31m+           onCustomCursorChanged={handleCustomCursorChanged}[39m
+[31m+           telegramConnected={settings?.telegram_cloud_connected ?? false}[39m
+[31m+           networkOnline={connectionState === "online"}[39m
+[31m+           telegramUsername={settings?.telegram_cloud_username ?? null}[39m
+[31m+           onDisconnectTelegram={handleDisconnectTelegramAccount}[39m
+[31m+           onClose={() => setShowSettings(false)}[39m
+[31m+           onFolderChanged={handleFolderChanged}[39m
+[31m+           onBeatRestored={handleBeatRestored}[39m
+[31m+         />[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       {drawer && !reviewQueue && !reviewBootstrap && ([39m
+[31m+         <Drawer[39m
+[31m+           beat={drawer.beat}[39m
+[31m+           mode={drawer.mode}[39m
+[31m+           tagSuggestions={tagSuggestions}[39m
+[31m+           onClose={() => { setDrawer(null); clearSelection(); }}[39m
+[31m+           onSaved={updateBeat}[39m
+[31m+           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) releaseFile(); }}[39m
+[31m+           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}[39m
+[31m+           onBulkSaved={applyBulkUpdate}[39m
+[31m+           mutationAllowed={connectionState === "online"}[39m
+[31m+           onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}[39m
+[31m+         />[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       <ImportReviewHost[39m
+[31m+   libraryDropStaging={libraryDropStaging}[39m
+[31m+   reviewBootstrap={reviewBootstrap}[39m
+[31m+   reviewQueue={reviewQueue}[39m
+[31m+   skeletonEnabled={REVIEW_SKELETON_ENABLED}[39m
+[31m+   tagSuggestions={tagSuggestions}[39m
+[31m+   mutationAllowed={connectionState === "online"}[39m
+[31m+   onSkipCurrent={skipCurrentReviewBeat}[39m
+[31m+   onCancel={cancelReview}[39m
+[31m+   onSaveAll={platform.capabilities.reviewBeatCloudCommit ? undefined : handleReviewedSaveAll}[39m
+[31m+   isReviewNameTaken={(candidateName) => {[39m
+[31m+     const normalized = candidateName.trim().toLocaleLowerCase();[39m
+[31m+     if (!normalized) return false;[39m
+[31m+     return beats.some(existing =>[39m
+[31m+       existing.name.trim().toLocaleLowerCase() === normalized[39m
+[31m+     );[39m
+[31m+   }}[39m
+[31m+   onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}[39m
+[31m+   onSaved={handleReviewedBeatSaved}[39m
+[31m+   onReleaseAudio={beat => {[39m
+[31m+     if (audio.playingId === beat.id) releaseFile();[39m
+[31m+   }}[39m
+[31m+ />[39m
+[31m+[39m
+[31m+       {beatFileDrop && ([39m
+[31m+         <BeatFileDropModal[39m
+[31m+           beat={beatFileDrop.beat}[39m
+[31m+           filePath={beatFileDrop.filePath}[39m
+[31m+           fileName={fileNameFromPath(beatFileDrop.filePath)}[39m
+[31m+           fileExtension={extensionFromPath(beatFileDrop.filePath)}[39m
+[31m+           isDirectory={beatFileDrop.kind === "directory"}[39m
+[31m+           onChoose={handleDroppedBeatFileRole}[39m
+[31m+           onClose={() => {[39m
+[31m+             void cleanupStagedDropPaths([beatFileDrop.filePath]);[39m
+[31m+             setBeatFileDrop(null);[39m
+[31m+           }}[39m
+[31m+         />[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       <ImportResolutionHost[39m
+[31m+         audioConflictBatch={audioConflictBatch}[39m
+[31m+         dropImportBatch={dropImportBatch}[39m
+[31m+         onAudioConflictsCancel={cancelAudioConflicts}[39m
+[31m+         onAudioConflictsResolved={resolveAudioConflicts}[39m
+[31m+         onImportDecisionsClose={closeImportDecisions}[39m
+[31m+         onImportDecisionsImported={importResolvedDecisions}[39m
+[31m+       />[39m
+[31m+[39m
+[31m+       {(dropActive || dropImporting) && !libraryDropStaging && !reviewBootstrap && !reviewQueue && ([39m
+[31m+         <div style={{[39m
+[31m+           position: "fixed",[39m
+[31m+           left: "50%",[39m
+[31m+           bottom: currentBeat ? 86 : 24,[39m
+[31m+           transform: "translateX(-50%)",[39m
+[31m+           zIndex: 10000,[39m
+[31m+           pointerEvents: "none",[39m
+[31m+           width: "min(620px, calc(100vw - 48px))",[39m
+[31m+         }}>[39m
+[31m+           <div style={{[39m
+[31m+             padding: "13px 18px",[39m
+[31m+             borderRadius: 12,[39m
+[31m+             border: "2px dashed #f5a623",[39m
+[31m+             background: "rgba(17,17,17,0.94)",[39m
+[31m+             textAlign: "center",[39m
+[31m+             boxShadow: "0 10px 32px rgba(0,0,0,0.42)",[39m
+[31m+           }}>[39m
+[31m+             <div style={{ fontSize: 13, color: "#eee", fontWeight: 600 }}>[39m
+[31m+               {dropImporting ? "Importando…" : "Suelta aquí para agregar como beat aparte"}[39m
+[31m+             </div>[39m
+[31m+             {!dropImporting && ([39m
+[31m+               <div style={{ fontSize: 10, color: "#777", marginTop: 4, lineHeight: 1.45 }}>[39m
+[31m+                 O arrástralo encima de un beat para agregarlo a ese beat.[39m
+[31m+               </div>[39m
+[31m+             )}[39m
+[31m+           </div>[39m
+[31m+         </div>[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       {currentBeat && ([39m
+[31m+         <Player[39m
+[31m+           beat={currentBeat}[39m
+[31m+           playing={audio.isPlaying}[39m
+[31m+           progress={audio.progress}[39m
+[31m+           duration={audio.duration}[39m
+[31m+           volume={audio.volume}[39m
+[31m+           queue={queuedBeats}[39m
+[31m+           currentIndex={-1}[39m
+[31m+           showQueue={showQueue}[39m
+[31m+           shuffleEnabled={shuffleEnabled}[39m
+[31m+           repeatMode={repeatMode}[39m
+[31m+           canShowQueue={queuedBeats.length > 0}[39m
+[31m+           onToggle={togglePause}[39m
+[31m+           onSeek={seek}[39m
+[31m+           onPrev={handlePrev}[39m
+[31m+           onNext={() => handleNext(false)}[39m
+[31m+           onVolumeChange={setVolume}[39m
+[31m+           onToggleShuffle={toggleShuffle}[39m
+[31m+           onCycleRepeat={cycleRepeat}[39m
+[31m+           onToggleQueue={toggleQueue}[39m
+[31m+           onPlayQueueIndex={playQueueIndex}[39m
+[31m+           canAddBeat={platform.capabilities.browserFileImport || platform.capabilities.nativeFilesystemDrop}[39m
+[31m+           onAddBeat={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}[39m
+[31m+           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })}[39m
+[31m+           onEdit={(b) => { if (!rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}[39m
+[31m+           onDelete={deleteBeat}[39m
+[31m+           onAddToQueue={addToQueue}[39m
+[31m+         />[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       {showUpload && ([39m
+[31m+         <UploadModal[39m
+[31m+           initialBeat={showUpload.initialBeat}[39m
+[31m+           allBeats={beats}[39m
+[31m+           initialSelectedIds={showUpload.selectedIds}[39m
+[31m+           onClose={() => setShowUpload(null)}[39m
+[31m+         />[39m
+[31m+       )}[39m
+[31m+[39m
+[31m+       <JobStatusBar />[39m
+[31m+     </div>[39m
+[31m+   );[39m
+[31m+ }[39m
+[31m+[39m
+[31m+[39m
+[31m+ export default function App() {[39m
+[31m+   return platform.kind === "web"[39m
+[31m+     ? <BeatGalerApp />[39m
+[31m+     : <AccountGate><BeatGalerApp /></AccountGate>;[39m
+[31m+ }[39m
+[31m+[39m
+
+[36m [2m❯[22m tests/integration/issue97RuntimeWebFollowup.test.ts:[2m222:17[22m[39m
+    [90m220| [39m    const playbackController = source("src/features/playback/usePlayba…
+    [90m221| [39m    expect(playbackController).toContain('if (!platform.capabilities.p…
+    [90m222| [39m    expect(app).toContain("Math.min(isTauriAvailable ? 6 : 1, queue.le…
+    [90m   | [39m                [31m^[39m
+    [90m223| [39m  })[33m;[39m
+    [90m224| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m41 passed[39m[22m[90m (42)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m156 passed[39m[22m[90m (157)[39m
+[2m   Start at [22m 11:22:32
+[2m   Duration [22m 14.53s[2m (transform 913ms, setup 0ms, collect 1.69s, tests 847ms, environment 26.14s, prepare 5.20s)[22m
+
+
+::error file=/home/runner/work/BeatGaler/BeatGaler/tests/integration/issue97RuntimeWebFollowup.test.ts,title=tests/integration/issue97RuntimeWebFollowup.test.ts > Issue #97 production runtime follow-up > does not let Web card warming queue native cooking ahead of Play,line=222,column=17::AssertionError: expected 'import React, { useState, useCallback…' to contain 'Math.min(isTauriAvailable ? 6 : 1, qu…'%0A%0A- Expected%0A+ Received%0A%0A- Math.min(isTauriAvailable ? 6 : 1, queue.length)%0A+ import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";%0A+ import type { Beat } from "./types";%0A+ import BeatCard from "./components/BeatCard";%0A+ import Drawer from "./components/Drawer";%0A+ import Player from "./components/Player";%0A+ import AddBeatModal from "./components/AddBeatModal";%0A+ import SettingsPanel from "./components/SettingsPanel";%0A+ import AccountGate, { logoutBeatGalerAccount } from "./components/AccountGate";%0A+ import UploadModal from "./components/UploadModal";%0A+ import JobStatusBar from "./components/JobStatusBar";%0A+ import { PlusIcon, Artwork } from "./components/ui";%0A+ import { useAudio } from "./hooks/useAudio";%0A+ import { loadLibrary, readBeatMeta, saveBeatMeta, discardImportReviewBatch, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, type CloudFileType, isTauriAvailable } from "./lib/tauri";%0A+ import { libraryStateManager } from "./lib/libraryStateManager";%0A+ import { platform } from "./platform";%0A+ import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";%0A+ import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";%0A+ import { appAlert, appConfirm } from "./lib/dialog";%0A+ import { sanitizeUserVisibleText } from "./lib/userVisibleError";%0A+ import { useTagColors, setTagColor } from "./lib/tagColors";%0A+ import { registerJob, updateJob } from "./lib/jobStore";%0A+ import { cleanTags } from "./lib/metadataValidation";%0A+ import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";%0A+ import CloudFilesModal from "./features/downloads/components/CloudFilesModal";%0A+ import { useBeatDownloads } from "./features/downloads/useBeatDownloads";%0A+ import BeatFileDropModal, { type DroppedBeatFileRole } from "./features/dragdrop/components/BeatFileDropModal";%0A+ import SearchBar from "./features/library/components/SearchBar";%0A+ import SortMenu from "./features/library/components/SortMenu";%0A+ import TagColorMenu from "./features/tags/components/TagColorMenu";%0A+ import { useArtworkHydration } from "./features/artwork/useArtworkHydration";%0A+ import { useCloudUploadQueue } from "./features/cloud/useCloudUploadQueue";%0A+ import ImportReviewHost, { ImportResolutionHost } from "./features/import/components/ImportReviewHost";%0A+ import { useImportSession } from "./features/import/useImportSession";%0A+ import { useImportReview } from "./features/import/useImportReview";%0A+ import { useImportDiscovery } from "./features/import/useImportDiscovery";%0A+ import { useImportSaveAll } from "./features/import/useImportSaveAll";%0A+ import { useBrowserImport } from "./features/import/useBrowserImport";%0A+ import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";%0A+ import { useHtmlLibraryDrop } from "./features/dragdrop/useHtmlLibraryDrop";%0A+ import { useNativeLibraryDrop } from "./features/dragdrop/useNativeLibraryDrop";%0A+ import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";%0A+ import { clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";%0A+ import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";%0A+ import { useLibraryViewState } from "./features/library/useLibraryViewState";%0A+ import { useLibraryReorder } from "./features/library/useLibraryReorder";%0A+ import { useBeatSelection } from "./features/selection/useBeatSelection";%0A+ import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "./features/tags/tagSelectors";%0A+ import { useTagFilters } from "./features/tags/useTagFilters";%0A+ import { useTagRename } from "./features/tags/useTagRename";%0A+ import TagRenameDialog from "./features/tags/components/TagRenameDialog";%0A+ import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";%0A+ import { useLibraryReload } from "./features/library/useLibraryReload";%0A+ import { useStartupBootstrap } from "./features/startup/useStartupBootstrap";%0A+ import { useLibraryReveal } from "./features/startup/useLibraryReveal";%0A+ import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";%0A+ import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";%0A+ import { usePlaybackController } from "./features/playback/usePlaybackController";%0A+ import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";%0A+ import { useDrawerCloudPersistence } from "./features/edit/useDrawerCloudPersistence";%0A+ import { useBeatAssetUpdates } from "./features/edit/useBeatAssetUpdates";%0A+ import { useBeatProjects } from "./features/projects/useBeatProjects";%0A+ import { useOfflineAvailability } from "./features/offline/useOfflineAvailability";%0A+ import { useTrashActions } from "./features/trash/useTrashActions";%0A+ import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";%0A+ import { createBeatRuntimeState } from "./features/state/beatRuntimeState";%0A+ import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";%0A+ import { useSessionState } from "./features/session/useSessionState";%0A+ import { useSessionActions } from "./features/session/useSessionActions";%0A+ import { useCustomCursor } from "./features/session/useCustomCursor";%0A+ import { useConnectivity } from "./features/session/useConnectivity";%0A+ import { useCloudLibraryEvents } from "./features/cloud/useCloudLibraryEvents";%0A+%0A+ // Intentionally isolated: if real-world timings prove the skeleton unnecessary,%0A+ // flipping/removing this one constant deletes the visual layer without touching%0A+ // the staged Review architecture underneath it.%0A+ const REVIEW_SKELETON_ENABLED = true;%0A+%0A+ const beatCloudUpdateBusyIds = new Set<string>();%0A+%0A+ function setBeatCloudUpdateBusy(beatId: string, active: boolean, success = false) {%0A+   if (active) beatCloudUpdateBusyIds.add(beatId);%0A+   else beatCloudUpdateBusyIds.delete(beatId);%0A+   window.dispatchEvent(new CustomEvent("beatgaler:beat-cloud-busy", {%0A+     detail: { beatId, active, success }%0A+   }));%0A+ }%0A+%0A+ function formatCloudBytes(bytes: number) {%0A+   if (!bytes) return "0 B";%0A+   const units = ["B", "KB", "MB", "GB"];%0A+   let n = bytes; let i = 0;%0A+   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }%0A+   return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;%0A+ }%0A+%0A+ function runtimeErrorMessage(error: unknown): string {%0A+   return error instanceof Error ? error.message : String(error);%0A+ }%0A+%0A+ function isRuntimeConflictError(error: unknown): boolean {%0A+   const message = runtimeErrorMessage(error).toLowerCase();%0A+   return message.includes("409") || message.includes("conflict") || message.includes("revision mismatch") || message.includes("version mismatch");%0A+ }%0A+%0A+ function BeatGalerApp() {%0A+   const {%0A+     beats,%0A+     setBeats,%0A+     beatsLatestRef,%0A+     startupCachedBeatsRef,%0A+     initialLoading,%0A+   } = useLibraryState();%0A+   const cloudMetaSnapshotRef = useRef<Map<string, string> | null>(null);%0A+   const cloudLibraryTimerRef = useRef<number | null>(null);%0A+   const cloudLibrarySnapshotRef = useRef<string | null>(null);%0A+   const visibleLibraryFingerprintRef = useRef<string>("");%0A+   const {%0A+     beatRuntimeStates,%0A+     beatRuntimeStatesRef,%0A+     transitionRuntime,%0A+     forgetRuntimeState,%0A+     clearReconciledTrashRuntimeStates,%0A+   } = useBeatRuntimeRegistry(beats, beatsLatestRef);%0A+   const stagedImportPathsRef = useRef<Map<string, string[]>>(new Map());%0A+   const [loading, setLoading] = useState(() => initialLoading);%0A+   const startupCookingResolvedRef = useRef(false);%0A+   const startupPipelineStartedRef = useRef(false);%0A+   const startupEnginePrimeReadyRef = useRef(false);%0A+   const handleArtworkHydratedFromNetwork = useCallback((next: Beat[], beatId: string) => {%0A+     const hydrated = next.find(item => item.id === beatId);%0A+     if (hydrated && cloudMetaSnapshotRef.current) {%0A+       cloudMetaSnapshotRef.current.set(beatId, cloudBeatFingerprint(hydrated));%0A+     }%0A+     if (cloudLibrarySnapshotRef.current !== null) {%0A+       cloudLibrarySnapshotRef.current = next%0A+         .filter(item => !!item.telegram_file_id)%0A+         .map(cloudBeatFingerprint)%0A+         .join("\u001c");%0A+     }%0A+   }, []);%0A+   const { ensureArtworkReady, clearArtworkHydration, invalidateArtworkHydration } = useArtworkHydration({%0A+     setBeats,%0A+     onNetworkHydrated: handleArtworkHydratedFromNetwork,%0A+   });%0A+   const { search, setSearch, sortBy, setSortBy } = useLibraryViewState();%0A+   const {%0A+     includedTags,%0A+     excludedTags,%0A+     clearTagFilters,%0A+     toggleTagFilter,%0A+     replaceTagFilter,%0A+   } = useTagFilters();%0A+   const filteredBeats = selectFilteredAndSortedBeats(%0A+     beats,%0A+     search,%0A+     includedTags,%0A+     excludedTags,%0A+     sortBy,%0A+   );%0A+%0A+   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);%0A+   const {%0A+     tagRename, tagRenameBusy, tagRenameError, affectedCount: tagRenameAffectedCount,%0A+     affectedMp3Count: tagRenameMp3Count, affectedWavCount: tagRenameWavCount,%0A+     openTagRename, setNewTag: setTagRenameNewTag, continueTagRename, backTagRename,%0A+     cancelTagRename, confirmTagRename,%0A+   } = useTagRename({ beats, setBeats, replaceTagFilter });%0A+   useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");%0A+   const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {%0A+     setBeats(current => {%0A+       const next = preserveLoadedArtwork(incoming, current);%0A+       beatsLatestRef.current = next;%0A+       return next;%0A+     });%0A+   }, []);%0A+   useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);%0A+   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);%0A+   const [showAdd, setShowAdd] = useState(false);%0A+   const [dropActive, setDropActive] = useState(false);%0A+   const [dropImporting, setDropImporting] = useState(false);%0A+   // Covers the WebView2 staging window that happens BEFORE importDroppedPaths%0A+   // receives native paths. Without this state, the app can look frozen while%0A+   // large dropped files are being copied into drop-staging.%0A+   const [libraryDropStaging, setLibraryDropStaging] = useState(false);%0A+   const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string; kind: "file" | "directory" } | null>(null);%0A+   const {%0A+     reviewQueue,%0A+     setReviewQueue,%0A+     reviewQueueLatestRef,%0A+     skippedReviewSourceKeysRef,%0A+     startReview,%0A+   } = useImportSession();%0A+   const [showSettings, setShowSettings] = useState(false);%0A+   const {%0A+     settings,%0A+     setSettings,%0A+     setupDone,%0A+     setSetupDone,%0A+     connectionState,%0A+     setConnectionState,%0A+     cloudSessionVerified,%0A+     setCloudSessionVerified,%0A+   } = useSessionState();%0A+   const {%0A+     startupCookingGate,%0A+     setStartupCookingGate,%0A+     revealedBeatIds,%0A+     setRevealedBeatIds,%0A+     progressiveRevealRunRef,%0A+   } = useLibraryReveal({%0A+     initialCachedBeats: startupCachedBeatsRef.current ?? [],%0A+     filteredBeats,%0A+     loading,%0A+     settings,%0A+     cloudSessionVerified,%0A+     connectionState,%0A+     ensureArtworkReady,%0A+     startupCookingResolvedRef,%0A+     startupPipelineStartedRef,%0A+     nativeParallelism: isTauriAvailable ? 6 : 1,%0A+   });%0A+   const {%0A+     cloudFilesBeat,%0A+     cloudFiles,%0A+     cloudFilesBusyId,%0A+     cloudFilesDownloadedIds,%0A+     cloudFilesDownloadError,%0A+     cloudDownloadNotice,%0A+     handleCloudFiles,%0A+     handleGetCloudFile,%0A+     closeCloudFiles,%0A+     dismissDownloadError,%0A+   } = useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime });%0A+   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);%0A+%0A+   const {%0A+     selectedIds,%0A+     selectMode,%0A+     toggleSelection,%0A+     toggleSelectAll,%0A+     finishSelection,%0A+     clearSelection,%0A+   } = useBeatSelection(beats);%0A+   const {%0A+     sensors,%0A+     activeDragId,%0A+     handleDragStart,%0A+     handleDragEnd,%0A+     handleDragCancel,%0A+   } = useLibraryReorder({ sortBy, setSortBy, setBeats });%0A+   const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();%0A+   const { clearPlaybackPreparation, ensureWarmPlaybackUrl, handlePlay, handleWarm, invalidatePlaybackPreparation, waitForUploadedBeatPlaybackReady } = usePlaybackController({%0A+     audio,%0A+     play,%0A+     beatsLatestRef,%0A+     beatRuntimeStatesRef,%0A+     transitionRuntime,%0A+     setBeats,%0A+     cloudSessionVerified,%0A+     connectionState,%0A+     isBeatCloudUpdateBusy: beatId => beatCloudUpdateBusyIds.has(beatId),%0A+   });%0A+   const { offlineBusyIds, handleToggleOffline } = useOfflineAvailability({%0A+     connectionState,%0A+     audioPlayingId: audio.playingId,%0A+     releaseFile,%0A+     invalidatePlaybackPreparation,%0A+     ensureWarmPlaybackUrl,%0A+     beatRuntimeStatesRef,%0A+     transitionRuntime,%0A+     setBeats,%0A+     setDrawer,%0A+     setRevealedBeatIds,%0A+   });%0A+%0A+   // Keep a ref to togglePause so the keydown handler never goes stale%0A+   const togglePauseRef = useRef(togglePause);%0A+   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);%0A+%0A+   const rejectOfflineMutation = useCallback((action: string): boolean => {%0A+     if (connectionState === "online") return false;%0A+     void appAlert({%0A+       title: connectionState === "offline" ? "Offline" : "Connection unavailable",%0A+       message: `${action} requires an internet connection. Offline mode is read-only except for moving beats to Trash.`,%0A+     });%0A+     return true;%0A+   }, [connectionState]);%0A+%0A+   const {%0A+     reviewBootstrap,%0A+     reviewPreparationDone,%0A+     reviewPreparationPromiseRef,%0A+     deferredImportBatch,%0A+     setDeferredImportBatch,%0A+     importDroppedPaths,%0A+     cancelPendingReviewWork,%0A+     completeImmediateReviewPreparation,%0A+   } = useImportDiscovery({%0A+     dropImporting,%0A+     setDropImporting,%0A+     rejectOfflineMutation,%0A+     setDropActive,%0A+     setShowAdd,%0A+     setReviewQueue,%0A+     skippedReviewSourceKeysRef,%0A+     stagedImportPathsRef,%0A+     skeletonEnabled: REVIEW_SKELETON_ENABLED,%0A+   });%0A+%0A+   const {%0A+     backgroundUploadErrors,%0A+     cloudifyImportedBeats,%0A+     retryBackgroundUpload,%0A+     getQueuedBeatsSnapshot,%0A+     deferLibraryReloadIfUploading,%0A+     deferredLibraryReloadRef,%0A+   } = useCloudUploadQueue({%0A+     settings,%0A+     setSettings,%0A+     setConnectionState,%0A+     setBeats,%0A+     beatsLatestRef,%0A+     beatRuntimeStatesRef,%0A+     transitionRuntime,%0A+     cloudLibrarySnapshotRef,%0A+     waitForUploadedBeatPlaybackReady,%0A+     rejectOfflineMutation,%0A+     isReviewActive: () => reviewQueueLatestRef.current !== null,%0A+     hasProtectedStaging: () => stagedImportPathsRef.current.size > 0,%0A+   });%0A+%0A+%0A+   const { libraryRefreshing, reloadLibrary } = useLibraryReload({%0A+     telegramCloudConnected: Boolean(settings?.telegram_cloud_connected),%0A+     beatsLatestRef,%0A+     setBeats,%0A+     setConnectionState,%0A+     setCloudSessionVerified,%0A+     cloudMetaSnapshotRef,%0A+     cloudLibrarySnapshotRef,%0A+     startupCookingResolvedRef,%0A+     startupPipelineStartedRef,%0A+     progressiveRevealRunRef,%0A+     setRevealedBeatIds,%0A+     setStartupCookingGate,%0A+     setLoading,%0A+     deferLibraryReloadIfUploading,%0A+   });%0A+%0A+   const { interruptedUploadNotices, dismissInterruptedUploadNotices } = useStartupBootstrap({%0A+     startupCachedBeatsRef,%0A+     cloudMetaSnapshotRef,%0A+     cloudLibrarySnapshotRef,%0A+     startupCookingResolvedRef,%0A+     startupPipelineStartedRef,%0A+     startupEnginePrimeReadyRef,%0A+     progressiveRevealRunRef,%0A+     setBeats,%0A+     setSettings,%0A+     setSetupDone,%0A+     setLoading,%0A+     setConnectionState,%0A+     setCloudSessionVerified,%0A+     setStartupCookingGate,%0A+     setRevealedBeatIds,%0A+     clearReconciledTrashRuntimeStates,%0A+     dismissStartupLoader: dismissBeatGalerStartupLoader,%0A+   });%0A+%0A+%0A+ useConnectivity({%0A+   setupDone,%0A+   setConnectionState,%0A+   setCloudSessionVerified,%0A+   setSettings,%0A+   setBeats,%0A+   cloudMetaSnapshotRef,%0A+   cloudLibrarySnapshotRef,%0A+   startupCookingResolvedRef,%0A+   startupPipelineStartedRef,%0A+   startupEnginePrimeReadyRef,%0A+   progressiveRevealRunRef,%0A+   clearReconciledTrashRuntimeStates,%0A+   clearPlaybackPreparation,%0A+   clearArtworkHydration,%0A+   setStartupCookingGate,%0A+ });%0A+%0A+   useCustomCursor(settings?.custom_cursor_enabled ?? true);%0A+%0A+%0A+%0A+ // BeatGaler synchronization remains push-based. SSE only notifies the app;%0A+ // the extracted owner verifies authority before hydrating library state.%0A+ useCloudLibraryEvents({%0A+   setupDone,%0A+   beatgalerUserId: settings?.beatgaler_user_id ?? null,%0A+   setConnectionState,%0A+   setCloudSessionVerified,%0A+   setSettings,%0A+   setBeats,%0A+   cloudMetaSnapshotRef,%0A+   cloudLibrarySnapshotRef,%0A+   visibleLibraryFingerprintRef,%0A+   startupCookingResolvedRef,%0A+   startupPipelineStartedRef,%0A+   startupEnginePrimeReadyRef,%0A+   progressiveRevealRunRef,%0A+   clearReconciledTrashRuntimeStates,%0A+   clearArtworkHydration,%0A+   clearPlaybackPreparation,%0A+   setStartupCookingGate,%0A+ });%0A+%0A+   useLibraryPresentationCache(%0A+     beats,%0A+     cloudSessionVerified,%0A+     settings,%0A+   );%0A+%0A+   useEffect(() => {%0A+     visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);%0A+     beatsLatestRef.current = beats;%0A+   }, [beats]);%0A+%0A+%0A+%0A+   // One-time recovery for a cloud-only library after Telegram login/startup.%0A+   // No timer, no permanent synchronization.%0A+   const beatGalerCloudRecoveryAttemptedRef = useRef(false);%0A+%0A+   const recoverTelegramLibraryOnceIfEmpty = useCallback(async () => {%0A+     if (beatGalerCloudRecoveryAttemptedRef.current) return;%0A+     if (beats.length !== 0) return;%0A+%0A+     beatGalerCloudRecoveryAttemptedRef.current = true;%0A+     try {%0A+       const restored = await libraryStateManager.reloadAuthoritative();%0A+       if (restored.length > 0) {%0A+         setBeats(current => current.length === 0 ? restored : current);%0A+       }%0A+     } catch (error) {%0A+       console.warn("Telegram library one-time recovery skipped:", error);%0A+     }%0A+   }, [beats.length]);%0A+%0A+   // IMPORTANT: an empty library is a valid, authoritative state (for example%0A+   // immediately after Remove All). Never infer "Telegram recovery" merely from%0A+   // beats.length === 0; doing so races the pending trash/index commit and can%0A+   // resurrect the just-removed cards with their artwork unloaded. Recovery is%0A+   // only allowed from explicit Telegram connection/startup flows below.%0A+%0A+   useEffect(() => {%0A+     const onTelegramConnected = (event: Event) => {%0A+       const detail = (event as CustomEvent<{ connected?: boolean; username?: string | null }>).detail;%0A+       if (!detail?.connected) return;%0A+%0A+       setSettings(current => current ? {%0A+         ...current,%0A+         telegram_cloud_connected: true,%0A+         telegram_cloud_username: detail.username ?? current.telegram_cloud_username ?? null,%0A+       } : current);%0A+%0A+       void recoverTelegramLibraryOnceIfEmpty();%0A+     };%0A+%0A+     window.addEventListener("beatgaler:telegram-connected", onTelegramConnected);%0A+     return () => window.removeEventListener("beatgaler:telegram-connected", onTelegramConnected);%0A+   }, [recoverTelegramLibraryOnceIfEmpty]);%0A+%0A+   // Global keyboard shortcuts — stable handler via ref%0A+   useEffect(() => {%0A+     const handler = (e: KeyboardEvent) => {%0A+       const tag = (e.target as HTMLElement).tagName;%0A+       const isTyping = tag === "INPUT" || tag === "TEXTAREA";%0A+       if (e.key === "Escape") {%0A+         // Prevent Escape from leaving a focus ring or text selection behind%0A+         // on whatever element/button was last interacted with.%0A+         (document.activeElement as HTMLElement | null)?.blur();%0A+         window.getSelection()?.removeAllRanges();%0A+         clearSelection();%0A+         setDrawer(null);%0A+         setShowAdd(false);%0A+         setShowSettings(false);%0A+         closeQueue();%0A+         setShowUpload(null);%0A+       }%0A+       if (e.key === " " && !isTyping) { e.preventDefault(); togglePauseRef.current(); }%0A+     };%0A+     window.addEventListener("keydown", handler);%0A+     return () => window.removeEventListener("keydown", handler);%0A+   }, []); // empty deps — safe because we use ref%0A+%0A+   const handleUpload = useCallback((beat: Beat) => {%0A+     if (rejectOfflineMutation("Uploading to YouTube")) return;%0A+     setShowUpload({ initialBeat: beat, selectedIds: undefined });%0A+   }, [rejectOfflineMutation]);%0A+%0A+   const handleUploadTelegram = useCallback(async (beat: Beat) => {%0A+     if (rejectOfflineMutation("Uploading a beat")) return;%0A+     const existingCloudBeat = Boolean(beat.telegram_file_id);%0A+     transitionRuntime(beat.id, { type: existingCloudBeat ? "SYNC_QUEUE_UPDATE" : "SYNC_QUEUE_UPLOAD" }, beat);%0A+     transitionRuntime(beat.id, { type: existingCloudBeat ? "SYNC_UPDATE_STARTED" : "SYNC_UPLOAD_STARTED" }, beat);%0A+     try {%0A+       const updated = await uploadBeatToTelegram(beat);%0A+       await syncBeatMetadataToTelegram(updated);%0A+       transitionRuntime(updated.id, { type: existingCloudBeat ? "SYNC_UPDATE_SUCCEEDED" : "SYNC_UPLOAD_SUCCEEDED" }, updated);%0A+       setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));%0A+     } catch (e: any) {%0A+       const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");%0A+       if (existingCloudBeat && isRuntimeConflictError(e)) {%0A+         transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);%0A+       } else {%0A+         transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "TELEGRAM_UPLOAD_FAILED", message, retryable: true }, beat);%0A+       }%0A+       await appAlert({%0A+         title: "Cloud upload failed",%0A+         message,%0A+         danger: true,%0A+       });%0A+     }%0A+   }, [rejectOfflineMutation, transitionRuntime]);%0A+%0A+   const handleDownloadTelegram = useCallback(async (_beat: Beat) => {%0A+     await appAlert({%0A+       title: "Cloud-only library",%0A+       message: "Files are fetched into temporary storage automatically when needed.",%0A+     });%0A+   }, []);%0A+%0A+   const handleUploadBulk = useCallback(() => {%0A+     if (rejectOfflineMutation("Bulk upload")) return;%0A+     setShowUpload({ initialBeat: null, selectedIds: Array.from(selectedIds) });%0A+   }, [selectedIds, rejectOfflineMutation]);%0A+%0A+   const handleEditBulk = useCallback(() => {%0A+     if (rejectOfflineMutation("Editing metadata")) return;%0A+     const firstSelected = beats.find(b => selectedIds.has(b.id));%0A+     if (firstSelected) setDrawer({ beat: firstSelected, mode: "edit" });%0A+   }, [beats, selectedIds, rejectOfflineMutation]);%0A+%0A+   const { deleteBeat, handleRemoveBulk, handleBeatRestored } = useTrashActions({%0A+     beats,%0A+     setBeats,%0A+     beatsLatestRef,%0A+     selectedIds,%0A+     clearSelection,%0A+     connectionState,%0A+     audioPlayingId: audio.playingId,%0A+     releaseFile,%0A+     beatRuntimeStatesRef,%0A+     transitionRuntime,%0A+     forgetRuntimeState,%0A+     cloudMetaSnapshotRef,%0A+     cloudLibrarySnapshotRef,%0A+     invalidateArtworkHydration,%0A+     ensureArtworkReady,%0A+   });%0A+%0A+   const addBeats = useCallback((newBeats: Beat[]) => {%0A+     setBeats(bs => {%0A+       const existing = new Set(bs.map(b => b.mp3_path));%0A+       const next = [...newBeats.filter(b => !existing.has(b.mp3_path)), ...bs];%0A+       beatsLatestRef.current = next;%0A+       return next;%0A+     });%0A+   }, []);%0A+%0A+   const addBeatsAndReview = useCallback((newBeats: Beat[]) => {%0A+     if (newBeats.length === 0) return;%0A+     if (connectionState !== "online") {%0A+       void appAlert({%0A+         title: "Internet connection required",%0A+         message: "BeatGaler does not import new beats while offline. Reconnect and import them again.",%0A+       });%0A+       void cleanupOrphanedDropStaging(beatsLatestRef.current);%0A+       return;%0A+     }%0A+     const sanitized = newBeats.map(beat => ({ ...beat, tags: cleanTags(beat.tags || []).tags }));%0A+%0A+     // Review candidates are NOT library beats yet.%0A+     // Keeping them out of `beats` means:%0A+     // 1) Cancel leaves absolutely nothing behind.%0A+     // 2) duplicate-name checks compare only against committed library items.%0A+     // 3) a re-dropped folder can never masquerade as an edit of the existing beat.%0A+     setShowAdd(false);%0A+     startReview(sanitized);%0A+     // Upload begins only after Review → Save.%0A+   }, [connectionState, startReview]);%0A+%0A+ const {%0A+   skipCurrentReviewBeat,%0A+   cancelReview,%0A+   handleReviewedBeatSaved,%0A+ } = useImportReview({%0A+   setBeats,%0A+   beatsLatestRef,%0A+   setReviewQueue,%0A+   skippedReviewSourceKeysRef,%0A+   cloudifyImportedBeats,%0A+   getQueuedBeatsSnapshot,%0A+   onCancelPendingWork: cancelPendingReviewWork,%0A+   releaseBeat: platform.capabilities.reviewBeatCloudCommit%0A+     ? beatId => platform.importer.releaseBeat(beatId)%0A+     : undefined,%0A+   discardBatch: batchId => discardImportReviewBatch(batchId),%0A+   cleanupStaging: protectedBeats => cleanupOrphanedDropStaging(protectedBeats),%0A+ });%0A+%0A+   const {%0A+     audioConflictBatch,%0A+     dropImportBatch,%0A+     resetImportResolutionState,%0A+     handleReviewedSaveAll,%0A+     cancelAudioConflicts,%0A+     resolveAudioConflicts,%0A+     closeImportDecisions,%0A+     importResolvedDecisions,%0A+   } = useImportSaveAll({%0A+     setBeats,%0A+     beatsLatestRef,%0A+     reviewQueue,%0A+     setReviewQueue,%0A+     reviewQueueLatestRef,%0A+     reviewBootstrap,%0A+     reviewPreparationDone,%0A+     reviewPreparationPromiseRef,%0A+     deferredImportBatch,%0A+     setDeferredImportBatch,%0A+     stagedImportPathsRef,%0A+     setDropImporting,%0A+     cloudifyImportedBeats,%0A+     addBeatsAndReview,%0A+   });%0A+%0A+   const { importDroppedBrowserFiles } = useBrowserImport({%0A+     dropImporting,%0A+     setDropImporting,%0A+     rejectOfflineMutation,%0A+     setDropActive,%0A+     setShowAdd,%0A+     setReviewQueue,%0A+     completeImmediateReviewPreparation,%0A+     resetImportResolutionState,%0A+   });%0A+%0A+   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {%0A+     if (rejectOfflineMutation("Updating beat files")) return true;%0A+     if (isBackupFolderPath(folderPath)) {%0A+       await appAlert({%0A+         title: "Backup folder skipped",%0A+         message: "BeatGaler keeps Backup/Backups folders out of PROJECT.zip so old project copies are not uploaded.",%0A+       });%0A+       return true;%0A+     }%0A+%0A+     const t = await import("./lib/tauri");%0A+%0A+     let preview;%0A+     try {%0A+       preview = await t.inspectBeatUpdateFolder(folderPath);%0A+     } catch {%0A+       return false;%0A+     }%0A+%0A+     let replaceMaster = false;%0A+     if (preview.has_mp3) {%0A+       const alreadyHasMaster = Boolean(beat.telegram_file_id) || Boolean(beat.mp3_path?.trim());%0A+       if (alreadyHasMaster) {%0A+         const incoming = preview.mp3_filename || "the incoming MP3";%0A+         const confirmed = window.confirm(%0A+           `Replace current MASTER for "${beat.name}"?\n\n` +%0A+           `${incoming} will become the new MASTER.\n` +%0A+           `Its BPM, key, tags, rating and artwork will replace the current metadata.\n\n` +%0A+           `WAV and project files from this folder will also be added or updated.`%0A+         );%0A+         if (!confirmed) return true;%0A+       }%0A+       replaceMaster = true;%0A+     }%0A+%0A+     setBeatCloudUpdateBusy(beat.id, true);%0A+     const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);%0A+     if (runtime.sync_state === "synced") transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);%0A+     transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);%0A+     try {%0A+       let updated = await t.mergeFolderIntoExistingBeat(beat, folderPath, replaceMaster);%0A+       setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));%0A+%0A+       if (replaceMaster) {%0A+         updated = await t.uploadBeatToTelegram(updated);%0A+         setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));%0A+       }%0A+%0A+       if (preview.has_wav && updated.wav_path) {%0A+         await t.uploadDroppedFileToTelegram(updated, updated.wav_path, "WAV");%0A+       }%0A+%0A+       if (preview.has_project_assets) {%0A+         await t.uploadProjectToTelegram(updated);%0A+       }%0A+%0A+       if (replaceMaster && updated.telegram_file_id) {%0A+         await t.syncBeatMetadataToTelegram(updated);%0A+       }%0A+%0A+       window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));%0A+       await libraryStateManager.commitSnapshot(beatsLatestRef.current.map(item => item.id === beat.id ? updated : item), "metadata-update");%0A+       transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);%0A+       setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));%0A+       return true;%0A+     } catch (error) {%0A+       console.error(error);%0A+       const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");%0A+       if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);%0A+       else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "FOLDER_UPDATE_FAILED", message, retryable: true }, beat);%0A+       alert(`Could not update "${beat.name}" from the dropped folder: ${message}`);%0A+       return true;%0A+     } finally {%0A+       setBeatCloudUpdateBusy(beat.id, false);%0A+     }%0A+   }, [rejectOfflineMutation, transitionRuntime]);%0A+%0A+   const { commitDrawerCloudMutation } = useDrawerCloudPersistence({%0A+   beats,%0A+   browserCloudEditing: platform.capabilities.browserCloudEditing,%0A+   connectionState,%0A+   cloudSessionVerified,%0A+   beatsLatestRef,%0A+   beatRuntimeStatesRef,%0A+   transitionRuntime,%0A+   cloudMetaSnapshotRef,%0A+   cloudLibraryTimerRef,%0A+   cloudLibrarySnapshotRef,%0A+ });%0A+%0A+   // V7: INDEX writes are explicit transactions only.%0A+   // There is deliberately no generic "beats changed => rewrite Telegram" observer.%0A+   // Upload, metadata, Trash/Restore and project/file operations commit through%0A+   // libraryStateManager at their actual logical commit boundary. This prevents%0A+   // render/cache hydration from becoming an accidental cloud mutation.%0A+%0A+   const {%0A+     handleIncompleteWarningsChanged,%0A+     handleCustomCursorChanged,%0A+     handleFolderChanged,%0A+     handleDisconnectTelegramAccount,%0A+   } = useSessionActions({%0A+     setSettings,%0A+     setCloudSessionVerified,%0A+     logoutAccount: logoutBeatGalerAccount,%0A+     releaseFile,%0A+     progressiveRevealRunRef,%0A+     clearPlaybackPreparation,%0A+     clearArtworkHydration,%0A+     setRevealedBeatIds,%0A+     setBeats,%0A+     clearSelection,%0A+   });%0A+%0A+   const updateBeat = useCallback((updated: Beat) => {%0A+     if (updated.telegram_file_id && connectionState === "online") {%0A+       const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);%0A+       if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);%0A+     }%0A+     setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));%0A+     if (drawer?.beat.id === updated.id) setDrawer(d => d ? { ...d, beat: updated } : null);%0A+   }, [connectionState, drawer, transitionRuntime]);%0A+%0A+%0A+%0A+   const handleDropArtwork = useCallback(async (beat: Beat, imageBase64: string) => {%0A+     if (rejectOfflineMutation("Changing artwork")) return;%0A+%0A+     const updated = { ...beat, image_base64: imageBase64, image_preview_base64: null };%0A+%0A+     if (platform.capabilities.browserCloudEditing) {%0A+       // Publish the browser-decoded artwork immediately, then commit it through%0A+       // the Web editor/Direct transport. No Tauri metadata path participates.%0A+       updateBeat(updated);%0A+       transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);%0A+       try {%0A+         const committed = await platform.editor.commit(beat, updated, {});%0A+         setBeats(current => {%0A+           const next = current.map(item => item.id === committed.id ? committed : item);%0A+           beatsLatestRef.current = next;%0A+           return next;%0A+         });%0A+         setDrawer(current => current?.beat.id === committed.id ? { ...current, beat: committed } : current);%0A+         transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, committed);%0A+       } catch (error) {%0A+         const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");%0A+         transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);%0A+         throw error;%0A+       }%0A+       return;%0A+     }%0A+%0A+     // Desktop keeps its existing native metadata/artwork transaction.%0A+     await saveBeatMeta({%0A+       mp3_path: beat.mp3_path,%0A+       wav_path: beat.wav_path,%0A+       bpm: beat.bpm,%0A+       key: beat.key,%0A+       tags: beat.tags,%0A+       rating: beat.rating,%0A+       image_base64: imageBase64,%0A+       update_filename: false,%0A+     });%0A+%0A+     updateBeat(updated);%0A+%0A+     if (updated.telegram_file_id && connectionState === "online") {%0A+       const runtime = beatRuntimeStatesRef.current[updated.id] ?? createBeatRuntimeState(updated);%0A+       if (runtime.sync_state === "synced") transitionRuntime(updated.id, { type: "SYNC_QUEUE_UPDATE" }, updated);%0A+       transitionRuntime(updated.id, { type: "SYNC_UPDATE_STARTED" }, updated);%0A+       try {%0A+         await syncBeatMetadataToTelegram(updated);%0A+         const indexSnapshot = beatsLatestRef.current.map(item => item.id === updated.id ? updated : item);%0A+         await libraryStateManager.commitSnapshot(indexSnapshot, "upload-batch");%0A+         if (cloudLibraryTimerRef.current) {%0A+           window.clearTimeout(cloudLibraryTimerRef.current);%0A+           cloudLibraryTimerRef.current = null;%0A+         }%0A+         cloudLibrarySnapshotRef.current = indexSnapshot%0A+           .filter(item => !!item.telegram_file_id)%0A+           .map(cloudBeatFingerprint)%0A+           .join("\u001c");%0A+         cloudMetaSnapshotRef.current?.set(updated.id, cloudBeatFingerprint(updated));%0A+         transitionRuntime(updated.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);%0A+       } catch (error) {%0A+         const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");%0A+         transitionRuntime(updated.id, { type: "SYNC_FAILED", code: "ARTWORK_SYNC_FAILED", message, retryable: true }, updated);%0A+         throw error;%0A+       }%0A+     }%0A+   }, [updateBeat, rejectOfflineMutation, connectionState, transitionRuntime]);%0A+%0A+%0A+   const {%0A+     runBeatCloudUpdate,%0A+     startMasterAssetUpdate,%0A+     startWavAssetUpdate,%0A+     handleBrowserBeatAssetDrop,%0A+   } = useBeatAssetUpdates({%0A+     rejectOfflineMutation,%0A+     setBeatFileDrop,%0A+     setBeatCloudUpdateBusy,%0A+     beatRuntimeStatesRef,%0A+     transitionRuntime,%0A+     beatsLatestRef,%0A+     cloudLibrarySnapshotRef,%0A+     setBeats,%0A+     setDrawer,%0A+     waitForUploadedBeatPlaybackReady,%0A+   });%0A+%0A+   const {%0A+     openableCloudProjectIds,%0A+     projectUpdateNotice,%0A+     dismissProjectUpdateNotice,%0A+     hasStoredProject,%0A+     startProjectAssetUpdate,%0A+     handleAutoProjectDrop,%0A+     handleBrowserProjectDrop,%0A+     handleUploadProjectTelegram,%0A+     handleOpenProject,%0A+     handleUpdateProject,%0A+   } = useBeatProjects({%0A+     beats,%0A+     connectionState,%0A+     rejectOfflineMutation,%0A+     transitionRuntime,%0A+     beatsLatestRef,%0A+     setBeats,%0A+     setDrawer,%0A+     runBeatCloudUpdate,%0A+     setBeatCloudUpdateBusy,%0A+   });%0A+%0A+   const handleDroppedBeatFileRole = useCallback(async (role: DroppedBeatFileRole) => {%0A+     if (!beatFileDrop) return;%0A+     const { beat, filePath } = beatFileDrop;%0A+     const ext = extensionFromPath(filePath);%0A+%0A+     if (role === "loop" || role === "stems") return;%0A+%0A+     if (role === "main") {%0A+       if (ext !== "mp3") return;%0A+       startMasterAssetUpdate(beat, filePath);%0A+       return;%0A+     }%0A+%0A+     if (role === "wav") {%0A+       if (ext !== "wav") return;%0A+       startWavAssetUpdate(beat, filePath);%0A+       return;%0A+     }%0A+%0A+     if (role === "projectFolder") {%0A+       const existing = await hasStoredProject(beat).catch(() => false);%0A+       if (!existing) {%0A+         await cleanupStagedDropPaths([filePath]).catch(() => {});%0A+         setBeatFileDrop(null);%0A+         await appAlert({%0A+           title: "Project file required",%0A+           message: "Add a .flp, .als, .logicx, .ptx/.ptf file or a valid PROJECT ZIP first. Then folders can be added to that PROJECT.zip using their original folder name.",%0A+         });%0A+         return;%0A+       }%0A+       startProjectAssetUpdate(beat, filePath, "projectFolder");%0A+     }%0A+   }, [beatFileDrop, hasStoredProject, startMasterAssetUpdate, startProjectAssetUpdate, startWavAssetUpdate]);%0A+%0A+%0A+   useHtmlLibraryDrop({%0A+     nativeDropAvailable: isTauriAvailable,%0A+     browserFileImport: platform.capabilities.browserFileImport,%0A+     reviewSkeletonEnabled: REVIEW_SKELETON_ENABLED,%0A+     beatsLatestRef,%0A+     setDropActive,%0A+     setBeatCloudUpdateBusy,%0A+     setBeatFileDrop,%0A+     setLibraryDropStaging,%0A+     handleDropArtwork,%0A+     handleAutoProjectDrop,%0A+     handleBrowserBeatAssetDrop,%0A+     handleBrowserProjectDrop,%0A+     importDroppedBrowserFiles,%0A+     importDroppedPaths,%0A+   });%0A+%0A+   useNativeLibraryDrop({%0A+     nativeDropAvailable: isTauriAvailable,%0A+     reviewSkeletonEnabled: REVIEW_SKELETON_ENABLED,%0A+     beatsLatestRef,%0A+     setDropActive,%0A+     setBeatCloudUpdateBusy,%0A+     setBeatFileDrop,%0A+     setLibraryDropStaging,%0A+     handleDropArtwork,%0A+     handleAutoProjectDrop,%0A+     importDroppedPaths,%0A+   });%0A+%0A+   const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {%0A+     setBeats(bs => bs.map(b => {%0A+       if (!selectedIds.has(b.id)) return b;%0A+       if (!updates.tags) return { ...b, ...updates };%0A+%0A+       const normalizedInput = Array.from(new Set(%0A+         updates.tags.map(t => t.trim().toLowerCase()).filter(Boolean)%0A+       ));%0A+%0A+       if (options?.tagsMode === "replace") {%0A+         return { ...b, ...updates, tags: normalizedInput };%0A+       }%0A+%0A+       if (options?.tagsMode === "remove") {%0A+         const removeSet = new Set(normalizedInput);%0A+         const remainingTags = b.tags.filter(tag => !removeSet.has(tag.trim().toLowerCase()));%0A+         return { ...b, ...updates, tags: remainingTags };%0A+       }%0A+%0A+       const mergedTags = Array.from(new Set(%0A+         [...b.tags, ...normalizedInput].map(t => t.trim().toLowerCase()).filter(Boolean)%0A+       ));%0A+       return { ...b, ...updates, tags: mergedTags };%0A+     }));%0A+     clearSelection();%0A+   }, [selectedIds]);%0A+%0A+%0A+   const tagColors = useTagColors();%0A+%0A+ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {%0A+   toggleTagFilter(tag, e.altKey ? "exclude" : "include");%0A+ }, [toggleTagFilter]);%0A+%0A+   const tagFrequency = useMemo(() => selectTagFrequency(beats), [beats]);%0A+   const allTags = useMemo(() => selectAllTags(beats, tagFrequency), [beats, tagFrequency]);%0A+   const tagSuggestions = useMemo(() => selectTagSuggestions(beats), [beats]);%0A+   const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));%0A+%0A+   const {%0A+     shuffleEnabled,%0A+     repeatMode,%0A+     showQueue,%0A+     queuedBeats,%0A+     addToQueue,%0A+     handleNext,%0A+     handlePrev,%0A+     closeQueue,%0A+     toggleQueue,%0A+     toggleShuffle,%0A+     cycleRepeat,%0A+     playQueueIndex,%0A+   } = usePlaybackQueue({%0A+     beats,%0A+     displayedBeats,%0A+     playingId: audio.playingId,%0A+     progress: audio.progress,%0A+     endedSeq: audio.endedSeq,%0A+     handlePlay,%0A+     seek,%0A+     releaseFile,%0A+   });%0A+%0A+%0A+%0A+   const currentBeat = beats.find(b => b.id === audio.playingId);%0A+   const selectedBeats = beats.filter(b => selectedIds.has(b.id));%0A+   const activeDragBeat = activeDragId ? beats.find(b => b.id === activeDragId) ?? null : null;%0A+%0A+   return (%0A+     <div%0A+       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}%0A+     >%0A+       {(connectionState === "poor" || connectionState === "offline") && (%0A+         <div style={{%0A+           position: "fixed", top: 62, left: "50%25", transform: "translateX(-50%25)", zIndex: 20200,%0A+           maxWidth: "min(620px, calc(100vw - 36px))", padding: "10px 14px", borderRadius: 10,%0A+           border: "1px solid #7a6525", background: "#302913", color: "#f0d77d",%0A+           boxShadow: "0 12px 34px rgba(0,0,0,.4)", fontSize: 11.5, lineHeight: 1.4, textAlign: "center",%0A+         }}>%0A+           {connectionState === "offline"%0A+             ? "You're offline. This session can keep using already prepared audio; after restart only beats with the green Offline check are shown."%0A+             : "Poor connection. BeatGaler is retrying automatically; cloud actions may take longer."}%0A+         </div>%0A+       )}%0A+       {cloudFilesDownloadError && (%0A+         <div style={{%0A+           position: "fixed", top: 62, right: 18, zIndex: 20140, width: 360, maxWidth: "calc(100vw - 36px)",%0A+           padding: "12px 42px 12px 14px", borderRadius: 10, border: "1px solid #7a2525",%0A+           background: "#351414", color: "#ffd7d7", boxShadow: "0 14px 44px rgba(0,0,0,.65)",%0A+           fontSize: 12, lineHeight: 1.5,%0A+         }}>%0A+           <button%0A+             type="button"%0A+             aria-label="Close download error"%0A+             onClick={dismissDownloadError}%0A+             style={{%0A+               position: "absolute", top: 8, right: 8, width: 24, height: 24, border: "none",%0A+               borderRadius: 6, background: "transparent", color: "#ff9d9d", cursor: "pointer",%0A+               fontSize: 16, lineHeight: "24px", padding: 0, textAlign: "center",%0A+             }}%0A+           >×</button>%0A+           <div style={{ fontWeight: 700, marginBottom: 3 }}>Download failed</div>%0A+           <div>{cloudFilesDownloadError}</div>%0A+         </div>%0A+       )}%0A+       {projectUpdateNotice && (%0A+         <div style={{%0A+           position: "fixed", top: cloudDownloadNotice ? 116 : 62, right: 18, zIndex: 20130,%0A+           width: 360, maxWidth: "calc(100vw - 36px)", padding: "11px 38px 11px 14px",%0A+           borderRadius: 10, border: "1px solid #66521f", background: "#2d2714",%0A+           color: "#f1d783", boxShadow: "0 14px 44px rgba(0,0,0,.45)", fontSize: 12, lineHeight: 1.45,%0A+         }}>%0A+           <button%0A+             type="button"%0A+             aria-label="Close project notice"%0A+             onClick={dismissProjectUpdateNotice}%0A+             style={{%0A+               position: "absolute", top: 7, right: 8, width: 24, height: 24, border: "none",%0A+               borderRadius: 6, background: "transparent", color: "#d8bd67", cursor: "pointer",%0A+               fontSize: 16, lineHeight: "24px", padding: 0, textAlign: "center",%0A+             }}%0A+           >×</button>%0A+           <div style={{ fontWeight: 700, marginBottom: 2 }}>Project notice</div>%0A+           <div>{projectUpdateNotice}</div>%0A+         </div>%0A+       )}%0A+       {cloudDownloadNotice && (%0A+         <div style={{%0A+           position: "fixed", top: 62, right: 18, zIndex: 20120, width: 340, maxWidth: "calc(100vw - 36px)",%0A+           padding: "11px 14px", borderRadius: 10,%0A+           border: cloudDownloadNotice.status === "completed" ? "1px solid #257a3d" : "1px solid #303030",%0A+           background: cloudDownloadNotice.status === "completed" ? "#12351d" : "#171717",%0A+           color: cloudDownloadNotice.status === "completed" ? "#8ff0aa" : "#e8e8e8",%0A+           boxShadow: "0 14px 44px rgba(0,0,0,.45)", fontSize: 12, lineHeight: 1.45,%0A+         }}>%0A+           {cloudDownloadNotice.status === "downloading" ? (%0A+             cloudDownloadNotice.kind === "ALL"%0A+               ? <>Downloading everything from &quot;{cloudDownloadNotice.beatName}&quot;...</>%0A+               : cloudDownloadNotice.kind === "PROJECT"%0A+                 ? <>Downloading Full Project from &quot;{cloudDownloadNotice.beatName}&quot;...</>%0A+                 : <>Downloading {cloudDownloadNotice.kind} from &quot;{cloudDownloadNotice.beatName}&quot;...</>%0A+           ) : (%0A+             cloudDownloadNotice.kind === "ALL"%0A+               ? <>Downloaded everything from &quot;{cloudDownloadNotice.beatName}&quot;.</>%0A+               : cloudDownloadNotice.kind === "PROJECT"%0A+                 ? <>Downloaded Full Project from &quot;{cloudDownloadNotice.beatName}&quot;.</>%0A+                 : <>Downloaded {cloudDownloadNotice.kind} from &quot;{cloudDownloadNotice.beatName}&quot;.</>%0A+           )}%0A+         </div>%0A+       )}%0A+       {interruptedUploadNotices.length > 0 && (%0A+         <div style={{%0A+           position: "fixed", top: 62, right: 18, zIndex: 20000, width: 360, maxWidth: "calc(100vw - 36px)",%0A+           padding: "12px 42px 12px 14px", borderRadius: 10, border: "1px solid #7a2525",%0A+           background: "#351414", color: "#ffd7d7", boxShadow: "0 14px 44px rgba(0,0,0,.55)",%0A+           fontSize: 12, lineHeight: 1.5,%0A+         }}>%0A+           <button%0A+             type="button"%0A+             aria-label="Close notification"%0A+             title="Close"%0A+             onClick={dismissInterruptedUploadNotices}%0A+             style={{%0A+               position: "absolute", top: 8, right: 8, width: 24, height: 24, border: "none",%0A+               borderRadius: 6, background: "transparent", color: "#ff9d9d", cursor: "pointer",%0A+               fontSize: 16, lineHeight: "24px", padding: 0, textAlign: "center",%0A+             }}%0A+           >%0A+             ×%0A+           </button>%0A+           {interruptedUploadNotices.map(name => (%0A+             <div key={name}>Your last upload of &quot;{name}&quot; was interrupted. The incomplete upload was removed.</div>%0A+           ))}%0A+         </div>%0A+       )}%0A+       {/* Top bar */}%0A+       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 24px", height: 50, flexShrink: 0, borderBottom: "1px solid #111" }}>%0A+         <span style={{ fontWeight: 400, fontSize: 14, color: "#aaa", letterSpacing: 0.3 }}>beat galer</span>%0A+         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>%0A+           <SearchBar value={search} onChange={setSearch} />%0A+           <SortMenu value={sortBy} onChange={setSortBy} />%0A+           {/* Settings gear */}%0A+           <button%0A+             onClick={() => setShowSettings(true)}%0A+             title="Settings"%0A+             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: "#444", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}%0A+             onMouseEnter={e => (e.currentTarget.style.color = "#aaa")}%0A+             onMouseLeave={e => (e.currentTarget.style.color = "#444")}%0A+           >%0A+             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">%0A+               <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />%0A+               <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.3.72.6 1 .3.27.68.4 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7.6Z"%0A+                 stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />%0A+             </svg></button>%0A+           <button%0A+             onClick={() => { clearUploadPreviewCache(); void reloadLibrary(); }}%0A+             title={deferredLibraryReloadRef.current ? "Reload queued until uploads finish" : "Reload Library"}%0A+             disabled={loading || libraryRefreshing}%0A+             style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", border: "none", color: (loading || libraryRefreshing) ? "#666" : "#444", cursor: (loading || libraryRefreshing) ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}%0A+             onMouseEnter={e => { if (!loading && !libraryRefreshing) e.currentTarget.style.color = "#aaa"; }}%0A+             onMouseLeave={e => { e.currentTarget.style.color = (loading || libraryRefreshing) ? "#666" : "#444"; }}%0A+           ><span style={{ display: "inline-block", animation: libraryRefreshing ? "beatgaler-refresh-spin .62s linear infinite" : "none" }}>↻</span></button>%0A+           {/* Apple-style Select / Select All / Done */}%0A+           {selectMode ? (%0A+             <>%0A+               <button%0A+                 onClick={() => toggleSelectAll(displayedBeats)}%0A+                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#888", fontSize: 12, cursor: "pointer" }}>%0A+                 {displayedBeats.length > 0 && displayedBeats.every(b => selectedIds.has(b.id)) ? "Deselect All" : "Select All"}%0A+               </button>%0A+               <button%0A+                 onClick={finishSelection}%0A+                 style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #2a2a2a", color: "#ccc", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>%0A+                 Done%0A+               </button>%0A+             </>%0A+           ) : (%0A+             <button%0A+               onClick={() => toggleSelection(null, false, displayedBeats)}%0A+               style={{ padding: "5px 12px", borderRadius: 7, background: "transparent", border: "1px solid #1e1e1e", color: "#555", fontSize: 12, cursor: "pointer" }}%0A+               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#aaa"; (e.currentTarget as HTMLElement).style.borderColor = "#2a2a2a"; }}%0A+               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "#555"; (e.currentTarget as HTMLElement).style.borderColor = "#1e1e1e"; }}>%0A+               Select%0A+             </button>%0A+           )}%0A+         </div>%0A+       </div>%0A+%0A+       {/* Selection toolbar */}%0A+       {selectedIds.size > 0 && (%0A+         <div style={{ padding: "0 24px", height: 40, display: "flex", alignItems: "center", gap: 12, background: "#111", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>%0A+           <span style={{ fontSize: 12, color: "#888" }}>{selectedIds.size} selected</span>%0A+           <button onClick={handleEditBulk}%0A+             style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>%0A+             Edit all%0A+           </button>%0A+           <button onClick={handleUploadBulk}%0A+             style={{ padding: "5px 14px", background: "#202020", border: "1px solid #2e2e2e", borderRadius: 6, color: "#e0e0e0", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>%0A+             Upload to YouTube%0A+           </button>%0A+           <button onClick={handleRemoveBulk}%0A+             style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>%0A+             Remove all%0A+           </button>%0A+           <button onClick={finishSelection}%0A+             style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", fontSize: 12, cursor: "pointer" }}>%0A+             Cancel%0A+           </button>%0A+         </div>%0A+       )}%0A+%0A+       {/* Tag filter */}%0A+ <div style={{ padding: "7px 24px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: "1px solid #111", flexShrink: 0 }}>%0A+   <button%0A+     onClick={clearTagFilters}%0A+     style={{%0A+       padding: "4px 12px", borderRadius: 20,%0A+       background: (!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "transparent",%0A+       border: `1px solid ${(!includedTags.size && !excludedTags.size) ? "#e5e5e5" : "#1e1e1e"}`,%0A+       color: (!includedTags.size && !excludedTags.size) ? "#000" : "#444", fontSize: 12, cursor: "pointer",%0A+     }}>All</button>%0A+   {allTags.map(t => {%0A+     const color = tagColors[t.trim().toLowerCase()];%0A+     const included = includedTags.has(t);%0A+     const excluded = excludedTags.has(t);%0A+     const bg = excluded ? "rgba(248,113,113,0.14)" : included ? (color ?? "#e5e5e5") : (color ? `${color}22` : "transparent");%0A+     const border = excluded ? "#7f1d1d" : included ? (color ?? "#e5e5e5") : (color ? `${color}55` : "#1e1e1e");%0A+     const text = excluded ? "#f87171" : included ? (color ? "#fff" : "#000") : (color ?? "#444");%0A+     return (%0A+       <button key={t}%0A+         onClick={(e) => handleTagClick(t, e)}%0A+         onContextMenu={(e) => {%0A+           e.preventDefault();%0A+           window.dispatchEvent(new Event("beatcard:close-menus"));%0A+           setTagColorMenu({ tag: t, x: e.clientX, y: e.clientY });%0A+         }}%0A+         style={{%0A+           padding: "4px 12px", borderRadius: 20, background: bg,%0A+           border: `1px solid ${border}`, color: text, fontSize: 12, cursor: "pointer",%0A+           textDecoration: excluded ? "line-through" : "none",%0A+           display: "inline-flex", alignItems: "center", gap: 5,%0A+         }}>%0A+         {t}%0A+       </button>%0A+     );%0A+   })}%0A+ </div>%0A+%0A+ {tagColorMenu && (%0A+   <TagColorMenu%0A+     x={tagColorMenu.x}%0A+     y={tagColorMenu.y}%0A+     current={tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}%0A+     onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }}%0A+     onRename={() => {%0A+       openTagRename(tagColorMenu.tag);%0A+       setTagColorMenu(null);%0A+     }}%0A+     onClose={() => setTagColorMenu(null)}%0A+   />%0A+ )}%0A+%0A+%0A+ {tagRename && (%0A+   <TagRenameDialog%0A+     rename={tagRename}%0A+     busy={tagRenameBusy}%0A+     error={tagRenameError}%0A+     affectedCount={tagRenameAffectedCount}%0A+     mp3Count={tagRenameMp3Count}%0A+     wavCount={tagRenameWavCount}%0A+     onNewTagChange={setTagRenameNewTag}%0A+     onContinue={continueTagRename}%0A+     onBack={backTagRename}%0A+     onCancel={cancelTagRename}%0A+     onConfirm={confirmTagRename}%0A+   />%0A+ )}%0A+%0A+       {/* Grid — OS file drag-drop */}%0A+       <div%0A+         data-library-scroll="true"%0A+         aria-busy={startupCookingGate || (connectionState === "online" && !cloudSessionVerified)}%0A+         style={{ flex: 1, position: "relative", overflowY: "auto", padding: "28px 24px", paddingBottom: currentBeat ? 90 : 28, opacity: libraryRefreshing ? 0.82 : 1, transform: libraryRefreshing ? "scale(0.997)" : "scale(1)", transition: "opacity 150ms ease, transform 150ms ease" }}%0A+%0A+       >%0A+         {libraryRefreshing && (%0A+           <div aria-hidden="true" style={{ position: "sticky", top: -28, left: 0, right: 0, height: 2, zIndex: 20, overflow: "hidden", pointerEvents: "none" }}>%0A+             <div style={{ width: "28%25", height: "100%25", background: "rgba(255,255,255,.38)", animation: "beatgaler-refresh-line .72s ease-in-out infinite" }} />%0A+           </div>%0A+         )}%0A+         {filteredBeats.length === 0 ? (%0A+           <div style={{ textAlign: "center", paddingTop: 92, color: "#383838" }}>%0A+             {beats.length === 0 ? (%0A+               cloudSessionVerified && connectionState === "online" ? (%0A+                 <div>%0A+                   <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>Empty Gallery</div>%0A+                   <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Add a beat to start your library.</div>%0A+                 </div>%0A+               ) : connectionState === "offline" || connectionState === "poor" ? (%0A+                 <div>%0A+                   <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>No offline beats available</div>%0A+                   <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Reconnect to verify your Galer Cloud library.</div>%0A+                 </div>%0A+               ) : (%0A+                 <div aria-label="Loading beat library" style={{ minHeight: 1 }} />%0A+               )%0A+             ) : <div style={{ fontSize: 13 }}>No beats match your search</div>}%0A+           </div>%0A+         ) : (%0A+           <DndContext%0A+             sensors={sensors}%0A+             collisionDetection={closestCenter}%0A+             onDragStart={handleDragStart}%0A+             onDragEnd={handleDragEnd}%0A+             onDragCancel={handleDragCancel}%0A+           >%0A+             <SortableContext items={filteredBeats.map((b) => b.id)} strategy={rectSortingStrategy}>%0A+               <div style={{ display: "flex", justifyContent: "center", width: "100%25" }}>%0A+                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "28px 22px", alignContent: "flex-start", maxWidth: 1300 }}>%0A+                 {filteredBeats.map((beat, i) => (%0A+                   <BeatCard%0A+                     key={beat.id}%0A+                     beat={beat}%0A+                     visible={revealedBeatIds.has(beat.id)}%0A+                     interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}%0A+                     playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}%0A+                     openableProject={platform.capabilities.openProjectInDaw && (openableCloudProjectIds.has(beat.id) || Boolean(beat.offline_available && (beat.has_flp || beat.has_als) && (beat.flp_path || beat.als_path)))}%0A+                     cloudUploadErrorDetail={backgroundUploadErrors[beat.id]}%0A+                     tagFrequency={tagFrequency}%0A+                     showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}%0A+                     playing={audio.playingId === beat.id && audio.isPlaying}%0A+                     selected={selectedIds.has(beat.id)}%0A+                     selectedCount={selectedIds.size}%0A+                     selectMode={selectMode}%0A+                     dragEnabled={!selectMode && platform.capabilities.manualLibraryReorder}%0A+                     networkOnline={connectionState === "online"}%0A+                     offlineBusy={offlineBusyIds.has(beat.id)}%0A+                     canUseOfflinePackage={platform.capabilities.offlinePackage}%0A+                     canUseLocalHelper={platform.capabilities.localHelper}%0A+                     canInspectNativeProject={platform.capabilities.openProjectInDaw}%0A+                     onToggleOffline={handleToggleOffline}%0A+                     onRetryUpload={retryBackgroundUpload}%0A+                     onBulkEdit={handleEditBulk}%0A+                     onBulkUpload={handleUploadBulk}%0A+                     onBulkDelete={handleRemoveBulk}%0A+                     onPlay={handlePlay}%0A+                     onWarm={handleWarm}%0A+                     onDetail={b => setDrawer({ beat: b, mode: "detail" })}%0A+                     onEdit={b => { if (!rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}%0A+                     onDelete={deleteBeat}%0A+                     onAddToQueue={addToQueue}%0A+                     onUpload={handleUpload}%0A+                     onUploadTelegram={handleUploadTelegram}%0A+                     onDownloadTelegram={handleDownloadTelegram}%0A+                     onUploadProjectTelegram={handleUploadProjectTelegram}%0A+                     onOpenProject={handleOpenProject}%0A+                     onUpdateProject={handleUpdateProject}%0A+                     onCloudFiles={handleCloudFiles}%0A+                     onToggleSelect={(b, e) => toggleSelection(b, e.shiftKey, filteredBeats)}%0A+                     animDelay={0}%0A+                   />%0A+                 ))}%0A+                 </div>%0A+               </div>%0A+             </SortableContext>%0A+             <DragOverlay>%0A+               {activeDragBeat ? (%0A+                 <div style={{ width: 160, borderRadius: 12, transform: "scale(1.02)", boxShadow: "0 20px 40px rgba(0,0,0,0.6)" }}>%0A+                   <Artwork beat={activeDragBeat} size={160} playing={false} />%0A+                 </div>%0A+               ) : null}%0A+             </DragOverlay>%0A+           </DndContext>%0A+         )}%0A+       </div>%0A+%0A+       {/* + Add beat */}%0A+       {!currentBeat && (%0A+         <div style={{ position: "fixed", bottom: 24, left: "50%25", transform: "translateX(-50%25)", zIndex: 45 }}>%0A+           <button onClick={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}%0A+             style={{ padding: "9px 20px", borderRadius: 40, background: "#161616", border: "1px solid #242424", color: "#777", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 4px 24px rgba(0,0,0,0.6)" }}%0A+             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#202020"; (e.currentTarget as HTMLElement).style.color = "#ccc"; }}%0A+             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#161616"; (e.currentTarget as HTMLElement).style.color = "#777"; }}>%0A+             <PlusIcon size={11} /> Add beat%0A+           </button>%0A+         </div>%0A+       )}%0A+%0A+       {cloudFilesBeat && (%0A+         <CloudFilesModal%0A+           beat={cloudFilesBeat}%0A+           files={cloudFiles}%0A+           busyId={cloudFilesBusyId}%0A+           downloadedIds={cloudFilesDownloadedIds}%0A+           onDownload={handleGetCloudFile}%0A+           onClose={closeCloudFiles}%0A+         />%0A+       )}%0A+%0A+       {showAdd && <AddBeatModal onClose={() => setShowAdd(false)} onAdd={addBeatsAndReview} existingBeats={beats} />}%0A+%0A+       {showSettings && (%0A+         <SettingsPanel%0A+           currentFolder={settings?.beats_folder ?? null}%0A+           showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}%0A+           onIncompleteWarningsChanged={handleIncompleteWarningsChanged}%0A+           customCursorEnabled={settings?.custom_cursor_enabled ?? true}%0A+           onCustomCursorChanged={handleCustomCursorChanged}%0A+           telegramConnected={settings?.telegram_cloud_connected ?? false}%0A+           networkOnline={connectionState === "online"}%0A+           telegramUsername={settings?.telegram_cloud_username ?? null}%0A+           onDisconnectTelegram={handleDisconnectTelegramAccount}%0A+           onClose={() => setShowSettings(false)}%0A+           onFolderChanged={handleFolderChanged}%0A+           onBeatRestored={handleBeatRestored}%0A+         />%0A+       )}%0A+%0A+       {drawer && !reviewQueue && !reviewBootstrap && (%0A+         <Drawer%0A+           beat={drawer.beat}%0A+           mode={drawer.mode}%0A+           tagSuggestions={tagSuggestions}%0A+           onClose={() => { setDrawer(null); clearSelection(); }}%0A+           onSaved={updateBeat}%0A+           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) releaseFile(); }}%0A+           selectedBeats={selectedBeats.length > 1 ? selectedBeats : undefined}%0A+           onBulkSaved={applyBulkUpdate}%0A+           mutationAllowed={connectionState === "online"}%0A+           onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}%0A+         />%0A+       )}%0A+%0A+       <ImportReviewHost%0A+   libraryDropStaging={libraryDropStaging}%0A+   reviewBootstrap={reviewBootstrap}%0A+   reviewQueue={reviewQueue}%0A+   skeletonEnabled={REVIEW_SKELETON_ENABLED}%0A+   tagSuggestions={tagSuggestions}%0A+   mutationAllowed={connectionState === "online"}%0A+   onSkipCurrent={skipCurrentReviewBeat}%0A+   onCancel={cancelReview}%0A+   onSaveAll={platform.capabilities.reviewBeatCloudCommit ? undefined : handleReviewedSaveAll}%0A+   isReviewNameTaken={(candidateName) => {%0A+     const normalized = candidateName.trim().toLocaleLowerCase();%0A+     if (!normalized) return false;%0A+     return beats.some(existing =>%0A+       existing.name.trim().toLocaleLowerCase() === normalized%0A+     );%0A+   }}%0A+   onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}%0A+   onSaved={handleReviewedBeatSaved}%0A+   onReleaseAudio={beat => {%0A+     if (audio.playingId === beat.id) releaseFile();%0A+   }}%0A+ />%0A+%0A+       {beatFileDrop && (%0A+         <BeatFileDropModal%0A+           beat={beatFileDrop.beat}%0A+           filePath={beatFileDrop.filePath}%0A+           fileName={fileNameFromPath(beatFileDrop.filePath)}%0A+           fileExtension={extensionFromPath(beatFileDrop.filePath)}%0A+           isDirectory={beatFileDrop.kind === "directory"}%0A+           onChoose={handleDroppedBeatFileRole}%0A+           onClose={() => {%0A+             void cleanupStagedDropPaths([beatFileDrop.filePath]);%0A+             setBeatFileDrop(null);%0A+           }}%0A+         />%0A+       )}%0A+%0A+       <ImportResolutionHost%0A+         audioConflictBatch={audioConflictBatch}%0A+         dropImportBatch={dropImportBatch}%0A+         onAudioConflictsCancel={cancelAudioConflicts}%0A+         onAudioConflictsResolved={resolveAudioConflicts}%0A+         onImportDecisionsClose={closeImportDecisions}%0A+         onImportDecisionsImported={importResolvedDecisions}%0A+       />%0A+%0A+       {(dropActive || dropImporting) && !libraryDropStaging && !reviewBootstrap && !reviewQueue && (%0A+         <div style={{%0A+           position: "fixed",%0A+           left: "50%25",%0A+           bottom: currentBeat ? 86 : 24,%0A+           transform: "translateX(-50%25)",%0A+           zIndex: 10000,%0A+           pointerEvents: "none",%0A+           width: "min(620px, calc(100vw - 48px))",%0A+         }}>%0A+           <div style={{%0A+             padding: "13px 18px",%0A+             borderRadius: 12,%0A+             border: "2px dashed #f5a623",%0A+             background: "rgba(17,17,17,0.94)",%0A+             textAlign: "center",%0A+             boxShadow: "0 10px 32px rgba(0,0,0,0.42)",%0A+           }}>%0A+             <div style={{ fontSize: 13, color: "#eee", fontWeight: 600 }}>%0A+               {dropImporting ? "Importando…" : "Suelta aquí para agregar como beat aparte"}%0A+             </div>%0A+             {!dropImporting && (%0A+               <div style={{ fontSize: 10, color: "#777", marginTop: 4, lineHeight: 1.45 }}>%0A+                 O arrástralo encima de un beat para agregarlo a ese beat.%0A+               </div>%0A+             )}%0A+           </div>%0A+         </div>%0A+       )}%0A+%0A+       {currentBeat && (%0A+         <Player%0A+           beat={currentBeat}%0A+           playing={audio.isPlaying}%0A+           progress={audio.progress}%0A+           duration={audio.duration}%0A+           volume={audio.volume}%0A+           queue={queuedBeats}%0A+           currentIndex={-1}%0A+           showQueue={showQueue}%0A+           shuffleEnabled={shuffleEnabled}%0A+           repeatMode={repeatMode}%0A+           canShowQueue={queuedBeats.length > 0}%0A+           onToggle={togglePause}%0A+           onSeek={seek}%0A+           onPrev={handlePrev}%0A+           onNext={() => handleNext(false)}%0A+           onVolumeChange={setVolume}%0A+           onToggleShuffle={toggleShuffle}%0A+           onCycleRepeat={cycleRepeat}%0A+           onToggleQueue={toggleQueue}%0A+           onPlayQueueIndex={playQueueIndex}%0A+           canAddBeat={platform.capabilities.browserFileImport || platform.capabilities.nativeFilesystemDrop}%0A+           onAddBeat={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}%0A+           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })}%0A+           onEdit={(b) => { if (!rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}%0A+           onDelete={deleteBeat}%0A+           onAddToQueue={addToQueue}%0A+         />%0A+       )}%0A+%0A+       {showUpload && (%0A+         <UploadModal%0A+           initialBeat={showUpload.initialBeat}%0A+           allBeats={beats}%0A+           initialSelectedIds={showUpload.selectedIds}%0A+           onClose={() => setShowUpload(null)}%0A+         />%0A+       )}%0A+%0A+       <JobStatusBar />%0A+     </div>%0A+   );%0A+ }%0A+%0A+%0A+ export default function App() {%0A+   return platform.kind === "web"%0A+     ? <BeatGalerApp />%0A+     : <AccountGate><BeatGalerApp /></AccountGate>;%0A+ }%0A+%0A%0A ❯ tests/integration/issue97RuntimeWebFollowup.test.ts:222:17%0A%0A
+EXIT_CODE=1
