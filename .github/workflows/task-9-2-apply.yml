@@ -66,41 +66,85 @@ jobs:
           PY
 
       - name: Apply task 9.2 extraction
-        id: apply
-        continue-on-error: true
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           python .github/task-9-2-apply.py 2>&1 | tee artifacts/migration-check-logs/00-apply-task-9-2.log
 
-      - name: Focused task 9.2 checks
-        if: steps.apply.outcome == 'success'
-        id: focused
-        continue-on-error: true
+      - name: Adapt tests to extracted Reload ownership
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          reload_test = Path('tests/component-dom/libraryReload.test.tsx')
+          text = reload_test.read_text()
+          text = text.replace('  vi.useFakeTimers();\n', '', 1)
+          text = text.replace('  vi.useRealTimers();\n', '', 1)
+          text = text.replace(
+              '    await act(async () => {\n      await vi.runAllTimersAsync();\n      await pending;\n    });',
+              '    await act(async () => {\n      await pending;\n    });'
+          )
+          text = text.replace(
+              '    await act(async () => {\n      await vi.runAllTimersAsync();\n      await deferredAttempt;\n    });',
+              '    await act(async () => {\n      await deferredAttempt;\n    });',
+              1,
+          )
+          text = text.replace(
+              '    await act(async () => {\n      await vi.runAllTimersAsync();\n    });',
+              '    await act(async () => {\n      await new Promise(resolve => window.setTimeout(resolve, 360));\n    });',
+              1,
+          )
+          text = text.replace(
+              '    await act(async () => {\n      await vi.runAllTimersAsync();\n      await pending;\n    });',
+              '    await act(async () => {\n      await pending;\n    });'
+          )
+          reload_test.write_text(text)
+
+          architecture_test = Path('tests/component-dom/startupRevealArchitecture.test.ts')
+          text = architecture_test.read_text()
+          text = text.replace(
+              'const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");',
+              'const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");\nconst libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.ts", "utf8");',
+              1,
+          )
+          text = text.replace(
+              '    expect(app).toContain("for (const beat of visible) next.add(beat.id)");',
+              '    expect(libraryReloadOwner).toContain("for (const beat of visible) next.add(beat.id)");',
+              1,
+          )
+          architecture_test.write_text(text)
+          PY
+
+      - name: Focused task 9.2 checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
           npx vitest run \
             tests/component-dom/libraryReload.test.tsx \
+            tests/component-dom/startupRevealArchitecture.test.ts \
             tests/integration/appLibraryReloadExtraction.test.ts \
             tests/integration/appMigrationCharacterization.test.ts \
             tests/integration/appCloudUploadQueueExtraction.test.ts \
             2>&1 | tee artifacts/migration-check-logs/00-focused-task-9-2.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "${status}" -eq 0
 
       - name: Diff check
-        if: steps.apply.outcome == 'success'
-        id: diffcheck
-        continue-on-error: true
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           git diff --check 2>&1 | tee artifacts/migration-check-logs/00-diff-check.log
 
       - name: Run migration matrix
-        if: steps.apply.outcome == 'success'
-        id: matrix
-        continue-on-error: true
         run: node scripts/run-migration-checks-with-logs.mjs
+
+      - name: Require green migration matrix
+        shell: bash
+        run: grep -Fqx 'Migration checks: PASS' artifacts/migration-check-logs/summary.txt
 
       - name: Upload migration check logs
         if: always()
@@ -109,16 +153,6 @@ jobs:
           name: migration-check-logs-task-9-2-${{ github.run_id }}
           path: artifacts/migration-check-logs
           if-no-files-found: error
-
-      - name: Require all validation
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "${{ steps.apply.outcome }}" = "success"
-          test "${{ steps.focused.outcome }}" = "success"
-          test "${{ steps.diffcheck.outcome }}" = "success"
-          test "${{ steps.matrix.outcome }}" = "success"
 
       - name: Recheck remote HEAD before publication
         shell: bash
@@ -129,7 +163,6 @@ jobs:
           test "${remote}" = "${GITHUB_SHA}"
 
       - name: Publish exact validated implementation
-        id: publish
         shell: bash
         run: |
           set -euo pipefail
@@ -145,6 +178,7 @@ jobs:
               'src/App.tsx' \
               'src/features/library/useLibraryReload.ts' \
               'tests/component-dom/libraryReload.test.tsx' \
+              'tests/component-dom/startupRevealArchitecture.test.ts' \
               'tests/integration/appCloudUploadQueueExtraction.test.ts' \
               'tests/integration/appLibraryReloadExtraction.test.ts' \
               'tests/integration/appMigrationCharacterization.test.ts' | sort
@@ -157,4 +191,3 @@ jobs:
           git add -A
           git commit -m "refactor(app): extract library reload"
           git push origin HEAD:v0.9.0-test-noche
-          echo "validated_implementation_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
