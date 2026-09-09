@@ -1,0 +1,135 @@
+name: Temporary task 8.1 final
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-8-1-final-temp.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: beatgaler-migration-v0.9.0-test-noche
+  cancel-in-progress: false
+
+jobs:
+  task-8-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Apply task 8.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='v0.9.0-test-noche'
+          initial='aba85aadb3dce83f326587f72425614c8f962a53'
+          test "${GITHUB_REF_NAME}" = "$target"
+          git merge-base --is-ancestor "$initial" HEAD
+          unexpected="$(git diff --name-only "$initial"..HEAD | grep -v -E '^(\.github/workflows/task-8-1-(temp|retry-temp|final-temp)\.yml|scripts/task-8-1-apply-temp\.py)$' || true)"
+          test -z "$unexpected"
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "${GITHUB_SHA}"
+          cp scripts/task-8-1-apply-temp.py /tmp/task-8-1-apply.py
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          source=Path('.github/workflows/task-8-1-temp.yml').read_text(encoding='utf-8')
+          blocks=re.findall(r"          python - <<'PY'\n(.*?)\n          PY", source, re.S)
+          if len(blocks) != 2:
+              raise RuntimeError(f'expected 2 embedded Python blocks, found {len(blocks)}')
+          lines=[line[10:] if line.startswith('          ') else line for line in blocks[1].splitlines()]
+          Path('/tmp/task-8-1-docs.py').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          PY
+          python -m py_compile /tmp/task-8-1-apply.py /tmp/task-8-1-docs.py
+          git rm .github/workflows/task-8-1-temp.yml .github/workflows/task-8-1-retry-temp.yml .github/workflows/task-8-1-final-temp.yml scripts/task-8-1-apply-temp.py
+          python /tmp/task-8-1-apply.py
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: extract native drop targets'
+          echo "IMPLEMENTATION_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run migration matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='artifacts/migration-check-logs'
+          mkdir -p "$dir"
+          summary="$dir/summary.txt"
+          printf 'Task 8.1 migration checks\nInitial SHA: aba85aadb3dce83f326587f72425614c8f962a53\nImplementation SHA: %s\n' "$IMPLEMENTATION_SHA" > "$summary"
+          check() {
+            name="$1"; shift
+            log="$dir/$name.log"
+            if "$@" >"$log" 2>&1; then
+              echo "PASS $name" | tee -a "$summary"
+            else
+              code=$?
+              echo "FAIL $name exit=$code" | tee -a "$summary"
+              cat "$log"
+              exit "$code"
+            fi
+          }
+          check focused-targets npx vitest run tests/integration/appNativeDropTargetsExtraction.test.ts --environment jsdom
+          check regression-native node scripts/regression-import-native.mjs
+          check mac-portability-static npm run test:mac-portability:static
+          check typecheck npm run test:typecheck
+          check unit-ts npm run test:unit:ts
+          check component-dom npm run test:component:dom
+          check integration npm run test:integration
+          check regressions npm run test:regressions
+          check build-web npm run build:web
+          check build-desktop npm run build
+          echo 'Migration checks: PASS' | tee -a "$summary"
+
+      - name: Upload migration check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-8-1-${{ github.run_id }}
+          path: artifacts/migration-check-logs
+          if-no-files-found: warn
+
+      - name: Publish validated implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='v0.9.0-test-noche'
+          test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_SHA"
+          test -z "$(git status --porcelain)"
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "${GITHUB_SHA}"
+          git push origin "$IMPLEMENTATION_SHA:refs/heads/$target"
+
+      - name: Finalize migration documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='v0.9.0-test-noche'
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "$IMPLEMENTATION_SHA"
+          python /tmp/task-8-1-docs.py
+          git diff --check
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md
+          git commit -m 'docs: close task 8.1'
+          final="$(git rev-parse HEAD)"
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "$IMPLEMENTATION_SHA"
+          git push origin "$final:refs/heads/$target"
