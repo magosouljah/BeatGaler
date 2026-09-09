@@ -102,19 +102,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          expected="$(cat <<'EOF'
-.github/task-9-3-apply.py
-.github/workflows/task-9-3-apply.yml
-src/App.tsx
-src/features/startup/useStartupBootstrap.ts
-tests/component-dom/startupBootstrap.test.tsx
-tests/integration/appMigrationCharacterization.test.ts
-tests/integration/appStartupBootstrapExtraction.test.ts
-EOF
-)"
+          expected="$(printf '%s\n' \
+            .github/task-9-3-apply.py \
+            .github/workflows/task-9-3-apply.yml \
+            src/App.tsx \
+            src/features/startup/useStartupBootstrap.ts \
+            tests/component-dom/startupBootstrap.test.tsx \
+            tests/integration/appMigrationCharacterization.test.ts \
+            tests/integration/appStartupBootstrapExtraction.test.ts | sort)"
           actual="$(git diff --cached --name-only | sort)"
-          expected_sorted="$(printf '%s\n' "$expected" | sort)"
-          if test "$actual" != "$expected_sorted"; then
+          if test "$actual" != "$expected"; then
             printf 'Unexpected staged implementation files:\n%s\n' "$actual" | tee -a migration-check-logs/summary.txt
             exit 1
           fi
@@ -165,6 +162,16 @@ EOF
           test "$PRE_CLOSE_HEAD" = "$IMPLEMENTATION_SHA"
           export PRE_CLOSE_HEAD
           python /tmp/task-9-3-apply.py --close
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("migration/Registro-de-avance.md")
+          text = path.read_text()
+          old = "- Ninguno en la corrida final; si existieron intentos previos fallidos de esta misma ronda, quedan identificables en GitHub Actions y no se usaron como evidencia de cierre."
+          new = "- Run 34321548287 fue rechazado antes de crear jobs por YAML temporal inválido (un heredoc sin indentación válida dentro de `run:`); no ejecutó ni publicó producto y no pudo generar artifact. Se corrigió únicamente el tooling temporal.\n- La corrida final completó la extracción y toda la matriz sin fallos de producto."
+          if old not in text:
+              raise SystemExit("Could not locate task 9.3 failure placeholder")
+          path.write_text(text.replace(old, new, 1))
+          PY
           git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md
           actual="$(git diff --cached --name-only | sort)"
           expected="$(printf '%s\n' migration/BeatGaler-agent-state.md migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md | sort)"
