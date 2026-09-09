@@ -79,7 +79,7 @@ jobs:
           set -o pipefail
           npm run test:integration 2>&1 | tee integration-10-2.log
       - name: Upload integration diagnostics
-        if: steps.integration.outcome == 'failure'
+        if: always() && steps.integration.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: task-10-2-integration-log
@@ -92,7 +92,7 @@ jobs:
           set -o pipefail
           npm run test:regressions 2>&1 | tee regressions-10-2.log
       - name: Upload regression diagnostics
-        if: steps.regressions.outcome == 'failure'
+        if: always() && steps.regressions.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: task-10-2-regressions-log
