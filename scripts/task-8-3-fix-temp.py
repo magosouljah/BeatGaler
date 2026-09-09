@@ -22,4 +22,21 @@ if text.count(old_path_import) != 1:
 text = text.replace(old_path_import, new_path_import, 1)
 
 path.write_text(text, encoding="utf-8", newline="\n")
-print("Corrected focal assertion, App splice offsets, and preserved App isBackupFolderPath import.")
+
+target_test_path = Path(__file__).resolve().parents[1] / "tests/integration/appNativeDropTargetsExtraction.test.ts"
+target_test = target_test_path.read_text(encoding="utf-8")
+old_reads = 'const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");\nconst targets = readFileSync(resolve(process.cwd(), "src/features/dragdrop/nativeDropTargets.ts"), "utf8");\n'
+new_reads = 'const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");\nconst nativeDropOwner = readFileSync(resolve(process.cwd(), "src/features/dragdrop/useNativeLibraryDrop.ts"), "utf8");\nconst targets = readFileSync(resolve(process.cwd(), "src/features/dragdrop/nativeDropTargets.ts"), "utf8");\n'
+if target_test.count(old_reads) != 1:
+    raise SystemExit(f"Expected one task 8.1 test read block, found {target_test.count(old_reads)}")
+target_test = target_test.replace(old_reads, new_reads, 1)
+for old, new in [
+    ('    expect(app).toContain("resolveNativeFilesystemDropTarget(payload.paths, payload.position)");\n', '    expect(nativeDropOwner).toContain("resolveNativeFilesystemDropTarget(payload.paths, payload.position)");\n'),
+    ('    expect(app).toContain("resolveNativeExternalImageDropTarget(position)");\n', '    expect(nativeDropOwner).toContain("resolveNativeExternalImageDropTarget(position)");\n'),
+]:
+    if target_test.count(old) != 1:
+        raise SystemExit(f"Expected one task 8.1 ownership assertion, found {target_test.count(old)}: {old.strip()}")
+    target_test = target_test.replace(old, new, 1)
+target_test_path.write_text(target_test, encoding="utf-8", newline="\n")
+
+print("Corrected focal assertion, App splice offsets, preserved App isBackupFolderPath import, and moved task 8.1 ownership assertions to the new native receiver.")
