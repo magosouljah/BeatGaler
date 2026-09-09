@@ -39,12 +39,13 @@ jobs:
 
           prefix = prefix
             .replace(/from "\.\//g, 'from "../')
-            .replace(/import\("\.\//g, 'import("../')
             .replace('import AccountGate, { logoutBeatGalerAccount } from "../components/AccountGate";', 'import { logoutBeatGalerAccount } from "../components/AccountGate";')
             .replace('import AppShell from "../app/AppShell";\n', '')
             .replace('import { useAppShortcuts } from "../app/useAppShortcuts";', 'import { useAppShortcuts } from "./useAppShortcuts";');
 
-          compositionFunction = compositionFunction.replace(functionMarker, 'export function useBeatGalerComposition() {');
+          compositionFunction = compositionFunction
+            .replace(functionMarker, 'export function useBeatGalerComposition() {')
+            .replace(/import\("\.\//g, 'import("../');
           const returnStart = '  return <AppShell scope={{';
           const returnEnd = '}} />;';
           const returnStartIndex = compositionFunction.lastIndexOf(returnStart);
