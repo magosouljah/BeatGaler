@@ -1,0 +1,62 @@
+name: Task 10.2 integration-aware composition temp
+
+on:
+  push:
+    branches: [v0.9.0-test-noche]
+    paths:
+      - .github/workflows/task-10-2-integration-fix-temp.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Apply task 10.2 composition refactor
+        run: node scripts/task-10-2-refactor-temp.cjs
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused structural check
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const app = fs.readFileSync('src/App.tsx', 'utf8');
+          const beatGalerApp = fs.readFileSync('src/app/BeatGalerApp.tsx', 'utf8');
+          const composition = fs.readFileSync('src/app/useBeatGalerComposition.ts', 'utf8');
+          const lines = app.trimEnd().split(/\r?\n/).length;
+          if (lines < 5 || lines > 15) throw new Error(`App.tsx must remain 5-15 lines, got ${lines}`);
+          if (!app.includes('<BeatGalerApp />') || app.includes('AccountGate') || app.includes('platform.kind')) throw new Error('App.tsx is not a minimal entry point');
+          if (!beatGalerApp.includes('platform.kind === "web"') || !beatGalerApp.includes('<AccountGate><BeatGalerWorkspace /></AccountGate>')) throw new Error('Platform authentication route changed');
+          if (!beatGalerApp.includes('<AppShell scope={scope} />')) throw new Error('AppShell is not owned by BeatGalerApp');
+          if (!composition.includes('useAppShortcuts({') || !composition.includes('usePublishingActions({')) throw new Error('Composition wiring is incomplete');
+          if (composition.includes('BeatGalerCompositionLegacy') || fs.existsSync('src/BeatGalerCompositionLegacy.tsx')) throw new Error('Legacy mega-component bridge is forbidden');
+          NODE
+      - name: Typecheck
+        run: npm run test:typecheck
+      - name: Unit TS
+        run: npm run test:unit:ts
+      - name: Component DOM
+        run: npm run test:component:dom
+      - name: Integration
+        run: npm run test:integration
+      - name: Regressions
+        run: npm run test:regressions
+      - name: Build web
+        run: npm run build:web
+      - name: Build desktop
+        run: npm run build
+      - name: Commit validated implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor(app): establish minimal composition root for 10.2"
+          git push origin HEAD:v0.9.0-test-noche
