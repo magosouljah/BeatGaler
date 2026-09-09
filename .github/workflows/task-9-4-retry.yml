@@ -1,0 +1,137 @@
+name: Temporary Task 9.4 Retry
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-9-4-retry.yml
+
+permissions:
+  contents: write
+
+env:
+  TARGET_BRANCH: v0.9.0-test-noche
+
+jobs:
+  apply-validate-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Guard exclusive branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "${TARGET_BRANCH}"
+          test "$(git branch --show-current)" = "${TARGET_BRANCH}"
+
+      - name: Apply task 9.4 extraction and correct validation ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-task-9-4.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          test_path = Path("tests/integration/appConnectivityCloudEventsExtraction.test.ts")
+          test = test_path.read_text(encoding="utf-8")
+          for event_name in ("ready", "library_changed", "telegram_connected"):
+              old = f'expect(count(events, \'events.removeEventListener("{event_name}", on'
+              new = f'expect(count(events, \'events?.removeEventListener("{event_name}", on'
+              if test.count(old) != 1:
+                  raise SystemExit(f"cleanup assertion patch for {event_name}: expected one match")
+              test = test.replace(old, new, 1)
+          test_path.write_text(test, encoding="utf-8")
+
+          regressions_path = Path("scripts/run-regressions.mjs")
+          regressions = regressions_path.read_text(encoding="utf-8")
+          owner_line = '  const startupBootstrap = readFileSync(path.join(root, "src", "features", "startup", "useStartupBootstrap.ts"), "utf8");\n'
+          owner_with_connectivity = owner_line + '  const connectivity = readFileSync(path.join(root, "src", "features", "session", "useConnectivity.ts"), "utf8");\n'
+          if regressions.count(owner_line) != 1:
+              raise SystemExit("connectivity regression owner insertion: expected one match")
+          regressions = regressions.replace(owner_line, owner_with_connectivity, 1)
+          old_guard = "  if (!startupBootstrap.includes('if (!status.reachable)') || !app.includes('if (!status.reachable)')) fail(\"Offline startup/reconnect lost explicit Telegram transport reachability.\");"
+          new_guard = "  if (!startupBootstrap.includes('if (!status.reachable)') || !connectivity.includes('if (!status.reachable)')) fail(\"Offline startup/reconnect lost explicit Telegram transport reachability.\");"
+          if regressions.count(old_guard) != 1:
+              raise SystemExit("reachability guard retarget: expected one match")
+          regressions = regressions.replace(old_guard, new_guard, 1)
+          regressions_path.write_text(regressions, encoding="utf-8")
+          PY
+
+      - name: Remove temporary executable validation tooling before checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f scripts/apply-task-9-4.py
+          rm -f .github/workflows/task-9-4-apply.yml
+          rm -f .github/workflows/task-9-4-retry.yml
+          git diff --check
+          test ! -e scripts/apply-task-9-4.py
+          test ! -e .github/workflows/task-9-4-apply.yml
+          test ! -e .github/workflows/task-9-4-retry.yml
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused task 9.4 checks
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/migration-check-logs
+          npx vitest run \
+            tests/integration/appConnectivityCloudEventsExtraction.test.ts \
+            tests/integration/appSessionExtraction.test.ts \
+            tests/integration/appStartupBootstrapExtraction.test.ts \
+            2>&1 | tee artifacts/migration-check-logs/00-task-9-4-focused.log
+
+      - name: Run migration matrix
+        id: matrix
+        continue-on-error: true
+        run: node scripts/run-migration-checks-with-logs.mjs
+
+      - name: Upload migration check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-9-4-retry-${{ github.run_id }}
+          path: artifacts/migration-check-logs
+          if-no-files-found: error
+
+      - name: Require focused and matrix PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "focused=${{ steps.focused.outcome }}"
+          echo "matrix=${{ steps.matrix.outcome }}"
+          test "${{ steps.focused.outcome }}" = "success"
+          test "${{ steps.matrix.outcome }}" = "success"
+
+      - name: Commit exact validated implementation tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf artifacts/migration-check-logs
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No implementation changes to commit" >&2
+            exit 1
+          fi
+          git commit -m "refactor(app): extract connectivity and cloud events"
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "IMPLEMENTATION_SHA=$(git rev-parse HEAD)"
