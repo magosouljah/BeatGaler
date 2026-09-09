@@ -1,5 +1,5 @@
 name: Final task 8.3 validation
-# Retry after preserving App's independent Backup path helper usage.
+# Retry after adapting the task 8.1 target-routing guard to the new native receiver ownership.
 
 on:
   push:
@@ -53,6 +53,7 @@ jobs:
           git add src/App.tsx \
             src/features/dragdrop/useNativeLibraryDrop.ts \
             tests/integration/appNativeLibraryDropExtraction.test.ts \
+            tests/integration/appNativeDropTargetsExtraction.test.ts \
             scripts/regression-import-native.mjs \
             scripts/run-regressions.mjs \
             scripts/test-macos-portability.mjs
