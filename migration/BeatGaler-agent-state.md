@@ -4,38 +4,40 @@
 
 - Fecha de ejecución: 2026-09-08
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `7.2 — Separar descubrimiento incremental`
+- Tarea trabajada: `7.3 — Separar Save All y conflictos`
 - Estado: `Terminada`
-- Última tarea terminada: `7.2 — Separar descubrimiento incremental`
+- Última tarea terminada: `7.3 — Separar Save All y conflictos`
 
 ## Base de esta ejecución
 
-- SHA inicial: `01e4c439ef4e251a5c94d0d46b907bfdf0745e3b`
-- SHA de implementación validada: `8923a1790b9dd0d126760ae54908678a44f78025`
-- HEAD después de retirar el artifact generado por CI y antes del cierre documental: `d993cabe4a4aaf3c661cb68afd604734a529720f`
-- Run de implementación final: `34287602453` — `Temporary task 7.2 retry 3` — `SUCCESS`
+- SHA inicial: `76729479a4947d27626654464defb844a98db031`
+- SHA de implementación validada: `de32aab99da86942aa71a83e992f9f371ae3f44f`
+- HEAD después de retirar el artifact generado por CI y antes del cierre documental: `a309b9c197ac835306b2ee8be5197c6a3b13a980`
+- Run de implementación final: `34296950583` — `Temporary task 7.3 apply` — `SUCCESS`
 - El SHA final real de la ronda es el HEAD remoto que debe leerse nuevamente después de este cierre documental; no se anticipa dentro del propio commit de cierre.
 
 ## Resultado verificado
 
-- `useImportDiscovery.ts` posee el descubrimiento/preparación progresiva y sus generaciones de cancelación.
-- Beat 1 se publica antes de que termine el escaneo completo; el resto continúa secuencialmente en background después de un frame.
-- Cancel/reemplazo invalidan trabajo obsoleto; un resultado tardío se descarta y no reabre Review.
-- Save All sigue esperando la misma promesa de preparación y permanece en App hasta 7.3.
-- La entrada Web permanece en App hasta 7.4 y usa una conexión mínima para cerrar el estado visual de discovery.
-- La matriz completa pasó sobre la implementación validada y el guard nativo sigue comprobando que las rutas originales entran al stream incremental.
+- `useImportSaveAll.ts` posee Save All, `audioConflictBatch`, `dropImportBatch` y los callbacks de resolución nativa.
+- Save All cierra Review inmediatamente y entrega el beat actual a la cola cloud antes de esperar la preparación restante.
+- Los beats restantes reutilizan la misma promesa del worker secuencial de 7.2; válidos se guardan/suben y duplicados/errores vuelven a Review al final.
+- Los conflictos de audio y decisiones se muestran después de Review normal y conservan la protección de staging de archivos todavía referenciados.
+- `ImportResolutionHost` conecta los modales existentes desde el host de importación.
+- La entrada Web sigue en `App.tsx` hasta 7.4 mediante un puente temporal de setters; 7.4 no fue iniciada.
+- El uso independiente de `saveBeatMeta` para metadata/artwork Desktop permanece intacto.
+- Las pruebas focalizadas y la matriz completa de siete checks pasaron sobre el SHA de implementación validada.
 
 ## Pendientes concretos
 
-- `7.3 — Separar Save All y conflictos`.
-- `7.4 — Separar la entrada de importación web` permanece posterior a 7.3.
+- `7.4 — Separar la entrada de importación web`.
+- Retirar en 7.4 el puente temporal de `setAudioConflictBatch` / `setDropImportBatch` cuando la entrada Web tenga owner propio.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 7.2.
+- Ninguna necesaria para cerrar 7.3.
 
 ## Siguiente tarea
 
-- `7.3 — Separar Save All y conflictos`
+- `7.4 — Separar la entrada de importación web`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

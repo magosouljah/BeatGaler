@@ -383,7 +383,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** un lote grande permite revisar pronto el primer beat y Cancel durante el descubrimiento no reabre candidatos antiguos.
     
 
-### [ ] 7.3 — Separar Save All y conflictos
+### [x] 7.3 — Separar Save All y conflictos
 
 - **Hacer:** extraer guardado del resto del lote y callbacks de decisiones/duplicados/conflictos.
     
