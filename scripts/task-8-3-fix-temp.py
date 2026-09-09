@@ -15,5 +15,11 @@ if text.count(old_splice) != 1:
     raise SystemExit(f"Expected one App native-effect splice, found {text.count(old_splice)}")
 text = text.replace(old_splice, new_splice, 1)
 
+old_path_import = '    \'import { extensionFromPath, fileNameFromPath } from "./features/dragdrop/pathHelpers";\',\n'
+new_path_import = '    \'import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";\',\n'
+if text.count(old_path_import) != 1:
+    raise SystemExit(f"Expected one App path-helper replacement target, found {text.count(old_path_import)}")
+text = text.replace(old_path_import, new_path_import, 1)
+
 path.write_text(text, encoding="utf-8", newline="\n")
-print("Corrected focal test comment handling and recalculated App native-effect offsets before splicing.")
+print("Corrected focal assertion, App splice offsets, and preserved App isBackupFolderPath import.")
