@@ -71,6 +71,7 @@ try {
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
   const htmlDropOwner = readFileSync(path.join(root, "src", "features", "dragdrop", "useHtmlLibraryDrop.ts"), "utf8");
+  const nativeDropOwner = readFileSync(path.join(root, "src", "features", "dragdrop", "useNativeLibraryDrop.ts"), "utf8");
   const rustLib = readFileSync(path.join(root, "src-tauri", "src", "lib.rs"), "utf8");
   const nativeExternalImage = readFileSync(path.join(root, "src", "features", "dragdrop", "nativeExternalImage.ts"), "utf8");
   const wryPatch = readFileSync(path.join(root, "scripts", "wry-patches", "wry-0.54.2-drag_drop.rs"), "utf8").replace(/\r\n/g, "\n");
@@ -85,16 +86,18 @@ try {
 
   const tauriConfig = readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8");
   if (!tauriConfig.includes('"dragDropEnabled": true')) fail("Windows native filesystem drag/drop is not enabled in Tauri config.");
-  if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Windows Explorer drops are no longer using Tauri's native filesystem-path event.");
-  if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("Native filesystem drop diagnostics disappeared.");
-  if (!app.includes("MAX_NATIVE_DROP_ITEMS = 50")) fail("Native Explorer drop safety cap disappeared.");
+  if (!nativeDropOwner.includes("getCurrentWebview().onDragDropEvent")) fail("Windows Explorer drops are no longer using Tauri's native filesystem-path event.");
+  if (!nativeDropOwner.includes("TAURI_NATIVE_DROP") || !nativeDropOwner.includes("NATIVE_LIBRARY_IMPORT_START")) fail("Native filesystem drop diagnostics disappeared.");
+  if (!nativeDropOwner.includes("MAX_NATIVE_DROP_ITEMS = 50")) fail("Native Explorer drop safety cap disappeared.");
   if (!htmlDropOwner.includes("windowsNativeDrop") || !htmlDropOwner.includes("if (windowsNativeDrop) return")) fail("HTML DataTransfer staging is still installed on Windows and can race native filesystem drops.");
   if (!app.includes("useHtmlLibraryDrop({")) fail("App no longer composes the extracted HTML/browser drop owner.");
+  if (!app.includes("useNativeLibraryDrop({")) fail("App no longer composes the extracted native drop owner.");
+  if (app.includes("getCurrentWebview().onDragDropEvent") || app.includes("const handleNativeDrop = async")) fail("Native listener ownership leaked back into App.tsx.");
   if (app.includes("installHtmlDropController")) fail("App.tsx took ownership of HTML controller installation again.");
   if (app.includes('listen<NativeDragPayload>("beatgaler-native-drag"')) fail("Obsolete custom OLE event router returned.");
   if (rustLib.includes('mod native_drop;') || rustLib.includes("native_drop::install(app)")) fail("Obsolete custom OLE HWND router is still installed.");
   if (!rustLib.includes("Tauri native filesystem drop enabled")) fail("Rust startup no longer identifies the official native file-drop path.");
-  if (!app.includes("readImagePathAsDataUrl")) fail("Native Explorer artwork path support disappeared.");
+  if (!nativeDropOwner.includes("readImagePathAsDataUrl")) fail("Native Explorer artwork path support disappeared.");
   if (app.includes('document.addEventListener("drop"')) fail("App.tsx owns a raw document drop listener; the HTML fallback belongs in htmlDropController.ts.");
   if (beatCard.includes("onDropArtwork")) fail("BeatCard reintroduced its own artwork drop pipeline.");
   if (!controller.includes('document.addEventListener("drop"')) fail("htmlDropController.ts lost the non-Windows/browser fallback.");
@@ -121,13 +124,13 @@ try {
   if (macWryPatch.indexOf("collect_paths(drag_info)") > macWryPatch.indexOf("external_image_url(drag_info)")) fail("macOS browser-image fallback can run before the Finder filesystem fast path.");
 
   if (!nativeExternalImage.includes("__BEATGALER_EXTERNAL_IMAGE_V1__")) fail("Native external-image bridge prefix disappeared.");
-  if (!app.includes('window.dispatchEvent(new CustomEvent("native-external-image-drop"')) fail("WRY external-image payload is no longer emitted as a separate BeatGaler artwork event.");
-  if (!app.includes('window.addEventListener("native-external-image-drop"')) fail("BeatGaler no longer receives the native external-image artwork event.");
-  if (!app.includes("nativeExternalImageSignalFromPaths(incomingPaths)")) fail("Reserved external-image markers are no longer filtered at the Tauri event boundary.");
-  if (!app.includes("URLs never enter Import Beat and are accepted only by an artwork target")) fail("Pinterest artwork-only routing invariant disappeared.");
-  const nativeDropEffectStart = app.indexOf("    const handleNativeDrop = async");
-  const nativeDropEffectEnd = app.indexOf("  const handleCloudFiles =", nativeDropEffectStart);
-  const nativeDropEffect = app.slice(nativeDropEffectStart, nativeDropEffectEnd);
+  if (!nativeDropOwner.includes('window.dispatchEvent(new CustomEvent("native-external-image-drop"')) fail("WRY external-image payload is no longer emitted as a separate BeatGaler artwork event.");
+  if (!nativeDropOwner.includes('window.addEventListener("native-external-image-drop"')) fail("BeatGaler no longer receives the native external-image artwork event.");
+  if (!nativeDropOwner.includes("nativeExternalImageSignalFromPaths(incomingPaths)")) fail("Reserved external-image markers are no longer filtered at the Tauri event boundary.");
+  if (!nativeDropOwner.includes("URLs never enter Import Beat and are accepted only by an artwork target")) fail("Pinterest artwork-only routing invariant disappeared.");
+  const nativeDropEffectStart = nativeDropOwner.indexOf("    const handleNativeDrop = async");
+  const nativeDropEffectEnd = nativeDropOwner.indexOf("    void (async () => {", nativeDropEffectStart);
+  const nativeDropEffect = nativeDropOwner;
   const nativeDropCodeOnly = nativeDropEffect
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
@@ -305,7 +308,7 @@ try {
   const dropSkeletonIndex = htmlDropController.indexOf("options.onLibraryFileStagingChange?.(true)");
   const stageBytesIndex = htmlDropController.indexOf("await stageCapturedHtmlDrop(capturedDrop)", dropSkeletonIndex);
   if (dropSkeletonIndex < 0 || stageBytesIndex < 0 || dropSkeletonIndex > stageBytesIndex) fail("HTML fallback must paint feedback before it stages bytes.");
-  if (!app.includes("DataTransfer File.arrayBuffer(), no drop-staging")) fail("Windows native import lost its explicit no-staging critical-path invariant.");
+  if (!nativeDropOwner.includes("DataTransfer File.arrayBuffer(), no drop-staging")) fail("Windows native import lost its explicit no-staging critical-path invariant.");
   const skeletonIndex = importDiscovery.indexOf("setReviewBootstrap({ total: null })");
   const streamStartIndex = importDiscovery.indexOf("await services.startStream(normalized)", skeletonIndex);
   if (skeletonIndex < 0 || streamStartIndex < 0 || skeletonIndex > streamStartIndex) fail("Review skeleton no longer appears before streaming discovery starts.");

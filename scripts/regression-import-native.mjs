@@ -10,30 +10,33 @@ const app = read("src/App.tsx");
 const importDiscovery = read("src/features/import/useImportDiscovery.ts");
 const htmlController = read("src/features/dragdrop/htmlDropController.ts");
 const htmlDropOwner = read("src/features/dragdrop/useHtmlLibraryDrop.ts");
+const nativeDropOwner = read("src/features/dragdrop/useNativeLibraryDrop.ts");
 const nativeTargets = read("src/features/dragdrop/nativeDropTargets.ts");
 const tauriConfig = read("src-tauri/tauri.conf.json");
 const commands = read("src-tauri/src/commands.rs");
 
 if (!tauriConfig.includes('"dragDropEnabled": true')) fail("Tauri native dragDropEnabled must remain enabled.");
-if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Desktop filesystem drops must continue through Tauri onDragDropEvent.");
-if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");
-if (!app.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)")) fail("native drop target routing is no longer wired through its extracted owner.");
-if (app.includes("const elementAtNativePosition =") || app.includes("const isImagePath =")) fail("native target detection leaked back into App.tsx.");
+if (!nativeDropOwner.includes("getCurrentWebview().onDragDropEvent")) fail("Desktop filesystem drops must continue through Tauri onDragDropEvent.");
+if (!nativeDropOwner.includes("TAURI_NATIVE_DROP") || !nativeDropOwner.includes("NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");
+if (!nativeDropOwner.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)")) fail("native drop target routing is no longer wired through its extracted owner.");
+if ([app, nativeDropOwner].some(source => source.includes("const elementAtNativePosition =") || source.includes("const isImagePath ="))) fail("native target detection leaked back into App.tsx.");
 if (!nativeTargets.includes("document.elementFromPoint") || !nativeTargets.includes("window.devicePixelRatio") || !nativeTargets.includes("[data-filerole]")) fail("native target owner lost coordinate/scale/Drawer classification.");
-if (!app.includes("await importDroppedPaths(payload.paths)")) fail("native library drop no longer enters the normal import stream with original filesystem paths.");
+if (!nativeDropOwner.includes("await importDroppedPaths(payload.paths)")) fail("native library drop no longer enters the normal import stream with original filesystem paths.");
 if (!importDiscovery.includes("startStream: startImportReviewStream") || !importDiscovery.includes("await services.startStream(normalized)")) fail("native import no longer starts the incremental Review stream.");
-if (!app.includes("No\n      // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.")) fail("zero-copy native import invariant comment disappeared; review this path before release.");
+if (!nativeDropOwner.includes("No\n      // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.")) fail("zero-copy native import invariant comment disappeared; review this path before release.");
 
 const fallbackGuard = htmlDropOwner.indexOf("const windowsNativeDrop = nativeDropAvailable && /Windows/i.test(navigator.userAgent);");
 const fallbackReturn = htmlDropOwner.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
 const fallbackInstall = htmlDropOwner.indexOf("return installHtmlDropController(", fallbackReturn);
 if (fallbackGuard < 0 || fallbackReturn < 0 || fallbackInstall < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");
 if (!app.includes("useHtmlLibraryDrop({")) fail("App no longer composes the extracted HTML drop owner.");
+if (!app.includes("useNativeLibraryDrop({")) fail("App no longer composes the extracted native drop owner.");
+if (app.includes("getCurrentWebview().onDragDropEvent") || app.includes("const handleNativeDrop = async")) fail("native listener ownership leaked back into App.tsx.");
 if (app.includes("installHtmlDropController")) fail("HTML controller installation leaked back into App.tsx.");
 
-const nativeStart = app.indexOf("const handleNativeDrop = async");
-const nativeEnd = app.indexOf("    void (async () => {", nativeStart);
-const nativeBlock = app.slice(nativeStart, nativeEnd > nativeStart ? nativeEnd : undefined);
+const nativeStart = nativeDropOwner.indexOf("const handleNativeDrop = async");
+const nativeEnd = nativeDropOwner.indexOf("    void (async () => {", nativeStart);
+const nativeBlock = nativeDropOwner.slice(nativeStart, nativeEnd > nativeStart ? nativeEnd : undefined);
 if (nativeStart < 0) fail("handleNativeDrop disappeared.");
 const nativeCodeOnly = nativeBlock
   .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -42,11 +45,11 @@ if (nativeCodeOnly.includes("stageCapturedHtmlDrop")) fail("native filesystem dr
 if (nativeCodeOnly.includes(".arrayBuffer(")) fail("native filesystem drop reintroduced full File byte reads.");
 if (!nativeBlock.includes("if (cardBeatId)")) fail("drop-on-existing-beat routing disappeared.");
 if (!nativeBlock.includes("if (!library) return;")) fail("native filesystem drops can import outside the library target again.");
-const signalIndex = app.indexOf("nativeExternalImageSignalFromPaths(incomingPaths)", nativeEnd);
-const dispatchIndex = app.indexOf("void handleNativeDrop({ paths: incomingPaths", signalIndex);
+const signalIndex = nativeDropOwner.indexOf("nativeExternalImageSignalFromPaths(incomingPaths)", nativeEnd);
+const dispatchIndex = nativeDropOwner.indexOf("void handleNativeDrop({ paths: incomingPaths", signalIndex);
 if (signalIndex < 0 || dispatchIndex < 0 || signalIndex > dispatchIndex) fail("browser-image sentinels are no longer separated from filesystem paths before import.");
 
-const stagingOccurrences = [...app.matchAll(/HTML_FALLBACK_STAGING_START/g)].length;
+const stagingOccurrences = [app, nativeDropOwner].reduce((count, source) => count + [...source.matchAll(/HTML_FALLBACK_STAGING_START/g)].length, 0);
 if (stagingOccurrences !== 0) fail("HTML_FALLBACK_STAGING_START must never live in App.tsx/native Windows routing.");
 if (!htmlController.includes("HTML_FALLBACK_STAGING_START")) fail("browser/non-Windows fallback lost its staging diagnostic.");
 if (!htmlController.includes("stageCapturedHtmlDrop(capturedDrop)")) fail("browser/non-Windows fallback lost staging itself.");

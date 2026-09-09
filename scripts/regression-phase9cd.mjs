@@ -7,6 +7,7 @@ const read = relative => readFileSync(path.join(root, relative), "utf8");
 const fail = message => { throw new Error(`Phase 9C/9D regression: ${message}`); };
 
 const app = read("src/App.tsx");
+const nativeDropOwner = read("src/features/dragdrop/useNativeLibraryDrop.ts");
 const assetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");
 const projects = read("src/features/projects/useBeatProjects.ts");
 const beatFileDropModal = read("src/features/dragdrop/components/BeatFileDropModal.tsx");
@@ -29,7 +30,7 @@ if (!app.includes('startProjectAssetUpdate(beat, filePath, "projectFolder")') ||
 if (!beatFileDropModal.includes('Add folder to Project')) fail("folder-to-PROJECT destination disappeared.");
 if (!app.includes('Project file required')) fail("folder updates no longer require an existing PROJECT.");
 if (!projects.includes('Replace PROJECT ZIP?') || !projects.includes('Replace project file?')) fail("PROJECT replacement confirmation disappeared.");
-if (!app.includes('if (isBackupFolderPath(filePath))')) fail("direct Backup/Backups drop is no longer rejected.");
+if (!nativeDropOwner.includes('if (isBackupFolderPath(filePath))')) fail("direct Backup/Backups drop is no longer rejected.");
 if (!projects.includes('Backup folders were skipped from')) fail("nested Backup/Backups filtering no longer reaches the user.");
 if (!assetUpdates.includes('libraryStateManager.commitSnapshot(refreshed, "dropped-master")')) fail("MASTER replacement lost its authoritative library commit.");
 if (!assetUpdates.includes('libraryStateManager.commitSnapshot(beatsLatestRef.current, "project-sync")')) fail("WAV update lost its authoritative commit.");
@@ -42,9 +43,9 @@ if (!rust.includes('is_forbidden_project_component') || !rust.includes('write_pr
 if (!browserArtwork.includes('application/x-pinterest-closeup-image')) fail("Pinterest custom MIME support disappeared.");
 if (!browserArtwork.includes('i.pinimg.com')) fail("Pinterest CDN recognition disappeared.");
 if (!nativeExternalImage.includes('__BEATGALER_EXTERNAL_IMAGE_V1__')) fail("native external-image sentinel disappeared.");
-if (!app.includes('nativeExternalImageSignalFromPaths(incomingPaths)')) fail("native external-image marker is no longer intercepted before filesystem import.");
-if (!app.includes('native-external-image-drop')) fail("external artwork event route disappeared.");
-if (!app.includes('URLs never enter Import Beat and are accepted only by an artwork target')) fail("artwork-only URL invariant disappeared.");
+if (!nativeDropOwner.includes('nativeExternalImageSignalFromPaths(incomingPaths)')) fail("native external-image marker is no longer intercepted before filesystem import.");
+if (!nativeDropOwner.includes('native-external-image-drop')) fail("external artwork event route disappeared.");
+if (!nativeDropOwner.includes('URLs never enter Import Beat and are accepted only by an artwork target')) fail("artwork-only URL invariant disappeared.");
 if (!controller.includes('captureArtworkSourcesFromDataTransfer(dt)')) fail("browser fallback lost artwork source capture.");
 if (!wry.includes('i.pinimg.com') || !wry.includes('application/x-pinterest-closeup-image')) fail("WRY Option-2 Pinterest extraction disappeared.");
 if (!wry.includes('CF_HDROP') || !wry.includes('inspect_external_drop')) fail("WRY no longer separates local filesystem and browser payloads.");

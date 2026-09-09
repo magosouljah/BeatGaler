@@ -8,12 +8,13 @@ import {
 } from "../../src/features/dragdrop/nativeDropTargets";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const nativeDropOwner = readFileSync(resolve(process.cwd(), "src/features/dragdrop/useNativeLibraryDrop.ts"), "utf8");
 const targets = readFileSync(resolve(process.cwd(), "src/features/dragdrop/nativeDropTargets.ts"), "utf8");
 
 describe("task 8.1 native drop target extraction", () => {
   it("moves coordinate, scale, data-* and image classification ownership out of App", () => {
-    expect(app).toContain("resolveNativeFilesystemDropTarget(payload.paths, payload.position)");
-    expect(app).toContain("resolveNativeExternalImageDropTarget(position)");
+    expect(nativeDropOwner).toContain("resolveNativeFilesystemDropTarget(payload.paths, payload.position)");
+    expect(nativeDropOwner).toContain("resolveNativeExternalImageDropTarget(position)");
     expect(app).not.toContain("const elementAtNativePosition =");
     expect(app).not.toContain("const isImagePath =");
     for (const marker of ["window.devicePixelRatio", "document.elementFromPoint", "[data-beat-artwork-id]", "[data-beat-card-id]", "[data-artwork-drop]", "[data-filerole]"]) expect(targets).toContain(marker);

@@ -30,6 +30,7 @@ const addBeatModal = read("src/components/AddBeatModal.tsx");
 const importAudioConflicts = read("src/components/ImportAudioConflictsModal.tsx");
 const htmlDrop = read("src/features/dragdrop/htmlDropController.ts");
 const nativeDropTargets = read("src/features/dragdrop/nativeDropTargets.ts");
+const nativeDropOwner = read("src/features/dragdrop/useNativeLibraryDrop.ts");
 const helper = read("src-tauri/direct-transport/transport-helper.cjs");
 const libRs = read("src-tauri/src/lib.rs");
 const cargo = read("src-tauri/Cargo.toml");
@@ -66,10 +67,10 @@ ok(commands.includes("follow_links(false)") && commands.includes("entry.file_typ
 ok(commands.includes("path_is_symbolic_link") && commands.includes("Symbolic links are not imported. Drop the original project file or folder instead."), "PROJECT top-level symlinks are rejected instead of following outside targets");
 ok(commands.includes("if !root_path.exists() || path_is_symbolic_link(&root_path) { continue; }") && commands.includes("if entry.file_type().is_symlink() { return false; }"), "streaming import does not follow filesystem symlinks");
 
-ok(app.includes("getCurrentWebview().onDragDropEvent"), "Tauri native filesystem drop listener is installed");
-ok(app.includes("if (!isTauriAvailable) return;"), "native drop listener is not gated to Windows only");
-ok(app.includes("claimNativeLibraryDrop()") && htmlDrop.includes("waitForNativeLibraryDropClaim"), "Mac duplicate native/HTML local drops are arbitrated");
-ok(app.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)") && nativeDropTargets.includes("isNativeImagePath") && nativeDropTargets.includes("window.devicePixelRatio") && nativeDropTargets.includes("[data-beat-artwork-id]") && app.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through extracted native target detection while preserving browser/Pinterest sentinels");
+ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && app.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed");
+ok(nativeDropOwner.includes("if (!nativeDropAvailable) return;"), "native drop listener is not gated to Windows only");
+ok(nativeDropOwner.includes("claimNativeLibraryDrop()") && htmlDrop.includes("waitForNativeLibraryDropClaim"), "Mac duplicate native/HTML local drops are arbitrated");
+ok(nativeDropOwner.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)") && nativeDropTargets.includes("isNativeImagePath") && nativeDropTargets.includes("window.devicePixelRatio") && nativeDropTargets.includes("[data-beat-artwork-id]") && nativeDropOwner.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through extracted native target detection while preserving browser/Pinterest sentinels");
 ok(wryPatchInstaller.includes('patchPlatform === "darwin"') && wryPatchInstaller.includes('"wkwebview",\n      "drag_drop.rs"'), "macOS installs its native WRY browser-image bridge before compiling");
 ok(macWryDragDropPatch.includes("BEATGALER_MAC_EXTERNAL_IMAGE_PATCH_V1") && macWryDragDropPatch.includes("application/x-pinterest-closeup-image") && macWryDragDropPatch.includes("WebURLsWithTitlesPboardType") && macWryDragDropPatch.includes("org.chromium.web-custom-data") && macWryDragDropPatch.includes("NSPasteboardTypeURL") && macWryDragDropPatch.includes("NSPasteboardTypeHTML") && macWryDragDropPatch.includes("NSPasteboardTypeString"), "macOS native drop reads Pinterest, Chrome/Safari URL, HTML, and text pasteboard representations");
 ok(macWryDragDropPatch.indexOf("collect_paths(drag_info)") < macWryDragDropPatch.indexOf("external_image_url(drag_info)"), "macOS Finder paths stay ahead of browser-image fallback routing");
