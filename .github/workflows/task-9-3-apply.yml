@@ -120,6 +120,11 @@ jobs:
               1,
           )
           regression = regression.replace(
+              '  if (!app.includes(\'setRevealedBeatIds(new Set(offline.map(beat => beat.id)))\')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");',
+              '  if (!startupBootstrap.includes(\'setRevealedBeatIds(new Set(offline.map(beat => beat.id)))\')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");',
+              1,
+          )
+          regression = regression.replace(
               "  const startupReachableIndex = app.indexOf('if (!status.reachable)', app.indexOf('Telegram startup connectivity check failed'));\n  const startupConnectedIndex = app.indexOf('if (!status.connected)', app.indexOf('Telegram startup connectivity check failed'));",
               "  const startupReachableIndex = startupBootstrap.indexOf('if (!status.reachable)', startupBootstrap.indexOf('Telegram startup connectivity check failed'));\n  const startupConnectedIndex = startupBootstrap.indexOf('if (!status.connected)', startupBootstrap.indexOf('Telegram startup connectivity check failed'));",
               1,
@@ -127,6 +132,7 @@ jobs:
           required = [
               'const startupBootstrap = readFileSync(path.join(root, "src", "features", "startup", "useStartupBootstrap.ts"), "utf8");',
               "startupBootstrap.includes('loadOfflineLibrary()')",
+              "startupBootstrap.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')",
               "startupBootstrap.indexOf('if (!status.reachable)'",
           ]
           if not all(item in regression for item in required):
@@ -238,7 +244,7 @@ jobs:
           path = Path("migration/Registro-de-avance.md")
           text = path.read_text()
           old = "- Ninguno en la corrida final; si existieron intentos previos fallidos de esta misma ronda, quedan identificables en GitHub Actions y no se usaron como evidencia de cierre."
-          new = "- Run 34321548287 fue rechazado antes de crear jobs por YAML temporal inválido (un heredoc sin indentación válida dentro de `run:`); no ejecutó ni publicó producto y no pudo generar artifact. Se corrigió únicamente el tooling temporal.\n- Run 34321631406 llegó a la matriz previa y el artifact mostró dos pruebas existentes acopladas físicamente a `App.tsx`: `appHelperExtraction.test.ts` exigía el import directo del journal y `issue97WebRoutingContract.test.ts` buscaba el catch de startup dentro de App. Focalizadas, diff-check, typecheck, unit TS y component DOM habían pasado; integration falló antes de publicar producto. Se adaptaron esas guardas para seguir al nuevo owner sin cambiar semántica de producción.\n- Run 34321874031 dejó focalizadas, diff-check, typecheck, unit TS, component DOM e integración en PASS; `test:regressions` falló porque `scripts/run-regressions.mjs` todavía buscaba `loadOfflineLibrary()` y el orden reachability→connected en App. El artifact confirmó que era una guardia estática de ownership; se redirigió al nuevo bootstrap sin cambiar producción y no se publicó producto en ese intento.\n- La corrida final completó la extracción y toda la matriz sobre el SHA publicado."
+          new = "- Run 34321548287 fue rechazado antes de crear jobs por YAML temporal inválido (un heredoc sin indentación válida dentro de `run:`); no ejecutó ni publicó producto y no pudo generar artifact. Se corrigió únicamente el tooling temporal.\n- Run 34321631406 llegó a la matriz previa y el artifact mostró dos pruebas existentes acopladas físicamente a `App.tsx`: `appHelperExtraction.test.ts` exigía el import directo del journal y `issue97WebRoutingContract.test.ts` buscaba el catch de startup dentro de App. Focalizadas, diff-check, typecheck, unit TS y component DOM habían pasado; integration falló antes de publicar producto. Se adaptaron esas guardas para seguir al nuevo owner sin cambiar semántica de producción.\n- Run 34321874031 dejó focalizadas, diff-check, typecheck, unit TS, component DOM e integración en PASS; `test:regressions` falló porque `scripts/run-regressions.mjs` todavía buscaba `loadOfflineLibrary()` y el orden reachability→connected en App. No publicó producto.\n- Run 34322128673 confirmó esas correcciones pero destapó una segunda assertion estática del mismo guard que todavía buscaba el reveal Offline atómico en App. El artifact mostró todo verde hasta `test:regressions`; se redirigió también esa assertion al bootstrap, sin cambiar producción y sin publicar producto en ese intento.\n- La corrida final completó la extracción y toda la matriz sobre el SHA publicado."
           if old not in text:
               raise SystemExit("Could not locate task 9.3 failure placeholder")
           path.write_text(text.replace(old, new, 1))
