@@ -29,6 +29,19 @@ jobs:
       - name: Apply documentation closure
         run: python .github/task-9-1-close.py
 
+      - name: Normalize Registro and record closer retry
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("migration/Registro-de-avance.md")
+          text = path.read_text()
+          needle = "- Runs 34311757123 y 34311893799: dos closers documentales YAML fueron rechazados antes de crear jobs; no modificaron documentación ni producto y sus archivos fueron eliminados antes de este closer.\n\nVeredicto"
+          replacement = "- Runs 34311757123 y 34311893799: dos closers documentales YAML fueron rechazados antes de crear jobs; no modificaron documentación ni producto y sus archivos fueron eliminados antes de este closer.\n- Run 34311993177: el closer ejecutó la escritura documental en el working tree, pero `git diff --check` detectó una línea en blanco extra al EOF del Registro; no publicó cambios.\n\nVeredicto"
+          if text.count(needle) != 1:
+              raise SystemExit(f"closer retry marker count: {text.count(needle)}")
+          path.write_text(text.replace(needle, replacement, 1).rstrip() + "\n")
+          PY
+
       - name: Remove temporary tooling and verify scope
         run: |
           set -euo pipefail
