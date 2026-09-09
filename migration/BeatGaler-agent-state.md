@@ -4,39 +4,39 @@
 
 - Fecha de ejecución: 2026-09-08
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `7.4 — Separar la entrada de importación web`
+- Tarea trabajada: `8.1 — Separar detección del destino`
 - Estado: `Terminada`
-- Última tarea terminada: `7.4 — Separar la entrada de importación web`
+- Última tarea terminada: `8.1 — Separar detección del destino`
 
 ## Base de esta ejecución
 
-- SHA inicial: `45ca0eae03d1685a1f938f4beaffb4259097882b`
-- SHA de implementación validada: `3c485083e4fe6e896017e2e26f4a33d9e25902b5`
-- Run de implementación final: `34298836051` — `Temporary task 7.4 retry` — matriz, commit exacto y fast-forward correctos; el workflow general falló únicamente en el cierre documental posterior.
-- Run de recuperación documental: `34301504093` — el árbol final de recuperación modifica solo los tres documentos de migración respecto al SHA validado.
+- SHA inicial: `aba85aadb3dce83f326587f72425614c8f962a53`
+- SHA de implementación validada: `00b56e94fbc790483e150de27202488eef166bb4`
+- Run de implementación final: `34305812263` — `Temporary task 8.1 product validation` — matriz aplicable, commit exacto y fast-forward correctos.
+- Artifact final: `migration-check-logs-task-8-1-34305812263`.
 - El SHA final real de la ronda es el HEAD remoto posterior a este cierre documental y debe releerse después del push.
 
 ## Resultado verificado
 
-- `useBrowserImport.ts` posee la recepción de `File` del navegador, selección de un beat por gesto, carga de metadata y entrada a Review.
-- `App.tsx` conserva solo el wiring de esa entrada con Review/import y la cola cloud existente.
-- La preparación Web reutiliza `platform.importer`; el nuevo owner no contiene invocaciones Tauri/nativas.
-- Save conserva la ruta Web existente hacia la cola y `platform.cloudData.commitImportedBeat`.
-- Skip/Cancel liberan las fuentes/candidatos Web que dejan de estar en uso.
-- `useImportSaveAll.ts` expone `clearImportResolution`, retirando el puente temporal de setters de conflictos dejado por 7.3.
-- Las pruebas focalizadas y la matriz completa de checks pasaron sobre `3c485083e4fe6e896017e2e26f4a33d9e25902b5`.
+- `src/features/dragdrop/nativeDropTargets.ts` posee clasificación de rutas de imagen y detección de destinos nativos.
+- `App.tsx` conserva listeners/arbitraje/acciones pero ya no posee `elementFromPoint`, fallback de escala ni selectores de destino.
+- Se conserva prioridad Drawer → artwork de imagen única → tarjeta → galería/biblioteca.
+- Se conservan atributos `data-*`, coordenadas nativas y fallback por `devicePixelRatio`.
+- El routing de imágenes externas navegador/Pinterest conserva Drawer artwork → card artwork → ninguno.
+- Prueba focalizada, regresión nativa, typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre `00b56e94fbc790483e150de27202488eef166bb4`.
+- El contrato Mac de drag & drop afectado por 8.1 pasa. El wrapper general Mac conserva un fallo previo del Direct helper, reproducido también en el SHA inicial y separado de esta tarea.
 
 ## Pendientes concretos
 
-- `8.1 — Separar detección del destino`.
+- `8.2 — Separar recepción HTML y navegador`.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 7.4.
-- Prueba física Web interactiva no ejecutada ni inventada; no quedó como bloqueo porque el flujo modificado quedó cubierto por component DOM, integración, regresiones y build Web.
+- Ninguna necesaria para cerrar 8.1.
+- Prueba física Desktop Windows/macOS no ejecutada ni inventada; no quedó como bloqueo porque la extracción quedó cubierta por pruebas focalizadas, regresiones, portabilidad del área y ambos builds.
 
 ## Siguiente tarea
 
-- `8.1 — Separar detección del destino`
+- `8.2 — Separar recepción HTML y navegador`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

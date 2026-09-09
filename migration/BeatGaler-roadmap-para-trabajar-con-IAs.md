@@ -409,7 +409,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** que la recepción del gesto se limite a decidir qué acción debe ejecutarse.
 
-### [ ] 8.1 — Separar detección del destino
+### [x] 8.1 — Separar detección del destino
 
 - **Hacer:** extraer clasificación de archivos y localización del destino: galería, tarjeta, portada o campo del Drawer.
     
