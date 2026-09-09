@@ -1,0 +1,20 @@
+
+> beat-galer@0.9.0-alpha.2 test:regressions
+> node scripts/run-regressions.mjs && node scripts/regression-direct-peer-bootstrap.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs
+
+PASS native Option-2 bridge regressions: pending/url sentinels are isolated from real Windows paths
+PASS drag/drop regressions: Pinterest FileList + DataTransferItem + custom-MIME fallbacks
+PASS external drag cursor regressions: accepted effect matches source
+PASS Phase 9B native import contracts: native desktop drops keep original filesystem paths, Windows skips HTML staging, Mac arbitrates native-vs-HTML, and browser artwork fallback stays isolated
+PASS Phase 9C existing-beat slot updates: MASTER/WAV/PROJECT/folder routes, replacement safety, commits, readiness, and Backup filtering are protected
+PASS Phase 9D Pinterest/external artwork: browser/native sources stay artwork-only and isolated from local beat import
+PASS playback readiness: uploading/preparing beats cannot Play; completed cloud beats can
+PASS beat runtime state machine: independent sync/download/playback/offline states and strict transitions
+PASS Telegram 429 retry_after parser + flood-wait retry
+PASS direct shared-pool guard: temporary MTProto bootstrap/binding/renewal, bound-session continuity, no Desktop permanent credentials, shared leases, and Direct INDEX operations are present.
+PASS architecture guard: WRY remains the single Windows drop owner; CF_HDROP stays zero-copy and Pinterest HTML/URL/text is isolated to artwork-only native Drop
+PASS cursor guard: range controls keep the normal BeatGaler cursor instead of the text I-beam
+PASS project-drop guard: beat target survives WebView2 drop, ZIP inspection shows loading, valid project types auto-route, and Backup folders are skipped (including inside ZIPs) with notice
+PASS export metadata guard: source tags/chunks survive overlay and MP3/WAV filenames include BPM + key
+PASS remove/trash guard: names are human-readable; Empty Trash never blocks UI, retries transient Cloud enqueue, and permanent deletes cannot resurrect
+FAIL regression guard: App.tsx is no longer wired to the extracted Trash actions owner.
