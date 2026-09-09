@@ -60,6 +60,12 @@ export function useImportSaveAll({
   const [audioConflictBatch, setAudioConflictBatch] = useState<ImportBatchPreview | null>(null);
   const [dropImportBatch, setDropImportBatch] = useState<ImportBatchPreview | null>(null);
 
+  const resetImportResolutionState = useCallback(() => {
+    setDeferredImportBatch(null);
+    setAudioConflictBatch(null);
+    setDropImportBatch(null);
+  }, [setDeferredImportBatch]);
+
   const handleReviewedSaveAll = useCallback(async (currentUpdated: Beat) => {
     const queue = reviewQueueLatestRef.current;
     if (!queue) return;
@@ -268,8 +274,7 @@ export function useImportSaveAll({
   return {
     audioConflictBatch,
     dropImportBatch,
-    setAudioConflictBatch,
-    setDropImportBatch,
+    resetImportResolutionState,
     handleReviewedSaveAll,
     cancelAudioConflicts,
     resolveAudioConflicts,

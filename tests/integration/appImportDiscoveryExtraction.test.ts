@@ -23,7 +23,7 @@ function expectOrdered(source: string, markers: string[]): void {
 }
 
 describe("task 7.2 incremental discovery extraction", () => {
-  it("keeps progressive discovery outside App while Save All consumes its worker and browser import remains for 7.4", () => {
+  it("keeps progressive discovery outside App while later import owners consume its worker", () => {
     expect(app).toContain("} = useImportDiscovery({");
     expect(app).not.toContain("const importDroppedPaths = useCallback");
     expect(app).not.toContain("const reviewPreparationRunRef = useRef");
@@ -33,7 +33,8 @@ describe("task 7.2 incremental discovery extraction", () => {
     expect(app).not.toContain("getImportReviewBatchSummary");
     expect(app).not.toContain("const handleReviewedSaveAll = useCallback");
     expect(app).toContain("useImportSaveAll({");
-    expect(app).toContain("const importDroppedBrowserFiles = useCallback");
+    expect(app).toContain("useBrowserImport({");
+    expect(app).not.toContain("const importDroppedBrowserFiles = useCallback");
     expect(discovery).toContain("startStream: startImportReviewStream");
     expect(discovery).toContain("prepareNext: prepareNextImportReviewBeat");
     expect(discovery).toContain("getSummary: getImportReviewBatchSummary");

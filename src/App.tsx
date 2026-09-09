@@ -40,6 +40,7 @@ import { useImportSession } from "./features/import/useImportSession";
 import { useImportReview } from "./features/import/useImportReview";
 import { useImportDiscovery } from "./features/import/useImportDiscovery";
 import { useImportSaveAll } from "./features/import/useImportSaveAll";
+import { useBrowserImport } from "./features/import/useBrowserImport";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -1025,8 +1026,7 @@ const {
   const {
     audioConflictBatch,
     dropImportBatch,
-    setAudioConflictBatch,
-    setDropImportBatch,
+    resetImportResolutionState,
     handleReviewedSaveAll,
     cancelAudioConflicts,
     resolveAudioConflicts,
@@ -1047,6 +1047,17 @@ const {
     setDropImporting,
     cloudifyImportedBeats,
     addBeatsAndReview,
+  });
+
+  const { importDroppedBrowserFiles } = useBrowserImport({
+    dropImporting,
+    setDropImporting,
+    rejectOfflineMutation,
+    setDropActive,
+    setShowAdd,
+    setReviewQueue,
+    completeImmediateReviewPreparation,
+    resetImportResolutionState,
   });
 
   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
@@ -1312,44 +1323,6 @@ const {
     }
   }, [beatFileDrop, hasStoredProject, startMasterAssetUpdate, startProjectAssetUpdate, startWavAssetUpdate]);
 
-
-  const importDroppedBrowserFiles = useCallback(async (files: File[]) => {
-    if (rejectOfflineMutation("Importing beats")) return;
-    if (dropImporting) return;
-
-    const supported = files.filter(file =>
-      /\.(mp3|wav)$/i.test(file.name) ||
-      file.type === "audio/mpeg" ||
-      file.type === "audio/wav" ||
-      file.type === "audio/x-wav"
-    );
-    if (supported.length === 0) {
-      await appAlert({ title: "Nothing to import", message: "Drop an MP3 or WAV file to add a beat." });
-      return;
-    }
-    if (supported.length > 1) {
-      await appAlert({ title: "Drop one beat at a time", message: "BeatGaler Web imports one beat per drag action." });
-      return;
-    }
-
-    setDropImporting(true);
-    setDropActive(false);
-    try {
-      const candidate = platform.importer.fromFile(supported[0]);
-      const hydrated = await candidate.hydrated.catch(() => candidate.beat);
-      const beat = { ...hydrated, tags: cleanTags(hydrated.tags || []).tags };
-      setShowAdd(false);
-      completeImmediateReviewPreparation();
-      setDeferredImportBatch(null);
-      setAudioConflictBatch(null);
-      setDropImportBatch(null);
-      setReviewQueue({ beats: [beat], index: 0, total: 1, batchId: null, preparing: false });
-    } catch (error) {
-      await appAlert({ title: "Import failed", message: String(error), danger: true });
-    } finally {
-      setDropImporting(false);
-    }
-  }, [dropImporting, rejectOfflineMutation]);
 
   const handleBrowserBeatFileDrop = useCallback(async (beatId: string, files: File[]): Promise<boolean> => {
     const beat = beatsLatestRef.current.find(item => item.id === beatId);

@@ -17,15 +17,20 @@ function expectOrdered(source: string, markers: string[]): void {
 }
 
 describe("task 7.3 Save All/conflict extraction", () => {
-  it("moves Save All and conflict state/callback ownership out of App while leaving browser import for 7.4", () => {
+  it("keeps Save All/conflict ownership out of App and exposes only a semantic browser reset bridge", () => {
     expect(app).toContain("useImportSaveAll({");
     expect(app).not.toContain("const handleReviewedSaveAll = useCallback");
     expect(app).not.toContain("const [audioConflictBatch, setAudioConflictBatch] = useState");
     expect(app).not.toContain("const [dropImportBatch, setDropImportBatch] = useState");
-    expect(app).toContain("setAudioConflictBatch(null);");
-    expect(app).toContain("setDropImportBatch(null);");
+    expect(app).not.toContain("setAudioConflictBatch(null);");
+    expect(app).not.toContain("setDropImportBatch(null);");
+    expect(app).toContain("resetImportResolutionState,");
+    expect(saveAll).toContain("const resetImportResolutionState = useCallback(() => {");
+    expect(saveAll).toContain("setDeferredImportBatch(null);");
+    expect(saveAll).toContain("setAudioConflictBatch(null);");
+    expect(saveAll).toContain("setDropImportBatch(null);");
     expect(saveAll).toContain("saveMeta: saveBeatMeta,");
-    expect(app).toContain("const importDroppedBrowserFiles = useCallback");
+    expect(app).not.toContain("const importDroppedBrowserFiles = useCallback");
     expect(discovery).toContain("const [deferredImportBatch, setDeferredImportBatch]");
     expect(discovery).not.toContain("setAudioConflictBatch");
     expect(discovery).not.toContain("setDropImportBatch");
