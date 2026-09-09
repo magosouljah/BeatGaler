@@ -39,15 +39,16 @@ jobs:
           initial='f577cb324bcfce702957ea1d718b60f4c19a807b'
           test "${GITHUB_REF_NAME}" = "$target"
           git merge-base --is-ancestor "$initial" HEAD
-          unexpected="$(git diff --name-only "$initial"..HEAD | grep -v -E '^(\.github/workflows/task-8-3-temp\.yml|scripts/task-8-3-apply-temp\.py)$' || true)"
+          unexpected="$(git diff --name-only "$initial"..HEAD | grep -v -E '^(\.github/workflows/task-8-3-temp\.yml|scripts/task-8-3-apply-temp\.py|scripts/task-8-3-fix-temp\.py)$' || true)"
           test -z "$unexpected"
           remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
           test "$remote" = "${GITHUB_SHA}"
 
+          python scripts/task-8-3-fix-temp.py
           python scripts/task-8-3-apply-temp.py
           git diff --check
 
-          git rm .github/workflows/task-8-3-temp.yml scripts/task-8-3-apply-temp.py
+          git rm .github/workflows/task-8-3-temp.yml scripts/task-8-3-apply-temp.py scripts/task-8-3-fix-temp.py
           git add src/App.tsx \
             src/features/dragdrop/useNativeLibraryDrop.ts \
             tests/integration/appNativeLibraryDropExtraction.test.ts \
