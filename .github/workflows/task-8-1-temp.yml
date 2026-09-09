@@ -1,0 +1,561 @@
+name: Temporary task 8.1 apply
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-8-1-temp.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: beatgaler-migration-v0.9.0-test-noche
+  cancel-in-progress: false
+
+jobs:
+  task-8-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Apply extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='v0.9.0-test-noche'
+          initial='aba85aadb3dce83f326587f72425614c8f962a53'
+          test "${GITHUB_REF_NAME}" = "$target"
+          test "$(git rev-parse HEAD^)" = "$initial"
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "${GITHUB_SHA}"
+          git rm .github/workflows/task-8-1-temp.yml
+          python - <<'PY'
+          from pathlib import Path
+
+          def read(p): return Path(p).read_text(encoding='utf-8').replace('\r\n','\n')
+          def write(p,s):
+              path=Path(p); path.parent.mkdir(parents=True,exist_ok=True); path.write_text(s,encoding='utf-8')
+          def rep(s,a,b,label):
+              n=s.count(a)
+              if n != 1: raise RuntimeError(f'{label}: expected once, found {n}')
+              return s.replace(a,b,1)
+
+          app=read('src/App.tsx')
+          app=rep(app,
+              'import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";',
+              'import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";\nimport { isNativeImagePath, resolveNativeExternalImageDropTarget, resolveNativeFilesystemDropTarget } from "./features/dragdrop/nativeDropTargets";',
+              'target import')
+
+          inline='''    const elementAtNativePosition = (position: { x?: number; y?: number } | null | undefined): HTMLElement | null => {
+              if (!position || typeof position.x !== "number" || typeof position.y !== "number") return null;
+              const scale = window.devicePixelRatio || 1;
+              const candidates: Array<[number, number]> = [[position.x, position.y]];
+              if (scale !== 1) candidates.push([position.x / scale, position.y / scale]);
+              for (const [x, y] of candidates) {
+                const el = document.elementFromPoint(x, y) as HTMLElement | null;
+                if (el) return el;
+              }
+              return null;
+            };
+
+            const isImagePath = (path: string) => {
+              const ext = extensionFromPath(path);
+              return ["png", "jpg", "jpeg", "webp", "bmp", "gif", "avif"].includes(ext);
+            };
+
+          '''
+          app=rep(app,inline,'','inline helpers')
+
+          app=rep(app,
+          '''      const target = elementAtNativePosition(position);
+                const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+                const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+                const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
+          ''',
+          '''      const destination = resolveNativeExternalImageDropTarget(position);
+                const artworkBeatId = destination.kind === "card-artwork" ? destination.beatId : null;
+                const drawerArtwork = destination.kind === "drawer-artwork";
+          ''','external hover')
+
+          app=rep(app,
+          '''      const target = elementAtNativePosition(payload.position);
+                const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+                const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
+                const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
+                const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+                const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
+                const drawerTarget = drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null;
+                const localImage = payload.paths.length === 1 && isImagePath(payload.paths[0]);
+                const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
+                const cardBeatId = card?.dataset.beatCardId ?? null;
+          ''',
+          '''      const routing = resolveNativeFilesystemDropTarget(payload.paths, payload.position);
+                const drawerTarget = routing.destination.kind === "drawer" ? routing.destination.target : null;
+                const artworkBeatId = routing.destination.kind === "card-artwork" ? routing.destination.beatId : null;
+                const cardBeatId = routing.destination.kind === "beat-card" ? routing.destination.beatId : null;
+          ''','hover routing')
+          app=rep(app,'      if (artworkBeatId && localImage) {','      if (artworkBeatId) {','hover artwork')
+          app=rep(app,'      setDropActive(Boolean(library && payload.paths.length > 0));','      setDropActive(routing.destination.kind === "library");','hover library')
+
+          app=rep(app,
+          '''      const target = elementAtNativePosition(detail);
+                const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+                const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+                const beatId = artwork?.dataset.beatArtworkId ?? null;
+          ''',
+          '''      const destination = resolveNativeExternalImageDropTarget(detail);
+                const drawerArtwork = destination.kind === "drawer-artwork";
+                const beatId = destination.kind === "card-artwork" ? destination.beatId : null;
+          ''','external final')
+
+          app=rep(app,
+          '''      const target = elementAtNativePosition(payload.position);
+                const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+                const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
+                const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
+                const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+                const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
+                const drawerTarget = drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null;
+                const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
+                const cardBeatId = card?.dataset.beatCardId ?? null;
+                clearNativeDragUi();
+
+                reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} target=${drawerTarget ?? (artworkBeatId ? "card-artwork" : cardBeatId ? "beat-card" : library ? "library" : "none")} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
+          ''',
+          '''      const routing = resolveNativeFilesystemDropTarget(payload.paths, payload.position);
+                const drawerTarget = routing.destination.kind === "drawer" ? routing.destination.target : null;
+                const artworkBeatId = routing.destination.kind === "card-artwork" ? routing.destination.beatId : null;
+                const cardBeatId = routing.destination.kind === "beat-card" ? routing.destination.beatId : null;
+                const library = routing.destination.kind === "library";
+                clearNativeDragUi();
+
+                reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} target=${routing.diagnosticTarget} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
+          ''','final routing')
+          app=rep(app,'        if (drawerTarget || artworkBeatId || cardBeatId || library) {','        if (routing.hasAnyTarget) {','empty paths target')
+          app=rep(app,'        if (drawerTarget === "artwork" && !isImagePath(payload.paths[0])) {','        if (drawerTarget === "artwork" && !isNativeImagePath(payload.paths[0])) {','drawer image')
+          app=rep(app,'      if (cardBeatId || library) claimNativeLibraryDrop();','      if (routing.shouldClaimNativeLibraryDrop) claimNativeLibraryDrop();','claim')
+          app=rep(app,'      if (artworkBeatId && payload.paths.length === 1 && isImagePath(payload.paths[0])) {','      if (artworkBeatId) {','artwork final')
+          if 'const elementAtNativePosition =' in app or 'const isImagePath =' in app: raise RuntimeError('inline target ownership remains')
+          write('src/App.tsx',app)
+
+          module='''import { extensionFromPath } from "./pathHelpers";
+
+          export type NativeDropPosition = { x?: number; y?: number } | null | undefined;
+          export type NativeDropTargetEnvironment = {
+            devicePixelRatio?: number;
+            elementFromPoint?: (x: number, y: number) => Element | null;
+          };
+          export type NativeFilesystemDropDestination =
+            | { kind: "drawer"; target: string }
+            | { kind: "card-artwork"; beatId: string }
+            | { kind: "beat-card"; beatId: string }
+            | { kind: "library" }
+            | { kind: "none" };
+          export type NativeFilesystemDropRouting = {
+            destination: NativeFilesystemDropDestination;
+            hasAnyTarget: boolean;
+            shouldClaimNativeLibraryDrop: boolean;
+            diagnosticTarget: string;
+          };
+          export type NativeExternalImageDropDestination =
+            | { kind: "drawer-artwork" }
+            | { kind: "card-artwork"; beatId: string }
+            | { kind: "none" };
+
+          const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "bmp", "gif", "avif"]);
+
+          function elementAtNativePosition(position: NativeDropPosition, environment: NativeDropTargetEnvironment = {}): HTMLElement | null {
+            if (!position || typeof position.x !== "number" || typeof position.y !== "number") return null;
+            const scale = (environment.devicePixelRatio ?? (typeof window !== "undefined" ? window.devicePixelRatio : 1)) || 1;
+            const elementFromPoint = environment.elementFromPoint ?? ((x: number, y: number) => {
+              if (typeof document === "undefined" || typeof document.elementFromPoint !== "function") return null;
+              return document.elementFromPoint(x, y);
+            });
+            const candidates: Array<[number, number]> = [[position.x, position.y]];
+            if (scale !== 1) candidates.push([position.x / scale, position.y / scale]);
+            for (const [x, y] of candidates) {
+              const element = elementFromPoint(x, y) as HTMLElement | null;
+              if (element) return element;
+            }
+            return null;
+          }
+
+          function locate(position: NativeDropPosition, environment: NativeDropTargetEnvironment = {}) {
+            const target = elementAtNativePosition(position, environment);
+            const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
+            const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
+            const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
+            const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
+            const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
+            return {
+              artworkBeatId: artwork?.dataset.beatArtworkId ?? null,
+              cardBeatId: card?.dataset.beatCardId ?? null,
+              library: Boolean(library),
+              drawerArtwork: Boolean(drawerArtwork),
+              drawerTarget: drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null,
+            };
+          }
+
+          export function isNativeImagePath(path: string): boolean {
+            return IMAGE_EXTENSIONS.has(extensionFromPath(path));
+          }
+
+          export function resolveNativeFilesystemDropTarget(paths: string[], position: NativeDropPosition, environment: NativeDropTargetEnvironment = {}): NativeFilesystemDropRouting {
+            const found = locate(position, environment);
+            const localImage = paths.length === 1 && isNativeImagePath(paths[0]);
+            let destination: NativeFilesystemDropDestination = { kind: "none" };
+            if (found.drawerTarget) destination = { kind: "drawer", target: found.drawerTarget };
+            else if (found.artworkBeatId && localImage) destination = { kind: "card-artwork", beatId: found.artworkBeatId };
+            else if (paths.length > 0 && found.cardBeatId) destination = { kind: "beat-card", beatId: found.cardBeatId };
+            else if (paths.length > 0 && found.library) destination = { kind: "library" };
+            return {
+              destination,
+              hasAnyTarget: Boolean(found.drawerTarget || found.artworkBeatId || found.cardBeatId || found.library),
+              shouldClaimNativeLibraryDrop: Boolean(found.cardBeatId || found.library),
+              diagnosticTarget: found.drawerTarget ?? (found.artworkBeatId ? "card-artwork" : found.cardBeatId ? "beat-card" : found.library ? "library" : "none"),
+            };
+          }
+
+          export function resolveNativeExternalImageDropTarget(position: NativeDropPosition, environment: NativeDropTargetEnvironment = {}): NativeExternalImageDropDestination {
+            const found = locate(position, environment);
+            if (found.drawerArtwork) return { kind: "drawer-artwork" };
+            if (found.artworkBeatId) return { kind: "card-artwork", beatId: found.artworkBeatId };
+            return { kind: "none" };
+          }
+          '''
+          import textwrap
+          write('src/features/dragdrop/nativeDropTargets.ts',textwrap.dedent(module))
+
+          test='''import { readFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          import { describe, expect, it } from "vitest";
+          import { isNativeImagePath, resolveNativeExternalImageDropTarget, resolveNativeFilesystemDropTarget } from "../../src/features/dragdrop/nativeDropTargets";
+
+          const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+          const targets = readFileSync(resolve(process.cwd(), "src/features/dragdrop/nativeDropTargets.ts"), "utf8");
+
+          describe("task 8.1 native drop target extraction", () => {
+            it("moves coordinate, scale, data-* and image classification ownership out of App", () => {
+              expect(app).toContain('resolveNativeFilesystemDropTarget(payload.paths, payload.position)');
+              expect(app).toContain('resolveNativeExternalImageDropTarget(position)');
+              expect(app).not.toContain("const elementAtNativePosition =");
+              expect(app).not.toContain("const isImagePath =");
+              expect(targets).toContain("window.devicePixelRatio");
+              expect(targets).toContain("document.elementFromPoint");
+              expect(targets).toContain("[data-beat-artwork-id]");
+              expect(targets).toContain("[data-beat-card-id]");
+              expect(targets).toContain('[data-library-scroll=\"true\"]');
+              expect(targets).toContain("[data-artwork-drop]");
+              expect(targets).toContain("[data-filerole]");
+            });
+
+            it("tries native coordinates first and scaled coordinates second", () => {
+              const card = document.createElement("div"); card.dataset.beatCardId = "b1";
+              const artwork = document.createElement("div"); artwork.dataset.beatArtworkId = "b1"; card.append(artwork);
+              document.body.append(card);
+              const calls: Array<[number, number]> = [];
+              const routing = resolveNativeFilesystemDropTarget(["beat.wav"], { x: 200, y: 100 }, {
+                devicePixelRatio: 2,
+                elementFromPoint: (x, y) => { calls.push([x, y]); return calls.length === 1 ? null : artwork; },
+              });
+              expect(calls).toEqual([[200, 100], [100, 50]]);
+              expect(routing.destination).toEqual({ kind: "beat-card", beatId: "b1" });
+              expect(routing.shouldClaimNativeLibraryDrop).toBe(true);
+            });
+
+            it("preserves Drawer > image artwork > card > library priority", () => {
+              const card = document.createElement("div"); card.dataset.beatCardId = "b2";
+              const artwork = document.createElement("div"); artwork.dataset.beatArtworkId = "b2"; card.append(artwork);
+              const env = { elementFromPoint: () => artwork };
+              expect(resolveNativeFilesystemDropTarget(["cover.PNG"], { x: 1, y: 1 }, env).destination).toEqual({ kind: "card-artwork", beatId: "b2" });
+              expect(resolveNativeFilesystemDropTarget(["master.wav"], { x: 1, y: 1 }, env).destination).toEqual({ kind: "beat-card", beatId: "b2" });
+
+              const drawer = document.createElement("div"); drawer.dataset.filerole = "wav"; card.append(drawer);
+              expect(resolveNativeFilesystemDropTarget(["cover.png"], { x: 1, y: 1 }, { elementFromPoint: () => drawer }).destination).toEqual({ kind: "drawer", target: "wav" });
+
+              const library = document.createElement("div"); library.dataset.libraryScroll = "true";
+              const child = document.createElement("span"); library.append(child);
+              expect(resolveNativeFilesystemDropTarget(["beat.wav"], { x: 1, y: 1 }, { elementFromPoint: () => child }).destination).toEqual({ kind: "library" });
+            });
+
+            it("keeps browser/Pinterest images artwork-only with Drawer artwork priority", () => {
+              const artwork = document.createElement("div"); artwork.dataset.beatArtworkId = "b3";
+              expect(resolveNativeExternalImageDropTarget({ x: 1, y: 1 }, { elementFromPoint: () => artwork })).toEqual({ kind: "card-artwork", beatId: "b3" });
+              const drawerArtwork = document.createElement("div"); drawerArtwork.dataset.artworkDrop = "true"; artwork.append(drawerArtwork);
+              expect(resolveNativeExternalImageDropTarget({ x: 1, y: 1 }, { elementFromPoint: () => drawerArtwork })).toEqual({ kind: "drawer-artwork" });
+            });
+
+            it("preserves the native artwork extension set", () => {
+              for (const ext of ["png", "jpg", "jpeg", "webp", "bmp", "gif", "avif"]) expect(isNativeImagePath(`x.${ext}`)).toBe(true);
+              expect(isNativeImagePath("x.wav")).toBe(false);
+            });
+          });
+          '''
+          write('tests/integration/appNativeDropTargetsExtraction.test.ts',textwrap.dedent(test))
+
+          reg=read('scripts/regression-import-native.mjs')
+          reg=rep(reg,
+              'const htmlController = read("src/features/dragdrop/htmlDropController.ts");',
+              'const htmlController = read("src/features/dragdrop/htmlDropController.ts");\nconst nativeTargets = read("src/features/dragdrop/nativeDropTargets.ts");',
+              'regression owner read')
+          reg=rep(reg,
+              'if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");',
+              'if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");\nif (!app.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)")) fail("native drop target routing is no longer wired through its extracted owner.");\nif (app.includes("const elementAtNativePosition =") || app.includes("const isImagePath =")) fail("native target detection leaked back into App.tsx.");\nif (!nativeTargets.includes("document.elementFromPoint") || !nativeTargets.includes("window.devicePixelRatio") || !nativeTargets.includes("[data-filerole]")) fail("native target owner lost coordinate/scale/Drawer classification.");',
+              'regression ownership guard')
+          write('scripts/regression-import-native.mjs',reg)
+
+          mac=read('scripts/test-macos-portability.mjs')
+          mac=rep(mac,
+              'const htmlDrop = read("src/features/dragdrop/htmlDropController.ts");',
+              'const htmlDrop = read("src/features/dragdrop/htmlDropController.ts");\nconst nativeDropTargets = read("src/features/dragdrop/nativeDropTargets.ts");',
+              'mac owner read')
+          mac=rep(mac,
+              'ok(app.includes(\'if (artworkBeatId && payload.paths.length === 1 && isImagePath(payload.paths[0]))\') && app.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through native paths while preserving browser/Pinterest sentinels");',
+              'ok(app.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)") && nativeDropTargets.includes("isNativeImagePath") && nativeDropTargets.includes("window.devicePixelRatio") && nativeDropTargets.includes("[data-beat-artwork-id]") && app.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through extracted native target detection while preserving browser/Pinterest sentinels");',
+              'mac routing guard')
+          write('scripts/test-macos-portability.mjs',mac)
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: extract native drop targets'
+          echo "IMPLEMENTATION_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run migration matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='artifacts/migration-check-logs'
+          mkdir -p "$dir"
+          summary="$dir/summary.txt"
+          printf 'Task 8.1 migration checks\nInitial SHA: aba85aadb3dce83f326587f72425614c8f962a53\nImplementation SHA: %s\n' "$IMPLEMENTATION_SHA" > "$summary"
+          check() {
+            name="$1"; shift
+            log="$dir/$name.log"
+            if "$@" >"$log" 2>&1; then
+              echo "PASS $name" | tee -a "$summary"
+            else
+              code=$?
+              echo "FAIL $name exit=$code" | tee -a "$summary"
+              cat "$log"
+              exit "$code"
+            fi
+          }
+          check focused-targets npx vitest run tests/integration/appNativeDropTargetsExtraction.test.ts --environment jsdom
+          check regression-native node scripts/regression-import-native.mjs
+          check mac-portability-static npm run test:mac-portability:static
+          check typecheck npm run test:typecheck
+          check unit-ts npm run test:unit:ts
+          check component-dom npm run test:component:dom
+          check integration npm run test:integration
+          check regressions npm run test:regressions
+          check build-web npm run build:web
+          check build-desktop npm run build
+          echo 'Migration checks: PASS' | tee -a "$summary"
+
+      - name: Upload migration check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-8-1-${{ github.run_id }}
+          path: artifacts/migration-check-logs
+          if-no-files-found: warn
+
+      - name: Publish validated implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='v0.9.0-test-noche'
+          test "$(git rev-parse HEAD)" = "$IMPLEMENTATION_SHA"
+          test -z "$(git status --porcelain)"
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "${GITHUB_SHA}"
+          git push origin "$IMPLEMENTATION_SHA:refs/heads/$target"
+
+      - name: Finalize migration documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='v0.9.0-test-noche'
+          initial='aba85aadb3dce83f326587f72425614c8f962a53'
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "$IMPLEMENTATION_SHA"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          run=os.environ['GITHUB_RUN_ID']; impl=os.environ['IMPLEMENTATION_SHA']; initial='aba85aadb3dce83f326587f72425614c8f962a53'
+          roadmap=Path('migration/BeatGaler-roadmap-para-trabajar-con-IAs.md')
+          text=roadmap.read_text(encoding='utf-8')
+          old='### [ ] 8.1 — Separar detección del destino'; new='### [x] 8.1 — Separar detección del destino'
+          if text.count(old)!=1: raise RuntimeError('roadmap 8.1 checkbox mismatch')
+          roadmap.write_text(text.replace(old,new,1),encoding='utf-8')
+
+          registro=Path('migration/Registro-de-avance.md')
+          current=registro.read_text(encoding='utf-8').rstrip()
+          if '### Registro — 8.1' in current: raise RuntimeError('duplicate Registro 8.1')
+          entry=f'''\n\n### Registro — 8.1
+
+```
+Tarea: 8.1 — Separar detección del destino
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: {initial}
+- SHA de implementación validada: {impl}
+- Última tarea verificada: 7.4 — Separar la entrada de importación web
+
+Cambio realizado
+
+- Se creó `src/features/dragdrop/nativeDropTargets.ts` como dueño de coordenadas nativas, fallback por `devicePixelRatio`, atributos `data-*`, clasificación de imágenes y prioridad de destinos.
+- `App.tsx` dejó de resolver el elemento DOM destino y de clasificar extensiones de imagen; conserva listeners, feedback y las acciones ejecutadas después del routing.
+- Se conserva la prioridad Drawer → artwork de tarjeta para un único path de imagen → tarjeta → galería; para imágenes externas browser/Pinterest se conserva Drawer artwork → artwork de tarjeta → no-op.
+- Se conservan coordenadas originales primero y segundo intento dividido por escala, además de PNG/JPG/JPEG/WebP/BMP/GIF/AVIF.
+- No se inició 8.2.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appNativeDropTargetsExtraction.test.ts` para coordenadas/escala, prioridad, imágenes externas, extensiones y ownership.
+- `scripts/regression-import-native.mjs` y `scripts/test-macos-portability.mjs` se adaptaron al nuevo owner sin relajar los contratos nativos existentes.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/dragdrop/nativeDropTargets.ts
+- tests/integration/appNativeDropTargetsExtraction.test.ts
+- scripts/regression-import-native.mjs
+- scripts/test-macos-portability.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary task 8.1 apply`, run {run} — matriz completa PASS.
+- `git diff --check` — PASS.
+- Prueba focalizada de `appNativeDropTargetsExtraction.test.ts` — PASS.
+- `node scripts/regression-import-native.mjs` — PASS.
+- `npm run test:mac-portability:static` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- Artifact `migration-check-logs-task-8-1-{run}` contiene `summary.txt` y logs de la corrida.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` no se ejecutó como wrapper; sus checks aplicables se ejecutaron individualmente.
+- Prueba física Desktop Windows/macOS no ejecutada ni inventada; la detección quedó cubierta con DOM determinista, regressions, portabilidad y builds.
+- E2E completos ajenos a esta extracción no fueron necesarios.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Sugerida: arrastrar imagen y WAV sobre Drawer, artwork, cuerpo de tarjeta y galería con escala 100% y >100%.
+- Resultado esperado: mismos destinos y acciones que antes; un archivo no-imagen sobre artwork cae a la tarjeta y Drawer mantiene prioridad.
+
+Pendientes / fuera de alcance
+
+- 8.2 — Separar recepción HTML y navegador queda pendiente y no fue iniciada.
+- 8.3 — Separar recepción nativa permanece pendiente.
+- Listeners, feedback y staging permanecen fuera del alcance de 8.1.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de producto quedó abierto por 8.1.
+
+Herramientas temporales restantes
+
+- Ninguna; el workflow temporal se eliminó antes de crear y validar la implementación.
+
+Fallos encontrados y causa
+
+- Ninguno en la corrida final.
+
+Veredicto
+
+Terminada.
+
+La detección del destino nativo quedó fuera de `App.tsx` conservando coordenadas, escala, atributos `data-*`, clasificación y prioridad observable.
+
+Siguiente tarea
+
+8.2 — Separar recepción HTML y navegador.
+
+No iniciada.
+```
+'''
+          registro.write_text(current+entry,encoding='utf-8')
+
+          agent=f'''# BeatGaler — Agent State
+
+## Contexto
+
+- Fecha de ejecución: 2026-09-08
+- Rama de trabajo: `v0.9.0-test-noche`
+- Tarea trabajada: `8.1 — Separar detección del destino`
+- Estado: `Terminada`
+- Última tarea terminada: `8.1 — Separar detección del destino`
+
+## Base de esta ejecución
+
+- SHA inicial: `{initial}`
+- SHA de implementación validada: `{impl}`
+- Run de implementación final: `{run}` — `Temporary task 8.1 apply` — checks focalizados, portabilidad, matriz completa y fast-forward correctos.
+- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `{impl}`
+- El SHA final real de la ronda debe releerse desde GitHub después de este cierre documental.
+
+## Resultado verificado
+
+- `nativeDropTargets.ts` posee coordenadas, fallback por escala, atributos `data-*`, clasificación de imagen y prioridad de destinos nativos.
+- `App.tsx` conserva acciones y listeners, pero ya no calcula el elemento DOM destino ni clasifica extensiones de imagen.
+- Drawer conserva prioridad; artwork de tarjeta gana solo con un único path de imagen; un no-imagen sobre artwork cae a la tarjeta.
+- Imágenes externas browser/Pinterest siguen limitadas a Drawer artwork o artwork de tarjeta.
+- Pruebas focalizadas, portabilidad, regresiones y matriz completa pasaron sobre `{impl}`.
+
+## Pendientes concretos
+
+- `8.2 — Separar recepción HTML y navegador`.
+
+## Comprobaciones pendientes
+
+- Ninguna necesaria para cerrar 8.1.
+- Prueba física Desktop no ejecutada ni inventada; no bloquea por la cobertura automatizada aplicada.
+
+## Siguiente tarea
+
+- `8.2 — Separar recepción HTML y navegador`
+- Estado: `Pendiente`
+- No iniciar hasta la próxima ronda.
+'''
+          Path('migration/BeatGaler-agent-state.md').write_text(agent,encoding='utf-8')
+          PY
+          git diff --check
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md
+          git commit -m 'docs: close task 8.1'
+          final="$(git rev-parse HEAD)"
+          remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
+          test "$remote" = "$IMPLEMENTATION_SHA"
+          git push origin "$final:refs/heads/$target"
