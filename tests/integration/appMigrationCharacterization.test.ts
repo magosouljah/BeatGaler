@@ -9,6 +9,7 @@ const uploadErrorDetails = readFileSync(resolve(process.cwd(), "src/features/clo
 const desktopBeatUploadPipeline = readFileSync(resolve(process.cwd(), "src/features/cloud/desktopBeatUploadPipeline.ts"), "utf8");
 const cloudUploadQueue = readFileSync(resolve(process.cwd(), "src/features/cloud/useCloudUploadQueue.ts"), "utf8");
 const libraryReload = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryReload.ts"), "utf8");
+const startupBootstrap = readFileSync(resolve(process.cwd(), "src/features/startup/useStartupBootstrap.ts"), "utf8");
 const importSession = readFileSync(resolve(process.cwd(), "src/features/import/useImportSession.ts"), "utf8");
 const importReview = readFileSync(resolve(process.cwd(), "src/features/import/useImportReview.ts"), "utf8");
 const importReviewHost = readFileSync(resolve(process.cwd(), "src/features/import/components/ImportReviewHost.tsx"), "utf8");
@@ -184,7 +185,8 @@ describe("App migration characterization contracts", () => {
       "writeActiveCloudUploads(remaining)",
     ]);
     expect(interruptedUploadJournal).toContain("remaining.push(item)");
-    expect(app).toContain("rollbackInterruptedCloudUploads({");
+    expect(startupBootstrap).toContain("rollbackInterruptedCloudUploads({");
+    expect(app).toContain("useStartupBootstrap({");
     expect(app).not.toContain("async function rollbackInterruptedCloudUploads");
     expect(uploadErrorDetails).toContain("buildUploadFailureDetail");
     expect(uploadErrorDetails).toContain("buildPlaybackPreparationFailureDetail");

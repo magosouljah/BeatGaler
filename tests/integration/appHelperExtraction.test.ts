@@ -23,6 +23,7 @@ const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
 const cache = readFileSync(resolve(root, "src/features/library/libraryPresentationCache.ts"), "utf8");
 const fingerprints = readFileSync(resolve(root, "src/features/library/libraryFingerprints.ts"), "utf8");
 const journal = readFileSync(resolve(root, "src/features/cloud/interruptedUploadJournal.ts"), "utf8");
+const startupBootstrap = readFileSync(resolve(root, "src/features/startup/useStartupBootstrap.ts"), "utf8");
 const artworkDecode = readFileSync(resolve(root, "src/features/artwork/decodeArtworkDataUrl.ts"), "utf8");
 const artworkHydration = readFileSync(resolve(root, "src/features/artwork/useArtworkHydration.ts"), "utf8");
 
@@ -56,13 +57,13 @@ describe("App 2.3 helper extraction", () => {
     for (const importPath of [
       "./features/library/libraryPresentationCache",
       "./features/library/libraryFingerprints",
-      "./features/cloud/interruptedUploadJournal",
       "./features/dragdrop/pathHelpers",
     ]) {
       expect(app).toContain(importPath);
     }
 
     expect(artworkHydration).toContain('from "./decodeArtworkDataUrl"');
+    expect(startupBootstrap).toContain('from "../cloud/interruptedUploadJournal"');
 
     for (const localDefinition of [
       "function fileNameFromPath(",

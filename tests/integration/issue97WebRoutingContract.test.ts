@@ -4,12 +4,17 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const drawerPersistence = readFileSync(resolve(process.cwd(), "src/features/edit/useDrawerCloudPersistence.ts"), "utf8");
+const startupBootstrap = readFileSync(resolve(process.cwd(), "src/features/startup/useStartupBootstrap.ts"), "utf8");
+
+function sourceSection(source: string, startMarker: string, endMarker: string, label: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) throw new Error(`Could not find ${label} section: ${startMarker}`);
+  return source.slice(start, end);
+}
 
 function section(startMarker: string, endMarker: string): string {
-  const start = app.indexOf(startMarker);
-  const end = app.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end < 0) throw new Error(`Could not find App.tsx section: ${startMarker}`);
-  return app.slice(start, end);
+  return sourceSection(app, startMarker, endMarker, "App.tsx");
 }
 
 describe("Issue #97 Web routing contracts", () => {
@@ -35,9 +40,11 @@ describe("Issue #97 Web routing contracts", () => {
   });
 
   it("keeps an online transient startup authority failure visible but read-only", () => {
-    const startupCatch = section(
+    const startupCatch = sourceSection(
+      startupBootstrap,
       'console.warn("Telegram vault startup check failed:", error);',
       "return () => { cancelled = true; };",
+      "useStartupBootstrap.ts",
     );
     expect(startupCatch).toContain("setCloudSessionVerified(false)");
     expect(startupCatch).toContain('await showOfflineLibrary("offline")');

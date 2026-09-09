@@ -62,6 +62,7 @@ try {
   const offlineAvailability = readFileSync(path.join(root, "src", "features", "offline", "useOfflineAvailability.ts"), "utf8");
   const trashActions = readFileSync(path.join(root, "src", "features", "trash", "useTrashActions.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
+  const startupBootstrap = readFileSync(path.join(root, "src", "features", "startup", "useStartupBootstrap.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const uploadErrorDetails = readFileSync(path.join(root, "src", "features", "cloud", "uploadErrorDetails.ts"), "utf8");
   const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
@@ -349,16 +350,16 @@ try {
   // per-user desktop pin, never ordinary playback cache and never web metadata.
   // Cold offline starts may expose only validated pins; ordinary cached cards
   // are allowed to survive only until the current app process closes.
-  if (!app.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
+  if (!startupBootstrap.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
   if (!app.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
-  if (!app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
+  if (!startupBootstrap.includes('if (!status.reachable)') || !app.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!libraryStateOwner.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
   if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
   if (!beatCard.includes('pointerEvents: visible ? "auto" : "none"')) fail("Visible cached cards lost the pointer path required for progressive playback.");
 if (!app.includes('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}')) fail("Cached cards lost the non-destructive playback gate while cloud authority is verifying.");
 if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (interactive && selectMode)') || !beatCard.includes('dragEnabled && interactive')) fail("Cached presentation can mutate before authority verification.");
   if (!libraryStateOwner.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");
-  if (!app.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
+  if (!startupBootstrap.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
   if (!app.includes('BeatGaler does not import new beats while offline')) fail("Offline mode re-enabled beat imports.");
   if (!app.includes('const delays = [0, 1000, 2000, 5000, 10000, 30000, 60000]')) fail("Reconnect/upload preflight lost the bounded 1s→60s backoff sequence.");
   if (!beatCard.includes('Make available offline') || !beatCard.includes('offlineAvailablePng')) fail("Beat cards lost Offline pin controls or the supplied Offline artwork symbol.");
@@ -381,8 +382,8 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!cloudServer.includes('telegramPublicEdgeReachable')) fail("Connectivity must probe Telegram's public edge; a local Bot API response is not enough.");
   if (cloudServer.includes('telegramReachabilityProbe = { checkedAt:')) fail("Connectivity reintroduced a stale positive reachability cache across Wi-Fi/app restart transitions.");
   if (!cloudServer.includes('telegramTransportReachable(null)')) fail("Unlinked-vs-offline status is ambiguous again when no linked account is in server memory.");
-  const startupReachableIndex = app.indexOf('if (!status.reachable)', app.indexOf('Telegram startup connectivity check failed'));
-  const startupConnectedIndex = app.indexOf('if (!status.connected)', app.indexOf('Telegram startup connectivity check failed'));
+  const startupReachableIndex = startupBootstrap.indexOf('if (!status.reachable)', startupBootstrap.indexOf('Telegram startup connectivity check failed'));
+  const startupConnectedIndex = startupBootstrap.indexOf('if (!status.connected)', startupBootstrap.indexOf('Telegram startup connectivity check failed'));
   if (startupReachableIndex < 0 || startupConnectedIndex < 0 || startupReachableIndex > startupConnectedIndex) fail("Cold start must decide reachability before treating connected:false as logout.");
   if (!rustCommands.includes('else if reachable {\n        settings.telegram_cloud_connected = false;')) fail("Native status reconciliation can still log the account out while Telegram is unreachable.");
   const loadLibraryStart = rustCommands.indexOf('pub fn load_library(');
