@@ -37,6 +37,18 @@ jobs:
           NODE
       - name: Extract live domain logic from root composition
         run: node scripts/task-10-2-live-domain-split-temp.cjs
+      - name: Adapt moved Phase 9C drop owner
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'scripts/regression-phase9cd.mjs';
+          let source = fs.readFileSync(path, 'utf8');
+          const anchor = 'const composition = read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");\nconst app = `${appEntry}\\n${composition}`;';
+          const replacement = 'const composition = read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");\nconst beatFileDropRouting = read("src/features/dragdrop/useBeatFileDropRouting.ts").replaceAll("../", "./");\nconst app = `${appEntry}\\n${composition}\\n${beatFileDropRouting}`;';
+          if (!source.includes(anchor)) throw new Error('Phase 9C/9D owner anchor changed');
+          source = source.replace(anchor, replacement);
+          fs.writeFileSync(path, source);
+          NODE
       - name: Install dependencies
         run: npm ci
       - name: Focused architecture check
