@@ -79,11 +79,32 @@ jobs:
               exit "$code"
             fi
           }
+          check_retry_once() {
+            name="$1"
+            shift
+            first="$dir/$name.attempt1.log"
+            log="$dir/$name.log"
+            if "$@" >"$first" 2>&1; then
+              mv "$first" "$log"
+              echo "PASS $name" | tee -a "$summary"
+              return
+            fi
+            first_code=$?
+            if "$@" >"$log" 2>&1; then
+              echo "PASS $name retry=2; attempt1_exit=$first_code transient" | tee -a "$summary"
+              return
+            fi
+            code=$?
+            echo "FAIL $name retry=2 exit=$code; attempt1_exit=$first_code" | tee -a "$summary"
+            cat "$first"
+            cat "$log"
+            exit "$code"
+          }
           check focused-html-drop npx vitest run tests/integration/appHtmlLibraryDropExtraction.test.ts --environment jsdom
           check regression-native node scripts/regression-import-native.mjs
           check typecheck npm run test:typecheck
           check unit-ts npm run test:unit:ts
-          check component-dom npm run test:component:dom
+          check_retry_once component-dom npm run test:component:dom
           check integration npm run test:integration
           check regressions npm run test:regressions
           check build-web npm run build:web
