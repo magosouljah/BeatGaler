@@ -1,5 +1,5 @@
 name: Final task 8.3 validation
-# Retry after recalculating App native-effect splice offsets.
+# Retry after preserving App's independent Backup path helper usage.
 
 on:
   push:
