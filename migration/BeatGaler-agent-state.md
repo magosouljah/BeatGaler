@@ -4,41 +4,40 @@
 
 - Fecha de ejecución: 2026-09-08
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `8.2 — Separar recepción HTML y navegador`
+- Tarea trabajada: `8.3 — Separar recepción nativa`
 - Estado: `Terminada`
-- Última tarea terminada: `8.2 — Separar recepción HTML y navegador`
+- Última tarea terminada: `8.3 — Separar recepción nativa`
 
 ## Base de esta ejecución
 
-- SHA inicial: `344571f32efa83610e2ad17bb48566b74ece3ede`
-- SHA de implementación validada: `1a1ab540a246bc7cd7b1b2a71191287292f02eb4`
-- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `31bb4984c080c1f0a8e100ad94a667a25aba24dc`
-- Run de implementación final: `34307783102` — `Final task 8.2 validation` — matriz aplicable y publicación del commit exacto correctas.
-- Artifact final: `migration-check-logs-task-8-2-34307783102`.
+- SHA inicial: `f577cb324bcfce702957ea1d718b60f4c19a807b`
+- SHA de implementación validada: `b8b8c6376837687881510ddeeac11062db2fcd46`
+- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `5203d4136a68f9d1194b953734724ed1e14c0caf`
+- Run de implementación final: `34309637023` — `Final task 8.3 validation` — matriz aplicable y publicación del commit exacto correctas.
+- Artifact final: `migration-check-logs-task-8-3-34309637023`.
 - El SHA final real de la ronda es el HEAD remoto posterior a este cierre documental y debe releerse después de la última escritura.
 
 ## Resultado verificado
 
-- `src/features/dragdrop/useHtmlLibraryDrop.ts` posee la instalación de `htmlDropController`, recepción HTML/browser y routing de `File` del navegador.
-- `App.tsx` conserva solo la composición del hook; la recepción nativa completa permanece allí para 8.3.
-- Windows Desktop conserva el owner nativo único; macOS conserva arbitraje Finder nativo vs HTML y browser/Pinterest para artwork.
-- El fallback multi-source de artwork conserva URL/data URL y `File` virtual, sin convertir imágenes remotas en beats.
-- Web conserva el gate `browserFileImport` y sus rutas MP3/WAV/PROJECT/biblioteca.
-- Staging Desktop, Backup/Backups, auto-routing de proyectos y feedback de carga permanecen protegidos.
-- Prueba focalizada, regresión nativa, typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre `1a1ab540a246bc7cd7b1b2a71191287292f02eb4`.
-- El contrato Mac de drag & drop pasa. El wrapper Mac general conserva el fallo previo del Direct helper ya separado desde 8.1.
+- `src/features/dragdrop/useNativeLibraryDrop.ts` posee el listener nativo de Tauri, feedback, arbitraje y routing/ejecución del drop nativo.
+- `App.tsx` conserva un único punto de composición del hook y ya no posee `onDragDropEvent` ni `handleNativeDrop`.
+- Se conservan límite de 50 rutas, rutas originales Explorer/Finder y entrada zero-copy mediante `payload.paths`, sin staging/copia previa a Review.
+- Se conservan detección de destinos, `nativeDropArbiter`, sentinelas de imagen externa/browser y prioridad del receptor nativo.
+- El cleanup cubre registro asíncrono tardío, desuscripción del listener Tauri, listener de imagen externa y feedback visual.
+- Prueba focalizada, regresión nativa, typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre `b8b8c6376837687881510ddeeac11062db2fcd46`.
+- El contrato Mac de drag & drop afectado pasa; la excepción baseline del Direct helper sigue separada y no fue introducida por 8.3.
 
 ## Pendientes concretos
 
-- `8.3 — Separar recepción nativa`.
+- `9.1 — Separar sesión y ajustes`.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 8.2.
-- Prueba física Desktop Windows/macOS y Web interactiva no ejecutada ni inventada; no quedó como bloqueo porque la extracción está cubierta por pruebas focalizadas, regresiones, contrato Mac afectado y ambos builds.
+- Ninguna necesaria para cerrar 8.3.
+- Prueba física Desktop Windows/macOS no ejecutada ni inventada; no quedó como bloqueo porque ownership, routing, zero-copy, arbitraje, cleanup y ambos builds están cubiertos por la matriz automatizada.
 
 ## Siguiente tarea
 
-- `8.3 — Separar recepción nativa`
+- `9.1 — Separar sesión y ajustes`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

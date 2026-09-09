@@ -431,7 +431,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** los gestos HTML admitidos funcionan una sola vez y las imágenes de navegador no se interpretan como beats.
     
 
-### [ ] 8.3 — Separar recepción nativa
+### [x] 8.3 — Separar recepción nativa
 
 - **Hacer:** extraer listener de Tauri, feedback de arrastre y conexión con el arbitraje existente.
     

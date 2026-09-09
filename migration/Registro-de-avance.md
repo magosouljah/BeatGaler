@@ -2684,3 +2684,97 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 8.3
+
+```
+Tarea: 8.3 — Separar recepción nativa
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: f577cb324bcfce702957ea1d718b60f4c19a807b
+- SHA de implementación validada: b8b8c6376837687881510ddeeac11062db2fcd46
+- Última tarea verificada: 8.2 — Separar recepción HTML y navegador
+
+Cambio realizado
+
+- Se creó `src/features/dragdrop/useNativeLibraryDrop.ts` como owner del listener nativo de Tauri, feedback de drag, arbitraje y ejecución/routing del drop nativo.
+- `App.tsx` dejó de poseer `getCurrentWebview().onDragDropEvent` y `handleNativeDrop`; conserva un único punto de composición mediante `useNativeLibraryDrop({...})`.
+- Se conservaron las rutas originales de Explorer/Finder, el límite de 50 rutas, el uso directo de `payload.paths` y la importación zero-copy sin `DataTransfer.arrayBuffer`, `drop-staging` ni copia previa a Review.
+- Se conservaron `nativeDropArbiter`, sentinelas de imagen externa/browser, detección extraída de destinos y la prioridad del gesto nativo antes de la importación local.
+- La limpieza conserva desuscripción aun si el registro asíncrono del listener termina después del unmount, además de retirar el listener de imagen externa y limpiar el feedback visual.
+- No se inició 9.1.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appNativeLibraryDropExtraction.test.ts` para ownership, receptor único, límite/rutas originales, zero-copy, arbitraje/sentinelas y cleanup asíncrono.
+- `tests/integration/appNativeDropTargetsExtraction.test.ts` ahora sigue las llamadas a los resolvers hasta `useNativeLibraryDrop.ts` en vez de exigirlas físicamente en `App.tsx`.
+- `scripts/regression-import-native.mjs`, `scripts/run-regressions.mjs`, `scripts/regression-phase9cd.mjs` y `scripts/test-macos-portability.mjs` fueron adaptados para seguir el ownership extraído sin relajar sus invariantes.
+
+Archivos de implementación/pruebas afectados
+
+- scripts/regression-import-native.mjs
+- scripts/regression-phase9cd.mjs
+- scripts/run-regressions.mjs
+- scripts/test-macos-portability.mjs
+- src/App.tsx
+- src/features/dragdrop/useNativeLibraryDrop.ts
+- tests/integration/appNativeDropTargetsExtraction.test.ts
+- tests/integration/appNativeLibraryDropExtraction.test.ts
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Final task 8.3 validation`, run 34309637023 — SUCCESS.
+- Artifact `migration-check-logs-task-8-3-34309637023` generado.
+- Prueba focalizada `appNativeLibraryDropExtraction.test.ts` — PASS.
+- `node scripts/regression-import-native.mjs` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- Contrato Mac afectado por drag & drop — PASS; el wrapper conserva únicamente la excepción baseline ya documentada del Direct helper.
+- La publicación del commit exacto validado terminó correctamente.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` no se ejecutó como wrapper; la matriz ejecutó individualmente los checks aplicables.
+- Prueba física Desktop Windows/macOS no ejecutada ni inventada; la ronda trabaja mediante GitHub Actions.
+- E2E completos ajenos a drag & drop no se usaron como criterio de cierre.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Sugerida: arrastrar desde Explorer/Finder archivos y carpetas sobre biblioteca, tarjeta, artwork y Drawer; desmontar/cambiar de vista durante el registro del listener y repetir con imagen externa de navegador.
+- Resultado esperado: un solo receptor efectivo por gesto, mismas rutas/destinos, sin copia previa innecesaria, sentinelas correctos y ningún listener residual.
+
+Pendientes / fuera de alcance
+
+- 9.1 — Separar sesión y ajustes queda pendiente y no fue iniciada.
+- La prueba física multiplataforma queda como comprobación manual opcional, no como bloqueo del cierre automatizado.
+
+Fallos encontrados y causa
+
+- Una assertion nueva confundió `.arrayBuffer(` dentro de un comentario con código ejecutable; se corrigió el test para inspeccionar código sin comentarios.
+- Un aplicador temporal calculó offsets de `App.tsx` antes de retirar imports; se corrigió el tooling para recalcularlos antes del reemplazo.
+- Typecheck confirmó que `App.tsx` aún usa `isBackupFolderPath` independientemente del receptor nativo; se conservó ese import.
+- Guards antiguos de 8.1/Phase 9/no-staging seguían el ownership físico dentro de `App.tsx`; se trasladaron al nuevo owner manteniendo los mismos contratos.
+- Run 34309637023 quedó verde y publicó `b8b8c6376837687881510ddeeac11062db2fcd46`.
+
+Veredicto
+
+Terminada.
+
+La recepción nativa quedó fuera de `App.tsx` conservando listener único, destinos, arbitraje, rutas originales, zero-copy, feedback y cleanup.
+
+Siguiente tarea
+
+9.1 — Separar sesión y ajustes.
+
+No iniciada.
+```
