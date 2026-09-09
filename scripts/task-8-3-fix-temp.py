@@ -22,6 +22,12 @@ if text.count(old_path_import) != 1:
     raise SystemExit(f"Expected one App path-helper replacement target, found {text.count(old_path_import)}")
 text = text.replace(old_path_import, new_path_import, 1)
 
+old_broad_guard = '    (\'if (!app.includes("readImagePathAsDataUrl"))\', \'if (!nativeDropOwner.includes("readImagePathAsDataUrl"))\'),\n'
+new_broad_guard = old_broad_guard + '    (\'if (!app.includes("DataTransfer File.arrayBuffer(), no drop-staging"))\', \'if (!nativeDropOwner.includes("DataTransfer File.arrayBuffer(), no drop-staging"))\'),\n'
+if text.count(old_broad_guard) != 1:
+    raise SystemExit(f"Expected one broad native artwork guard insertion point, found {text.count(old_broad_guard)}")
+text = text.replace(old_broad_guard, new_broad_guard, 1)
+
 path.write_text(text, encoding="utf-8", newline="\n")
 
 target_test_path = root / "tests/integration/appNativeDropTargetsExtraction.test.ts"
