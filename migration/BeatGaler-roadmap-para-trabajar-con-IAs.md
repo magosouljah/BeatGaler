@@ -479,7 +479,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** abrir con/sin caché, sin red y con fallo temporal cloud mantiene los resultados de la línea base.
     
 
-### [ ] 9.4 — Separar reconexión y eventos cloud
+### [x] 9.4 — Separar reconexión y eventos cloud
 
 - **Hacer:** extraer listeners online/offline y eventos del servidor —SSE— que actualizan la biblioteca.
     

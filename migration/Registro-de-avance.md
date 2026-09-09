@@ -3088,3 +3088,96 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 9.4
+
+```
+Tarea: 9.4 — Separar reconexión y eventos cloud
+Estado: Terminada
+Fecha: 2026-09-09
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial: c63684fd296a21e7d2b2387e5549e103e112f7a7
+- SHA de implementación validada: 41961ce716911b0044cecffb1b4ad34e94a05f2a
+- Última tarea verificada: 9.3 — Separar el arranque inicial
+
+Cambio realizado
+
+- Se extrajo la recuperación online/offline de App.tsx a src/features/session/useConnectivity.ts.
+- Se extrajo la suscripción SSE y sus eventos de biblioteca a src/features/cloud/useCloudLibraryEvents.ts.
+- Se conservaron el backoff 0/1/2/5/10/30/60 s, la verificación de reachability/connected, la reconciliación de Trash offline, la recarga autoritativa y los resets de startup al recuperar conectividad.
+- SSE conserva ticket de un solo uso, EventSource, listeners ready/library_changed/telegram_connected, reintento con ticket fresco y backoff hasta 30 s.
+- SSE sigue siendo solo canal de notificación: verifica autoridad antes de hidratar y no incorpora commitSnapshot, syncBeatMetadataToTelegram ni uploadBeatToTelegram.
+- App.tsx quedó como compositor de useConnectivity y useCloudLibraryEvents para estas responsabilidades.
+
+Adaptación de pruebas
+
+- Se añadió tests/integration/appConnectivityCloudEventsExtraction.test.ts para ownership, listeners únicos, backoff, verificación, Trash offline, ticket SSE, cleanup y ausencia de rutas de commit.
+- tests/integration/appSessionExtraction.test.ts y appStartupBootstrapExtraction.test.ts se retargetearon a los nuevos owners sin debilitar sus contratos.
+- scripts/run-regressions.mjs conserva las guardas de reachability y backoff, ahora leyendo useConnectivity.ts en vez de exigir que esas líneas permanezcan físicamente en App.tsx.
+- Primer run 34325645202: falló por una assertion nueva que buscaba removeEventListener sin optional chaining y por una guarda vieja acoplada a App.tsx.
+- Segundo run 34326305219: integración quedó verde; regresiones detectaron una segunda guarda vieja de backoff todavía acoplada a App.tsx.
+- Ambos fallos se clasificaron como pruebas/guardas de ownership desactualizadas; el comportamiento extraído no se cambió para satisfacerlas.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/session/useConnectivity.ts
+- src/features/cloud/useCloudLibraryEvents.ts
+- tests/integration/appConnectivityCloudEventsExtraction.test.ts
+- tests/integration/appSessionExtraction.test.ts
+- tests/integration/appStartupBootstrapExtraction.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- Focused 9.4: npx vitest run tests/integration/appConnectivityCloudEventsExtraction.test.ts tests/integration/appSessionExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts — PASS.
+- npm run test:typecheck — PASS.
+- npm run test:unit:ts — PASS.
+- npm run test:component:dom — PASS.
+- npm run test:integration — PASS.
+- npm run test:regressions — PASS.
+- npm run build:web — PASS.
+- npm run build — PASS.
+- Run de implementación verde: 34326576043 — Temporary Task 9.4 Retry 2.
+- Run final de revalidación: 34327027988 — Temporary Task 9.4 Close.
+- Artifact final: migration-check-logs-task-9-4-close-34327027988.
+- SHA comprobado y publicado como implementación validada: 41961ce716911b0044cecffb1b4ad34e94a05f2a.
+
+Comprobaciones no ejecutadas
+
+- No se ejecutó una prueba física manual Desktop/Web. No es necesaria para cerrar 9.4 porque listeners, cleanup, estados, autoridad y builds están cubiertos por pruebas automatizadas y la matriz completa.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Si se desea repetir manualmente: abrir Desktop/Web online, desconectar red, reconectar y provocar un cambio remoto; esperar que la biblioteca se recupere una sola vez, sin duplicar listeners ni perder el estado disponible durante fallos temporales.
+
+Pendientes / fuera de alcance
+
+- 9.5 — Separar la aparición de tarjetas.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de integridad identificado por 9.4.
+- Las cadenas internas históricas que todavía mencionan Telegram se conservaron cuando forman parte de logs/contratos internos; no se cambió copy visible fuera del alcance.
+
+Herramientas temporales restantes
+
+- Ninguna. Los workflows/scripts temporales de aplicación, retry y cierre se eliminaron del árbol final antes de fijar el SHA validado.
+
+Veredicto
+
+Terminada. Reconexión y SSE tienen owners separados, conservan sus contratos y la matriz completa está verde.
+
+Siguiente tarea
+
+9.5 — Separar la aparición de tarjetas.
+
+No iniciada.
+```
