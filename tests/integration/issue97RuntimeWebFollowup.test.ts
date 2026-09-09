@@ -217,8 +217,10 @@ describe("Issue #97 production runtime follow-up", () => {
 
   it("does not let Web card warming queue native cooking ahead of Play", () => {
     const app = source("src/App.tsx");
+    const revealOwner = source("src/features/startup/useLibraryReveal.ts");
     const playbackController = source("src/features/playback/usePlaybackController.ts");
     expect(playbackController).toContain('if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;');
-    expect(app).toContain("Math.min(isTauriAvailable ? 6 : 1, queue.length)");
+    expect(app).toContain("nativeParallelism: isTauriAvailable ? 6 : 1");
+    expect(revealOwner).toContain("Math.min(nativeParallelism, queue.length)");
   });
 });

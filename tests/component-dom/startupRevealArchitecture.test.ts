@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync("src/App.tsx", "utf8");
+const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");
 const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
 const libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.ts", "utf8");
 const beatCard = readFileSync("src/components/BeatCard.tsx", "utf8");
@@ -30,7 +31,7 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("does not gate card reveal on audio cooking", () => {
-    expect(app).toContain("title + artwork are enough to show a beat");
+    expect(libraryRevealOwner).toContain("Authority pass: title + artwork reveal a card. Audio remains a later viewport warmup.");
     expect(app).not.toContain("After the first six are usable, prepare the rest one at a time");
   });
 

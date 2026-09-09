@@ -51,6 +51,8 @@ import TagRenameDialog from "./features/tags/components/TagRenameDialog";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
 import { useLibraryReload } from "./features/library/useLibraryReload";
 import { useStartupBootstrap } from "./features/startup/useStartupBootstrap";
+import { useLibraryReveal } from "./features/startup/useLibraryReveal";
+import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
 import { usePlaybackController } from "./features/playback/usePlaybackController";
 import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
@@ -72,12 +74,6 @@ import { useCloudLibraryEvents } from "./features/cloud/useCloudLibraryEvents";
 // flipping/removing this one constant deletes the visual layer without touching
 // the staged Review architecture underneath it.
 const REVIEW_SKELETON_ENABLED = true;
-
-function dismissBeatGalerStartupLoader(): void {
-  const loader = document.getElementById("beatgaler-startup-loader");
-  if (!loader) return;
-  loader.remove();
-}
 
 const beatCloudUpdateBusyIds = new Set<string>();
 
@@ -127,16 +123,9 @@ function BeatGalerApp() {
   } = useBeatRuntimeRegistry(beats, beatsLatestRef);
   const stagedImportPathsRef = useRef<Map<string, string[]>>(new Map());
   const [loading, setLoading] = useState(() => initialLoading);
-  const [startupCookingGate, setStartupCookingGate] = useState(() => (startupCachedBeatsRef.current ?? []).length === 0);
-  const [revealedBeatIds, setRevealedBeatIds] = useState<Set<string>>(() => new Set(
-    (startupCachedBeatsRef.current ?? [])
-      .filter(beat => Boolean(beat.image_preview_base64 || beat.image_base64))
-      .map(beat => beat.id)
-  ));
   const startupCookingResolvedRef = useRef(false);
   const startupPipelineStartedRef = useRef(false);
   const startupEnginePrimeReadyRef = useRef(false);
-  const progressiveRevealRunRef = useRef(0);
   const handleArtworkHydratedFromNetwork = useCallback((next: Beat[], beatId: string) => {
     const hydrated = next.find(item => item.id === beatId);
     if (hydrated && cloudMetaSnapshotRef.current) {
@@ -161,6 +150,14 @@ function BeatGalerApp() {
     toggleTagFilter,
     replaceTagFilter,
   } = useTagFilters();
+  const filteredBeats = selectFilteredAndSortedBeats(
+    beats,
+    search,
+    includedTags,
+    excludedTags,
+    sortBy,
+  );
+
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
   const {
     tagRename, tagRenameBusy, tagRenameError, affectedCount: tagRenameAffectedCount,
@@ -204,6 +201,24 @@ function BeatGalerApp() {
     cloudSessionVerified,
     setCloudSessionVerified,
   } = useSessionState();
+  const {
+    startupCookingGate,
+    setStartupCookingGate,
+    revealedBeatIds,
+    setRevealedBeatIds,
+    progressiveRevealRunRef,
+  } = useLibraryReveal({
+    initialCachedBeats: startupCachedBeatsRef.current ?? [],
+    filteredBeats,
+    loading,
+    settings,
+    cloudSessionVerified,
+    connectionState,
+    ensureArtworkReady,
+    startupCookingResolvedRef,
+    startupPipelineStartedRef,
+    nativeParallelism: isTauriAvailable ? 6 : 1,
+  });
   const {
     cloudFilesBeat,
     cloudFiles,
@@ -965,15 +980,6 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   const tagFrequency = useMemo(() => selectTagFrequency(beats), [beats]);
   const allTags = useMemo(() => selectAllTags(beats, tagFrequency), [beats, tagFrequency]);
   const tagSuggestions = useMemo(() => selectTagSuggestions(beats), [beats]);
-  const filteredBeats = selectFilteredAndSortedBeats(
-    beats,
-    search,
-    includedTags,
-    excludedTags,
-    sortBy,
-  );
-
-  const filteredBeatIdsKey = filteredBeats.map(beat => beat.id).join("|");
   const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));
 
   const {
@@ -1000,113 +1006,6 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
     releaseFile,
   });
 
-  const revealBeat = useCallback((beatId: string) => {
-    setRevealedBeatIds(current => {
-      if (current.has(beatId)) return current;
-      const next = new Set(current);
-      next.add(beatId);
-      return next;
-    });
-  }, []);
-
-  // Instant-paint pass: use only local presentation cache while cloud authority
-  // is still resolving. This never mutates the source of truth and never starts
-  // an audio download. Every BeatCard is already mounted invisibly in its final
-  // slot, so cards can appear independently without reflowing the grid.
-  useEffect(() => {
-    if (filteredBeats.length === 0) return;
-    let cancelled = false;
-    const queue = filteredBeats.filter(beat => !revealedBeatIds.has(beat.id));
-
-    void Promise.all(queue.map(async beat => {
-      const ready = await ensureArtworkReady(beat, false);
-      if (!cancelled && ready) revealBeat(beat.id);
-    })).then(() => {
-      if (!cancelled) {
-        setStartupCookingGate(false);
-        dismissBeatGalerStartupLoader();
-      }
-    });
-
-    return () => { cancelled = true; };
-    // revealedBeatIds intentionally stays out of deps: one cache sweep per library shape.
-  }, [filteredBeatIdsKey, ensureArtworkReady, revealBeat]);
-
-  // Authority/reveal pass: title + artwork are enough to show a beat. Audio is
-  // deliberately NOT part of this gate. Once a visible card enters the viewport,
-  // BeatCard's existing IntersectionObserver calls onWarm and the progressive
-  // audio/chunk path continues exactly as before.
-  useEffect(() => {
-    if (loading || settings === null) return;
-
-    if (connectionState === "checking") {
-      if (filteredBeats.length === 0) setStartupCookingGate(true);
-      return;
-    }
-
-    if (connectionState !== "online" || !settings.telegram_cloud_connected) {
-      setRevealedBeatIds(new Set(filteredBeats.map(beat => beat.id)));
-      startupCookingResolvedRef.current = true;
-      startupPipelineStartedRef.current = false;
-      setStartupCookingGate(false);
-      dismissBeatGalerStartupLoader();
-      return;
-    }
-
-    // Cached cards may stay visible while this is false, but confirmed-empty UI
-    // remains forbidden until the authoritative INDEX resolves.
-    if (!cloudSessionVerified) {
-      setStartupCookingGate(filteredBeats.length === 0);
-      return;
-    }
-
-    startupCookingResolvedRef.current = true;
-    startupPipelineStartedRef.current = false;
-    setStartupCookingGate(false);
-    dismissBeatGalerStartupLoader();
-
-    if (filteredBeats.length === 0) return;
-
-    const runId = ++progressiveRevealRunRef.current;
-    // The Desktop restore model deliberately omits image_base64 and keeps the
-    // durable artwork reference in Rust cloud_metadata (not Beat.assets). A
-    // cache-only pass may already have revealed the card with its gradient, but
-    // the online pass must still hydrate every beat whose artwork is not loaded.
-    const queue = filteredBeats.filter(beat =>
-      !beat.image_base64 && !beat.image_preview_base64
-    );
-    let cursor = 0;
-    const workerCount = Math.min(isTauriAvailable ? 6 : 1, queue.length);
-
-    const worker = async () => {
-      while (cursor < queue.length) {
-        const index = cursor++;
-        const beat = queue[index];
-        if (!beat || progressiveRevealRunRef.current !== runId) return;
-
-        let ready = false;
-        for (let attempt = 0; attempt < 4 && !ready; attempt += 1) {
-          ready = await ensureArtworkReady(beat, true);
-          if (ready || progressiveRevealRunRef.current !== runId) break;
-          const delay = [350, 900, 1800, 3200][attempt] ?? 3200;
-          await new Promise(resolve => window.setTimeout(resolve, delay));
-        }
-
-        if (progressiveRevealRunRef.current !== runId) return;
-        if (ready) revealBeat(beat.id);
-      }
-    };
-
-    void Promise.all(Array.from({ length: workerCount }, () => worker()));
-
-    return () => {
-      if (progressiveRevealRunRef.current === runId) progressiveRevealRunRef.current += 1;
-    };
-    // revealedBeatIds intentionally stays out of deps so each reveal does not restart workers.
-  }, [
-    loading, settings, cloudSessionVerified, connectionState, filteredBeatIdsKey,
-    ensureArtworkReady, revealBeat,
-  ]);
 
 
   const currentBeat = beats.find(b => b.id === audio.playingId);

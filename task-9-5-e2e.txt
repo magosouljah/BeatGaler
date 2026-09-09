@@ -1,6 +1,0 @@
-npm error Missing script: "e2e:core"
-npm error
-npm error To see a list of scripts, run:
-npm error   npm run
-npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-09-09T11_29_35_550Z-debug-0.log
-EXIT_CODE=1

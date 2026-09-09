@@ -63,6 +63,7 @@ try {
   const trashActions = readFileSync(path.join(root, "src", "features", "trash", "useTrashActions.ts"), "utf8");
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const startupBootstrap = readFileSync(path.join(root, "src", "features", "startup", "useStartupBootstrap.ts"), "utf8");
+  const libraryReveal = readFileSync(path.join(root, "src", "features", "startup", "useLibraryReveal.ts"), "utf8");
   const connectivity = readFileSync(path.join(root, "src", "features", "session", "useConnectivity.ts"), "utf8");
   const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
   const uploadErrorDetails = readFileSync(path.join(root, "src", "features", "cloud", "uploadErrorDetails.ts"), "utf8");
@@ -352,7 +353,7 @@ try {
   // Cold offline starts may expose only validated pins; ordinary cached cards
   // are allowed to survive only until the current app process closes.
   if (!startupBootstrap.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
-  if (!app.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
+  if (!libraryReveal.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
   if (!startupBootstrap.includes('if (!status.reachable)') || !connectivity.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!libraryStateOwner.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
   if (!app.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
