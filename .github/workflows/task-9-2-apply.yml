@@ -171,7 +171,12 @@ jobs:
           rm -f .github/task-9-2-apply.py
           rm -f .github/workflows/task-9-2-apply.yml
 
-          allowed="$(git diff --name-only | sort)"
+          actual="$(
+            {
+              git diff --name-only
+              git ls-files --others --exclude-standard
+            } | sort -u
+          )"
           expected="$(
             printf '%s\n' \
               '.github/task-9-2-apply.py' \
@@ -184,7 +189,8 @@ jobs:
               'tests/integration/appLibraryReloadExtraction.test.ts' \
               'tests/integration/appMigrationCharacterization.test.ts' | sort
           )"
-          test "${allowed}" = "${expected}"
+          printf 'Actual paths:\n%s\nExpected paths:\n%s\n' "${actual}" "${expected}"
+          test "${actual}" = "${expected}"
 
           git diff --check
           git config user.name "github-actions[bot]"
