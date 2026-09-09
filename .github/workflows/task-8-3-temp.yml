@@ -1,5 +1,5 @@
 name: Final task 8.3 validation
-# Retry after adapting Phase 9 native receiver guards to the extracted owner.
+# Retry after adapting the explicit native no-staging guard to the extracted owner.
 
 on:
   push:
