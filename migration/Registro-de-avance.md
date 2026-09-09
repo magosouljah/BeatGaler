@@ -2986,3 +2986,105 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 9.3
+
+```
+Tarea: 9.3 — Separar el arranque inicial
+Estado: Terminada
+Fecha: 2026-09-09
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 18ad9a91f3a6207c652587509d27f4e3ee4907ca
+- SHA de implementación validada: 9e8b1fe7e560f64707c4595ce5ed81d14519dcd0
+- Última tarea verificada: 9.2 — Separar Reload
+
+Cambio realizado
+
+- Se creó `src/features/startup/useStartupBootstrap.ts` como owner del bootstrap inicial: lectura de settings, verificación de conectividad Cloud, validación Offline, recuperación de uploads interrumpidos, flush de Trash offline, carga/reparación de autoridad y publicación inicial de biblioteca.
+- `App.tsx` dejó de poseer el efecto de arranque y el estado/timer de avisos de recuperación; ahora compone `useStartupBootstrap` y conserva solamente el render del aviso mediante el controller devuelto.
+- Se preservó el orden observable: settings → reachability/linkage → recuperación segura → Trash offline → autoridad con retry → reparación stale → publicación/verificación.
+- Caché de presentación, biblioteca vacía confirmada y autoridad desconocida siguen siendo estados distintos: el caché se mantiene ante fallo temporal de autoridad, pero un INDEX vacío confirmado sí publica `[]`.
+- El arranque offline valida primero `loadOfflineLibrary()` y revela únicamente paquetes durables.
+- `src/main.tsx` no fue modificado; `installStartupTrace`, CSRF coordinator, Direct preconnect y la composición raíz permanecen en su sitio.
+- Reconexión/SSE permanecen en App para 9.4 y revelado progresivo general permanece para 9.5.
+
+Adaptación de pruebas
+
+- Se añadió `tests/component-dom/startupBootstrap.test.tsx` con casos ejecutables para arranque online sin caché, cold start offline, autoridad vacía confirmada y fallo temporal de autoridad preservando caché.
+- Se añadió `tests/integration/appStartupBootstrapExtraction.test.ts` para ownership, orden y preservación de inicializadores de `main.tsx`.
+- `tests/integration/appMigrationCharacterization.test.ts` sigue la recuperación de uploads en el nuevo owner sin debilitar su contrato fail-closed.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/startup/useStartupBootstrap.ts
+- tests/component-dom/startupBootstrap.test.tsx
+- tests/integration/appStartupBootstrapExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Task 9.3 Apply`, run 34322763669 — matriz focalizada, prepublicación y validación exacta del commit publicado.
+- Artifact `migration-check-logs-task-9-3-34322763669` generado por la corrida.
+- Focalizadas de startup/extracción/caracterización — PASS.
+- `git diff --check` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- Los checks exactos validaron `9e8b1fe7e560f64707c4595ce5ed81d14519dcd0` después de publicarlo en la rama.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` no se ejecutó como wrapper; sus checks frontend aplicables se ejecutaron individualmente y ambos builds pasaron.
+- Prueba física Desktop/Web interactiva no ejecutada ni inventada; no queda como bloqueo porque los cuatro estados de aceptación de 9.3 están cubiertos por pruebas ejecutables más la matriz completa.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Sugerida: abrir con caché válida, sin caché, sin red y con Cloud temporalmente inaccesible.
+- Resultado esperado: caché visible pero read-only hasta autoridad; INDEX vacío confirmado muestra galería vacía; offline muestra solo paquetes durables; fallo temporal no produce flash 60→0→60.
+
+Pendientes / fuera de alcance
+
+- 9.4 — Separar reconexión y eventos cloud.
+- 9.5 — Separar la aparición de tarjetas.
+
+Riesgos previos relevantes
+
+- Ninguno nuevo de integridad identificado por 9.3.
+
+Herramientas temporales restantes
+
+- Ninguna. El workflow/applier temporal se elimina antes de publicar el SHA de implementación validada.
+
+Fallos encontrados y causa
+
+- Run 34321548287 fue rechazado antes de crear jobs por YAML temporal inválido (un heredoc sin indentación válida dentro de `run:`); no ejecutó ni publicó producto y no pudo generar artifact. Se corrigió únicamente el tooling temporal.
+- Run 34321631406 llegó a la matriz previa y el artifact mostró dos pruebas existentes acopladas físicamente a `App.tsx`: `appHelperExtraction.test.ts` exigía el import directo del journal y `issue97WebRoutingContract.test.ts` buscaba el catch de startup dentro de App. Focalizadas, diff-check, typecheck, unit TS y component DOM habían pasado; integration falló antes de publicar producto. Se adaptaron esas guardas para seguir al nuevo owner sin cambiar semántica de producción.
+- Run 34321874031 dejó focalizadas, diff-check, typecheck, unit TS, component DOM e integración en PASS; `test:regressions` falló porque `scripts/run-regressions.mjs` todavía buscaba `loadOfflineLibrary()` y el orden reachability→connected en App. No publicó producto.
+- Run 34322128673 confirmó esas correcciones pero destapó una segunda assertion estática del mismo guard que todavía buscaba el reveal Offline atómico en App. El artifact mostró todo verde hasta `test:regressions`; se redirigió también esa assertion al bootstrap y no se publicó producto.
+- Run 34322417502 dejó focalizadas, diff-check, typecheck, unit TS, component DOM, integración, regresiones y ambos builds en PASS; la publicación fue bloqueada únicamente porque `git add -A` incluyó `migration-check-logs/summary.txt`. Se corrigió el staging para limitarlo a `.github`, `scripts`, `src` y `tests`; no se publicó producto en ese intento.
+- La corrida final completó la extracción y toda la matriz sobre el SHA publicado.
+
+Veredicto
+
+Terminada.
+
+El bootstrap inicial salió de App con los mismos estados de autoridad, caché y Offline y sin absorber reconexión/SSE ni revelado progresivo.
+
+Siguiente tarea
+
+9.4 — Separar reconexión y eventos cloud.
+
+No iniciada.
+```

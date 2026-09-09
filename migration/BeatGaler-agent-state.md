@@ -2,43 +2,41 @@
 
 ## Contexto
 
-- Fecha de ejecución: 2026-09-08
+- Fecha de ejecución: 2026-09-09
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `9.2 — Separar Reload`
+- Tarea trabajada: `9.3 — Separar el arranque inicial`
 - Estado: `Terminada`
-- Última tarea terminada: `9.2 — Separar Reload`
+- Última tarea terminada: `9.3 — Separar el arranque inicial`
 
 ## Base de esta ejecución
 
-- SHA inicial: `9292213dcdfa45e7424108e3aa861e1ab7eeef53`
-- SHA de implementación validada: `ef31e40653c82cbde9cf59b1d541dfd33e7829e8`
-- HEAD remoto observado inmediatamente antes del cierre documental: `498f966324d49864220de9f00635312137aee5f1`
-- Run de implementación final: `34314514114` — `Task 9.2 Apply` — focalizadas, diff check, matriz completa y publicación del commit exacto correctas.
-- Artifact final: `migration-check-logs-task-9-2-34314514114` — `Migration checks: PASS`.
-- Run de cierre documental: `34316909167` — actualiza roadmap/Registro/agent-state y elimina su tooling temporal.
+- SHA inicial: `18ad9a91f3a6207c652587509d27f4e3ee4907ca`
+- SHA de implementación validada: `9e8b1fe7e560f64707c4595ce5ed81d14519dcd0`
+- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `9e8b1fe7e560f64707c4595ce5ed81d14519dcd0`
+- Run de implementación final: `34322763669` — `Task 9.3 Apply`.
+- Artifact final: `migration-check-logs-task-9-3-34322763669`.
 - El SHA final real de la ronda se relee desde GitHub después de esta escritura y no se autorreferencia aquí.
 
 ## Resultado verificado
 
-- `src/features/library/useLibraryReload.ts` posee Reload manual, `libraryRefreshing`, los reintentos de autoridad y la recepción de `beatgaler:deferred-library-reload`.
-- La cola cloud sigue siendo owner de la actividad de uploads y del pending marker; Reload se difiere mientras hay actividad y se reintenta al drenar la cola.
-- Se conservan feedback mínimo de 320 ms, cuatro intentos de autoridad con backoff y reparación tolerante de referencias stale.
-- Un fallo de autoridad conserva la galería visible, marca conexión `poor` y deja la sesión cloud no verificada; autoridad desconocida no equivale a biblioteca vacía.
-- `App.tsx` consume el nuevo owner y conserva el gesto manual de limpiar `clearUploadPreviewCache()` antes de Reload.
-- Las pruebas focalizadas cubren Reload con/sin upload activo, evento diferido, feedback y preservación de galería ante cuatro fallos de autoridad.
-- Typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre el estado publicado como `ef31e40653c82cbde9cf59b1d541dfd33e7829e8`.
+- `src/features/startup/useStartupBootstrap.ts` posee el bootstrap inicial, recuperación y avisos de uploads interrumpidos.
+- Settings, conectividad/linkage, recuperación, Trash offline, autoridad, reparación stale y publicación conservan su orden observable.
+- Arranque online sin caché, cold start offline, autoridad vacía confirmada y fallo temporal de autoridad están cubiertos por pruebas ejecutables.
+- Un fallo temporal conserva la presentación cacheada y deja la sesión Cloud no verificada; un INDEX vacío confirmado sí publica biblioteca vacía.
+- `main.tsx` permanece intacto.
+- Typecheck, unit TS, component DOM, integración, regresiones y builds Web/Desktop pasaron sobre `9e8b1fe7e560f64707c4595ce5ed81d14519dcd0`.
 
 ## Pendientes concretos
 
-- `9.3 — Separar el arranque inicial`.
+- `9.4 — Separar reconexión y eventos cloud`.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 9.2.
-- Prueba física Desktop/Web no ejecutada ni inventada; no quedó como bloqueo porque los criterios de 9.2 están cubiertos por focalizadas, component DOM, integración y ambos builds.
+- Ninguna necesaria para cerrar 9.3.
+- Prueba física Desktop/Web no ejecutada ni inventada; no quedó como bloqueo por la cobertura automatizada de los estados exigidos.
 
 ## Siguiente tarea
 
-- `9.3 — Separar el arranque inicial`
+- `9.4 — Separar reconexión y eventos cloud`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

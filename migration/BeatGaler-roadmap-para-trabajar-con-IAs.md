@@ -468,7 +468,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** Reload funciona tanto con uploads activos como sin ellos y mantiene su feedback visual.
     
 
-### [ ] 9.3 — Separar el arranque inicial
+### [x] 9.3 — Separar el arranque inicial
 
 - **Hacer:** extraer lectura de ajustes, verificación, recuperación y carga de biblioteca inicial.
     
