@@ -42,6 +42,11 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/task-8-1-docs-temp.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('migration/Registro-de-avance.md')
+          p.write_text(p.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+          PY
           git diff --check
           grep -Fq '### [x] 8.1 — Separar detección del destino' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
           grep -Fq '### [ ] 8.2 — Separar recepción HTML y navegador' migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
