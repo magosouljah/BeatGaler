@@ -1,0 +1,165 @@
+name: Temporary Task 9.4 Close
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-9-4-close.yml
+
+permissions:
+  contents: write
+
+env:
+  TARGET_BRANCH: v0.9.0-test-noche
+  EXPECTED_IMPLEMENTATION_PARENT: b6b4f529bdccd239bbe82d9b1b29604dbcc79699
+  INITIAL_SHA: c63684fd296a21e7d2b2387e5549e103e112f7a7
+
+jobs:
+  revalidate-and-close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Guard exclusive branch and expected parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "${TARGET_BRANCH}"
+          test "$(git branch --show-current)" = "${TARGET_BRANCH}"
+          test "$(git rev-parse HEAD^)" = "${EXPECTED_IMPLEMENTATION_PARENT}"
+
+      - name: Remove closing workflow before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/task-9-4-close.yml
+          git diff --check
+          test "$(git diff --name-only)" = ".github/workflows/task-9-4-close.yml"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused task 9.4 checks on executable-final tree
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/migration-check-logs
+          npx vitest run \
+            tests/integration/appConnectivityCloudEventsExtraction.test.ts \
+            tests/integration/appSessionExtraction.test.ts \
+            tests/integration/appStartupBootstrapExtraction.test.ts \
+            2>&1 | tee artifacts/migration-check-logs/00-task-9-4-focused.log
+
+      - name: Run migration matrix on executable-final tree
+        id: matrix
+        continue-on-error: true
+        run: node scripts/run-migration-checks-with-logs.mjs
+
+      - name: Upload final validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-logs-task-9-4-close-${{ github.run_id }}
+          path: artifacts/migration-check-logs
+          if-no-files-found: error
+
+      - name: Require final validation PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "focused=${{ steps.focused.outcome }}"
+          echo "matrix=${{ steps.matrix.outcome }}"
+          test "${{ steps.focused.outcome }}" = "success"
+          test "${{ steps.matrix.outcome }}" = "success"
+
+      - name: Publish revalidated executable-final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf artifacts/migration-check-logs
+          git diff --check
+          test "$(git diff --name-only)" = ".github/workflows/task-9-4-close.yml"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: remove temporary task 9.4 closing workflow"
+          git push origin HEAD:${TARGET_BRANCH}
+          VALIDATED_SHA="$(git ls-remote origin refs/heads/${TARGET_BRANCH} | awk '{print $1}')"
+          test "$VALIDATED_SHA" = "$(git rev-parse HEAD)"
+          echo "VALIDATED_SHA=$VALIDATED_SHA" >> "$GITHUB_ENV"
+          echo "VALIDATED_SHA=$VALIDATED_SHA"
+
+      - name: Update roadmap and append register
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          validated = os.environ["VALIDATED_SHA"]
+          initial = os.environ["INITIAL_SHA"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+
+          roadmap_path = Path("migration/BeatGaler-roadmap-para-trabajar-con-IAs.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          old = "### [ ] 9.4 — Separar reconexión y eventos cloud"
+          new = "### [x] 9.4 — Separar reconexión y eventos cloud"
+          if roadmap.count(old) != 1:
+              raise SystemExit(f"roadmap 9.4 checkbox: expected one match, found {roadmap.count(old)}")
+          roadmap_path.write_text(roadmap.replace(old, new, 1), encoding="utf-8")
+
+          register_path = Path("migration/Registro-de-avance.md")
+          register = register_path.read_text(encoding="utf-8")
+          if "### Registro — 9.4" in register:
+              raise SystemExit("Registro 9.4 already exists; refusing duplicate append")
+
+          entry = f'''\n\n### Registro — 9.4\n\n```\nTarea: 9.4 — Separar reconexión y eventos cloud\nEstado: Terminada\nFecha: 2026-09-09\n\nBase\n\n- Rama: v0.9.0-test-noche\n- SHA inicial: {initial}\n- SHA de implementación validada: {validated}\n- Última tarea verificada: 9.3 — Separar el arranque inicial\n\nCambio realizado\n\n- Se extrajo la recuperación online/offline de App.tsx a src/features/session/useConnectivity.ts.\n- Se extrajo la suscripción SSE y sus eventos de biblioteca a src/features/cloud/useCloudLibraryEvents.ts.\n- Se conservaron el backoff 0/1/2/5/10/30/60 s, la verificación de reachability/connected, la reconciliación de Trash offline, la recarga autoritativa y los resets de startup al recuperar conectividad.\n- SSE conserva ticket de un solo uso, EventSource, listeners ready/library_changed/telegram_connected, reintento con ticket fresco y backoff hasta 30 s.\n- SSE sigue siendo solo canal de notificación: verifica autoridad antes de hidratar y no incorpora commitSnapshot, syncBeatMetadataToTelegram ni uploadBeatToTelegram.\n- App.tsx quedó como compositor de useConnectivity y useCloudLibraryEvents para estas responsabilidades.\n\nAdaptación de pruebas\n\n- Se añadió tests/integration/appConnectivityCloudEventsExtraction.test.ts para ownership, listeners únicos, backoff, verificación, Trash offline, ticket SSE, cleanup y ausencia de rutas de commit.\n- tests/integration/appSessionExtraction.test.ts y appStartupBootstrapExtraction.test.ts se retargetearon a los nuevos owners sin debilitar sus contratos.\n- scripts/run-regressions.mjs conserva las guardas de reachability y backoff, ahora leyendo useConnectivity.ts en vez de exigir que esas líneas permanezcan físicamente en App.tsx.\n- Primer run 34325645202: falló por una assertion nueva que buscaba removeEventListener sin optional chaining y por una guarda vieja acoplada a App.tsx.\n- Segundo run 34326305219: integración quedó verde; regresiones detectaron una segunda guarda vieja de backoff todavía acoplada a App.tsx.\n- Ambos fallos se clasificaron como pruebas/guardas de ownership desactualizadas; el comportamiento extraído no se cambió para satisfacerlas.\n\nArchivos afectados\n\n- src/App.tsx\n- src/features/session/useConnectivity.ts\n- src/features/cloud/useCloudLibraryEvents.ts\n- tests/integration/appConnectivityCloudEventsExtraction.test.ts\n- tests/integration/appSessionExtraction.test.ts\n- tests/integration/appStartupBootstrapExtraction.test.ts\n- scripts/run-regressions.mjs\n- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md\n- migration/Registro-de-avance.md\n- migration/BeatGaler-agent-state.md\n\nComprobaciones ejecutadas\n\n- Focused 9.4: npx vitest run tests/integration/appConnectivityCloudEventsExtraction.test.ts tests/integration/appSessionExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts — PASS.\n- npm run test:typecheck — PASS.\n- npm run test:unit:ts — PASS.\n- npm run test:component:dom — PASS.\n- npm run test:integration — PASS.\n- npm run test:regressions — PASS.\n- npm run build:web — PASS.\n- npm run build — PASS.\n- Run de implementación verde: 34326576043 — Temporary Task 9.4 Retry 2.\n- Run final de revalidación: {run_id} — Temporary Task 9.4 Close.\n- Artifact final: migration-check-logs-task-9-4-close-{run_id}.\n- SHA comprobado y publicado como implementación validada: {validated}.\n\nComprobaciones no ejecutadas\n\n- No se ejecutó una prueba física manual Desktop/Web. No es necesaria para cerrar 9.4 porque listeners, cleanup, estados, autoridad y builds están cubiertos por pruebas automatizadas y la matriz completa.\n\nPrueba manual\n\n- No ejecutada ni inventada.\n- Si se desea repetir manualmente: abrir Desktop/Web online, desconectar red, reconectar y provocar un cambio remoto; esperar que la biblioteca se recupere una sola vez, sin duplicar listeners ni perder el estado disponible durante fallos temporales.\n\nPendientes / fuera de alcance\n\n- 9.5 — Separar la aparición de tarjetas.\n\nRiesgos previos relevantes\n\n- Ningún riesgo nuevo de integridad identificado por 9.4.\n- Las cadenas internas históricas que todavía mencionan Telegram se conservaron cuando forman parte de logs/contratos internos; no se cambió copy visible fuera del alcance.\n\nHerramientas temporales restantes\n\n- Ninguna. Los workflows/scripts temporales de aplicación, retry y cierre se eliminaron del árbol final antes de fijar el SHA validado.\n\nVeredicto\n\nTerminada. Reconexión y SSE tienen owners separados, conservan sus contratos y la matriz completa está verde.\n\nSiguiente tarea\n\n9.5 — Separar la aparición de tarjetas.\n\nNo iniciada.\n```\n'''
+          register_path.write_text(register.rstrip() + entry, encoding="utf-8")
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md
+          git commit -m "docs(migration): close task 9.4"
+          git push origin HEAD:${TARGET_BRANCH}
+          PRE_AGENT_SHA="$(git ls-remote origin refs/heads/${TARGET_BRANCH} | awk '{print $1}')"
+          test "$PRE_AGENT_SHA" = "$(git rev-parse HEAD)"
+          echo "PRE_AGENT_SHA=$PRE_AGENT_SHA" >> "$GITHUB_ENV"
+          echo "PRE_AGENT_SHA=$PRE_AGENT_SHA"
+
+      - name: Write final agent state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          validated = os.environ["VALIDATED_SHA"]
+          pre_agent = os.environ["PRE_AGENT_SHA"]
+          initial = os.environ["INITIAL_SHA"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          content = f'''# BeatGaler — Agent State\n\n## Contexto\n\n- Fecha de ejecución: 2026-09-09\n- Rama de trabajo: `v0.9.0-test-noche`\n- Tarea trabajada: `9.4 — Separar reconexión y eventos cloud`\n- Estado: `Terminada`\n- Última tarea terminada: `9.4 — Separar reconexión y eventos cloud`\n\n## Base de esta ejecución\n\n- SHA inicial: `{initial}`\n- SHA de implementación validada: `{validated}`\n- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `{pre_agent}`\n- Run de implementación verde: `34326576043` — `Temporary Task 9.4 Retry 2`.\n- Run final de revalidación: `{run_id}` — `Temporary Task 9.4 Close`.\n- Artifact final: `migration-check-logs-task-9-4-close-{run_id}`.\n- El SHA final real de la ronda se relee desde GitHub después de esta escritura y no se autorreferencia aquí.\n\n## Resultado verificado\n\n- `src/features/session/useConnectivity.ts` posee listeners online/offline, recuperación autoritativa, backoff y reconciliación de Trash offline.\n- `src/features/cloud/useCloudLibraryEvents.ts` posee ticket SSE, EventSource, eventos ready/library_changed/telegram_connected, in-flight guard, cleanup y reconexión con ticket fresco.\n- Startup, Reload y SSE siguen siendo flujos separados.\n- SSE verifica autoridad antes de hidratar y no introduce rutas de commit/upload/sync.\n- No quedan listeners online/offline ni EventSource propios de 9.4 dentro de `App.tsx`; App compone ambos owners.\n- Typecheck, unit TS, component DOM, integración, regresiones y builds Web/Desktop pasaron sobre el árbol ejecutable correspondiente a `{validated}`.\n\n## Pendientes concretos\n\n- `9.5 — Separar la aparición de tarjetas`.\n\n## Comprobaciones pendientes\n\n- Ninguna necesaria para cerrar 9.4.\n- Prueba física Desktop/Web no ejecutada ni inventada; no quedó como bloqueo por la cobertura automatizada de listeners, estados, autoridad, cleanup y builds.\n\n## Siguiente tarea\n\n- `9.5 — Separar la aparición de tarjetas`\n- Estado: `Pendiente`\n- No iniciar hasta la próxima ronda.\n'''
+          Path("migration/BeatGaler-agent-state.md").write_text(content, encoding="utf-8")
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add migration/BeatGaler-agent-state.md
+          git commit -m "docs(migration): advance agent state after task 9.4"
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "POST_AGENT_REMOTE=$(git ls-remote origin refs/heads/${TARGET_BRANCH} | awk '{print $1}')"
