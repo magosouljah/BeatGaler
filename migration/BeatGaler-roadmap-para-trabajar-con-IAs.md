@@ -505,7 +505,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** una entrada pequeña y módulos que se pueden mantener por separado.
 
-### [ ] 10.1 — Extraer la estructura visual restante
+### [x] 10.1 — Extraer la estructura visual restante
 
 - **Hacer:** separar header, galería, avisos, barra de selección y regiones de diálogos/player; mover los callbacks restantes a sus módulos.
     

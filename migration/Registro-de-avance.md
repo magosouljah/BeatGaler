@@ -3194,3 +3194,15 @@ No iniciada.
 - **Limpieza:** se retiraron workflows, helper y logs temporales usados para diagnosticar 9.5.
 - **Siguiente tarea:** `10.1 — Extraer la estructura visual restante`.
 
+## 2026-09-09 — Tarea 10.1 — Extraer la estructura visual restante
+
+- **Estado:** Terminada.
+- **SHA inicial de la ronda:** `28a518c7db4a9e624fd8c66e1d511420b994c5dd`.
+- **SHA de implementación validada:** `869b47565d794fcdeedff13340d0f57bf7545424`.
+- **Cambio realizado:** se extrajo la estructura visual restante de `App.tsx` hacia `src/app/AppShell.tsx`; los atajos globales pasaron a `src/app/useAppShortcuts.ts` y la apertura individual/bulk de publishing quedó en `src/features/publishing/usePublishingActions.ts`.
+- **Contratos conservados:** DOM efectivo, keys, portales, teclado, montaje permanente de tareas de fondo, gates de interacción/Offline, Trash, playback y rutas de publishing.
+- **Pruebas adaptadas:** las guardas que dependían de JSX literal en `App.tsx` verifican ahora `AppShell` como dueño real; se mantuvo `appShellExtraction.test.ts`.
+- **Comprobaciones:** caracterización enfocada 10.1, `npm run test:typecheck`, `npm run test:unit:ts`, `npm run test:component:dom`, `npm run test:integration`, `npm run test:regressions`, `npm run build:web` y `npm run build`, todas verdes sobre `869b47565d794fcdeedff13340d0f57bf7545424`.
+- **Limpieza:** se retiraron workflow y scripts temporales usados para aplicar, corregir y validar 10.1.
+- **Siguiente tarea:** `10.2 — Dejar la composición mínima`.
+
