@@ -3,7 +3,7 @@ import fs from "node:fs";
 
 describe("artwork hydration extraction", () => {
   it("keeps hydration ownership outside App and does not turn display loads into cloud commits", () => {
-    const app = fs.readFileSync("src/App.tsx", "utf8");
+    const app = fs.readFileSync("src/app/useBeatGalerComposition.ts", "utf8").replaceAll("../", "./");
     const hook = fs.readFileSync("src/features/artwork/useArtworkHydration.ts", "utf8");
     expect(app).toContain('useArtworkHydration({');
     expect(app).not.toContain('artworkLoadPromisesRef');

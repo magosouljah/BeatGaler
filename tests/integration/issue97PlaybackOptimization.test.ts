@@ -32,7 +32,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
   });
 
   it("wires the real App caller to UI sort routing and authoritative reconcile", () => {
-    const app = source("src/App.tsx");
+    const app = source("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
     const libraryViewState = source("src/features/library/useLibraryViewState.ts");
 
     expect(app).toContain('import { useLibraryViewState } from "./features/library/useLibraryViewState";');

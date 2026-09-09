@@ -6,7 +6,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = relative => readFileSync(path.join(root, relative), "utf8");
 const fail = message => { throw new Error(`Phase 9C/9D regression: ${message}`); };
 
-const app = read("src/App.tsx");
+const appEntry = read("src/App.tsx");
+const composition = read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
+const app = `${appEntry}\n${composition}`;
 const nativeDropOwner = read("src/features/dragdrop/useNativeLibraryDrop.ts");
 const assetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");
 const projects = read("src/features/projects/useBeatProjects.ts");

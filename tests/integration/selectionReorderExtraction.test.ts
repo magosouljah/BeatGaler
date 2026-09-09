@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const app = readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
 const appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");
 const selection = readFileSync(resolve(process.cwd(), "src/features/selection/useBeatSelection.ts"), "utf8");
 const reorder = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryReorder.ts"), "utf8");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 
-const app = fs.readFileSync("src/App.tsx", "utf8");
+const app = fs.readFileSync("src/app/useBeatGalerComposition.ts", "utf8").replaceAll("../", "./");
 const appShell = fs.readFileSync("src/app/AppShell.tsx", "utf8");
 const hook = fs.readFileSync("src/features/tags/useTagRename.ts", "utf8");
 const dialog = fs.readFileSync("src/features/tags/components/TagRenameDialog.tsx", "utf8");

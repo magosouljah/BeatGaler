@@ -19,7 +19,7 @@ import {
 } from "../../src/features/dragdrop/pathHelpers";
 
 const root = process.cwd();
-const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
+const app = readFileSync(resolve(root, "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
 const cache = readFileSync(resolve(root, "src/features/library/libraryPresentationCache.ts"), "utf8");
 const fingerprints = readFileSync(resolve(root, "src/features/library/libraryFingerprints.ts"), "utf8");
 const journal = readFileSync(resolve(root, "src/features/cloud/interruptedUploadJournal.ts"), "utf8");

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const app = readFileSync("src/App.tsx", "utf8");
+const app = readFileSync("src/app/useBeatGalerComposition.ts", "utf8").replaceAll("../", "./");
 const connectivity = readFileSync("src/features/session/useConnectivity.ts", "utf8");
 const events = readFileSync("src/features/cloud/useCloudLibraryEvents.ts", "utf8");
 

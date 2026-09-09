@@ -6,7 +6,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = relative => readFileSync(path.join(root, relative), "utf8").replace(/\r\n/g, "\n");
 const fail = message => { throw new Error(`Import/native-drop regression: ${message}`); };
 
-const app = read("src/App.tsx");
+const appEntry = read("src/App.tsx");
+const composition = read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
+const app = `${appEntry}\n${composition}`;
 const importDiscovery = read("src/features/import/useImportDiscovery.ts");
 const htmlController = read("src/features/dragdrop/htmlDropController.ts");
 const htmlDropOwner = read("src/features/dragdrop/useHtmlLibraryDrop.ts");

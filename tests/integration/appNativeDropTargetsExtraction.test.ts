@@ -7,7 +7,7 @@ import {
   resolveNativeFilesystemDropTarget,
 } from "../../src/features/dragdrop/nativeDropTargets";
 
-const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+const app = readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
 const nativeDropOwner = readFileSync(resolve(process.cwd(), "src/features/dragdrop/useNativeLibraryDrop.ts"), "utf8");
 const targets = readFileSync(resolve(process.cwd(), "src/features/dragdrop/nativeDropTargets.ts"), "utf8");
 

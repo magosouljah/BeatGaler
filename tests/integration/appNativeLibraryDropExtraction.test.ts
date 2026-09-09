@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
-const app = read("src/App.tsx");
+const app = read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
 const owner = read("src/features/dragdrop/useNativeLibraryDrop.ts");
 const targets = read("src/features/dragdrop/nativeDropTargets.ts");
 const arbiter = read("src/features/dragdrop/nativeDropArbiter.ts");

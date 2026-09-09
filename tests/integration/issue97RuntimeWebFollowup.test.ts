@@ -203,7 +203,7 @@ describe("Issue #97 production runtime follow-up", () => {
   });
 
   it("routes browser drops through browser File owners, not Desktop path staging", () => {
-    const app = source("src/App.tsx");
+    const app = source("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
     const uploadQueue = source("src/features/cloud/useCloudUploadQueue.ts");
     const htmlDropOwner = source("src/features/dragdrop/useHtmlLibraryDrop.ts");
     const controller = source("src/features/dragdrop/htmlDropController.ts");
@@ -216,7 +216,7 @@ describe("Issue #97 production runtime follow-up", () => {
   });
 
   it("does not let Web card warming queue native cooking ahead of Play", () => {
-    const app = source("src/App.tsx");
+    const app = source("src/app/useBeatGalerComposition.ts").replaceAll("../", "./");
     const revealOwner = source("src/features/startup/useLibraryReveal.ts");
     const playbackController = source("src/features/playback/usePlaybackController.ts");
     expect(playbackController).toContain('if (!platform.capabilities.playbackCache || !cloudSessionVerified || connectionState !== "online") return;');

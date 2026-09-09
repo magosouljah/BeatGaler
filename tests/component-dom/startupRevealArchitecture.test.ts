@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync("src/App.tsx", "utf8");
+const beatGalerApp = readFileSync("src/app/BeatGalerApp.tsx", "utf8");
+const composition = readFileSync("src/app/useBeatGalerComposition.ts", "utf8");
 const appShell = readFileSync("src/app/AppShell.tsx", "utf8");
 const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");
 const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
@@ -14,9 +16,9 @@ const nginx = readFileSync("deploy/web/beatgaler.com.conf", "utf8");
 
 describe("Issue #97 startup reveal architecture", () => {
   it("boots the presentation layer from the last verified lightweight manifest", () => {
-    expect(app).toContain("} = useLibraryState();");
+    expect(composition).toContain("} = useLibraryState();");
     expect(libraryStateOwner).toContain("useState<Beat[]>(() => startupCachedBeatsRef.current ?? [])");
-    expect(app).toContain("useLibraryPresentationCache(");
+    expect(composition).toContain("useLibraryPresentationCache(");
     expect(libraryStateOwner).toContain("if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;");
     expect(libraryStateOwner).toContain("[beats, settings?.telegram_cloud_connected, cloudSessionVerified]");
   });
@@ -33,7 +35,7 @@ describe("Issue #97 startup reveal architecture", () => {
 
   it("does not gate card reveal on audio cooking", () => {
     expect(libraryRevealOwner).toContain("Authority pass: title + artwork reveal a card. Audio remains a later viewport warmup.");
-    expect(app).not.toContain("After the first six are usable, prepare the rest one at a time");
+    expect(composition).not.toContain("After the first six are usable, prepare the rest one at a time");
   });
 
   it("renders Empty Gallery only after online authority is verified", () => {
@@ -41,9 +43,9 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("keeps Web auth to one gate while preserving Desktop AccountGate", () => {
-    expect(app).toContain('return platform.kind === "web"');
-    expect(app).toContain('? <BeatGalerApp />');
-    expect(app).toContain(': <AccountGate><BeatGalerApp /></AccountGate>');
+    expect(beatGalerApp).toContain('return platform.kind === "web"');
+    expect(beatGalerApp).toContain('? <BeatGalerWorkspace />');
+    expect(beatGalerApp).toContain(': <AccountGate><BeatGalerWorkspace /></AccountGate>');
   });
 
   it("keeps online reveal monotonic across transport refreshes", () => {

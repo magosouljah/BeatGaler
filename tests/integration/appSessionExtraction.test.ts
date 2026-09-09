@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
-const app = fs.readFileSync(path.join(root, "src/App.tsx"), "utf8");
+const app = fs.readFileSync(path.join(root, "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
 const appShell = fs.readFileSync(path.join(root, "src/app/AppShell.tsx"), "utf8");
 const state = fs.readFileSync(path.join(root, "src/features/session/useSessionState.ts"), "utf8");
 const actions = fs.readFileSync(path.join(root, "src/features/session/useSessionActions.ts"), "utf8");
