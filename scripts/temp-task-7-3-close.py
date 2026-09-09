@@ -1,0 +1,189 @@
+from pathlib import Path
+
+roadmap = Path("migration/BeatGaler-roadmap-para-trabajar-con-IAs.md")
+registro = Path("migration/Registro-de-avance.md")
+agent_state = Path("migration/BeatGaler-agent-state.md")
+
+roadmap_text = roadmap.read_text(encoding="utf-8")
+old = "### [ ] 7.3 — Separar Save All y conflictos"
+new = "### [x] 7.3 — Separar Save All y conflictos"
+if roadmap_text.count(old) != 1:
+    raise SystemExit(f"expected exactly one pending 7.3 marker, found {roadmap_text.count(old)}")
+roadmap.write_text(roadmap_text.replace(old, new, 1), encoding="utf-8")
+
+registro_text = registro.read_text(encoding="utf-8")
+if "### Registro — 7.3" in registro_text:
+    raise SystemExit("7.3 register entry already exists")
+entry = '''
+
+### Registro — 7.3
+
+```
+Tarea: 7.3 — Separar Save All y conflictos
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 76729479a4947d27626654464defb844a98db031
+- SHA de implementación validada: de32aab99da86942aa71a83e992f9f371ae3f44f
+- HEAD limpio después de retirar el summary generado por CI y antes del cierre documental: a309b9c197ac835306b2ee8be5197c6a3b13a980
+- Última tarea verificada: 7.2 — Separar descubrimiento incremental
+
+Cambio realizado
+
+- Se creó `src/features/import/useImportSaveAll.ts` como owner de Save All y del estado/callbacks de conflictos nativos y decisiones pendientes.
+- Save All cierra Review inmediatamente, incorpora el beat actual a la biblioteca y lo entrega a la cola cloud antes de esperar la preparación del resto.
+- Los beats restantes reutilizan la misma `reviewPreparationPromiseRef` del worker secuencial de 7.2; los candidatos válidos se guardan en secuencia con yields y se suben sin reabrir Review uno por uno.
+- Nombres duplicados y errores de validación/guardado se acumulan y vuelven a Review al final para resolución manual.
+- `useImportDiscovery.ts` conserva el resumen diferido del batch, mientras `useImportSaveAll.ts` posee `audioConflictBatch` y `dropImportBatch` y decide cuándo mostrar cada resolución después de cerrar Review normal.
+- `ImportReviewHost.tsx` exporta `ImportResolutionHost`, que conecta los modales existentes `ImportAudioConflictsModal` e `ImportDecisionsModal` sin duplicar su comportamiento.
+- Se preservó la protección de staging: al importar decisiones resueltas se elimina primero la entrada del mapa capturado; el cierre posterior puede ejecutar `cleanup([])`, que no borra archivos todavía referenciados por los beats importados.
+- La entrada de importación Web permanece en `App.tsx` para 7.4. Hasta entonces recibe únicamente un puente temporal de los setters de conflicto desde `useImportSaveAll`.
+- Se preservó el uso independiente de `saveBeatMeta` que `App.tsx` todavía necesita para la transacción Desktop de metadata/artwork; la extracción de Save All no tomó ese flujo ajeno.
+- No se inició 7.4.
+
+Adaptación de pruebas
+
+- Se añadió `tests/component-dom/importSaveAll.test.tsx` para ejecutar cierre inmediato, preparación restante, duplicados y protección de staging en conflictos/decisiones.
+- Se añadió `tests/integration/appImportSaveAllExtraction.test.ts` para proteger ownership y orden del nuevo flujo.
+- `tests/integration/appImportDiscoveryExtraction.test.ts` y `tests/integration/appMigrationCharacterization.test.ts` siguen la promesa de preparación y Save All en su nuevo owner.
+- `tests/integration/libraryStateExtraction.test.ts` sigue contando las escrituras síncronas de `beatsLatestRef` también en `useImportSaveAll`, sin reducir el umbral histórico.
+- `scripts/run-regressions.mjs` sigue los invariantes de Save All desde el nuevo módulo.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/import/useImportDiscovery.ts
+- src/features/import/useImportSaveAll.ts
+- src/features/import/components/ImportReviewHost.tsx
+- tests/component-dom/importSaveAll.test.tsx
+- tests/component-dom/importDiscovery.test.tsx
+- tests/integration/appImportSaveAllExtraction.test.ts
+- tests/integration/appImportDiscoveryExtraction.test.ts
+- tests/integration/appMigrationCharacterization.test.ts
+- tests/integration/libraryStateExtraction.test.ts
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary task 7.3 apply`, run 34296950583 — SUCCESS.
+- Guard de exclusividad de `v0.9.0-test-noche` — PASS.
+- `git diff --check` antes de la validación — PASS.
+- Pruebas focalizadas de 7.3, incluidas las de library-state afectadas — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- La matriz completa de siete checks quedó verde antes de publicar el commit `de32aab99da86942aa71a83e992f9f371ae3f44f`.
+- El `artifacts/migration-check-logs/summary.txt` generado por la matriz fue retirado después de usarlo como evidencia; el HEAD limpio previo a documentación quedó en `a309b9c197ac835306b2ee8be5197c6a3b13a980`.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` no se ejecutó como wrapper; la matriz ejecutó individualmente los checks aplicables del plan.
+- Prueba física interactiva Desktop/Web no ejecutada ni inventada; GitHub Actions validó los contratos modificados, typecheck, tests y ambos builds.
+- E2E completos ajenos al flujo de Save All/conflictos no se usaron como criterio de cierre de esta extracción.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Sugerida: importar una carpeta con varios beats, pulsar Save All antes de terminar toda la preparación y comprobar que Review se cierra inmediatamente; los válidos se guardan/suben sin reaparecer uno a uno y duplicados/conflictos reaparecen al final. Resolver después un conflicto de decisiones y comprobar que los archivos staged usados por el beat importado siguen disponibles.
+
+Pendientes / fuera de alcance
+
+- 7.4 — Separar la entrada de importación web queda pendiente y no fue iniciada.
+- El puente temporal `setAudioConflictBatch` / `setDropImportBatch` hacia el callback Web debe retirarse cuando 7.4 mueva esa entrada a su owner.
+
+Riesgos previos relevantes
+
+- Ningún riesgo nuevo de producto quedó abierto por 7.3.
+
+Herramientas temporales restantes
+
+- Ninguna. El applier y workflow temporal de implementación se eliminaron antes de validar/publicar; el closer documental y este script se eliminan dentro de su propio commit de cierre.
+
+Fallos encontrados y causa
+
+- Run 34293760589: 17/18 tests focalizados pasaron. La única assertion restante prohibía `saveBeatMeta({` en todo `App.tsx`, aunque existe una transacción Desktop de metadata/artwork ajena a Save All. Además el applier había retirado por error ese import compartido. No se publicó implementación; se preservó el flujo ajeno y se hizo que el test comprobara el owner real de Save All.
+- Run 34296752458: las pruebas focalizadas pasaron; la matriz completa dejó solo `test:integration` rojo porque `libraryStateExtraction.test.ts` contaba escrituras de `beatsLatestRef` en App + `useImportReview` y todavía no seguía al nuevo owner `useImportSaveAll`. Se adaptó el guard sin bajar el umbral ni cambiar comportamiento de producto; no se publicó implementación.
+- Run 34296950583: pruebas focalizadas y matriz completa PASS; publicó el árbol exacto validado como `de32aab99da86942aa71a83e992f9f371ae3f44f`.
+- Run 34297402862: el primer closer documental tuvo YAML inválido por incluir un bloque multilínea sin indentación suficiente; no creó jobs ni tocó producto/documentación.
+
+Veredicto
+
+Terminada.
+
+Save All y la resolución nativa de conflictos/decisiones quedaron fuera de `App.tsx` conservando cierre inmediato de Review, preparación secuencial compartida, reaparición final de conflictos y protección de staging.
+
+Siguiente tarea
+
+7.4 — Separar la entrada de importación web.
+
+No iniciada.
+```
+'''
+registro.write_text(registro_text.rstrip() + entry + "\n", encoding="utf-8")
+
+agent_state.write_text('''# BeatGaler — Agent State
+
+## Contexto
+
+- Fecha de ejecución: 2026-09-08
+- Rama de trabajo: `v0.9.0-test-noche`
+- Tarea trabajada: `7.3 — Separar Save All y conflictos`
+- Estado: `Terminada`
+- Última tarea terminada: `7.3 — Separar Save All y conflictos`
+
+## Base de esta ejecución
+
+- SHA inicial: `76729479a4947d27626654464defb844a98db031`
+- SHA de implementación validada: `de32aab99da86942aa71a83e992f9f371ae3f44f`
+- HEAD después de retirar el artifact generado por CI y antes del cierre documental: `a309b9c197ac835306b2ee8be5197c6a3b13a980`
+- Run de implementación final: `34296950583` — `Temporary task 7.3 apply` — `SUCCESS`
+- El SHA final real de la ronda es el HEAD remoto que debe leerse nuevamente después de este cierre documental; no se anticipa dentro del propio commit de cierre.
+
+## Resultado verificado
+
+- `useImportSaveAll.ts` posee Save All, `audioConflictBatch`, `dropImportBatch` y los callbacks de resolución nativa.
+- Save All cierra Review inmediatamente y entrega el beat actual a la cola cloud antes de esperar la preparación restante.
+- Los beats restantes reutilizan la misma promesa del worker secuencial de 7.2; válidos se guardan/suben y duplicados/errores vuelven a Review al final.
+- Los conflictos de audio y decisiones se muestran después de Review normal y conservan la protección de staging de archivos todavía referenciados.
+- `ImportResolutionHost` conecta los modales existentes desde el host de importación.
+- La entrada Web sigue en `App.tsx` hasta 7.4 mediante un puente temporal de setters; 7.4 no fue iniciada.
+- El uso independiente de `saveBeatMeta` para metadata/artwork Desktop permanece intacto.
+- Las pruebas focalizadas y la matriz completa de siete checks pasaron sobre el SHA de implementación validada.
+
+## Pendientes concretos
+
+- `7.4 — Separar la entrada de importación web`.
+- Retirar en 7.4 el puente temporal de `setAudioConflictBatch` / `setDropImportBatch` cuando la entrada Web tenga owner propio.
+
+## Comprobaciones pendientes
+
+- Ninguna necesaria para cerrar 7.3.
+
+## Siguiente tarea
+
+- `7.4 — Separar la entrada de importación web`
+- Estado: `Pendiente`
+- No iniciar hasta la próxima ronda.
+''', encoding="utf-8")
+
+Path(".github/workflows/temp-task-7-3-close.yml").unlink()
+Path("scripts/temp-task-7-3-close.py").unlink()
+
+final_roadmap = roadmap.read_text(encoding="utf-8")
+final_registro = registro.read_text(encoding="utf-8")
+final_agent = agent_state.read_text(encoding="utf-8")
+assert "### [x] 7.3 — Separar Save All y conflictos" in final_roadmap
+assert "### [ ] 7.4 — Separar la entrada de importación web" in final_roadmap
+assert final_registro.count("### Registro — 7.3") == 1
+assert "- Estado: `Terminada`" in final_agent
+assert "`7.4 — Separar la entrada de importación web`" in final_agent
