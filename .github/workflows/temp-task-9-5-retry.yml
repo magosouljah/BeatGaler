@@ -1,4 +1,4 @@
-name: Temporary Task 9.5 Final Validation
+name: Temporary Task 9.5 E2E Diagnostic
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  validate-and-publish:
+  diagnose-e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,33 +54,20 @@ jobs:
           assert old_block in integration
           integration_path.write_text(integration.replace(old_block, new_block, 1))
           PY
-      - name: Focused 9.5 tests
-        run: npx vitest run tests/integration/appLibraryRevealExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts --environment jsdom
-      - name: Typecheck
-        run: npm run test:typecheck
-      - name: Unit TypeScript
-        run: npm run test:unit:ts
-      - name: Component DOM
-        run: npm run test:component:dom
-      - name: Integration
-        run: npm run test:integration
-      - name: Regressions
-        run: npm run test:regressions
-      - name: Core E2E
-        run: npm run e2e:core
-      - name: App guard
-        run: npm run guard:app
-      - name: Web build
-        run: npm run build:web
-      - name: Full build
-        run: npm run build
-      - name: Publish validated implementation on test branch only
+      - name: Capture Core E2E failure
+        shell: bash
+        run: |
+          set +e
+          npm run e2e:core > task-9-5-e2e.txt 2>&1
+          code=$?
+          echo "EXIT_CODE=$code" >> task-9-5-e2e.txt
+          cat task-9-5-e2e.txt
+          exit 0
+      - name: Publish diagnostic on test branch only
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          rm -f task-9-5-component.log task-9-5-integration.txt
-          git add src/App.tsx src/features/startup/startupLoader.ts src/features/startup/useLibraryReveal.ts tests/integration/appLibraryRevealExtraction.test.ts tests/integration/issue97RuntimeWebFollowup.test.ts tests/component-dom/startupRevealArchitecture.test.ts scripts/run-regressions.mjs
-          git add -u task-9-5-component.log task-9-5-integration.txt || true
-          git commit -m "refactor(app): extract library reveal orchestration"
+          git add task-9-5-e2e.txt
+          git commit -m "chore(migration): capture task 9.5 e2e failure"
           git push origin HEAD:v0.9.0-test-noche
