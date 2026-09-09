@@ -2576,3 +2576,111 @@ Siguiente tarea
 
 No iniciada.
 ```
+
+### Registro — 8.2
+
+```
+Tarea: 8.2 — Separar recepción HTML y navegador
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: 344571f32efa83610e2ad17bb48566b74ece3ede
+- SHA de implementación validada: 1a1ab540a246bc7cd7b1b2a71191287292f02eb4
+- Última tarea verificada: 8.1 — Separar detección del destino
+
+Cambio realizado
+
+- Se creó `src/features/dragdrop/useHtmlLibraryDrop.ts` como owner de la recepción HTML/navegador y de la instalación de `htmlDropController`.
+- `App.tsx` dejó de poseer `handleBrowserBeatFileDrop` y el `useEffect` que instalaba el controller; conserva únicamente el wiring hacia el nuevo hook.
+- Windows Desktop conserva un único owner nativo: el hook no instala el fallback HTML cuando Tauri está disponible y el user agent es Windows.
+- macOS conserva el arbitraje nativo-vs-HTML ya existente en `htmlDropController`, de modo que Finder puede reclamar el gesto antes del staging HTML mientras browser/Pinterest sigue disponible para artwork.
+- El artwork del navegador conserva fallback multi-source: URL/data URL y `File` virtual se prueban hasta obtener una imagen válida; una imagen remota no entra en la ruta de importación de beats.
+- La entrada Web conserva el gate `platform.capabilities.browserFileImport`, un archivo MP3/WAV/PROJECT ZIP por beat y la entrada de biblioteca mediante `importDroppedBrowserFiles`.
+- El fallback HTML Desktop conserva staging, exclusión Backup/Backups, auto-routing de proyectos y feedback de carga antes de copiar/inspeccionar.
+- No se inició 8.3; el listener/receptor nativo completo permanece en `App.tsx`.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appHtmlLibraryDropExtraction.test.ts` para proteger ownership, Windows single-owner, arbitraje Mac/browser, fallback de artwork, rutas Web y staging Desktop.
+- `tests/integration/appBrowserImportExtraction.test.ts` y `tests/integration/issue97RuntimeWebFollowup.test.ts` dejaron de exigir callbacks HTML físicamente dentro de `App.tsx` y ahora siguen el contrato hasta `useHtmlLibraryDrop.ts`.
+- `scripts/regression-import-native.mjs` y `scripts/run-regressions.mjs` siguen los invariantes de Windows, staging y auto-routing desde el nuevo owner sin relajar los contratos.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/dragdrop/useHtmlLibraryDrop.ts
+- tests/integration/appHtmlLibraryDropExtraction.test.ts
+- tests/integration/appBrowserImportExtraction.test.ts
+- tests/integration/issue97RuntimeWebFollowup.test.ts
+- scripts/regression-import-native.mjs
+- scripts/run-regressions.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Final task 8.2 validation`, run 34307783102 — SUCCESS.
+- Artifact `migration-check-logs-task-8-2-34307783102` leído; implementation SHA `1a1ab540a246bc7cd7b1b2a71191287292f02eb4`.
+- `npx vitest run tests/integration/appHtmlLibraryDropExtraction.test.ts --environment jsdom` — PASS.
+- `node scripts/regression-import-native.mjs` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- Contrato Mac afectado por drag & drop — PASS. El wrapper general `test:mac-portability:static` conserva el fallo previo del Direct helper `helper refuses sessions without explicit local Bot API base`, ya documentado desde 8.1 y separado de esta tarea.
+- Comparación neta `344571f32efa83610e2ad17bb48566b74ece3ede...1a1ab540a246bc7cd7b1b2a71191287292f02eb4`: siete archivos de producto/pruebas/regresiones de 8.2; el tooling temporal no permanece en el árbol de implementación.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` no se ejecutó como wrapper; la matriz ejecutó individualmente los checks aplicables.
+- Prueba física Desktop Windows/macOS y Web interactiva no ejecutada ni inventada; la ronda trabaja mediante GitHub Actions.
+- E2E completos ajenos a drag & drop no se usaron como criterio de cierre.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Sugerida: en Windows arrastrar una carpeta/archivo local y comprobar una sola recepción nativa; en macOS repetir desde Finder y después arrastrar artwork desde navegador/Pinterest; en Web arrastrar MP3/WAV/ZIP sobre un beat y un audio a biblioteca.
+- Resultado esperado: un gesto produce una sola acción; artwork remoto solo actualiza artwork; archivos Web siguen su ruta Web; Finder/Explorer no duplica staging ni importación.
+
+Pendientes / fuera de alcance
+
+- 8.3 — Separar recepción nativa queda pendiente y no fue iniciada.
+- El listener nativo completo, su ciclo de vida y ejecución de acciones nativas permanecen en `App.tsx` para 8.3.
+
+Riesgos previos relevantes
+
+- El wrapper general de portabilidad Mac conserva el fallo previo del Direct helper descrito arriba; no fue introducido por 8.2 y el contrato Mac de drag & drop afectado pasa.
+- En una corrida intermedia `test:component:dom` pasó 64/64 archivos y 258/258 tests pero Vitest reportó después un teardown asíncrono de `TagColorMenu.tsx` (`window is not defined`). La corrida siguiente pasó component DOM; no se cambió `TagColorMenu` para esta tarea.
+
+Herramientas temporales restantes
+
+- Ninguna. Los workflows y scripts temporales de implementación fueron eliminados antes de publicar `1a1ab540a246bc7cd7b1b2a71191287292f02eb4`; el closer documental y este script se eliminan dentro de su propio commit de cierre.
+
+Fallos encontrados y causa
+
+- Run 34306849185 y un trigger intermedio equivalente fallaron antes de crear jobs por definición YAML temporal inválida; no publicaron implementación.
+- Run 34307027328 llegó a integración: el código focalizado/typecheck/unit/component DOM pasaban, pero dos pruebas antiguas exigían callbacks HTML físicamente en `App.tsx`. Se adaptaron al nuevo owner sin relajar comportamiento; no se publicó implementación.
+- Run 34307184168 pasó integración y falló `test:regressions` por guards antiguos que buscaban auto-routing/staging en `App.tsx`; se movieron al nuevo owner; no se publicó implementación.
+- Run 34307318445 encontró el teardown asíncrono de `TagColorMenu` después de 258/258 tests component DOM pasados; se clasificó como intermitencia ajena a 8.2.
+- Run 34307484419 confirmó component DOM en verde y detectó otra guarda estática de ownership en `test:regressions`; se adaptó sin cambiar el contrato.
+- Run 34307783102 quedó verde en toda la matriz aplicable y publicó `1a1ab540a246bc7cd7b1b2a71191287292f02eb4`.
+
+Veredicto
+
+Terminada.
+
+La recepción HTML/navegador quedó fuera de `App.tsx` conservando single-owner por gesto, gates de plataforma, artwork multi-source y staging/routing existentes.
+
+Siguiente tarea
+
+8.3 — Separar recepción nativa.
+
+No iniciada.
+```

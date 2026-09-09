@@ -420,7 +420,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** los mismos archivos y coordenadas se dirigen a las mismas acciones.
     
 
-### [ ] 8.2 — Separar recepción HTML y navegador
+### [x] 8.2 — Separar recepción HTML y navegador
 
 - **Hacer:** mover la conexión con `htmlDropController` a un hook que llama a importación, artwork y actualización de assets.
     
