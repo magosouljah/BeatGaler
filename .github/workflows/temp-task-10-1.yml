@@ -1,0 +1,51 @@
+name: temp task 10.1 validation
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/temp-task-10-1.yml
+      - .github/scripts/temp-task-10-1.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Apply task 10.1 extraction
+        run: node .github/scripts/temp-task-10-1.mjs
+      - name: Focused characterization
+        run: npx vitest run tests/component-dom/appShellExtraction.test.ts
+      - name: Typecheck
+        run: npm run test:typecheck
+      - name: Unit TS
+        run: npm run test:unit:ts
+      - name: Component DOM
+        run: npm run test:component:dom
+      - name: Integration
+        run: npm run test:integration
+      - name: Regressions
+        run: npm run test:regressions
+      - name: Web build
+        run: npm run build:web
+      - name: Desktop frontend build
+        run: npm run build
+      - name: Commit validated implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.tsx src/app/AppShell.tsx src/app/useAppShortcuts.ts src/features/publishing/usePublishingActions.ts tests/component-dom/appShellExtraction.test.ts
+          git commit -m "refactor(app): extract remaining visual shell"
+          git push origin HEAD:v0.9.0-test-noche
