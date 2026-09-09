@@ -41,3 +41,11 @@ for (const assertion of [
   architecture = architecture.replace(assertion, assertion.replace('expect(app)', 'expect(appShell)'));
 }
 fs.writeFileSync(architecturePath, architecture);
+
+const runtimeFollowupPath = 'tests/integration/issue97RuntimeWebFollowup.test.ts';
+let runtimeFollowup = fs.readFileSync(runtimeFollowupPath, 'utf8');
+runtimeFollowup = runtimeFollowup.replace(
+  '    const app = source("src/App.tsx");\n    const card = source("src/components/BeatCard.tsx");\n    expect(app).toContain(\'playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}\');',
+  '    const appShell = source("src/app/AppShell.tsx");\n    const card = source("src/components/BeatCard.tsx");\n    expect(appShell).toContain(\'playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}\');',
+);
+fs.writeFileSync(runtimeFollowupPath, runtimeFollowup);
