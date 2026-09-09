@@ -1,4 +1,5 @@
 name: Final task 8.3 validation
+# Retry after recalculating App native-effect splice offsets.
 
 on:
   push:
