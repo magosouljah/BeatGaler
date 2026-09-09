@@ -56,7 +56,13 @@ try {
 
   const appEntry = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
   const composition = readFileSync(path.join(root, "src", "app", "useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");
-  const app = `${appEntry}\n${composition}`;
+  const rootDomainOwners = [
+    readFileSync(path.join(root, "src", "features", "session", "useMutationAvailability.ts"), "utf8"),
+    readFileSync(path.join(root, "src", "features", "startup", "useCloudLibraryRecovery.ts"), "utf8"),
+    readFileSync(path.join(root, "src", "features", "cloud", "useCloudBeatTransfer.ts"), "utf8"),
+    readFileSync(path.join(root, "src", "features", "import", "useImportEntry.ts"), "utf8"),
+  ].join("\n").replaceAll("../", "./");
+  const app = `${appEntry}\n${composition}\n${rootDomainOwners}`;
   const appShell = readFileSync(path.join(root, "src", "app", "AppShell.tsx"), "utf8");
   const customCursor = readFileSync(path.join(root, "src", "features", "session", "useCustomCursor.ts"), "utf8");
   const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");

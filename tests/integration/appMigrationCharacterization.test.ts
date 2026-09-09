@@ -12,13 +12,14 @@ const cloudUploadQueue = readFileSync(resolve(process.cwd(), "src/features/cloud
 const libraryReload = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryReload.ts"), "utf8");
 const startupBootstrap = readFileSync(resolve(process.cwd(), "src/features/startup/useStartupBootstrap.ts"), "utf8");
 const importSession = readFileSync(resolve(process.cwd(), "src/features/import/useImportSession.ts"), "utf8");
+const importEntry = readFileSync(resolve(process.cwd(), "src/features/import/useImportEntry.ts"), "utf8");
 const importReview = readFileSync(resolve(process.cwd(), "src/features/import/useImportReview.ts"), "utf8");
 const importReviewHost = readFileSync(resolve(process.cwd(), "src/features/import/components/ImportReviewHost.tsx"), "utf8");
 const importSaveAll = readFileSync(resolve(process.cwd(), "src/features/import/useImportSaveAll.ts"), "utf8");
 
 const migrationTargets = {
   uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/uploadErrorDetails.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
-  review: { tasks: ["7.1", "7.2", "7.3", "7.4"], owners: ["src/features/import/useImportReview.ts", "src/features/import/useImportDiscovery.ts", "src/features/import/useImportSaveAll.ts", "src/features/import/useBrowserImport.ts"] },
+  review: { tasks: ["7.1", "7.2", "7.3", "7.4"], owners: ["src/features/import/useImportReview.ts", "src/features/import/useImportDiscovery.ts", "src/features/import/useImportSaveAll.ts", "src/features/import/useBrowserImport.ts", "src/features/import/useImportEntry.ts"] },
   reload: { tasks: ["9.2"], owners: ["src/features/library/useLibraryReload.ts"] },
   audio: { tasks: ["4.2", "4.3"], owners: ["src/features/playback/usePlaybackController.ts", "src/features/playback/usePlaybackPreparation.ts", "src/features/playback/usePlaybackQueue.ts"] },
   recovery: { tasks: ["6.2"], owners: ["src/features/cloud/interruptedUploadJournal.ts"] },
@@ -92,7 +93,7 @@ describe("App migration characterization contracts", () => {
   });
 
   it("keeps Review candidates outside the library until Save and preserves Skip versus Cancel", () => {
-    const add = section("const addBeatsAndReview = useCallback", "const {\n  skipCurrentReviewBeat,");
+    const add = sourceSection(importEntry, "const addBeatsAndReview = useCallback", "\n  return { addBeatsAndReview };", "useImportEntry.ts");
     expect(add).toContain("startReview(sanitized)");
     expect(add).not.toContain("setBeats(");
     expect(importSession).toContain("const [reviewQueue, setReviewQueue] = useState<ImportReviewQueueState | null>(null)");

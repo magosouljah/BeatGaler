@@ -71,6 +71,10 @@ import { useConnectivity } from "../features/session/useConnectivity";
 import { useCloudLibraryEvents } from "../features/cloud/useCloudLibraryEvents";
 import { useAppShortcuts } from "./useAppShortcuts";
 import { usePublishingActions } from "../features/publishing/usePublishingActions";
+import { useMutationAvailability } from "../features/session/useMutationAvailability";
+import { useCloudLibraryRecovery } from "../features/startup/useCloudLibraryRecovery";
+import { useCloudBeatTransfer } from "../features/cloud/useCloudBeatTransfer";
+import { useImportEntry } from "../features/import/useImportEntry";
 
 // Intentionally isolated: if real-world timings prove the skeleton unnecessary,
 // flipping/removing this one constant deletes the visual layer without touching
@@ -278,14 +282,7 @@ export function useBeatGalerComposition() {
   const togglePauseRef = useRef(togglePause);
   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);
 
-  const rejectOfflineMutation = useCallback((action: string): boolean => {
-    if (connectionState === "online") return false;
-    void appAlert({
-      title: connectionState === "offline" ? "Offline" : "Connection unavailable",
-      message: `${action} requires an internet connection. Offline mode is read-only except for moving beats to Trash.`,
-    });
-    return true;
-  }, [connectionState]);
+  const { rejectOfflineMutation } = useMutationAvailability(connectionState);
 
   const { showUpload, setShowUpload, handleUpload, handleUploadBulk } = usePublishingActions({
     selectedIds,
@@ -431,82 +428,13 @@ useCloudLibraryEvents({
 
 
 
-  // One-time recovery for a cloud-only library after Telegram login/startup.
-  // No timer, no permanent synchronization.
-  const beatGalerCloudRecoveryAttemptedRef = useRef(false);
+  useCloudLibraryRecovery({ beatsLength: beats.length, setBeats, setSettings });
 
-  const recoverTelegramLibraryOnceIfEmpty = useCallback(async () => {
-    if (beatGalerCloudRecoveryAttemptedRef.current) return;
-    if (beats.length !== 0) return;
-
-    beatGalerCloudRecoveryAttemptedRef.current = true;
-    try {
-      const restored = await libraryStateManager.reloadAuthoritative();
-      if (restored.length > 0) {
-        setBeats(current => current.length === 0 ? restored : current);
-      }
-    } catch (error) {
-      console.warn("Telegram library one-time recovery skipped:", error);
-    }
-  }, [beats.length]);
-
-  // IMPORTANT: an empty library is a valid, authoritative state (for example
-  // immediately after Remove All). Never infer "Telegram recovery" merely from
-  // beats.length === 0; doing so races the pending trash/index commit and can
-  // resurrect the just-removed cards with their artwork unloaded. Recovery is
-  // only allowed from explicit Telegram connection/startup flows below.
-
-  useEffect(() => {
-    const onTelegramConnected = (event: Event) => {
-      const detail = (event as CustomEvent<{ connected?: boolean; username?: string | null }>).detail;
-      if (!detail?.connected) return;
-
-      setSettings(current => current ? {
-        ...current,
-        telegram_cloud_connected: true,
-        telegram_cloud_username: detail.username ?? current.telegram_cloud_username ?? null,
-      } : current);
-
-      void recoverTelegramLibraryOnceIfEmpty();
-    };
-
-    window.addEventListener("beatgaler:telegram-connected", onTelegramConnected);
-    return () => window.removeEventListener("beatgaler:telegram-connected", onTelegramConnected);
-  }, [recoverTelegramLibraryOnceIfEmpty]);
-
-
-  const handleUploadTelegram = useCallback(async (beat: Beat) => {
-    if (rejectOfflineMutation("Uploading a beat")) return;
-    const existingCloudBeat = Boolean(beat.telegram_file_id);
-    transitionRuntime(beat.id, { type: existingCloudBeat ? "SYNC_QUEUE_UPDATE" : "SYNC_QUEUE_UPLOAD" }, beat);
-    transitionRuntime(beat.id, { type: existingCloudBeat ? "SYNC_UPDATE_STARTED" : "SYNC_UPLOAD_STARTED" }, beat);
-    try {
-      const updated = await uploadBeatToTelegram(beat);
-      await syncBeatMetadataToTelegram(updated);
-      transitionRuntime(updated.id, { type: existingCloudBeat ? "SYNC_UPDATE_SUCCEEDED" : "SYNC_UPLOAD_SUCCEEDED" }, updated);
-      setBeats(bs => bs.map(b => b.id === updated.id ? updated : b));
-    } catch (e: any) {
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(e), "Cloud operation failed.");
-      if (existingCloudBeat && isRuntimeConflictError(e)) {
-        transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
-      } else {
-        transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "TELEGRAM_UPLOAD_FAILED", message, retryable: true }, beat);
-      }
-      await appAlert({
-        title: "Cloud upload failed",
-        message,
-        danger: true,
-      });
-    }
-  }, [rejectOfflineMutation, transitionRuntime]);
-
-  const handleDownloadTelegram = useCallback(async (_beat: Beat) => {
-    await appAlert({
-      title: "Cloud-only library",
-      message: "Files are fetched into temporary storage automatically when needed.",
-    });
-  }, []);
-
+  const { handleUploadTelegram, handleDownloadTelegram } = useCloudBeatTransfer({
+    rejectOfflineMutation,
+    transitionRuntime,
+    setBeats,
+  });
 
   const handleEditBulk = useCallback(() => {
     if (rejectOfflineMutation("Editing metadata")) return;
@@ -541,27 +469,12 @@ useCloudLibraryEvents({
     });
   }, []);
 
-  const addBeatsAndReview = useCallback((newBeats: Beat[]) => {
-    if (newBeats.length === 0) return;
-    if (connectionState !== "online") {
-      void appAlert({
-        title: "Internet connection required",
-        message: "BeatGaler does not import new beats while offline. Reconnect and import them again.",
-      });
-      void cleanupOrphanedDropStaging(beatsLatestRef.current);
-      return;
-    }
-    const sanitized = newBeats.map(beat => ({ ...beat, tags: cleanTags(beat.tags || []).tags }));
-
-    // Review candidates are NOT library beats yet.
-    // Keeping them out of `beats` means:
-    // 1) Cancel leaves absolutely nothing behind.
-    // 2) duplicate-name checks compare only against committed library items.
-    // 3) a re-dropped folder can never masquerade as an edit of the existing beat.
-    setShowAdd(false);
-    startReview(sanitized);
-    // Upload begins only after Review → Save.
-  }, [connectionState, startReview]);
+  const { addBeatsAndReview } = useImportEntry({
+    connectionState,
+    setShowAdd,
+    startReview,
+    beatsLatestRef,
+  });
 
 const {
   skipCurrentReviewBeat,
