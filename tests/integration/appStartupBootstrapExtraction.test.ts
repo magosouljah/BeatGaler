@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync("src/App.tsx", "utf8");
 const startup = readFileSync("src/features/startup/useStartupBootstrap.ts", "utf8");
+const connectivity = readFileSync("src/features/session/useConnectivity.ts", "utf8");
+const cloudEvents = readFileSync("src/features/cloud/useCloudLibraryEvents.ts", "utf8");
 const main = readFileSync("src/main.tsx", "utf8");
 
 function expectOrdered(source: string, markers: string[]): void {
@@ -15,15 +17,18 @@ function expectOrdered(source: string, markers: string[]): void {
 }
 
 describe("task 9.3 startup bootstrap extraction", () => {
-  it("moves the initial bootstrap owner out of App without taking reconnect or SSE", () => {
+  it("keeps bootstrap, reconnect and SSE as distinct owners after task 9.4", () => {
     expect(app).toContain('import { useStartupBootstrap } from "./features/startup/useStartupBootstrap";');
     expect(app).toContain("useStartupBootstrap({");
+    expect(app).toContain("useConnectivity({");
+    expect(app).toContain("useCloudLibraryEvents({");
     expect(app).not.toContain("const showOfflineLibrary = async");
-    expect(app).not.toContain("Telegram vault startup check failed:");
+    expect(app).not.toContain("const reconnect = async () => {");
+    expect(app).not.toContain("const connectEvents = async () => {");
     expect(startup).toContain("const showOfflineLibrary = async");
     expect(startup).toContain("Telegram vault startup check failed:");
-    expect(app).toContain("const reconnect = async () => {");
-    expect(app).toContain("const connectEvents = async () => {");
+    expect(connectivity).toContain("const reconnect = async () => {");
+    expect(cloudEvents).toContain("const connectEvents = async () => {");
   });
 
   it("preserves startup ordering and authority distinctions", () => {

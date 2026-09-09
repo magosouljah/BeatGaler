@@ -5,12 +5,12 @@ import Drawer from "./components/Drawer";
 import Player from "./components/Player";
 import AddBeatModal from "./components/AddBeatModal";
 import SettingsPanel from "./components/SettingsPanel";
-import AccountGate, { getBeatGalerAuthToken, getResolvedCloudApiBase, logoutBeatGalerAccount } from "./components/AccountGate";
+import AccountGate, { logoutBeatGalerAccount } from "./components/AccountGate";
 import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, flushOfflineTrashIntents, readBeatMeta, saveBeatMeta, discardImportReviewBatch, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, pollTelegramCloudStatus, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, type CloudFileType, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, readBeatMeta, saveBeatMeta, discardImportReviewBatch, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, type CloudFileType, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
@@ -65,6 +65,8 @@ import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry"
 import { useSessionState } from "./features/session/useSessionState";
 import { useSessionActions } from "./features/session/useSessionActions";
 import { useCustomCursor } from "./features/session/useCustomCursor";
+import { useConnectivity } from "./features/session/useConnectivity";
+import { useCloudLibraryEvents } from "./features/cloud/useCloudLibraryEvents";
 
 // Intentionally isolated: if real-world timings prove the skeleton unnecessary,
 // flipping/removing this one constant deletes the visual layer without touching
@@ -123,7 +125,6 @@ function BeatGalerApp() {
     forgetRuntimeState,
     clearReconciledTrashRuntimeStates,
   } = useBeatRuntimeRegistry(beats, beatsLatestRef);
-  const cloudPullInFlightRef = useRef(false);
   const stagedImportPathsRef = useRef<Map<string, string[]>>(new Map());
   const [loading, setLoading] = useState(() => initialLoading);
   const [startupCookingGate, setStartupCookingGate] = useState(() => (startupCachedBeatsRef.current ?? []).length === 0);
@@ -259,7 +260,6 @@ function BeatGalerApp() {
 
   // Keep a ref to togglePause so the keydown handler never goes stale
   const togglePauseRef = useRef(togglePause);
-  const networkReconnectRunRef = useRef(0);
   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);
 
   const rejectOfflineMutation = useCallback((action: string): boolean => {
@@ -352,270 +352,50 @@ function BeatGalerApp() {
     dismissStartupLoader: dismissBeatGalerStartupLoader,
   });
 
-  useEffect(() => {
-    if (!setupDone) return;
-    let disposed = false;
 
-    const restoreOnlineLibrary = async (username: string | null) => {
-      const flushedTrashCount = await flushOfflineTrashIntents();
-        if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates();
-      const restored = await libraryStateManager.reloadAuthoritative();
-      if (disposed) return;
-      cloudMetaSnapshotRef.current = new Map(
-        restored.filter(beat => !!beat.telegram_file_id).map(beat => [beat.id, cloudBeatFingerprint(beat)])
-      );
-      cloudLibrarySnapshotRef.current = restored
-        .filter(beat => !!beat.telegram_file_id)
-        .map(cloudBeatFingerprint)
-        .join("\u001c");
-      setBeats(current => preserveLoadedArtwork(restored, current));
-      setCloudSessionVerified(true);
-      setSettings(current => current ? {
-        ...current, telegram_cloud_connected: true, telegram_cloud_username: username
-      } : current);
-
-      // A cold offline start bypasses Download Cooking. Reset the reveal pipeline
-      // so the full online library gets the normal readiness guarantees again.
-      startupCookingResolvedRef.current = false;
-      startupPipelineStartedRef.current = false;
-      startupEnginePrimeReadyRef.current = false;
-      progressiveRevealRunRef.current += 1;
-      clearPlaybackPreparation();
-      clearArtworkHydration();
-      setStartupCookingGate(false);
-    };
-
-    const reconnect = async () => {
-      const run = ++networkReconnectRunRef.current;
-      const delays = [0, 1000, 2000, 5000, 10000, 30000, 60000];
-      for (const delay of delays) {
-        if (delay > 0) await new Promise(resolve => window.setTimeout(resolve, delay));
-        if (disposed || run !== networkReconnectRunRef.current) return;
-        if (typeof navigator !== "undefined" && navigator.onLine === false) {
-          setConnectionState("offline");
-          return;
-        }
-        try {
-          const status = await pollTelegramCloudStatus();
-          if (disposed || run !== networkReconnectRunRef.current) return;
-          if (!status.reachable) {
-            setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-            continue;
-          }
-          if (!status.connected) {
-            setCloudSessionVerified(false);
-            setBeats([]);
-            setSettings(current => current ? {
-              ...current, telegram_cloud_connected: false, telegram_cloud_username: null
-            } : current);
-            return;
-          }
-          setConnectionState("online");
-          await restoreOnlineLibrary(status.username);
-          return;
-        } catch (error) {
-          console.warn(`Reconnect attempt after ${delay}ms failed:`, error);
-          setConnectionState("poor");
-        }
-      }
-      // Stop active retry work after the 60s backoff attempt. The browser's
-      // next online event or the existing SSE reconnect can wake us again.
-      if (!disposed && run === networkReconnectRunRef.current) {
-        setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-      }
-    };
-
-    const onOffline = () => {
-      networkReconnectRunRef.current += 1;
-      setConnectionState("offline");
-      setCloudSessionVerified(false);
-      // Intentionally keep the already-rendered session in memory. Cached audio
-      // may continue playing until the app closes; a cold restart filters it out.
-    };
-    const onOnline = () => { void reconnect(); };
-
-    window.addEventListener("offline", onOffline);
-    window.addEventListener("online", onOnline);
-    return () => {
-      disposed = true;
-      networkReconnectRunRef.current += 1;
-      window.removeEventListener("offline", onOffline);
-      window.removeEventListener("online", onOnline);
-    };
-  }, [setupDone]);
+useConnectivity({
+  setupDone,
+  setConnectionState,
+  setCloudSessionVerified,
+  setSettings,
+  setBeats,
+  cloudMetaSnapshotRef,
+  cloudLibrarySnapshotRef,
+  startupCookingResolvedRef,
+  startupPipelineStartedRef,
+  startupEnginePrimeReadyRef,
+  progressiveRevealRunRef,
+  clearReconciledTrashRuntimeStates,
+  clearPlaybackPreparation,
+  clearArtworkHydration,
+  setStartupCookingGate,
+});
 
   useCustomCursor(settings?.custom_cursor_enabled ?? true);
 
 
-  // Telegram/BeatGaler synchronization is push-based.
-  // There is no timer and no focus-triggered full library scan.
-  useEffect(() => {
-    const userId = settings?.beatgaler_user_id;
-    if (!setupDone || !userId) return;
 
-    const sourceId = getCloudClientId();
-    const cloudBase = getResolvedCloudApiBase();
-    let events: EventSource | null = null;
-    let eventReconnectTimer: number | null = null;
-    let eventReconnectDelayMs = 1000;
-    let cancelled = false;
-
-    const applyRemoteLibraryChange = async () => {
-      if (cancelled || cloudPullInFlightRef.current) return;
-      cloudPullInFlightRef.current = true;
-      try {
-        const flushedTrashCount = await flushOfflineTrashIntents();
-        if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates();
-        const merged = await libraryStateManager.reloadAuthoritative();
-        if (!cancelled) {
-          const nextFingerprint = libraryViewFingerprint(merged);
-          if (nextFingerprint !== visibleLibraryFingerprintRef.current) {
-            visibleLibraryFingerprintRef.current = nextFingerprint;
-            cloudMetaSnapshotRef.current = new Map(
-              merged.filter(beat => !!beat.telegram_file_id).map(beat => [beat.id, cloudBeatFingerprint(beat)])
-            );
-            cloudLibrarySnapshotRef.current = merged
-              .filter(beat => !!beat.telegram_file_id)
-              .map(cloudBeatFingerprint)
-              .join("\u001c");
-            setBeats(current => preserveLoadedArtwork(merged, current));
-          }
-        }
-      } catch (error) {
-        console.warn("Telegram event sync failed:", error);
-      } finally {
-        cloudPullInFlightRef.current = false;
-      }
-    };
-
-    const onLibraryChanged = () => {
-      void (async () => {
-        try {
-          const status = await pollTelegramCloudStatus();
-          if (cancelled || !status.connected) return;
-          if (!status.reachable) {
-            setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-            return;
-          }
-          setConnectionState("online");
-          await applyRemoteLibraryChange();
-        } catch {
-          if (!cancelled) setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-        }
-      })();
-    };
-    const onReady = () => {
-      void (async () => {
-        try {
-          const status = await pollTelegramCloudStatus();
-          if (cancelled) return;
-          if (!status.reachable) {
-            setCloudSessionVerified(false);
-            setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-            return;
-          }
-          if (!status.connected) {
-            setCloudSessionVerified(false);
-            setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : current);
-            return;
-          }
-          setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : current);
-          setConnectionState("online");
-          await applyRemoteLibraryChange();
-          if (!cancelled) setCloudSessionVerified(true);
-        } catch (error) {
-          if (!cancelled) setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-        }
-      })();
-    };
-    const onTelegramConnected = () => {
-      void (async () => {
-        try {
-          const status = await pollTelegramCloudStatus();
-          if (cancelled || !status.connected) return;
-          if (!status.reachable) {
-            setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-            return;
-          }
-          setConnectionState("online");
-          startupCookingResolvedRef.current = false;
-          startupPipelineStartedRef.current = false;
-          startupEnginePrimeReadyRef.current = false;
-          clearArtworkHydration();
-          clearPlaybackPreparation();
-          progressiveRevealRunRef.current += 1;
-          setStartupCookingGate(false);
-          setCloudSessionVerified(false);
-          setSettings(current => current ? { ...current, telegram_cloud_connected: true, telegram_cloud_username: status.username } : current);
-          await applyRemoteLibraryChange();
-          if (!cancelled) setCloudSessionVerified(true);
-        } catch (error) {
-          console.warn("Could not activate Telegram vault:", error);
-        }
-      })();
-    };
-
-    const connectEvents = async () => {
-      const token = getBeatGalerAuthToken();
-      if (!token) return;
-      try {
-        const response = await fetch(`${cloudBase}/events/ticket`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ beatgalerUserId: userId }),
-        });
-        if (!response.ok) throw new Error(`Event authorization failed (${response.status}).`);
-        const body = await response.json();
-        if (cancelled || !body?.ticket) return;
-        const url =
-          `${cloudBase}/events?beatgalerUserId=${encodeURIComponent(userId)}` +
-          `&sourceId=${encodeURIComponent(sourceId)}` +
-          `&ticket=${encodeURIComponent(String(body.ticket))}`;
-        events = new EventSource(url);
-        events.onopen = () => { eventReconnectDelayMs = 1000; };
-        events.addEventListener("ready", onReady);
-        events.addEventListener("library_changed", onLibraryChanged);
-        events.addEventListener("telegram_connected", onTelegramConnected);
-        events.onerror = () => {
-          // Event tickets are intentionally single-use. EventSource's built-in
-          // reconnect would reuse the consumed ticket and receive 401 forever,
-          // so close it and obtain a fresh ticket instead. SSE is only the push
-          // notification channel; its failure is not evidence that Telegram or
-          // the Cloud data plane is unreachable.
-          events?.close();
-          events = null;
-          if (cancelled || eventReconnectTimer !== null) return;
-          const delay = eventReconnectDelayMs;
-          eventReconnectDelayMs = Math.min(eventReconnectDelayMs * 2, 30000);
-          eventReconnectTimer = window.setTimeout(() => {
-            eventReconnectTimer = null;
-            void connectEvents();
-          }, delay);
-        };
-      } catch (error) {
-        console.warn("BeatGaler event authorization failed:", error);
-        if (!cancelled && eventReconnectTimer === null) {
-          const delay = eventReconnectDelayMs;
-          eventReconnectDelayMs = Math.min(eventReconnectDelayMs * 2, 30000);
-          eventReconnectTimer = window.setTimeout(() => {
-            eventReconnectTimer = null;
-            void connectEvents();
-          }, delay);
-        }
-      }
-    };
-
-    void connectEvents();
-
-    return () => {
-      cancelled = true;
-      if (eventReconnectTimer !== null) window.clearTimeout(eventReconnectTimer);
-      events?.removeEventListener("ready", onReady);
-      events?.removeEventListener("library_changed", onLibraryChanged);
-      events?.removeEventListener("telegram_connected", onTelegramConnected);
-      events?.close();
-    };
-  }, [setupDone, settings?.beatgaler_user_id]);
+// BeatGaler synchronization remains push-based. SSE only notifies the app;
+// the extracted owner verifies authority before hydrating library state.
+useCloudLibraryEvents({
+  setupDone,
+  beatgalerUserId: settings?.beatgaler_user_id ?? null,
+  setConnectionState,
+  setCloudSessionVerified,
+  setSettings,
+  setBeats,
+  cloudMetaSnapshotRef,
+  cloudLibrarySnapshotRef,
+  visibleLibraryFingerprintRef,
+  startupCookingResolvedRef,
+  startupPipelineStartedRef,
+  startupEnginePrimeReadyRef,
+  progressiveRevealRunRef,
+  clearReconciledTrashRuntimeStates,
+  clearArtworkHydration,
+  clearPlaybackPreparation,
+  setStartupCookingGate,
+});
 
   useLibraryPresentationCache(
     beats,
