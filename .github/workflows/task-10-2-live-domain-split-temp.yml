@@ -23,6 +23,20 @@ jobs:
           cache: npm
       - name: Extract live domain logic from root composition
         run: node scripts/task-10-2-live-domain-split-temp.cjs
+      - name: Adapt moved artwork routing characterization
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'tests/integration/issue97WebRoutingContract.test.ts';
+          let source = fs.readFileSync(path, 'utf8');
+          const oldOwner = 'const app = readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./");';
+          const newOwner = 'const app = readFileSync(resolve(process.cwd(), "src/features/edit/useBeatEditing.ts"), "utf8").replaceAll("../", "./");';
+          if (!source.includes(oldOwner)) throw new Error('Artwork routing characterization owner anchor changed');
+          source = source.replace(oldOwner, newOwner);
+          source = source.replace('return sourceSection(app, startMarker, endMarker, "App.tsx");', 'return sourceSection(app, startMarker, endMarker, "useBeatEditing.ts");');
+          source = source.replace('      "const {\\n    runBeatCloudUpdate,",', '      "  const applyBulkUpdate = useCallback",');
+          fs.writeFileSync(path, source);
+          NODE
       - name: Install dependencies
         run: npm ci
       - name: Focused architecture check
