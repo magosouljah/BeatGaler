@@ -4,41 +4,41 @@
 
 - Fecha de ejecución: 2026-09-08
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `9.1 — Separar sesión y ajustes`
+- Tarea trabajada: `9.2 — Separar Reload`
 - Estado: `Terminada`
-- Última tarea terminada: `9.1 — Separar sesión y ajustes`
+- Última tarea terminada: `9.2 — Separar Reload`
 
 ## Base de esta ejecución
 
-- SHA inicial: `8541ba633d7f0ab0b271b82014410b5998bd0c52`
-- SHA de implementación validada: `f381d77a50280a4a1c19bbfbd7c717019ba9fd3b`
-- HEAD remoto observado inmediatamente antes de la escritura final de agent-state: `778d1977082dfd4bfb86470dc9f87f6df1a00777`
-- Run de implementación final: `34311448820` — `Final Task 9.1 Validation 2` — focalizadas, diff check, matriz completa y publicación del commit exacto correctas.
-- Artifact final: `migration-check-logs-task-9-1-34311448820` — `Migration checks: PASS`.
-- Run de cierre documental: `34312049238` — actualiza solamente roadmap/Registro/agent-state y elimina su tooling temporal.
-- El SHA final real de la ronda debe releerse desde GitHub después de la última escritura y no se intenta autorreferenciar aquí.
+- SHA inicial: `9292213dcdfa45e7424108e3aa861e1ab7eeef53`
+- SHA de implementación validada: `ef31e40653c82cbde9cf59b1d541dfd33e7829e8`
+- HEAD remoto observado inmediatamente antes del cierre documental: `498f966324d49864220de9f00635312137aee5f1`
+- Run de implementación final: `34314514114` — `Task 9.2 Apply` — focalizadas, diff check, matriz completa y publicación del commit exacto correctas.
+- Artifact final: `migration-check-logs-task-9-2-34314514114` — `Migration checks: PASS`.
+- Run de cierre documental: `34316909167` — actualiza roadmap/Registro/agent-state y elimina su tooling temporal.
+- El SHA final real de la ronda se relee desde GitHub después de esta escritura y no se autorreferencia aquí.
 
 ## Resultado verificado
 
-- `src/features/session/useSessionState.ts` posee settings, setup, conectividad y verificación cloud; `connectionState` y `cloudSessionVerified` permanecen independientes.
-- `src/features/session/useSessionActions.ts` posee los cambios de preferencias y Sign out, conservando limpieza de audio, presentación/revelado, galería, selección y verificación cloud.
-- `src/features/session/useCustomCursor.ts` posee el efecto del cursor conservando el whitelist de edición de texto.
-- `App.tsx` consume los nuevos owners; Reload, startup, reconnect online/offline y SSE permanecen para sus tareas posteriores.
-- `tests/component-dom/sessionState.test.tsx` y `tests/integration/appSessionExtraction.test.ts` protegen los contratos de 9.1.
-- `scripts/run-regressions.mjs` sigue verificando el cursor desde el nuevo owner sin relajar el contrato.
-- Typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre el estado publicado como `f381d77a50280a4a1c19bbfbd7c717019ba9fd3b`.
+- `src/features/library/useLibraryReload.ts` posee Reload manual, `libraryRefreshing`, los reintentos de autoridad y la recepción de `beatgaler:deferred-library-reload`.
+- La cola cloud sigue siendo owner de la actividad de uploads y del pending marker; Reload se difiere mientras hay actividad y se reintenta al drenar la cola.
+- Se conservan feedback mínimo de 320 ms, cuatro intentos de autoridad con backoff y reparación tolerante de referencias stale.
+- Un fallo de autoridad conserva la galería visible, marca conexión `poor` y deja la sesión cloud no verificada; autoridad desconocida no equivale a biblioteca vacía.
+- `App.tsx` consume el nuevo owner y conserva el gesto manual de limpiar `clearUploadPreviewCache()` antes de Reload.
+- Las pruebas focalizadas cubren Reload con/sin upload activo, evento diferido, feedback y preservación de galería ante cuatro fallos de autoridad.
+- Typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre el estado publicado como `ef31e40653c82cbde9cf59b1d541dfd33e7829e8`.
 
 ## Pendientes concretos
 
-- `9.2 — Separar Reload`.
+- `9.3 — Separar el arranque inicial`.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 9.1.
-- Prueba física Desktop/Web no ejecutada ni inventada; no quedó como bloqueo porque los contratos afectados están cubiertos por focalizadas, matriz completa y ambos builds.
+- Ninguna necesaria para cerrar 9.2.
+- Prueba física Desktop/Web no ejecutada ni inventada; no quedó como bloqueo porque los criterios de 9.2 están cubiertos por focalizadas, component DOM, integración y ambos builds.
 
 ## Siguiente tarea
 
-- `9.2 — Separar Reload`
+- `9.3 — Separar el arranque inicial`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

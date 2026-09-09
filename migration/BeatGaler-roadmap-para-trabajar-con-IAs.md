@@ -457,7 +457,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** los flujos restantes consumen una sola sesión y Settings conserva su conducta.
     
 
-### [ ] 9.2 — Separar Reload
+### [x] 9.2 — Separar Reload
 
 - **Hacer:** extraer recarga manual, reintentos y recepción de recarga diferida usando la actividad de la cola cloud.
     
