@@ -4,40 +4,39 @@
 
 - Fecha de ejecución: 2026-09-08
 - Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `7.3 — Separar Save All y conflictos`
+- Tarea trabajada: `7.4 — Separar la entrada de importación web`
 - Estado: `Terminada`
-- Última tarea terminada: `7.3 — Separar Save All y conflictos`
+- Última tarea terminada: `7.4 — Separar la entrada de importación web`
 
 ## Base de esta ejecución
 
-- SHA inicial: `76729479a4947d27626654464defb844a98db031`
-- SHA de implementación validada: `de32aab99da86942aa71a83e992f9f371ae3f44f`
-- HEAD después de retirar el artifact generado por CI y antes del cierre documental: `a309b9c197ac835306b2ee8be5197c6a3b13a980`
-- Run de implementación final: `34296950583` — `Temporary task 7.3 apply` — `SUCCESS`
-- El SHA final real de la ronda es el HEAD remoto que debe leerse nuevamente después de este cierre documental; no se anticipa dentro del propio commit de cierre.
+- SHA inicial: `45ca0eae03d1685a1f938f4beaffb4259097882b`
+- SHA de implementación validada: `3c485083e4fe6e896017e2e26f4a33d9e25902b5`
+- Run de implementación final: `34298836051` — `Temporary task 7.4 retry` — matriz, commit exacto y fast-forward correctos; el workflow general falló únicamente en el cierre documental posterior.
+- Run de recuperación documental: `34301504093` — el árbol final de recuperación modifica solo los tres documentos de migración respecto al SHA validado.
+- El SHA final real de la ronda es el HEAD remoto posterior a este cierre documental y debe releerse después del push.
 
 ## Resultado verificado
 
-- `useImportSaveAll.ts` posee Save All, `audioConflictBatch`, `dropImportBatch` y los callbacks de resolución nativa.
-- Save All cierra Review inmediatamente y entrega el beat actual a la cola cloud antes de esperar la preparación restante.
-- Los beats restantes reutilizan la misma promesa del worker secuencial de 7.2; válidos se guardan/suben y duplicados/errores vuelven a Review al final.
-- Los conflictos de audio y decisiones se muestran después de Review normal y conservan la protección de staging de archivos todavía referenciados.
-- `ImportResolutionHost` conecta los modales existentes desde el host de importación.
-- La entrada Web sigue en `App.tsx` hasta 7.4 mediante un puente temporal de setters; 7.4 no fue iniciada.
-- El uso independiente de `saveBeatMeta` para metadata/artwork Desktop permanece intacto.
-- Las pruebas focalizadas y la matriz completa de siete checks pasaron sobre el SHA de implementación validada.
+- `useBrowserImport.ts` posee la recepción de `File` del navegador, selección de un beat por gesto, carga de metadata y entrada a Review.
+- `App.tsx` conserva solo el wiring de esa entrada con Review/import y la cola cloud existente.
+- La preparación Web reutiliza `platform.importer`; el nuevo owner no contiene invocaciones Tauri/nativas.
+- Save conserva la ruta Web existente hacia la cola y `platform.cloudData.commitImportedBeat`.
+- Skip/Cancel liberan las fuentes/candidatos Web que dejan de estar en uso.
+- `useImportSaveAll.ts` expone `clearImportResolution`, retirando el puente temporal de setters de conflictos dejado por 7.3.
+- Las pruebas focalizadas y la matriz completa de checks pasaron sobre `3c485083e4fe6e896017e2e26f4a33d9e25902b5`.
 
 ## Pendientes concretos
 
-- `7.4 — Separar la entrada de importación web`.
-- Retirar en 7.4 el puente temporal de `setAudioConflictBatch` / `setDropImportBatch` cuando la entrada Web tenga owner propio.
+- `8.1 — Separar detección del destino`.
 
 ## Comprobaciones pendientes
 
-- Ninguna necesaria para cerrar 7.3.
+- Ninguna necesaria para cerrar 7.4.
+- Prueba física Web interactiva no ejecutada ni inventada; no quedó como bloqueo porque el flujo modificado quedó cubierto por component DOM, integración, regresiones y build Web.
 
 ## Siguiente tarea
 
-- `7.4 — Separar la entrada de importación web`
+- `8.1 — Separar detección del destino`
 - Estado: `Pendiente`
 - No iniciar hasta la próxima ronda.

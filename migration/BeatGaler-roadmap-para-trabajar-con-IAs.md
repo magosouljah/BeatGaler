@@ -394,7 +394,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** se guardan los candidatos válidos y los conflictos quedan disponibles para resolverlos.
     
 
-### [ ] 7.4 — Separar la entrada de importación web
+### [x] 7.4 — Separar la entrada de importación web
 
 - **Hacer:** extraer la recepción de archivos del navegador y su entrada a Review, reutilizando `platform.importer` y el commit web.
     
