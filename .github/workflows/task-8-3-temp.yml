@@ -48,7 +48,7 @@ jobs:
           python scripts/task-8-3-apply-temp.py
           git diff --check
 
-          git rm .github/workflows/task-8-3-temp.yml scripts/task-8-3-apply-temp.py scripts/task-8-3-fix-temp.py
+          git rm -f .github/workflows/task-8-3-temp.yml scripts/task-8-3-apply-temp.py scripts/task-8-3-fix-temp.py
           git add src/App.tsx \
             src/features/dragdrop/useNativeLibraryDrop.ts \
             tests/integration/appNativeLibraryDropExtraction.test.ts \
