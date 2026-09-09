@@ -40,7 +40,7 @@ import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./featu
 import { useHtmlLibraryDrop } from "./features/dragdrop/useHtmlLibraryDrop";
 import { useNativeLibraryDrop } from "./features/dragdrop/useNativeLibraryDrop";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
-import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
+import { clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
 import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";
 import { useLibraryViewState } from "./features/library/useLibraryViewState";
 import { useLibraryReorder } from "./features/library/useLibraryReorder";
@@ -50,6 +50,7 @@ import { useTagFilters } from "./features/tags/useTagFilters";
 import { useTagRename } from "./features/tags/useTagRename";
 import TagRenameDialog from "./features/tags/components/TagRenameDialog";
 import { useLibraryPresentationCache, useLibraryState } from "./features/library/useLibraryState";
+import { useLibraryReload } from "./features/library/useLibraryReload";
 import { useWebPlaybackSortRouting } from "./features/playback/useWebPlaybackSortRouting";
 import { usePlaybackController } from "./features/playback/usePlaybackController";
 import { usePlaybackQueue } from "./features/playback/usePlaybackQueue";
@@ -133,7 +134,6 @@ function BeatGalerApp() {
   }, [interruptedUploadNotices]);
 
   const [loading, setLoading] = useState(() => initialLoading);
-  const [libraryRefreshing, setLibraryRefreshing] = useState(false);
   const [startupCookingGate, setStartupCookingGate] = useState(() => (startupCachedBeatsRef.current ?? []).length === 0);
   const [revealedBeatIds, setRevealedBeatIds] = useState<Set<string>>(() => new Set(
     (startupCachedBeatsRef.current ?? [])
@@ -320,6 +320,24 @@ function BeatGalerApp() {
     rejectOfflineMutation,
     isReviewActive: () => reviewQueueLatestRef.current !== null,
     hasProtectedStaging: () => stagedImportPathsRef.current.size > 0,
+  });
+
+
+  const { libraryRefreshing, reloadLibrary } = useLibraryReload({
+    telegramCloudConnected: Boolean(settings?.telegram_cloud_connected),
+    beatsLatestRef,
+    setBeats,
+    setConnectionState,
+    setCloudSessionVerified,
+    cloudMetaSnapshotRef,
+    cloudLibrarySnapshotRef,
+    startupCookingResolvedRef,
+    startupPipelineStartedRef,
+    progressiveRevealRunRef,
+    setRevealedBeatIds,
+    setStartupCookingGate,
+    setLoading,
+    deferLibraryReloadIfUploading,
   });
 
   useEffect(() => {
@@ -1321,111 +1339,6 @@ const {
     handleAutoProjectDrop,
     importDroppedPaths,
   });
-
-  const reloadLibrary = useCallback(async () => {
-    // Pre-Direct BeatGaler reload used a full loading state and then replaced the
-    // rendered library from the durable source. Keep that authoritative behavior,
-    // but never let Reload race an active import: until the batch INDEX commit
-    // finishes, Telegram intentionally does not contain those optimistic beats.
-    const refreshStarted = performance.now();
-    setLibraryRefreshing(true);
-
-    const finishRefreshAnimation = async () => {
-      const elapsed = performance.now() - refreshStarted;
-      if (elapsed < 320) await new Promise(resolve => window.setTimeout(resolve, 320 - elapsed));
-      setLibraryRefreshing(false);
-    };
-
-    try {
-      // Queue ownership includes active IDs and the pending Reload marker.
-      if (deferLibraryReloadIfUploading()) return;
-
-      clearCachedBeats();
-      const browserOffline = typeof navigator !== "undefined" && navigator.onLine === false;
-
-      if (settings?.telegram_cloud_connected && !browserOffline) {
-        let lastError: unknown = null;
-        for (let attempt = 1; attempt <= 4; attempt += 1) {
-          try {
-            // Reload is also an integrity pass: if an INDEX entry points at a
-            // MASTER message Telegram definitively says no longer exists, repair
-            // the INDEX first and then apply the repaired authority to SQLite/UI.
-            const repaired = await repairStaleCloudLibraryRefs().catch(error => {
-              console.warn("Reload integrity probe deferred safely:", error);
-              return 0;
-            });
-            if (repaired > 0) console.warn(`[library-refresh] stale_refs_repaired=${repaired}`);
-            const restored = await libraryStateManager.reloadAuthoritative();
-            cloudMetaSnapshotRef.current = new Map(
-              restored.filter(beat => !!beat.telegram_file_id).map(beat => [beat.id, cloudBeatFingerprint(beat)])
-            );
-            cloudLibrarySnapshotRef.current = restored
-              .filter(beat => !!beat.telegram_file_id)
-              .map(cloudBeatFingerprint)
-              .join("\u001c");
-            setConnectionState("online");
-
-            // Reload replaces committed library state, just like the functional
-            // pre-Direct version, while preserving already-decoded artwork.
-            const visible = preserveLoadedArtwork(restored, beatsLatestRef.current);
-            beatsLatestRef.current = visible;
-            setBeats(visible);
-
-            startupCookingResolvedRef.current = true;
-            startupPipelineStartedRef.current = false;
-            progressiveRevealRunRef.current += 1;
-            setRevealedBeatIds(current => {
-              const next = new Set(current);
-              for (const beat of visible) next.add(beat.id);
-              return next;
-            });
-            setStartupCookingGate(false);
-            setCloudSessionVerified(true);
-            console.info(`[library-refresh] APPLIED beats=${visible.length} attempt=${attempt}`);
-            return;
-          } catch (error) {
-            lastError = error;
-            if (attempt < 4) await new Promise(resolve => window.setTimeout(resolve, 450 * attempt));
-          }
-        }
-        console.warn("Telegram library refresh failed after retries; preserving verified gallery:", lastError);
-        setConnectionState("poor");
-        setCloudSessionVerified(false);
-        return;
-      }
-
-      const offline = await loadOfflineLibrary();
-      if (browserOffline) {
-        setConnectionState("offline");
-        setCloudSessionVerified(false);
-        if (beatsLatestRef.current.length === 0) {
-          beatsLatestRef.current = offline;
-          setBeats(offline);
-        }
-        return;
-      }
-
-      if (!settings?.telegram_cloud_connected) {
-        setCloudSessionVerified(false);
-        beatsLatestRef.current = offline;
-        setBeats(offline);
-      }
-    } catch (err) {
-      console.error(err);
-      setConnectionState(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "poor");
-      setCloudSessionVerified(false);
-    } finally {
-      await finishRefreshAnimation();
-      setLoading(false);
-    }
-  }, [settings?.telegram_cloud_connected]);
-
-  useEffect(() => {
-    const runDeferredReload = () => { void reloadLibrary(); };
-    window.addEventListener("beatgaler:deferred-library-reload", runDeferredReload);
-    return () => window.removeEventListener("beatgaler:deferred-library-reload", runDeferredReload);
-  }, [reloadLibrary]);
-
 
   const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {
     setBeats(bs => bs.map(b => {

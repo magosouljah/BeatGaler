@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync("src/App.tsx", "utf8");
 const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
+const libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.ts", "utf8");
 const beatCard = readFileSync("src/components/BeatCard.tsx", "utf8");
 const webAdapter = readFileSync("src/platform/webAdapter.ts", "utf8");
 const viteConfig = readFileSync("vite.config.ts", "utf8");
@@ -44,7 +45,7 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("keeps online reveal monotonic across transport refreshes", () => {
-    expect(app).toContain("for (const beat of visible) next.add(beat.id)");
+    expect(libraryReloadOwner).toContain("for (const beat of visible) next.add(beat.id)");
   });
 
   it("refreshes cloud-backed playback even when cached metadata contains a stale blob URL", () => {

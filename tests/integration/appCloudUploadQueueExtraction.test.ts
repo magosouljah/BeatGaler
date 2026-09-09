@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const queue = readFileSync(resolve(process.cwd(), "src/features/cloud/useCloudUploadQueue.ts"), "utf8");
+const reload = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryReload.ts"), "utf8");
 
 function expectOrdered(source: string, markers: string[]): void {
   let previous = -1;
@@ -50,8 +51,9 @@ describe("task 6.4 cloud upload queue extraction", () => {
     const desktopFinally = queue.indexOf("backgroundUploadRunningRef.current = false");
     expect(desktopFinally).toBeGreaterThan(-1);
     expect(queue.indexOf("finishDeferredReloadIfIdle();", desktopFinally)).toBeGreaterThan(desktopFinally);
-    expect(app).toContain("if (deferLibraryReloadIfUploading())");
-    expect(app).toContain('window.addEventListener("beatgaler:deferred-library-reload", runDeferredReload)');
+    expect(reload).toContain("if (deferLibraryReloadIfUploading())");
+    expect(reload).toContain('"beatgaler:deferred-library-reload"');
+    expect(app).toContain("useLibraryReload({");
   });
 
   it("preserves staging until the queue is empty and Review/import no longer protects it", () => {
