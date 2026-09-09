@@ -21,4 +21,4 @@ PASS task 5.5 ownership guard: delete/bulk/restore live in useTrashActions and r
 PASS upload/play guard: first Play waits for real MASTER readiness and loading beats stay non-interactive
 PASS runtime-state guard: sync/download/playback are independent, Offline is orthogonal, errors remember previous_state, and App flows are wired
 PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, Telegram flood-wait, and authoritative final sync
-FAIL regression guard: Cached cloud presentation can become interactive before authority verification.
+FAIL regression guard: Offline PROJECT cards can lose Open Project merely because the cloud-project indicator has not refreshed.
