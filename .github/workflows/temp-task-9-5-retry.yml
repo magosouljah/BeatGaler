@@ -1,4 +1,4 @@
-name: Temporary Task 9.5 Final Validation
+name: Temporary Task 9.5 Integration Diagnostic
 
 on:
   push:
@@ -10,75 +10,51 @@ permissions:
   contents: write
 
 jobs:
-  validate-and-publish:
+  diagnose-integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v0.9.0-test-noche
-          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
           cache: npm
       - run: npm ci
-      - name: Apply task 9.5 candidate and align architecture contract
+      - name: Apply validated-so-far task 9.5 candidate
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
-
           workflow = Path('.github/workflows/temp-task-9-5-apply.yml').read_text().splitlines()
           start = next(i for i, line in enumerate(workflow) if "python3 <<'PY'" in line) + 1
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
           code = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end]) + '\n'
           exec(compile(code, '<task-9-5-apply>', 'exec'), {'__name__': '__main__'})
-
           app_path = Path('src/App.tsx')
           app = app_path.read_text()
           anchor = 'import { useLibraryReveal } from "./features/startup/useLibraryReveal";\n'
-          assert anchor in app
-          app = app.replace(anchor, anchor + 'import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";\n', 1)
-          app_path.write_text(app)
-
+          app_path.write_text(app.replace(anchor, anchor + 'import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";\n', 1))
           test_path = Path('tests/component-dom/startupRevealArchitecture.test.ts')
           test = test_path.read_text()
-          old_decl = 'const app = readFileSync("src/App.tsx", "utf8");\n'
-          new_decl = old_decl + 'const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");\n'
-          assert old_decl in test and 'libraryRevealOwner' not in test
-          test = test.replace(old_decl, new_decl, 1)
-          old_assert = '    expect(app).toContain("title + artwork are enough to show a beat");'
-          new_assert = '    expect(libraryRevealOwner).toContain("Authority pass: title + artwork reveal a card. Audio remains a later viewport warmup.");'
-          assert old_assert in test
-          test_path.write_text(test.replace(old_assert, new_assert, 1))
+          test = test.replace('const app = readFileSync("src/App.tsx", "utf8");\n', 'const app = readFileSync("src/App.tsx", "utf8");\nconst libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");\n', 1)
+          test = test.replace('    expect(app).toContain("title + artwork are enough to show a beat");', '    expect(libraryRevealOwner).toContain("Authority pass: title + artwork reveal a card. Audio remains a later viewport warmup.");', 1)
+          test_path.write_text(test)
           PY
-      - name: Focused 9.5 tests
-        run: npx vitest run tests/integration/appLibraryRevealExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts --environment jsdom
-      - name: Typecheck
-        run: npm run test:typecheck
-      - name: Unit TypeScript
-        run: npm run test:unit:ts
-      - name: Component DOM
-        run: npm run test:component:dom
-      - name: Integration
-        run: npm run test:integration
-      - name: Regressions
-        run: npm run test:regressions
-      - name: Core E2E
-        run: npm run e2e:core
-      - name: App guard
-        run: npm run guard:app
-      - name: Web build
-        run: npm run build:web
-      - name: Full build
-        run: npm run build
-      - name: Publish validated implementation on test branch only
+      - name: Capture integration failure
+        shell: bash
+        run: |
+          set +e
+          npm run test:integration > task-9-5-integration.txt 2>&1
+          code=$?
+          echo "EXIT_CODE=$code" >> task-9-5-integration.txt
+          cat task-9-5-integration.txt
+          exit 0
+      - name: Publish diagnostic on test branch only
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          rm -f task-9-5-component.log
-          git add src/App.tsx src/features/startup/startupLoader.ts src/features/startup/useLibraryReveal.ts tests/integration/appLibraryRevealExtraction.test.ts tests/component-dom/startupRevealArchitecture.test.ts scripts/run-regressions.mjs
-          git add -u task-9-5-component.log || true
-          git commit -m "refactor(app): extract library reveal orchestration"
+          git add task-9-5-integration.txt
+          git commit -m "chore(migration): capture task 9.5 integration failure"
           git push origin HEAD:v0.9.0-test-noche
