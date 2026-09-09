@@ -144,7 +144,8 @@ jobs:
 
       - name: Require green migration matrix
         shell: bash
-        run: grep -Fqx 'Migration checks: PASS' artifacts/migration-check-logs/summary.txt
+        run: |
+          grep -Fqx 'Migration checks: PASS' artifacts/migration-check-logs/summary.txt
 
       - name: Upload migration check logs
         if: always()
