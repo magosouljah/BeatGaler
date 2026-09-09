@@ -89,3 +89,8 @@ patchFile('tests/integration/selectionReorderExtraction.test.ts', [
   ['const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");', 'const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");\nconst appShell = readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8");'],
   ['expect(app).toContain("toggleSelection(b, e.shiftKey, filteredBeats)");', 'expect(appShell).toContain("toggleSelection(b, e.shiftKey, filteredBeats)");'],
 ]);
+
+patchFile('scripts/run-regressions.mjs', [
+  ['  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");', '  const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");\n  const appShell = readFileSync(path.join(root, "src", "app", "AppShell.tsx"), "utf8");'],
+  ['  if (!app.includes(\'useTrashActions({\') || !app.includes(\'onBeatRestored={handleBeatRestored}\')) fail("App.tsx is no longer wired to the extracted Trash actions owner.");', '  if (!app.includes(\'useTrashActions({\') || !appShell.includes(\'onBeatRestored={handleBeatRestored}\')) fail("App/AppShell no longer compose the extracted Trash actions owner.");'],
+]);
