@@ -42,6 +42,7 @@ import { useImportDiscovery } from "./features/import/useImportDiscovery";
 import { useImportSaveAll } from "./features/import/useImportSaveAll";
 import { useBrowserImport } from "./features/import/useBrowserImport";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
+import { isNativeImagePath, resolveNativeExternalImageDropTarget, resolveNativeFilesystemDropTarget } from "./features/dragdrop/nativeDropTargets";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
 import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";
@@ -1474,22 +1475,6 @@ const {
       source: "pinterest" | "browser";
     };
 
-    const elementAtNativePosition = (position: { x?: number; y?: number } | null | undefined): HTMLElement | null => {
-      if (!position || typeof position.x !== "number" || typeof position.y !== "number") return null;
-      const scale = window.devicePixelRatio || 1;
-      const candidates: Array<[number, number]> = [[position.x, position.y]];
-      if (scale !== 1) candidates.push([position.x / scale, position.y / scale]);
-      for (const [x, y] of candidates) {
-        const el = document.elementFromPoint(x, y) as HTMLElement | null;
-        if (el) return el;
-      }
-      return null;
-    };
-
-    const isImagePath = (path: string) => {
-      const ext = extensionFromPath(path);
-      return ["png", "jpg", "jpeg", "webp", "bmp", "gif", "avif"].includes(ext);
-    };
 
     const clearNativeDragUi = () => {
       setDropActive(false);
@@ -1499,10 +1484,9 @@ const {
     };
 
     const updateNativeExternalImageUi = (position: { x?: number; y?: number } | null | undefined) => {
-      const target = elementAtNativePosition(position);
-      const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
-      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
-      const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
+      const destination = resolveNativeExternalImageDropTarget(position);
+      const artworkBeatId = destination.kind === "card-artwork" ? destination.beatId : null;
+      const drawerArtwork = destination.kind === "drawer-artwork";
       setDropActive(false);
       window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
       window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", {
@@ -1514,16 +1498,10 @@ const {
     };
 
     const updateNativeDragUi = (payload: NativeFsPayload) => {
-      const target = elementAtNativePosition(payload.position);
-      const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
-      const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
-      const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
-      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
-      const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
-      const drawerTarget = drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null;
-      const localImage = payload.paths.length === 1 && isImagePath(payload.paths[0]);
-      const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
-      const cardBeatId = card?.dataset.beatCardId ?? null;
+      const routing = resolveNativeFilesystemDropTarget(payload.paths, payload.position);
+      const drawerTarget = routing.destination.kind === "drawer" ? routing.destination.target : null;
+      const artworkBeatId = routing.destination.kind === "card-artwork" ? routing.destination.beatId : null;
+      const cardBeatId = routing.destination.kind === "beat-card" ? routing.destination.beatId : null;
 
       if (drawerTarget) {
         setDropActive(false);
@@ -1537,7 +1515,7 @@ const {
 
       window.dispatchEvent(new CustomEvent("beatgaler:drawer-native-hover", { detail: { target: null, active: false } }));
 
-      if (artworkBeatId && localImage) {
+      if (artworkBeatId) {
         setDropActive(false);
         window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", { detail: { beatId: artworkBeatId, active: true } }));
         window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
@@ -1553,7 +1531,7 @@ const {
 
       window.dispatchEvent(new CustomEvent("beatgaler:artwork-drag", { detail: { beatId: null, active: false } }));
       window.dispatchEvent(new CustomEvent("beatgaler:beat-update-drag", { detail: { beatId: null, active: false } }));
-      setDropActive(Boolean(library && payload.paths.length > 0));
+      setDropActive(routing.destination.kind === "library");
     };
 
     const resolveNativeArtwork = async (beatId: string, imagePath: string) => {
@@ -1572,10 +1550,9 @@ const {
     const resolveNativeExternalImage = async (detail: NativeExternalImageDropDetail) => {
       // Routing decision happens at the final drop coordinates. Pinterest/browser
       // URLs never enter Import Beat and are accepted only by an artwork target.
-      const target = elementAtNativePosition(detail);
-      const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
-      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
-      const beatId = artwork?.dataset.beatArtworkId ?? null;
+      const destination = resolveNativeExternalImageDropTarget(detail);
+      const drawerArtwork = destination.kind === "drawer-artwork";
+      const beatId = destination.kind === "card-artwork" ? destination.beatId : null;
       if (drawerArtwork) {
         const imageData = await fetchInternetArtworkDataUrl(detail.url);
         if (!/^data:image\//i.test(imageData) || imageData.length < 32) {
@@ -1650,21 +1627,17 @@ const {
     const handleNativeDrop = async (payload: NativeFsPayload) => {
       // Reserved external-image sentinels are intercepted in onDragDropEvent
       // before this local-filesystem router can ever be called.
-      const target = elementAtNativePosition(payload.position);
-      const artwork = target?.closest?.("[data-beat-artwork-id]") as HTMLElement | null;
-      const card = target?.closest?.("[data-beat-card-id]") as HTMLElement | null;
-      const library = target?.closest?.('[data-library-scroll="true"]') as HTMLElement | null;
-      const drawerArtwork = target?.closest?.("[data-artwork-drop]") as HTMLElement | null;
-      const drawerFileRow = target?.closest?.("[data-filerole]") as HTMLElement | null;
-      const drawerTarget = drawerArtwork ? "artwork" : drawerFileRow?.dataset.filerole ?? null;
-      const artworkBeatId = artwork?.dataset.beatArtworkId ?? null;
-      const cardBeatId = card?.dataset.beatCardId ?? null;
+      const routing = resolveNativeFilesystemDropTarget(payload.paths, payload.position);
+      const drawerTarget = routing.destination.kind === "drawer" ? routing.destination.target : null;
+      const artworkBeatId = routing.destination.kind === "card-artwork" ? routing.destination.beatId : null;
+      const cardBeatId = routing.destination.kind === "beat-card" ? routing.destination.beatId : null;
+      const library = routing.destination.kind === "library";
       clearNativeDragUi();
 
-      reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} target=${drawerTarget ?? (artworkBeatId ? "card-artwork" : cardBeatId ? "beat-card" : library ? "library" : "none")} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
+      reviewPerfMark(`TAURI_NATIVE_DROP path_count=${payload.paths.length} target=${routing.diagnosticTarget} names=${payload.paths.map(fileNameFromPath).slice(0, 12).join("|")}`);
 
       if (payload.paths.length === 0) {
-        if (drawerTarget || artworkBeatId || cardBeatId || library) {
+        if (routing.hasAnyTarget) {
           await appAlert({
             title: "Drop could not be read",
             message: "The drop reached BeatGaler, but macOS supplied no filesystem path. Try selecting the file with the button instead.",
@@ -1678,7 +1651,7 @@ const {
           await appAlert({ title: "Drop one file", message: "Choose one file for this field." });
           return;
         }
-        if (drawerTarget === "artwork" && !isImagePath(payload.paths[0])) {
+        if (drawerTarget === "artwork" && !isNativeImagePath(payload.paths[0])) {
           await appAlert({ title: "Artwork must be an image", message: "Choose a PNG, JPEG, WebP, GIF, BMP, or AVIF image." });
           return;
         }
@@ -1687,7 +1660,7 @@ const {
         }));
         return;
       }
-      if (cardBeatId || library) claimNativeLibraryDrop();
+      if (routing.shouldClaimNativeLibraryDrop) claimNativeLibraryDrop();
       if (payload.paths.length > MAX_NATIVE_DROP_ITEMS) {
         await appAlert({
           title: "Too many items",
@@ -1696,7 +1669,7 @@ const {
         return;
       }
 
-      if (artworkBeatId && payload.paths.length === 1 && isImagePath(payload.paths[0])) {
+      if (artworkBeatId) {
         await resolveNativeArtwork(artworkBeatId, payload.paths[0]);
         return;
       }

@@ -9,12 +9,16 @@ const fail = message => { throw new Error(`Import/native-drop regression: ${mess
 const app = read("src/App.tsx");
 const importDiscovery = read("src/features/import/useImportDiscovery.ts");
 const htmlController = read("src/features/dragdrop/htmlDropController.ts");
+const nativeTargets = read("src/features/dragdrop/nativeDropTargets.ts");
 const tauriConfig = read("src-tauri/tauri.conf.json");
 const commands = read("src-tauri/src/commands.rs");
 
 if (!tauriConfig.includes('"dragDropEnabled": true')) fail("Tauri native dragDropEnabled must remain enabled.");
 if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Desktop filesystem drops must continue through Tauri onDragDropEvent.");
 if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("native filesystem drop diagnostics disappeared.");
+if (!app.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)")) fail("native drop target routing is no longer wired through its extracted owner.");
+if (app.includes("const elementAtNativePosition =") || app.includes("const isImagePath =")) fail("native target detection leaked back into App.tsx.");
+if (!nativeTargets.includes("document.elementFromPoint") || !nativeTargets.includes("window.devicePixelRatio") || !nativeTargets.includes("[data-filerole]")) fail("native target owner lost coordinate/scale/Drawer classification.");
 if (!app.includes("await importDroppedPaths(payload.paths)")) fail("native library drop no longer enters the normal import stream with original filesystem paths.");
 if (!importDiscovery.includes("startStream: startImportReviewStream") || !importDiscovery.includes("await services.startStream(normalized)")) fail("native import no longer starts the incremental Review stream.");
 if (!app.includes("No\n      // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.")) fail("zero-copy native import invariant comment disappeared; review this path before release.");
