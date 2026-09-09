@@ -36,6 +36,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/temp-task-7-3-close.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("migration/Registro-de-avance.md")
+          path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n", encoding="utf-8")
+          PY
           git diff --check
 
       - name: Commit closure only on test branch
