@@ -9,6 +9,7 @@ const fail = message => { throw new Error(`Import/native-drop regression: ${mess
 const app = read("src/App.tsx");
 const importDiscovery = read("src/features/import/useImportDiscovery.ts");
 const htmlController = read("src/features/dragdrop/htmlDropController.ts");
+const htmlDropOwner = read("src/features/dragdrop/useHtmlLibraryDrop.ts");
 const nativeTargets = read("src/features/dragdrop/nativeDropTargets.ts");
 const tauriConfig = read("src-tauri/tauri.conf.json");
 const commands = read("src-tauri/src/commands.rs");
@@ -23,10 +24,12 @@ if (!app.includes("await importDroppedPaths(payload.paths)")) fail("native libra
 if (!importDiscovery.includes("startStream: startImportReviewStream") || !importDiscovery.includes("await services.startStream(normalized)")) fail("native import no longer starts the incremental Review stream.");
 if (!app.includes("No\n      // DataTransfer File.arrayBuffer(), no drop-staging, and no pre-Review copy.")) fail("zero-copy native import invariant comment disappeared; review this path before release.");
 
-const fallbackGuard = app.indexOf("const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);");
-const fallbackReturn = app.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
-const fallbackInstall = app.indexOf("return installHtmlDropController(", fallbackReturn);
+const fallbackGuard = htmlDropOwner.indexOf("const windowsNativeDrop = nativeDropAvailable && /Windows/i.test(navigator.userAgent);");
+const fallbackReturn = htmlDropOwner.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
+const fallbackInstall = htmlDropOwner.indexOf("return installHtmlDropController(", fallbackReturn);
 if (fallbackGuard < 0 || fallbackReturn < 0 || fallbackInstall < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");
+if (!app.includes("useHtmlLibraryDrop({")) fail("App no longer composes the extracted HTML drop owner.");
+if (app.includes("installHtmlDropController")) fail("HTML controller installation leaked back into App.tsx.");
 
 const nativeStart = app.indexOf("const handleNativeDrop = async");
 const nativeEnd = app.indexOf("    void (async () => {", nativeStart);

@@ -1,48 +1,4 @@
-from pathlib import Path
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise RuntimeError(message)
-
-
-app_path = Path("src/App.tsx")
-app = app_path.read_text(encoding="utf-8")
-
-app = app.replace('import { artworkFileToDataUrl } from "./features/dragdrop/browserArtwork";\n', "")
-app = app.replace('import { installHtmlDropController } from "./features/dragdrop/htmlDropController";\n', "")
-native_import = 'import { isNativeImagePath, resolveNativeExternalImageDropTarget, resolveNativeFilesystemDropTarget } from "./features/dragdrop/nativeDropTargets";\n'
-hook_import = 'import { useHtmlLibraryDrop } from "./features/dragdrop/useHtmlLibraryDrop";\n'
-if hook_import not in app:
-    require(native_import in app, "native target import anchor missing")
-    app = app.replace(native_import, native_import + hook_import, 1)
-
-start = app.find("  const handleBrowserBeatFileDrop = useCallback")
-native_effect = app.find('  useEffect(() => {\n    if (!isTauriAvailable) return;', start)
-require(start >= 0 and native_effect > start, "HTML drop ownership block anchors missing")
-
-hook_call = '''  useHtmlLibraryDrop({
-    nativeDropAvailable: isTauriAvailable,
-    browserFileImport: platform.capabilities.browserFileImport,
-    reviewSkeletonEnabled: REVIEW_SKELETON_ENABLED,
-    beatsLatestRef,
-    setDropActive,
-    setBeatCloudUpdateBusy,
-    setBeatFileDrop,
-    setLibraryDropStaging,
-    handleDropArtwork,
-    handleAutoProjectDrop,
-    handleBrowserBeatAssetDrop,
-    handleBrowserProjectDrop,
-    importDroppedBrowserFiles,
-    importDroppedPaths,
-  });
-
-'''
-app = app[:start] + hook_call + app[native_effect:]
-app_path.write_text(app, encoding="utf-8")
-
-hook = '''import { useCallback, useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import type { Beat } from "../../types";
 import { appAlert } from "../../lib/dialog";
 import { fetchInternetArtworkDataUrl } from "../artwork/internetArtwork";
@@ -143,9 +99,9 @@ export function useHtmlLibraryDrop({
           for (const source of sources) {
             try {
               const candidate = source.kind === "remote"
-                ? (/^data:image\\//i.test(source.url) ? source.url : await fetchInternetArtworkDataUrl(source.url))
+                ? (/^data:image\//i.test(source.url) ? source.url : await fetchInternetArtworkDataUrl(source.url))
                 : await artworkFileToDataUrl(source.file);
-              if (!/^data:image\\//i.test(candidate) || candidate.length < 32) {
+              if (!/^data:image\//i.test(candidate) || candidate.length < 32) {
                 throw new Error("Artwork source returned an invalid/empty image payload.");
               }
               imageData = candidate;
@@ -236,93 +192,3 @@ export function useHtmlLibraryDrop({
     importDroppedPaths,
   ]);
 }
-'''
-Path("src/features/dragdrop/useHtmlLibraryDrop.ts").write_text(hook, encoding="utf-8")
-
-test = '''import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-
-const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
-const app = read("src/App.tsx");
-const owner = read("src/features/dragdrop/useHtmlLibraryDrop.ts");
-const controller = read("src/features/dragdrop/htmlDropController.ts");
-
-describe("task 8.2 HTML/browser drop extraction", () => {
-  it("moves controller installation and browser beat routing out of App", () => {
-    expect(app).toContain("useHtmlLibraryDrop({");
-    expect(app).not.toContain("installHtmlDropController");
-    expect(app).not.toContain("const handleBrowserBeatFileDrop = useCallback");
-    expect(owner).toContain("return installHtmlDropController({");
-    expect((owner.match(/installHtmlDropController\\(/g) ?? []).length).toBe(1);
-    expect(owner).toContain("const handleBrowserBeatFileDrop = useCallback");
-  });
-
-  it("keeps Windows on the native owner and Mac/browser HTML arbitration intact", () => {
-    expect(owner).toContain("const windowsNativeDrop = nativeDropAvailable && /Windows/i.test(navigator.userAgent);");
-    expect(owner).toContain("if (windowsNativeDrop) return;");
-    expect(controller).toContain("waitForNativeLibraryDropClaim(htmlDropStartedAt)");
-    expect(controller).toContain("captureArtworkSourcesFromDataTransfer(dt)");
-  });
-
-  it("preserves browser artwork fallback before generic file import", () => {
-    expect(owner).toContain("for (const source of sources)");
-    expect(owner).toContain("fetchInternetArtworkDataUrl(source.url)");
-    expect(owner).toContain("artworkFileToDataUrl(source.file)");
-    expect(owner).toContain("await handleDropArtwork(beat, imageData)");
-    expect(controller.indexOf("if (artworkBeatId && artworkCandidate)")).toBeLessThan(controller.indexOf("if (!hasFilePayload(dt))"));
-  });
-
-  it("keeps browser asset/project and library import actions explicit", () => {
-    expect(owner).toContain('name.endsWith(".mp3") ? "MASTER"');
-    expect(owner).toContain('name.endsWith(".wav") ? "WAV"');
-    expect(owner).toContain('name.endsWith(".zip") ? "PROJECT"');
-    expect(owner).toContain("handleBrowserBeatAssetDrop(beat, file, kind)");
-    expect(owner).toContain("handleBrowserProjectDrop(beat, file)");
-    expect(owner).toContain("onBrowserLibraryFileDrop: browserFileImport ? importDroppedBrowserFiles : undefined");
-    expect(owner).toContain("await importDroppedPaths(roots.map(root => root.path))");
-  });
-
-  it("preserves staged Desktop beat handling and Backup exclusion", () => {
-    expect(owner).toContain("isBackupFolderPath(root.path)");
-    expect(owner).toContain("cleanupStagedDropPaths([root.path])");
-    expect(owner).toContain("const autoResult = await handleAutoProjectDrop(beat, root.path)");
-    expect(owner).toContain("setBeatFileDrop({ beat, filePath: root.path, kind: root.kind })");
-  });
-});
-'''
-Path("tests/integration/appHtmlLibraryDropExtraction.test.ts").write_text(test, encoding="utf-8")
-
-regression = Path("scripts/regression-import-native.mjs")
-text = regression.read_text(encoding="utf-8")
-anchor = 'const htmlController = read("src/features/dragdrop/htmlDropController.ts");\n'
-addition = 'const htmlDropOwner = read("src/features/dragdrop/useHtmlLibraryDrop.ts");\n'
-if addition not in text:
-    require(anchor in text, "regression-import-native read anchor missing")
-    text = text.replace(anchor, anchor + addition, 1)
-old = '''const fallbackGuard = app.indexOf("const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);");
-const fallbackReturn = app.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
-const fallbackInstall = app.indexOf("return installHtmlDropController(", fallbackReturn);
-if (fallbackGuard < 0 || fallbackReturn < 0 || fallbackInstall < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");
-'''
-new = '''const fallbackGuard = htmlDropOwner.indexOf("const windowsNativeDrop = nativeDropAvailable && /Windows/i.test(navigator.userAgent);");
-const fallbackReturn = htmlDropOwner.indexOf("if (windowsNativeDrop) return;", fallbackGuard);
-const fallbackInstall = htmlDropOwner.indexOf("return installHtmlDropController(", fallbackReturn);
-if (fallbackGuard < 0 || fallbackReturn < 0 || fallbackInstall < 0) fail("Windows is no longer excluded from the HTML DataTransfer fallback.");
-if (!app.includes("useHtmlLibraryDrop({")) fail("App no longer composes the extracted HTML drop owner.");
-if (app.includes("installHtmlDropController")) fail("HTML controller installation leaked back into App.tsx.");
-'''
-require(old in text, "regression-import-native fallback block missing")
-regression.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-regressions = Path("scripts/run-regressions.mjs")
-text = regressions.read_text(encoding="utf-8")
-anchor = '  const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");\n'
-addition = '  const htmlDropOwner = readFileSync(path.join(root, "src", "features", "dragdrop", "useHtmlLibraryDrop.ts"), "utf8");\n'
-if addition not in text:
-    require(anchor in text, "run-regressions controller anchor missing")
-    text = text.replace(anchor, anchor + addition, 1)
-old = '  if (!app.includes("windowsNativeDrop") || !app.includes("if (windowsNativeDrop) return")) fail("HTML DataTransfer staging is still installed on Windows and can race native filesystem drops.");\n'
-new = '  if (!htmlDropOwner.includes("windowsNativeDrop") || !htmlDropOwner.includes("if (windowsNativeDrop) return")) fail("HTML DataTransfer staging is still installed on Windows and can race native filesystem drops.");\n  if (!app.includes("useHtmlLibraryDrop({")) fail("App no longer composes the extracted HTML/browser drop owner.");\n  if (app.includes("installHtmlDropController")) fail("App.tsx took ownership of HTML controller installation again.");\n'
-require(old in text, "run-regressions Windows ownership guard missing")
-regressions.write_text(text.replace(old, new, 1), encoding="utf-8")

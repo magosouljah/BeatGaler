@@ -21,10 +21,8 @@ import { useTagColors, setTagColor } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
 import { cleanTags } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
-import { artworkFileToDataUrl } from "./features/dragdrop/browserArtwork";
 import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeExternalImage";
 import { claimNativeLibraryDrop } from "./features/dragdrop/nativeDropArbiter";
-import { installHtmlDropController } from "./features/dragdrop/htmlDropController";
 import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "./features/dragdrop/dropStaging";
 import CloudFilesModal from "./features/downloads/components/CloudFilesModal";
 import { useBeatDownloads } from "./features/downloads/useBeatDownloads";
@@ -43,6 +41,7 @@ import { useImportSaveAll } from "./features/import/useImportSaveAll";
 import { useBrowserImport } from "./features/import/useBrowserImport";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { isNativeImagePath, resolveNativeExternalImageDropTarget, resolveNativeFilesystemDropTarget } from "./features/dragdrop/nativeDropTargets";
+import { useHtmlLibraryDrop } from "./features/dragdrop/useHtmlLibraryDrop";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
 import { selectFilteredAndSortedBeats } from "./features/library/librarySelectors";
@@ -1325,136 +1324,22 @@ const {
   }, [beatFileDrop, hasStoredProject, startMasterAssetUpdate, startProjectAssetUpdate, startWavAssetUpdate]);
 
 
-  const handleBrowserBeatFileDrop = useCallback(async (beatId: string, files: File[]): Promise<boolean> => {
-    const beat = beatsLatestRef.current.find(item => item.id === beatId);
-    if (!beat) throw new Error(`Dropped file target beat was not found: ${beatId}`);
-    if (files.length !== 1) {
-      await appAlert({ title: "Drop one file at a time", message: "Drop one MP3, WAV, or PROJECT ZIP on a beat." });
-      return false;
-    }
-
-    const file = files[0];
-    const name = file.name.toLowerCase();
-    const kind = name.endsWith(".mp3") ? "MASTER" : name.endsWith(".wav") ? "WAV" : name.endsWith(".zip") ? "PROJECT" : null;
-    if (!kind) {
-      await appAlert({ title: "Unsupported file", message: "BeatGaler Web accepts MP3, WAV, or PROJECT ZIP files on an existing beat." });
-      return false;
-    }
-
-    if (kind === "MASTER" || kind === "WAV") {
-      return handleBrowserBeatAssetDrop(beat, file, kind);
-    }
-
-    return handleBrowserProjectDrop(beat, file);
-  }, [handleBrowserBeatAssetDrop, handleBrowserProjectDrop]);
-
-  // Browser/Pinterest controller. Windows desktop keeps the existing single native
-  // owner. macOS keeps HTML enabled for browser artwork while local Finder drops
-  // are claimed by the native-path fast path before staging can begin.
-  useEffect(() => {
-    // On Windows desktop, WRY/Tauri owns the external drop. Explorer gives us
-    // original paths with zero byte staging, while browser/Pinterest payloads
-    // stay on that same native receiver. The HTML DataTransfer controller is
-    // intentionally not installed there; otherwise the same local file drop
-    // can fall back to File.arrayBuffer() and recreate the 20-40s staging delay.
-    const windowsNativeDrop = isTauriAvailable && /Windows/i.test(navigator.userAgent);
-    if (windowsNativeDrop) return;
-    return installHtmlDropController({
-      setGlobalDropActive: setDropActive,
-      onArtworkDrop: async (beatId, sources) => {
-        const beat = beatsLatestRef.current.find(item => item.id === beatId);
-        if (!beat) throw new Error(`Dropped artwork target beat was not found: ${beatId}`);
-
-        setBeatCloudUpdateBusy(beat.id, true);
-        try {
-          const conversionErrors: string[] = [];
-          let imageData: string | null = null;
-
-          // Browser drags are intentionally multi-source. Pinterest/Chromium may
-          // provide a CDN URL AND a virtual File; whichever representation works
-          // first wins. A failed cloud URL fetch therefore cannot kill a usable
-          // virtual-file drop, and vice versa.
-          for (const source of sources) {
-            try {
-              const candidate = source.kind === "remote"
-                ? (/^data:image\//i.test(source.url) ? source.url : await fetchInternetArtworkDataUrl(source.url))
-                : await artworkFileToDataUrl(source.file);
-              if (!/^data:image\//i.test(candidate) || candidate.length < 32) {
-                throw new Error("Artwork source returned an invalid/empty image payload.");
-              }
-              imageData = candidate;
-              console.info(`[dragdrop/artwork] resolved via ${source.kind}`);
-              break;
-            } catch (error) {
-              conversionErrors.push(`${source.kind}: ${String(error)}`);
-              console.warn(`[dragdrop/artwork] ${source.kind} candidate failed; trying fallback`, error);
-            }
-          }
-
-          if (!imageData) {
-            throw new Error(`Pinterest/browser artwork could not be decoded. ${conversionErrors.join(" | ")}`);
-          }
-
-          await handleDropArtwork(beat, imageData);
-        } finally {
-          setBeatCloudUpdateBusy(beat.id, false);
-        }
-      },
-      onBeatFileDrop: async (beatId, roots) => {
-        const beat = beatsLatestRef.current.find(item => item.id === beatId);
-        if (!beat) return;
-        if (roots.length > 1) {
-          await appAlert({
-            title: "Drop one file at a time",
-            message: "Drop a single file or folder on a beat so BeatGaler can assign it to the correct slot.",
-          });
-          return false;
-        }
-        const root = roots[0];
-        if (isBackupFolderPath(root.path)) {
-          await cleanupStagedDropPaths([root.path]).catch(() => {});
-          await appAlert({
-            title: "Backup folder skipped",
-            message: "BeatGaler keeps Backup/Backups folders out of PROJECT.zip so old project copies are not uploaded.",
-          });
-          return false;
-        }
-
-        // Project files and PROJECT ZIPs have exactly one sensible destination,
-        // so do not make the user answer a redundant "What are you adding?" page.
-        // The card is already in its loading state while WebView2 stages/inspects
-        // the drop, so large ZIPs never look like the app ignored them.
-        const autoResult = await handleAutoProjectDrop(beat, root.path);
-        if (autoResult === "started") return true;
-        if (autoResult === "handled") return false;
-
-        setBeatFileDrop({ beat, filePath: root.path, kind: root.kind });
-        return false;
-      },
-      onBeatFileStagingChange: (beatId, active) => {
-        setBeatCloudUpdateBusy(beatId, active, false);
-      },
-      onLibraryFileStagingChange: active => {
-        if (!REVIEW_SKELETON_ENABLED) return;
-        setLibraryDropStaging(active);
-      },
-      onBrowserBeatFileDrop: platform.capabilities.browserFileImport ? handleBrowserBeatFileDrop : undefined,
-      onBrowserLibraryFileDrop: platform.capabilities.browserFileImport ? importDroppedBrowserFiles : undefined,
-      onLibraryFileDrop: async roots => {
-        await importDroppedPaths(roots.map(root => root.path));
-      },
-      onEmptyFileDrop: async () => {
-        await appAlert({
-          title: "Nothing to import",
-          message: "The desktop drag source reported files, but the app could not access any usable file or folder paths.",
-        });
-      },
-      onError: async error => {
-        console.error("HTML5 drag & drop failed:", error);
-        await appAlert({ title: "Drag & drop failed", message: String(error), danger: true });
-      },
-    });
-  }, [handleAutoProjectDrop, handleBrowserBeatFileDrop, handleDropArtwork, importDroppedBrowserFiles, importDroppedPaths]);
+  useHtmlLibraryDrop({
+    nativeDropAvailable: isTauriAvailable,
+    browserFileImport: platform.capabilities.browserFileImport,
+    reviewSkeletonEnabled: REVIEW_SKELETON_ENABLED,
+    beatsLatestRef,
+    setDropActive,
+    setBeatCloudUpdateBusy,
+    setBeatFileDrop,
+    setLibraryDropStaging,
+    handleDropArtwork,
+    handleAutoProjectDrop,
+    handleBrowserBeatAssetDrop,
+    handleBrowserProjectDrop,
+    importDroppedBrowserFiles,
+    importDroppedPaths,
+  });
 
   useEffect(() => {
     if (!isTauriAvailable) return;

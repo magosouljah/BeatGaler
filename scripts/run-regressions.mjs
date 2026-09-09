@@ -70,6 +70,7 @@ try {
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
+  const htmlDropOwner = readFileSync(path.join(root, "src", "features", "dragdrop", "useHtmlLibraryDrop.ts"), "utf8");
   const rustLib = readFileSync(path.join(root, "src-tauri", "src", "lib.rs"), "utf8");
   const nativeExternalImage = readFileSync(path.join(root, "src", "features", "dragdrop", "nativeExternalImage.ts"), "utf8");
   const wryPatch = readFileSync(path.join(root, "scripts", "wry-patches", "wry-0.54.2-drag_drop.rs"), "utf8").replace(/\r\n/g, "\n");
@@ -87,7 +88,9 @@ try {
   if (!app.includes("getCurrentWebview().onDragDropEvent")) fail("Windows Explorer drops are no longer using Tauri's native filesystem-path event.");
   if (!app.includes("TAURI_NATIVE_DROP") || !app.includes("NATIVE_LIBRARY_IMPORT_START")) fail("Native filesystem drop diagnostics disappeared.");
   if (!app.includes("MAX_NATIVE_DROP_ITEMS = 50")) fail("Native Explorer drop safety cap disappeared.");
-  if (!app.includes("windowsNativeDrop") || !app.includes("if (windowsNativeDrop) return")) fail("HTML DataTransfer staging is still installed on Windows and can race native filesystem drops.");
+  if (!htmlDropOwner.includes("windowsNativeDrop") || !htmlDropOwner.includes("if (windowsNativeDrop) return")) fail("HTML DataTransfer staging is still installed on Windows and can race native filesystem drops.");
+  if (!app.includes("useHtmlLibraryDrop({")) fail("App no longer composes the extracted HTML/browser drop owner.");
+  if (app.includes("installHtmlDropController")) fail("App.tsx took ownership of HTML controller installation again.");
   if (app.includes('listen<NativeDragPayload>("beatgaler-native-drag"')) fail("Obsolete custom OLE event router returned.");
   if (rustLib.includes('mod native_drop;') || rustLib.includes("native_drop::install(app)")) fail("Obsolete custom OLE HWND router is still installed.");
   if (!rustLib.includes("Tauri native filesystem drop enabled")) fail("Rust startup no longer identifies the official native file-drop path.");
@@ -164,8 +167,8 @@ try {
   if (beatFileDropModal.includes('projectSamples') || beatFileDropModal.includes('projectAudio') || beatFileDropModal.includes('role: "other"')) fail("Existing-beat drop chooser reintroduced Samples/Audio split or Other.");
   if (!beatFileDropModal.includes('Loop · Coming soon') || !beatFileDropModal.includes('Stems · Coming soon')) fail("Loop/Stems must remain visible as Coming soon, not active upload destinations.");
   if (!beatProjects.includes('inspectProjectDropSource(filePath)')) fail("Project files/ZIPs lost automatic destination inspection.");
-  if (!app.includes('const autoResult = await handleAutoProjectDrop(beat, root.path)')) fail("Recognized project files/ZIPs must bypass the redundant role chooser.");
-  if (!controller.includes('onBeatFileStagingChange?.(beatId, true)') || !app.includes('onBeatFileStagingChange: (beatId, active)')) fail("Beat-card loading must begin before WebView2 copies/inspects a large PROJECT ZIP.");
+  if (!htmlDropOwner.includes('const autoResult = await handleAutoProjectDrop(beat, root.path)')) fail("Recognized project files/ZIPs must bypass the redundant role chooser.");
+  if (!controller.includes('onBeatFileStagingChange?.(beatId, true)') || !htmlDropOwner.includes('onBeatFileStagingChange: (beatId, active)')) fail("Beat-card loading must begin before WebView2 copies/inspects a large PROJECT ZIP.");
   if (!beatProjects.includes('Replace PROJECT ZIP?') || !beatProjects.includes('Replace project file?')) fail("Existing PROJECT replacement lost its explicit Replace/Cancel confirmation.");
   if (!beatAssetUpdates.includes('setBeatFileDrop(null);') || !beatAssetUpdates.includes('const runBeatCloudUpdate')) fail("Long beat updates must close the chooser before background work starts.");
   if (!playbackController.includes('isBeatCloudUpdateBusy(inputBeat.id)')) fail("Queue/direct Play can bypass a running slot/project update.");
@@ -295,8 +298,8 @@ try {
   const htmlDropController = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
   if (!app.includes("const REVIEW_SKELETON_ENABLED = true")) fail("Instant Review lost the removable skeleton gate.");
   if (!app.includes("const [libraryDropStaging, setLibraryDropStaging]")) fail("Instant Review no longer covers the pre-import WebView2 staging window.");
-  if (!app.includes("onLibraryFileStagingChange: active")) fail("App is no longer notified at the HTML fallback library-drop boundary.");
-  if (!app.includes("windowsNativeDrop") || !app.includes("if (windowsNativeDrop) return")) fail("Windows can still enter the expensive HTML staging path.");
+  if (!htmlDropOwner.includes("onLibraryFileStagingChange: active")) fail("The extracted HTML owner no longer notifies App state at the library-drop boundary.");
+  if (!htmlDropOwner.includes("windowsNativeDrop") || !htmlDropOwner.includes("if (windowsNativeDrop) return")) fail("Windows can still enter the expensive HTML staging path.");
   if (!htmlDropController.includes("options.onLibraryFileStagingChange?.(true)")) fail("Non-Windows HTML fallback no longer opens Review feedback before fallback staging.");
   if (!htmlDropController.includes("requestAnimationFrame(() => window.setTimeout(resolve, 0))")) fail("Skeleton paint is no longer guaranteed before HTML fallback staging.");
   const dropSkeletonIndex = htmlDropController.indexOf("options.onLibraryFileStagingChange?.(true)");

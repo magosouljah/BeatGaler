@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const browserImport = readFileSync(resolve(process.cwd(), "src/features/import/useBrowserImport.ts"), "utf8");
+const htmlDropOwner = readFileSync(resolve(process.cwd(), "src/features/dragdrop/useHtmlLibraryDrop.ts"), "utf8");
 const review = readFileSync(resolve(process.cwd(), "src/features/import/useImportReview.ts"), "utf8");
 const capabilities = readFileSync(resolve(process.cwd(), "src/platform/capabilities.ts"), "utf8");
 
@@ -12,7 +13,9 @@ describe("task 7.4 browser import extraction", () => {
     expect(app).toContain('import { useBrowserImport } from "./features/import/useBrowserImport";');
     expect((app.match(/useBrowserImport\(/g) ?? []).length).toBe(1);
     expect(app).not.toContain("const importDroppedBrowserFiles = useCallback");
-    expect(app).toContain("onBrowserLibraryFileDrop: platform.capabilities.browserFileImport ? importDroppedBrowserFiles : undefined");
+    expect(app).toContain("browserFileImport: platform.capabilities.browserFileImport");
+    expect(app).toContain("importDroppedBrowserFiles,");
+    expect(htmlDropOwner).toContain("onBrowserLibraryFileDrop: browserFileImport ? importDroppedBrowserFiles : undefined");
   });
 
   it("preserves one beat per gesture, hydration, tag cleanup and immediate Review preparation", () => {
