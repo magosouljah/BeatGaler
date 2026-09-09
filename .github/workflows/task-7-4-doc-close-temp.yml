@@ -2,10 +2,8 @@ name: Temporary task 7.4 documentation closer
 
 on:
   push:
-    branches:
-      - v0.9.0-test-noche
-    paths:
-      - .github/workflows/task-7-4-doc-close-temp.yml
+    branches: [v0.9.0-test-noche]
+    paths: [.github/workflows/task-7-4-doc-close-temp.yml]
 
 permissions:
   contents: write
@@ -17,206 +15,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Verify staged closer parent
-        shell: bash
+      - name: Close documentation
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "3c485083e4fe6e896017e2e26f4a33d9e25902b5"
-          test "${GITHUB_REF_NAME}" = "v0.9.0-test-noche"
-
-      - name: Close task 7.4 documentation
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import os
-
-          roadmap_path = Path('migration/BeatGaler-roadmap-para-trabajar-con-IAs.md')
-          roadmap = roadmap_path.read_text(encoding='utf-8')
-          old = '### [ ] 7.4 — Separar la entrada de importación web'
-          new = '### [x] 7.4 — Separar la entrada de importación web'
-          if new not in roadmap:
-              if old not in roadmap:
-                  raise SystemExit('7.4 roadmap marker not found')
-              roadmap = roadmap.replace(old, new, 1)
-              roadmap_path.write_text(roadmap, encoding='utf-8')
-
-          registro_path = Path('migration/Registro-de-avance.md')
-          registro = registro_path.read_text(encoding='utf-8')
-          entry = r'''### Registro — 7.4
-
-```
-Tarea: 7.4 — Separar la entrada de importación web
-Estado: Terminada
-Fecha: 2026-09-08
-
-Base
-
-- Rama: v0.9.0-test-noche
-- SHA inicial de esta ejecución: 45ca0eae03d1685a1f938f4beaffb4259097882b
-- SHA de implementación validada: 3c485083e4fe6e896017e2e26f4a33d9e25902b5
-- Última tarea verificada: 7.3 — Separar Save All y conflictos
-
-Cambio realizado
-
-- Se creó `src/features/import/useBrowserImport.ts` como owner de la recepción de `File` del navegador, carga de metadata y entrada a Review.
-- `App.tsx` dejó de poseer el cuerpo de la importación Web y conserva solo el wiring del hook con la sesión/Review y la cola cloud.
-- Se conserva un beat por gesto: la entrada Web filtra los audios admitidos y utiliza `supported[0]` para preparar un único candidato.
-- La preparación Web reutiliza `platform.importer`, `makeBrowserFileRef` y la lectura de metadata existente; el nuevo owner no incorpora invocaciones Tauri/nativas.
-- Save conserva la ruta Web ya existente a través de la cola y `platform.cloudData.commitImportedBeat`; esta tarea no movió ni duplicó ese commit.
-- Skip/Cancel continúan liberando las fuentes/candidatos Web que dejan de estar en uso.
-- `useImportSaveAll.ts` expone `clearImportResolution`; se retiró el puente temporal de `setAudioConflictBatch` / `setDropImportBatch` que 7.3 había dejado para la entrada Web.
-- No se inició 8.1.
-
-Adaptación de pruebas
-
-- Se añadió `tests/component-dom/browserImport.test.tsx`, que ejecuta un gesto con varios archivos, exige un único candidato, verifica metadata y comprueba liberación de fuentes al Skip/Cancel.
-- Se añadió `tests/integration/appBrowserImportExtraction.test.ts` para proteger ownership, wiring y ausencia de invocaciones Tauri/nativas en `useBrowserImport.ts`.
-- `tests/integration/appImportDiscoveryExtraction.test.ts` dejó de exigir que `importDroppedBrowserFiles` permaneciera físicamente en `App.tsx`; conserva el contrato de discovery que le corresponde.
-- Las demás guardas de Review, Save All y routing Web permanecen activas.
-
-Archivos afectados
-
-- src/App.tsx
-- src/features/import/useBrowserImport.ts
-- src/features/import/useImportSaveAll.ts
-- tests/component-dom/browserImport.test.tsx
-- tests/integration/appBrowserImportExtraction.test.ts
-- tests/integration/appImportDiscoveryExtraction.test.ts
-- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
-- migration/Registro-de-avance.md
-- migration/BeatGaler-agent-state.md
-
-Comprobaciones ejecutadas
-
-- GitHub Actions `Temporary task 7.4 retry`, run 34298836051.
-- `Apply extraction and focused checks` — PASS.
-- `Run migration matrix` — PASS.
-- `Commit exact validated implementation` — PASS.
-- `Fast-forward target branch` — PASS.
-- `git diff --check` — PASS.
-- Pruebas focalizadas de 7.4 — PASS.
-- `npm run test:typecheck` — PASS.
-- `npm run test:unit:ts` — PASS.
-- `npm run test:component:dom` — PASS.
-- `npm run test:integration` — PASS.
-- `npm run test:regressions` — PASS.
-- `npm run build:web` — PASS.
-- `npm run build` — PASS.
-- La implementación exacta publicada y validada es `3c485083e4fe6e896017e2e26f4a33d9e25902b5`.
-- El workflow general figura `FAILURE` solo porque `Finalize documentation` falló después de publicar el commit validado; la matriz no falló.
-
-Comprobaciones no ejecutadas
-
-- `npm run check` no se ejecutó como wrapper; la matriz ejecutó individualmente los checks aplicables.
-- Prueba física Web interactiva no ejecutada ni inventada.
-- E2E completos ajenos al flujo de entrada Web no se usaron como criterio de cierre.
-
-Prueba manual
-
-- No ejecutada ni inventada.
-- Sugerida: en Web, arrastrar/seleccionar más de un audio en un mismo gesto y comprobar que Review recibe un único candidato con metadata; omitir/cancelar y repetir; guardar otro beat y comprobar que sigue la ruta cloud Web.
-- Resultado esperado: un beat por gesto, fuentes liberadas al omitir/cancelar y Save inicia el mismo commit/upload Web de antes sin invocaciones nativas.
-
-Pendientes / fuera de alcance
-
-- 8.1 — Separar detección del destino queda pendiente y no fue iniciada.
-- La recepción HTML general y el arbitraje de destinos corresponden a 8.1/8.2 y no se movieron en 7.4.
-
-Riesgos previos relevantes
-
-- Ningún riesgo nuevo de producto quedó abierto por 7.4.
-
-Herramientas temporales restantes
-
-- Ninguna creada por 7.4 permanece en el árbol final; este closer temporal se elimina dentro del commit documental.
-
-Fallos encontrados y causa
-
-- Run 34298545804: la primera matriz se detuvo porque `appImportDiscoveryExtraction.test.ts` todavía exigía que `importDroppedBrowserFiles` permaneciera en App “hasta 7.4”. Era una guarda previa acoplada al ownership que esta tarea debía mover. No se publicó implementación.
-- Run 34298836051: la matriz, el commit exacto y el fast-forward terminaron PASS y publicaron `3c485083e4fe6e896017e2e26f4a33d9e25902b5`; el único fallo posterior fue `Finalize documentation`, por lo que este cierre recupera únicamente roadmap/registro/agent-state sin repetir código.
-- Se descartó un SHA transitorio `43df569895f21e47e945f71a3fe4b19b089cfdf6` mencionado durante el tooling: no existe en GitHub. El SHA remoto real publicado es `3c485083e4fe6e896017e2e26f4a33d9e25902b5`.
-
-Veredicto
-
-Terminada.
-
-La entrada de importación Web quedó fuera de `App.tsx`, con un beat por gesto, metadata y Review preservados, liberación al omitir/cancelar y cero invocaciones nativas desde el owner Web.
-
-Siguiente tarea
-
-8.1 — Separar detección del destino.
-
-No iniciada.
-```
-'''
-          if '### Registro — 7.4' not in registro:
-              registro = registro.rstrip() + '\n\n' + entry.strip() + '\n'
-              registro_path.write_text(registro, encoding='utf-8')
-
-          close_run = os.environ.get('GITHUB_RUN_ID', 'unknown')
-          agent = f'''# BeatGaler — Agent State
-
-## Contexto
-
-- Fecha de ejecución: 2026-09-08
-- Rama de trabajo: `v0.9.0-test-noche`
-- Tarea trabajada: `7.4 — Separar la entrada de importación web`
-- Estado: `Terminada`
-- Última tarea terminada: `7.4 — Separar la entrada de importación web`
-
-## Base de esta ejecución
-
-- SHA inicial: `45ca0eae03d1685a1f938f4beaffb4259097882b`
-- SHA de implementación validada: `3c485083e4fe6e896017e2e26f4a33d9e25902b5`
-- Run de implementación final: `34298836051` — `Temporary task 7.4 retry` — matriz, commit exacto y fast-forward correctos; el workflow general falló únicamente en el cierre documental posterior.
-- Run de recuperación documental: `{close_run}` — modifica solo los tres documentos de migración en el árbol final.
-- El SHA final real de la ronda es el HEAD remoto posterior a este cierre documental y debe releerse después del push.
-
-## Resultado verificado
-
-- `useBrowserImport.ts` posee la recepción de `File` del navegador, selección de un beat por gesto, carga de metadata y entrada a Review.
-- `App.tsx` conserva solo el wiring de esa entrada con Review/import y la cola cloud existente.
-- La preparación Web reutiliza `platform.importer`; el nuevo owner no contiene invocaciones Tauri/nativas.
-- Save conserva la ruta Web existente hacia la cola y `platform.cloudData.commitImportedBeat`.
-- Skip/Cancel liberan las fuentes/candidatos Web que dejan de estar en uso.
-- `useImportSaveAll.ts` expone `clearImportResolution`, retirando el puente temporal de setters de conflictos dejado por 7.3.
-- Las pruebas focalizadas y la matriz completa de checks pasaron sobre `3c485083e4fe6e896017e2e26f4a33d9e25902b5`.
-
-## Pendientes concretos
-
-- `8.1 — Separar detección del destino`.
-
-## Comprobaciones pendientes
-
-- Ninguna necesaria para cerrar 7.4.
-- Prueba física Web interactiva no ejecutada ni inventada; no quedó como bloqueo porque el flujo modificado quedó cubierto por component DOM, integración, regresiones y build Web.
-
-## Siguiente tarea
-
-- `8.1 — Separar detección del destino`
-- Estado: `Pendiente`
-- No iniciar hasta la próxima ronda.
-'''
-          Path('migration/BeatGaler-agent-state.md').write_text(agent, encoding='utf-8')
-          PY
-
+          git merge-base --is-ancestor 3c485083e4fe6e896017e2e26f4a33d9e25902b5 HEAD
+          python .github/task-7-4-doc-close.py
+          rm .github/task-7-4-doc-close.py
           rm .github/workflows/task-7-4-doc-close-temp.yml
-
           git diff --check
           actual="$(git diff --name-only 3c485083e4fe6e896017e2e26f4a33d9e25902b5 -- | sort)"
-          expected="$(printf '%s\n' \
-            migration/BeatGaler-agent-state.md \
-            migration/BeatGaler-roadmap-para-trabajar-con-IAs.md \
-            migration/Registro-de-avance.md | sort)"
+          expected="$(printf '%s\n' migration/BeatGaler-agent-state.md migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md | sort)"
           test "$actual" = "$expected"
-
-      - name: Commit and push documentation only
-        shell: bash
-        run: |
-          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
