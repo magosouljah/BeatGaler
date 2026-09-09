@@ -8,6 +8,7 @@ on:
       - .github/workflows/temp-task-10-1.yml
       - .github/scripts/temp-task-10-1.mjs
       - .github/scripts/temp-task-10-1-fix.mjs
+      - .github/scripts/temp-task-10-1-regression-fix.mjs
 
 permissions:
   contents: write
@@ -29,6 +30,7 @@ jobs:
         run: |
           node .github/scripts/temp-task-10-1.mjs
           node .github/scripts/temp-task-10-1-fix.mjs
+          node .github/scripts/temp-task-10-1-regression-fix.mjs
       - name: Focused characterization
         run: npx vitest run tests/component-dom/appShellExtraction.test.ts
       - name: Typecheck
