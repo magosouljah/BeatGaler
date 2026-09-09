@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import type { Beat, AppSettings } from "./types";
+import type { Beat } from "./types";
 import BeatCard from "./components/BeatCard";
 import Drawer from "./components/Drawer";
 import Player from "./components/Player";
@@ -61,6 +61,9 @@ import { useTrashActions } from "./features/trash/useTrashActions";
 import { useWebLibraryReconciled } from "./features/library/useWebLibraryReconciled";
 import { createBeatRuntimeState } from "./features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "./features/state/useBeatRuntimeRegistry";
+import { useSessionState, type ConnectionState } from "./features/session/useSessionState";
+import { useSessionActions } from "./features/session/useSessionActions";
+import { useCustomCursor } from "./features/session/useCustomCursor";
 
 // Intentionally isolated: if real-world timings prove the skeleton unnecessary,
 // flipping/removing this one constant deletes the visual layer without touching
@@ -99,8 +102,6 @@ function isRuntimeConflictError(error: unknown): boolean {
   const message = runtimeErrorMessage(error).toLowerCase();
   return message.includes("409") || message.includes("conflict") || message.includes("revision mismatch") || message.includes("version mismatch");
 }
-
-type ConnectionState = "checking" | "online" | "poor" | "offline";
 
 function BeatGalerApp() {
   const {
@@ -200,13 +201,16 @@ function BeatGalerApp() {
     startReview,
   } = useImportSession();
   const [showSettings, setShowSettings] = useState(false);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
-  // Prevent cached/local state from being pushed back to Telegram before this
-  // app session has first verified and pulled the authoritative pinned index.
-  const [cloudSessionVerified, setCloudSessionVerified] = useState(false);
-  const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
-    typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "checking"
-  );
+  const {
+    settings,
+    setSettings,
+    setupDone,
+    setSetupDone,
+    connectionState,
+    setConnectionState,
+    cloudSessionVerified,
+    setCloudSessionVerified,
+  } = useSessionState();
   const {
     cloudFilesBeat,
     cloudFiles,
@@ -219,7 +223,6 @@ function BeatGalerApp() {
     closeCloudFiles,
     dismissDownloadError,
   } = useBeatDownloads({ connectionState, beatRuntimeStatesRef, transitionRuntime });
-  const [setupDone, setSetupDone] = useState(false);
   const [showUpload, setShowUpload] = useState<{ initialBeat: Beat | null; selectedIds?: string[] } | null>(null);
 
   const {
@@ -615,40 +618,7 @@ function BeatGalerApp() {
     };
   }, [setupDone]);
 
-  useEffect(() => {
-    const styleId = "beatgaler-custom-cursor-style";
-    let style = document.getElementById(styleId) as HTMLStyleElement | null;
-
-    if (settings?.custom_cursor_enabled ?? true) {
-      if (!style) {
-        style = document.createElement("style");
-        style.id = styleId;
-        style.textContent = `
-          html, body, body * {
-            cursor: url('/beatgaler-custom-cursor.cur'), url('/beatgaler-custom-cursor.png') 0 0, auto !important;
-          }
-          input[type="text"],
-          input[type="email"],
-          input[type="password"],
-          input[type="search"],
-          input[type="url"],
-          input[type="tel"],
-          input[type="number"],
-          textarea,
-          [contenteditable="true"] {
-            cursor: text !important;
-          }
-        `;
-        document.head.appendChild(style);
-      }
-    } else {
-      style?.remove();
-    }
-
-    return () => {
-      // Keep the current setting active across React re-renders.
-    };
-  }, [settings?.custom_cursor_enabled]);
+  useCustomCursor(settings?.custom_cursor_enabled ?? true);
 
 
   // Telegram/BeatGaler synchronization is push-based.
@@ -1149,18 +1119,23 @@ const {
   // libraryStateManager at their actual logical commit boundary. This prevents
   // render/cache hydration from becoming an accidental cloud mutation.
 
-  const handleDisconnectTelegramAccount = useCallback(async () => {
-    await logoutBeatGalerAccount().catch(() => {});
-    releaseFile();
-    progressiveRevealRunRef.current += 1;
-    clearPlaybackPreparation();
-    clearArtworkHydration();
-    setRevealedBeatIds(new Set());
-    setCloudSessionVerified(false);
-    setBeats([]);
-    clearSelection();
-    setSettings(current => current ? { ...current, telegram_cloud_connected: false, telegram_cloud_username: null } : current);
-  }, [releaseFile]);
+  const {
+    handleIncompleteWarningsChanged,
+    handleCustomCursorChanged,
+    handleFolderChanged,
+    handleDisconnectTelegramAccount,
+  } = useSessionActions({
+    setSettings,
+    setCloudSessionVerified,
+    logoutAccount: logoutBeatGalerAccount,
+    releaseFile,
+    progressiveRevealRunRef,
+    clearPlaybackPreparation,
+    clearArtworkHydration,
+    setRevealedBeatIds,
+    setBeats,
+    clearSelection,
+  });
 
   const updateBeat = useCallback((updated: Beat) => {
     if (updated.telegram_file_id && connectionState === "online") {
@@ -2015,19 +1990,15 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         <SettingsPanel
           currentFolder={settings?.beats_folder ?? null}
           showIncompleteWarnings={settings?.incomplete_warnings_enabled ?? true}
-          onIncompleteWarningsChanged={(enabled: boolean) => setSettings(current => current
-            ? { ...current, incomplete_warnings_enabled: enabled }
-            : { beats_folder: null, incomplete_warnings_enabled: enabled, custom_cursor_enabled: true })}
+          onIncompleteWarningsChanged={handleIncompleteWarningsChanged}
           customCursorEnabled={settings?.custom_cursor_enabled ?? true}
-          onCustomCursorChanged={(enabled: boolean) => setSettings(current => current
-            ? { ...current, custom_cursor_enabled: enabled }
-            : { beats_folder: null, incomplete_warnings_enabled: true, custom_cursor_enabled: enabled })}
+          onCustomCursorChanged={handleCustomCursorChanged}
           telegramConnected={settings?.telegram_cloud_connected ?? false}
           networkOnline={connectionState === "online"}
           telegramUsername={settings?.telegram_cloud_username ?? null}
           onDisconnectTelegram={handleDisconnectTelegramAccount}
           onClose={() => setShowSettings(false)}
-          onFolderChanged={folder => setSettings(s => s ? { ...s, beats_folder: folder } : { beats_folder: folder, incomplete_warnings_enabled: true, custom_cursor_enabled: true })}
+          onFolderChanged={handleFolderChanged}
           onBeatRestored={handleBeatRestored}
         />
       )}

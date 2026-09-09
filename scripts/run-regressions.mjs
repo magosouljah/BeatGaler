@@ -55,6 +55,7 @@ try {
   });
 
   const app = readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+  const customCursor = readFileSync(path.join(root, "src", "features", "session", "useCustomCursor.ts"), "utf8");
   const drawerCloudPersistence = readFileSync(path.join(root, "src", "features", "edit", "useDrawerCloudPersistence.ts"), "utf8");
   const beatAssetUpdates = readFileSync(path.join(root, "src", "features", "edit", "useBeatAssetUpdates.ts"), "utf8");
   const beatProjects = readFileSync(path.join(root, "src", "features", "projects", "useBeatProjects.ts"), "utf8");
@@ -151,8 +152,8 @@ try {
   // Cursor regression shield. Range/checkbox/radio controls must never inherit
   // the text I-beam just because they are <input> elements. Only text-editing
   // controls are allowed to opt into cursor:text.
-  if (app.includes('input, textarea, [contenteditable="true"]')) fail("Global custom-cursor CSS reintroduced cursor:text for every input; range sliders would show an I-beam again.");
-  if (!app.includes('input[type="text"]') || !app.includes('input[type="email"]') || !app.includes('[contenteditable="true"]')) fail("Custom-cursor CSS lost the explicit text-editing input whitelist.");
+  if (customCursor.includes('input, textarea, [contenteditable="true"]')) fail("Global custom-cursor CSS reintroduced cursor:text for every input; range sliders would show an I-beam again.");
+  if (!customCursor.includes('input[type="text"]') || !customCursor.includes('input[type="email"]') || !customCursor.includes('[contenteditable="true"]')) fail("Custom-cursor CSS lost the explicit text-editing input whitelist.");
   if (!app.includes('input[type="range"]') && !readFileSync(path.join(root, "src", "components", "Player.tsx"), "utf8").includes('type="range"')) fail("Volume range control could not be located for cursor regression coverage.");
   console.log("PASS cursor guard: range controls keep the normal BeatGaler cursor instead of the text I-beam");
 
