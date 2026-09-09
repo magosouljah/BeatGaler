@@ -39,14 +39,15 @@ jobs:
           initial='344571f32efa83610e2ad17bb48566b74ece3ede'
           test "${GITHUB_REF_NAME}" = "$target"
           git merge-base --is-ancestor "$initial" HEAD
-          unexpected="$(git diff --name-only "$initial"..HEAD | grep -v -E '^(\.github/workflows/task-8-2-temp\.yml|scripts/task-8-2-apply-temp\.py)$' || true)"
+          unexpected="$(git diff --name-only "$initial"..HEAD | grep -v -E '^(\.github/workflows/task-8-2-temp\.yml|scripts/task-8-2-apply-temp\.py|scripts/task-8-2-tests-temp\.py)$' || true)"
           test -z "$unexpected"
           remote="$(git ls-remote origin "refs/heads/$target" | awk '{print $1}')"
           test "$remote" = "${GITHUB_SHA}"
           python scripts/task-8-2-apply-temp.py
+          python scripts/task-8-2-tests-temp.py
           git diff --check
-          git rm .github/workflows/task-8-2-temp.yml scripts/task-8-2-apply-temp.py
-          git add src/App.tsx src/features/dragdrop/useHtmlLibraryDrop.ts tests/integration/appHtmlLibraryDropExtraction.test.ts scripts/regression-import-native.mjs scripts/run-regressions.mjs
+          git rm .github/workflows/task-8-2-temp.yml scripts/task-8-2-apply-temp.py scripts/task-8-2-tests-temp.py
+          git add src/App.tsx src/features/dragdrop/useHtmlLibraryDrop.ts tests/integration/appHtmlLibraryDropExtraction.test.ts tests/integration/appBrowserImportExtraction.test.ts tests/integration/issue97RuntimeWebFollowup.test.ts scripts/regression-import-native.mjs scripts/run-regressions.mjs
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
