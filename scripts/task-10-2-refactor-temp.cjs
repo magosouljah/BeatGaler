@@ -81,6 +81,22 @@ const oldDirectDouble = 'readFileSync("src/App.tsx", "utf8")';
 const newDirectDouble = 'readFileSync("src/app/useBeatGalerComposition.ts", "utf8").replaceAll("../", "./")';
 const oldDirectSingle = "readFileSync('src/App.tsx', 'utf8')";
 const newDirectSingle = "readFileSync('src/app/useBeatGalerComposition.ts', 'utf8').replaceAll('../', './')";
+const oldResolvedRootDouble = 'readFileSync(resolve(root, "src/App.tsx"), "utf8")';
+const newResolvedRootDouble = 'readFileSync(resolve(root, "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./")';
+const oldResolvedRootSingle = "readFileSync(resolve(root, 'src/App.tsx'), 'utf8')";
+const newResolvedRootSingle = "readFileSync(resolve(root, 'src/app/useBeatGalerComposition.ts'), 'utf8').replaceAll('../', './')";
+const oldReadDouble = 'read("src/App.tsx")';
+const newReadDouble = 'read("src/app/useBeatGalerComposition.ts").replaceAll("../", "./")';
+const oldReadSingle = "read('src/App.tsx')";
+const newReadSingle = "read('src/app/useBeatGalerComposition.ts').replaceAll('../', './')";
+const oldSourceDouble = 'source("src/App.tsx")';
+const newSourceDouble = 'source("src/app/useBeatGalerComposition.ts").replaceAll("../", "./")';
+const oldSourceSingle = "source('src/App.tsx')";
+const newSourceSingle = "source('src/app/useBeatGalerComposition.ts').replaceAll('../', './')";
+const oldFsPathJoinDouble = 'fs.readFileSync(path.join(root, "src/App.tsx"), "utf8")';
+const newFsPathJoinDouble = 'fs.readFileSync(path.join(root, "src/app/useBeatGalerComposition.ts"), "utf8").replaceAll("../", "./")';
+const oldFsPathJoinSingle = "fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8')";
+const newFsPathJoinSingle = "fs.readFileSync(path.join(root, 'src/app/useBeatGalerComposition.ts'), 'utf8').replaceAll('../', './')";
 let updatedIntegrationFiles = 0;
 
 for (const name of fs.readdirSync(integrationDir)) {
@@ -92,7 +108,15 @@ for (const name of fs.readdirSync(integrationDir)) {
     .replaceAll(oldResolvedDouble, newResolvedDouble)
     .replaceAll(oldResolvedSingle, newResolvedSingle)
     .replaceAll(oldDirectDouble, newDirectDouble)
-    .replaceAll(oldDirectSingle, newDirectSingle);
+    .replaceAll(oldDirectSingle, newDirectSingle)
+    .replaceAll(oldResolvedRootDouble, newResolvedRootDouble)
+    .replaceAll(oldResolvedRootSingle, newResolvedRootSingle)
+    .replaceAll(oldReadDouble, newReadDouble)
+    .replaceAll(oldReadSingle, newReadSingle)
+    .replaceAll(oldSourceDouble, newSourceDouble)
+    .replaceAll(oldSourceSingle, newSourceSingle)
+    .replaceAll(oldFsPathJoinDouble, newFsPathJoinDouble)
+    .replaceAll(oldFsPathJoinSingle, newFsPathJoinSingle);
   if (text !== before) {
     fs.writeFileSync(testPath, text);
     updatedIntegrationFiles += 1;
