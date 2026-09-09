@@ -17,4 +17,8 @@ PASS cursor guard: range controls keep the normal BeatGaler cursor instead of th
 PASS project-drop guard: beat target survives WebView2 drop, ZIP inspection shows loading, valid project types auto-route, and Backup folders are skipped (including inside ZIPs) with notice
 PASS export metadata guard: source tags/chunks survive overlay and MP3/WAV filenames include BPM + key
 PASS remove/trash guard: names are human-readable; Empty Trash never blocks UI, retries transient Cloud enqueue, and permanent deletes cannot resurrect
-FAIL regression guard: App.tsx is no longer wired to the extracted Trash actions owner.
+PASS task 5.5 ownership guard: delete/bulk/restore live in useTrashActions and restore does not double-publish INDEX
+PASS upload/play guard: first Play waits for real MASTER readiness and loading beats stay non-interactive
+PASS runtime-state guard: sync/download/playback are independent, Offline is orthogonal, errors remember previous_state, and App flows are wired
+PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, Telegram flood-wait, and authoritative final sync
+FAIL regression guard: Cached cloud presentation can become interactive before authority verification.
