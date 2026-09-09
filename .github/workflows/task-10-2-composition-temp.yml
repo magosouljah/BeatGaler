@@ -74,6 +74,18 @@ jobs:
             .replace('expect(app).toContain("usePublishingActions({");', 'expect(composition).toContain("usePublishingActions({");');
           fs.writeFileSync(shellTestPath, shellTest);
 
+          const startupTestPath = 'tests/component-dom/startupRevealArchitecture.test.ts';
+          let startupTest = fs.readFileSync(startupTestPath, 'utf8');
+          startupTest = startupTest
+            .replace('const app = readFileSync("src/App.tsx", "utf8");', 'const app = readFileSync("src/App.tsx", "utf8");\nconst beatGalerApp = readFileSync("src/app/BeatGalerApp.tsx", "utf8");\nconst composition = readFileSync("src/app/useBeatGalerComposition.ts", "utf8");')
+            .replace('expect(app).toContain("} = useLibraryState();");', 'expect(composition).toContain("} = useLibraryState();");')
+            .replace('expect(app).toContain("useLibraryPresentationCache(");', 'expect(composition).toContain("useLibraryPresentationCache(");')
+            .replace('expect(app).not.toContain("After the first six are usable, prepare the rest one at a time");', 'expect(composition).not.toContain("After the first six are usable, prepare the rest one at a time");')
+            .replace('expect(app).toContain(\'return platform.kind === "web"\');', 'expect(beatGalerApp).toContain(\'return platform.kind === "web"\');')
+            .replace('expect(app).toContain(\'? <BeatGalerApp />\');', 'expect(beatGalerApp).toContain(\'? <BeatGalerWorkspace />\');')
+            .replace('expect(app).toContain(\': <AccountGate><BeatGalerApp /></AccountGate>\');', 'expect(beatGalerApp).toContain(\': <AccountGate><BeatGalerWorkspace /></AccountGate>\');');
+          fs.writeFileSync(startupTestPath, startupTest);
+
           fs.writeFileSync('tests/component-dom/appComposition.test.ts', `import { readFileSync } from "node:fs";\nimport { describe, expect, it } from "vitest";\n\nconst app = readFileSync("src/App.tsx", "utf8");\nconst beatGalerApp = readFileSync("src/app/BeatGalerApp.tsx", "utf8");\nconst composition = readFileSync("src/app/useBeatGalerComposition.ts", "utf8");\n\ndescribe("minimal application composition", () => {\n  it("keeps App as a tiny entry point", () => {\n    const lines = app.trimEnd().split(/\\r?\\n/).length;\n    expect(lines).toBeGreaterThanOrEqual(5);\n    expect(lines).toBeLessThanOrEqual(15);\n    expect(app).toContain("<BeatGalerApp />");\n    expect(app).not.toContain("AccountGate");\n    expect(app).not.toContain("platform.kind");\n    expect(app).not.toContain("AppShell");\n  });\n\n  it("keeps the single platform authentication route in BeatGalerApp", () => {\n    expect(beatGalerApp).toContain('platform.kind === "web"');\n    expect(beatGalerApp).toContain("<BeatGalerWorkspace />");\n    expect(beatGalerApp).toContain("<AccountGate><BeatGalerWorkspace /></AccountGate>");\n    expect(beatGalerApp).toContain("<AppShell scope={scope} />");\n  });\n\n  it("keeps feature wiring in the composition boundary without hiding a legacy app component", () => {\n    expect(composition).toContain("export function useBeatGalerComposition()");\n    expect(composition).toContain("useLibraryState()");\n    expect(composition).toContain("usePlaybackController({");\n    expect(composition).toContain("useCloudUploadQueue({");\n    expect(composition).toContain("useAppShortcuts({");\n    expect(composition).not.toContain("BeatGalerCompositionLegacy");\n    expect(composition).not.toContain("<AppShell");\n  });\n});\n`);
 
           fs.unlinkSync('.github/workflows/task-10-2-composition-temp.yml');
