@@ -92,15 +92,6 @@ function formatCloudBytes(bytes: number) {
   return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function runtimeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isRuntimeConflictError(error: unknown): boolean {
-  const message = runtimeErrorMessage(error).toLowerCase();
-  return message.includes("409") || message.includes("conflict") || message.includes("revision mismatch") || message.includes("version mismatch");
-}
-
 export function useBeatGalerComposition() {
   const {
     beats,
@@ -518,83 +509,6 @@ const {
     completeImmediateReviewPreparation,
     resetImportResolutionState,
   });
-
-  const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
-    if (rejectOfflineMutation("Updating beat files")) return true;
-    if (isBackupFolderPath(folderPath)) {
-      await appAlert({
-        title: "Backup folder skipped",
-        message: "BeatGaler keeps Backup/Backups folders out of PROJECT.zip so old project copies are not uploaded.",
-      });
-      return true;
-    }
-
-    const t = await import("../lib/tauri");
-
-    let preview;
-    try {
-      preview = await t.inspectBeatUpdateFolder(folderPath);
-    } catch {
-      return false;
-    }
-
-    let replaceMaster = false;
-    if (preview.has_mp3) {
-      const alreadyHasMaster = Boolean(beat.telegram_file_id) || Boolean(beat.mp3_path?.trim());
-      if (alreadyHasMaster) {
-        const incoming = preview.mp3_filename || "the incoming MP3";
-        const confirmed = window.confirm(
-          `Replace current MASTER for "${beat.name}"?\n\n` +
-          `${incoming} will become the new MASTER.\n` +
-          `Its BPM, key, tags, rating and artwork will replace the current metadata.\n\n` +
-          `WAV and project files from this folder will also be added or updated.`
-        );
-        if (!confirmed) return true;
-      }
-      replaceMaster = true;
-    }
-
-    setBeatCloudUpdateBusy(beat.id, true);
-    const runtime = beatRuntimeStatesRef.current[beat.id] ?? createBeatRuntimeState(beat);
-    if (runtime.sync_state === "synced") transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }, beat);
-    transitionRuntime(beat.id, { type: "SYNC_UPDATE_STARTED" }, beat);
-    try {
-      let updated = await t.mergeFolderIntoExistingBeat(beat, folderPath, replaceMaster);
-      setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
-
-      if (replaceMaster) {
-        updated = await t.uploadBeatToTelegram(updated);
-        setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
-      }
-
-      if (preview.has_wav && updated.wav_path) {
-        await t.uploadDroppedFileToTelegram(updated, updated.wav_path, "WAV");
-      }
-
-      if (preview.has_project_assets) {
-        await t.uploadProjectToTelegram(updated);
-      }
-
-      if (replaceMaster && updated.telegram_file_id) {
-        await t.syncBeatMetadataToTelegram(updated);
-      }
-
-      window.dispatchEvent(new CustomEvent("beatgaler:project-cloud-updated", { detail: { beatId: beat.id } }));
-      await libraryStateManager.commitSnapshot(beatsLatestRef.current.map(item => item.id === beat.id ? updated : item), "metadata-update");
-      transitionRuntime(beat.id, { type: "SYNC_UPDATE_SUCCEEDED" }, updated);
-      setBeats(bs => bs.map(b => b.id === beat.id ? updated : b));
-      return true;
-    } catch (error) {
-      console.error(error);
-      const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-      if (isRuntimeConflictError(error)) transitionRuntime(beat.id, { type: "SYNC_CONFLICT", message }, beat);
-      else transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "FOLDER_UPDATE_FAILED", message, retryable: true }, beat);
-      alert(`Could not update "${beat.name}" from the dropped folder: ${message}`);
-      return true;
-    } finally {
-      setBeatCloudUpdateBusy(beat.id, false);
-    }
-  }, [rejectOfflineMutation, transitionRuntime]);
 
   const { commitDrawerCloudMutation } = useDrawerCloudPersistence({
   beats,

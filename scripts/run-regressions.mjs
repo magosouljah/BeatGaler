@@ -301,7 +301,7 @@ try {
   if (!runtimeStateMachine.includes("download_progress: number | null")) fail("Optional download progress runtime data was removed.");
   if (!runtimeStateMachine.includes("previous_state")) fail("Runtime errors no longer retain previous_state.");
   if (!runtimeStateMachine.includes("trash_sync_required")) fail("Offline Trash lost its explicit reconciliation bit.");
-  if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
+  if (!beatAssetUpdates.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
   if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
   if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
   if (!app.includes("useBeatRuntimeRegistry(beats, beatsLatestRef)")) fail("App flows are no longer connected to the extracted runtime registry.");
