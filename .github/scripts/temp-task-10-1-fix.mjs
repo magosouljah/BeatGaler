@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
-const path = 'src/app/AppShell.tsx';
-let text = fs.readFileSync(path, 'utf8');
+const shellPath = 'src/app/AppShell.tsx';
+let text = fs.readFileSync(shellPath, 'utf8');
 
 const replacements = [
   ['interruptedUploadNotices.map(name =>', 'interruptedUploadNotices.map((name: string) =>'],
@@ -18,4 +18,26 @@ for (const [before, after] of replacements) {
   text = text.replace(before, after);
 }
 
-fs.writeFileSync(path, text);
+fs.writeFileSync(shellPath, text);
+
+const architecturePath = 'tests/component-dom/startupRevealArchitecture.test.ts';
+let architecture = fs.readFileSync(architecturePath, 'utf8');
+architecture = architecture.replace(
+  'const app = readFileSync("src/App.tsx", "utf8");',
+  'const app = readFileSync("src/App.tsx", "utf8");\nconst appShell = readFileSync("src/app/AppShell.tsx", "utf8");',
+);
+architecture = architecture.replace(
+  'expect(app).toContain("<SortableContext items={filteredBeats.map((b) => b.id)}");',
+  'expect(appShell).toContain("<SortableContext items={filteredBeats.map(");',
+);
+for (const assertion of [
+  'expect(app).toContain("visible={revealedBeatIds.has(beat.id)}");',
+  'expect(app).toContain(\'interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}\');',
+  'expect(app).toContain(\'playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}\');',
+  'expect(app).toContain(\'cloudSessionVerified && connectionState === "online" ? (\');',
+]) {
+  const count = architecture.split(assertion).length - 1;
+  if (count !== 1) throw new Error(`Expected one architecture assertion for ${assertion}, found ${count}`);
+  architecture = architecture.replace(assertion, assertion.replace('expect(app)', 'expect(appShell)'));
+}
+fs.writeFileSync(architecturePath, architecture);
