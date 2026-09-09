@@ -1,0 +1,107 @@
+name: Close task 9.1 documentation v2
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-9-1-close-temp-v2.yml
+
+permissions:
+  contents: write
+
+env:
+  ENTRY_B64: "IyMjIFJlZ2lzdHJvIOKAlCA5LjEKCmBgYApUYXJlYTogOS4xIOKAlCBTZXBhcmFyIHNlc2nDs24geSBhanVzdGVzCkVzdGFkbzogVGVybWluYWRhCkZlY2hhOiAyMDI2LTA5LTA4CgpCYXNlCgotIFJhbWE6IHYwLjkuMC10ZXN0LW5vY2hlCi0gU0hBIGluaWNpYWwgZGUgZXN0YSBlamVjdWNpw7NuOiA4NTQxYmE2MzNkN2YwYWIwYjI3MWI4MjAxNDQxMGI1OTk4YmQwYzUyCi0gU0hBIGRlIGltcGxlbWVudGFjacOzbiB2YWxpZGFkYTogZjM4MWQ3N2E1MDI4MGE0YTFjMTliYmZiZDdjNzE3MDE5YmE5ZmQzYgotIMOabHRpbWEgdGFyZWEgdmVyaWZpY2FkYTogOC4zIOKAlCBTZXBhcmFyIHJlY2VwY2nDs24gbmF0aXZhCgpDYW1iaW8gcmVhbGl6YWRvCgotIFNlIGNyZcOzIGBzcmMvZmVhdHVyZXMvc2Vzc2lvbi91c2VTZXNzaW9uU3RhdGUudHNgIGNvbW8gb3duZXIgw7puaWNvIGRlbCBlc3RhZG8gZGUgYWp1c3Rlcywgc2V0dXAsIGNvbmVjdGl2aWRhZCB5IHZlcmlmaWNhY2nDs24gY2xvdWQgY29uc3VtaWRvIHBvciBsb3MgZmx1am9zIHJlc3RhbnRlcy4KLSBgY29ubmVjdGlvblN0YXRlYCB5IGBjbG91ZFNlc3Npb25WZXJpZmllZGAgY29udGluw7phbiBzaWVuZG8gZGF0b3MgaW5kZXBlbmRpZW50ZXM7IG5vIHNlIGNvbGFwc2Fyb24gZW4gdW5hIHNvbGEgc2XDsWFsLgotIFNlIGNyZcOzIGBzcmMvZmVhdHVyZXMvc2Vzc2lvbi91c2VTZXNzaW9uQWN0aW9ucy50c2AgcGFyYSBsb3MgY2FtYmlvcyBsb2NhbGVzIGRlIHByZWZlcmVuY2lhcyB5IGxhIGFjY2nDs24gZGUgU2lnbiBvdXQvZGVzY29uZXhpw7NuLgotIExhIGRlc2NvbmV4acOzbiBjb25zZXJ2YSBsYSBsaW1waWV6YSBwcmV2aWE6IGxvZ291dCB0b2xlcmFudGUgYSBmYWxsbywgcmVsZWFzZSBkZSBhdWRpbywgaW52YWxpZGFjacOzbiBkZWwgcmV2ZWxhZG8gcHJvZ3Jlc2l2bywgbGltcGllemEgZGUgcHJlcGFyYWNpw7NuIGRlIHBsYXliYWNrL2FydHdvcmssIGJlYXRzIHJldmVsYWRvcywgdmVyaWZpY2FjacOzbiBjbG91ZCwgZ2FsZXLDrWEgeSBzZWxlY2Npw7NuOyBhZGVtw6FzIGFjdHVhbGl6YSBsb3MgY2FtcG9zIGRlIGN1ZW50YSBjb25lY3RhZGEgZW4gc2V0dGluZ3MuCi0gU2UgY3Jpw7MgYHNyYy9mZWF0dXJlcy9zZXNzaW9uL3VzZUN1c3RvbUN1cnNvci50c2AgeSBzZSB0cmFzbGFkw7MgYWxsw60gZWwgZWZlY3RvIGRlbCBjdXJzb3IgbWFudGVuaWVuZG8gZWwgd2hpdGVsaXN0IGV4cGzDrWNpdG8gZGUgY29udHJvbGVzIGRlIGVkaWNpw7NuIGRlIHRleHRvLgotIGBBcHAudHN4YCBjb21wb25lIGxvcyBudWV2b3Mgb3duZXJzIHkgeWEgbm8gcG9zZWUgZXNvcyBlc3RhZG9zL2NhbGxiYWNrcy9lZmVjdG8gbG9jYWxtZW50ZS4KLSBTdGFydHVwLCBSZWxvYWQsIHJlY29uZXhpw7NuIG9ubGluZS9vZmZsaW5lIHkgU1NFIHBlcm1hbmVjZW4gZGVsaWJlcmFkYW1lbnRlIGVuIGBBcHAudHN4YDsgY29ycmVzcG9uZGVuIGEgOS4yLCA5LjMgeSA5LjQgeSBubyBzZSBhZGVsYW50YXJvbi4KCkFkYXB0YWNpw7NuIGRlIHBydWViYXMKCi0gU2UgYcOxYWRpw7MgYHRlc3RzL2NvbXBvbmVudC1kb20vc2Vzc2lvblN0YXRlLnRlc3QudHN4YCBwYXJhIHByb3RlZ2VyIGluZGVwZW5kZW5jaWEgZW50cmUgY29uZWN0aXZpZGFkL3ZlcmlmaWNhY2nDs24sIGNhbWJpb3MgZGUgcHJlZmVyZW5jaWFzLCBlZmVjdG8gZGVsIGN1cnNvciB5IGNsZWFudXAgY29tcGxldG8gZGUgU2lnbiBvdXQuCi0gU2UgYcOxYWRpw7MgYHRlc3RzL2ludGVncmF0aW9uL2FwcFNlc3Npb25FeHRyYWN0aW9uLnRlc3QudHNgIHBhcmEgcHJvdGVnZXIgb3duZXJzaGlwIHkgZXZpdGFyIGFkZWxhbnRhciBzdGFydHVwL3JlY29ubmVjdC9TU0UuCi0gYHNjcmlwdHMvcnVuLXJlZ3Jlc3Npb25zLm1qc2Agc2lndWUgdmVyaWZpY2FuZG8gZWwgbWlzbW8gd2hpdGVsaXN0IGRlbCBjdXJzb3IgZGVzZGUgc3UgbnVldm8gb3duZXIgYHVzZUN1c3RvbUN1cnNvci50c2A7IHNlIGNhbWJpw7MgbGEgdWJpY2FjacOzbiBpbnNwZWNjaW9uYWRhLCBubyBlbCBjb250cmF0by4KCkFyY2hpdm9zIGRlIGltcGxlbWVudGFjacOzbi9wcnVlYmFzIGFmZWN0YWRvcwoKLSBzY3JpcHRzL3J1bi1yZWdyZXNzaW9ucy5tanMKLSBzcmMvQXBwLnRzeAotIHNyYy9mZWF0dXJlcy9zZXNzaW9uL3VzZUN1c3RvbUN1cnNvci50cwotIHNyYy9mZWF0dXJlcy9zZXNzaW9uL3VzZVNlc3Npb25BY3Rpb25zLnRzCi0gc3JjL2ZlYXR1cmVzL3Nlc3Npb24vdXNlU2Vzc2lvblN0YXRlLnRzCi0gdGVzdHMvY29tcG9uZW50LWRvbS9zZXNzaW9uU3RhdGUudGVzdC50c3gKLSB0ZXN0cy9pbnRlZ3JhdGlvbi9hcHBTZXNzaW9uRXh0cmFjdGlvbi50ZXN0LnRzCgpDb21wcm9iYWNpb25lcyBlamVjdXRhZGFzCgotIEdpdEh1YiBBY3Rpb25zIGBGaW5hbCBUYXNrIDkuMSBWYWxpZGF0aW9uIDJgLCBydW4gMzQzMTE0NDg4MjAg4oCUIFNVQ0NFU1MuCi0gQXJ0aWZhY3QgYG1pZ3JhdGlvbi1jaGVjay1sb2dzLXRhc2stOS0xLTM0MzExNDQ4ODIwYCBsZcOtZG8g4oCUIGBNaWdyYXRpb24gY2hlY2tzOiBQQVNTYC4KLSBQcnVlYmFzIGZvY2FsaXphZGFzIGBzZXNzaW9uU3RhdGUudGVzdC50c3hgICsgYGFwcFNlc3Npb25FeHRyYWN0aW9uLnRlc3QudHNgIOKAlCBQQVNTLgotIGBnaXQgZGlmZiAtLWNoZWNrYCDigJQgUEFTUy4KLSBgbnBtIHJ1biB0ZXN0OnR5cGVjaGVja2Ag4oCUIFBBU1MuCi0gYG5wbSBydW4gdGVzdDp1bml0OnRzYCDigJQgUEFTUy4KLSBgbnBtIHJ1biB0ZXN0OmNvbXBvbmVudDpkb21gIOKAlCBQQVNTLgotIGBucG0gcnVuIHRlc3Q6aW50ZWdyYXRpb25gIOKAlCBQQVNTLgotIGBucG0gcnVuIHRlc3Q6cmVncmVzc2lvbnNgIOKAlCBQQVNTLgotIGBucG0gcnVuIGJ1aWxkOndlYmAg4oCUIFBBU1MuCi0gYG5wbSBydW4gYnVpbGRgIOKAlCBQQVNTLgotIEVsIHdvcmtmbG93IHB1YmxpY8OzIGVsIGNvbW1pdCBleGFjdG8gdmFsaWRhZG8gYGYzODFkNzdhNTAyODBhNGExYzE5YmJmYmQ3YzcxNzAxOWJhOWZkM2JgLgotIENvbXBhcmFjacOzbiBuZXRhIGA4NTQxYmE2MzNkN2YwYWIwYjI3MWI4MjAxNDQxMGI1OTk4YmQwYzUyLi4uZjM4MWQ3N2E1MDI4MGE0YTFjMTliYmZiZDdjNzE3MDE5YmE5ZmQzYmA6IGV4YWN0YW1lbnRlIHNpZXRlIGFyY2hpdm9zIGRlIGltcGxlbWVudGFjacOzbi9wcnVlYmFzL3JlZ3Jlc2nDs247IGVsIHRvb2xpbmcgdGVtcG9yYWwgbm8gcGVybWFuZWNlIGVuIGVsIMOhcmJvbCB2YWxpZGFkby4KCkNvbXByb2JhY2lvbmVzIG5vIGVqZWN1dGFkYXMKCi0gYG5wbSBydW4gY2hlY2tgIG5vIHNlIGVqZWN1dMOzIGNvbW8gd3JhcHBlcjsgbGEgbWF0cml6IGVqZWN1dMOzIGluZGl2aWR1YWxtZW50ZSB0eXBlY2hlY2ssIHVuaXQgVFMsIGNvbXBvbmVudCBET00sIGludGVncmFjacOzbiwgcmVncmVzaW9uZXMgeSBhbWJvcyBidWlsZHMuCi0gUHJ1ZWJhIGbDrXNpY2EgRGVza3RvcC9XZWIgaW50ZXJhY3RpdmEgbm8gZWplY3V0YWRhIG5pIGludmVudGFkYTsgbm8gcXVlZMOzIGNvbW8gYmxvcXVlbyBwb3JxdWUgbG9zIGNvbnRyYXRvcyBtb2RpZmljYWRvcyBlc3TDoW4gY3ViaWVydG9zIHBvciBwcnVlYmFzIERPTS9pbnRlZ3JhY2nDs24vcmVncmVzacOzbiB5IGFtYm9zIGJ1aWxkcy4KClBydWViYSBtYW51YWwKCi0gTm8gZWplY3V0YWRhIG5pIGludmVudGFkYS4KLSBTdWdlcmlkYTogYWJyaXIgU2V0dGluZ3MsIGFsdGVybmFyIGluY29tcGxldGUgd2FybmluZ3MgeSBjdXN0b20gY3Vyc29yLCBjYW1iaWFyIGNhcnBldGEgY3VhbmRvIGFwbGlxdWUgeSBlamVjdXRhciBTaWduIG91dCBjb24gYXVkaW8vc2VsZWNjacOzbiBhY3Rpdm9zLgotIFJlc3VsdGFkbyBlc3BlcmFkbzogU2V0dGluZ3MgY29uc2VydmEgbGEgbWlzbWEgY29uZHVjdGEgdmlzdWFsL3BlcnNpc3RlbnRlOyBlbCBjdXJzb3IgY2FtYmlhIGlndWFsIHF1ZSBhbnRlczsgU2lnbiBvdXQgbGltcGlhIGF1ZGlvLCBnYWxlcsOtYSwgc2VsZWNjacOzbiB5IHZlcmlmaWNhY2nDs24gY2xvdWQgc2luIG1lemNsYXIgY29uZWN0aXZpZGFkIGRlIGludGVybmV0IGNvbiB2ZXJpZmljYWNpw7NuIGRlIHNlc2nDs24uCgpQZW5kaWVudGVzIC8gZnVlcmEgZGUgYWxjYW5jZQoKLSA5LjIg4oCUIFNlcGFyYXIgUmVsb2FkIHF1ZWRhIHBlbmRpZW50ZSB5IG5vIGZ1ZSBpbmljaWFkYS4KLSBTdGFydHVwIGluaWNpYWwgcGVybWFuZWNlIHBhcmEgOS4zOyBsaXN0ZW5lcnMgb25saW5lL29mZmxpbmUgeSBTU0UgcGVybWFuZWNlbiBwYXJhIDkuNC4KClJpZXNnb3MgcHJldmlvcyByZWxldmFudGVzCgotIEVsIGZhbGxvIGJhc2VsaW5lIGRlbCB3cmFwcGVyIGVzdMOhdGljbyBNYWMgcmVsYWNpb25hZG8gY29uIGVsIERpcmVjdCBoZWxwZXIsIGRvY3VtZW50YWRvIGRlc2RlIDguMeKAkzguMywgbm8gcGVydGVuZWNlIGEgOS4xIG5pIGZ1ZSBtb2RpZmljYWRvIHBvciBlc3RhIGV4dHJhY2Npw7NuLgoKSGVycmFtaWVudGFzIHRlbXBvcmFsZXMgcmVzdGFudGVzCgotIE5pbmd1bmEgZGViZSBwZXJtYW5lY2VyIGVuIGVsIMOhcmJvbCBmaW5hbC4gTG9zIHdvcmtmbG93cy9zY3JpcHRzIHRlbXBvcmFsZXMgZGUgOS4xIGZ1ZXJvbiByZXRpcmFkb3MgYWwgcHVibGljYXIgbGEgaW1wbGVtZW50YWNpw7NuIHkgZWwgY2xvc2VyIGRvY3VtZW50YWwgc2UgZWxpbWluYSBkZW50cm8gZGUgc3UgcHJvcGlvIGNvbW1pdC4KCkZhbGxvcyBlbmNvbnRyYWRvcyB5IGNhdXNhCgotIFJ1biAzNDMxMDk3NzU4MDogcHJ1ZWJhcyBmb2NhbGl6YWRhcyB5IG1hdHJpeiBwYXNhcm9uLCBwZXJvIHVuYSBjb25kaWNpw7NuIHRlbXBvcmFsIGRlbCB3b3JrZmxvdyBpbnRlcnByZXTDsyBpbmNvcnJlY3RhbWVudGUgZWwgcmVzdWx0YWRvIHkgYmxvcXVlw7MgbGEgcHVibGljYWNpw7NuOyBmYWxsbyBkZSB0b29saW5nLCBzaW4gY29tbWl0IGRlIHByb2R1Y3RvLgotIFJ1biAzNDMxMTE4NDcyMjogbGEgbWF0cml6IGRldGVjdMOzIGRvcyBwcm9ibGVtYXMgcmVhbGVzIGRlIGV4dHJhY2Npw7NuOiBmYWx0YWJhIGltcG9ydGFyIGVsIHRpcG8gYENvbm5lY3Rpb25TdGF0ZWAgZW4gYEFwcC50c3hgIHkgZWwgZ3VhcmQgZGVsIGN1cnNvciBzZWd1w61hIGJ1c2NhbmRvIGVsIHdoaXRlbGlzdCBmw61zaWNhbWVudGUgZW4gYEFwcC50c3hgLiBTZSBpbXBvcnTDsyBlbCB0aXBvIHkgc2Ugc2lndWnDsyBlbCBjb250cmF0byBoYXN0YSBgdXNlQ3VzdG9tQ3Vyc29yLnRzYCBzaW4gcmViYWphciBsYSBhc3NlcnRpb24uCi0gUnVuIDM0MzExMzYwMTc0OiBlbCBzY3JpcHQgdGVtcG9yYWwgZGUgY29ycmVjY2nDs24gdXPDsyB1bmEgY29pbmNpZGVuY2lhIHRleHR1YWwgZGVtYXNpYWRvIGxpdGVyYWwgeSBhYm9ydMOzIGFudGVzIGRlIHRlc3RzOyBmYWxsbyBkZSB0b29saW5nLCBzaW4gcHVibGljYWNpw7NuIGRlIHByb2R1Y3RvLgotIFJ1biAzNDMxMTQ0ODgyMDogZm9jYWxpemFkYXMsIGRpZmYgY2hlY2sgeSB0b2RhIGxhIG1hdHJpeiBxdWVkYXJvbiB2ZXJkZXMgeSBzZSBwdWJsaWPDsyBgZjM4MWQ3N2E1MDI4MGE0YTFjMTliYmZiZDdjNzE3MDE5YmE5ZmQzYmAuCi0gUnVuIDM0MzExNzU3MTIzOiBlbCBwcmltZXIgY2xvc2VyIGRvY3VtZW50YWwgZnVlIHJlY2hhemFkbyBwb3Igc2ludGF4aXMgWUFNTCBhbnRlcyBkZSBjcmVhciBqb2JzOyBubyBtb2RpZmljw7MgZG9jdW1lbnRhY2nDs24gbmkgcHJvZHVjdG8uCgpWZXJlZGljdG8KClRlcm1pbmFkYS4KCkxhIHNlc2nDs24vYWp1c3RlcyBxdWVkw7MgY29uIHVuIG93bmVyIGV4cGzDrWNpdG87IFNldHRpbmdzLCBjdXJzb3IgeSBTaWduIG91dCBjb25zZXJ2YW4gY29tcG9ydGFtaWVudG8sIHkgY29uZWN0aXZpZGFkIHNpZ3VlIHNlcGFyYWRhIGRlIHZlcmlmaWNhY2nDs24gY2xvdWQuCgpTaWd1aWVudGUgdGFyZWEKCjkuMiDigJQgU2VwYXJhciBSZWxvYWQuCgpObyBpbmljaWFkYS4KYGBgCg=="
+  AGENT_B64: "IyBCZWF0R2FsZXIg4oCUIEFnZW50IFN0YXRlCgojIyBDb250ZXh0bwoKLSBGZWNoYSBkZSBlamVjdWNpw7NuOiAyMDI2LTA5LTA4Ci0gUmFtYSBkZSB0cmFiYWpvOiBgdjAuOS4wLXRlc3Qtbm9jaGVgCi0gVGFyZWEgdHJhYmFqYWRhOiBgOS4xIOKAlCBTZXBhcmFyIHNlc2nDs24geSBhanVzdGVzYAotIEVzdGFkbzogYFRlcm1pbmFkYWAKLSDDmmx0aW1hIHRhcmVhIHRlcm1pbmFkYTogYDkuMSDigJQgU2VwYXJhciBzZXNpw7NuIHkgYWp1c3Rlc2AKCiMjIEJhc2UgZGUgZXN0YSBlamVjdWNpw7NuCgotIFNIQSBpbmljaWFsOiBgODU0MWJhNjMzZDdmMGFiMGIyNzFiODIwMTQ0MTBiNTk5OGJkMGM1MmAKLSBTSEEgZGUgaW1wbGVtZW50YWNpw7NuIHZhbGlkYWRhOiBgZjM4MWQ3N2E1MDI4MGE0YTFjMTliYmZiZDdjNzE3MDE5YmE5ZmQzYmAKLSBIRUFEIHJlbW90byBvYnNlcnZhZG8gaW5tZWRpYXRhbWVudGUgYW50ZXMgZGUgbGEgZXNjcml0dXJhIGZpbmFsIGRlIGFnZW50LXN0YXRlOiBge09CU0VSVkVEX0hFQUR9YAotIFJ1biBkZSBpbXBsZW1lbnRhY2nDs24gZmluYWw6IGAzNDMxMTQ0ODgyMGAg4oCUIGBGaW5hbCBUYXNrIDkuMSBWYWxpZGF0aW9uIDJgIOKAlCBmb2NhbGl6YWRhcywgZGlmZiBjaGVjaywgbWF0cml6IGNvbXBsZXRhIHkgcHVibGljYWNpw7NuIGRlbCBjb21taXQgZXhhY3RvIGNvcnJlY3Rhcy4KLSBBcnRpZmFjdCBmaW5hbDogYG1pZ3JhdGlvbi1jaGVjay1sb2dzLXRhc2stOS0xLTM0MzExNDQ4ODIwYCDigJQgYE1pZ3JhdGlvbiBjaGVja3M6IFBBU1NgLgotIFJ1biBkZSBjaWVycmUgZG9jdW1lbnRhbDogYHtSVU5fSUR9YCDigJQgYWN0dWFsaXphIHNvbGFtZW50ZSByb2FkbWFwL1JlZ2lzdHJvL2FnZW50LXN0YXRlIHkgZWxpbWluYSBsb3Mgd29ya2Zsb3dzIHRlbXBvcmFsZXMgZGUgY2llcnJlLgotIEVsIFNIQSBmaW5hbCByZWFsIGRlIGxhIHJvbmRhIGRlYmUgcmVsZWVyc2UgZGVzZGUgR2l0SHViIGRlc3B1w6lzIGRlIGxhIMO6bHRpbWEgZXNjcml0dXJhIHkgbm8gc2UgaW50ZW50YSBhdXRvcnJlZmVyZW5jaWFyIGFxdcOtLgoKIyMgUmVzdWx0YWRvIHZlcmlmaWNhZG8KCi0gYHNyYy9mZWF0dXJlcy9zZXNzaW9uL3VzZVNlc3Npb25TdGF0ZS50c2AgcG9zZWUgc2V0dGluZ3MsIHNldHVwLCBjb25lY3RpdmlkYWQgeSB2ZXJpZmljYWNpw7NuIGNsb3VkOyBgY29ubmVjdGlvblN0YXRlYCB5IGBjbG91ZFNlc3Npb25WZXJpZmllZGAgcGVybWFuZWNlbiBpbmRlcGVuZGllbnRlcy4KLSBgc3JjL2ZlYXR1cmVzL3Nlc3Npb24vdXNlU2Vzc2lvbkFjdGlvbnMudHNgIHBvc2VlIGxvcyBjYW1iaW9zIGRlIHByZWZlcmVuY2lhcyB5IFNpZ24gb3V0LCBjb25zZXJ2YW5kbyBsaW1waWV6YSBkZSBhdWRpbywgcHJlc2VudGFjacOzbi9yZXZlbGFkbywgZ2FsZXLDrWEsIHNlbGVjY2nDs24geSB2ZXJpZmljYWNpw7NuIGNsb3VkLgotIGBzcmMvZmVhdHVyZXMvc2Vzc2lvbi91c2VDdXN0b21DdXJzb3IudHNgIHBvc2VlIGVsIGVmZWN0byBkZWwgY3Vyc29yIGNvbnNlcnZhbmRvIGVsIHdoaXRlbGlzdCBkZSBlZGljacOzbiBkZSB0ZXh0by4KLSBgQXBwLnRzeGAgY29uc3VtZSBsb3MgbnVldm9zIG93bmVyczsgUmVsb2FkLCBzdGFydHVwLCByZWNvbm5lY3Qgb25saW5lL29mZmxpbmUgeSBTU0UgcGVybWFuZWNlbiBwYXJhIHN1cyB0YXJlYXMgcG9zdGVyaW9yZXMuCi0gYHRlc3RzL2NvbXBvbmVudC1kb20vc2Vzc2lvblN0YXRlLnRlc3QudHN4YCB5IGB0ZXN0cy9pbnRlZ3JhdGlvbi9hcHBTZXNzaW9uRXh0cmFjdGlvbi50ZXN0LnRzYCBwcm90ZWdlbiBsb3MgY29udHJhdG9zIGRlIDkuMS4KLSBgc2NyaXB0cy9ydW4tcmVncmVzc2lvbnMubWpzYCBzaWd1ZSB2ZXJpZmljYW5kbyBlbCBjdXJzb3IgZGVzZGUgZWwgbnVldm8gb3duZXIgc2luIHJlbGFqYXIgZWwgY29udHJhdG8uCi0gVHlwZWNoZWNrLCB1bml0IFRTLCBjb21wb25lbnQgRE9NLCBpbnRlZ3JhY2nDs24sIHJlZ3Jlc2lvbmVzLCBidWlsZCBXZWIgeSBidWlsZCBEZXNrdG9wIHBhc2Fyb24gc29icmUgZWwgZXN0YWRvIHB1YmxpY2FkbyBjb21vIGBmMzgxZDc3YTUwMjgwYTRhMWMxOWJiZmJkN2M3MTcwMTliYTlmZDNiYC4KCiMjIFBlbmRpZW50ZXMgY29uY3JldG9zCgotIGA5LjIg4oCUIFNlcGFyYXIgUmVsb2FkYC4KCiMjIENvbXByb2JhY2lvbmVzIHBlbmRpZW50ZXMKCi0gTmluZ3VuYSBuZWNlc2FyaWEgcGFyYSBjZXJyYXIgOS4xLgotIFBydWViYSBmw61zaWNhIERlc2t0b3AvV2ViIG5vIGVqZWN1dGFkYSBuaSBpbnZlbnRhZGE7IG5vIHF1ZWTDsyBjb21vIGJsb3F1ZW8gcG9ycXVlIGxvcyBjb250cmF0b3MgYWZlY3RhZG9zIGVzdMOhbiBjdWJpZXJ0b3MgcG9yIGZvY2FsaXphZGFzLCBtYXRyaXogY29tcGxldGEgeSBhbWJvcyBidWlsZHMuCgojIyBTaWd1aWVudGUgdGFyZWEKCi0gYDkuMiDigJQgU2VwYXJhciBSZWxvYWRgCi0gRXN0YWRvOiBgUGVuZGllbnRlYAotIE5vIGluaWNpYXIgaGFzdGEgbGEgcHLDs3hpbWEgcm9uZGEuCg=="
+
+jobs:
+  close-task-9-1:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact trigger SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Guard target branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "v0.9.0-test-noche"
+          git fetch origin v0.9.0-test-noche
+          test "$(git rev-parse origin/v0.9.0-test-noche)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor f381d77a50280a4a1c19bbfbd7c717019ba9fd3b "${GITHUB_SHA}"
+
+      - name: Update roadmap and append Registro
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+          roadmap_path = Path("migration/BeatGaler-roadmap-para-trabajar-con-IAs.md")
+          roadmap = roadmap_path.read_text()
+          old = "### [ ] 9.1 — Separar sesión y ajustes"
+          new = "### [x] 9.1 — Separar sesión y ajustes"
+          if roadmap.count(old) != 1:
+              raise SystemExit(f"roadmap 9.1: expected one unchecked task, got {roadmap.count(old)}")
+          roadmap_path.write_text(roadmap.replace(old, new, 1))
+          registro_path = Path("migration/Registro-de-avance.md")
+          registro = registro_path.read_text()
+          if "### Registro — 9.1" in registro:
+              raise SystemExit("Registro 9.1 already exists; refusing duplicate append")
+          entry = base64.b64decode(os.environ["ENTRY_B64"]).decode("utf-8")
+          registro_path.write_text(registro.rstrip() + "\n\n" + entry + "\n")
+          PY
+
+      - name: Observe remote HEAD before agent-state
+        id: observe
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin v0.9.0-test-noche
+          observed="$(git rev-parse origin/v0.9.0-test-noche)"
+          test "$observed" = "${GITHUB_SHA}"
+          echo "head=$observed" >> "$GITHUB_OUTPUT"
+
+      - name: Write agent-state and remove closers
+        shell: bash
+        env:
+          OBSERVED_HEAD: ${{ steps.observe.outputs.head }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+          text = base64.b64decode(os.environ["AGENT_B64"]).decode("utf-8")
+          text = text.replace("{OBSERVED_HEAD}", os.environ["OBSERVED_HEAD"])
+          text = text.replace("{RUN_ID}", os.environ["GITHUB_RUN_ID"])
+          Path("migration/BeatGaler-agent-state.md").write_text(text)
+          PY
+          rm -f .github/workflows/task-9-1-close-temp.yml
+          rm -f .github/workflows/task-9-1-close-temp-v2.yml
+
+      - name: Verify documentation-only final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          actual="$(git diff --name-only f381d77a50280a4a1c19bbfbd7c717019ba9fd3b -- | sort)"
+          expected="$(printf '%s\n' migration/BeatGaler-agent-state.md migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md | sort)"
+          test "$actual" = "$expected"
+          git diff --quiet f381d77a50280a4a1c19bbfbd7c717019ba9fd3b -- src scripts tests package.json package-lock.json src-tauri
+
+      - name: Commit documentation closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin v0.9.0-test-noche
+          test "$(git rev-parse origin/v0.9.0-test-noche)" = "${GITHUB_SHA}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: close task 9.1"
+          git push origin HEAD:v0.9.0-test-noche
