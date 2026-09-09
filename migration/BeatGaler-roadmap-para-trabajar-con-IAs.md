@@ -446,7 +446,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 
 **Resultado:** comprender qué sucede al abrir, recargar, desconectar y reconectar la app.
 
-### [ ] 9.1 — Separar sesión y ajustes
+### [x] 9.1 — Separar sesión y ajustes
 
 - **Hacer:** extraer estado de ajustes/conexión/verificación, cambios de preferencias, cursor y acción de desconexión.
     
