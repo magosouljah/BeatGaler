@@ -11,6 +11,10 @@ const patches = [
     "if (!app.includes('playbackInteractive={connectionState !== \"offline\" || Boolean(beat.offline_available)}')) fail(\"Cached cards lost the non-destructive playback gate while cloud authority is verifying.\");",
     "if (!appShell.includes('playbackInteractive={connectionState !== \"offline\" || Boolean(beat.offline_available)}')) fail(\"Cached cards lost the non-destructive playback gate while cloud authority is verifying.\");",
   ],
+  [
+    "if (!app.includes('beat.offline_available && (beat.has_flp || beat.has_als)')) fail(\"Offline PROJECT cards can lose Open Project merely because the cloud-project indicator has not refreshed.\");",
+    "if (!appShell.includes('beat.offline_available && (beat.has_flp || beat.has_als)')) fail(\"Offline PROJECT cards can lose Open Project merely because the cloud-project indicator has not refreshed.\");",
+  ],
 ];
 for (const [before, after] of patches) {
   const count = source.split(before).length - 1;
