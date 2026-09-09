@@ -37,13 +37,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply task 9.2 extraction
-        run: python .github/task-9-2-apply.py
-
       - name: Prepare migration log directory
         run: mkdir -p artifacts/migration-check-logs
 
+      - name: Preserve startup repair ownership in temporary applier
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/task-9-2-apply.py')
+          text = path.read_text()
+          text = text.replace(
+              'syncBeatMetadataToTelegram, pollTelegramCloudStatus, purgeInterruptedUploadLocal',
+              'syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, purgeInterruptedUploadLocal',
+              1,
+          )
+          text = text.replace(
+              'if "repairStaleCloudLibraryRefs" in app:\n    raise SystemExit("App still contains repairStaleCloudLibraryRefs after extraction")\n',
+              '',
+              1,
+          )
+          text = text.replace(
+              '    expect(app).not.toContain("repairStaleCloudLibraryRefs");\n',
+              '',
+              1,
+          )
+          path.write_text(text)
+          PY
+
+      - name: Apply task 9.2 extraction
+        id: apply
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python .github/task-9-2-apply.py 2>&1 | tee artifacts/migration-check-logs/00-apply-task-9-2.log
+
       - name: Focused task 9.2 checks
+        if: steps.apply.outcome == 'success'
         id: focused
         continue-on-error: true
         shell: bash
@@ -57,6 +88,7 @@ jobs:
             2>&1 | tee artifacts/migration-check-logs/00-focused-task-9-2.log
 
       - name: Diff check
+        if: steps.apply.outcome == 'success'
         id: diffcheck
         continue-on-error: true
         shell: bash
@@ -65,6 +97,7 @@ jobs:
           git diff --check 2>&1 | tee artifacts/migration-check-logs/00-diff-check.log
 
       - name: Run migration matrix
+        if: steps.apply.outcome == 'success'
         id: matrix
         continue-on-error: true
         run: node scripts/run-migration-checks-with-logs.mjs
@@ -82,6 +115,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "${{ steps.apply.outcome }}" = "success"
           test "${{ steps.focused.outcome }}" = "success"
           test "${{ steps.diffcheck.outcome }}" = "success"
           test "${{ steps.matrix.outcome }}" = "success"
