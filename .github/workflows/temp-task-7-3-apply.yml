@@ -47,13 +47,31 @@ jobs:
           python3 scripts/temp-task-7-3-apply.py
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("tests/component-dom/importSaveAll.test.tsx")
-          text = path.read_text(encoding="utf-8")
-          old = '    expect(cleaned).toEqual([[]]);\n'
-          new = '    expect(cleaned).toEqual([]);\n'
-          if text.count(old) != 1:
+
+          test_path = Path("tests/component-dom/importSaveAll.test.tsx")
+          test_text = test_path.read_text(encoding="utf-8")
+          old_assertion = '    expect(cleaned).toEqual([[]]);\n'
+          new_assertion = '    expect(cleaned).toEqual([]);\n'
+          if test_text.count(old_assertion) != 1:
               raise SystemExit("expected exactly one staging-cleanup assertion")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          test_path.write_text(test_text.replace(old_assertion, new_assertion, 1), encoding="utf-8")
+
+          # replace_between() already preserves its end marker. The temporary
+          # applier accidentally included that marker in two replacement bodies,
+          # duplicating one declaration and one JSX opener in generated App.tsx.
+          app_path = Path("src/App.tsx")
+          app_text = app_path.read_text(encoding="utf-8")
+          function_marker = '  const updateExistingBeatFromFolder = useCallback'
+          function_duplicate = function_marker + function_marker
+          overlay_marker = '      {(dropActive || dropImporting) && !libraryDropStaging && !reviewBootstrap && !reviewQueue && ('
+          overlay_duplicate = overlay_marker + overlay_marker
+          if app_text.count(function_duplicate) != 1:
+              raise SystemExit("expected exactly one duplicated updateExistingBeatFromFolder marker")
+          if app_text.count(overlay_duplicate) != 1:
+              raise SystemExit("expected exactly one duplicated drop overlay marker")
+          app_text = app_text.replace(function_duplicate, function_marker, 1)
+          app_text = app_text.replace(overlay_duplicate, overlay_marker, 1)
+          app_path.write_text(app_text, encoding="utf-8")
           PY
 
       - name: Remove temporary tooling before validation
