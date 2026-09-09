@@ -1,0 +1,175 @@
+from pathlib import Path
+
+roadmap = Path('migration/BeatGaler-roadmap-para-trabajar-con-IAs.md')
+text = roadmap.read_text(encoding='utf-8')
+old = '### [ ] 8.1 — Separar detección del destino'
+new = '### [x] 8.1 — Separar detección del destino'
+if text.count(old) != 1:
+    raise RuntimeError(f'roadmap 8.1 marker expected once, found {text.count(old)}')
+if '### [x] 8.2 — Separar recepción HTML y navegador' in text:
+    raise RuntimeError('8.2 must remain pending')
+roadmap.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+registro = Path('migration/Registro-de-avance.md')
+current = registro.read_text(encoding='utf-8')
+if '### Registro — 8.1' in current:
+    raise RuntimeError('8.1 registro already exists')
+entry = r'''
+
+### Registro — 8.1
+
+```
+Tarea: 8.1 — Separar detección del destino
+Estado: Terminada
+Fecha: 2026-09-08
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de esta ejecución: aba85aadb3dce83f326587f72425614c8f962a53
+- SHA de implementación validada: 00b56e94fbc790483e150de27202488eef166bb4
+- Última tarea verificada: 7.4 — Separar la entrada de importación web
+
+Cambio realizado
+
+- Se creó `src/features/dragdrop/nativeDropTargets.ts` como owner de la clasificación de rutas de imagen y de la localización/clasificación del destino del drop nativo.
+- `App.tsx` dejó de poseer directamente `document.elementFromPoint`, el fallback de `devicePixelRatio`, la clasificación por extensión de imagen y los selectores `data-*` usados para decidir el destino.
+- Se conserva la prioridad del drop de filesystem: Drawer primero; después artwork si existe exactamente una ruta de imagen; después tarjeta; finalmente galería/biblioteca.
+- Se conservan las coordenadas recibidas de Tauri y el fallback de escala de pantalla para localizar el mismo elemento cuando las coordenadas requieren conversión.
+- Se conserva el routing de imágenes externas de navegador/Pinterest: artwork del Drawer antes que artwork de tarjeta; no se convierte ese gesto en importación de beat.
+- `App.tsx` conserva listeners, arbitraje y ejecución de acciones; 8.1 solo separa detección/clasificación del destino.
+- No se inició 8.2.
+
+Adaptación de pruebas
+
+- Se añadió `tests/integration/appNativeDropTargetsExtraction.test.ts` para proteger ownership, coordenadas/escala, selectores, clasificación de imágenes, prioridad de destinos y routing de imagen externa.
+- `scripts/regression-import-native.mjs` se adaptó para seguir verificando el routing nativo en el nuevo owner.
+- `scripts/test-macos-portability.mjs` se adaptó para verificar el contrato Mac de drag & drop en `nativeDropTargets.ts` en vez de exigir esa responsabilidad físicamente dentro de `App.tsx`.
+- No se desactivaron ni relajaron contratos para conseguir un resultado verde.
+
+Archivos afectados
+
+- src/App.tsx
+- src/features/dragdrop/nativeDropTargets.ts
+- tests/integration/appNativeDropTargetsExtraction.test.ts
+- scripts/regression-import-native.mjs
+- scripts/test-macos-portability.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- GitHub Actions `Temporary task 8.1 product validation`, run 34305812263 — SUCCESS.
+- Artifact `migration-check-logs-task-8-1-34305812263` leído; implementation SHA `00b56e94fbc790483e150de27202488eef166bb4`.
+- Prueba focalizada `appNativeDropTargetsExtraction.test.ts` — PASS.
+- `node scripts/regression-import-native.mjs` — PASS.
+- Contrato Mac específico de drag & drop extraído — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS directo en la corrida final.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+- Comparación neta `aba85aadb3dce83f326587f72425614c8f962a53...00b56e94fbc790483e150de27202488eef166bb4`: solo cinco archivos de producto/pruebas de 8.1; el tooling temporal no permanece en el árbol de implementación.
+
+Comprobaciones con fallo previo separado
+
+- `npm run test:mac-portability:static` conserva un fallo previo ajeno a 8.1: `helper refuses sessions without explicit local Bot API base`.
+- Ese mismo fallo fue reproducido directamente sobre el SHA inicial `aba85aadb3dce83f326587f72425614c8f962a53`, después de que el contrato Mac anterior de routing Finder/artwork pasara. Por tanto no fue introducido por 8.1.
+- La corrida final exige además que el nuevo contrato Mac de drag & drop pase antes de aceptar únicamente ese fallo baseline.
+
+Comprobaciones no ejecutadas
+
+- `npm run check` no se ejecutó como wrapper; la matriz ejecutó individualmente los checks aplicables.
+- Prueba física Desktop Windows/macOS no ejecutada ni inventada; la ronda trabaja mediante GitHub Actions.
+- E2E completos ajenos a drag & drop no se usaron como criterio de cierre.
+
+Prueba manual
+
+- No ejecutada ni inventada.
+- Sugerida: en Desktop, arrastrar los mismos archivos sobre Drawer, artwork de tarjeta, cuerpo de tarjeta y galería; repetir con una imagen única y con múltiples rutas, incluyendo pantalla con escala distinta de 100%.
+- Resultado esperado: misma prioridad y mismas acciones que antes de la extracción, sin duplicar el gesto y sin interpretar una imagen externa del navegador como beat.
+
+Pendientes / fuera de alcance
+
+- 8.2 — Separar recepción HTML y navegador queda pendiente y no fue iniciada.
+- La recepción/listener HTML y el listener nativo completo siguen en `App.tsx`; corresponden a 8.2 y 8.3 respectivamente.
+
+Riesgos previos relevantes
+
+- El wrapper general de portabilidad Mac conserva el fallo previo del Direct helper descrito arriba; no bloquea 8.1 porque fue reproducido en el SHA inicial y el contrato Mac afectado por 8.1 pasa.
+- Durante una corrida intermedia se observó una carrera de teardown de `TagColorMenu` después de que 64/64 archivos y 258/258 tests component DOM pasaran; `TagColorMenu.tsx` y su prueba eran blobs idénticos al SHA inicial. La corrida final `34305812263` ejecutó `test:component:dom` directamente en verde.
+
+Herramientas temporales restantes
+
+- Ninguna herramienta temporal de 8.1 debe permanecer en el árbol final; el workflow y script documentales se eliminan dentro del propio commit de cierre.
+
+Fallos encontrados y causa
+
+- Corridas intermedias de tooling abortaron antes de publicar producto por definición temporal inválida, coincidencias textuales/indentación del aplicador y una assertion nueva mal escapada; se corrigió el tooling/prueba, no el comportamiento de producto.
+- Run 34303874900 llegó a los checks de producto y dejó focalizada/regresión nativa en verde; el wrapper Mac se detuvo en el fallo del Direct helper.
+- Run 34305339011 reprodujo ese fallo Mac también en el SHA inicial, separándolo de 8.1. Después component DOM mostró la carrera de teardown indicada arriba, con 64/64 archivos y 258/258 tests pasados; no se publicó producto.
+- Un intento posterior de ejecutar la suite baseline desde un worktree con `node_modules` enlazado falló artificialmente por el allow-list de Vite para `mtcute.wasm`; se descartó esa evidencia y no se publicó producto.
+- Run 34305812263 quedó verde en toda la matriz aplicable, component DOM pasó directamente y publicó `00b56e94fbc790483e150de27202488eef166bb4`.
+- El primer closer documental fue rechazado por GitHub antes de crear jobs debido a una definición YAML inválida; no modificó documentos.
+
+Veredicto
+
+Terminada.
+
+La detección/clasificación del destino nativo quedó fuera de `App.tsx` conservando prioridad, `data-*`, coordenadas, escala y routing de imágenes; App sigue ejecutando las acciones y conserva los listeners para las tareas siguientes.
+
+Siguiente tarea
+
+8.2 — Separar recepción HTML y navegador.
+
+No iniciada.
+```
+'''
+registro.write_text(current.rstrip() + entry + '\n', encoding='utf-8')
+
+Path('migration/BeatGaler-agent-state.md').write_text('''# BeatGaler — Agent State
+
+## Contexto
+
+- Fecha de ejecución: 2026-09-08
+- Rama de trabajo: `v0.9.0-test-noche`
+- Tarea trabajada: `8.1 — Separar detección del destino`
+- Estado: `Terminada`
+- Última tarea terminada: `8.1 — Separar detección del destino`
+
+## Base de esta ejecución
+
+- SHA inicial: `aba85aadb3dce83f326587f72425614c8f962a53`
+- SHA de implementación validada: `00b56e94fbc790483e150de27202488eef166bb4`
+- Run de implementación final: `34305812263` — `Temporary task 8.1 product validation` — matriz aplicable, commit exacto y fast-forward correctos.
+- Artifact final: `migration-check-logs-task-8-1-34305812263`.
+- El SHA final real de la ronda es el HEAD remoto posterior a este cierre documental y debe releerse después del push.
+
+## Resultado verificado
+
+- `src/features/dragdrop/nativeDropTargets.ts` posee clasificación de rutas de imagen y detección de destinos nativos.
+- `App.tsx` conserva listeners/arbitraje/acciones pero ya no posee `elementFromPoint`, fallback de escala ni selectores de destino.
+- Se conserva prioridad Drawer → artwork de imagen única → tarjeta → galería/biblioteca.
+- Se conservan atributos `data-*`, coordenadas nativas y fallback por `devicePixelRatio`.
+- El routing de imágenes externas navegador/Pinterest conserva Drawer artwork → card artwork → ninguno.
+- Prueba focalizada, regresión nativa, typecheck, unit TS, component DOM, integración, regresiones, build Web y build Desktop pasaron sobre `00b56e94fbc790483e150de27202488eef166bb4`.
+- El contrato Mac de drag & drop afectado por 8.1 pasa. El wrapper general Mac conserva un fallo previo del Direct helper, reproducido también en el SHA inicial y separado de esta tarea.
+
+## Pendientes concretos
+
+- `8.2 — Separar recepción HTML y navegador`.
+
+## Comprobaciones pendientes
+
+- Ninguna necesaria para cerrar 8.1.
+- Prueba física Desktop Windows/macOS no ejecutada ni inventada; no quedó como bloqueo porque la extracción quedó cubierta por pruebas focalizadas, regresiones, portabilidad del área y ambos builds.
+
+## Siguiente tarea
+
+- `8.2 — Separar recepción HTML y navegador`
+- Estado: `Pendiente`
+- No iniciar hasta la próxima ronda.
+''', encoding='utf-8')
