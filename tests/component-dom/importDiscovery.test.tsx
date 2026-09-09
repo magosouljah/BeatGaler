@@ -50,9 +50,6 @@ function Harness() {
   const [dropImporting, setDropImporting] = useState(false);
   const [, setDropActive] = useState(false);
   const [, setShowAdd] = useState(false);
-  const [, setDeferredImportBatch] = useState<ImportBatchPreview | null>(null);
-  const [, setAudioConflictBatch] = useState<ImportBatchPreview | null>(null);
-  const [, setDropImportBatch] = useState<ImportBatchPreview | null>(null);
   const stagedImportPathsRef = useRef<Map<string, string[]>>(new Map());
   const discovery = useImportDiscovery({
     dropImporting,
@@ -60,9 +57,6 @@ function Harness() {
     rejectOfflineMutation: () => false,
     setDropActive,
     setShowAdd,
-    setDeferredImportBatch,
-    setAudioConflictBatch,
-    setDropImportBatch,
     setReviewQueue: session.setReviewQueue,
     skippedReviewSourceKeysRef: session.skippedReviewSourceKeysRef,
     stagedImportPathsRef,

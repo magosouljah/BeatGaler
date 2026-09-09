@@ -11,6 +11,7 @@ const cloudUploadQueue = readFileSync(resolve(process.cwd(), "src/features/cloud
 const importSession = readFileSync(resolve(process.cwd(), "src/features/import/useImportSession.ts"), "utf8");
 const importReview = readFileSync(resolve(process.cwd(), "src/features/import/useImportReview.ts"), "utf8");
 const importReviewHost = readFileSync(resolve(process.cwd(), "src/features/import/components/ImportReviewHost.tsx"), "utf8");
+const importSaveAll = readFileSync(resolve(process.cwd(), "src/features/import/useImportSaveAll.ts"), "utf8");
 
 const migrationTargets = {
   uploads: { tasks: ["6.2", "6.3", "6.4"], owners: ["src/features/cloud/interruptedUploadJournal.ts", "src/features/cloud/uploadErrorDetails.ts", "src/features/cloud/desktopBeatUploadPipeline.ts", "src/features/cloud/useCloudUploadQueue.ts"] },
@@ -88,7 +89,7 @@ describe("App migration characterization contracts", () => {
   });
 
   it("keeps Review candidates outside the library until Save and preserves Skip versus Cancel", () => {
-    const add = section("const addBeatsAndReview = useCallback", "const handleReviewedSaveAll = useCallback");
+    const add = section("const addBeatsAndReview = useCallback", "const {\n  skipCurrentReviewBeat,");
     expect(add).toContain("startReview(sanitized)");
     expect(add).not.toContain("setBeats(");
     expect(importSession).toContain("const [reviewQueue, setReviewQueue] = useState<ImportReviewQueueState | null>(null)");
@@ -124,6 +125,14 @@ describe("App migration characterization contracts", () => {
     expect(app).toContain("<ImportReviewHost");
     expect(importReviewHost).toContain("onSkipAll={onCancel}");
     expect(importReviewHost).toContain("onSaved={onSaved}");
+    expectOrdered(importSaveAll, [
+      "setReviewQueue(null);",
+      "cloudifyImportedBeats([currentUpdated])",
+      "if (reviewPreparationPromiseRef.current)",
+      "if (nameConflicts.length > 0)",
+    ]);
+    expect(importSaveAll).toContain("if (deferredImportBatch.audio_conflicts.length > 0)");
+    expect(importSaveAll).toContain("if (deferredImportBatch.pending.length > 0)");
   });
 
   it("defers manual Reload while uploads are active and consumes the deferred event after the queue drains", () => {

@@ -66,6 +66,7 @@ try {
   const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
   const cloudUploadQueue = readFileSync(path.join(root, "src", "features", "cloud", "useCloudUploadQueue.ts"), "utf8");
   const importDiscovery = readFileSync(path.join(root, "src", "features", "import", "useImportDiscovery.ts"), "utf8");
+  const importSaveAll = readFileSync(path.join(root, "src", "features", "import", "useImportSaveAll.ts"), "utf8");
   const beatFileDropModal = readFileSync(path.join(root, "src", "features", "dragdrop", "components", "BeatFileDropModal.tsx"), "utf8");
   const beatCard = readFileSync(path.join(root, "src", "components", "BeatCard.tsx"), "utf8");
   const controller = readFileSync(path.join(root, "src", "features", "dragdrop", "htmlDropController.ts"), "utf8");
@@ -308,8 +309,8 @@ try {
   if ([app, importDiscovery].some(source => source.includes("await previewImportBatch(normalized)"))) fail("Review regressed to full-batch discovery before Beat 1.");
   if (!importDiscovery.includes("startStream: startImportReviewStream") || !importDiscovery.includes("prepareNext: prepareNextImportReviewBeat") || !importDiscovery.includes("await services.prepareNext(stream.batch_id)")) fail("Review no longer advances the streaming discovery one beat at a time.");
   if (!importDiscovery.includes("while (!step.discovery_complete") || !importDiscovery.includes("FIRST_REVIEW_READY") || !importDiscovery.includes("DISCOVERY_FINISHED")) fail("Streaming Review worker/perf instrumentation was removed.");
-  if (!importDiscovery.includes("const reviewPreparationPromiseRef = useRef<Promise<Beat[]> | null>(null)") || !app.includes("reviewPreparationPromiseRef.current")) fail("Save All no longer shares the sequential Review preparation worker.");
-  if (!app.includes("setReviewQueue(null);") || !app.includes("cloudifyImportedBeats([currentUpdated])")) fail("Save All must close Review and upload the current beat without waiting for the rest.");
+  if (!importDiscovery.includes("const reviewPreparationPromiseRef = useRef<Promise<Beat[]> | null>(null)") || !importSaveAll.includes("reviewPreparationPromiseRef.current")) fail("Save All no longer shares the sequential Review preparation worker.");
+  if (!importSaveAll.includes("setReviewQueue(null);") || !importSaveAll.includes("cloudifyImportedBeats([currentUpdated])")) fail("Save All must close Review and upload the current beat without waiting for the rest.");
   if (!app.includes("Retry upload") && !beatCard.includes("Retry upload")) fail("Individual failed-upload Retry disappeared.");
   if (!cloudUploadQueue.includes('cloudifyImportedBeats([{ ...beat, cloud_status: "UPLOADING" }])')) fail("Individual Retry is no longer wired back into the checkpoint-aware upload pipeline.");
   if (!rustCommands.includes("pub fn start_import_review_stream") || !rustCommands.includes("VecDeque") || !rustCommands.includes("discover_next_stream_group")) fail("Rust lost true incremental/shallow-first import discovery.");

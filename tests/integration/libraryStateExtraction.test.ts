@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const owner = readFileSync(resolve(process.cwd(), "src/features/library/useLibraryState.ts"), "utf8");
 const importReview = readFileSync(resolve(process.cwd(), "src/features/import/useImportReview.ts"), "utf8");
+const importSaveAll = readFileSync(resolve(process.cwd(), "src/features/import/useImportSaveAll.ts"), "utf8");
 
 describe("task 3.1 library-state extraction", () => {
   it("moves the single library owner and presentation cache out of App", () => {
@@ -22,7 +23,7 @@ describe("task 3.1 library-state extraction", () => {
   it("preserves the old latest-snapshot timing instead of making every setter synchronous", () => {
     expect(app).toContain("visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);\n    beatsLatestRef.current = beats;");
     expect(owner).not.toContain("beatsLatestRef.current = beats");
-    const extractedOwners = `${app}\n${importReview}`;
+    const extractedOwners = `${app}\n${importReview}\n${importSaveAll}`;
     expect((extractedOwners.match(/beatsLatestRef\.current = next/g) ?? []).length).toBeGreaterThan(5);
     expect(importReview).toContain("beatsLatestRef.current = next;");
   });

@@ -4,15 +4,13 @@ import BeatCard from "./components/BeatCard";
 import Drawer from "./components/Drawer";
 import Player from "./components/Player";
 import AddBeatModal from "./components/AddBeatModal";
-import ImportDecisionsModal from "./components/ImportDecisionsModal";
-import ImportAudioConflictsModal from "./components/ImportAudioConflictsModal";
 import SettingsPanel from "./components/SettingsPanel";
 import AccountGate, { getBeatGalerAuthToken, getResolvedCloudApiBase, logoutBeatGalerAccount } from "./components/AccountGate";
 import UploadModal from "./components/UploadModal";
 import JobStatusBar from "./components/JobStatusBar";
 import { PlusIcon, Artwork } from "./components/ui";
 import { useAudio } from "./hooks/useAudio";
-import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, discardImportReviewBatch, resolveImportDecisions, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, type ImportBatchPreview, isTauriAvailable } from "./lib/tauri";
+import { loadLibrary, loadOfflineLibrary, flushOfflineTrashIntents, readBeatMeta, getSettings, saveBeatMeta, discardImportReviewBatch, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, repairStaleCloudLibraryRefs, pollTelegramCloudStatus, purgeInterruptedUploadLocal, getCloudClientId, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, readImagePathAsDataUrl, isDirectoryPath, diagnosticLog, type CloudFileType, isTauriAvailable } from "./lib/tauri";
 import { libraryStateManager } from "./lib/libraryStateManager";
 import { platform } from "./platform";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
@@ -21,7 +19,7 @@ import { appAlert, appConfirm } from "./lib/dialog";
 import { sanitizeUserVisibleText } from "./lib/userVisibleError";
 import { useTagColors, setTagColor } from "./lib/tagColors";
 import { registerJob, updateJob } from "./lib/jobStore";
-import { cleanTags, validateBpm, validateMusicKey } from "./lib/metadataValidation";
+import { cleanTags } from "./lib/metadataValidation";
 import { fetchInternetArtworkDataUrl } from "./features/artwork/internetArtwork";
 import { artworkFileToDataUrl } from "./features/dragdrop/browserArtwork";
 import { nativeExternalImageSignalFromPaths } from "./features/dragdrop/nativeExternalImage";
@@ -37,10 +35,11 @@ import TagColorMenu from "./features/tags/components/TagColorMenu";
 import { useArtworkHydration } from "./features/artwork/useArtworkHydration";
 import { readActiveCloudUploads, rollbackInterruptedCloudUploads } from "./features/cloud/interruptedUploadJournal";
 import { useCloudUploadQueue } from "./features/cloud/useCloudUploadQueue";
-import ImportReviewHost from "./features/import/components/ImportReviewHost";
+import ImportReviewHost, { ImportResolutionHost } from "./features/import/components/ImportReviewHost";
 import { useImportSession } from "./features/import/useImportSession";
 import { useImportReview } from "./features/import/useImportReview";
 import { useImportDiscovery } from "./features/import/useImportDiscovery";
+import { useImportSaveAll } from "./features/import/useImportSaveAll";
 import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "./features/dragdrop/pathHelpers";
 import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "./features/library/libraryFingerprints";
 import { clearCachedBeats, clearUploadPreviewCache, preserveLoadedArtwork } from "./features/library/libraryPresentationCache";
@@ -194,14 +193,10 @@ function BeatGalerApp() {
   const [showAdd, setShowAdd] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [dropImporting, setDropImporting] = useState(false);
-  const [dropImportBatch, setDropImportBatch] = useState<ImportBatchPreview | null>(null);
-  const [deferredImportBatch, setDeferredImportBatch] = useState<ImportBatchPreview | null>(null);
-  const [audioConflictBatch, setAudioConflictBatch] = useState<ImportBatchPreview | null>(null);
   // Covers the WebView2 staging window that happens BEFORE importDroppedPaths
   // receives native paths. Without this state, the app can look frozen while
   // large dropped files are being copied into drop-staging.
   const [libraryDropStaging, setLibraryDropStaging] = useState(false);
-  const [bulkSaveAllBusy, setBulkSaveAllBusy] = useState(false);
   const [beatFileDrop, setBeatFileDrop] = useState<{ beat: Beat; filePath: string; kind: "file" | "directory" } | null>(null);
   const {
     reviewQueue,
@@ -291,6 +286,8 @@ function BeatGalerApp() {
     reviewBootstrap,
     reviewPreparationDone,
     reviewPreparationPromiseRef,
+    deferredImportBatch,
+    setDeferredImportBatch,
     importDroppedPaths,
     cancelPendingReviewWork,
     completeImmediateReviewPreparation,
@@ -300,9 +297,6 @@ function BeatGalerApp() {
     rejectOfflineMutation,
     setDropActive,
     setShowAdd,
-    setDeferredImportBatch,
-    setAudioConflictBatch,
-    setDropImportBatch,
     setReviewQueue,
     skippedReviewSourceKeysRef,
     stagedImportPathsRef,
@@ -1028,145 +1022,32 @@ const {
   cleanupStaging: protectedBeats => cleanupOrphanedDropStaging(protectedBeats),
 });
 
-  const handleReviewedSaveAll = useCallback(async (currentUpdated: Beat) => {
-    const queue = reviewQueueLatestRef.current;
-    if (!queue) return;
-    const startIndex = queue.index;
-    setBulkSaveAllBusy(true);
-
-    // Save All is a UX command, not a request to wait for Review preparation.
-    // Close Review immediately, commit the current beat, then let the same
-    // sequential worker finish metadata for the remaining beats in background.
-    setReviewQueue(null);
-    setBeats(current => {
-      const exists = current.some(item => item.id === currentUpdated.id);
-      const next = exists
-        ? current.map(item => item.id === currentUpdated.id ? currentUpdated : item)
-        : [currentUpdated, ...current];
-      beatsLatestRef.current = next;
-      return next;
-    });
-    cloudifyImportedBeats([currentUpdated]);
-
-    let allPrepared = queue.beats;
-    if (reviewPreparationPromiseRef.current) {
-      try {
-        allPrepared = await reviewPreparationPromiseRef.current;
-      } catch (error) {
-        // The background preparer already surfaces the real error. Save All
-        // must still keep already-prepared beats usable instead of rejecting
-        // the whole batch promise.
-        console.warn("Save All continued with already-prepared beats:", error);
-        allPrepared = reviewQueueLatestRef.current?.beats ?? queue.beats;
-      }
-    }
-    const remaining = allPrepared.slice(startIndex + 1);
-    const committed: Beat[] = [];
-    const nameConflicts: Beat[] = [];
-
-    const queueIds = new Set(allPrepared.map(item => item.id));
-    const reservedNames = new Set(
-      beatsLatestRef.current
-        .filter(item => !queueIds.has(item.id) && item.id !== currentUpdated.id)
-        .map(item => item.name.trim().toLocaleLowerCase())
-        .filter(Boolean)
-    );
-    const currentName = currentUpdated.name.trim().toLocaleLowerCase();
-    if (currentName) reservedNames.add(currentName);
-
-    for (const beat of remaining) {
-      const nameKey = beat.name.trim().toLocaleLowerCase();
-      if (nameKey && reservedNames.has(nameKey)) {
-        // Duplicate review candidates are not auto-renamed. They are moved to
-        // the end so Save All remains fast and the user can choose a real name.
-        nameConflicts.push(beat);
-        continue;
-      }
-      if (nameKey) reservedNames.add(nameKey);
-
-      try {
-        const bpmCheck = validateBpm(beat.bpm);
-        const keyCheck = validateMusicKey(beat.key);
-        if (bpmCheck.valid === false) throw new Error(`${beat.name}: ${bpmCheck.reason}`);
-        if (keyCheck.valid === false) throw new Error(`${beat.name}: ${keyCheck.reason}`);
-
-        const cleaned = cleanTags(beat.tags);
-        const normalized: Beat = {
-          ...beat,
-          tags: cleaned.tags,
-          bpm: bpmCheck.normalized,
-          key: keyCheck.normalized,
-        };
-
-        const result = await saveBeatMeta({
-          mp3_path: normalized.mp3_path,
-          wav_path: normalized.wav_path,
-          bpm: normalized.bpm,
-          key: normalized.key,
-          tags: normalized.tags,
-          rating: normalized.rating,
-          image_base64: normalized.image_base64,
-          image_preview_base64: normalized.image_preview_base64 ?? null,
-          image_crop: normalized.image_crop ?? null,
-          update_filename: normalized.bpm !== beat.bpm || normalized.key !== beat.key,
-        });
-
-        committed.push({
-          ...normalized,
-          mp3_path: result.new_mp3_path || normalized.mp3_path,
-          wav_path: result.new_wav_path ?? normalized.wav_path,
-          playback_path: result.new_mp3_path || normalized.mp3_path || normalized.playback_path,
-        });
-      } catch (error) {
-        console.warn(`Save All could not commit ${beat.name}:`, error);
-        nameConflicts.push(beat);
-      }
-
-      // Keep WebView responsive even when hundreds of beats are selected.
-      await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-    }
-
-    if (committed.length > 0) {
-      const committedIds = new Set(committed.map(beat => beat.id));
-      setBeats(current => {
-        const next = [
-          ...committed,
-          ...current.filter(beat => !committedIds.has(beat.id)),
-        ];
-        beatsLatestRef.current = next;
-        return next;
-      });
-      cloudifyImportedBeats(committed);
-    }
-
-    // Local duplicate/validation conflicts are intentionally last and reopen
-    // Review instead of blocking the whole Save All batch.
-    if (nameConflicts.length > 0) {
-      setReviewQueue({ beats: nameConflicts, index: 0, total: nameConflicts.length, batchId: queue.batchId, preparing: false });
-    }
-    setBulkSaveAllBusy(false);
-  }, [cloudifyImportedBeats]);
-
-
-
-  useEffect(() => {
-    if (!deferredImportBatch || !reviewPreparationDone || bulkSaveAllBusy) return;
-    if (reviewBootstrap || reviewQueue || audioConflictBatch || dropImportBatch) return;
-
-    if (deferredImportBatch.audio_conflicts.length > 0) {
-      setAudioConflictBatch(deferredImportBatch);
-      return;
-    }
-    if (deferredImportBatch.pending.length > 0) {
-      setDropImportBatch(deferredImportBatch);
-      return;
-    }
-
-    const batchId = deferredImportBatch.batch_id;
-    stagedImportPathsRef.current.delete(batchId);
-    setDeferredImportBatch(null);
-    void discardImportReviewBatch(batchId);
-  }, [deferredImportBatch, reviewPreparationDone, bulkSaveAllBusy, reviewBootstrap, reviewQueue, audioConflictBatch, dropImportBatch]);
+  const {
+    audioConflictBatch,
+    dropImportBatch,
+    setAudioConflictBatch,
+    setDropImportBatch,
+    handleReviewedSaveAll,
+    cancelAudioConflicts,
+    resolveAudioConflicts,
+    closeImportDecisions,
+    importResolvedDecisions,
+  } = useImportSaveAll({
+    setBeats,
+    beatsLatestRef,
+    reviewQueue,
+    setReviewQueue,
+    reviewQueueLatestRef,
+    reviewBootstrap,
+    reviewPreparationDone,
+    reviewPreparationPromiseRef,
+    deferredImportBatch,
+    setDeferredImportBatch,
+    stagedImportPathsRef,
+    setDropImporting,
+    cloudifyImportedBeats,
+    addBeatsAndReview,
+  });
 
   const updateExistingBeatFromFolder = useCallback(async (beat: Beat, folderPath: string): Promise<boolean> => {
     if (rejectOfflineMutation("Updating beat files")) return true;
@@ -2719,53 +2600,14 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
         />
       )}
 
-      {audioConflictBatch && audioConflictBatch.audio_conflicts.length > 0 && (
-        <ImportAudioConflictsModal
-          batchId={audioConflictBatch.batch_id}
-          conflicts={audioConflictBatch.audio_conflicts}
-          onCancel={() => {
-            const batchId = audioConflictBatch.batch_id;
-            stagedImportPathsRef.current.delete(batchId);
-            setAudioConflictBatch(null);
-            setDeferredImportBatch(null);
-            // Cancel only the unresolved tail. Already-saved normal beats/uploads
-            // keep their staged files via the existing protected cleanup path.
-            void discardImportReviewBatch(batchId);
-          }}
-          onResolved={(resolved) => {
-            const batchId = audioConflictBatch.batch_id;
-            setAudioConflictBatch(null);
-            setDeferredImportBatch(current => current ? { ...current, audio_conflicts: [] } : current);
-            if (resolved.length > 0) {
-              setReviewQueue({ beats: resolved, index: 0, total: resolved.length, batchId, preparing: false });
-            }
-          }}
-        />
-      )}
-
-      {dropImportBatch && (
-        <ImportDecisionsModal
-          batch={dropImportBatch}
-          onClose={() => {
-            const staged = stagedImportPathsRef.current.get(dropImportBatch.batch_id) ?? [];
-            stagedImportPathsRef.current.delete(dropImportBatch.batch_id);
-            void cleanupStagedDropPaths(staged);
-            void discardImportReviewBatch(dropImportBatch.batch_id);
-            setDeferredImportBatch(null);
-            setDropImportBatch(null);
-            setDropImporting(false);
-          }}
-          onImported={(imported) => {
-            // Do not delete the captured files here. The imported BeatMeta records
-            // still point at them and the Telegram upload may happen seconds later.
-            stagedImportPathsRef.current.delete(dropImportBatch.batch_id);
-            setDeferredImportBatch(null);
-            setDropImportBatch(null);
-            setDropImporting(false);
-            addBeatsAndReview(imported);
-          }}
-        />
-      )}
+      <ImportResolutionHost
+        audioConflictBatch={audioConflictBatch}
+        dropImportBatch={dropImportBatch}
+        onAudioConflictsCancel={cancelAudioConflicts}
+        onAudioConflictsResolved={resolveAudioConflicts}
+        onImportDecisionsClose={closeImportDecisions}
+        onImportDecisionsImported={importResolvedDecisions}
+      />
 
       {(dropActive || dropImporting) && !libraryDropStaging && !reviewBootstrap && !reviewQueue && (
         <div style={{

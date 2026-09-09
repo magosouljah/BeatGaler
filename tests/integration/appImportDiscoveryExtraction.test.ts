@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 const discovery = readFileSync(resolve(process.cwd(), "src/features/import/useImportDiscovery.ts"), "utf8");
+const saveAll = readFileSync(resolve(process.cwd(), "src/features/import/useImportSaveAll.ts"), "utf8");
 
 function section(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -22,7 +23,7 @@ function expectOrdered(source: string, markers: string[]): void {
 }
 
 describe("task 7.2 incremental discovery extraction", () => {
-  it("moves the progressive discovery owner out of App without moving Save All or browser import", () => {
+  it("keeps progressive discovery outside App while Save All consumes its worker and browser import remains for 7.4", () => {
     expect(app).toContain("} = useImportDiscovery({");
     expect(app).not.toContain("const importDroppedPaths = useCallback");
     expect(app).not.toContain("const reviewPreparationRunRef = useRef");
@@ -30,7 +31,8 @@ describe("task 7.2 incremental discovery extraction", () => {
     expect(app).not.toContain("startImportReviewStream");
     expect(app).not.toContain("prepareNextImportReviewBeat");
     expect(app).not.toContain("getImportReviewBatchSummary");
-    expect(app).toContain("const handleReviewedSaveAll = useCallback");
+    expect(app).not.toContain("const handleReviewedSaveAll = useCallback");
+    expect(app).toContain("useImportSaveAll({");
     expect(app).toContain("const importDroppedBrowserFiles = useCallback");
     expect(discovery).toContain("startStream: startImportReviewStream");
     expect(discovery).toContain("prepareNext: prepareNextImportReviewBeat");
@@ -66,6 +68,6 @@ describe("task 7.2 incremental discovery extraction", () => {
     expect((flow.match(/importReviewRequestRunRef\.current !== requestRunId/g) ?? []).length).toBeGreaterThanOrEqual(4);
     expect(flow).toContain("void services.discardBatch(stream.batch_id);");
     expect(app).toContain("reviewPreparationPromiseRef,");
-    expect(app).toContain("await reviewPreparationPromiseRef.current");
+    expect(saveAll).toContain("await reviewPreparationPromiseRef.current");
   });
 });

@@ -33,9 +33,6 @@ type UseImportDiscoveryOptions = {
   rejectOfflineMutation: (action: string) => boolean;
   setDropActive: Dispatch<SetStateAction<boolean>>;
   setShowAdd: Dispatch<SetStateAction<boolean>>;
-  setDeferredImportBatch: Dispatch<SetStateAction<ImportBatchPreview | null>>;
-  setAudioConflictBatch: Dispatch<SetStateAction<ImportBatchPreview | null>>;
-  setDropImportBatch: Dispatch<SetStateAction<ImportBatchPreview | null>>;
   setReviewQueue: Dispatch<SetStateAction<ImportReviewQueueState | null>>;
   skippedReviewSourceKeysRef: MutableRefObject<Set<string>>;
   stagedImportPathsRef: MutableRefObject<Map<string, string[]>>;
@@ -49,9 +46,6 @@ export function useImportDiscovery({
   rejectOfflineMutation,
   setDropActive,
   setShowAdd,
-  setDeferredImportBatch,
-  setAudioConflictBatch,
-  setDropImportBatch,
   setReviewQueue,
   skippedReviewSourceKeysRef,
   stagedImportPathsRef,
@@ -60,6 +54,7 @@ export function useImportDiscovery({
 }: UseImportDiscoveryOptions) {
   const [reviewBootstrap, setReviewBootstrap] = useState<{ total: number | null } | null>(null);
   const [reviewPreparationDone, setReviewPreparationDone] = useState(true);
+  const [deferredImportBatch, setDeferredImportBatch] = useState<ImportBatchPreview | null>(null);
   const reviewPreparationRunRef = useRef(0);
   const reviewPreparationPromiseRef = useRef<Promise<Beat[]> | null>(null);
   // Every import gesture gets its own generation. Cancel/replacement
@@ -77,12 +72,11 @@ export function useImportDiscovery({
     reviewPreparationPromiseRef.current = null;
     setReviewPreparationDone(true);
     setReviewBootstrap(null);
-    setAudioConflictBatch(null);
     setDeferredImportBatch(current => {
       if (current?.batch_id) void services.discardBatch(current.batch_id);
       return null;
     });
-  }, [services, setAudioConflictBatch, setDeferredImportBatch]);
+  }, [services]);
 
   const importDroppedPaths = useCallback(async (paths: string[]) => {
     if (rejectOfflineMutation("Importing beats")) return;
@@ -96,8 +90,6 @@ export function useImportDiscovery({
     setDropImporting(true);
     setReviewPreparationDone(false);
     setDeferredImportBatch(null);
-    setAudioConflictBatch(null);
-    setDropImportBatch(null);
     skippedReviewSourceKeysRef.current.clear();
     if (skeletonEnabled) {
       setReviewBootstrap({ total: null });
@@ -166,11 +158,7 @@ export function useImportDiscovery({
         setDeferredImportBatch(summary);
         setReviewBootstrap(null);
         setReviewPreparationDone(true);
-        if (summary.audio_conflicts.length > 0) {
-          setAudioConflictBatch(summary);
-        } else if (summary.pending.length > 0) {
-          setDropImportBatch(summary);
-        } else {
+        if (summary.audio_conflicts.length === 0 && summary.pending.length === 0) {
           stagedImportPathsRef.current.delete(stream.batch_id);
           setDeferredImportBatch(null);
           await services.discardBatch(stream.batch_id);
@@ -264,10 +252,7 @@ export function useImportDiscovery({
     dropImporting,
     rejectOfflineMutation,
     services,
-    setAudioConflictBatch,
-    setDeferredImportBatch,
     setDropActive,
-    setDropImportBatch,
     setDropImporting,
     setReviewQueue,
     setShowAdd,
@@ -280,6 +265,8 @@ export function useImportDiscovery({
     reviewBootstrap,
     reviewPreparationDone,
     reviewPreparationPromiseRef,
+    deferredImportBatch,
+    setDeferredImportBatch,
     importDroppedPaths,
     cancelPendingReviewWork,
     completeImmediateReviewPreparation,
