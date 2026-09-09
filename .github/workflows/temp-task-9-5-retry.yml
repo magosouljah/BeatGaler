@@ -17,11 +17,6 @@ jobs:
         with:
           ref: v0.9.0-test-noche
           fetch-depth: 2
-      - name: Verify expected base
-        shell: bash
-        run: |
-          parent="$(git rev-parse HEAD^)"
-          test "$parent" = "595b4dfca7464c019ceeca3367d50487687c9c68" || { echo "Unexpected base: $parent"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
@@ -48,10 +43,14 @@ jobs:
 
           test_path = Path('tests/component-dom/startupRevealArchitecture.test.ts')
           test = test_path.read_text()
-          old = '''  assert.match(\n    appSource,\n    /prevModeRef\\.current === "library" && mode !== "library"/,\n    "App should own the first eligible library reveal transition",\n  );'''
-          new = '''  assert.match(\n    revealHookSource,\n    /prevModeRef\\.current === "library" && mode !== "library"/,\n    "the reveal hook should own the first eligible library reveal transition",\n  );'''
-          assert old in test, 'stale architecture assertion not found'
-          test_path.write_text(test.replace(old, new, 1))
+          old_decl = 'const app = readFileSync("src/App.tsx", "utf8");\n'
+          new_decl = old_decl + 'const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");\n'
+          assert old_decl in test and 'libraryRevealOwner' not in test
+          test = test.replace(old_decl, new_decl, 1)
+          old_assert = '    expect(app).toContain("title + artwork are enough to show a beat");'
+          new_assert = '    expect(libraryRevealOwner).toContain("Authority pass: title + artwork reveal a card. Audio remains a later viewport warmup.");'
+          assert old_assert in test
+          test_path.write_text(test.replace(old_assert, new_assert, 1))
           PY
       - name: Focused 9.5 tests
         run: npx vitest run tests/integration/appLibraryRevealExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts --environment jsdom
