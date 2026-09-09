@@ -1,4 +1,4 @@
-name: Temporary Task 9.5 Diagnostic
+name: Temporary Task 9.5 Final Validation
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  diagnose-component-dom:
+  validate-and-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,46 +21,65 @@ jobs:
         shell: bash
         run: |
           parent="$(git rev-parse HEAD^)"
-          test "$parent" = "aa7242d780cd8e21d0c73b543a3c30054bcec21d" || { echo "Unexpected base: $parent"; exit 1; }
+          test "$parent" = "595b4dfca7464c019ceeca3367d50487687c9c68" || { echo "Unexpected base: $parent"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
           cache: npm
       - run: npm ci
-      - name: Reapply task 9.5 candidate
+      - name: Apply task 9.5 candidate and align architecture contract
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
+
           workflow = Path('.github/workflows/temp-task-9-5-apply.yml').read_text().splitlines()
           start = next(i for i, line in enumerate(workflow) if "python3 <<'PY'" in line) + 1
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
-          lines = []
-          for line in workflow[start:end]:
-              lines.append(line[10:] if line.startswith('          ') else line)
-          code = '\n'.join(lines) + '\n'
+          code = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end]) + '\n'
           exec(compile(code, '<task-9-5-apply>', 'exec'), {'__name__': '__main__'})
+
           app_path = Path('src/App.tsx')
           app = app_path.read_text()
           anchor = 'import { useLibraryReveal } from "./features/startup/useLibraryReveal";\n'
           assert anchor in app
           app = app.replace(anchor, anchor + 'import { dismissBeatGalerStartupLoader } from "./features/startup/startupLoader";\n', 1)
           app_path.write_text(app)
+
+          test_path = Path('tests/component-dom/startupRevealArchitecture.test.ts')
+          test = test_path.read_text()
+          old = '''  assert.match(\n    appSource,\n    /prevModeRef\\.current === "library" && mode !== "library"/,\n    "App should own the first eligible library reveal transition",\n  );'''
+          new = '''  assert.match(\n    revealHookSource,\n    /prevModeRef\\.current === "library" && mode !== "library"/,\n    "the reveal hook should own the first eligible library reveal transition",\n  );'''
+          assert old in test, 'stale architecture assertion not found'
+          test_path.write_text(test.replace(old, new, 1))
           PY
-      - name: Capture component DOM failure
-        shell: bash
-        run: |
-          set +e
-          npm run test:component:dom > task-9-5-component.log 2>&1
-          code=$?
-          echo "EXIT_CODE=$code" >> task-9-5-component.log
-          cat task-9-5-component.log
-          exit 0
-      - name: Publish diagnostic log on test branch only
+      - name: Focused 9.5 tests
+        run: npx vitest run tests/integration/appLibraryRevealExtraction.test.ts tests/integration/appStartupBootstrapExtraction.test.ts --environment jsdom
+      - name: Typecheck
+        run: npm run test:typecheck
+      - name: Unit TypeScript
+        run: npm run test:unit:ts
+      - name: Component DOM
+        run: npm run test:component:dom
+      - name: Integration
+        run: npm run test:integration
+      - name: Regressions
+        run: npm run test:regressions
+      - name: Core E2E
+        run: npm run e2e:core
+      - name: App guard
+        run: npm run guard:app
+      - name: Web build
+        run: npm run build:web
+      - name: Full build
+        run: npm run build
+      - name: Publish validated implementation on test branch only
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f task-9-5-component.log
-          git commit -m "chore(migration): capture task 9.5 component failure"
+          rm -f task-9-5-component.log
+          git add src/App.tsx src/features/startup/startupLoader.ts src/features/startup/useLibraryReveal.ts tests/integration/appLibraryRevealExtraction.test.ts tests/component-dom/startupRevealArchitecture.test.ts scripts/run-regressions.mjs
+          git add -u task-9-5-component.log || true
+          git commit -m "refactor(app): extract library reveal orchestration"
           git push origin HEAD:v0.9.0-test-noche
