@@ -46,3 +46,11 @@ for (const required of [
 }
 
 fs.writeFileSync(compositionPath, source);
+
+const regressionsPath = 'scripts/run-regressions.mjs';
+let regressions = fs.readFileSync(regressionsPath, 'utf8');
+const oldRuntimeOwner = `if (!app.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");`;
+const newRuntimeOwner = `if (!beatAssetUpdates.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");`;
+if (!regressions.includes(oldRuntimeOwner)) throw new Error('Runtime ownership regression anchor changed');
+regressions = regressions.replace(oldRuntimeOwner, newRuntimeOwner);
+fs.writeFileSync(regressionsPath, regressions);
