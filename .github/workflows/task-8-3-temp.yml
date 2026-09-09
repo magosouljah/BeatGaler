@@ -1,5 +1,5 @@
 name: Final task 8.3 validation
-# Retry after adapting the task 8.1 target-routing guard to the new native receiver ownership.
+# Retry after adapting Phase 9 native receiver guards to the extracted owner.
 
 on:
   push:
@@ -55,6 +55,7 @@ jobs:
             tests/integration/appNativeLibraryDropExtraction.test.ts \
             tests/integration/appNativeDropTargetsExtraction.test.ts \
             scripts/regression-import-native.mjs \
+            scripts/regression-phase9cd.mjs \
             scripts/run-regressions.mjs \
             scripts/test-macos-portability.mjs
           git diff --cached --check
