@@ -53,7 +53,20 @@ jobs:
           git push origin HEAD:v0.9.0-test-noche
           exit 1
       - name: Regressions
-        run: npm run test:regressions
+        id: regressions
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm run test:regressions 2>&1 | tee regressions.log
+      - name: Capture regression failure
+        if: steps.regressions.outcome == 'failure'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f regressions.log
+          git commit -m "chore(migration): capture task 10.1 regression contract"
+          git push origin HEAD:v0.9.0-test-noche
+          exit 1
       - name: Web build
         run: npm run build:web
       - name: Desktop frontend build
