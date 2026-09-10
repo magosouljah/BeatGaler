@@ -1,4 +1,3 @@
-import React from "react";
 import AccountGate from "../components/AccountGate";
 import { platform } from "../platform";
 import AppShell from "./AppShell";

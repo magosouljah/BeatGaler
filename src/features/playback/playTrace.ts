@@ -5,7 +5,7 @@ export type PlayTraceDetail = Record<string, unknown>;
 let spanSequence = 0;
 
 /**
- * Temporary Issue #97 runtime trace. Keep payloads free of credentials/chat ids.
+ * Playback runtime trace. Keep payloads free of credentials/chat ids.
  * Epoch time lets main-thread and Worker events be correlated in one console log.
  */
 export function playTrace(stage: string, detail: PlayTraceDetail = {}): void {

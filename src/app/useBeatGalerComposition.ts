@@ -1,45 +1,23 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { Beat } from "../types";
-import BeatCard from "../components/BeatCard";
-import Drawer from "../components/Drawer";
-import Player from "../components/Player";
-import AddBeatModal from "../components/AddBeatModal";
-import SettingsPanel from "../components/SettingsPanel";
 import { logoutBeatGalerAccount } from "../components/AccountGate";
-import UploadModal from "../components/UploadModal";
-import JobStatusBar from "../components/JobStatusBar";
-import { PlusIcon, Artwork } from "../components/ui";
 import { useAudio } from "../hooks/useAudio";
-import { loadLibrary, readBeatMeta, saveBeatMeta, discardImportReviewBatch, uploadBeatToTelegram, downloadBeatFromTelegram, prepareBeatForPlayback, warmBeatForPlayback, getDownloadCookingStatus, downloadCookingDiagnosticEvent, uploadProjectToTelegram, uploadDroppedFileToTelegram, downloadCloudFileToCache, downloadProjectToCache, revealInExplorer, syncBeatMetadataToTelegram, copyExportFile, copyAudioMetadata, prepareUniqueExportFolder, type CloudFileType, isTauriAvailable } from "../lib/tauri";
-import { libraryStateManager } from "../lib/libraryStateManager";
+import { discardImportReviewBatch, isTauriAvailable } from "../lib/tauri";
 import { platform } from "../platform";
-import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
-import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
-import { appAlert, appConfirm } from "../lib/dialog";
-import { sanitizeUserVisibleText } from "../lib/userVisibleError";
-import { useTagColors, setTagColor } from "../lib/tagColors";
-import { registerJob, updateJob } from "../lib/jobStore";
-import { cleanTags } from "../lib/metadataValidation";
-import { cleanupOrphanedDropStaging, cleanupStagedDropPaths } from "../features/dragdrop/dropStaging";
-import CloudFilesModal from "../features/downloads/components/CloudFilesModal";
+import { useTagColors } from "../lib/tagColors";
+import { cleanupOrphanedDropStaging } from "../features/dragdrop/dropStaging";
 import { useBeatDownloads } from "../features/downloads/useBeatDownloads";
-import BeatFileDropModal, { type DroppedBeatFileRole } from "../features/dragdrop/components/BeatFileDropModal";
-import SearchBar from "../features/library/components/SearchBar";
-import SortMenu from "../features/library/components/SortMenu";
-import TagColorMenu from "../features/tags/components/TagColorMenu";
 import { useArtworkHydration } from "../features/artwork/useArtworkHydration";
 import { useCloudUploadQueue } from "../features/cloud/useCloudUploadQueue";
-import ImportReviewHost, { ImportResolutionHost } from "../features/import/components/ImportReviewHost";
 import { useImportSession } from "../features/import/useImportSession";
 import { useImportReview } from "../features/import/useImportReview";
 import { useImportDiscovery } from "../features/import/useImportDiscovery";
 import { useImportSaveAll } from "../features/import/useImportSaveAll";
 import { useBrowserImport } from "../features/import/useBrowserImport";
-import { extensionFromPath, fileNameFromPath, isBackupFolderPath } from "../features/dragdrop/pathHelpers";
 import { useHtmlLibraryDrop } from "../features/dragdrop/useHtmlLibraryDrop";
 import { useNativeLibraryDrop } from "../features/dragdrop/useNativeLibraryDrop";
-import { cloudBeatFingerprint, drawerMetadataCommitFingerprint, libraryViewFingerprint } from "../features/library/libraryFingerprints";
-import { clearUploadPreviewCache, preserveLoadedArtwork } from "../features/library/libraryPresentationCache";
+import { cloudBeatFingerprint, libraryViewFingerprint } from "../features/library/libraryFingerprints";
+import { preserveLoadedArtwork } from "../features/library/libraryPresentationCache";
 import { selectFilteredAndSortedBeats } from "../features/library/librarySelectors";
 import { useLibraryViewState } from "../features/library/useLibraryViewState";
 import { useLibraryReorder } from "../features/library/useLibraryReorder";
@@ -47,7 +25,6 @@ import { useBeatSelection } from "../features/selection/useBeatSelection";
 import { selectAllTags, selectTagFrequency, selectTagSuggestions } from "../features/tags/tagSelectors";
 import { useTagFilters } from "../features/tags/useTagFilters";
 import { useTagRename } from "../features/tags/useTagRename";
-import TagRenameDialog from "../features/tags/components/TagRenameDialog";
 import { useLibraryPresentationCache, useLibraryState } from "../features/library/useLibraryState";
 import { useLibraryReload } from "../features/library/useLibraryReload";
 import { useStartupBootstrap } from "../features/startup/useStartupBootstrap";
@@ -62,7 +39,6 @@ import { useBeatProjects } from "../features/projects/useBeatProjects";
 import { useOfflineAvailability } from "../features/offline/useOfflineAvailability";
 import { useTrashActions } from "../features/trash/useTrashActions";
 import { useWebLibraryReconciled } from "../features/library/useWebLibraryReconciled";
-import { createBeatRuntimeState } from "../features/state/beatRuntimeState";
 import { useBeatRuntimeRegistry } from "../features/state/useBeatRuntimeRegistry";
 import { useSessionState } from "../features/session/useSessionState";
 import { useSessionActions } from "../features/session/useSessionActions";
@@ -84,14 +60,6 @@ import { isBeatCloudUpdateBusy, setBeatCloudUpdateBusy } from "../features/cloud
 // the staged Review architecture underneath it.
 const REVIEW_SKELETON_ENABLED = true;
 
-function formatCloudBytes(bytes: number) {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let n = bytes; let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
 export function useBeatGalerComposition() {
   const {
     beats,
@@ -105,7 +73,6 @@ export function useBeatGalerComposition() {
   const cloudLibrarySnapshotRef = useRef<string | null>(null);
   const visibleLibraryFingerprintRef = useRef<string>("");
   const {
-    beatRuntimeStates,
     beatRuntimeStatesRef,
     transitionRuntime,
     forgetRuntimeState,
@@ -438,15 +405,6 @@ useCloudLibraryEvents({
     ensureArtworkReady,
   });
 
-  const addBeats = useCallback((newBeats: Beat[]) => {
-    setBeats(bs => {
-      const existing = new Set(bs.map(b => b.mp3_path));
-      const next = [...newBeats.filter(b => !existing.has(b.mp3_path)), ...bs];
-      beatsLatestRef.current = next;
-      return next;
-    });
-  }, []);
-
   const { addBeatsAndReview } = useImportEntry({
     connectionState,
     setShowAdd,
@@ -695,5 +653,5 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   const selectedBeats = beats.filter(b => selectedIds.has(b.id));
   const activeDragBeat = activeDragId ? beats.find(b => b.id === activeDragId) ?? null : null;
 
-  return { Event, HTMLElement, REVIEW_SKELETON_ENABLED, activeDragBeat, addBeatsAndReview, addToQueue, allTags, applyBulkUpdate, audio, audioConflictBatch, backTagRename, backgroundUploadErrors, beatFileDrop, beats, cancelAudioConflicts, cancelReview, cancelTagRename, clearSelection, clearTagFilters, closeCloudFiles, closeImportDecisions, cloudDownloadNotice, cloudFiles, cloudFilesBeat, cloudFilesBusyId, cloudFilesDownloadError, cloudFilesDownloadedIds, cloudSessionVerified, commitDrawerCloudMutation, confirmTagRename, connectionState, continueTagRename, currentBeat, cycleRepeat, deferredLibraryReloadRef, deleteBeat, dismissDownloadError, dismissInterruptedUploadNotices, dismissProjectUpdateNotice, displayedBeats, drawer, dropActive, dropImportBatch, dropImporting, excludedTags, filteredBeats, finishSelection, handleBeatRestored, handleCloudFiles, handleCustomCursorChanged, handleDisconnectTelegramAccount, handleDownloadTelegram, handleDragCancel, handleDragEnd, handleDragStart, handleDroppedBeatFileRole, handleEditBulk, handleFolderChanged, handleGetCloudFile, handleIncompleteWarningsChanged, handleNext, handleOpenProject, handlePlay, handlePrev, handleRemoveBulk, handleReviewedBeatSaved, handleReviewedSaveAll, handleTagClick, handleToggleOffline, handleUpdateProject, handleUpload, handleUploadBulk, handleUploadProjectTelegram, handleUploadTelegram, handleWarm, importResolvedDecisions, includedTags, interruptedUploadNotices, libraryDropStaging, libraryRefreshing, loading, offlineBusyIds, openTagRename, openableCloudProjectIds, playQueueIndex, projectUpdateNotice, queuedBeats, rejectOfflineMutation, releaseFile, reloadLibrary, repeatMode, resolveAudioConflicts, retryBackgroundUpload, revealedBeatIds, reviewBootstrap, reviewQueue, search, seek, selectMode, selectedBeats, selectedIds, sensors, setBeatFileDrop, setDrawer, setSearch, setShowAdd, setShowSettings, setShowUpload, setSortBy, setTagColorMenu, setTagRenameNewTag, setVolume, settings, showAdd, showQueue, showSettings, showUpload, shuffleEnabled, skipCurrentReviewBeat, sortBy, startupCookingGate, tagColorMenu, tagColors, tagFrequency, tagRename, tagRenameAffectedCount, tagRenameBusy, tagRenameError, tagRenameMp3Count, tagRenameWavCount, tagSuggestions, togglePause, toggleQueue, toggleSelectAll, toggleSelection, toggleShuffle, updateBeat };
+  return { REVIEW_SKELETON_ENABLED, activeDragBeat, addBeatsAndReview, addToQueue, allTags, applyBulkUpdate, audio, audioConflictBatch, backTagRename, backgroundUploadErrors, beatFileDrop, beats, cancelAudioConflicts, cancelReview, cancelTagRename, clearSelection, clearTagFilters, closeCloudFiles, closeImportDecisions, cloudDownloadNotice, cloudFiles, cloudFilesBeat, cloudFilesBusyId, cloudFilesDownloadError, cloudFilesDownloadedIds, cloudSessionVerified, commitDrawerCloudMutation, confirmTagRename, connectionState, continueTagRename, currentBeat, cycleRepeat, deferredLibraryReloadRef, deleteBeat, dismissDownloadError, dismissInterruptedUploadNotices, dismissProjectUpdateNotice, displayedBeats, drawer, dropActive, dropImportBatch, dropImporting, excludedTags, filteredBeats, finishSelection, handleBeatRestored, handleCloudFiles, handleCustomCursorChanged, handleDisconnectTelegramAccount, handleDownloadTelegram, handleDragCancel, handleDragEnd, handleDragStart, handleDroppedBeatFileRole, handleEditBulk, handleFolderChanged, handleGetCloudFile, handleIncompleteWarningsChanged, handleNext, handleOpenProject, handlePlay, handlePrev, handleRemoveBulk, handleReviewedBeatSaved, handleReviewedSaveAll, handleTagClick, handleToggleOffline, handleUpdateProject, handleUpload, handleUploadBulk, handleUploadProjectTelegram, handleUploadTelegram, handleWarm, importResolvedDecisions, includedTags, interruptedUploadNotices, libraryDropStaging, libraryRefreshing, loading, offlineBusyIds, openTagRename, openableCloudProjectIds, playQueueIndex, projectUpdateNotice, queuedBeats, rejectOfflineMutation, releaseFile, reloadLibrary, repeatMode, resolveAudioConflicts, retryBackgroundUpload, revealedBeatIds, reviewBootstrap, reviewQueue, search, seek, selectMode, selectedBeats, selectedIds, sensors, setBeatFileDrop, setDrawer, setSearch, setShowAdd, setShowSettings, setShowUpload, setSortBy, setTagColorMenu, setTagRenameNewTag, setVolume, settings, showAdd, showQueue, showSettings, showUpload, shuffleEnabled, skipCurrentReviewBeat, sortBy, startupCookingGate, tagColorMenu, tagColors, tagFrequency, tagRename, tagRenameAffectedCount, tagRenameBusy, tagRenameError, tagRenameMp3Count, tagRenameWavCount, tagSuggestions, togglePause, toggleQueue, toggleSelectAll, toggleSelection, toggleShuffle, updateBeat };
 }

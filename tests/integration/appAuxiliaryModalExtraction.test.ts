@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const app = [
   readFileSync(resolve(process.cwd(), "src/app/useBeatGalerComposition.ts"), "utf8"),
+  readFileSync(resolve(process.cwd(), "src/app/AppShell.tsx"), "utf8"),
   readFileSync(resolve(process.cwd(), "src/features/edit/useBeatEditing.ts"), "utf8"),
   readFileSync(resolve(process.cwd(), "src/features/dragdrop/useBeatFileDropRouting.ts"), "utf8"),
   readFileSync(resolve(process.cwd(), "src/features/cloud/beatCloudUpdateBusy.ts"), "utf8"),

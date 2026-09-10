@@ -29,7 +29,7 @@ describe("task 3.1 library-state extraction", () => {
     expect(app).toContain("visibleLibraryFingerprintRef.current = libraryViewFingerprint(beats);\n    beatsLatestRef.current = beats;");
     expect(owner).not.toContain("beatsLatestRef.current = beats");
     const extractedOwners = `${app}\n${importReview}\n${importSaveAll}`;
-    expect((extractedOwners.match(/beatsLatestRef\.current = next/g) ?? []).length).toBeGreaterThan(5);
+    expect((extractedOwners.match(/beatsLatestRef\.current = next/g) ?? []).length).toBeGreaterThanOrEqual(5);
     expect(importReview).toContain("beatsLatestRef.current = next;");
   });
 
