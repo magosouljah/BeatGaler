@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { appAlert } from "../lib/dialog";
 import type { Beat, FolderScanResult, ResolveFilesPayload } from "../types";
 import { Artwork, FolderIcon } from "./ui";
 import {
@@ -92,16 +93,24 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
 
   if (platform.capabilities.browserFileImport) {
     const handleBrowserPick = async () => {
+      if (importing) return;
+      setImporting(true);
       setError(null);
       try {
         const candidate = await platform.importer.pickBeat();
         if (!candidate) return;
-        // Review paints before ID3/artwork parsing finishes.
+        // Review opens while WAV conversion and metadata hydration run in the background.
         onAdd([candidate.beat]);
         onClose();
-        void candidate.hydrated.then(onCandidateHydrated).catch(() => {});
+        void candidate.hydrated.then(onCandidateHydrated).catch(error => {
+          if (platform.importer.fileForBeat(candidate.beat.id)) {
+            void appAlert({ title: "Import failed", message: String(error), danger: true });
+          }
+        });
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        setImporting(false);
       }
     };
 
@@ -114,10 +123,10 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
             <button aria-label="Close" onClick={onClose} style={{ background: "none", border: "none", color: "#777", fontSize: 18, cursor: "pointer" }}>×</button>
           </div>
           <div style={{ padding: 22 }}>
-            <button onClick={() => void handleBrowserPick()}
+            <button disabled={importing} onClick={() => void handleBrowserPick()}
               style={{ width: "100%", padding: "18px", background: "#161616", border: "1px solid #252525", borderRadius: 10, cursor: "pointer", textAlign: "left" }}>
-              <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>Choose MP3 or WAV</div>
-              <div style={{ fontSize: 11, color: "#666", marginTop: 5 }}>One beat per import · Review opens immediately</div>
+              <div style={{ fontSize: 13, color: "#e0e0e0", fontWeight: 500 }}>{importing ? "Preparing beat…" : "Choose MP3 or WAV"}</div>
+              <div style={{ fontSize: 11, color: "#666", marginTop: 5 }}>WAV imports include an automatic 320 kbps MP3 for playback.</div>
             </button>
             <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6, marginTop: 12 }}>
               You can also drop one MP3 or WAV directly into your library.

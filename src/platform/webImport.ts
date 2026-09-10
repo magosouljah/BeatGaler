@@ -1,8 +1,17 @@
 import type { Beat } from "../types";
 import { parseId3FromFile } from "../features/import/webAudioMetadata";
+import { createWebWavMaster } from "../features/import/webWavMaster";
 import type { PlatformImportCandidate, PlatformImportPort, PlatformImportSlotFiles, PlatformImportSlotKind } from "./contracts";
 
-const webFiles = new Map<string, { file: File; objectUrl: string; slots: PlatformImportSlotFiles }>();
+const webFiles = new Map<string, { file: File; objectUrl: string; slots: PlatformImportSlotFiles; ready: Promise<void>; controller: AbortController }>();
+
+export async function waitForWebImportFiles(id: string): Promise<PlatformImportSlotFiles> {
+  const entry = webFiles.get(id);
+  if (!entry) throw new Error("The import was cancelled.");
+  await entry.ready;
+  if (webFiles.get(id) !== entry) throw new Error("The import was cancelled.");
+  return { ...entry.slots };
+}
 
 function createId(): string {
   const suffix = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -21,13 +30,13 @@ export function createWebImportCandidate(file: File): PlatformImportCandidate {
   }
 
   const id = createId();
-  const objectUrl = URL.createObjectURL(file);
   const isWav = /\.wav$/i.test(file.name) || /wav/i.test(file.type);
+  const objectUrl = isWav ? "" : URL.createObjectURL(file);
   const beat: Beat = {
     id,
     name: file.name.replace(/\.[^.]+$/, ""),
     folder_path: `web-file://${id}`,
-    mp3_path: file.name,
+    mp3_path: isWav ? "" : file.name,
     wav_path: isWav ? file.name : null,
     playback_path: objectUrl,
     bpm: "",
@@ -53,18 +62,27 @@ export function createWebImportCandidate(file: File): PlatformImportCandidate {
     cloud_status: "PENDING_UPLOAD",
   };
 
-  webFiles.set(id, {
+  const entry = {
     file,
     objectUrl,
-    slots: isWav ? { WAV: file } : { MASTER: file },
-  });
-  const hydrated = parseId3FromFile(file).then(metadata => ({
-    ...beat,
-    bpm: metadata.bpm,
-    key: metadata.key,
-    tags: metadata.tags,
-    image_base64: metadata.image_base64,
+    slots: (isWav ? { WAV: file } : { MASTER: file }) as PlatformImportSlotFiles,
+    ready: Promise.resolve(),
+    controller: new AbortController(),
+  };
+  webFiles.set(id, entry);
+  if (isWav) {
+    entry.ready = createWebWavMaster(file, entry.controller.signal).then(master => {
+      if (webFiles.get(id) !== entry) throw new Error("The import was cancelled.");
+      entry.objectUrl = URL.createObjectURL(master);
+      entry.slots.MASTER = master;
+    });
+  }
+  const hydrated = Promise.all([parseId3FromFile(file), entry.ready]).then(([metadata]) => ({
+    ...beat, mp3_path: entry.slots.MASTER?.name || "", playback_path: entry.objectUrl,
+    bpm: metadata.bpm, key: metadata.key, tags: metadata.tags, image_base64: metadata.image_base64,
   }));
+  // Review opens immediately. Save still observes preparation failures via entry.ready.
+  void hydrated.catch(() => {});
   return { beat, hydrated };
 }
 
@@ -119,7 +137,8 @@ export async function pickWebSlotFile(kind: PlatformImportSlotKind): Promise<Fil
 export const webImportPort: PlatformImportPort = {
   async pickBeat() {
     const file = await pickOneAudioFile();
-    return file ? createWebImportCandidate(file) : null;
+    if (!file) return null;
+    return createWebImportCandidate(file);
   },
   fromFile: createWebImportCandidate,
   fileForBeat(id) {
@@ -139,7 +158,8 @@ export const webImportPort: PlatformImportPort = {
   releaseBeat(id) {
     const entry = webFiles.get(id);
     if (!entry) return;
-    URL.revokeObjectURL(entry.objectUrl);
+    entry.controller.abort();
+    if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
     webFiles.delete(id);
   },
 };

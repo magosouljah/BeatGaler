@@ -215,9 +215,15 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setData({ ...beat, tags: [] });
       return;
     }
+    if (platform.capabilities.reviewBeatCloudCommit) {
+      const slots = platform.importer.slotFilesForBeat(beat.id);
+      setReviewSlotNames(Object.fromEntries(Object.entries(slots).map(([kind, file]) => [kind, file?.name])));
+    }
     if (displayedBeatIdRef.current === beat.id) {
       setData(current => ({
         ...current,
+        mp3_path: current.mp3_path || beat.mp3_path,
+        playback_path: current.playback_path || beat.playback_path,
         bpm: current.bpm || beat.bpm,
         key: current.key || beat.key,
         tags: current.tags.length > 0 ? current.tags : beat.tags,
@@ -228,10 +234,6 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
     }
     displayedBeatIdRef.current = beat.id;
     setData({ ...beat });
-    if (platform.capabilities.reviewBeatCloudCommit) {
-      const slots = platform.importer.slotFilesForBeat(beat.id);
-      setReviewSlotNames(Object.fromEntries(Object.entries(slots).map(([kind, file]) => [kind, file?.name])));
-    }
     setPending({});
     setPendingCloud({});
     setPendingWebEdit({});

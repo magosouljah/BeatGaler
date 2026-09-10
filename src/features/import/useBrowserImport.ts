@@ -48,12 +48,19 @@ export function useBrowserImport({
     setDropActive(false);
     try {
       const candidate = platform.importer.fromFile(supported[0]);
-      const hydrated = await candidate.hydrated.catch(() => candidate.beat);
-      const beat = { ...hydrated, tags: cleanTags(hydrated.tags || []).tags };
+      const beat = candidate.beat;
       setShowAdd(false);
       completeImmediateReviewPreparation();
       resetImportResolutionState();
       setReviewQueue({ beats: [beat], index: 0, total: 1, batchId: null, preparing: false });
+      void candidate.hydrated.then(hydrated => {
+        setReviewQueue(queue => queue ? { ...queue, beats: queue.beats.map(current => current.id === beat.id
+          ? { ...hydrated, tags: cleanTags(hydrated.tags || []).tags } : current) } : null);
+      }).catch(error => {
+        if (platform.importer.fileForBeat(beat.id)) {
+          void appAlert({ title: "Import failed", message: String(error), danger: true });
+        }
+      });
     } catch (error) {
       await appAlert({ title: "Import failed", message: String(error), danger: true });
     } finally {

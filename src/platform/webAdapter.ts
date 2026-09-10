@@ -2,7 +2,7 @@ import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 import type { Beat } from "../types";
 import { getWebClientId } from "./webClientId";
-import { pickWebSlotFile, webImportPort } from "./webImport";
+import { pickWebSlotFile, waitForWebImportFiles, webImportPort } from "./webImport";
 import { WebLibraryWindowConsumer, type WebLibraryWindowSnapshot } from "../features/library/webLibraryWindow";
 import { clearWebLibraryNavigationState, publishWebLibraryNavigationState, readRequestedWebLibraryOffset } from "../features/library/webLibraryNavigation";
 import type { WebPlaybackSourceManager } from "../features/playback/webPlaybackSource";
@@ -152,7 +152,7 @@ export const webAdapter: PlatformAdapter = {
   cloud: { async status() { const reachable = typeof navigator === "undefined" || navigator.onLine !== false; return { connected: true, reachable, username: null }; } },
   cloudData: {
     async upload(input, onProgress) { return (await resolveWebCloudTransport()).upload(input, onProgress); },
-    async commitImportedBeat(beat, onProgress) { const slots = webImportPort.slotFilesForBeat(beat.id); const master = slots.MASTER; if (!master) throw new Error("Add a MASTER MP3 before saving this beat."); const transport = await resolveWebCloudTransport(); try { const committed = await transport.commitImportedBeat(beat, { master, wav: slots.WAV, project: slots.PROJECT }, webClientId, onProgress); upsertPlaybackRouteFromBeat(committed); rememberWebBeats([committed]); webImportPort.releaseBeat(beat.id); return committed; } catch (error) { console.error("[web/import] durable commit failed", error); const message = error instanceof Error ? error.message : String(error); if (message.includes("changed on another device")) throw new Error(message); throw new Error("Galer Cloud could not save this beat. Your file is still available for retry."); } },
+    async commitImportedBeat(beat, onProgress) { const slots = await waitForWebImportFiles(beat.id); const master = slots.MASTER; if (!master) throw new Error("Add a MASTER MP3 before saving this beat."); const transport = await resolveWebCloudTransport(); try { const committed = await transport.commitImportedBeat(beat, { master, wav: slots.WAV, project: slots.PROJECT }, webClientId, onProgress); upsertPlaybackRouteFromBeat(committed); rememberWebBeats([committed]); webImportPort.releaseBeat(beat.id); return committed; } catch (error) { console.error("[web/import] durable commit failed", error); const message = error instanceof Error ? error.message : String(error); if (message.includes("changed on another device")) throw new Error(message); throw new Error("Galer Cloud could not save this beat. Your file is still available for retry."); } },
     async disconnect() { invalidateAllWebPlaybackIntents(); playbackRouteRecoveries.clear(); resetVisiblePlaybackPrefetch(); webPlaybackSources?.releaseAll(); webPlaybackSources = null; webDownloads?.cancelAll(); webDownloads = null; webLibraryWindow = null; clearWebLibraryNavigationState(); const module = await import("../features/playback/webStartupPlaybackCoordinator"); await module.disconnectWebStartupPlaybackCoordinator(); webCoordinator = null; webCloudTransport = null; },
   },
   downloads: { start(beat, kind, onProgress) { return resolveWebDownloads().start(beat, kind, onProgress); }, cancelAll() { webDownloads?.cancelAll(); } },
