@@ -1,0 +1,86 @@
+name: Task 10.4 adapt mac guard temp
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-10-4-adapt-mac-guard-temp.yml
+
+permissions:
+  contents: write
+
+jobs:
+  adapt:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: v0.9.0-test-noche
+          fetch-depth: 0
+
+      - name: Adapt stale App.tsx structural guards to extracted owners
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("scripts/test-macos-portability.mjs")
+          text = path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  'const app = read("src/App.tsx");',
+                  'const appComposition = read("src/app/useBeatGalerComposition.ts");\nconst appShell = read("src/app/AppShell.tsx");\nconst beatEditing = read("src/features/edit/useBeatEditing.ts");\nconst beatAssetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");\nconst cloudUploadQueue = read("src/features/cloud/useCloudUploadQueue.ts");',
+              ),
+              (
+                  'ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && app.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed");',
+                  'ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && appComposition.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed by the composition owner");',
+              ),
+              (
+                  'const artworkSync = section(app, "const handleDropArtwork", "const runBeatCloudUpdate");',
+                  'const artworkSync = section(beatEditing, "const handleDropArtwork", "const applyBulkUpdate");',
+              ),
+              (
+                  'ok(!app.includes("Windows reported a file drop"), "user-facing drag error is platform-neutral");',
+                  'ok(!nativeDropOwner.includes("Windows reported a file drop"), "user-facing native drag error is platform-neutral");',
+              ),
+              (
+                  "ok(app.includes('target=${drawerTarget') && app.includes('beatgaler:drawer-native-path'), \"native drop logs its resolved target and forwards Finder artwork to Drawer\");",
+                  "ok(nativeDropOwner.includes('target=${routing.diagnosticTarget}') && nativeDropOwner.includes('beatgaler:drawer-native-path'), \"native drop owner logs its resolved target and forwards Finder artwork to Drawer\");",
+              ),
+              (
+                  'ok(drawer.includes("onCloudMutationCommit") && app.includes("commitDrawerCloudMutation"), "Drawer PROJECT/artwork changes own an explicit authoritative INDEX commit");',
+                  'ok(drawer.includes("onCloudMutationCommit") && appComposition.includes("commitDrawerCloudMutation") && appShell.includes("onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}"), "Drawer PROJECT/artwork changes retain an explicit authoritative INDEX commit through composition and shell wiring");',
+              ),
+              (
+                  'ok((app.match(/sanitizeUserVisibleText\\(runtimeErrorMessage/g) || []).length >= 8, "runtime-state/cloud inline errors are sanitized before being stored for rendering");',
+                  'ok(beatEditing.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && beatAssetUpdates.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && cloudUploadQueue.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)"), "extracted runtime-state/cloud owners sanitize errors before storing or rendering them");',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one stale guard to replace, got {count}: {old[:90]}")
+              text = text.replace(old, new)
+
+          if 'app.includes(' in text or 'section(app,' in text or 'const app = read("src/App.tsx")' in text:
+              raise SystemExit("Stale App.tsx structural coupling remains in macOS portability gate")
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Verify adapted static guard
+        run: node scripts/test-macos-portability.mjs
+
+      - name: Publish only the task 10.4 test adaptation and remove this temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/task-10-4-adapt-mac-guard-temp.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/test-macos-portability.mjs .github/workflows/task-10-4-adapt-mac-guard-temp.yml
+          git diff --cached --check
+          git commit -m "test(migration): point macOS guards at extracted owners"
+          git push origin HEAD:v0.9.0-test-noche
