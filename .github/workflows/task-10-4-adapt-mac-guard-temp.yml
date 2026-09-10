@@ -20,7 +20,7 @@ jobs:
           ref: v0.9.0-test-noche
           fetch-depth: 0
 
-      - name: Adapt stale App.tsx structural guards to extracted owners
+      - name: Adapt stale structural guards to current owners
         shell: python
         run: |
           from pathlib import Path
@@ -32,6 +32,10 @@ jobs:
               (
                   'const app = read("src/App.tsx");',
                   'const appComposition = read("src/app/useBeatGalerComposition.ts");\nconst appShell = read("src/app/AppShell.tsx");\nconst beatEditing = read("src/features/edit/useBeatEditing.ts");\nconst beatAssetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");\nconst cloudUploadQueue = read("src/features/cloud/useCloudUploadQueue.ts");',
+              ),
+              (
+                  'const helper = read("src-tauri/direct-transport/transport-helper.cjs");',
+                  'const helper = read("src-tauri/direct-transport/transport-helper.cjs");\nconst helperSource = read("src-tauri/direct-transport/transport-helper.source.mjs");',
               ),
               (
                   'ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && app.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed");',
@@ -56,6 +60,10 @@ jobs:
               (
                   'ok((app.match(/sanitizeUserVisibleText\\(runtimeErrorMessage/g) || []).length >= 8, "runtime-state/cloud inline errors are sanitized before being stored for rendering");',
                   'ok(beatEditing.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && beatAssetUpdates.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && cloudUploadQueue.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)"), "extracted runtime-state/cloud owners sanitize errors before storing or rendering them");',
+              ),
+              (
+                  'ok(helper.includes("Direct transport session is incomplete"), "helper refuses sessions without explicit local Bot API base");',
+                  'ok(helperSource.includes("bot_token") && helperSource.includes("telegram_api_id") && helperSource.includes("telegram_api_hash") && helperSource.includes("credential_envelope") && helperSource.includes("bot_api_base") && helperSource.includes("Permanent transport credentials reached the Desktop helper.") && helperSource.includes("galer-direct-temp-mtproto"), "temporary MTProto helper refuses permanent transport credentials");',
               ),
           ]
 
@@ -82,5 +90,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add scripts/test-macos-portability.mjs .github/workflows/task-10-4-adapt-mac-guard-temp.yml
           git diff --cached --check
-          git commit -m "test(migration): point macOS guards at extracted owners"
+          git commit -m "test(migration): point portability guards at current owners"
           git push origin HEAD:v0.9.0-test-noche
