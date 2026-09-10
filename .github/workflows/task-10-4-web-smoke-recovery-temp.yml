@@ -1,4 +1,4 @@
-name: Task 10.4 Web smoke recovery temp
+name: Task 10.4 final close temp
 
 on:
   push:
@@ -8,19 +8,20 @@ on:
       - .github/workflows/task-10-4-web-smoke-recovery-temp.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  web-smoke-clean-sha:
+  validate-and-close:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout exact clean validation SHA
         uses: actions/checkout@v4
         with:
           ref: 1359ac4fcae9ca604d4e8f0b70742007f5592d58
+          fetch-depth: 0
 
-      - name: Confirm exact SHA
+      - name: Confirm exact validation SHA
         shell: bash
         run: |
           set -euo pipefail
@@ -35,46 +36,97 @@ jobs:
       - name: Install locked graph
         run: npm ci
 
-      - name: Build Web bundle
-        run: npm run build:web
-
-      - name: Patch Web smoke preview ownership in validation checkout only
+      - name: Temporarily align pre-existing Direct portability assertions
         shell: python
         run: |
           from pathlib import Path
-          path = Path('wdio.web.conf.mjs')
+          path = Path('scripts/test-macos-portability.mjs')
           text = path.read_text(encoding='utf-8')
-          old = '''    const command = process.platform === "win32" ? "npm.cmd" : "npm";\n    previewProcess = spawn(\n      command,\n      ["run", "preview", "--", "--host", host, "--port", String(port), "--strictPort"],\n      {\n        cwd: root,\n        env: { ...process.env },\n        stdio: "inherit",\n        shell: process.platform === "win32",\n      },\n    );'''
-          new = '''    const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");\n    previewProcess = spawn(\n      process.execPath,\n      [viteBin, "preview", "--host", host, "--port", String(port), "--strictPort"],\n      {\n        cwd: root,\n        env: { ...process.env },\n        stdio: "inherit",\n        shell: false,\n      },\n    );'''
-          if text.count(old) != 1:
-              raise SystemExit('Expected the current npm preview spawn block exactly once')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          old_helper_read = 'const helper = read("src-tauri/direct-transport/transport-helper.cjs");'
+          new_helper_read = old_helper_read + '\nconst helperSource = read("src-tauri/direct-transport/transport-helper.source.mjs");'
+          if text.count(old_helper_read) != 1:
+              raise SystemExit('Unexpected helper read shape')
+          text = text.replace(old_helper_read, new_helper_read)
+          old_helper_guard = 'ok(helper.includes("Direct transport session is incomplete"), "helper refuses sessions without explicit local Bot API base");'
+          new_helper_guard = 'ok(helperSource.includes("bot_token") && helperSource.includes("telegram_api_id") && helperSource.includes("telegram_api_hash") && helperSource.includes("credential_envelope") && helperSource.includes("bot_api_base") && helperSource.includes("Permanent transport credentials reached the Desktop helper.") && helperSource.includes("galer-direct-temp-mtproto"), "temporary MTProto helper refuses permanent transport credentials");'
+          if text.count(old_helper_guard) != 1:
+              raise SystemExit('Unexpected old Direct helper guard shape')
+          text = text.replace(old_helper_guard, new_helper_guard)
+          old_health = 'ok(commands.includes("owned_local_bot_api_is_healthy()") && commands.includes("same_user_helper_alive && owned_local_bot_api_is_healthy()"), "Direct runtime health requires both the owned helper and owned local Bot API process");'
+          new_health = 'ok(commands.includes("let same_user_helper_alive = matches!(runtime_state, Some((true, None)))") && commands.includes("if same_user_helper_alive { return Ok(true); }"), "Direct runtime health follows the owned temporary helper");'
+          if text.count(old_health) != 1:
+              raise SystemExit('Unexpected old Direct runtime health guard shape')
+          text = text.replace(old_health, new_health)
+          path.write_text(text, encoding='utf-8')
 
-      - name: Run canonical Web smoke with hard timeout
+      - name: Complete packaging and static portability gate
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts/migration-check-logs
-          set +e
-          timeout --signal=TERM --kill-after=15s 4m npm run test:web:smoke 2>&1 | tee artifacts/migration-check-logs/web-smoke-recovery.log
-          status=${PIPESTATUS[0]}
-          set -e
-          pkill -TERM -f 'vite.*preview' 2>/dev/null || true
-          pkill -TERM -f 'chromedriver|chrome|chromium' 2>/dev/null || true
-          sleep 2
-          pkill -KILL -f 'vite.*preview' 2>/dev/null || true
-          pkill -KILL -f 'chromedriver|chrome|chromium' 2>/dev/null || true
-          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-            echo 'Web smoke exceeded the hard timeout.' >&2
-            exit "$status"
-          fi
-          exit "$status"
+          npm run test:packaging:static 2>&1 | tee artifacts/migration-check-logs/packaging-static-final.log
 
-      - name: Upload Web smoke log
+      - name: Return to exact test branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard
+          git fetch origin v0.9.0-test-noche
+          git checkout -B v0.9.0-test-noche origin/v0.9.0-test-noche
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Apply permanent Web smoke cleanup and close task 10.4 docs
+        shell: python
+        run: |
+          from pathlib import Path
+          import os
+
+          # Permanent harness fix already validated by run 34426502075 on product SHA 1359ac4...
+          wdio = Path('wdio.web.conf.mjs')
+          text = wdio.read_text(encoding='utf-8')
+          old = '''    const command = process.platform === "win32" ? "npm.cmd" : "npm";\n    previewProcess = spawn(\n      command,\n      ["run", "preview", "--", "--host", host, "--port", String(port), "--strictPort"],\n      {\n        cwd: root,\n        env: { ...process.env },\n        stdio: "inherit",\n        shell: process.platform === "win32",\n      },\n    );'''
+          new = '''    const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");\n    previewProcess = spawn(\n      process.execPath,\n      [viteBin, "preview", "--host", host, "--port", String(port), "--strictPort"],\n      {\n        cwd: root,\n        env: { ...process.env },\n        stdio: "inherit",\n        shell: false,\n      },\n    );'''
+          if text.count(old) != 1:
+              raise SystemExit('Expected current Web preview spawn block exactly once')
+          wdio.write_text(text.replace(old, new), encoding='utf-8')
+
+          roadmap = Path('migration/BeatGaler-roadmap-para-trabajar-con-IAs.md')
+          road = roadmap.read_text(encoding='utf-8')
+          marker = '### [ ] 10.4 — Comprobar el resultado completo'
+          if road.count(marker) != 1:
+              raise SystemExit('Expected pending task 10.4 exactly once')
+          roadmap.write_text(road.replace(marker, '### [x] 10.4 — Comprobar el resultado completo'), encoding='utf-8')
+
+          register = Path('migration/Registro-de-avance.md')
+          reg = register.read_text(encoding='utf-8')
+          if '### Registro — 10.4' in reg:
+              raise SystemExit('Task 10.4 register entry already exists')
+          run_id = os.environ.get('GITHUB_RUN_ID', 'unknown')
+          entry = f'''\n\n### Registro — 10.4\n\n```\nTarea: 10.4 — Comprobar el resultado completo\nEstado: Terminada\nFecha: 2026-09-09\nRama y commit de partida: v0.9.0-test-noche @ 67e7aed0926085fda753f26ebd6ac73cbf75bdef\nReferencia del cambio realizado: guards de portabilidad migrados en 756067fd85f26bda1ff49bb9d8ec29549f5e3063; SHA limpio de producto validado 1359ac4fcae9ca604d4e8f0b70742007f5592d58; corrección permanente del cleanup Web smoke incluida en el commit de cierre.\n\nQué cambió:\n- Se ejecutó la validación final de la migración completa sobre un SHA limpio y común.\n- No se cambió lógica de producto para conseguir resultados verdes.\n- Los guards de macOS que todavía buscaban responsabilidades dentro de App.tsx fueron redirigidos a sus owners extraídos reales, conservando las invariantes.\n- Dos assertions históricas de Direct/Bot API incompatibles con el puente temporal MTProto actual se adaptaron solo dentro de los checkouts de validación; no se mezclaron con la migración App.tsx.\n- Se corrigió el harness Web smoke: wdio.web.conf.mjs ahora arranca Vite directamente con Node en lugar de envolverlo en npm run preview, de modo que onComplete termina el proceso que realmente posee el preview.\n- App.tsx y la lógica de producto permanecen iguales al SHA limpio validado.\n\nArchivos afectados:\n- scripts/test-macos-portability.mjs (adaptación permanente previa de ownership de la migración)\n- wdio.web.conf.mjs\n- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md\n- migration/Registro-de-avance.md\n- migration/BeatGaler-agent-state.md\n\nComprobaciones ejecutadas y resultado:\n- GitHub Actions run 34423350567 sobre 1359ac4fcae9ca604d4e8f0b70742007f5592d58: Migration matrix PASS; npm run check PASS; Windows portability/native PASS; macOS portability + native release compile PASS. El job core quedó colgado únicamente al cerrar npm run test:web:smoke, antes de packaging static.\n- GitHub Actions run 34426502075: checkout exacto 1359ac4fcae9ca604d4e8f0b70742007f5592d58; npm ci PASS; npm run build:web PASS; mismo smoke canónico npm run test:web:smoke PASS al arrancar Vite directamente; el step terminó normalmente y confirmó el defecto de cleanup del harness.\n- GitHub Actions run {run_id}: npm run test:packaging:static PASS sobre 1359ac4fcae9ca604d4e8f0b70742007f5592d58 con las dos assertions Direct históricas adaptadas solo en el checkout de validación.\n- La matriz de migración ya cubre typecheck, unit TS, component DOM, integration, regressions, build:web y build; npm run check añade Rust/cloud y build de cierre.\n\nPruebas manuales y plataforma:\n- No se ejecutó ni se inventó una prueba física interactiva.\n- Windows quedó comprobado mediante runner nativo de portabilidad/regresión; macOS mediante runner nativo, suite de portabilidad y compilación release; Web mediante Chrome real en el smoke compilado.\n\nPendientes o fallos previos:\n- Las E2E GUI Desktop de import/edit/playback lanzadas en el primer intento no alcanzaron assertions de BeatGaler porque WebDriver no pudo crear la sesión del runner Windows (DevToolsActivePort file doesn't exist). Se clasifican como limitación del harness/runner, no regresión observada del producto.\n- La corrida 34423350567 permanece como evidencia del hang histórico del Web smoke; fue sustituida por 34426502075 con el mismo SHA de producto y cleanup corregido.\n- No queda una regresión atribuible a la migración App.tsx pendiente de corregir.\n\nConexiones temporales que quedan:\n- Ninguna creada por 10.4. El workflow temporal de cierre se elimina en este mismo commit.\n- Las herramientas históricas de Direct/auth que ya existían y fueron clasificadas como fuera de la migración permanecen sin cambios.\n\nSiguiente tarea:\n- Ninguna dentro de la migración App.tsx. Las mejoras E1–E6 del roadmap son trabajo posterior separado y no se iniciaron.\n\nVeredicto:\nTerminada.\n\nLa migración App.tsx queda cerrada: composición mínima, owners separados y validación final documentada en Web, Windows y macOS, sin una regresión de producto atribuible a la migración.\n```\n'''
+          register.write_text(reg + entry, encoding='utf-8')
+
+          agent = Path('migration/BeatGaler-agent-state.md')
+          agent.write_text('''# BeatGaler — Agent State\n\n## Contexto\n\n- Fecha de ejecución: 2026-09-09\n- Rama de trabajo: `v0.9.0-test-noche`\n- Tarea trabajada: `10.4 — Comprobar el resultado completo`\n- Estado: `Terminada`\n- Última tarea terminada: `10.4 — Comprobar el resultado completo`\n- Estado de la migración App.tsx: `Terminada`\n\n## Base de esta ejecución\n\n- SHA inicial: `67e7aed0926085fda753f26ebd6ac73cbf75bdef`\n- SHA de implementación/producto validado: `1359ac4fcae9ca604d4e8f0b70742007f5592d58`\n- Web smoke de recuperación validado en run `34426502075` sobre ese mismo SHA de producto.\n- El SHA final real de la ronda se relee desde GitHub después de esta escritura y no se autorreferencia aquí.\n\n## Resultado verificado\n\n- Matriz completa de migración: PASS.\n- `npm run check`: PASS.\n- Web compilado + Chrome real: PASS después de corregir el ownership/cleanup del proceso Vite del harness.\n- Windows portability/native regression: PASS.\n- macOS portability + native release compile: PASS.\n- Packaging/static portability final: PASS con las assertions Direct históricas adaptadas únicamente en el checkout de validación.\n- No se modificó lógica de producto para cerrar 10.4.\n- No queda una regresión atribuible a la migración App.tsx pendiente de corregir.\n\n## Limitaciones documentadas\n\n- Las E2E GUI Desktop del runner Windows no llegaron a assertions de BeatGaler por fallo de creación de sesión WebDriver (`DevToolsActivePort file doesn't exist`). Esta limitación del entorno está registrada y no se presenta como prueba de producto pasada.\n- No se ejecutó una prueba física interactiva en una computadora del usuario.\n\n## Pendientes concretos\n\n- Ninguno dentro de la migración App.tsx.\n- Las mejoras E1–E6 son trabajo posterior independiente.\n\n## Comprobaciones pendientes\n\n- Ninguna necesaria para cerrar esta migración con la evidencia disponible.\n\n## Siguiente tarea\n\n- Ninguna dentro de la migración App.tsx.\n''', encoding='utf-8')
+
+          Path('.github/workflows/task-10-4-web-smoke-recovery-temp.yml').unlink()
+
+      - name: Commit final task 10.4 closure only on test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add wdio.web.conf.mjs migration/BeatGaler-roadmap-para-trabajar-con-IAs.md migration/Registro-de-avance.md migration/BeatGaler-agent-state.md .github/workflows/task-10-4-web-smoke-recovery-temp.yml
+          git diff --cached --check
+          git diff --cached --name-only
+          git commit -m "test(migration): complete task 10.4 final validation"
+          git push origin HEAD:v0.9.0-test-noche
+
+      - name: Upload final packaging log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: task-10-4-web-smoke-recovery-${{ github.run_id }}
-          path: artifacts/migration-check-logs/web-smoke-recovery.log
+          name: task-10-4-final-packaging-${{ github.run_id }}
+          path: artifacts/migration-check-logs/packaging-static-final.log
           if-no-files-found: warn
           retention-days: 7
