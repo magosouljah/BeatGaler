@@ -2,6 +2,10 @@ import { hasRememberedWebSessionMarker, readWebCsrfCookieToken } from "../auth/w
 import { playTrace } from "./playTrace";
 import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";
 
+// Keep the established startup-contract name while making its source explicit:
+// the remembered preconnect may use only the current-origin cookie token.
+const readWebCsrfToken = readWebCsrfCookieToken;
+
 export function preconnectRememberedWebDirect(): void {
   if (typeof window === "undefined") return;
   // The entrypoint is shared by Web and Tauri. Never construct the browser
@@ -14,7 +18,7 @@ export function preconnectRememberedWebDirect(): void {
   // Only a CSRF cookie visible to the current Web origin proves that the early
   // Direct request can accompany the browser cookie session. Account restore
   // remains parallel and can repair/refresh CSRF when preconnect is deferred.
-  if (!readWebCsrfCookieToken()) {
+  if (!readWebCsrfToken()) {
     playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", { reason: "csrf_unavailable" });
     return;
   }
