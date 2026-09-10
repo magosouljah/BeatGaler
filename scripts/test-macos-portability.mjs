@@ -21,7 +21,11 @@ function section(text, start, end) {
 }
 
 const commands = read("src-tauri/src/commands.rs");
-const app = read("src/App.tsx");
+const appComposition = read("src/app/useBeatGalerComposition.ts");
+const appShell = read("src/app/AppShell.tsx");
+const beatEditing = read("src/features/edit/useBeatEditing.ts");
+const beatAssetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");
+const cloudUploadQueue = read("src/features/cloud/useCloudUploadQueue.ts");
 const accountGate = read("src/components/AccountGate.tsx");
 const settingsPanel = read("src/components/SettingsPanel.tsx");
 const desktopAdapter = read("src/platform/desktopAdapter.ts");
@@ -67,7 +71,7 @@ ok(commands.includes("follow_links(false)") && commands.includes("entry.file_typ
 ok(commands.includes("path_is_symbolic_link") && commands.includes("Symbolic links are not imported. Drop the original project file or folder instead."), "PROJECT top-level symlinks are rejected instead of following outside targets");
 ok(commands.includes("if !root_path.exists() || path_is_symbolic_link(&root_path) { continue; }") && commands.includes("if entry.file_type().is_symlink() { return false; }"), "streaming import does not follow filesystem symlinks");
 
-ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && app.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed");
+ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && appComposition.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed by the composition owner");
 ok(nativeDropOwner.includes("if (!nativeDropAvailable) return;"), "native drop listener is not gated to Windows only");
 ok(nativeDropOwner.includes("claimNativeLibraryDrop()") && htmlDrop.includes("waitForNativeLibraryDropClaim"), "Mac duplicate native/HTML local drops are arbitrated");
 ok(nativeDropOwner.includes("resolveNativeFilesystemDropTarget(payload.paths, payload.position)") && nativeDropTargets.includes("isNativeImagePath") && nativeDropTargets.includes("window.devicePixelRatio") && nativeDropTargets.includes("[data-beat-artwork-id]") && nativeDropOwner.includes("nativeExternalImageSignalFromPaths"), "Mac routes Finder artwork through extracted native target detection while preserving browser/Pinterest sentinels");
@@ -96,7 +100,7 @@ ok(libRs.indexOf("tauri_plugin_single_instance::init") < libRs.indexOf("tauri_pl
 ok(accountGate.includes("platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase())") && desktopAdapter.includes('invoke("set_cloud_auth_token", { token, cloudApiBase })'), "React passes the resolved Galer Cloud base through the Desktop auth adapter");
 ok(commands.includes("cloud_api_base: Option<String>") && commands.includes("cloud_api_base_slot"), "Rust Direct uses the frontend-selected Galer Cloud origin");
 
-const artworkSync = section(app, "const handleDropArtwork", "const runBeatCloudUpdate");
+const artworkSync = section(beatEditing, "const handleDropArtwork", "const applyBulkUpdate");
 ok(artworkSync.includes('updated.telegram_file_id && connectionState === "online"'), "explicit artwork changes always attempt cloud sync when online");
 ok(!artworkSync.includes('connectionState === "online" && cloudSessionVerified'), "artwork sync is not silently gated by transient cloudSessionVerified");
 
@@ -180,20 +184,20 @@ ok(cargo.includes('unicode-normalization = "=0.1.25"') && commands.includes(".nf
 ok(commands.includes("canonical_unicode_forms_share_one_beat_identity"), "Unicode NFC/NFD identity has a regression test");
 ok(!commands.includes('Command::new("ffmpeg")') && (commands.match(/beatgaler_ffmpeg_program\(\)\?/g) || []).length >= 3, "YouTube and WAV conversion use BeatGaler's bundled FFmpeg instead of assuming a system install");
 
-ok(!app.includes("Windows reported a file drop"), "user-facing drag error is platform-neutral");
+ok(!nativeDropOwner.includes("Windows reported a file drop"), "user-facing native drag error is platform-neutral");
 ok(!htmlDrop.includes("WebView2 exposed no usable image payload"), "user-facing browser artwork error is platform-neutral");
 ok(player.includes("Reveal in Finder"), "Mac UI has Finder-specific reveal wording");
 ok(commands.includes("pub fn read_image_file_data_url") && commands.includes("ARTWORK_READ_OK"), "macOS artwork uses native byte reads with stage diagnostics");
 ok(drawer.includes('handlePickArtwork') && drawer.includes('beatgaler:drawer-native-path') && !drawer.includes('tauri://drag-drop'), "Drawer artwork uses the native picker and the single Webview drop receiver");
-ok(app.includes('target=${drawerTarget') && app.includes('beatgaler:drawer-native-path'), "native drop logs its resolved target and forwards Finder artwork to Drawer");
-ok(drawer.includes("onCloudMutationCommit") && app.includes("commitDrawerCloudMutation"), "Drawer PROJECT/artwork changes own an explicit authoritative INDEX commit");
+ok(nativeDropOwner.includes('target=${routing.diagnosticTarget}') && nativeDropOwner.includes('beatgaler:drawer-native-path'), "native drop owner logs its resolved target and forwards Finder artwork to Drawer");
+ok(drawer.includes("onCloudMutationCommit") && appComposition.includes("commitDrawerCloudMutation") && appShell.includes("onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}"), "Drawer PROJECT/artwork changes retain an explicit authoritative INDEX commit through composition and shell wiring");
 ok(commands.includes("VERIFY_OK") && commands.includes("missing projects"), "INDEX writes verify pinned project membership before reporting success");
 
 const publicServerErrorTexts = cloudServer.split(/\r?\n/).filter(line => line.includes("error:")).map(line => line.slice(line.indexOf("error:") + 6));
 ok(!publicServerErrorTexts.some(text => /telegram|bot api|transport bot|001beatgaler|tdlib/i.test(text)), "public Cloud HTTP errors do not expose the hidden storage implementation names");
 ok(!cloudServer.split(/\r?\n/).some(line => line.includes("res.status(500).json") && line.includes("err.message")), "public Cloud HTTP 500 responses do not forward raw internal exception text");
 ok(dialog.includes("sanitizeUserVisibleText(normalized.message") && userVisibleError.includes("[redacted credential]"), "application alerts sanitize hidden transport names and credential-looking text before rendering");
-ok((app.match(/sanitizeUserVisibleText\(runtimeErrorMessage/g) || []).length >= 8, "runtime-state/cloud inline errors are sanitized before being stored for rendering");
+ok(beatEditing.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && beatAssetUpdates.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && cloudUploadQueue.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)"), "extracted runtime-state/cloud owners sanitize errors before storing or rendering them");
 ok(settingsPanel.includes("sanitizeUserVisibleText(updateMessage") && settingsPanel.includes("Update operation failed."), "updater messages pass through the final user-visible privacy boundary");
 ok(drawer.includes("sanitizeUserVisibleText(error)") && drawer.includes("sanitizeUserVisibleText(cloudError)"), "Drawer renders native/cloud errors through the privacy boundary");
 ok(addBeatModal.includes("sanitizeUserVisibleText(error)"), "Add Beat renders native import errors through the privacy boundary");
