@@ -1,0 +1,141 @@
+name: One-shot Web loopback API fix
+
+on:
+  push:
+    branches:
+      - fix/web-ignore-loopback-cloud-api
+    paths:
+      - .github/workflows/one-shot-web-loopback-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/web-ignore-loopback-cloud-api
+          fetch-depth: 0
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Patch Web Cloud API policy and regression test
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const accountPath = 'src/components/AccountGate.tsx';
+          let account = fs.readFileSync(accountPath, 'utf8');
+
+          const oldTrusted = `function trustedWebApiCandidate(value: string | null): value is string {
+            if (!value) return false;
+            const sameOriginProxy = sameOriginProxyApi();
+            if (value === REMOTE_API || (!!sameOriginProxy && value === sameOriginProxy)) return true;
+            return /^http:\\/\\/127\\.0\\.0\\.1:\\d+$/.test(value);
+          }`;
+          const newTrusted = `function trustedWebApiCandidate(value: string | null): value is string {
+            if (!value) return false;
+            const sameOriginProxy = sameOriginProxyApi();
+            return value === REMOTE_API || (!!sameOriginProxy && value === sameOriginProxy);
+          }`;
+          if (!account.includes(oldTrusted)) throw new Error('trustedWebApiCandidate source shape changed');
+          account = account.replace(oldTrusted, newTrusted);
+
+          const oldResolver = `export async function resolveBeatGalerCloudApi(): Promise<string> {
+            const remembered = localStorage.getItem(API_KEY);
+            if (remembered && await probe(remembered, 1200)) return remembered;
+            const sameOriginProxy = sameOriginProxyApi();
+            if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
+              localStorage.setItem(API_KEY, sameOriginProxy);
+              return sameOriginProxy;
+            }
+            if (await probe(LOCAL_API, 900)) { localStorage.setItem(API_KEY, LOCAL_API); return LOCAL_API; }
+            if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
+            throw new Error("Could not reach BeatGaler Cloud.");
+          }
+
+          export function getResolvedCloudApiBase(): string { return localStorage.getItem(API_KEY) || REMOTE_API; }`;
+          const newResolver = `export async function resolveBeatGalerCloudApi(): Promise<string> {
+            const remembered = localStorage.getItem(API_KEY);
+            const sameOriginProxy = sameOriginProxyApi();
+
+            if (platform.kind === "web") {
+              // Browser sessions are origin-bound. A remembered loopback API can be
+              // healthy while still being unusable from localhost because cookies
+              // and CORS belong to a different origin. Prefer the same-origin proxy
+              // and never probe LOCAL_API from Web.
+              if (sameOriginProxy && remembered === sameOriginProxy && await probe(sameOriginProxy, 1200)) return sameOriginProxy;
+              if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
+                localStorage.setItem(API_KEY, sameOriginProxy);
+                return sameOriginProxy;
+              }
+              if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
+              throw new Error("Could not reach BeatGaler Cloud.");
+            }
+
+            if (remembered && await probe(remembered, 1200)) return remembered;
+            if (await probe(LOCAL_API, 900)) { localStorage.setItem(API_KEY, LOCAL_API); return LOCAL_API; }
+            if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
+            throw new Error("Could not reach BeatGaler Cloud.");
+          }
+
+          export function getResolvedCloudApiBase(): string {
+            const remembered = localStorage.getItem(API_KEY);
+            if (platform.kind === "web") {
+              return trustedWebApiCandidate(remembered) ? remembered : (sameOriginProxyApi() || REMOTE_API);
+            }
+            return remembered || REMOTE_API;
+          }`;
+          if (!account.includes(oldResolver)) throw new Error('Cloud resolver source shape changed');
+          account = account.replace(oldResolver, newResolver);
+          fs.writeFileSync(accountPath, account);
+
+          const testPath = 'tests/integration/webStartupCloudResolutionRace.test.ts';
+          let test = fs.readFileSync(testPath, 'utf8');
+          const anchor = `  it("keeps development Web API traffic on the verified same-origin proxy", () => {`;
+          if (!test.includes(anchor)) throw new Error('regression test anchor missing');
+          const addition = `  it("forbids a remembered loopback API from becoming the Web Cloud base", () => {
+            const accountGate = source("src/components/AccountGate.tsx");
+            const trustedStart = accountGate.indexOf("function trustedWebApiCandidate");
+            const resolverStart = accountGate.indexOf("export async function resolveBeatGalerCloudApi");
+            const getterStart = accountGate.indexOf("export function getResolvedCloudApiBase");
+            const desktopRemembered = accountGate.indexOf("if (remembered && await probe(remembered, 1200))", resolverStart);
+            const trustedBlock = accountGate.slice(trustedStart, resolverStart);
+            const webResolverBlock = accountGate.slice(resolverStart, desktopRemembered);
+            const getterBlock = accountGate.slice(getterStart, accountGate.indexOf("export async function getBeatGalerInstallationId", getterStart));
+
+            expect(trustedBlock).not.toContain("127\\.0\\.0\\.1");
+            expect(webResolverBlock).toContain('if (platform.kind === "web")');
+            expect(webResolverBlock).not.toContain("probe(LOCAL_API");
+            expect(getterBlock).toContain("trustedWebApiCandidate(remembered)");
+            expect(getterBlock).toContain("sameOriginProxyApi() || REMOTE_API");
+          });
+
+`;
+          test = test.replace(anchor, addition + anchor);
+          fs.writeFileSync(testPath, test);
+          NODE
+
+      - name: Run focused regression and typecheck
+        run: |
+          npx vitest run tests/integration/webStartupCloudResolutionRace.test.ts --environment jsdom
+          npx vitest run tests/component-dom/webStartupPlaybackCoordinator.behavior.test.ts --environment jsdom
+          npm run test:typecheck
+
+      - name: Commit fix and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-web-loopback-fix.yml
+          git add src/components/AccountGate.tsx tests/integration/webStartupCloudResolutionRace.test.ts
+          git commit -m "fix: keep Web Cloud API on browser-safe origins"
+          git push origin HEAD:fix/web-ignore-loopback-cloud-api
