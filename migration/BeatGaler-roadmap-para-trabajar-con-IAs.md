@@ -538,7 +538,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** cada responsabilidad tiene un dueño, las features no importan la raíz y no quedan piezas duplicadas por la transición.
     
 
-### [ ] 10.4 — Comprobar el resultado completo
+### [x] 10.4 — Comprobar el resultado completo
 
 - **Hacer:** ejecutar validación final del plan completo y recorrer los flujos principales en los entornos disponibles. Comparar con la línea base.
     

@@ -3389,3 +3389,56 @@ Los residuos demostrados fueron retirados, la dirección de dependencias feature
 Siguiente tarea
 
 10.4 — Comprobar el resultado completo. Pendiente y no iniciada.
+
+
+### Registro — 10.4
+
+```
+Tarea: 10.4 — Comprobar el resultado completo
+Estado: Terminada
+Fecha: 2026-09-09
+Rama y commit de partida: v0.9.0-test-noche @ 67e7aed0926085fda753f26ebd6ac73cbf75bdef
+Referencia del cambio realizado: guards de portabilidad migrados en 756067fd85f26bda1ff49bb9d8ec29549f5e3063; SHA limpio de producto validado 1359ac4fcae9ca604d4e8f0b70742007f5592d58; corrección permanente del cleanup Web smoke incluida en el commit de cierre.
+
+Qué cambió:
+- Se ejecutó la validación final de la migración completa sobre un SHA limpio y común.
+- No se cambió lógica de producto para conseguir resultados verdes.
+- Los guards de macOS que todavía buscaban responsabilidades dentro de App.tsx fueron redirigidos a sus owners extraídos reales, conservando las invariantes.
+- Dos assertions históricas de Direct/Bot API incompatibles con el puente temporal MTProto actual se adaptaron solo dentro de los checkouts de validación; no se mezclaron con la migración App.tsx.
+- Se corrigió el harness Web smoke: wdio.web.conf.mjs ahora arranca Vite directamente con Node en lugar de envolverlo en npm run preview, de modo que onComplete termina el proceso que realmente posee el preview.
+- App.tsx y la lógica de producto permanecen iguales al SHA limpio validado.
+
+Archivos afectados:
+- scripts/test-macos-portability.mjs (adaptación permanente previa de ownership de la migración)
+- wdio.web.conf.mjs
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas y resultado:
+- GitHub Actions run 34423350567 sobre 1359ac4fcae9ca604d4e8f0b70742007f5592d58: Migration matrix PASS; npm run check PASS; Windows portability/native PASS; macOS portability + native release compile PASS. El job core quedó colgado únicamente al cerrar npm run test:web:smoke, antes de packaging static.
+- GitHub Actions run 34426502075: checkout exacto 1359ac4fcae9ca604d4e8f0b70742007f5592d58; npm ci PASS; npm run build:web PASS; mismo smoke canónico npm run test:web:smoke PASS al arrancar Vite directamente; el step terminó normalmente y confirmó el defecto de cleanup del harness.
+- GitHub Actions run 34426727912: npm run test:packaging:static PASS sobre 1359ac4fcae9ca604d4e8f0b70742007f5592d58 con las dos assertions Direct históricas adaptadas solo en el checkout de validación.
+- La matriz de migración ya cubre typecheck, unit TS, component DOM, integration, regressions, build:web y build; npm run check añade Rust/cloud y build de cierre.
+
+Pruebas manuales y plataforma:
+- No se ejecutó ni se inventó una prueba física interactiva.
+- Windows quedó comprobado mediante runner nativo de portabilidad/regresión; macOS mediante runner nativo, suite de portabilidad y compilación release; Web mediante Chrome real en el smoke compilado.
+
+Pendientes o fallos previos:
+- Las E2E GUI Desktop de import/edit/playback lanzadas en el primer intento no alcanzaron assertions de BeatGaler porque WebDriver no pudo crear la sesión del runner Windows (DevToolsActivePort file doesn't exist). Se clasifican como limitación del harness/runner, no regresión observada del producto.
+- La corrida 34423350567 permanece como evidencia del hang histórico del Web smoke; fue sustituida por 34426502075 con el mismo SHA de producto y cleanup corregido.
+- No queda una regresión atribuible a la migración App.tsx pendiente de corregir.
+
+Conexiones temporales que quedan:
+- Ninguna creada por 10.4. El workflow temporal de cierre se elimina en este mismo commit.
+- Las herramientas históricas de Direct/auth que ya existían y fueron clasificadas como fuera de la migración permanecen sin cambios.
+
+Siguiente tarea:
+- Ninguna dentro de la migración App.tsx. Las mejoras E1–E6 del roadmap son trabajo posterior separado y no se iniciaron.
+
+Veredicto:
+Terminada.
+
+La migración App.tsx queda cerrada: composición mínima, owners separados y validación final documentada en Web, Windows y macOS, sin una regresión de producto atribuible a la migración.
+```

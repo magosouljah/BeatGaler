@@ -61,15 +61,15 @@ export const config = {
   ],
 
   onPrepare: async () => {
-    const command = process.platform === "win32" ? "npm.cmd" : "npm";
+    const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");
     previewProcess = spawn(
-      command,
-      ["run", "preview", "--", "--host", host, "--port", String(port), "--strictPort"],
+      process.execPath,
+      [viteBin, "preview", "--host", host, "--port", String(port), "--strictPort"],
       {
         cwd: root,
         env: { ...process.env },
         stdio: "inherit",
-        shell: process.platform === "win32",
+        shell: false,
       },
     );
     try {
