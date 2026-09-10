@@ -41,7 +41,7 @@ function GlobalStyles() {
           opacity: 0;
         }
         to {
-          transform: translateX(0) scale(1);
+          transform: translateX(0);
           opacity: 1;
         }
       }
