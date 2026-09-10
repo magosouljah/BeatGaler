@@ -1,6 +1,10 @@
-import { hasRememberedWebSessionMarker, readWebCsrfToken } from "../auth/webSessionBootstrap";
+import { hasRememberedWebSessionMarker, readWebCsrfCookieToken } from "../auth/webSessionBootstrap";
 import { playTrace } from "./playTrace";
 import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";
+
+// Keep the established startup-contract name while making its source explicit:
+// the remembered preconnect may use only the current-origin cookie token.
+const readWebCsrfToken = readWebCsrfCookieToken;
 
 export function preconnectRememberedWebDirect(): void {
   if (typeof window === "undefined") return;
@@ -10,8 +14,10 @@ export function preconnectRememberedWebDirect(): void {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   if (!hasRememberedWebSessionMarker()) return;
 
-  // /transport/session/start is unsafe and still needs persisted CSRF material.
-  // Account restore remains parallel; it is no longer a Direct gate.
+  // The remembered marker and sessionStorage can outlive an API-origin change.
+  // Only a CSRF cookie visible to the current Web origin proves that the early
+  // Direct request can accompany the browser cookie session. Account restore
+  // remains parallel and can repair/refresh CSRF when preconnect is deferred.
   if (!readWebCsrfToken()) {
     playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", { reason: "csrf_unavailable" });
     return;

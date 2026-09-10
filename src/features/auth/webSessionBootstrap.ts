@@ -23,17 +23,22 @@ export function readWebCookieValue(cookieHeader: string, name: string): string {
   return "";
 }
 
+export function readWebCsrfCookieToken(): string {
+  if (typeof document === "undefined") return "";
+  try {
+    return readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME);
+  } catch {
+    return "";
+  }
+}
+
 export function readWebCsrfToken(): string {
   // The cookie is what the browser actually presents to session-security, so it
   // is the authoritative CSRF value whenever it is readable. sessionStorage is
   // only a fallback for deployments where the API cookie is not visible to this
   // origin. This avoids selecting a stale cached token during parallel restore.
-  if (typeof document !== "undefined") {
-    try {
-      const cookieToken = readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME);
-      if (cookieToken) return cookieToken;
-    } catch {}
-  }
+  const cookieToken = readWebCsrfCookieToken();
+  if (cookieToken) return cookieToken;
   if (typeof window !== "undefined") {
     try {
       return window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY) || "";

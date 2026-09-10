@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   hasRememberedWebSessionMarker: vi.fn(() => true),
-  readWebCsrfToken: vi.fn((): string | null => "csrf-token"),
+  readWebCsrfCookieToken: vi.fn((): string | null => "csrf-cookie-token"),
   start: vi.fn(() => Promise.resolve()),
   getWebStartupPlaybackCoordinator: vi.fn(),
   playTrace: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../src/features/auth/webSessionBootstrap", () => ({
   hasRememberedWebSessionMarker: mocks.hasRememberedWebSessionMarker,
-  readWebCsrfToken: mocks.readWebCsrfToken,
+  readWebCsrfCookieToken: mocks.readWebCsrfCookieToken,
 }));
 
 vi.mock("../../src/features/playback/webStartupPlaybackCoordinator", () => ({
@@ -27,14 +27,14 @@ describe("remembered Web Direct preconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.hasRememberedWebSessionMarker.mockReturnValue(true);
-    mocks.readWebCsrfToken.mockReturnValue("csrf-token");
+    mocks.readWebCsrfCookieToken.mockReturnValue("csrf-cookie-token");
     mocks.start.mockReturnValue(Promise.resolve());
     mocks.getWebStartupPlaybackCoordinator.mockReturnValue({ start: mocks.start } as any);
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     delete (window as any).__TAURI_INTERNALS__;
   });
 
-  it("dispatches coordinator.start and its DISPATCHED trace synchronously when remembered session and CSRF are already available", async () => {
+  it("dispatches coordinator.start and its DISPATCHED trace synchronously when remembered session and current CSRF cookie are available", async () => {
     let resolveStart!: () => void;
     mocks.start.mockReturnValue(new Promise<void>(resolve => { resolveStart = resolve; }));
 
@@ -67,8 +67,8 @@ describe("remembered Web Direct preconnect", () => {
     );
   });
 
-  it("does not construct Direct when CSRF is unavailable and leaves restore to recover it", () => {
-    mocks.readWebCsrfToken.mockReturnValue(null);
+  it("does not construct Direct when the current-origin CSRF cookie is unavailable", () => {
+    mocks.readWebCsrfCookieToken.mockReturnValue(null);
 
     preconnectRememberedWebDirect();
 

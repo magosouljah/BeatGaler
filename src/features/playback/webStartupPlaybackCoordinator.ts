@@ -1,4 +1,5 @@
 import type { Beat } from "../../types";
+import { resolveBeatGalerCloudApi } from "../../components/AccountGate";
 import { WebGalerCloudTransport, type WebStartupWarmCandidate } from "../cloud/webGalerCloudTransport";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../cloud/webTransportEvents";
 import { WebPlaybackSourceManager, type WebPlaybackTransport } from "./webPlaybackSource";
@@ -97,6 +98,11 @@ export class WebStartupPlaybackCoordinator {
 
     let attempt!: Promise<void>;
     attempt = (async () => {
+      // Direct is intentionally dispatched before account restore finishes, but
+      // it must never choose an unresolved synchronous fallback API. Resolve the
+      // Cloud origin first; this keeps the fast path parallel with auth while
+      // ensuring the first transport request uses the same origin as auth.
+      await resolveBeatGalerCloudApi();
       await this.transport.connectPlaybackDataPlane();
       if (this.candidates.length === 0) {
         this.finishStartupWarm(0, 0);
