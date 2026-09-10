@@ -38,7 +38,19 @@ jobs:
       - name: Build Web bundle
         run: npm run build:web
 
-      - name: Run Web smoke with hard timeout
+      - name: Patch Web smoke preview ownership in validation checkout only
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('wdio.web.conf.mjs')
+          text = path.read_text(encoding='utf-8')
+          old = '''    const command = process.platform === "win32" ? "npm.cmd" : "npm";\n    previewProcess = spawn(\n      command,\n      ["run", "preview", "--", "--host", host, "--port", String(port), "--strictPort"],\n      {\n        cwd: root,\n        env: { ...process.env },\n        stdio: "inherit",\n        shell: process.platform === "win32",\n      },\n    );'''
+          new = '''    const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");\n    previewProcess = spawn(\n      process.execPath,\n      [viteBin, "preview", "--host", host, "--port", String(port), "--strictPort"],\n      {\n        cwd: root,\n        env: { ...process.env },\n        stdio: "inherit",\n        shell: false,\n      },\n    );'''
+          if text.count(old) != 1:
+              raise SystemExit('Expected the current npm preview spawn block exactly once')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+
+      - name: Run canonical Web smoke with hard timeout
         shell: bash
         run: |
           set -euo pipefail
@@ -47,10 +59,10 @@ jobs:
           timeout --signal=TERM --kill-after=15s 4m npm run test:web:smoke 2>&1 | tee artifacts/migration-check-logs/web-smoke-recovery.log
           status=${PIPESTATUS[0]}
           set -e
-          pkill -TERM -f 'vite preview' 2>/dev/null || true
+          pkill -TERM -f 'vite.*preview' 2>/dev/null || true
           pkill -TERM -f 'chromedriver|chrome|chromium' 2>/dev/null || true
           sleep 2
-          pkill -KILL -f 'vite preview' 2>/dev/null || true
+          pkill -KILL -f 'vite.*preview' 2>/dev/null || true
           pkill -KILL -f 'chromedriver|chrome|chromium' 2>/dev/null || true
           if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
             echo 'Web smoke exceeded the hard timeout.' >&2
