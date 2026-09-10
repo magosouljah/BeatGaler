@@ -1,0 +1,40 @@
+name: One-shot version bump alpha.3
+
+on:
+  push:
+    branches:
+      - integration-v0.9.0-alpha.2
+    paths:
+      - .github/workflows/one-shot-version-bump-alpha3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: integration-v0.9.0-alpha.2
+          fetch-depth: 0
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+
+      - name: Bump and verify version
+        run: |
+          node scripts/version.mjs set 0.9.0-alpha.3
+          node scripts/version.mjs check
+
+      - name: Commit synchronized version bump and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-version-bump-alpha3.yml
+          git add VERSION package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock src/components/SettingsPanel.tsx index.html
+          git commit -m "chore: bump version to 0.9.0-alpha.3"
+          git push origin HEAD:integration-v0.9.0-alpha.2
