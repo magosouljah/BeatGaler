@@ -8,6 +8,7 @@ import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
 import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
+import { normalizeRememberedWebCloudApi } from "./features/auth/webCloudApiStartupGuard";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
@@ -16,6 +17,7 @@ import "./styles/library-ux.css";
 (window as any).jsmediatags = browserId3Reader;
 
 installStartupTrace();
+normalizeRememberedWebCloudApi();
 installWebCsrfFetchCoordinator();
 preconnectRememberedWebDirect();
 
@@ -39,7 +41,7 @@ function GlobalStyles() {
           opacity: 0;
         }
         to {
-          transform: translateX(0);
+          transform: translateX(0) scale(1);
           opacity: 1;
         }
       }
