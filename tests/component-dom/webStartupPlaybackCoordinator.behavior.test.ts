@@ -5,6 +5,7 @@ const harness = vi.hoisted(() => {
   const transports: any[] = [];
   const sources: any[] = [];
   const prefetchDeferred = new Map<number, { promise: Promise<void>; resolve(): void; reject(error: Error): void }>();
+  const resolveBeatGalerCloudApi = vi.fn<() => Promise<string>>();
 
   function deferred(messageId: number) {
     let resolve!: () => void;
@@ -48,8 +49,12 @@ const harness = vi.hoisted(() => {
     }
   }
 
-  return { transports, sources, prefetchDeferred, deferred, FakeTransport, FakeSources };
+  return { transports, sources, prefetchDeferred, deferred, resolveBeatGalerCloudApi, FakeTransport, FakeSources };
 });
+
+vi.mock("../../src/components/AccountGate", () => ({
+  resolveBeatGalerCloudApi: harness.resolveBeatGalerCloudApi,
+}));
 
 vi.mock("../../src/features/cloud/webGalerCloudTransport", () => ({
   WebGalerCloudTransport: harness.FakeTransport,
@@ -83,10 +88,31 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
     harness.transports.length = 0;
     harness.sources.length = 0;
     harness.prefetchDeferred.clear();
+    harness.resolveBeatGalerCloudApi.mockReset();
+    harness.resolveBeatGalerCloudApi.mockResolvedValue("/beatgaler-api");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("blocks Direct transport until the Cloud API has resolved", async () => {
+    let releaseCloudResolution!: (value: string) => void;
+    const cloudResolution = new Promise<string>(resolve => { releaseCloudResolution = resolve; });
+    harness.resolveBeatGalerCloudApi.mockReturnValueOnce(cloudResolution);
+
+    const coordinator = new WebStartupPlaybackCoordinator();
+    const transport = harness.transports[0];
+    const startup = coordinator.start();
+
+    await Promise.resolve();
+    expect(harness.resolveBeatGalerCloudApi).toHaveBeenCalledOnce();
+    expect(transport.connectPlaybackDataPlane).not.toHaveBeenCalled();
+
+    releaseCloudResolution("/beatgaler-api");
+    await expect(startup).resolves.toBeUndefined();
+    expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce();
+    coordinator.dispose();
   });
 
   it("starts exactly one Direct connection with zero candidates and opens the INDEX barrier", async () => {
