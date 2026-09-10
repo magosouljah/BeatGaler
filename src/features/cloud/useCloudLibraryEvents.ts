@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { AppSettings, Beat } from "../../types";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "../../components/AccountGate";
 import { flushOfflineTrashIntents, getCloudClientId, pollTelegramCloudStatus } from "../../lib/tauri";
 import { libraryStateManager } from "../../lib/libraryStateManager";
 import { cloudBeatFingerprint, libraryViewFingerprint } from "../library/libraryFingerprints";
@@ -56,7 +56,6 @@ export function useCloudLibraryEvents({
     if (!setupDone || !userId) return;
 
     const sourceId = getCloudClientId();
-    const cloudBase = getResolvedCloudApiBase();
     let events: EventSource | null = null;
     let eventReconnectTimer: number | null = null;
     let eventReconnectDelayMs = 1000;
@@ -161,6 +160,10 @@ export function useCloudLibraryEvents({
       const token = getBeatGalerAuthToken();
       if (!token) return;
       try {
+        // Resolve on every attempt instead of capturing a synchronous fallback
+        // at effect mount. This keeps ticket/SSE on the same Cloud origin as
+        // auth even when startup is still discovering the dev proxy.
+        const cloudBase = await resolveBeatGalerCloudApi();
         const response = await fetch(`${cloudBase}/events/ticket`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
