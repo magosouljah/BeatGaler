@@ -32,6 +32,7 @@ var import_node_fs2 = __toESM(require("node:fs"), 1);
 var import_node_os2 = __toESM(require("node:os"), 1);
 var import_node_path2 = __toESM(require("node:path"), 1);
 var import_node_readline = __toESM(require("node:readline"), 1);
+var import_node_stream = require("node:stream");
 
 // node_modules/@fuman/utils/misc/index.js
 function noop() {
@@ -64100,6 +64101,7 @@ var TEMP_TTL_SECONDS = 10 * 60;
 var RENEW_BEFORE_SECONDS = 120;
 var TIMEOUT_MS = 6e4;
 var PROD_DC_SUBDOMAINS = { 1: "pluto", 2: "venus", 3: "aurora", 4: "vesta", 5: "flora" };
+var transportStorage = new MemoryStorage();
 var client = null;
 var tempExpiresAt = 0;
 var session = null;
@@ -64358,15 +64360,15 @@ async function bindFreshTemporarySession(reason) {
     const next = new TelegramClient2({
       apiId,
       apiHash: "",
-      storage: new MemoryStorage(),
+      storage: transportStorage,
       crypto: new WebCryptoProvider({ wasmInput: new Response(mtcute_simd_default, { headers: { "Content-Type": "application/wasm" } }) }),
-      disableUpdates: true
+      disableUpdates: false
     });
     try {
       await next.importSession({
         primaryDcs: { main: productionDc(Number(bound.temp_auth.dc_id)), media: productionDc(Number(bound.temp_auth.dc_id)) },
         self: { userId: Number(bound.temp_auth.expected_bot_id), isBot: true, isPremium: false, usernames: [] },
-        authKey: imported.authKey
+        authKey: imported.authKey.slice()
       }, true);
       imported.authKey.fill(0);
       const restoreConnect = installBoundTempConnectHook(prepared.metadata.tempSessionId, imported.sessionState, Number(bound.temp_auth.dc_id));
@@ -64375,9 +64377,9 @@ async function bindFreshTemporarySession(reason) {
       } finally {
         restoreConnect();
       }
+      await next.startUpdatesLoop();
       const self = await next.getMe();
       if (!self?.isBot || String(self.id) !== String(bound.temp_auth.expected_bot_id)) throw new Error("Temporary authorization resolved to the wrong transport identity.");
-      await next.getChat(Number(session.chat_id));
     } catch (error) {
       await next.destroy().catch(() => {
       });
@@ -64431,13 +64433,29 @@ async function getCurrentIndex() {
 async function sendDocument(filePath, filename, caption, threadId = 0) {
   const active = await ensureFreshTemporarySession();
   const stat = import_node_fs2.default.statSync(filePath);
-  const stream = import_node_fs2.default.createReadStream(filePath);
-  const sent = await active.sendMedia(Number(session.chat_id), factories_exports.document(stream, {
-    fileName: filename,
-    fileMime: "application/octet-stream",
-    fileSize: stat.size,
-    caption: caption || void 0
-  }), { silent: true, ...Number(threadId) > 0 ? { replyTo: Number(threadId), threadId: Number(threadId) } : {} });
+  const nodeStream = import_node_fs2.default.createReadStream(filePath);
+  const stream = import_node_stream.Readable.toWeb(nodeStream);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(new Error(`Direct Telegram upload timed out after ${TIMEOUT_MS}ms`)),
+    TIMEOUT_MS
+  );
+  let sent;
+  try {
+    sent = await active.sendMedia(Number(session.chat_id), factories_exports.document(stream, {
+      fileName: filename,
+      fileMime: "application/octet-stream",
+      fileSize: stat.size,
+      caption: caption || void 0
+    }), {
+      silent: true,
+      abortSignal: controller.signal,
+      ...Number(threadId) > 0 ? { replyTo: Number(threadId), threadId: Number(threadId) } : {}
+    });
+  } finally {
+    clearTimeout(timeoutId);
+    nodeStream.destroy();
+  }
   if (!sent?.id) throw new Error("Direct upload returned no message id.");
   return sent;
 }

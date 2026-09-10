@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { Readable } from "node:stream";
 import {
   InputMedia,
   Long,
@@ -277,10 +278,30 @@ async function getCurrentIndex() {
 async function sendDocument(filePath, filename, caption, threadId = 0) {
   const active = await ensureFreshTemporarySession();
   const stat = fs.statSync(filePath);
-  const stream = fs.createReadStream(filePath);
-  const sent = await active.sendMedia(Number(session.chat_id), InputMedia.document(stream, {
-    fileName: filename, fileMime: "application/octet-stream", fileSize: stat.size, caption: caption || undefined,
-  }), { silent: true, ...(Number(threadId) > 0 ? { replyTo: Number(threadId), threadId: Number(threadId) } : {}) });
+  const nodeStream = fs.createReadStream(filePath);
+  // @mtcute/web consumes either a Web ReadableStream or its own IReadable
+  // contract. A Node ReadStream also has a read() method, but that method takes
+  // a byte count and returns Buffer|null; passing it directly is therefore
+  // misdetected as IReadable and the uploader's exact-read loop never advances.
+  const stream = Readable.toWeb(nodeStream);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(new Error(`Direct Telegram upload timed out after ${TIMEOUT_MS}ms`)),
+    TIMEOUT_MS,
+  );
+  let sent;
+  try {
+    sent = await active.sendMedia(Number(session.chat_id), InputMedia.document(stream, {
+      fileName: filename, fileMime: "application/octet-stream", fileSize: stat.size, caption: caption || undefined,
+    }), {
+      silent: true,
+      abortSignal: controller.signal,
+      ...(Number(threadId) > 0 ? { replyTo: Number(threadId), threadId: Number(threadId) } : {}),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+    nodeStream.destroy();
+  }
   if (!sent?.id) throw new Error("Direct upload returned no message id.");
   return sent;
 }

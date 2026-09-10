@@ -63,6 +63,8 @@ if (!helper.includes('applyBoundTempSessionState')) fail('Bound MTProto session 
 if (!/authKey:\s*imported\.authKey\.slice\(\)/.test(helper)) fail('Desktop helper must give mtcute its own temporary-auth key buffer before zeroing the handoff buffer.');
 if (/authKey:\s*imported\.authKey\s*,/.test(helper)) fail('Desktop helper reintroduced the aliased temporary-auth key that becomes zeroed after importSession.');
 if (!helper.includes('imported.authKey.fill(0)')) fail('Desktop helper no longer clears the temporary handoff auth-key buffer after importing a safe copy.');
+if (!helper.includes('Readable.toWeb(nodeStream)')) fail('Desktop helper passes a Node ReadStream to the @mtcute/web IReadable path, which can spin forever without consuming bytes.');
+if (!helper.includes('abortSignal: controller.signal')) fail('Desktop helper upload no longer has an abortable Telegram deadline.');
 for (const forbidden of ['bot_token', 'telegram_api_id', 'telegram_api_hash', 'credential_envelope', 'bot_api_base']) {
   if (!helper.includes(`"${forbidden}"`)) fail(`Desktop helper no longer rejects ${forbidden}.`);
 }
@@ -85,6 +87,10 @@ for (const route of ['/beats/upload', '/projects/upload', '/cloud-files/upload',
   if (rust.includes(route)) fail(`Desktop still contains legacy media route ${route}.`);
 }
 if (!rust.includes('DIRECT_HEARTBEAT_SECONDS: u64 = 60')) fail('Desktop heartbeat is no longer one minute.');
+if (!rust.includes('recv_timeout(remaining)')) fail('Desktop helper response wait can block forever again.');
+if (!rust.includes('direct_terminate_unresponsive_helper(runtime)')) fail('Desktop does not terminate and reap an unresponsive helper after its response deadline.');
+const shutdownBlock = rust.slice(rust.indexOf('fn kill_direct_runtime_without_releasing'), rust.indexOf('fn replace_direct_runtime_from_session'));
+if (shutdownBlock.includes('direct_send_helper_command')) fail('Desktop shutdown waits for a helper acknowledgement and can deadlock behind an upload.');
 if (!rust.includes('DIRECT_TRANSPORT_LEASE_META')) fail('Heartbeat metadata is no longer separated from long helper I/O operations.');
 if (!rust.includes('using that lock here would suppress heartbeats during')) fail('Long transfers can silently block the one-minute heartbeat again.');
 if (!rust.includes('/transport/session/heartbeat')) fail('Desktop heartbeat route is missing.');

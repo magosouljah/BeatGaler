@@ -11,7 +11,7 @@ use std::io::{Read, Write, Seek, SeekFrom, BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Child, ChildStdin, ChildStdout, Stdio};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::{HashMap, VecDeque};
@@ -625,11 +625,16 @@ pub fn set_cloud_auth_token(
 
 const DIRECT_JSON_PREFIX: &str = "__BEATGALER_DIRECT_JSON__";
 const DIRECT_HEARTBEAT_SECONDS: u64 = 60;
+const DIRECT_HELPER_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(75);
+// The helper owns a 60-second abort deadline for Telegram operations. Give it
+// a small grace period to serialize the error, then terminate it if stdout is
+// still silent so no caller can hold the runtime mutex forever.
+const DIRECT_HELPER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(65);
 
 struct DirectTransportRuntime {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout: mpsc::Receiver<Result<String, String>>,
     user_id: String,
     session_id: String,
     transport_id: String,
@@ -1130,18 +1135,62 @@ fn direct_activate_server_session(user_id: &str, session_id: &str, generation: i
     Ok(())
 }
 
-fn direct_read_helper_message(runtime: &mut DirectTransportRuntime, expected_request_id: Option<&str>) -> Result<Value, String> {
-    loop {
-        let mut line = String::new();
-        let read = runtime.stdout.read_line(&mut line)
-            .map_err(|e| format!("Direct transport helper output failed: {}", e))?;
-        if read == 0 {
-            let status = runtime.child.try_wait().ok().flatten();
-            return Err(format!(
-                "Direct transport helper exited unexpectedly{}.",
-                status.map(|s| format!(" ({})", s)).unwrap_or_default()
-            ));
+fn direct_terminate_unresponsive_helper(runtime: &mut DirectTransportRuntime) {
+    let _ = runtime.child.kill();
+    let _ = runtime.child.wait();
+}
+
+fn direct_helper_stdout_channel(stdout: ChildStdout) -> mpsc::Receiver<Result<String, String>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    let _ = sender.send(Err("Direct transport helper closed its output.".to_string()));
+                    break;
+                }
+                Ok(_) => {
+                    if sender.send(Ok(line)).is_err() { break; }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(format!("Direct transport helper output failed: {}", error)));
+                    break;
+                }
+            }
         }
+    });
+    receiver
+}
+
+fn direct_read_helper_message(
+    runtime: &mut DirectTransportRuntime,
+    expected_request_id: Option<&str>,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            direct_terminate_unresponsive_helper(runtime);
+            return Err(format!("Direct transport helper response timed out after {}ms.", timeout.as_millis()));
+        }
+        let line = match runtime.stdout.recv_timeout(remaining) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => {
+                direct_terminate_unresponsive_helper(runtime);
+                return Err(error);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                direct_terminate_unresponsive_helper(runtime);
+                return Err(format!("Direct transport helper response timed out after {}ms.", timeout.as_millis()));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                direct_terminate_unresponsive_helper(runtime);
+                return Err("Direct transport helper output channel disconnected.".to_string());
+            }
+        };
         let Some(raw) = line.trim().strip_prefix(DIRECT_JSON_PREFIX) else { continue; };
         let value: Value = serde_json::from_str(raw)
             .map_err(|e| format!("Direct transport helper returned invalid JSON: {}", e))?;
@@ -1208,7 +1257,7 @@ fn direct_send_helper_command(runtime: &mut DirectTransportRuntime, mut command:
     runtime.stdin.write_all(encoded.as_bytes())
         .map_err(|e| format!("Direct transport helper command failed: {}", e))?;
     runtime.stdin.flush().map_err(|e| format!("Direct transport helper flush failed: {}", e))?;
-    direct_read_helper_message(runtime, Some(&request_id))
+    direct_read_helper_message(runtime, Some(&request_id), DIRECT_HELPER_RESPONSE_TIMEOUT)
 }
 
 fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransportRuntime, String> {
@@ -1247,7 +1296,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     let mut runtime = DirectTransportRuntime {
         child,
         stdin,
-        stdout: BufReader::new(stdout),
+        stdout: direct_helper_stdout_channel(stdout),
         user_id: user_id.to_string(),
         session_id,
         transport_id,
@@ -1257,7 +1306,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
 
     // The helper first emits temporary-key metadata. direct_read_helper_message
     // binds it through Cloud before allowing the helper to announce listening.
-    let listening = direct_read_helper_message(&mut runtime, None)?;
+    let listening = direct_read_helper_message(&mut runtime, None, DIRECT_HELPER_BOOTSTRAP_TIMEOUT)?;
     if listening.get("op").and_then(|v| v.as_str()) != Some("listening") {
         let _ = runtime.child.kill();
         return Err("Galer Storage local helper did not start.".to_string());
@@ -1278,7 +1327,7 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
     runtime.stdin.flush()
         .map_err(|e| format!("Could not flush Direct helper activation barrier: {}", e))?;
 
-    let ready = direct_read_helper_message(&mut runtime, None)?;
+    let ready = direct_read_helper_message(&mut runtime, None, DIRECT_HELPER_BOOTSTRAP_TIMEOUT)?;
     if ready.get("op").and_then(|v| v.as_str()) != Some("ready") {
         let _ = runtime.child.kill();
         return Err("Galer Storage local helper did not become ready.".to_string());
@@ -1291,7 +1340,9 @@ fn spawn_direct_helper(user_id: &str, session: &Value) -> Result<DirectTransport
 }
 
 fn kill_direct_runtime_without_releasing(mut runtime: DirectTransportRuntime) {
-    let _ = direct_send_helper_command(&mut runtime, json!({ "op": "shutdown" }));
+    // Shutdown is best-effort. Waiting for an acknowledgement here can deadlock
+    // behind an in-flight helper command during app exit or runtime replacement.
+    let _ = direct_write_helper_control(&mut runtime, &json!({ "op": "shutdown" }));
     let _ = runtime.child.kill();
     let _ = runtime.child.wait();
 }
