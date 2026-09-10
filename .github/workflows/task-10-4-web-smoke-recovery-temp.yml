@@ -1,0 +1,68 @@
+name: Task 10.4 Web smoke recovery temp
+
+on:
+  push:
+    branches:
+      - v0.9.0-test-noche
+    paths:
+      - .github/workflows/task-10-4-web-smoke-recovery-temp.yml
+
+permissions:
+  contents: read
+
+jobs:
+  web-smoke-clean-sha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact clean validation SHA
+        uses: actions/checkout@v4
+        with:
+          ref: 1359ac4fcae9ca604d4e8f0b70742007f5592d58
+
+      - name: Confirm exact SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "1359ac4fcae9ca604d4e8f0b70742007f5592d58"
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Install locked graph
+        run: npm ci
+
+      - name: Build Web bundle
+        run: npm run build:web
+
+      - name: Run Web smoke with hard timeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/migration-check-logs
+          set +e
+          timeout --signal=TERM --kill-after=15s 4m npm run test:web:smoke 2>&1 | tee artifacts/migration-check-logs/web-smoke-recovery.log
+          status=${PIPESTATUS[0]}
+          set -e
+          pkill -TERM -f 'vite preview' 2>/dev/null || true
+          pkill -TERM -f 'chromedriver|chrome|chromium' 2>/dev/null || true
+          sleep 2
+          pkill -KILL -f 'vite preview' 2>/dev/null || true
+          pkill -KILL -f 'chromedriver|chrome|chromium' 2>/dev/null || true
+          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+            echo 'Web smoke exceeded the hard timeout.' >&2
+            exit "$status"
+          fi
+          exit "$status"
+
+      - name: Upload Web smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-10-4-web-smoke-recovery-${{ github.run_id }}
+          path: artifacts/migration-check-logs/web-smoke-recovery.log
+          if-no-files-found: warn
+          retention-days: 7
