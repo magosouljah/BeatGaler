@@ -42,6 +42,18 @@ describe("Web startup Cloud resolution race", () => {
     );
   });
 
+  it("migrates a stale loopback Cloud API before Web fetch coordination or Direct preconnect", () => {
+    const main = source("src/main.tsx");
+    const normalizeIndex = main.indexOf("normalizeRememberedWebCloudApi();");
+    const csrfIndex = main.indexOf("installWebCsrfFetchCoordinator();");
+    const preconnectIndex = main.indexOf("preconnectRememberedWebDirect();");
+
+    expect(main).toContain('import { normalizeRememberedWebCloudApi } from "./features/auth/webCloudApiStartupGuard";');
+    expect(normalizeIndex).toBeGreaterThanOrEqual(0);
+    expect(csrfIndex).toBeGreaterThan(normalizeIndex);
+    expect(preconnectIndex).toBeGreaterThan(normalizeIndex);
+  });
+
   it("keeps development Web API traffic on the verified same-origin proxy", () => {
     const vite = source("vite.config.ts");
 
