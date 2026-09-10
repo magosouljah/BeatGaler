@@ -527,7 +527,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** se entiende la estructura leyendo la raíz. Orientación: App 5–15 líneas, BeatGalerApp 40–100; los números no justifican ocultar lógica ni comprimirla.
     
 
-### [ ] 10.3 — Retirar restos y conexiones temporales
+### [x] 10.3 — Retirar restos y conexiones temporales
 
 - **Hacer:** comprobar y eliminar imports/helpers sin consumidores, conexiones de transición y comentarios obsoletos. Revisar dependencias entre módulos.
     

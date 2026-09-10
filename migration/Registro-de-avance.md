@@ -3298,3 +3298,94 @@ Siguiente tarea
 
 10.3 — Retirar restos y conexiones temporales. No iniciada.
 
+## 2026-09-09 — Tarea 10.3 — Retirar restos y conexiones temporales
+
+Tarea: 10.3 — Retirar restos y conexiones temporales
+Estado: Terminada
+Fecha: 2026-09-09
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial: `a5f06734f27e5450b89451bcff27e71c77e4f9fd`
+- SHA de implementación validada: `063b16bfdb95b91530dd380970239510e5bfe303`
+- Última tarea verificada: 10.2 — Dejar la composición mínima
+
+Cambio realizado
+
+- Se retiraron imports, bindings y helpers sin consumidores que quedaron tras mover UI y lógica desde la composición, incluidos `formatCloudBytes`, `addBeats` y el binding no usado de `beatRuntimeStates`.
+- Se eliminó el puente transitorio de los globals DOM `Event`/`HTMLElement` entre `useBeatGalerComposition` y `AppShell`; `AppShell` usa ahora los globals DOM directamente.
+- Se limpiaron imports React/default y otros imports sin uso en `App.tsx`, `BeatGalerApp.tsx`, `AppShell.tsx`, `WebLibraryPagination.tsx` y `TagRenameDialog.tsx`.
+- Se conservó `playTrace` y únicamente se retiró su etiqueta documental obsoleta de “Temporary Issue #97”.
+- La auditoría confirmó que ninguna feature importa `src/app/` ni `src/App.tsx`.
+- Se añadió `appMigrationCleanup.test.ts` para proteger la dirección feature → app/root y evitar reintroducir el pass-through de globals DOM.
+
+Adaptación de pruebas
+
+- Se añadió una caracterización estructural permanente para la frontera de dependencias y el cleanup del scope.
+- Se adaptaron `appAuxiliaryModalExtraction.test.ts` y `appHelperExtraction.test.ts` para observar `AppShell`, que es ahora el consumidor real de esos imports.
+- Se ajustó el umbral estructural de `libraryStateExtraction.test.ts` de >5 a >=5 escrituras `beatsLatestRef.current = next`: la sexta pertenecía al helper muerto `addBeats` retirado por esta tarea; el contrato de timing y los owners restantes siguen comprobados.
+
+Archivos afectados
+
+- src/App.tsx
+- src/app/BeatGalerApp.tsx
+- src/app/AppShell.tsx
+- src/app/useBeatGalerComposition.ts
+- src/features/library/WebLibraryPagination.tsx
+- src/features/tags/components/TagRenameDialog.tsx
+- src/features/playback/playTrace.ts
+- tests/integration/appMigrationCleanup.test.ts
+- tests/integration/appAuxiliaryModalExtraction.test.ts
+- tests/integration/appHelperExtraction.test.ts
+- tests/integration/libraryStateExtraction.test.ts
+- migration/BeatGaler-roadmap-para-trabajar-con-IAs.md
+- migration/Registro-de-avance.md
+- migration/BeatGaler-agent-state.md
+
+Comprobaciones ejecutadas
+
+- Auditoría previa GitHub Actions run `34420216879` — SUCCESS; detectó los residuos y confirmó cero imports feature → app/root.
+- Primer intento de validación run `34420626191` — FAIL únicamente en 3 guards estructurales acoplados a owners/contadores previos; 157 tests de integración pasaron. La implementación no se publicó.
+- GitHub Actions `Task 10.3 cleanup and validate temp`, run `34420843912`.
+- `npx vitest run tests/integration/appMigrationCleanup.test.ts --environment jsdom` — PASS.
+- Auditoría TypeScript con `noUnusedLocals=true` limitada a `src/app` + `src/features` — PASS, sin residuos.
+- `git diff --check` — PASS.
+- `npm run test:typecheck` — PASS.
+- `npm run test:unit:ts` — PASS.
+- `npm run test:component:dom` — PASS.
+- `npm run test:integration` — PASS.
+- `npm run test:regressions` — PASS.
+- `npm run build:web` — PASS.
+- `npm run build` — PASS.
+
+Comprobaciones no ejecutadas
+
+- E2E finales y recorrido físico Desktop/Web: corresponden a 10.4, no a esta limpieza estructural.
+
+Prueba manual
+
+- No ejecutada ni inventada. 10.3 no requiere una interacción física adicional para justificar estas eliminaciones; el recorrido integral se reserva para 10.4.
+
+Pendientes / fuera de alcance
+
+- 10.4 — Comprobar el resultado completo. No iniciada.
+- Se conservaron `probe-task-5.1-productive-temp-auth-compile.yml`, `build-direct-temp-helper.mjs`, `regression-task-5.1-hardening.mjs` y `regression-web-bound-temp-rpc.mjs`: sus nombres contienen “temp/task”, pero la evidencia no los identifica como residuos de la migración App.tsx; pertenecen a contratos/tooling de auth/Direct y no se borraron por coincidencia de nombre.
+
+Riesgos previos relevantes
+
+- Ninguno nuevo de comportamiento identificado por esta limpieza.
+
+Herramientas temporales restantes
+
+- Ninguna creada por 10.3 permanece en el árbol de implementación validado; audit/applier se retiraron antes de fijar el SHA validado.
+
+Veredicto
+
+Terminada.
+
+Los residuos demostrados fueron retirados, la dirección de dependencias feature → app/root queda protegida y no se modificó comportamiento observable.
+
+Siguiente tarea
+
+10.4 — Comprobar el resultado completo. Pendiente y no iniciada.
