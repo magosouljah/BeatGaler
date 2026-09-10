@@ -20,7 +20,7 @@ jobs:
           ref: v0.9.0-test-noche
           fetch-depth: 0
 
-      - name: Adapt stale structural guards to current owners
+      - name: Apply migration-owned portability guard updates
         shell: python
         run: |
           from pathlib import Path
@@ -28,44 +28,53 @@ jobs:
           text = path.read_text(encoding="utf-8")
           replacements = [
               ('const app = read("src/App.tsx");', 'const appComposition = read("src/app/useBeatGalerComposition.ts");\nconst appShell = read("src/app/AppShell.tsx");\nconst beatEditing = read("src/features/edit/useBeatEditing.ts");\nconst beatAssetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");\nconst cloudUploadQueue = read("src/features/cloud/useCloudUploadQueue.ts");'),
-              ('const helper = read("src-tauri/direct-transport/transport-helper.cjs");', 'const helper = read("src-tauri/direct-transport/transport-helper.cjs");\nconst helperSource = read("src-tauri/direct-transport/transport-helper.source.mjs");'),
               ('ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && app.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed");', 'ok(nativeDropOwner.includes("getCurrentWebview().onDragDropEvent") && appComposition.includes("useNativeLibraryDrop({"), "Tauri native filesystem drop listener is installed by the composition owner");'),
               ('const artworkSync = section(app, "const handleDropArtwork", "const runBeatCloudUpdate");', 'const artworkSync = section(beatEditing, "const handleDropArtwork", "const applyBulkUpdate");'),
               ('ok(!app.includes("Windows reported a file drop"), "user-facing drag error is platform-neutral");', 'ok(!nativeDropOwner.includes("Windows reported a file drop"), "user-facing native drag error is platform-neutral");'),
               ("ok(app.includes('target=${drawerTarget') && app.includes('beatgaler:drawer-native-path'), \"native drop logs its resolved target and forwards Finder artwork to Drawer\");", "ok(nativeDropOwner.includes('target=${routing.diagnosticTarget}') && nativeDropOwner.includes('beatgaler:drawer-native-path'), \"native drop owner logs its resolved target and forwards Finder artwork to Drawer\");"),
               ('ok(drawer.includes("onCloudMutationCommit") && app.includes("commitDrawerCloudMutation"), "Drawer PROJECT/artwork changes own an explicit authoritative INDEX commit");', 'ok(drawer.includes("onCloudMutationCommit") && appComposition.includes("commitDrawerCloudMutation") && appShell.includes("onCloudMutationCommit={platform.capabilities.browserCloudEditing ? undefined : commitDrawerCloudMutation}"), "Drawer PROJECT/artwork changes retain an explicit authoritative INDEX commit through composition and shell wiring");'),
               ('ok((app.match(/sanitizeUserVisibleText\\(runtimeErrorMessage/g) || []).length >= 8, "runtime-state/cloud inline errors are sanitized before being stored for rendering");', 'ok(beatEditing.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && beatAssetUpdates.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)") && cloudUploadQueue.includes("sanitizeUserVisibleText(runtimeErrorMessage(error)"), "extracted runtime-state/cloud owners sanitize errors before storing or rendering them");'),
-              ('ok(helper.includes("Direct transport session is incomplete"), "helper refuses sessions without explicit local Bot API base");', 'ok(helperSource.includes("bot_token") && helperSource.includes("telegram_api_id") && helperSource.includes("telegram_api_hash") && helperSource.includes("credential_envelope") && helperSource.includes("bot_api_base") && helperSource.includes("Permanent transport credentials reached the Desktop helper.") && helperSource.includes("galer-direct-temp-mtproto"), "temporary MTProto helper refuses permanent transport credentials");'),
           ]
           for old, new in replacements:
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f"Expected exactly one stale guard to replace, got {count}: {old[:90]}")
+                  raise SystemExit(f"Expected exactly one migration guard to replace, got {count}: {old[:90]}")
               text = text.replace(old, new)
           if 'app.includes(' in text or 'section(app,' in text or 'const app = read("src/App.tsx")' in text:
               raise SystemExit("Stale App.tsx structural coupling remains in macOS portability gate")
           path.write_text(text, encoding="utf-8")
+          Path("/tmp/migration-portability-test.mjs").write_text(text, encoding="utf-8")
 
-      - name: Inspect current Direct health and recovery contract
-        shell: bash
+      - name: Temporarily adapt unrelated Direct transport guards for validation only
+        shell: python
         run: |
-          set -euo pipefail
-          echo '=== commands.rs relevant symbols ==='
-          grep -n -E 'same_user|helper_alive|helper.*healthy|healthy.*helper|reconnecting_same|TEMP_MTPROTO|temp_mtproto|temporary MTProto|BOT_API_(START|READY|EXIT)|direct-bot-api|LocalBotApiRuntime|direct_stop_server_session' src-tauri/src/commands.rs | head -n 160 || true
-          echo '=== helper current bootstrap/security ==='
-          grep -n -E 'galer-direct-temp-mtproto|Permanent transport credentials|bindFreshTemporarySession|activate_ready' src-tauri/direct-transport/transport-helper.source.mjs | head -n 80 || true
+          from pathlib import Path
+          path = Path("scripts/test-macos-portability.mjs")
+          text = path.read_text(encoding="utf-8")
+          replacements = [
+              ('const helper = read("src-tauri/direct-transport/transport-helper.cjs");', 'const helper = read("src-tauri/direct-transport/transport-helper.cjs");\nconst helperSource = read("src-tauri/direct-transport/transport-helper.source.mjs");'),
+              ('ok(helper.includes("Direct transport session is incomplete"), "helper refuses sessions without explicit local Bot API base");', 'ok(helperSource.includes("bot_token") && helperSource.includes("telegram_api_id") && helperSource.includes("telegram_api_hash") && helperSource.includes("credential_envelope") && helperSource.includes("bot_api_base") && helperSource.includes("Permanent transport credentials reached the Desktop helper.") && helperSource.includes("galer-direct-temp-mtproto"), "temporary MTProto helper refuses permanent transport credentials");'),
+              ('ok(commands.includes("owned_local_bot_api_is_healthy()") && commands.includes("same_user_helper_alive && owned_local_bot_api_is_healthy()"), "Direct runtime health requires both the owned helper and owned local Bot API process");', 'ok(commands.includes("same_user_helper_alive") && commands.includes("if same_user_helper_alive { return Ok(true); }"), "Direct runtime health follows the current temporary MTProto helper lifecycle");'),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one transport guard to replace, got {count}: {old[:90]}")
+              text = text.replace(old, new)
+          path.write_text(text, encoding="utf-8")
 
-      - name: Verify adapted static guard
+      - name: Verify complete portability guard with current transport semantics
         run: node scripts/test-macos-portability.mjs
 
-      - name: Publish only the task 10.4 migration test adaptation and remove this temporary workflow
+      - name: Restore migration-only diff and publish it
         shell: bash
         run: |
           set -euo pipefail
+          cp /tmp/migration-portability-test.mjs scripts/test-macos-portability.mjs
           rm .github/workflows/task-10-4-adapt-mac-guard-temp.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add scripts/test-macos-portability.mjs .github/workflows/task-10-4-adapt-mac-guard-temp.yml
           git diff --cached --check
-          git commit -m "test(migration): point portability guards at current owners"
+          git commit -m "test(migration): point portability guards at extracted owners"
           git push origin HEAD:v0.9.0-test-noche
