@@ -3206,3 +3206,95 @@ No iniciada.
 - **Limpieza:** se retiraron workflow y scripts temporales usados para aplicar, corregir y validar 10.1.
 - **Siguiente tarea:** `10.2 — Dejar la composición mínima`.
 
+## 2026-09-09 — Tarea 10.2 — Dejar la composición mínima
+
+Tarea: 10.2 — Dejar la composición mínima
+Estado: Terminada
+Fecha: 2026-09-09
+
+Base
+
+- Rama: v0.9.0-test-noche
+- SHA inicial de la tarea: d3df8b8c9ceed684bfb09b70129d47774aba1b1c
+- SHA de implementación validada: 61ae7ab57402bf033de0e7424d104016b15eff94
+- Última tarea verificada al comenzar: 10.1 — Extraer la estructura visual restante
+
+Cambio realizado
+
+- App.tsx quedó como entrada mínima y delega en app/BeatGalerApp.tsx.
+- BeatGalerApp.tsx conserva una sola ruta de autenticación por plataforma: Web monta el workspace directamente y Desktop lo monta dentro de AccountGate.
+- app/useBeatGalerComposition.ts quedó principalmente como composición/wiring entre owners de library, startup, session, playback, import, cloud, edit, projects, downloads, offline, trash, tags, selection y drag/drop.
+- Se extrajeron de la composición las acciones de mutación offline, recuperación de biblioteca Cloud, transferencias manuales Cloud, entrada de import, edición de beats, routing de archivos soltados y el estado compartido de beat-cloud-update.
+- La lógica activa de edición/artwork/bulk update quedó en features/edit/useBeatEditing.ts; MASTER/WAV en useBeatAssetUpdates.ts; PROJECT en features/projects/useBeatProjects.ts; routing de archivos en features/dragdrop/useBeatFileDropRouting.ts.
+- updateExistingBeatFromFolder se identificó como bloque huérfano sin consumidores y se retiró de la composición en lugar de crear un nuevo hook muerto. Sus rutas activas equivalentes permanecen protegidas por useBeatAssetUpdates/useBeatProjects y las regresiones Phase 9C/9D.
+- No se persiguió un número de líneas artificial: se conservaron callbacks pequeños que son conexiones reales entre features y se evitó mover lógica solo para cumplir una métrica.
+
+Archivos principales afectados
+
+- src/App.tsx
+- src/app/BeatGalerApp.tsx
+- src/app/useBeatGalerComposition.ts
+- src/features/session/useMutationAvailability.ts
+- src/features/startup/useCloudLibraryRecovery.ts
+- src/features/cloud/useCloudBeatTransfer.ts
+- src/features/cloud/beatCloudUpdateBusy.ts
+- src/features/import/useImportEntry.ts
+- src/features/edit/useBeatEditing.ts
+- src/features/dragdrop/useBeatFileDropRouting.ts
+- scripts/run-regressions.mjs
+- scripts/regression-phase9cd.mjs
+- tests de integración/characterization afectados por el cambio de owner.
+
+Adaptación de pruebas
+
+- Las caracterizaciones que buscaban lógica directamente en App.tsx/useBeatGalerComposition.ts fueron redirigidas al owner real sin relajar sus aserciones.
+- issue97WebRoutingContract conserva la verificación de orden del routing de artwork en useBeatEditing.ts.
+- Phase 9C/9D sigue verificando MASTER/WAV/PROJECT/folder, confirmaciones, commits, readiness y filtrado Backup en sus owners actuales.
+- El guard del runtime state machine fue actualizado para seguir las rutas activas reales después de retirar el bloque huérfano.
+
+Comprobaciones ejecutadas
+
+- GitHub Actions Task 10.2 finalize composition temp, run 34416955355: SUCCESS.
+- Focused 10.2 architecture check: PASS.
+- npm ci: PASS.
+- git diff --check: PASS.
+- npm run test:typecheck: PASS.
+- npm run test:unit:ts: PASS.
+- npm run test:component:dom: PASS.
+- npm run test:integration: PASS.
+- npm run test:regressions: PASS.
+- npm run build:web: PASS.
+- npm run build: PASS.
+- SHA validado por la matriz completa: 61ae7ab57402bf033de0e7424d104016b15eff94.
+
+Pruebas manuales y plataforma
+
+- No ejecutadas ni inventadas; esta tarea fue una extracción/composición estructural validada por la matriz automatizada aplicable.
+- La validación final integral y recorrido manual de flujos corresponde a 10.4.
+
+Fallos encontrados y causa
+
+- Las primeras corridas de 10.2 expusieron caracterizaciones/regresiones estáticas que todavía buscaban código en el owner anterior; se adaptaron al owner real sin reducir cobertura.
+- Run 34416745973: la implementación final pasó arquitectura, typecheck, unit, component DOM e integration, pero regression falló porque el guard del runtime esperaba una señal que desapareció al retirar el bloque huérfano. No fue una regresión funcional.
+- Run 34416955355: guard corregido; matriz completa PASS y commit de implementación publicado.
+
+Pendientes / fuera de alcance
+
+- 10.3 — Retirar restos y conexiones temporales. No iniciada.
+- La limpieza general de imports/helpers sin consumidores y comentarios de transición corresponde a 10.3.
+- La validación final completa/E2E y comparación con línea base corresponde a 10.4.
+
+Herramientas temporales restantes
+
+- Ninguna de los aplicadores/workflows temporales de implementación de 10.2 permanece en el árbol validado.
+
+Veredicto
+
+Terminada.
+
+La raíz quedó comprensible y la composición dejó de poseer lógica de dominio grande; App.tsx es una entrada mínima, BeatGalerApp mantiene la autenticación por plataforma y useBeatGalerComposition conecta owners de feature sin convertirse en reemplazo funcional del antiguo mega-App.
+
+Siguiente tarea
+
+10.3 — Retirar restos y conexiones temporales. No iniciada.
+

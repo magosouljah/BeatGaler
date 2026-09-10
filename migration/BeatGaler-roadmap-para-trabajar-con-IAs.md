@@ -516,7 +516,7 @@ La casilla `[ ]` se cambia por `[x]` únicamente al terminar. Guarda los otros e
 - **Termina cuando:** App deja de contener grandes bloques de interfaz y la app se ve y se usa igual.
     
 
-### [ ] 10.2 — Dejar la composición mínima
+### [x] 10.2 — Dejar la composición mínima
 
 - **Hacer:** dejar `App.tsx` como entrada; crear/completar `app/BeatGalerApp.tsx` y conexiones entre módulos.
     
