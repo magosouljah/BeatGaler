@@ -34,7 +34,8 @@ describe("Web startup Cloud resolution race", () => {
     const session = source("src/features/auth/webSessionBootstrap.ts");
 
     expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
-    expect(preconnect).toContain("readWebCsrfCookieToken as readWebCsrfToken");
+    expect(preconnect).toContain("readWebCsrfCookieToken");
+    expect(preconnect).toContain("const readWebCsrfToken = readWebCsrfCookieToken;");
     expect(session).toContain("export function readWebCsrfCookieToken(): string");
     expect(session.indexOf("const cookieToken = readWebCsrfCookieToken();")).toBeLessThan(
       session.indexOf("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)"),
