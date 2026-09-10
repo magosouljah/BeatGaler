@@ -101,6 +101,13 @@ export default defineConfig(async ({ command, mode }) => ({
   server: {
     port: 1420,
     strictPort: true,
+    proxy: {
+      "/beatgaler-api": {
+        target: "http://127.0.0.1:4000",
+        changeOrigin: true,
+        rewrite: requestPath => requestPath.replace(/^\/beatgaler-api/, ""),
+      },
+    },
     watch: {
       ignored: [
         "**/src-tauri/**",
