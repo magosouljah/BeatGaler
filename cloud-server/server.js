@@ -20,6 +20,7 @@ const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime"
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
+const { installPersistentDirectSessionStart } = require("./direct-persistent-session-runtime");
 const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index");
 const { installStartupRoutingIndex } = require("./startup-routing-index");
 
@@ -67,7 +68,17 @@ async function start() {
   installAtomicLibraryIndexBootstrap(express, { pool, dataDir: __dirname });
   installStartupRoutingIndex(express, { pool, dataDir: __dirname });
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"}`);
+
+  // server-core loads dotenv and the Direct module using the existing startup
+  // order. Its request handlers dereference directTransport.startSession only
+  // when a request arrives, so patching the cached module immediately after the
+  // synchronous require keeps that ordering while making PostgreSQL ownership
+  // authoritative before the event loop can serve Direct session starts.
   require("./server-core");
+  installPersistentDirectSessionStart({
+    directTransport: require("./direct-transport-control"),
+    persistentAssignments: directPersistentAssignments,
+  });
 }
 
 start().catch((error) => {
