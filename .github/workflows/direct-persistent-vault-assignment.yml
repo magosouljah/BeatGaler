@@ -10,12 +10,14 @@ on:
       - cloud-server/direct-transport-control.js
       - cloud-server/direct-persistent-assignment-runtime.js
       - cloud-server/direct-persistent-session-runtime.js
+      - cloud-server/direct-persistent-membership-runtime.js
       - cloud-server/direct-vault-assignment.js
       - cloud-server/server.js
       - cloud-server/migrations/**
       - cloud-server/tests/direct-allocator-no-cap.test.cjs
       - cloud-server/tests/direct-persistent-assignment-runtime.test.cjs
       - cloud-server/tests/direct-persistent-session-runtime.test.cjs
+      - cloud-server/tests/direct-persistent-membership-runtime.test.cjs
       - cloud-server/tests/direct-vault-assignment*
       - cloud-server/tests/postgres-live.integration.cjs
       - .github/workflows/direct-persistent-vault-assignment.yml
@@ -53,11 +55,13 @@ jobs:
           node --check cloud-server/direct-transport-control.js
           node --check cloud-server/direct-persistent-assignment-runtime.js
           node --check cloud-server/direct-persistent-session-runtime.js
+          node --check cloud-server/direct-persistent-membership-runtime.js
           node --check cloud-server/direct-vault-assignment.js
           node --check cloud-server/server.js
           node --check cloud-server/tests/direct-allocator-no-cap.test.cjs
           node --check cloud-server/tests/direct-persistent-assignment-runtime.test.cjs
           node --check cloud-server/tests/direct-persistent-session-runtime.test.cjs
+          node --check cloud-server/tests/direct-persistent-membership-runtime.test.cjs
           node --check cloud-server/tests/direct-vault-assignment.test.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.worker.cjs
