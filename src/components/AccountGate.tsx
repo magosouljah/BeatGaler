@@ -13,7 +13,7 @@ export function getBeatGalerAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 const API_KEY = "beatgaler:cloud-api:v1";
-const LOCAL_API = "http://127.0.0.1:4000";
+const LOCAL_API = import.meta.env.DEV ? "http://127.0.0.1:4000" : null;
 const REMOTE_API = "https://desktop-7l93a0j.tailabe8ff.ts.net";
 
 function sameOriginProxyApi(): string | null {
@@ -26,18 +26,17 @@ function currentWebCsrfToken(): string {
   return sessionStorage.getItem(CSRF_KEY) || "";
 }
 
-function trustedWebApiCandidate(value: string | null): value is string {
+function trustedRememberedApi(value: string | null): value is string {
   if (!value) return false;
   const sameOriginProxy = sameOriginProxyApi();
-  if (value === REMOTE_API || (!!sameOriginProxy && value === sameOriginProxy)) return true;
-  return /^http:\/\/127\.0\.0\.1:\d+$/.test(value);
+  if (platform.kind === "web") return !!sameOriginProxy && value === sameOriginProxy;
+  return value === REMOTE_API || (!!LOCAL_API && value === LOCAL_API);
 }
 
 function isBeatGalerApiRequest(input: RequestInfo | URL): boolean {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const remembered = localStorage.getItem(API_KEY);
-  const candidates = [trustedWebApiCandidate(remembered) ? remembered : null, sameOriginProxyApi(), REMOTE_API].filter((value): value is string => Boolean(value));
-  return candidates.some(base => url === base || url.startsWith(`${base}/`));
+  const sameOriginProxy = sameOriginProxyApi();
+  return !!sameOriginProxy && (url === sameOriginProxy || url.startsWith(`${sameOriginProxy}/`));
 }
 
 function installWebCredentialedFetchBoundary(): void {
@@ -173,18 +172,32 @@ async function probe(base: string, timeoutMs: number): Promise<boolean> {
 
 export async function resolveBeatGalerCloudApi(): Promise<string> {
   const remembered = localStorage.getItem(API_KEY);
-  if (remembered && await probe(remembered, 1200)) return remembered;
   const sameOriginProxy = sameOriginProxyApi();
-  if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
-    localStorage.setItem(API_KEY, sameOriginProxy);
-    return sameOriginProxy;
+  if (platform.kind === "web") {
+    if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);
+    if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
+      localStorage.setItem(API_KEY, sameOriginProxy);
+      return sameOriginProxy;
+    }
+    throw new Error("Could not reach BeatGaler Cloud.");
   }
-  if (await probe(LOCAL_API, 900)) { localStorage.setItem(API_KEY, LOCAL_API); return LOCAL_API; }
-  if (await probe(REMOTE_API, 2500)) { localStorage.setItem(API_KEY, REMOTE_API); return REMOTE_API; }
+  if (trustedRememberedApi(remembered) && await probe(remembered, 1200)) return remembered;
+  if (LOCAL_API && await probe(LOCAL_API, 900)) {
+    localStorage.setItem(API_KEY, LOCAL_API);
+    return LOCAL_API;
+  }
+  if (await probe(REMOTE_API, 2500)) {
+    localStorage.setItem(API_KEY, REMOTE_API);
+    return REMOTE_API;
+  }
   throw new Error("Could not reach BeatGaler Cloud.");
 }
 
-export function getResolvedCloudApiBase(): string { return localStorage.getItem(API_KEY) || REMOTE_API; }
+export function getResolvedCloudApiBase(): string {
+  const remembered = localStorage.getItem(API_KEY);
+  if (platform.kind === "web") return sameOriginProxyApi() || "";
+  return trustedRememberedApi(remembered) ? remembered : REMOTE_API;
+}
 
 export async function getBeatGalerInstallationId(): Promise<string> {
   return platform.account.getInstallationId();
