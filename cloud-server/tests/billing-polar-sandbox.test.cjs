@@ -7,6 +7,7 @@ const {
   PolarSandboxConfigError,
   PolarSandboxAdapterError,
   readPolarSandboxConfig,
+  createPinnedSandboxClient,
   createPolarSandboxAdapter,
 } = require('../billing-polar-sandbox');
 
@@ -24,7 +25,26 @@ function env() {
 
 function fakeClient(calls) {
   return {
-    products: { list: async input => (calls.products = input, { items: [] }) },
+    products: {
+      list: async input => (calls.products = input, { items: [] }),
+      get: async id => {
+        calls.productGet = id;
+        const high = id === 'prod_high';
+        return {
+          id,
+          organization_id: 'org_test',
+          recurring_interval: 'month',
+          recurring_interval_count: 1,
+          is_archived: false,
+          prices: [{
+            id: high ? 'price_high' : 'price_paid',
+            amount_type: 'fixed',
+            price_currency: 'usd',
+            price_amount: high ? 1199 : 699,
+          }],
+        };
+      },
+    },
     checkouts: { create: async input => (calls.checkout = input, { id: 'co_1', url: 'https://sandbox.polar.sh/checkout/co_1' }) },
     customerSessions: { create: async input => (calls.portal = input, { customer_portal_url: 'https://sandbox.polar.sh/portal/session' }) },
     customers: {
@@ -49,6 +69,16 @@ test('pins Polar SDK and API version for sandbox', () => {
   assert.equal(POLAR_API_VERSION, '2026-04');
 });
 
+test('pinned client is always created against Polar sandbox and API 2026-04', () => {
+  let options = null;
+  const sdk = { createPolar: input => (options = input, { ok: true }) };
+  const config = readPolarSandboxConfig(env());
+  createPinnedSandboxClient({ config, sdk });
+  assert.equal(options.environment, 'sandbox');
+  assert.equal(options.version, '2026-04');
+  assert.equal(options.accessToken, 'polar_oat_sandbox_test');
+});
+
 test('sandbox config uses sandbox-only credential names and requires both monthly mappings', () => {
   const config = readPolarSandboxConfig(env());
   assert.equal(config.environment, 'sandbox');
@@ -68,6 +98,7 @@ test('checkout resolves Polar product server-side and never grants access from r
     productId: 'attacker_product',
     priceId: 'attacker_price',
   });
+  assert.equal(calls.productGet, 'prod_paid');
   assert.equal(calls.checkout.product_price_id, 'price_paid');
   assert.equal(calls.checkout.products, undefined);
   assert.equal(calls.checkout.external_customer_id, 'user_123');
@@ -75,6 +106,32 @@ test('checkout resolves Polar product server-side and never grants access from r
   assert.equal(calls.checkout.metadata.beatgaler_provider_price_id, 'price_paid');
   assert.equal(result.entitlementGranted, false);
   assert.equal(result.providerProductId, 'prod_paid');
+});
+
+test('checkout fails closed when Polar sandbox price no longer matches BeatGaler catalog', async () => {
+  const calls = {};
+  const client = fakeClient(calls);
+  client.products.get = async id => ({
+    id,
+    organization_id: 'org_test',
+    recurring_interval: 'month',
+    prices: [{ id: 'price_paid', amount_type: 'fixed', price_currency: 'usd', price_amount: 700 }],
+  });
+  const a = createPolarSandboxAdapter({
+    config: readPolarSandboxConfig(env()),
+    client,
+    webhooks: { validateEvent: async () => ({ type: 'order.paid' }) },
+  });
+  await assert.rejects(
+    () => a.createCheckout({
+      offerId: 'paid_entry_monthly_v1',
+      userId: 'user_123',
+      successUrl: 'https://app.example.com/billing/success',
+      returnUrl: 'https://app.example.com/settings',
+    }),
+    error => error instanceof PolarSandboxConfigError && error.code === 'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+  );
+  assert.equal(calls.checkout, undefined);
 });
 
 test('annual remains unavailable even when adapter exists', async () => {

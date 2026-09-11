@@ -110,6 +110,91 @@ function createSandboxCommercialCatalog(config) {
   });
 }
 
+function validateProviderProductForOffer({ product, offer, organizationId = null }) {
+  if (!product || typeof product !== 'object') {
+    throw new PolarSandboxConfigError(
+      `Polar product for ${offer?.id || 'offer'} is missing.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (!offer?.providerMapping) {
+    throw new PolarSandboxConfigError(
+      'Checkout-ready offer requires a Polar provider mapping.',
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (String(product.id || '') !== offer.providerMapping.productId) {
+    throw new PolarSandboxConfigError(
+      `Polar product ID does not match ${offer.id}.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (product.is_archived === true) {
+    throw new PolarSandboxConfigError(
+      `Polar product for ${offer.id} is archived.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (organizationId && product.organization_id && String(product.organization_id) !== organizationId) {
+    throw new PolarSandboxConfigError(
+      `Polar product for ${offer.id} belongs to a different organization.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+
+  const prices = Array.isArray(product.prices) ? product.prices : [];
+  const price = prices.find(candidate => String(candidate?.id || '') === offer.providerMapping.priceId);
+  if (!price) {
+    throw new PolarSandboxConfigError(
+      `Polar price for ${offer.id} was not found on the configured product.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (price.amount_type !== 'fixed') {
+    throw new PolarSandboxConfigError(
+      `Polar price for ${offer.id} must be fixed.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (String(price.price_currency || '').toLowerCase() !== offer.currency) {
+    throw new PolarSandboxConfigError(
+      `Polar price currency for ${offer.id} does not match BeatGaler.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (price.price_amount !== offer.amountMinor) {
+    throw new PolarSandboxConfigError(
+      `Polar price amount for ${offer.id} does not match BeatGaler.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+
+  const recurringInterval = price.recurring_interval || product.recurring_interval || null;
+  if (recurringInterval !== offer.interval) {
+    throw new PolarSandboxConfigError(
+      `Polar recurring interval for ${offer.id} does not match BeatGaler.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  const intervalCount = price.recurring_interval_count ?? product.recurring_interval_count ?? 1;
+  if (intervalCount !== 1) {
+    throw new PolarSandboxConfigError(
+      `Polar recurring interval count for ${offer.id} must be 1.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+
+  return Object.freeze({
+    offerId: offer.id,
+    planId: offer.planId,
+    productId: offer.providerMapping.productId,
+    priceId: offer.providerMapping.priceId,
+    currency: offer.currency,
+    amountMinor: offer.amountMinor,
+    interval: offer.interval,
+  });
+}
+
 function loadPinnedPolarSdk() {
   try {
     return require(POLAR_SDK_ENTRY);
@@ -167,6 +252,7 @@ function createPolarSandboxAdapter(options = {}) {
   const webhookApi = options.webhooks || sdk?.webhooks;
 
   const productsList = assertService(client, 'products', 'list');
+  const productsGet = assertService(client, 'products', 'get');
   const checkoutCreate = assertService(client, 'checkouts', 'create');
   const customerSessionCreate = assertService(client, 'customerSessions', 'create');
   const customerGet = assertService(client, 'customers', 'get');
@@ -185,6 +271,11 @@ function createPolarSandboxAdapter(options = {}) {
       if (error instanceof PolarSandboxConfigError || error instanceof PolarSandboxAdapterError) throw error;
       throw new PolarSandboxAdapterError('Polar sandbox request failed.', code, error);
     }
+  }
+
+  async function validateOffer(offer) {
+    const product = await call('POLAR_SANDBOX_PRODUCT_GET_FAILED', () => productsGet(offer.providerMapping.productId));
+    return validateProviderProductForOffer({ product, offer, organizationId: config.organizationId });
   }
 
   return Object.freeze({
@@ -208,8 +299,14 @@ function createPolarSandboxAdapter(options = {}) {
       }));
     },
 
+    async validateOfferMapping(offerId) {
+      const offer = getCheckoutReadyOffer(catalog, requiredText(offerId, 'offerId'));
+      return validateOffer(offer);
+    },
+
     async createCheckout({ offerId, userId, email = null, successUrl, returnUrl }) {
       const offer = getCheckoutReadyOffer(catalog, requiredText(offerId, 'offerId'));
+      await validateOffer(offer);
       const externalCustomerId = requiredText(userId, 'userId');
       const body = {
         product_price_id: offer.providerMapping.priceId,
@@ -296,5 +393,6 @@ module.exports = {
   readPolarSandboxConfig,
   createSandboxCommercialCatalog,
   createPinnedSandboxClient,
+  validateProviderProductForOffer,
   createPolarSandboxAdapter,
 };
