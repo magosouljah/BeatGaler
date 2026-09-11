@@ -3,6 +3,7 @@ name: Billing V1 Policy and Polar Sandbox Adapter
 on:
   pull_request:
     paths:
+      - 'BLUEPRINT/BILLING-V1-POLAR-SANDBOX-COMPATIBILITY.md'
       - 'cloud-server/package.json'
       - 'cloud-server/package-lock.json'
       - 'cloud-server/billing-access-resolver.js'
