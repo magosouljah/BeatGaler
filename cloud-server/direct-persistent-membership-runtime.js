@@ -84,11 +84,16 @@ function readyResult(finalized) {
   return { ok: true, activated: true, status: finalized.status || 'ACTIVE' };
 }
 
+function membershipUpdatedAtMs(assignment) {
+  const parsed = Date.parse(String(assignment?.membershipUpdatedAt || ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function installPersistentDirectMembershipActivation({ directTransport, persistentAssignments } = {}) {
   if (!directTransport || typeof directTransport.activateSession !== 'function') {
     throw new Error('Direct transport activateSession() is required.');
   }
-  for (const method of ['getAssignment', 'withMembershipLock', 'markMembershipReady']) {
+  for (const method of ['getAssignment', 'withMembershipLock', 'markMembershipReady', 'markMembershipRepairNeeded']) {
     if (typeof persistentAssignments?.[method] !== 'function') {
       throw new Error(`Persistent Direct assignment runtime must implement ${method}().`);
     }
@@ -102,6 +107,13 @@ function installPersistentDirectMembershipActivation({ directTransport, persiste
   if (directTransport[INSTALL_MARK]?.wrappedActivateSession) return directTransport[INSTALL_MARK];
 
   const originalActivateSession = directTransport.activateSession.bind(directTransport);
+
+  const provisionCurrentLease = async ({ args, checked, assignedBotId }) => {
+    const result = await originalActivateSession(args);
+    await persistentAssignments.markMembershipReady(checked.lease.chat_id, assignedBotId);
+    return result;
+  };
+
   const wrappedActivateSession = async (args = {}) => {
     const checked = checkedLease({ directTransport, ...args });
     if (!checked) throw new Error('Direct transport session is not active.');
@@ -154,14 +166,60 @@ function installPersistentDirectMembershipActivation({ directTransport, persiste
       // it operates on the lease's already-verified persistent bot. On any
       // Telegram/network/FLOOD_WAIT failure PostgreSQL stays pending/repair,
       // so a later retry uses the SAME transport bot and never auto-reassigns.
-      const result = await originalActivateSession(args);
-      await persistentAssignments.markMembershipReady(chatId, assignedBotId);
-      return result;
+      return provisionCurrentLease({ args, checked, assignedBotId });
+    });
+  };
+
+  const repairMembership = async (args = {}) => {
+    const checked = checkedLease({ directTransport, ...args });
+    if (!checked) throw new Error('Direct transport session is not active.');
+    const chatId = String(checked.lease.chat_id);
+    const requestStartedAt = Date.now();
+
+    // Repair is explicit and serialized. READY never silently falls into this
+    // path. The request timestamp lets a waiter detect that another concurrent
+    // repair completed after this request began and coalesce instead of
+    // immediately mutating READY back to REPAIR and provisioning twice.
+    return persistentAssignments.withMembershipLock(chatId, async () => {
+      const current = await persistentAssignments.getAssignment(chatId);
+      const assignedBotId = assertAssignmentMatches(current, checked.lease);
+      const membershipState = String(current.membershipState || '');
+
+      if (membershipState === 'ready' && membershipUpdatedAtMs(current) >= requestStartedAt) {
+        return readyResult(finalizeReadyLease({
+          directTransport,
+          pool: checked.pool,
+          lease: checked.lease,
+        }));
+      }
+
+      if (membershipState === 'pending') {
+        throw codedError(
+          'Initial Direct membership provisioning is pending; explicit repair applies only to previously-ready membership.',
+          'TRANSPORT_MEMBERSHIP_REPAIR_NOT_READY',
+        );
+      }
+      if (!['ready', 'repair'].includes(membershipState)) {
+        throw codedError(
+          `Unsupported Direct membership state ${current.membershipState}.`,
+          'TRANSPORT_MEMBERSHIP_STATE_INVALID',
+        );
+      }
+
+      if (membershipState === 'ready') {
+        await persistentAssignments.markMembershipRepairNeeded(chatId, assignedBotId);
+      }
+
+      // Success is the only transition back to READY. FLOOD_WAIT, transient
+      // Telegram/network errors and missing-vault errors escape once and leave
+      // PostgreSQL in REPAIR. There is no internal retry loop or reassignment.
+      return provisionCurrentLease({ args, checked, assignedBotId });
     });
   };
 
   directTransport.activateSession = wrappedActivateSession;
-  const installed = Object.freeze({ originalActivateSession, wrappedActivateSession });
+  directTransport.repairMembership = repairMembership;
+  const installed = Object.freeze({ originalActivateSession, wrappedActivateSession, repairMembership });
   Object.defineProperty(directTransport, INSTALL_MARK, {
     configurable: true,
     enumerable: false,
@@ -175,4 +233,5 @@ module.exports = {
   checkedLease,
   assertAssignmentMatches,
   finalizeReadyLease,
+  membershipUpdatedAtMs,
 };
