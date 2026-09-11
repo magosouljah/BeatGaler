@@ -128,14 +128,16 @@ describe("Web playback priority over secondary reads", () => {
     expect(chunkReleased).toBe(true);
   });
 
-  it("keeps playback lease-free while an export retains scoped authorization", async () => {
+  it("keeps playback lease-free while export scheduling uses the download capability", async () => {
     const transport = new WebGalerCloudTransport();
 
-    await transport.streamFile(
+    const playback = await transport.streamFile(
       { messageId: 30, mimeType: "audio/mpeg", purpose: "playback" },
       () => {},
     );
+    await playback.completed;
     expect(harness.beginOperation).not.toHaveBeenCalled();
+    expect(harness.streamCalls[0].input.purpose).toBe("playback");
 
     const exported = await transport.streamFile(
       { messageId: 31, mimeType: "audio/wav", purpose: "export" },
@@ -143,9 +145,10 @@ describe("Web playback priority over secondary reads", () => {
     );
     await exported.completed;
 
+    expect(harness.streamCalls[1].input.purpose).toBe("export");
     expect(harness.beginOperation).toHaveBeenCalledTimes(1);
     expect(harness.beginOperation).toHaveBeenCalledWith(
-      "export",
+      "download",
       { objectType: "message", objectIds: ["31"] },
     );
     expect(harness.endOperation).toHaveBeenCalledTimes(1);
