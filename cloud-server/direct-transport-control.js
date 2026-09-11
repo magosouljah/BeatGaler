@@ -1368,5 +1368,6 @@ module.exports = {
     mutateState,
     leasesForBot,
     activeOpsForBot,
+    inviteAndPromote,
   },
 };
