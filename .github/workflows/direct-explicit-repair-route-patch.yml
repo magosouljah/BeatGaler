@@ -1,0 +1,40 @@
+name: Temporary Direct Explicit Repair Route Patch
+
+on:
+  push:
+    branches:
+      - direct/persistent-vault-assignment
+    paths:
+      - .github/workflows/direct-explicit-repair-route-patch.yml
+      - scripts/patch-direct-explicit-repair-route.cjs
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: direct/persistent-vault-assignment
+          fetch-depth: 0
+
+      - name: Apply exact repair route patch
+        run: |
+          node scripts/patch-direct-explicit-repair-route.cjs
+          node --check cloud-server/server-core.js
+          git diff --check
+
+      - name: Commit repair route patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud-server/server-core.js
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat: expose explicit Direct membership repair"
+          git push origin HEAD:direct/persistent-vault-assignment
