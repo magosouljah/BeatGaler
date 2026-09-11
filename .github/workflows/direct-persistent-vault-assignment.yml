@@ -13,6 +13,7 @@ on:
       - cloud-server/direct-persistent-membership-runtime.js
       - cloud-server/direct-vault-assignment.js
       - cloud-server/server.js
+      - cloud-server/server-core.js
       - cloud-server/migrations/**
       - cloud-server/tests/direct-allocator-no-cap.test.cjs
       - cloud-server/tests/direct-persistent-assignment-runtime.test.cjs
@@ -60,6 +61,7 @@ jobs:
           node --check cloud-server/direct-persistent-membership-runtime.js
           node --check cloud-server/direct-vault-assignment.js
           node --check cloud-server/server.js
+          node --check cloud-server/server-core.js
           node --check cloud-server/tests/direct-allocator-no-cap.test.cjs
           node --check cloud-server/tests/direct-persistent-assignment-runtime.test.cjs
           node --check cloud-server/tests/direct-persistent-session-runtime.test.cjs
