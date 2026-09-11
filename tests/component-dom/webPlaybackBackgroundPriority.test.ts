@@ -7,10 +7,10 @@ const audio = readFileSync("src/hooks/useAudio.ts", "utf8");
 const coordinator = readFileSync("src/features/playback/webStartupPlaybackCoordinator.ts", "utf8");
 
 describe("PLAY physical priority over artwork/export", () => {
-  it("marks export streams explicitly and retains scoped Cloud authorization", () => {
+  it("marks export streams explicitly while authorizing them through download", () => {
     expect(downloads).toContain('purpose: "export"');
     expect(transport).toContain('if (purpose === "export")');
-    expect(transport).toContain('"export",\n        { objectType: "message", objectIds: [String(input.messageId)] }');
+    expect(transport).toContain('"download",\n        { objectType: "message", objectIds: [String(input.messageId)] }');
   });
 
   it("backpressures every background stream before the Worker ACKs its next 64 KiB chunk", () => {
