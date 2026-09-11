@@ -68,11 +68,15 @@ Module._load = function(request, parent, isMain) {
 
 (async () => {
   const direct = require('../direct-transport-control.js');
+  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
   const runtimePool = [{ id: 'Bot01' }];
 
-  const first = direct.__test.leaseNextBot(runtimePool, {
-    installation_id: 'normal-close-installation',
-    chat_id: '-1007000000001',
+  const first = prepareAssignedLease({
+    directTransport: direct,
+    status: direct.poolStatus(),
+    transportBotId: bot.id,
+    installationId: 'normal-close-installation',
+    chatId: '-1007000000001',
   });
   const firstOp = await direct.beginOperation({
     installationId: first.lease.installation_id,
@@ -96,9 +100,12 @@ Module._load = function(request, parent, isMain) {
   assert.equal(state.operations[firstOp.operation_id], undefined, 'normal close must delete lease-owned operations');
   assert.equal(telegramClientConstructions, 0, 'normal close must not construct MASTER TelegramClient');
 
-  const second = direct.__test.leaseNextBot(runtimePool, {
-    installation_id: 'heartbeat-expired-installation',
-    chat_id: '-1007000000002',
+  const second = prepareAssignedLease({
+    directTransport: direct,
+    status: direct.poolStatus(),
+    transportBotId: bot.id,
+    installationId: 'heartbeat-expired-installation',
+    chatId: '-1007000000002',
   });
   const secondOp = await direct.beginOperation({
     installationId: second.lease.installation_id,

@@ -1,19 +1,5 @@
 'use strict';
 
-const crypto = require('crypto');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-
-const EMPTY_LIBRARY_INDEX = Object.freeze({
-  schema: 'beatgaler.telegram.library',
-  version: 2,
-  beats: [],
-  trash: [],
-  deleted: [],
-});
-const INDEX_CAPTION = 'BEATGALER_LIBRARY_INDEX_V1';
-
 function positiveMessageId(value) {
   const id = Number(value || 0);
   return Number.isInteger(id) && id > 0 ? id : 0;
@@ -64,48 +50,11 @@ function createAtomicLibraryIndexCoordinator({ pool, getPointer, createIndex, re
   });
 }
 
-function linkedVaultId(dataDir, installationId) {
-  const parsed = JSON.parse(fs.readFileSync(path.join(dataDir, 'cloud-data.json'), 'utf8'));
-  const account = parsed?.linkedAccounts?.[String(installationId)] || null;
-  const vault = String(account?.storageChatId || '').trim();
-  if (!vault) throw new Error('BeatGaler private storage is not provisioned for this account.');
-  return vault;
-}
-
-async function createEmptyProviderIndex(vaultId, direct) {
-  const directTransport = direct || require('./direct-transport-control');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-index-'));
-  const filePath = path.join(dir, `beatgaler-library-${crypto.randomBytes(6).toString('hex')}.json`);
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(EMPTY_LIBRARY_INDEX), 'utf8');
-    return await directTransport.commitIndexCopyOnWrite({
-      chatId: vaultId,
-      filePath,
-      caption: INDEX_CAPTION,
-      previousMessageId: 0,
-    });
-  } finally {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
-  }
-}
-
-function installAtomicLibraryIndexBootstrap(express, { pool, dataDir = __dirname, direct } = {}) {
+function installAtomicLibraryIndexBootstrap(express) {
   const application = express?.application;
   if (!application || application.__beatgalerAtomicIndexPatchInstalled) return;
   application.__beatgalerAtomicIndexPatchInstalled = true;
   const previousPost = application.post;
-  const directTransport = direct || require('./direct-transport-control');
-  let coordinator = null;
-  if (pool) {
-    coordinator = createAtomicLibraryIndexCoordinator({
-      pool,
-      getPointer: vaultId => directTransport.getIndexPointer(vaultId),
-      createIndex: vaultId => createEmptyProviderIndex(vaultId, directTransport),
-      recordPointer: async (vaultId, messageId) => { directTransport.recordIndexPointer(vaultId, { messageId, fileId: '' }); },
-      deleteIndex: async (vaultId, messageId) => { await directTransport.deleteMessages(vaultId, [messageId]); },
-    });
-  }
-
   application.post = function atomicIndexPatchedPost(routePath, ...handlers) {
     if (!this.__beatgalerAtomicIndexRouteInstalled) {
       this.__beatgalerAtomicIndexRouteInstalled = true;
@@ -118,10 +67,7 @@ function installAtomicLibraryIndexBootstrap(express, { pool, dataDir = __dirname
 }
 
 module.exports = {
-  EMPTY_LIBRARY_INDEX,
-  INDEX_CAPTION,
   positiveMessageId,
   createAtomicLibraryIndexCoordinator,
-  createEmptyProviderIndex,
   installAtomicLibraryIndexBootstrap,
 };

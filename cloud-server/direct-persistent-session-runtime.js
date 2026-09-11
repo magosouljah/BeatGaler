@@ -193,9 +193,8 @@ function installPersistentDirectSessionStart({ directTransport, persistentAssign
     });
 
     try {
-      // The legacy start path now sees an exact, authoritative reusable lease,
-      // so its FIFO/load allocator is not reached. Keeping that allocator in the
-      // file is intentional until the later cleanup task removes obsolete code.
+      // The runtime requires this exact PostgreSQL-assigned lease. It has no
+      // allocator fallback; unavailable ownership fails without choosing a bot.
       const session = await originalStartSession(args);
       if (String(session?.transport_id || '') !== assignedBotId) {
         throw codedError(

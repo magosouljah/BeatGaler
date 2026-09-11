@@ -79,6 +79,10 @@ process.env.DIRECT_HEARTBEAT_INTERVAL_MS = '60000';
 process.env.DIRECT_HEARTBEAT_TIMEOUT_MS = '300000';
 
 const direct = withFakeTelegram(() => require('../direct-transport-control.js'));
+const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+function prepare(botId, installationId, chatId) {
+  return prepareAssignedLease({ directTransport: direct, status: direct.poolStatus(), transportBotId: botId, installationId, chatId });
+}
 const pool = [
   { id: 'Bot01', token: 'fake-1' },
   { id: 'Bot02', token: 'fake-2' },
@@ -95,18 +99,16 @@ passed += test('Direct heartbeat contract remains 60 seconds / 5 minutes', () =>
   assert.equal(status.heartbeat_timeout_ms, 300_000);
 }) ? 1 : 0;
 
-passed += test('fair pool gives every bot one vault before any bot gets a second', () => {
+passed += test('repeated sessions use only the explicitly assigned bot', () => {
   fs.rmSync(stateFile, { force: true });
-  const picks = [];
   for (let i = 0; i < 6; i += 1) {
-    const result = direct.__test.leaseNextBot(pool, { installation_id: `install-${i}`, chat_id: `vault-${i}` });
-    picks.push(result.bot.id);
+    const result = prepare('Bot02', `install-${i}`, `vault-${i}`);
+    assert.equal(result.lease.bot_id, 'Bot02');
   }
-  assert.deepEqual(picks.slice(0, 3), ['Bot01', 'Bot02', 'Bot03']);
-  assert.deepEqual(picks.slice(3, 6), ['Bot01', 'Bot02', 'Bot03']);
+  assert.equal(direct.__test.leasesForBot(direct.__test.stateSnapshot(pool), 'Bot02').length, 6);
 }) ? 1 : 0;
 
-passed += test('minimum-load tier wins even when queue head has more vaults', () => {
+passed += test('assigned bot wins despite higher active load and stale FIFO order', () => {
   fs.writeFileSync(stateFile, JSON.stringify({
     version: 4,
     queue: ['Bot01', 'Bot02', 'Bot03'],
@@ -117,25 +119,29 @@ passed += test('minimum-load tier wins even when queue head has more vaults', ()
       existing3: { session_id:'existing3', bot_id:'Bot02', installation_id:'c', chat_id:'c', generation:1, credential_version:1, status:'ACTIVE', started_at:new Date().toISOString(), last_heartbeat_at:new Date().toISOString() },
     }, operations:{}, metrics:{}, rotation:{}
   }));
-  const result = direct.__test.leaseNextBot(pool, { installation_id:'new', chat_id:'new' });
-  assert.equal(result.bot.id, 'Bot03');
-  assert.equal(result.loadBefore, 0);
+  const result = prepare('Bot01', 'new', 'new');
+  assert.equal(result.lease.bot_id, 'Bot01');
+  assert.equal(direct.__test.leasesForBot(direct.__test.stateSnapshot(pool), 'Bot01').length, 3);
 }) ? 1 : 0;
 
-passed += test('quarantined and rotation-pending bots are not assignable', () => {
+passed += test('quarantined and rotating assigned bots fail without fallback', () => {
   fs.writeFileSync(stateFile, JSON.stringify({
     version:4, queue:['Bot01','Bot02','Bot03'],
     bots:{ Bot01:{quarantined:true}, Bot02:{rotation_pending:true}, Bot03:{} },
     leases:{}, operations:{}, metrics:{}, rotation:{}
   }));
-  const result = direct.__test.leaseNextBot(pool, { installation_id:'new2', chat_id:'new2' });
-  assert.equal(result.bot.id, 'Bot03');
+  assert.throws(() => prepare('Bot01', 'blocked1', 'vault1'), { code: 'TRANSPORT_ASSIGNMENT_BOT_QUARANTINED' });
+  assert.throws(() => prepare('Bot02', 'blocked2', 'vault2'), { code: 'TRANSPORT_ASSIGNMENT_BOT_ROTATING' });
+  assert.equal(Object.keys(direct.__test.stateSnapshot(pool).leases).length, 0);
+  assert.equal(prepare('Bot03', 'new2', 'new2').lease.bot_id, 'Bot03');
 }) ? 1 : 0;
 
-passed += test('pool state normalization deduplicates queue and preserves all configured bots', () => {
+passed += test('pool state drops obsolete FIFO while preserving configured bots', () => {
   fs.writeFileSync(stateFile, JSON.stringify({ version:4, queue:['Bot01','Bot01','unknown'], bots:{}, leases:{}, operations:{}, metrics:{}, rotation:{} }));
   const state = direct.__test.stateSnapshot(pool);
-  assert.deepEqual(state.queue, ['Bot01','Bot02','Bot03']);
+  assert.equal(state.queue, undefined);
+  assert.deepEqual(Object.keys(state.bots).sort(), ['Bot01','Bot02','Bot03']);
+  assert.deepEqual(direct.poolStatus().queue, []);
 }) ? 1 : 0;
 
 const { stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');

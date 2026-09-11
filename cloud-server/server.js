@@ -66,7 +66,7 @@ async function start() {
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
-  installAtomicLibraryIndexBootstrap(express, { pool, dataDir: __dirname });
+  installAtomicLibraryIndexBootstrap(express);
   installStartupRoutingIndex(express, { pool, dataDir: __dirname });
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"}`);
 

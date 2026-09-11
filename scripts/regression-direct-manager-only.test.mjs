@@ -16,6 +16,8 @@ verifyDirectArchitecture(read);
 // In-memory mutations: prove the guards reject plausible regressions without
 // ever modifying runtime sources or contacting Telegram/PostgreSQL.
 const mutations = [
+  ['unprepared startup regains allocator fallback', 'cloud-server/direct-transport-control.js',
+    "  error.code = 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED';\n  throw error;", "  error.code = 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED';\n  return leaseNextBot(pool, {});", /Base session start reaches leaseNextBot/],
   ['missing MASTER creation boundary', 'cloud-server/master-storage.js',
     'async function createPrivateUserStorageGroup(', 'async function renamedVaultCreation(', /function boundary createPrivateUserStorageGroup/],
   ['comment cannot install ownership wrapper', 'cloud-server/server.js',

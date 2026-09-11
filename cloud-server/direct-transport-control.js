@@ -174,7 +174,6 @@ function normalizeState(pool) {
   const ids = pool.map(b => b.id);
   const state = {
     version: 4,
-    queue: Array.isArray(raw.queue) ? raw.queue.filter(id => ids.includes(id)) : [],
     bots: raw.bots && typeof raw.bots === 'object' ? raw.bots : {},
     leases: raw.leases && typeof raw.leases === 'object' ? raw.leases : {},
     operations: raw.operations && typeof raw.operations === 'object' ? raw.operations : {},
@@ -183,8 +182,8 @@ function normalizeState(pool) {
   };
 
   // One-release migration from the old one-vault-per-bot state. Keep these
-  // leases until the normal 5-minute stale cleanup removes the bot from that
-  // vault safely; never silently put it back into service.
+  // leases until stale cleanup retires their ephemeral state. Persistent vault
+  // membership and PostgreSQL ownership remain untouched.
   if (raw.active_leases && typeof raw.active_leases === 'object') {
     for (const [botId, lease] of Object.entries(raw.active_leases)) {
       if (!ids.includes(botId) || !lease?.chat_id) continue;
@@ -206,7 +205,6 @@ function normalizeState(pool) {
   }
 
   for (const id of ids) {
-    if (!state.queue.includes(id)) state.queue.push(id);
     state.bots[id] = { ...defaultBotState(), ...(state.bots[id] || {}) };
     state.bots[id].generation = Number(state.bots[id].generation || 0);
     state.bots[id].credential_version = Math.max(1, Number(state.bots[id].credential_version || 1));
@@ -220,7 +218,6 @@ function normalizeState(pool) {
     if (!state.rotation[id]) state.rotation[id] = { last_rotated_at: null, last_status: 'never', last_error: null };
   }
 
-  state.queue = state.queue.filter((id, index, arr) => ids.includes(id) && arr.indexOf(id) === index);
   for (const sessionId of Object.keys(state.leases)) {
     const lease = state.leases[sessionId];
     if (!lease || !ids.includes(String(lease.bot_id || ''))) {
@@ -306,55 +303,6 @@ function findLeaseByInstallation(state, installationId) {
 }
 function leaseExpired(lease) {
   return Date.now() - parseTime(lease?.last_heartbeat_at) >= HEARTBEAT_TIMEOUT_MS;
-}
-
-function isDefinitiveMissingVaultError(error) {
-  const message = String(error?.errorMessage || error?.message || error || '').trim();
-  return (
-    message.includes('MASTER cannot find private vault') ||
-    /could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)
-  );
-}
-
-// Fair load-level FIFO:
-//   all bots get 1 vault before any bot gets 2;
-//   all bots get 2 before any bot gets 3; ...
-// Within the minimum-load tier, the queue decides who goes next. The selected
-// bot always moves to the back, exactly matching the requested round-robin.
-function leaseNextBot(pool, metadata) {
-  return mutateState(pool, state => {
-    const eligible = pool.filter(bot => !state.bots[bot.id].quarantined && !state.bots[bot.id].rotation_pending);
-    if (!eligible.length) {
-      const error = new Error('Every transport bot is temporarily unavailable while token rotation drains or recovery is required.');
-      error.code = 'NO_ASSIGNABLE_TRANSPORT';
-      throw error;
-    }
-    const loads = new Map(eligible.map(bot => [bot.id, leasesForBot(state, bot.id).length]));
-    const minLoad = Math.min(...loads.values());
-    const nextId = state.queue.find(id => loads.has(id) && loads.get(id) === minLoad);
-    if (!nextId) throw new Error('Transport pool queue is corrupt.');
-    const bot = pool.find(item => item.id === nextId);
-    const botState = state.bots[nextId];
-    botState.generation += 1;
-    botState.last_assigned_at = nowIso();
-    const sessionId = `dts_${crypto.randomBytes(16).toString('hex')}`;
-    const lease = {
-      session_id: sessionId,
-      bot_id: nextId,
-      installation_id: String(metadata.installation_id),
-      chat_id: String(metadata.chat_id),
-      generation: botState.generation,
-      credential_version: botState.credential_version,
-      status: 'ASSIGNING',
-      started_at: nowIso(),
-      last_heartbeat_at: nowIso(),
-      owner_instance: PROCESS_INSTANCE_ID,
-    };
-    state.leases[sessionId] = lease;
-    state.queue = state.queue.filter(id => id !== nextId);
-    state.queue.push(nextId);
-    return { bot, lease, loadBefore: minLoad, loadAfter: minLoad + 1 };
-  });
 }
 
 function finalizeLease(sessionId) {
@@ -687,9 +635,9 @@ async function runtimeForLease(lease, { freshMarker = false } = {}) {
   let runtime = runtimeSessions.get(lease.session_id);
   if (!runtime || runtime.credentialVersion !== botState.credential_version) {
     const token = await resolveManagedToken(bot);
-    // Bot API Local is the client-side data plane. Do NOT authenticate this bot
-    // through GramJS/MTProto here: that was the source of auth.ImportBotAuthorization
-    // FLOOD_WAIT storms. MASTER already knows the configured bot id/username.
+    // Resolve server-side identity without importing bot authorization per lease.
+    // The productive HTTP boundary strips permanent credentials and hands clients
+    // temporary MTProto authorization; normal media and INDEX bytes stay Direct.
     let username = bot.telegram_username || runtime?.bot?.telegram_username || null;
     let userId = bot.telegram_user_id || runtime?.bot?.telegram_user_id || null;
     if (!username || !userId) {
@@ -749,29 +697,6 @@ function getLeaseChecked({ installationId, sessionId, generation, allowExpired =
   return { pool, state, lease };
 }
 
-async function waitForAssignableTransport(pool, timeoutMs = 120_000) {
-  const started = Date.now();
-  while (true) {
-    let snapshot = stateSnapshot(pool);
-    for (const bot of pool) {
-      const bs = snapshot.bots[bot.id];
-      if (bs?.rotation_pending && !bs.quarantined && activeOpsForBot(snapshot, bot.id).length === 0) {
-        await maybeRotatePendingBot(bot.id);
-      }
-    }
-    snapshot = stateSnapshot(pool);
-    if (pool.some(bot => !snapshot.bots[bot.id].quarantined && !snapshot.bots[bot.id].rotation_pending)) {
-      return;
-    }
-    const recoverable = pool.some(bot => !snapshot.bots[bot.id].quarantined);
-    if (!recoverable) throw new Error('Every transport bot is quarantined and requires recovery.');
-    if (Date.now() - started >= timeoutMs) {
-      throw new Error('Transport pool is waiting for in-flight transfers to finish before token rotation.');
-    }
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-}
-
 async function startSession({ installationId, chatId, startupTrace = noDirectStartupTrace }) {
   if (!enabled()) throw new Error('Telegram Direct transport is not configured on this server.');
   startMaintenance();
@@ -796,28 +721,13 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
       });
       return sessionPublic(runtime);
     }
-    await cleanupLeaseSingleflight(existing, { reason: 'replaced_session' });
   }
 
-  // A bot waiting to rotate is temporarily skipped. If every bot is draining,
-  // a new login waits rather than receiving a credential that is about to be
-  // revoked. Once rotation completes, normal load-level FIFO resumes.
-  await waitForAssignableTransport(pool);
-  const { bot, lease, loadBefore, loadAfter } = leaseNextBot(pool, {
-    installation_id: installation,
-    chat_id: vaultId,
-  });
-  try {
-    startupTrace.mark("LEASE_SELECTED", { server_lease: "new", lease_state: lease.status });
-    const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(lease));
-    console.log(`[direct] SESSION_RESERVED installation=${installation.slice(0, 8)}… transport=${bot.id} load=${loadBefore}->${loadAfter}`);
-    diag('SESSION_RESERVED', { installation: installation.slice(0, 8), session_id: lease.session_id, transport_id: bot.id, vault: vaultId, load_before: loadBefore, load_after: loadAfter, mode: 'botapi-local' });
-    return sessionPublic(runtime);
-  } catch (error) {
-    deleteLease(lease.session_id);
-    runtimeSessions.delete(lease.session_id);
-    throw error;
-  }
+  // PostgreSQL's session wrapper must prepare the exact assigned lease first.
+  // Never choose a different bot from ephemeral load when that contract fails.
+  const error = new Error('A persistent-assignment lease is required before Direct startup.');
+  error.code = 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED';
+  throw error;
 }
 
 async function activateSession({ installationId, sessionId, generation, startupTrace = noDirectStartupTrace }) {
@@ -1091,9 +1001,9 @@ async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
     transport_id: lease.bot_id,
     vault: lease.chat_id,
     reason,
-    remaining_vaults: remaining,
+    remaining_leases: remaining,
   });
-  console.log('[direct] SESSION_RELEASED installation=' + lease.installation_id.slice(0, 8) + '… transport=' + lease.bot_id + ' reason=' + reason + ' remaining_vaults=' + remaining + ' rotation_pending=' + Boolean(rotation?.pending) + ' membership=preserved');
+  console.log('[direct] SESSION_RELEASED installation=' + lease.installation_id.slice(0, 8) + '… transport=' + lease.bot_id + ' reason=' + reason + ' remaining_leases=' + remaining + ' rotation_pending=' + Boolean(rotation?.pending) + ' membership=preserved');
   return {
     ok: true,
     released: true,
@@ -1300,13 +1210,14 @@ function poolStatus() {
       id: bot.id,
       label: bot.label,
       managed: bot.managed,
+      // Compatibility name: counts ephemeral leases, never persistent ownership.
       active_vaults: leasesForBot(state, bot.id).length,
       active_operations: activeOpsForBot(state, bot.id).length,
       credential_version: state.bots[bot.id].credential_version,
       rotation_pending: state.bots[bot.id].rotation_pending,
       quarantined: state.bots[bot.id].quarantined,
     })),
-    queue: [...state.queue],
+    queue: [], // Deprecated diagnostic field; ephemeral FIFO ownership is retired.
   };
 }
 
@@ -1363,7 +1274,6 @@ module.exports = {
   cleanupExpiredSessions,
   __test: {
     normalizeState,
-    leaseNextBot,
     stateSnapshot,
     mutateState,
     leasesForBot,

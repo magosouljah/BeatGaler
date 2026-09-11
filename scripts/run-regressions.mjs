@@ -495,8 +495,8 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!rustCommands.includes("Reconstructed project ZIP is empty.")) fail("PROJECT reconstruction no longer rejects empty/corrupt output.");
   if (!rustCommands.includes("Project download worker") || !rustCommands.includes("remove_dir_all(&part_dir)")) fail("PROJECT worker crash cleanup disappeared.");
   if (!rustCommands.includes(".tag-rename-journal") || !rustCommands.includes("rollback_incomplete_tag_rename")) fail("Crash-safe tag mutation journal/recovery disappeared.");
-  const transportPool = readFileSync(path.join(root, "cloud-server", "transport-pool.js"), "utf8");
-  if (!transportPool.includes("const tmp = `${file}.tmp`") || !transportPool.includes("fs.renameSync(tmp, file)")) fail("Transport pool durable state is no longer written temp+rename atomically.");
+  const transportControl = readFileSync(path.join(root, "cloud-server", "direct-transport-control.js"), "utf8");
+  if (!transportControl.includes("const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`") || !transportControl.includes("fs.fsyncSync(fd)") || !transportControl.includes("fs.renameSync(tmp, file)")) fail("Transport pool durable state is no longer flushed and replaced atomically.");
   console.log("PASS Phase 11 recovery/corruption guard: authoritative INDEX wins recovery, sidecar writes fail closed, corrupt outputs are rejected, journals roll back, and pool state stays atomic");
 
   execFileSync(process.execPath, [path.join(root, "scripts", "regression-phase12.mjs")], {

@@ -153,7 +153,7 @@ if (!/ADD COLUMN transport_bot_id text REFERENCES transport_bots\(id\)\s*,/i.tes
 if (!migration.includes('DROP TRIGGER IF EXISTS direct_leases_active_cap_trigger') || !migration.includes('DROP FUNCTION IF EXISTS enforce_transport_bot_active_lease_cap()')) fail('The obsolete four-active-lease cap must remain retired.');
 
 // The wrapper resolves ownership, installs that exact lease, then invokes the
-// legacy session primitive. Runtime tests exercise the branch that bypasses FIFO.
+// session primitive. Runtime tests also reject startup without a prepared lease.
 const wrappedStart = block(sessionRuntime, 'wrappedStartSession');
 const resolveCall = requireCall(wrappedStart, 'persistentAssignments.resolveForVault');
 const prepareCall = requireCall(wrappedStart, 'prepareAssignedLease');
@@ -174,6 +174,9 @@ for (const condition of ['!botState', 'botState.quarantined', 'botState.rotation
   if (!nodes(branch(admissible, condition).thenStatement, ts.isThrowStatement).length) fail(`Assigned bot ${condition} must fail without fallback.`);
 }
 noCalls(wrappedStart, /leaseNextBot|waitForAssignableTransport|repairMembership|rotateManagedToken/, 'Assigned session start');
+const baseStart = block(controlAst, 'startSession');
+noLocalReachability(controlAst, baseStart, /leaseNextBot|waitForAssignableTransport/, 'Base session start');
+if (!baseStart.getText().includes('TRANSPORT_ASSIGNMENT_LEASE_REQUIRED') || !ts.isThrowStatement(baseStart.statements.at(-1))) fail('Unprepared base startup must fail closed without an allocator.');
 const installStartBody = block(sessionRuntime, 'installPersistentDirectSessionStart');
 if (compact(requireCall(installStartBody, 'directTransport.startSession.bind').arguments[0]) !== 'directTransport') fail('Persistent start must wrap the original live Direct session primitive.');
 if (!nodes(installStartBody, node => ts.isBinaryExpression(node) && compact(node) === 'directTransport.startSession=wrappedStartSession').length) fail('Persistent start wrapper is not installed on the live Direct module.');

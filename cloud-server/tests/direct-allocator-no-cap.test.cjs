@@ -28,15 +28,19 @@ Module._load = function(request, parent, isMain) {
 
 try {
   const direct = require('../direct-transport-control.js');
+  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
   const pool = [bot];
   for (let index = 0; index < 5; index += 1) {
-    const result = direct.__test.leaseNextBot(pool, {
-      installation_id: `install-${index + 1}`,
-      chat_id: `vault-${index + 1}`,
+    const result = prepareAssignedLease({
+      directTransport: direct,
+      status: direct.poolStatus(),
+      transportBotId: bot.id,
+      installationId: `install-${index + 1}`,
+      chatId: `vault-${index + 1}`,
     });
-    assert.equal(result.bot.id, 'Bot01');
-    assert.equal(result.loadBefore, index);
-    assert.equal(result.loadAfter, index + 1);
+    assert.equal(result.lease.bot_id, 'Bot01');
+    assert.equal(result.reused, false);
+    assert.equal(direct.__test.leasesForBot(direct.__test.stateSnapshot(pool), 'Bot01').length, index + 1);
   }
   const state = direct.__test.stateSnapshot(pool);
   assert.equal(direct.__test.leasesForBot(state, 'Bot01').length, 5);

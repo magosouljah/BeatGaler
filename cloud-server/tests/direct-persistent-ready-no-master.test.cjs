@@ -97,6 +97,13 @@ Module._load = function(request, parent, isMain) {
     },
   };
 
+  await assert.rejects(
+    () => direct.startSession({ installationId: 'unprepared', chatId: assignment.chatId }),
+    { code: 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED' },
+  );
+  assert.equal(direct.poolStatus().sessions, 0, 'bare startup must not allocate a fallback lease');
+  assert.equal(telegramClientConstructions, 0, 'bare startup must fail before Telegram');
+
   installPersistentDirectSessionStart({
     directTransport: direct,
     persistentAssignments,

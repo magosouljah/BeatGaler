@@ -95,9 +95,9 @@ async function createPrivateUserStorageGroup({ username }) {
       console.warn("[storage] storage group created but #general pin failed:", error?.message || error);
     }
 
-    // Deliberately DO NOT add the manager/service bot here. MASTER owns the
-    // vault. A single transport bot is added only while a BeatGaler session is
-    // active and is removed again when that session ends.
+    // Keep the manager/service bot outside user vaults. PostgreSQL assigns the
+    // persistent transport bot separately on first access; exceptional provisioning
+    // adds/promotes that same bot. Session close leaves its membership intact.
     return {
       title,
       channelId: String(channel.id),
