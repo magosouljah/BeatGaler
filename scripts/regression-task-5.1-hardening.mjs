@@ -8,6 +8,7 @@ const fail = message => { throw new Error(`Task 5.1 hardening regression: ${mess
 
 const vite = read("vite.config.ts");
 const main = read("src/main.tsx");
+const accountGate = read("src/components/AccountGate.tsx");
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
 const capabilities = JSON.parse(read("src-tauri/capabilities/default.json"));
 const serverCore = read("cloud-server/server-core.js");
@@ -16,9 +17,24 @@ const headers = read("cloud-server/security-headers.js");
 const tempAuthBoundary = read("cloud-server/productive-temp-auth-boundary.js");
 
 if (!vite.includes("beatgaler-productive-trust-boundary")) fail("productive Vite trust-boundary transform is missing");
-if (!vite.includes("refusing an unsafe build") || !vite.includes("trustedRememberedApi")) fail("cloud-origin transform is not fail-closed");
+if (vite.includes("unsafeCloudConstants") || vite.includes("safeCloudConstants") || vite.includes("unsafeResolver") || vite.includes("safeResolver")) fail("Cloud-origin policy drifted back into a build-only Vite source rewrite");
+if (!vite.includes('"/beatgaler-api": {') || !vite.includes('target: "http://127.0.0.1:4000"')) fail("development same-origin Cloud proxy is missing");
 if (!vite.includes("safeId3Loader") || !vite.includes("unsafeId3Loader")) fail("remote ID3 loader stripping is missing");
 if (!main.includes('browserId3Reader') || !main.includes('(window as any).jsmediatags = browserId3Reader')) fail("local browser ID3 parser is not installed before app render");
+
+if (!accountGate.includes('const LOCAL_API = import.meta.env.DEV ? "http://127.0.0.1:4000" : null;')) fail("Desktop-only development Cloud fallback is no longer build-gated");
+if (!accountGate.includes('if (platform.kind === "web") return sameOriginProxyApi() || "";')) fail("synchronous Web Cloud base is not fixed to the same-origin proxy");
+if (!accountGate.includes("if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);")) fail("Web no longer discards remembered cross-origin Cloud choices");
+const resolverStart = accountGate.indexOf("export async function resolveBeatGalerCloudApi(): Promise<string> {");
+const getterStart = accountGate.indexOf("export function getResolvedCloudApiBase(): string {", resolverStart);
+const resolver = resolverStart >= 0 && getterStart > resolverStart ? accountGate.slice(resolverStart, getterStart) : "";
+if (!resolver) fail("Cloud API resolver source could not be located");
+const webStart = resolver.indexOf('if (platform.kind === "web") {');
+const desktopStart = resolver.indexOf("if (trustedRememberedApi(remembered)", webStart);
+if (webStart < 0 || desktopStart < 0) fail("Web/Desktop Cloud resolver boundary is missing");
+const webResolver = resolver.slice(webStart, desktopStart);
+if (!webResolver.includes("sameOriginProxy") || !webResolver.includes("throw new Error")) fail("Web resolver does not fail closed on the same-origin proxy");
+if (webResolver.includes("LOCAL_API") || webResolver.includes("REMOTE_API")) fail("Web resolver can still discover a direct Desktop/remote Cloud origin");
 
 const csp = String(tauri?.app?.security?.csp || "");
 if (!csp) fail("Tauri CSP is disabled");
@@ -66,4 +82,4 @@ if (existsSync(dist)) {
   }
 }
 
-console.log("PASS Task 5.1 hardening: fixed Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and serialized permanent auth");
+console.log("PASS Task 5.1 hardening: source-level Web Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and serialized permanent auth");
