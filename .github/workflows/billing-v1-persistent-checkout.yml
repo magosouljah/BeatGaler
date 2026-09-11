@@ -1,0 +1,66 @@
+name: Billing V1 Persistent Checkout
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/billing-checkout-persistent.js'
+      - 'cloud-server/billing-commercial-catalog.js'
+      - 'cloud-server/billing-polar-sandbox.js'
+      - 'cloud-server/migrations/**'
+      - 'cloud-server/postgres-migrations.js'
+      - 'cloud-server/tests/billing-checkout-persistent.integration.cjs'
+      - 'cloud-server/package.json'
+      - 'cloud-server/package-lock.json'
+      - 'BLUEPRINT/BILLING-V1-CHECKOUT-IDEMPOTENCY.md'
+      - '.github/workflows/billing-v1-persistent-checkout.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  persistent-checkout:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloud-server/package-lock.json
+
+      - name: Assert exact PR head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Install Cloud dependencies
+        working-directory: cloud-server
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Re-run Billing V1 domain and Polar contracts
+        working-directory: cloud-server
+        run: npm run test:billing-v1
+
+      - name: Test persistent checkout against isolated PostgreSQL
+        working-directory: cloud-server
+        env:
+          BILLING_CHECKOUT_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: npm run test:billing-checkout-pg
