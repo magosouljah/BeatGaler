@@ -19,13 +19,17 @@
 ### 1. PostgreSQL + Cloud — WSL
 
 ```bash
-service postgresql start # Arranca PostgreSQL.
+service postgresql start
+# Arranca PostgreSQL.
 
-pg_isready -h 127.0.0.1 -p 5432 -d beatgaler_cloud_dev -U beatgaler_dev # Comprueba que PostgreSQL acepta conexiones.
+pg_isready -h 127.0.0.1 -p 5432 -d beatgaler_cloud_dev -U beatgaler_dev
+# Debe decir: accepting connections.
 
-cd /mnt/e/777/app/beatvault/cloud-server # Entra al Cloud.
+cd /mnt/e/777/app/beatvault/cloud-server
+# Entra al Cloud.
 
-node --env-file=.env server.js # Arranca BeatGaler Cloud.
+node --env-file=.env server.js
+# Arranca Cloud con PostgreSQL.
 ```
 
 Debe aparecer:
@@ -55,29 +59,4 @@ $env:BEATGALER_CLOUD_API="http://127.0.0.1:4000"
 
 pwsh -NoProfile -File .\scripts\run-tauri.ps1 dev
 # Arranca BeatGaler Desktop con PowerShell 7.
-```
-
-```powershell caca
-$pid1420 = (Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue).OwningProcess # Obtiene únicamente el proceso que está sirviendo localhost:1420.
-if ($pid1420) { Stop-Process -Id $pid1420 -Force } # Mata únicamente el servidor viejo que ocupa el puerto 1420.
-
-cd E:\777\app\beatvault # Entra al repositorio correcto.
-git status -sb # Confirma visualmente qué branch tienes activa.
-git rev-parse --short HEAD # Confirma exactamente qué commit vas a ejecutar.
-
-Remove-Item -Recurse -Force node_modules\.vite -ErrorAction SilentlyContinue # Borra la caché compilada de Vite.
-npm run dev -- --force # Inicia Vite reconstruyendo sus dependencias y módulos.
-```
-
-
-
-
-### 3. WEB - PowerShell Windows
-
-```powershell
-cd E:\777\app\beatvault # Entrar al proyecto
-# npm ci # Reinstala exactamente las dependencias del frontend, incluyendo Vite.
-
-
-npm run dev # Abrir el frontend web en modo desarrollo
 ```

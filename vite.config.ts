@@ -48,6 +48,7 @@ function productiveTrustBoundaryPlugin() {
 
   return {
     name: "beatgaler-productive-trust-boundary",
+    apply: "build" as const,
     enforce: "pre" as const,
     transform(code: string, id: string) {
       const cleanId = id.split("?")[0].replace(/\\/g, "/");
