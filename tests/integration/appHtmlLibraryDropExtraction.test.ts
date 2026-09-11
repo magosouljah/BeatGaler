@@ -35,7 +35,7 @@ describe("task 8.2 HTML/browser drop extraction", () => {
   it("keeps browser asset/project and library import actions explicit", () => {
     expect(owner).toContain('name.endsWith(".mp3") ? "MASTER"');
     expect(owner).toContain('name.endsWith(".wav") ? "WAV"');
-    expect(owner).toContain('name.endsWith(".zip") ? "PROJECT"');
+    expect(owner).toContain('name.endsWith(".zip") || isProjectDawFileName(name)');
     expect(owner).toContain("handleBrowserBeatAssetDrop(beat, file, kind)");
     expect(owner).toContain("handleBrowserProjectDrop(beat, file)");
     expect(owner).toContain("onBrowserLibraryFileDrop: browserFileImport ? importDroppedBrowserFiles : undefined");

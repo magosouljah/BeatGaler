@@ -45,7 +45,7 @@ export function useBeatFileDropRouting({
         setBeatFileDrop(null);
         await appAlert({
           title: "Project file required",
-          message: "Add a .flp, .als, .logicx, .ptx/.ptf file or a valid PROJECT ZIP first. Then folders can be added to that PROJECT.zip using their original folder name.",
+          message: "Add a .flp, .als, .logicx, .rpp, .ptx/.ptf file or a valid PROJECT ZIP first. Then folders can be added to that PROJECT.zip using their original folder name.",
         });
         return;
       }

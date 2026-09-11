@@ -1,5 +1,7 @@
 import type { Beat } from "../../types";
 import type { PlatformBeatEditFiles } from "../../platform/contracts";
+import { prepareBrowserProjectArchive, type PreparedBrowserProject } from "../projects/browserProjectArchive";
+import { isProjectDawFileName, projectExtensionFromName } from "../projects/projectFileTypes";
 import { beatFromWebLibraryEntry, normalizeWebLibraryManifest } from "../library/webLibrary";
 import type {
   WebTransportLibraryIndexResult,
@@ -24,6 +26,7 @@ export interface WebBeatEditRuntime {
     onProgress?: (progress: WebTransportProgress) => void,
   ): Promise<WebTransportUploadResult>;
   replaceLibraryIndex(input: { manifest: unknown; expectedMessageId: number | null }): Promise<WebTransportReplaceIndexResult>;
+  downloadProject?(input: { messageId: number; filename: string; mimeType: string }): Promise<File>;
 }
 
 export interface WebBeatEditResult {
@@ -33,6 +36,12 @@ export interface WebBeatEditResult {
 
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
+}
+
+function directMessageId(value: string | null | undefined): number | null {
+  const match = /^direct:(\d+)$/.exec(String(value || "").trim());
+  const id = Number(match?.[1] || 0);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function dataUrlFile(dataUrl: string, beatName: string): { file: File; bytes: Uint8Array } | null {
@@ -100,6 +109,29 @@ export async function commitWebBeatEdit(
 
   const existing = manifest.beats[existingIndex];
 
+  let preparedProject: PreparedBrowserProject | null = null;
+  if (files.PROJECT) {
+    const projectExtension = projectExtensionFromName(files.PROJECT.name);
+    if (projectExtension !== "zip" && !isProjectDawFileName(files.PROJECT.name)) {
+      throw new Error("Choose a supported DAW project file or PROJECT ZIP.");
+    }
+    let existingProjectFile: File | null = null;
+    if (isProjectDawFileName(files.PROJECT.name) && record(existing.project)) {
+      const currentBeat = beatFromWebLibraryEntry(existing);
+      const projectRef = currentBeat.assets?.project || null;
+      const messageId = directMessageId(projectRef?.object_id);
+      if (!messageId || !runtime.downloadProject) {
+        throw new Error("The current PROJECT could not be loaded for a safe update. Refresh and try again.");
+      }
+      existingProjectFile = await runtime.downloadProject({
+        messageId,
+        filename: projectRef?.filename || `${updated.name || original.name}.zip`,
+        mimeType: projectRef?.mime_type || "application/zip",
+      });
+    }
+    preparedProject = await prepareBrowserProjectArchive(updated.name || original.name, files.PROJECT, existingProjectFile);
+  }
+
   const artworkChanged = (updated.image_base64 || null) !== (original.image_base64 || null);
   const artworkAsset = artworkChanged && updated.image_base64 ? dataUrlFile(updated.image_base64, updated.name) : null;
   if (artworkChanged && updated.image_base64 && !artworkAsset) {
@@ -109,7 +141,7 @@ export async function commitWebBeatEdit(
   const queued: Array<{ kind: EditUploadKind; file: File; stage: WebBeatEditStage }> = [];
   if (files.MASTER) queued.push({ kind: "MASTER", file: files.MASTER, stage: "master" });
   if (files.WAV) queued.push({ kind: "WAV", file: files.WAV, stage: "wav" });
-  if (files.PROJECT) queued.push({ kind: "PROJECT", file: files.PROJECT, stage: "project" });
+  if (preparedProject) queued.push({ kind: "PROJECT", file: preparedProject.file, stage: "project" });
   if (artworkAsset) queued.push({ kind: "ARTWORK", file: artworkAsset.file, stage: "artwork" });
   const totalBytes = queued.reduce((total, item) => total + item.file.size, 0);
   onProgress?.({ stage: "preparing", uploadedBytes: 0, totalBytes });
@@ -174,10 +206,10 @@ export async function commitWebBeatEdit(
     next.project = {
       manifest: uploadManifest(project),
       size: project.original_size,
-      openable: false,
-      has_flp: false,
-      has_als: false,
-      has_samples: false,
+      openable: preparedProject?.openable ?? false,
+      has_flp: preparedProject?.hasFlp ?? false,
+      has_als: preparedProject?.hasAls ?? false,
+      has_samples: preparedProject?.hasSamples ?? false,
     };
   }
 

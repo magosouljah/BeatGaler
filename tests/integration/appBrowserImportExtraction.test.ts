@@ -27,7 +27,8 @@ describe("task 7.4 browser import extraction", () => {
     expect(browserImport).toContain("if (supported.length > 1)");
     expect(browserImport).toContain("BeatGaler Web imports one beat per drag action.");
     expect(browserImport).toContain("platform.importer.fromFile(supported[0])");
-    expect(browserImport).toContain("candidate.hydrated.catch(() => candidate.beat)");
+    expect(browserImport).toContain("const beat = candidate.beat;");
+    expect(browserImport).toContain("void candidate.hydrated.then(hydrated => {");
     expect(browserImport).toContain("cleanTags(hydrated.tags || []).tags");
     expect(browserImport).toContain("completeImmediateReviewPreparation();");
     expect(browserImport).toContain("resetImportResolutionState();");

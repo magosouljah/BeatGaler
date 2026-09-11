@@ -12,7 +12,7 @@ export function beatCardPlaybackBlocked(
 export function beatCardIncompleteReasons(projectCloud: ProjectCloudView): string[] {
   if (projectCloud === null || projectCloud.valid) return [];
   return [
-    "No valid PROJECT.zip was found. A valid project ZIP must contain a .flp, .als, .logicx, .ptx, or .ptf project file and no Backup/Backups folder.",
+    "No valid PROJECT.zip was found. A valid project ZIP must contain a .flp, .als, .logicx, .rpp, .ptx, or .ptf project file and no Backup/Backups folder.",
   ];
 }
 

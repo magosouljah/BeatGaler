@@ -8,6 +8,7 @@ import { getProjectCloudStatus, inspectProjectDropSource, listOpenableCloudProje
 import { cleanupStagedDropPaths } from "../dragdrop/dropStaging";
 import { extensionFromPath, fileNameFromPath } from "../dragdrop/pathHelpers";
 import type { BeatRuntimeRegistry } from "../state/useBeatRuntimeRegistry";
+import { isProjectDawExtension } from "./projectFileTypes";
 
 type ConnectionState = "checking" | "online" | "poor" | "offline";
 type DrawerState = { beat: Beat; mode: "detail" | "edit" } | null;
@@ -81,7 +82,7 @@ export function useBeatProjects({ beats, connectionState, rejectOfflineMutation,
 
   const handleAutoProjectDrop = useCallback(async (beat: Beat, filePath: string): Promise<AutoProjectDropResult> => {
     const ext = extensionFromPath(filePath);
-    if (!(ext === "zip" || ["flp", "als", "logicx", "ptx", "ptf"].includes(ext))) return "not-project";
+    if (!(ext === "zip" || isProjectDawExtension(ext))) return "not-project";
     let inspection;
     try { inspection = await inspectProjectDropSource(filePath); }
     catch (error) { setBeatCloudUpdateBusy(beat.id, false, false); await cleanupStagedDropPaths([filePath]).catch(() => {}); await appAlert({ title: "Project check failed", message: String(error), danger: true }); return "handled"; }

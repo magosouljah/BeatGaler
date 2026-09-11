@@ -195,8 +195,8 @@ try {
   if (!beatCard.includes('slotUpdateComplete') || !beatCard.includes('detail.success')) fail("BeatCard lost the green completion animation for existing-beat updates.");
   if (!tauriClient.includes('inspect_project_drop_source') || !tauriClient.includes('"projectFile" | "projectFolder"')) fail("Tauri client lost smart PROJECT drop inspection/update kinds.");
   if (!rustLib.includes('inspect_project_drop_source')) fail("Tauri invoke handler lost PROJECT drop inspection.");
-  if (!rustProjectCommands.includes('"flp" | "als" | "logicx" | "ptx" | "ptf"')) fail("PROJECT recognition must include FL Studio, Ableton, Logic Pro, and Pro Tools.");
-  if (!rustProjectCommands.includes("A PROJECT ZIP needs at least one .flp, .als, .logicx, .ptx, or .ptf")) fail("PROJECT ZIP validation no longer requires a real project file.");
+  if (!rustProjectCommands.includes('"flp" | "als" | "logicx" | "rpp" | "ptx" | "ptf"')) fail("PROJECT recognition must include FL Studio, Ableton, Logic Pro, and Pro Tools.");
+  if (!rustProjectCommands.includes("A PROJECT ZIP needs at least one .flp, .als, .logicx, .rpp, .ptx, or .ptf")) fail("PROJECT ZIP validation no longer requires a real project file.");
   if (!rustProjectCommands.includes('zip::ZipArchive::new') || !rustProjectCommands.includes('project_zip_entry_names')) fail("PROJECT ZIP inspection is no longer handled by the cross-platform Rust ZIP reader.");
   if (rustProjectCommands.includes("elseif ($rootName -eq 'audio'") || rustProjectCommands.includes('matches!(root.as_str(), "audio" | "sample" | "samples")')) fail("Audio/Samples-only ZIPs became valid PROJECT archives again.");
   if (!rustProjectCommands.includes('"projectfolder" =>') || !rustProjectCommands.includes('("prefix", format!("{}/", folder_name))')) fail("Generic project folders must preserve their original folder name inside PROJECT.zip.");

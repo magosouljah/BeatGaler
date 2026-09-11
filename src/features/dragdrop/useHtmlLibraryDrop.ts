@@ -6,6 +6,7 @@ import { artworkFileToDataUrl } from "./browserArtwork";
 import { cleanupStagedDropPaths } from "./dropStaging";
 import { installHtmlDropController } from "./htmlDropController";
 import { isBackupFolderPath } from "./pathHelpers";
+import { isProjectDawFileName } from "../projects/projectFileTypes";
 
 type HtmlBeatFileDrop = {
   beat: Beat;
@@ -50,15 +51,15 @@ export function useHtmlLibraryDrop({
     const beat = beatsLatestRef.current.find(item => item.id === beatId);
     if (!beat) throw new Error(`Dropped file target beat was not found: ${beatId}`);
     if (files.length !== 1) {
-      await appAlert({ title: "Drop one file at a time", message: "Drop one MP3, WAV, or PROJECT ZIP on a beat." });
+      await appAlert({ title: "Drop one file at a time", message: "Drop one MP3, WAV, DAW project file, or PROJECT ZIP on a beat." });
       return false;
     }
 
     const file = files[0];
     const name = file.name.toLowerCase();
-    const kind = name.endsWith(".mp3") ? "MASTER" : name.endsWith(".wav") ? "WAV" : name.endsWith(".zip") ? "PROJECT" : null;
+    const kind = name.endsWith(".mp3") ? "MASTER" : name.endsWith(".wav") ? "WAV" : (name.endsWith(".zip") || isProjectDawFileName(name)) ? "PROJECT" : null;
     if (!kind) {
-      await appAlert({ title: "Unsupported file", message: "BeatGaler Web accepts MP3, WAV, or PROJECT ZIP files on an existing beat." });
+      await appAlert({ title: "Unsupported file", message: "BeatGaler Web accepts MP3, WAV, .flp, .als, .logicx, .rpp, .ptx, .ptf, or PROJECT ZIP files on an existing beat." });
       return false;
     }
 

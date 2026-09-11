@@ -3711,7 +3711,7 @@ pub fn upload_dropped_file_to_telegram(
     let source = filtered_project_source.as_ref().unwrap_or(&original_source).clone();
     if cloud_type == "PROJECT" && !project_zip_is_valid(&source) {
         if let Some(parent) = filtered_project_source.as_ref().and_then(|p| p.parent()) { let _ = std::fs::remove_dir_all(parent); }
-        return Err("PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.ptx/.ptf).".to_string());
+        return Err("PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.rpp/.ptx/.ptf).".to_string());
     }
     let meta = std::fs::metadata(&source).map_err(|e| e.to_string())?;
 
@@ -4769,7 +4769,7 @@ fn build_project_archive_if_needed(
     }
 
     if !folder_has_project_assets(&folder) {
-        return Err("No PROJECT project file was found. Add a .flp/.als/.logicx/.ptx/.ptf first.".to_string());
+        return Err("No PROJECT project file was found. Add a .flp/.als/.logicx/.rpp/.ptx/.ptf first.".to_string());
     }
 
     let root = beatgaler_temp_dir().join("cloud-upload-tmp").join("generated-projects");
@@ -4788,7 +4788,7 @@ fn build_project_archive_if_needed(
         let Ok(file_type) = entry.file_type() else { continue; };
         if file_type.is_symlink() || !file_type.is_file() { continue; }
         let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
-        if matches!(ext.as_str(), "flp" | "als" | "ptx" | "ptf" | "zpa") {
+        if matches!(ext.as_str(), "flp" | "als" | "rpp" | "ptx" | "ptf" | "zpa") {
             std::fs::copy(&path, staging.join(entry.file_name())).map_err(|e| e.to_string())?;
         }
     }
@@ -4847,7 +4847,7 @@ fn path_is_symbolic_link(path: &Path) -> bool {
 
 fn is_recognized_project_extension(ext: &str) -> bool {
     matches!(ext.trim().trim_start_matches('.').to_ascii_lowercase().as_str(),
-        "flp" | "als" | "logicx" | "ptx" | "ptf")
+        "flp" | "als" | "logicx" | "rpp" | "ptx" | "ptf")
 }
 
 fn path_is_recognized_project_file(path: &Path) -> bool {
@@ -4950,6 +4950,7 @@ fn inspect_project_zip_entries(entries: &[String]) -> (bool, usize, bool, bool) 
         let recognized = logic_bundle
             || lower.ends_with(".flp")
             || lower.ends_with(".als")
+            || lower.ends_with(".rpp")
             || lower.ends_with(".ptx")
             || lower.ends_with(".ptf");
         if recognized {
@@ -5032,7 +5033,7 @@ pub fn inspect_project_drop_source(source_path: String) -> ProjectDropInspection
         if project_file_count == 0 {
             return invalid(
                 "zip",
-                "A PROJECT ZIP needs at least one .flp, .als, .logicx, .ptx, or .ptf project file.".to_string(),
+                "A PROJECT ZIP needs at least one .flp, .als, .logicx, .rpp, .ptx, or .ptf project file.".to_string(),
                 false,
                 0,
                 entries.len(),
@@ -5372,7 +5373,7 @@ fn prepare_project_edit_copy(beat: &BeatMeta, archive_path: &Path) -> Result<Pat
     let _ = std::fs::remove_dir_all(&staging);
     extract_project_zip_to_directory(archive_path, &staging)?;
     let project = find_openable_project_in_directory(&staging, &beat.name)
-        .ok_or_else(|| "PROJECT ZIP contains no openable .flp/.als/.logicx/.ptx/.ptf file.".to_string())?;
+        .ok_or_else(|| "PROJECT ZIP contains no openable .flp/.als/.logicx/.rpp/.ptx/.ptf file.".to_string())?;
     let rel = project.strip_prefix(&staging).map_err(|e| e.to_string())?.to_path_buf();
     let _ = std::fs::remove_dir_all(&edit_root);
     std::fs::rename(&staging, &edit_root)
@@ -5426,7 +5427,7 @@ fn filtered_project_zip_for_upload(source: &Path) -> Result<Option<PathBuf>, Str
     validate_project_zip_entry_names(&entries)?;
     let (has_backups, project_file_count, _, _) = inspect_project_zip_entries(&entries);
     if project_file_count == 0 {
-        return Err("A PROJECT ZIP needs at least one .flp, .als, .logicx, .ptx, or .ptf project file.".to_string());
+        return Err("A PROJECT ZIP needs at least one .flp, .als, .logicx, .rpp, .ptx, or .ptf project file.".to_string());
     }
     if !has_backups { return Ok(None); }
 
@@ -5507,7 +5508,7 @@ fn ensure_project_working_copy(
 
         if !project_zip_is_valid(&workspace) {
             let _ = std::fs::remove_file(&workspace);
-            return Err("The PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.ptx/.ptf).".to_string());
+            return Err("The PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.rpp/.ptx/.ptf).".to_string());
         }
 
         let (size, modified_ms) = project_file_stamp(&workspace)
@@ -5568,6 +5569,7 @@ fn mutate_project_zip(zip_path: &Path, source: &Path, kind: &str) -> Result<(), 
         if zip_path.is_file() {
             let prefix = add_prefix.clone();
             copy_project_zip_entries(zip_path, &mut writer, |name| {
+                if zip_name_has_forbidden_component(name) { return true; }
                 if exclude_mode == "project" {
                     zip_name_contains_project_component(name)
                 } else {
@@ -6313,7 +6315,7 @@ pub fn upload_project_to_telegram(
     }
     if !project_zip_is_valid(&zip_path) {
         if generated_archive { let _ = std::fs::remove_file(&zip_path); }
-        return Err("PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.ptx/.ptf).".to_string());
+        return Err("PROJECT zip is invalid. It must contain a project file (.flp/.als/.logicx/.rpp/.ptx/.ptf).".to_string());
     }
     let size = std::fs::metadata(&zip_path).map_err(|e| e.to_string())?.len();
     if size == 0 { return Err("Project ZIP is empty.".to_string()); }
@@ -6769,7 +6771,7 @@ pub fn update_project_archive_from_source(
         let is_logic_bundle = source.is_dir()
             && source.extension().and_then(|v| v.to_str()).map(is_recognized_project_extension).unwrap_or(false);
         if !(source.is_file() && path_is_recognized_project_file(&source)) && !is_logic_bundle {
-            return Err("Choose a project file: .flp, .als, .logicx, .ptx, or .ptf.".to_string());
+            return Err("Choose a project file: .flp, .als, .logicx, .rpp, .ptx, or .ptf.".to_string());
         }
     } else if !source.is_dir() {
         return Err("Choose a project asset folder.".to_string());
@@ -14114,12 +14116,14 @@ mod project_zip_unit_tests {
         extract_project_zip_to_directory,
         filtered_project_zip_for_upload,
         find_openable_project_in_directory,
+        inspect_project_drop_source,
         inspect_project_zip_entries,
         is_forbidden_project_component,
         is_recognized_project_extension,
         mutate_project_zip,
         project_zip_entry_names,
         project_zip_is_openable,
+        project_zip_is_valid,
         validate_project_zip_entry_names,
         write_project_directory_zip,
     };
@@ -14306,6 +14310,47 @@ mod project_zip_unit_tests {
         assert!(names.iter().any(|name| name == "Samples/nested/snare.wav"));
         assert!(!names.iter().any(|name| name == "Samples/old.wav"));
         assert!(!names.iter().any(|name| name.to_ascii_lowercase().contains("backup")));
+    }
+
+    #[test]
+    fn rust_project_supports_reaper_across_inspect_create_modify_validate_and_repack() {
+        for extension in ["flp", "als", "logicx", "rpp", "ptx", "ptf"] {
+            assert!(is_recognized_project_extension(extension), "missing PROJECT extension: {}", extension);
+        }
+        let tree = TempProjectTree::new("reaper-project");
+        let first = tree.path("Beat.rpp");
+        std::fs::write(&first, b"reaper-v1").unwrap();
+        let inspection = inspect_project_drop_source(first.to_string_lossy().to_string());
+        assert!(inspection.valid);
+        assert_eq!(inspection.kind, "project_file");
+        let archive = tree.path("Beat.zip");
+        mutate_project_zip(&archive, &first, "projectfile").unwrap();
+        assert!(project_zip_is_valid(&archive));
+        assert!(project_zip_entry_names(&archive).unwrap().iter().any(|name| name == "Beat.rpp"));
+
+        create_zip(&archive, &[
+            ("Old.ptx", b"old-project"),
+            ("Audio/render.wav", b"render"),
+            ("Samples/kick.wav", b"kick"),
+            ("Backups/old.wav", b"backup"),
+        ]);
+        let replacement = tree.path("Beat-v2.rpp");
+        std::fs::write(&replacement, b"reaper-v2").unwrap();
+        mutate_project_zip(&archive, &replacement, "projectfile").unwrap();
+        let names = project_zip_entry_names(&archive).unwrap();
+        assert!(names.iter().any(|name| name == "Beat-v2.rpp"));
+        assert!(!names.iter().any(|name| name == "Old.ptx"));
+        assert!(names.iter().any(|name| name == "Audio/render.wav"));
+        assert!(names.iter().any(|name| name == "Samples/kick.wav"));
+        assert!(!names.iter().any(|name| name.to_ascii_lowercase().contains("backup")));
+        assert!(project_zip_is_valid(&archive));
+
+        let extracted = tree.path("repacked-source");
+        extract_project_zip_to_directory(&archive, &extracted).unwrap();
+        let repacked = tree.path("Repacked.zip");
+        write_project_directory_zip(&extracted, &repacked).unwrap();
+        assert!(project_zip_is_valid(&repacked));
+        assert!(project_zip_entry_names(&repacked).unwrap().iter().any(|name| name == "Beat-v2.rpp"));
     }
 
     #[test]

@@ -458,6 +458,12 @@ export class WebGalerCloudTransport {
           return { ...uploaded, thread_id: threadId };
         },
         replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        downloadProject: async input => {
+          const chunks: ArrayBuffer[] = [];
+          const stream = await this.streamFile({ messageId: input.messageId, mimeType: input.mimeType, purpose: "other" }, chunk => { chunks.push(chunk); });
+          await stream.completed;
+          return new File(chunks, input.filename, { type: input.mimeType, lastModified: 0 });
+        },
       }, onProgress);
       await commitWebTransportIndexPointer({
         messageId: result.index.messageId,

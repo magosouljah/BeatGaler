@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
 import { commitWebBeatEdit, type WebBeatEditRuntime } from "../../src/features/edit/webBeatEdit";
+import JSZip from "jszip";
+import { readBlobAsArrayBuffer } from "../../src/features/audio/mp3Metadata";
+import { PROJECT_DAW_EXTENSIONS, isProjectDawFileName } from "../../src/features/projects/projectFileTypes";
 
 function beat(overrides: Partial<Beat> = {}): Beat {
   return {
@@ -85,12 +88,28 @@ function manifest() {
   };
 }
 
-function runtime(upload = vi.fn()): WebBeatEditRuntime {
+function runtime(
+  upload = vi.fn(),
+  sourceManifest: ReturnType<typeof manifest> = manifest(),
+  downloadProject = vi.fn(async () => { throw new Error("unexpected PROJECT download"); }),
+): WebBeatEditRuntime {
   return {
-    getLibraryIndex: vi.fn(async () => ({ messageId: 500, manifest: manifest() })),
+    getLibraryIndex: vi.fn(async () => ({ messageId: 500, manifest: sourceManifest })),
     upload,
+    downloadProject,
     replaceLibraryIndex: vi.fn(async () => ({ messageId: 501, previousMessageId: 500, beatCount: 2 })),
   };
+}
+
+async function zipFile(name: string, entries: Record<string, string>): Promise<File> {
+  const zip = new JSZip();
+  for (const [path, content] of Object.entries(entries)) zip.file(path, content);
+  const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  return new File([bytes], name, { type: "application/zip", lastModified: 1 });
+}
+
+async function zipEntries(file: File): Promise<JSZip> {
+  return JSZip.loadAsync(await readBlobAsArrayBuffer(file));
 }
 
 describe("Web Galer Cloud beat editing", () => {
@@ -162,4 +181,67 @@ describe("Web Galer Cloud beat editing", () => {
     expect(candidate.beats[0].master.telegram_message_id).toBe(10);
     expect(result.beat.assets?.artwork).toBeNull();
   });
+
+  it("recognizes all six DAW PROJECT file formats", () => {
+    expect(PROJECT_DAW_EXTENSIONS).toEqual(["flp", "als", "logicx", "rpp", "ptx", "ptf"]);
+    for (const extension of PROJECT_DAW_EXTENSIONS) expect(isProjectDawFileName(`Beat.${extension}`)).toBe(true);
+  });
+
+  it("creates BeatName.zip when a DAW file is dropped without a previous PROJECT", async () => {
+    const source: any = manifest();
+    delete source.beats[0].project;
+    const upload = vi.fn(async (input: any) => uploaded(200, input.file));
+    const cloud = runtime(upload, source);
+    const daw = new File(["reaper-project"], "Beat.rpp", { lastModified: 2 });
+    const result = await commitWebBeatEdit(beat(), beat(), { PROJECT: daw }, cloud);
+    const projectInput = upload.mock.calls[0][0];
+    expect(projectInput.kind).toBe("PROJECT");
+    expect(projectInput.file.name).toBe("Before.zip");
+    const zip = await zipEntries(projectInput.file);
+    expect(await zip.file("Beat.rpp")?.async("string")).toBe("reaper-project");
+    expect(cloud.replaceLibraryIndex).toHaveBeenCalledOnce();
+    const candidate: any = vi.mocked(cloud.replaceLibraryIndex).mock.calls[0][0].manifest;
+    expect(candidate.beats[0].project.manifest.telegram_message_id).toBe(200);
+    expect(result.beat.assets?.project).not.toBeNull();
+  });
+
+  it("merges a DAW replacement into the authoritative PROJECT while preserving unrelated content", async () => {
+    const currentProject = await zipFile("Before.zip", { "Old.flp": "old-project", "Audio/render.wav": "render", "Samples/kick.wav": "kick", "notes.txt": "keep", "Backups/old.wav": "skip" });
+    const downloadProject = vi.fn(async ({ messageId }: any) => { expect(messageId).toBe(14); return currentProject; });
+    const upload = vi.fn(async (input: any) => uploaded(201, input.file));
+    const cloud = runtime(upload, manifest(), downloadProject);
+    await commitWebBeatEdit(beat(), beat(), { PROJECT: new File(["new-reaper"], "New.rpp", { lastModified: 3 }) }, cloud);
+    expect(downloadProject).toHaveBeenCalledOnce();
+    const zip = await zipEntries(upload.mock.calls[0][0].file);
+    expect(zip.file("Old.flp")).toBeNull();
+    expect(await zip.file("New.rpp")?.async("string")).toBe("new-reaper");
+    expect(await zip.file("Audio/render.wav")?.async("string")).toBe("render");
+    expect(await zip.file("Samples/kick.wav")?.async("string")).toBe("kick");
+    expect(await zip.file("notes.txt")?.async("string")).toBe("keep");
+    expect(Object.keys(zip.files).some(name => /(^|\/)backups?(\/|$)/i.test(name))).toBe(false);
+    expect(cloud.replaceLibraryIndex).toHaveBeenCalledOnce();
+    expect(upload.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(cloud.replaceLibraryIndex).mock.invocationCallOrder[0]);
+  });
+
+  it("keeps PROJECT ZIP drops as complete replacements instead of DAW merges", async () => {
+    const incoming = await zipFile("Replacement.zip", { "Only.ptx": "new-project", "new.txt": "new-only" });
+    const downloadProject = vi.fn(async () => { throw new Error("ZIP replacement must not download the old PROJECT"); });
+    const upload = vi.fn(async (input: any) => uploaded(202, input.file));
+    const cloud = runtime(upload, manifest(), downloadProject);
+    await commitWebBeatEdit(beat(), beat(), { PROJECT: incoming }, cloud);
+    expect(downloadProject).not.toHaveBeenCalled();
+    expect(upload.mock.calls[0][0].file).toBe(incoming);
+    const zip = await zipEntries(upload.mock.calls[0][0].file);
+    expect(zip.file("Only.ptx")).not.toBeNull();
+    expect(zip.file("Samples/kick.wav")).toBeNull();
+  });
+
+  it("does not publish a new PROJECT index when preparation/upload fails", async () => {
+    const currentProject = await zipFile("Before.zip", { "Old.flp": "old", "Audio/render.wav": "keep" });
+    const upload = vi.fn(async () => { throw new Error("upload failed"); });
+    const cloud = runtime(upload, manifest(), vi.fn(async () => currentProject));
+    await expect(commitWebBeatEdit(beat(), beat(), { PROJECT: new File(["new"], "New.als") }, cloud)).rejects.toThrow("upload failed");
+    expect(cloud.replaceLibraryIndex).not.toHaveBeenCalled();
+  });
+
 });

@@ -2,6 +2,7 @@ import type { Beat } from "../types";
 import { parseId3FromFile } from "../features/import/webAudioMetadata";
 import { createWebWavMaster } from "../features/import/webWavMaster";
 import type { PlatformImportCandidate, PlatformImportPort, PlatformImportSlotFiles, PlatformImportSlotKind } from "./contracts";
+import { PROJECT_DAW_ACCEPT } from "../features/projects/projectFileTypes";
 
 const webFiles = new Map<string, { file: File; objectUrl: string; slots: PlatformImportSlotFiles; ready: Promise<void>; controller: AbortController }>();
 
@@ -116,7 +117,7 @@ export async function pickWebSlotFile(kind: PlatformImportSlotKind): Promise<Fil
     ? ".mp3,audio/mpeg"
     : kind === "WAV"
       ? ".wav,audio/wav,audio/x-wav"
-      : ".zip,application/zip,application/x-zip-compressed";
+      : `${PROJECT_DAW_ACCEPT},.zip,application/zip,application/x-zip-compressed`;
   return new Promise(resolve => {
     const input = document.createElement("input");
     input.type = "file";
