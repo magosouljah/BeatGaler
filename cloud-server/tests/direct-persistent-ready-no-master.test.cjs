@@ -74,6 +74,7 @@ Module._load = function(request, parent, isMain) {
     membershipState: 'ready',
   };
   let membershipLockCalls = 0;
+  let repairStateCalls = 0;
   const persistentAssignments = {
     async resolveForVault({ pool, chatId }) {
       assert.equal(String(chatId), assignment.chatId);
@@ -89,6 +90,10 @@ Module._load = function(request, parent, isMain) {
     },
     async markMembershipReady() {
       throw new Error('READY startup must not rewrite membership state');
+    },
+    async markMembershipRepairNeeded() {
+      repairStateCalls += 1;
+      throw new Error('READY startup must not mark membership for repair');
     },
   };
 
@@ -144,6 +149,7 @@ Module._load = function(request, parent, isMain) {
   assert.equal(reactivated.ok, true);
   assert.equal(reactivated.status, 'ACTIVE');
   assert.equal(membershipLockCalls, 0, 'READY reentry must not reprovision persistent membership');
+  assert.equal(repairStateCalls, 0, 'READY reentry must not silently enter repair');
   assert.equal(telegramClientConstructions, 0, 'READY reentry must remain MASTER-free');
 
   const state = direct.__test.stateSnapshot([{ id: 'Bot01' }]);
