@@ -280,7 +280,7 @@ function createDurableWebhookInbox({
           provider_customer_id,provider_subscription_id,provider_checkout_id,
           received_at,created_at,updated_at
         ) VALUES ($1,$2,$3,$4,'RECEIVED',0,$5,$6,$7,$8::jsonb,$9,$10,$11,now(),now(),now())
-        ON CONFLICT(event_id) DO NOTHING
+        ON CONFLICT(provider,provider_environment,event_id) DO NOTHING
         RETURNING *
       `, [
         normalized.eventId,
@@ -309,20 +309,22 @@ function createDurableWebhookInbox({
       }
 
       const existingResult = await client.query(`
-        SELECT * FROM billing_webhook_events WHERE event_id=$1 FOR UPDATE
-      `, [normalized.eventId]);
+        SELECT * FROM billing_webhook_events
+        WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
+        FOR UPDATE
+      `, [provider, environment, normalized.eventId]);
       const existing = existingResult.rows[0];
       if (!existing) throw new Error('Webhook idempotency race produced no row.');
 
-      const sameIdentity = existing.provider === provider
-        && existing.provider_environment === environment
-        && existing.event_type === normalized.eventType
+      const sameIdentity = existing.event_type === normalized.eventType
         && existing.subject_id === normalized.subjectId
         && Number(existing.provider_created_at) === normalized.providerCreatedAt
         && existing.raw_body_sha256 === digest;
       if (!sameIdentity) {
         throw new DurableWebhookIdentityError('webhook-id was reused with different verified content.', {
           eventId: normalized.eventId,
+          provider,
+          environment,
         });
       }
 
@@ -377,16 +379,16 @@ function createDurableWebhookInbox({
         UPDATE billing_webhook_events
         SET state='PROCESSING',
             attempt_count=attempt_count+1,
-            processing_lease_owner=$2,
-            processing_lease_until=now()+($3 * interval '1 millisecond'),
+            processing_lease_owner=$4,
+            processing_lease_until=now()+($5 * interval '1 millisecond'),
             next_attempt_at=NULL,
             processed_at=NULL,
             last_error_code=NULL,
             last_error_redacted=NULL,
             updated_at=now()
-        WHERE event_id=$1
+        WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
         RETURNING *
-      `, [candidate.rows[0].event_id, owner, leaseMs]);
+      `, [provider, environment, candidate.rows[0].event_id, owner, leaseMs]);
       await client.query('COMMIT');
       return publicInboxRow(claimed.rows[0]);
     } catch (error) {
@@ -431,6 +433,8 @@ function createDurableWebhookInbox({
     if (candidates.size > 1) {
       throw new DurableWebhookBindingError('Provider identifiers resolve to different BeatGaler users.', {
         eventId: event.eventId,
+        provider,
+        environment,
       });
     }
     return candidates.size === 1 ? Array.from(candidates)[0] : null;
@@ -481,12 +485,13 @@ function createDurableWebhookInbox({
           processing_lease_owner=NULL,
           processing_lease_until=NULL,
           next_attempt_at=NULL,
-          last_error_code=$3,
+          last_error_code=$5,
           last_error_redacted='event intentionally ignored',
           updated_at=now()
-      WHERE event_id=$1 AND state='PROCESSING' AND processing_lease_owner=$2
+      WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
+        AND state='PROCESSING' AND processing_lease_owner=$4
       RETURNING *
-    `, [eventId, workerId, reasonCode]);
+    `, [provider, environment, eventId, workerId, reasonCode]);
     if (result.rowCount !== 1) {
       throw new DurableWebhookProcessingError('Webhook processing lease was lost.', 'WEBHOOK_LEASE_LOST');
     }
@@ -504,13 +509,14 @@ function createDurableWebhookInbox({
           processed_at=NULL,
           processing_lease_owner=NULL,
           processing_lease_until=NULL,
-          next_attempt_at=CASE WHEN $5::bigint IS NULL THEN NULL ELSE now()+($5 * interval '1 millisecond') END,
-          last_error_code=$3,
-          last_error_redacted=$4,
+          next_attempt_at=CASE WHEN $7::bigint IS NULL THEN NULL ELSE now()+($7 * interval '1 millisecond') END,
+          last_error_code=$5,
+          last_error_redacted=$6,
           updated_at=now()
-      WHERE event_id=$1 AND state='PROCESSING' AND processing_lease_owner=$2
+      WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
+        AND state='PROCESSING' AND processing_lease_owner=$4
       RETURNING *
-    `, [event.eventId, workerId, code, redactedErrorMessage(error), delayMs]);
+    `, [provider, environment, event.eventId, workerId, code, redactedErrorMessage(error), delayMs]);
     return result.rows[0] ? publicInboxRow(result.rows[0]) : null;
   }
 
@@ -543,9 +549,9 @@ function createDurableWebhookInbox({
         try {
           const currentResult = await lockClient.query(`
             SELECT * FROM billing_webhook_events
-            WHERE event_id=$1
+            WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
             FOR UPDATE
-          `, [event.eventId]);
+          `, [provider, environment, event.eventId]);
           const current = currentResult.rows[0];
           if (!current || current.state !== 'PROCESSING' || current.processing_lease_owner !== owner) {
             throw new DurableWebhookProcessingError('Webhook processing lease was lost.', 'WEBHOOK_LEASE_LOST');
@@ -568,7 +574,7 @@ function createDurableWebhookInbox({
           const completed = await lockClient.query(`
             UPDATE billing_webhook_events
             SET state='PROCESSED',
-                resolved_user_id=$3,
+                resolved_user_id=$5,
                 processed_at=now(),
                 processing_lease_owner=NULL,
                 processing_lease_until=NULL,
@@ -576,9 +582,10 @@ function createDurableWebhookInbox({
                 last_error_code=NULL,
                 last_error_redacted=NULL,
                 updated_at=now()
-            WHERE event_id=$1 AND state='PROCESSING' AND processing_lease_owner=$2
+            WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
+              AND state='PROCESSING' AND processing_lease_owner=$4
             RETURNING *
-          `, [event.eventId, owner, finalUserId]);
+          `, [provider, environment, event.eventId, owner, finalUserId]);
           if (completed.rowCount !== 1) {
             throw new DurableWebhookProcessingError('Webhook processing lease was lost.', 'WEBHOOK_LEASE_LOST');
           }
@@ -601,9 +608,9 @@ function createDurableWebhookInbox({
     const result = await pool.query(`
       UPDATE billing_webhook_events
       SET next_attempt_at=now(), last_error_code=NULL, last_error_redacted=NULL, updated_at=now()
-      WHERE event_id=$1 AND provider=$2 AND provider_environment=$3 AND state='FAILED'
+      WHERE provider=$1 AND provider_environment=$2 AND event_id=$3 AND state='FAILED'
       RETURNING *
-    `, [id, provider, environment]);
+    `, [provider, environment, id]);
     return result.rows[0] ? publicInboxRow(result.rows[0]) : null;
   }
 
@@ -611,9 +618,9 @@ function createDurableWebhookInbox({
     const id = requiredText(eventId, 'eventId');
     const result = await pool.query(`
       SELECT * FROM billing_webhook_events
-      WHERE event_id=$1 AND provider=$2 AND provider_environment=$3
+      WHERE provider=$1 AND provider_environment=$2 AND event_id=$3
       LIMIT 1
-    `, [id, provider, environment]);
+    `, [provider, environment, id]);
     return publicInboxRow(result.rows[0]);
   }
 
