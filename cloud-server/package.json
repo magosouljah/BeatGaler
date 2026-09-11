@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:containment": "node ../scripts/regression-http-containment.mjs",
-    "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs",
+    "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-sdk-contract.test.cjs",
     "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs"
   },
