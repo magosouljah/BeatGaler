@@ -354,7 +354,7 @@ export class WebGalerCloudTransport {
     let lease: Awaited<ReturnType<WebTransportController["beginOperation"]>> | null = null;
     if (purpose === "export") {
       lease = await this.controller.beginOperation(
-        "export",
+        "download",
         { objectType: "message", objectIds: [String(input.messageId)] },
       );
     }
