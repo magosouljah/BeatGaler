@@ -2009,7 +2009,11 @@ app.post("/transport/session/activate", async (req, res) => {
   const { beatgalerUserId } = auth;
   const startupTrace = createDirectStartupTrace();
   try {
-    const result = await directTransport.activateSession({
+    const activationMethod = req.body?.repairMembership === true ? "repairMembership" : "activateSession";
+    if (typeof directTransport[activationMethod] !== "function") {
+      throw new Error("Requested Direct membership repair is unavailable.");
+    }
+    const result = await directTransport[activationMethod]({
       startupTrace,
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
