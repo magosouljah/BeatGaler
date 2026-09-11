@@ -28,6 +28,7 @@ import type {
 } from "./webTransportWorkerProtocol";
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
+const WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000;
 export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
 const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
 const NON_RESUMABLE_PREFIX_ERROR = "Galer Cloud returned a non-resumable partial playback prefix.";
@@ -106,6 +107,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private credentialRefreshEpoch = 0;
   private credentialRefreshPromise: Promise<void> | null = null;
   private playbackCritical = false;
+  private dataPlaneInitialized = false;
   private activeBackgroundStreamRequests = new Set<string>();
   private preemptedBackgroundStreamRequests = new Set<string>();
   private backgroundResumeWaiters = new Set<() => void>();
@@ -113,6 +115,12 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   constructor(
     private readonly bootstrapRequestTimeoutMs = WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS,
   ) {}
+
+  private publishTransportInvalidatedIfReady(): void {
+    if (!this.dataPlaneInitialized) return;
+    this.dataPlaneInitialized = false;
+    publishTransportInvalidated();
+  }
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
@@ -128,7 +136,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       this.failPending("Galer Cloud Web Worker stopped unexpectedly.");
       worker.terminate();
       if (this.worker === worker) this.worker = null;
-      publishTransportInvalidated();
+      this.publishTransportInvalidatedIfReady();
     };
     this.worker = worker;
     return worker;
@@ -292,7 +300,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     if (worker) {
       worker.terminate();
       if (this.worker === worker) this.worker = null;
-      publishTransportInvalidated();
+      this.publishTransportInvalidatedIfReady();
     }
     this.failPending("Galer Cloud Web transport reset after an unresponsive worker request.");
   }
@@ -393,6 +401,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       await this.request<void>({ op: "playback_focus", messageId: desiredPlaybackMessageId });
       playTrace("WORKER_PLAYBACK_FOCUS_REAPPLIED", { message_id: desiredPlaybackMessageId });
     }
+    this.dataPlaneInitialized = true;
   }
 
   async replaceCredentials(session: WebTransportSession): Promise<void> {
@@ -635,11 +644,17 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     this.releaseBackgroundResumeWaiters();
     this.sessionStartupMessageIds = [];
     if (worker) {
-      await this.request({ op: "shutdown" }).catch(() => {});
+      await this.request(
+        { op: "shutdown" },
+        undefined,
+        undefined,
+        undefined,
+        WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS,
+      ).catch(() => {});
       worker.terminate();
       if (this.worker === worker) this.worker = null;
     }
     this.failPending("Galer Cloud Web transport closed.");
-    publishTransportInvalidated();
+    this.publishTransportInvalidatedIfReady();
   }
 }
