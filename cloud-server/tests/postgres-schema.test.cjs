@@ -9,6 +9,7 @@ const migrations = assertInitialSchemaContract();
 assert(migrations.length >= 1);
 assert.equal(migrations[0].version, '0001');
 assert.match(migrations[0].checksumSha256, /^[0-9a-f]{64}$/);
+assert(migrations.some(item => item.version === '0010' && item.name === '0010_persistent_transport_assignment.sql'));
 
 const sql = migrations.map(item => item.sql).join('\n');
 
@@ -26,6 +27,11 @@ for (const token of [
   'enforce_transport_bot_active_lease_cap',
   'active_count >= 4',
   'pg_advisory_xact_lock',
+  'transport_bot_id text REFERENCES transport_bots(id)',
+  "transport_membership_state text NOT NULL DEFAULT 'pending'",
+  "transport_membership_state IN ('pending', 'ready', 'repair')",
+  'transport_membership_updated_at timestamptz',
+  'vaults_transport_bot_id_idx',
 ]) {
   assert(sql.includes(token), `missing PostgreSQL contract token: ${token}`);
 }
