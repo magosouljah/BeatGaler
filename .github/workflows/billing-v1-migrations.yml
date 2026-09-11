@@ -1,0 +1,50 @@
+name: Billing V1 Migrations
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/migrations/**'
+      - 'cloud-server/postgres-migrations.js'
+      - 'cloud-server/tests/billing-v1-migrations.integration.cjs'
+      - '.github/workflows/billing-v1-migrations.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  billing-v1-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825aa50bf2007fbd43be
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloud-server/package-lock.json
+      - name: Assert exact PR head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Cloud dependencies
+        working-directory: cloud-server
+        run: npm ci
+      - name: Test Billing V1 migrations in isolated PostgreSQL
+        working-directory: cloud-server
+        env:
+          BILLING_MIGRATION_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: node --test tests/billing-v1-migrations.integration.cjs
