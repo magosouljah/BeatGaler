@@ -73,6 +73,7 @@ Module._load = function(request, parent, isMain) {
     transportBotId: 'Bot01',
     membershipState: 'ready',
   };
+  let membershipLockCalls = 0;
   const persistentAssignments = {
     async resolveForVault({ pool, chatId }) {
       assert.equal(String(chatId), assignment.chatId);
@@ -83,6 +84,7 @@ Module._load = function(request, parent, isMain) {
       return { ...assignment };
     },
     async withMembershipLock() {
+      membershipLockCalls += 1;
       throw new Error('READY startup must not enter membership provisioning lock');
     },
     async markMembershipReady() {
@@ -118,11 +120,38 @@ Module._load = function(request, parent, isMain) {
   assert.equal(activated.status, 'ACTIVE');
   assert.equal(telegramClientConstructions, 0, 'READY activation must stay MASTER-free');
 
-  const state = direct.__test.stateSnapshot([{ id: 'Bot01' }]);
-  assert.equal(state.leases[session.session_id].bot_id, 'Bot01');
-  assert.equal(state.leases[session.session_id].status, 'ACTIVE');
+  const stopped = await direct.stopSession({
+    installationId: 'ready-installation',
+    sessionId: session.session_id,
+    generation: session.generation,
+  });
+  assert.equal(stopped.ok, true);
+  assert.equal(stopped.released, true);
+  assert.equal(stopped.membership_preserved, true);
+  assert.equal(telegramClientConstructions, 0, 'normal close must not reopen MASTER to remove persistent membership');
 
-  console.log('PASS Direct READY startup: persisted resolver + persistent assignment + activation succeed with MASTER unavailable');
+  const reentered = await direct.startSession({
+    installationId: 'ready-installation-reentry',
+    chatId: assignment.chatId,
+  });
+  assert.equal(reentered.transport_id, 'Bot01', 'reentry must reuse the persistently assigned transport bot');
+  assert.equal(reentered.chat_id, assignment.chatId);
+  const reactivated = await direct.activateSession({
+    installationId: 'ready-installation-reentry',
+    sessionId: reentered.session_id,
+    generation: reentered.generation,
+  });
+  assert.equal(reactivated.ok, true);
+  assert.equal(reactivated.status, 'ACTIVE');
+  assert.equal(membershipLockCalls, 0, 'READY reentry must not reprovision persistent membership');
+  assert.equal(telegramClientConstructions, 0, 'READY reentry must remain MASTER-free');
+
+  const state = direct.__test.stateSnapshot([{ id: 'Bot01' }]);
+  assert.equal(state.leases[session.session_id], undefined, 'closed session lease must be gone');
+  assert.equal(state.leases[reentered.session_id].bot_id, 'Bot01');
+  assert.equal(state.leases[reentered.session_id].status, 'ACTIVE');
+
+  console.log('PASS Direct READY startup/reentry: persisted resolver + assignment + membership survive session close with MASTER unavailable');
 })().catch(error => {
   console.error(error?.stack || error);
   process.exitCode = 1;
