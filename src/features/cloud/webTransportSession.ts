@@ -1,6 +1,6 @@
 import { observePlayStep } from "../playback/playTrace";
 import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession } from "../../components/AccountGate";
 import { readWebCsrfToken } from "../auth/webSessionBootstrap";
 import { getWebClientId } from "../../platform/webClientId";
 import {
@@ -91,6 +91,7 @@ export interface WebTransportOperationResponse {
 }
 
 const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
+const WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS = 70_000;
 
 export function isTransientWebTempAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -110,16 +111,28 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
     };
     const csrf = readWebCsrfToken();
     if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
-    const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
-      method: "POST",
-      headers,
-      credentials: "include",
-      body: JSON.stringify(webTransportRequestBody(body)),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (stage) reportDirectStartupDiagnostics(response, stage);
-    if (!response.ok) throw new Error(payload?.error || `Galer Cloud HTTP ${response.status}`);
-    return payload as T;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify(webTransportRequestBody(body)),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (stage) reportDirectStartupDiagnostics(response, stage);
+      if (!response.ok) throw new Error(payload?.error || `Galer Cloud HTTP ${response.status}`);
+      return payload as T;
+    } catch (error) {
+      if ((error as { name?: string } | null)?.name === "AbortError") {
+        throw new Error("Galer Cloud transport control request timed out.");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   };
   return stage ? observePlayStep(stage, request) : request();
 }
@@ -217,6 +230,8 @@ async function bindTemporarySession(
 
 /** Reserves/reuses the control-plane lease. Playback routing never comes from Galer Cloud. */
 export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic> {
+  const account = await restoreBeatGalerSession();
+  if (!account) throw new Error("Session expired. Sign in again.");
   return validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
     browserClientId: getWebClientId(),
   }));
