@@ -7,6 +7,9 @@ on:
   pull_request:
     paths:
       - package.json
+      - package-lock.json
+      - scripts/regression-direct-manager-only.mjs
+      - scripts/regression-direct-manager-only.test.mjs
       - cloud-server/direct-transport-control.js
       - cloud-server/direct-persistent-assignment-runtime.js
       - cloud-server/direct-persistent-session-runtime.js
@@ -14,6 +17,13 @@ on:
       - cloud-server/direct-vault-assignment.js
       - cloud-server/server.js
       - cloud-server/server-core.js
+      - cloud-server/master-storage.js
+      - cloud-server/productive-temp-auth-boundary.js
+      - cloud-server/.env.example
+      - cloud-server/TELEGRAM-DIRECT-V5-BOTAPI.md
+      - cloud-server/package.json
+      - src-tauri/direct-transport/transport-helper.source.mjs
+      - src-tauri/src/commands.rs
       - cloud-server/migrations/**
       - cloud-server/tests/direct-allocator-no-cap.test.cjs
       - cloud-server/tests/direct-membership-provisioning-primitive.test.cjs
@@ -77,6 +87,13 @@ jobs:
           node --check cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.worker.cjs
           node --check cloud-server/tests/postgres-live.integration.cjs
+          node --check scripts/regression-direct-manager-only.mjs
+          node --check scripts/regression-direct-manager-only.test.mjs
+
+      - name: Guard persistent Direct architecture and guard failure cases
+        run: |
+          node scripts/regression-direct-manager-only.mjs
+          node scripts/regression-direct-manager-only.test.mjs
 
       - name: Run required Cloud unit gate
         run: npm run test:unit:cloud
