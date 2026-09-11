@@ -9,7 +9,8 @@
     "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-sdk-contract.test.cjs",
     "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
-    "test:billing-checkout-pg": "node --test tests/billing-checkout-persistent.integration.cjs"
+    "test:billing-checkout-pg": "node --test tests/billing-checkout-persistent.integration.cjs",
+    "test:billing-webhook-pg": "node --test tests/billing-webhook-durable.integration.cjs"
   },
   "keywords": [],
   "author": "",
