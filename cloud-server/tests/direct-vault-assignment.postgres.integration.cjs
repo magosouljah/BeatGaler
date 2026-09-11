@@ -153,6 +153,41 @@ async function main() {
     const repair = await storeA.markMembershipRepairNeeded({ chatId: balanceChatIds[0] }, restartBefore.transportBotId);
     assert.equal(repair.membershipState, 'repair');
 
+    // The membership lock is session-level and PostgreSQL-global. Two separate pools
+    // (standing in for independent Cloud processes) cannot enter provisioning for
+    // the same vault concurrently, while no SQL transaction is kept open during
+    // the callback that represents Telegram network work.
+    let releaseFirstLock;
+    let firstLockEnteredResolve;
+    const firstLockEntered = new Promise(resolve => { firstLockEnteredResolve = resolve; });
+    const firstLockGate = new Promise(resolve => { releaseFirstLock = resolve; });
+    let secondLockEntered = false;
+    const firstLock = storeA.withMembershipLock({ chatId: balanceChatIds[0] }, async () => {
+      firstLockEnteredResolve();
+      await firstLockGate;
+      return 'first';
+    });
+    await firstLockEntered;
+
+    const advisoryHolder = await poolB.query(`
+      SELECT a.state,a.xact_start
+      FROM pg_locks l
+      JOIN pg_stat_activity a ON a.pid=l.pid
+      WHERE l.locktype='advisory' AND l.granted=true
+      ORDER BY a.pid
+    `);
+    assert(advisoryHolder.rows.some(row => row.xact_start === null), 'session advisory lock must be held without an open SQL transaction');
+
+    const secondLock = storeB.withMembershipLock({ chatId: balanceChatIds[0] }, async () => {
+      secondLockEntered = true;
+      return 'second';
+    });
+    await new Promise(resolve => setTimeout(resolve, 75));
+    assert.equal(secondLockEntered, false, 'second process-equivalent store must wait for the same-vault membership lock');
+    releaseFirstLock();
+    assert.deepEqual(await Promise.all([firstLock, secondLock]), ['first', 'second']);
+    assert.equal(secondLockEntered, true);
+
     // Active session load must not decide persistent ownership. Four ACTIVE leases on Bot001 are deliberately
     // present, but with equal persistent counts the next vault still selects Bot001 by deterministic id tie-break.
     const leaseVaults = (await poolA.query(`
@@ -208,7 +243,7 @@ async function main() {
     const unassigned = await poolA.query("SELECT COUNT(*)::int AS n FROM vaults WHERE transport_bot_id IS NULL");
     assert.equal(unassigned.rows[0].n, 0);
 
-    console.log('PASS persistent Direct vault assignment PostgreSQL integration: migrations, cross-process locking, 80/160 balance, restart persistence, lease independence, quarantine, and pool growth');
+    console.log('PASS persistent Direct vault assignment PostgreSQL integration: migrations, assignment/membership locking, 80/160 balance, restart persistence, lease independence, quarantine, and pool growth');
   } finally {
     await Promise.allSettled([poolA.end(), poolB.end()]);
   }
