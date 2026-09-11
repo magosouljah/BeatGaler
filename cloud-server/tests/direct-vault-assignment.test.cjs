@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const {
   ASSIGNMENT_LOCK_KEY,
+  membershipLockKey,
   createDirectVaultAssignmentStore,
 } = require('../direct-vault-assignment');
 
@@ -26,6 +27,8 @@ function fakePool() {
     const compact = sql.replace(/\s+/g, ' ').trim();
     if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(compact)) return { rows: [] };
     if (sql.includes('pg_advisory_xact_lock')) return { rows: [{}] };
+    if (sql.includes('pg_advisory_lock')) return { rows: [{}] };
+    if (sql.includes('pg_advisory_unlock')) return { rows: [{ pg_advisory_unlock: true }] };
 
     if (sql.includes('UPDATE transport_bots') && sql.includes('NOT (id = ANY')) {
       const live = new Set(params[0].map(String));
@@ -127,6 +130,17 @@ function addVault(pool, id, chatId) {
   assert.equal((await restartedStore.markMembershipReady({ vaultId: 'vault-a' }, 'Bot01')).membershipState, 'ready');
   assert.equal((await restartedStore.markMembershipRepairNeeded({ vaultId: 'vault-a' }, 'Bot01')).membershipState, 'repair');
   await assert.rejects(() => restartedStore.markMembershipReady({ vaultId: 'vault-a' }, 'Bot02'), error => error.code === 'TRANSPORT_ASSIGNMENT_MISMATCH');
+
+  const lockResult = await restartedStore.withMembershipLock({ chatId: '-1001' }, async () => 'membership-locked');
+  assert.equal(lockResult, 'membership-locked');
+  const expectedMembershipLock = membershipLockKey({ chatId: '-1001' });
+  assert.ok(pool.calls.some(call => call.sql.includes('pg_advisory_lock') && call.params[0] === expectedMembershipLock));
+  assert.ok(pool.calls.some(call => call.sql.includes('pg_advisory_unlock') && call.params[0] === expectedMembershipLock));
+  assert.equal(
+    pool.calls.some(call => call.sql === 'BEGIN' && pool.calls.some(other => other.sql.includes('pg_advisory_lock'))),
+    false,
+    'membership lock is session-level and does not require a transaction',
+  );
 
   const balancedPool = fakePool();
   const balancedStore = createDirectVaultAssignmentStore(balancedPool);
