@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const runtime = require('../direct-persistent-assignment-runtime');
 
 async function main() {
-  const calls = { sync: [], assign: [] };
+  const calls = { sync: [], assign: [], get: [], locks: [], ready: [], repair: [] };
   const assignments = new Map([
     ['vault-a', { chatId: 'vault-a', transportBotId: 'Bot02', membershipState: 'ready' }],
     ['vault-b', { chatId: 'vault-b', transportBotId: 'Bot01', membershipState: 'pending' }],
@@ -18,6 +18,28 @@ async function main() {
     async assignIfMissing({ chatId }) {
       calls.assign.push(chatId);
       return assignments.get(chatId) || null;
+    },
+    async getAssignment({ chatId }) {
+      calls.get.push(chatId);
+      return assignments.get(chatId) || null;
+    },
+    async withMembershipLock({ chatId }, callback) {
+      calls.locks.push(chatId);
+      return callback();
+    },
+    async markMembershipReady({ chatId }, expectedTransportBotId) {
+      calls.ready.push([chatId, expectedTransportBotId]);
+      const current = assignments.get(chatId);
+      const updated = { ...current, membershipState: 'ready' };
+      assignments.set(chatId, updated);
+      return updated;
+    },
+    async markMembershipRepairNeeded({ chatId }, expectedTransportBotId) {
+      calls.repair.push([chatId, expectedTransportBotId]);
+      const current = assignments.get(chatId);
+      const updated = { ...current, membershipState: 'repair' };
+      assignments.set(chatId, updated);
+      return updated;
     },
   };
 
@@ -60,13 +82,24 @@ async function main() {
     error => error?.code === 'TRANSPORT_ASSIGNMENT_BOT_UNAVAILABLE',
   );
 
+  assert.equal((await runtime.getAssignment('vault-b')).membershipState, 'pending');
+  const locked = await runtime.withMembershipLock('vault-b', async () => 'locked-result');
+  assert.equal(locked, 'locked-result');
+  await runtime.markMembershipReady('vault-b', 'Bot01');
+  assert.equal((await runtime.getAssignment('vault-b')).membershipState, 'ready');
+  await runtime.markMembershipRepairNeeded('vault-b', 'Bot01');
+  assert.equal((await runtime.getAssignment('vault-b')).membershipState, 'repair');
+  assert.deepEqual(calls.locks, ['vault-b']);
+  assert.deepEqual(calls.ready, [['vault-b', 'Bot01']]);
+  assert.deepEqual(calls.repair, [['vault-b', 'Bot01']]);
+
   runtime._resetForTests();
   await assert.rejects(
     () => runtime.resolveForVault({ pool, state, chatId: 'vault-a' }),
     error => error?.code === 'TRANSPORT_ASSIGNMENT_POSTGRES_REQUIRED',
   );
 
-  console.log('PASS Direct persistent assignment runtime adapter: same vault, public pool sync, no secret persistence, no implicit reassignment');
+  console.log('PASS Direct persistent assignment runtime adapter: same vault, membership state/lock operations, public pool sync, no secret persistence, no implicit reassignment');
 }
 
 main().catch(error => {
