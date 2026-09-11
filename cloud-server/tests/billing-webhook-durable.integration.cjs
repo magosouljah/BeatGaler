@@ -51,13 +51,13 @@ function webhookHeaders(eventId, overrides = {}) {
   };
 }
 
-function adapterHarness() {
+function adapterHarness(environment = 'sandbox') {
   let verifyCalls = 0;
   return {
     get verifyCalls() { return verifyCalls; },
     adapter: {
       provider: 'polar',
-      environment: 'sandbox',
+      environment,
       async verifyWebhook({ rawBody, headers }) {
         verifyCalls += 1;
         assert.equal(Buffer.isBuffer(rawBody), true);
@@ -159,7 +159,8 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
       const row = (await pool.query(`
         SELECT provider,provider_environment,state,raw_body_sha256,validated_payload,
                resolved_user_id,received_at,processing_lease_owner
-        FROM billing_webhook_events WHERE event_id='msg_receive_1'
+        FROM billing_webhook_events
+        WHERE provider='polar' AND provider_environment='sandbox' AND event_id='msg_receive_1'
       `)).rows[0];
       assert.equal(row.provider, 'polar');
       assert.equal(row.provider_environment, 'sandbox');
@@ -185,11 +186,38 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
       assert.equal(first.duplicate, false);
       assert.equal(second.duplicate, true);
       assert.equal(second.state, 'RECEIVED');
-      const count = await pool.query("SELECT count(*)::int AS count FROM billing_webhook_events WHERE event_id='msg_duplicate_1'");
+      const count = await pool.query(`
+        SELECT count(*)::int AS count FROM billing_webhook_events
+        WHERE provider='polar' AND provider_environment='sandbox' AND event_id='msg_duplicate_1'
+      `);
       assert.equal(count.rows[0].count, 1);
     });
 
-    await t.test('reused webhook-id with altered signed content is an identity collision', async () => {
+    await t.test('same provider delivery ID is isolated between sandbox and production', async () => {
+      await resetInbox();
+      const sandbox = makeService(pool, adapterHarness('sandbox').adapter);
+      const production = makeService(pool, adapterHarness('production').adapter);
+      const raw = rawEvent({ data: { id: 'polar_sub_cross_env', customer_id: 'polar_customer_1' } });
+      const input = { rawBody: raw, headers: webhookHeaders('msg_cross_env_1') };
+
+      assert.equal((await sandbox.receive(input)).duplicate, false);
+      assert.equal((await production.receive(input)).duplicate, false);
+
+      const rows = await pool.query(`
+        SELECT provider_environment,state
+        FROM billing_webhook_events
+        WHERE provider='polar' AND event_id='msg_cross_env_1'
+        ORDER BY provider_environment
+      `);
+      assert.deepEqual(rows.rows, [
+        { provider_environment: 'production', state: 'RECEIVED' },
+        { provider_environment: 'sandbox', state: 'RECEIVED' },
+      ]);
+      assert.equal((await sandbox.getEvent('msg_cross_env_1')).environment, 'sandbox');
+      assert.equal((await production.getEvent('msg_cross_env_1')).environment, 'production');
+    });
+
+    await t.test('reused webhook-id with altered signed content is an identity collision within one environment', async () => {
       await resetInbox();
       const h = adapterHarness();
       const service = makeService(pool, h.adapter);
@@ -205,7 +233,10 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
         DurableWebhookIdentityError,
         'WEBHOOK_IDENTITY_COLLISION',
       );
-      const row = (await pool.query("SELECT state,validated_payload FROM billing_webhook_events WHERE event_id='msg_collision_1'")).rows[0];
+      const row = (await pool.query(`
+        SELECT state,validated_payload FROM billing_webhook_events
+        WHERE provider='polar' AND provider_environment='sandbox' AND event_id='msg_collision_1'
+      `)).rows[0];
       assert.equal(row.state, 'RECEIVED');
       assert.equal(row.validated_payload.data.status, 'active');
     });
@@ -308,10 +339,16 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
       const failed = await service.getEvent('msg_retry_1');
       assert.equal(failed.state, 'FAILED');
       assert.equal(failed.lastErrorCode, 'TEMP_PROVIDER_UNAVAILABLE');
-      const persistedError = (await pool.query("SELECT last_error_redacted FROM billing_webhook_events WHERE event_id='msg_retry_1'")).rows[0].last_error_redacted;
+      const persistedError = (await pool.query(`
+        SELECT last_error_redacted FROM billing_webhook_events
+        WHERE provider='polar' AND provider_environment='sandbox' AND event_id='msg_retry_1'
+      `)).rows[0].last_error_redacted;
       assert.equal(persistedError.includes('SECRET_PROVIDER_RESPONSE'), false);
 
-      await pool.query("UPDATE billing_webhook_events SET next_attempt_at=now()-interval '1 second' WHERE event_id='msg_retry_1'");
+      await pool.query(`
+        UPDATE billing_webhook_events SET next_attempt_at=now()-interval '1 second'
+        WHERE provider='polar' AND provider_environment='sandbox' AND event_id='msg_retry_1'
+      `);
       const retried = await service.processNext({ workerId: 'worker-retry-b', handlers: { 'subscription.active': handler } });
       assert.equal(retried.state, 'PROCESSED');
       assert.equal(retried.attemptCount, 2);
@@ -334,7 +371,10 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
       assert.equal(first.leaseOwner, 'worker-crashed');
       assert.equal(await service.claimNext('worker-too-early'), null);
 
-      await pool.query("UPDATE billing_webhook_events SET processing_lease_until=now()-interval '1 second' WHERE event_id='msg_crash_1'");
+      await pool.query(`
+        UPDATE billing_webhook_events SET processing_lease_until=now()-interval '1 second'
+        WHERE provider='polar' AND provider_environment='sandbox' AND event_id='msg_crash_1'
+      `);
       const recovered = await service.claimNext('worker-after-restart');
       assert.equal(recovered.eventId, 'msg_crash_1');
       assert.equal(recovered.state, 'PROCESSING');
