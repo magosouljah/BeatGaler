@@ -35,6 +35,10 @@ SET state = 'FAILED',
     updated_at = now()
 WHERE state = 'PROCESSING';
 
+-- Remove the 0006 state constraint before translating its legacy ignored state.
+ALTER TABLE billing_webhook_events
+  DROP CONSTRAINT IF EXISTS billing_webhook_events_state_check;
+
 UPDATE billing_webhook_events
 SET state = 'IGNORED'
 WHERE state = 'IGNORED_OUT_OF_ORDER';
@@ -43,9 +47,6 @@ UPDATE billing_webhook_events
 SET processed_at = updated_at
 WHERE state IN ('PROCESSED', 'IGNORED')
   AND processed_at IS NULL;
-
-ALTER TABLE billing_webhook_events
-  DROP CONSTRAINT IF EXISTS billing_webhook_events_state_check;
 
 ALTER TABLE billing_webhook_events
   ALTER COLUMN received_at SET DEFAULT now(),
