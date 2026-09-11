@@ -6,7 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:containment": "node ../scripts/regression-http-containment.mjs",
-    "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs"
+    "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs",
+    "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
+    "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +16,7 @@
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "3.1116.0",
     "@mtcute/web": "0.31.0",
+    "@polar-sh/sdk": "1.0.0-alpha.20",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "multer": "^1.4.5-lts.1",
