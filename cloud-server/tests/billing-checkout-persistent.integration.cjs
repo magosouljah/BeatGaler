@@ -11,6 +11,7 @@ const {
 } = require('../billing-checkout-persistent');
 
 const ADMIN_URL = process.env.BILLING_CHECKOUT_TEST_ADMIN_URL || '';
+let providerCheckoutSequence = 0;
 
 function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
@@ -53,9 +54,11 @@ function adapterHarness({
         calls.push(input);
         if (createDelayMs) await delay(createDelayMs);
         if (createError) throw createError;
+        providerCheckoutSequence += 1;
+        const sequence = providerCheckoutSequence;
         return {
-          id: `polar_checkout_${calls.length}`,
-          url: `https://sandbox.polar.test/checkout/${calls.length}`,
+          id: `polar_checkout_${sequence}`,
+          url: `https://sandbox.polar.test/checkout/${sequence}`,
         };
       },
       async getCustomerByExternalId(userId) {
