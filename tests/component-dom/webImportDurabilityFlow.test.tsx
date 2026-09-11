@@ -157,7 +157,7 @@ function Harness() {
         onCancel={review.cancelReview}
         isReviewNameTaken={() => false}
         onReleaseAudio={() => {}}
-        onSaved={async beat => { review.handleReviewedBeatSaved(beat); }}
+        onSaved={review.handleReviewedBeatSaved}
       />
     </div>
   );
@@ -175,14 +175,25 @@ function dispatchDrop(file: File) {
 }
 
 async function dispatchPicker(file: File) {
-  host.querySelector<HTMLButtonElement>('[data-testid="open-add"]')!.click();
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>('[data-testid="open-add"]')!.click();
+  });
   await vi.waitFor(() => expect(host.textContent).toContain("Choose MP3 or WAV"));
+
   const choose = Array.from(host.querySelectorAll("button"))
     .find(button => button.textContent?.includes("Choose MP3 or WAV"));
-  choose!.click();
-  const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(input, "files", { value: [file] });
-  input.dispatchEvent(new Event("change"));
+  expect(choose).toBeDefined();
+
+  await act(async () => {
+    choose!.click();
+  });
+
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+  expect(input).not.toBeNull();
+  Object.defineProperty(input!, "files", { configurable: true, value: [file] });
+  await act(async () => {
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 beforeEach(async () => {
@@ -261,11 +272,14 @@ describe("BeatGaler Web import durability", () => {
       decode.mockReturnValueOnce(new Promise(resolve => { finishDecode = resolve; }));
       const source = new File(["hq-wav"], `Durable ${entry}.wav`, { type: "audio/wav" });
 
-      await act(async () => {
-        if (entry === "drop") dispatchDrop(source);
-        else await dispatchPicker(source);
-        await vi.waitFor(() => expect(saveButton()).toBeDefined());
-      });
+      if (entry === "drop") {
+        await act(async () => {
+          dispatchDrop(source);
+        });
+      } else {
+        await dispatchPicker(source);
+      }
+      await vi.waitFor(() => expect(saveButton()).toBeDefined());
 
       // Review must be usable before WAV → MASTER preparation finishes.
       expect(network.upload).not.toHaveBeenCalled();
@@ -273,8 +287,8 @@ describe("BeatGaler Web import durability", () => {
 
       await act(async () => {
         saveButton()!.click();
-        await vi.waitFor(() => expect(saveButton()).toBeUndefined());
       });
+      await vi.waitFor(() => expect(saveButton()).toBeUndefined());
 
       // The real Web queue has started, but commitImportedBeat must wait for MASTER.
       expect(network.upload).not.toHaveBeenCalled();
@@ -287,9 +301,9 @@ describe("BeatGaler Web import durability", () => {
           sampleRate: 44100,
           getChannelData: () => new Float32Array(4410),
         });
-        await vi.waitFor(() => expect(network.replaceLibraryIndex).toHaveBeenCalledOnce());
-        await vi.waitFor(() => expect(latestBeats.some(beat => beat.telegram_message_id === 100)).toBe(true));
       });
+      await vi.waitFor(() => expect(network.replaceLibraryIndex).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(latestBeats.some(beat => beat.telegram_message_id === 100)).toBe(true));
 
       expect(network.upload.mock.calls.map(([input]) => input.kind)).toEqual(["MASTER", "WAV"]);
       expect(persistedManifest.beats).toHaveLength(1);
@@ -300,6 +314,10 @@ describe("BeatGaler Web import durability", () => {
         mime: "audio/mpeg",
       });
       expect(persistedManifest.beats[0].files).toHaveLength(1);
+      expect(persistedManifest.beats[0].files[0].manifest).toMatchObject({
+        telegram_message_id: 101,
+        filename: `Durable ${entry}.wav`,
+      });
       expect(latestUploadErrors).toEqual({});
 
       // Fresh app-side library load: discard transport/window state and read only persisted INDEX.
@@ -314,7 +332,10 @@ describe("BeatGaler Web import durability", () => {
         has_wav: true,
       });
       expect(reloaded[0].assets?.master?.object_id).toBe("direct:100");
-      expect(reloaded[0].assets?.wav?.object_id).toBe("direct:101");
+      expect(reloaded[0].assets?.wav).toMatchObject({
+        object_id: `WAV:${reloaded[0].id}`,
+        filename: `Durable ${entry}.wav`,
+      });
     },
   );
 });
