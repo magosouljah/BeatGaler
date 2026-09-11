@@ -13,6 +13,8 @@ const TARGET_ROUTES = new Set([
 ]);
 const DEFAULT_PROD_DC_ID = 2;
 const TIMEOUT_MS = 60_000;
+const BOUNDARY_TIMEOUT_MS = 65_000;
+const CLEANUP_TIMEOUT_MS = 5_000;
 const PROD_DC_SUBDOMAINS = {
   1: "pluto",
   2: "venus",
@@ -25,10 +27,13 @@ let permanentAuthorizationTail = Promise.resolve();
 let mtcutePromise = null;
 
 function timeout(promise, label, ms = TIMEOUT_MS) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
-  ]);
+  let timer = null;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    Promise.resolve(promise).then(resolve, reject);
+  }).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
 }
 
 function serializePermanentAuthorization(task) {
@@ -191,9 +196,14 @@ async function makeManualConnection(m, crypto, apiId, dcId) {
     const timer = setTimeout(() => reject(new Error("controlled binder socket open timeout")), TIMEOUT_MS);
     connection.onUsable.add(() => { clearTimeout(timer); resolve(); });
   });
-  connection.connect();
-  await opened;
-  return connection;
+  try {
+    connection.connect();
+    await opened;
+    return connection;
+  } catch (error) {
+    await timeout(connection.destroy().catch(() => {}), `controlled binder cleanup on DC ${dcId}`, CLEANUP_TIMEOUT_MS).catch(() => {});
+    throw error;
+  }
 }
 
 function longJson(value) {
@@ -218,8 +228,8 @@ async function authorizePermanent(session) {
 
   const promise = serializePermanentAuthorization(async () => {
     assert.ok(globalThis.WebSocket, "Node runtime must provide WebSocket for productive temporary auth.");
-    const m = await loadMtcuteInternals();
-    const crypto = await makeCrypto(m);
+    const m = await timeout(loadMtcuteInternals(), "mtcute internals load");
+    const crypto = await timeout(makeCrypto(m), "temporary auth crypto initialization");
     let dcId = DEFAULT_PROD_DC_ID;
     let connection;
     let permanentKeyBytes;
@@ -249,7 +259,7 @@ async function authorizePermanent(session) {
         const migrate = /^USER_MIGRATE_(\d+)$/.exec(String(authorization.errorMessage || ""));
         if (migrate) {
           const nextDcId = parseProductionDcId(migrate[1], "USER_MIGRATE target");
-          await connection.destroy().catch(() => {});
+          await timeout(connection.destroy().catch(() => {}), `controlled binder migration cleanup on DC ${dcId}`, CLEANUP_TIMEOUT_MS).catch(() => {});
           permanentKeyBytes.fill(0);
           connection = undefined;
           permanentKeyBytes = undefined;
@@ -401,7 +411,11 @@ function installProductiveTempAuthBoundary(express) {
       res.json = body => {
         if (sent) return res;
         sent = true;
-        void transformTransportBody(req, body).then(
+        void timeout(
+          transformTransportBody(req, body),
+          `${route} temporary authorization boundary`,
+          BOUNDARY_TIMEOUT_MS,
+        ).then(
           transformed => originalJson(transformed),
           error => {
             console.error(`[direct-temp-auth] ${route} boundary failed:`, error?.message || error);
