@@ -9,7 +9,10 @@ const migrations = assertInitialSchemaContract();
 assert(migrations.length >= 1);
 assert.equal(migrations[0].version, '0001');
 assert.match(migrations[0].checksumSha256, /^[0-9a-f]{64}$/);
-assert(migrations.some(item => item.version === '0010' && item.name === '0010_persistent_transport_assignment.sql'));
+const persistentAssignmentMigration = migrations.find(item => item.version === '0010' && item.name === '0010_persistent_transport_assignment.sql');
+assert(persistentAssignmentMigration, 'persistent transport assignment migration 0010 is required');
+assert(persistentAssignmentMigration.sql.includes('DROP TRIGGER IF EXISTS direct_leases_active_cap_trigger ON direct_leases'), 'migration 0010 must retire the old direct lease cap trigger');
+assert(persistentAssignmentMigration.sql.includes('DROP FUNCTION IF EXISTS enforce_transport_bot_active_lease_cap()'), 'migration 0010 must retire the old direct lease cap function');
 
 const sql = migrations.map(item => item.sql).join('\n');
 
@@ -24,8 +27,6 @@ for (const token of [
   'secret_key_version',
   'access_token_nonce',
   'refresh_token_nonce',
-  'enforce_transport_bot_active_lease_cap',
-  'active_count >= 4',
   'pg_advisory_xact_lock',
   'transport_bot_id text REFERENCES transport_bots(id)',
   "transport_membership_state text NOT NULL DEFAULT 'pending'",
