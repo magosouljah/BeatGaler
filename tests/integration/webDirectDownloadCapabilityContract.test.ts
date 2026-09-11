@@ -22,7 +22,8 @@ describe("Web Direct download capability contract", () => {
     const exportGuard = transport.match(/if \(purpose === "export"\) \{([\s\S]*?)\n    \}/)?.[1] || "";
     const requestedCapability = exportGuard.match(/beginOperation\(\s*"([^"]+)"/)?.[1] || "";
 
-    expect(exportGuard).toContain('purpose === "export"'.replace('purpose === "export"', "beginOperation"));
+    expect(transport).toContain('if (purpose === "export")');
+    expect(exportGuard).toContain("beginOperation");
     expect(requestedCapability).toBe("download");
     expect(OPERATION_SCOPE_RULES.has(requestedCapability)).toBe(true);
     expect(OPERATION_SCOPE_RULES.get(requestedCapability)?.has("message")).toBe(true);
