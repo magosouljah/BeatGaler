@@ -1,0 +1,85 @@
+name: Direct - Persistent Vault Assignment
+
+on:
+  push:
+    branches:
+      - direct/persistent-vault-assignment
+  pull_request:
+    paths:
+      - package.json
+      - cloud-server/direct-vault-assignment.js
+      - cloud-server/migrations/**
+      - cloud-server/tests/direct-vault-assignment*
+      - .github/workflows/direct-persistent-vault-assignment.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: direct-persistent-assignment-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud_unit:
+    name: Cloud unit gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked npm graphs
+        run: |
+          npm ci
+          npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Check persistent assignment sources
+        run: |
+          node --check cloud-server/direct-vault-assignment.js
+          node --check cloud-server/tests/direct-vault-assignment.test.cjs
+          node --check cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
+          node --check cloud-server/tests/direct-vault-assignment.postgres.worker.cjs
+
+      - name: Run required Cloud unit gate
+        run: npm run test:unit:cloud
+
+  postgres_assignment:
+    name: PostgreSQL persistent assignment gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_direct_assignment_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_direct_assignment_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_direct_assignment_ci
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked cloud-server graph
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+
+      - name: Run real PostgreSQL assignment integration
+        run: node cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
