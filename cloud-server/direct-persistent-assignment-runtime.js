@@ -12,7 +12,14 @@ function assignmentError(message, code) {
 
 function configure({ pool = null, store = null } = {}) {
   if (store) {
-    for (const method of ['syncTransportBots', 'assignIfMissing']) {
+    for (const method of [
+      'syncTransportBots',
+      'assignIfMissing',
+      'getAssignment',
+      'withMembershipLock',
+      'markMembershipReady',
+      'markMembershipRepairNeeded',
+    ]) {
       if (typeof store[method] !== 'function') {
         throw new Error(`Persistent Direct assignment store must implement ${method}().`);
       }
@@ -72,6 +79,30 @@ async function resolveForVault({ pool, state, chatId }) {
   return Object.freeze({ assignment, bot });
 }
 
+async function getAssignment(chatId) {
+  const vaultId = String(chatId || '').trim();
+  if (!vaultId) throw new Error('chatId is required for persistent Direct assignment.');
+  return requiredStore().getAssignment({ chatId: vaultId });
+}
+
+async function withMembershipLock(chatId, callback) {
+  const vaultId = String(chatId || '').trim();
+  if (!vaultId) throw new Error('chatId is required for Direct membership lock.');
+  return requiredStore().withMembershipLock({ chatId: vaultId }, callback);
+}
+
+async function markMembershipReady(chatId, expectedTransportBotId) {
+  const vaultId = String(chatId || '').trim();
+  if (!vaultId) throw new Error('chatId is required to mark Direct membership ready.');
+  return requiredStore().markMembershipReady({ chatId: vaultId }, expectedTransportBotId);
+}
+
+async function markMembershipRepairNeeded(chatId, expectedTransportBotId) {
+  const vaultId = String(chatId || '').trim();
+  if (!vaultId) throw new Error('chatId is required to mark Direct membership repair.');
+  return requiredStore().markMembershipRepairNeeded({ chatId: vaultId }, expectedTransportBotId);
+}
+
 function _resetForTests() {
   assignmentStore = null;
 }
@@ -79,6 +110,10 @@ function _resetForTests() {
 module.exports = {
   configure,
   resolveForVault,
+  getAssignment,
+  withMembershipLock,
+  markMembershipReady,
+  markMembershipRepairNeeded,
   publicPoolState,
   _resetForTests,
 };
