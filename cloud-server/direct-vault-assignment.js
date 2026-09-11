@@ -1,6 +1,7 @@
 'use strict';
 
 const ASSIGNMENT_LOCK_KEY = 'beatgaler:direct-vault-assignment:v1';
+const MEMBERSHIP_LOCK_PREFIX = 'beatgaler:direct-vault-membership:v1';
 const MEMBERSHIP_STATES = Object.freeze(['pending', 'ready', 'repair']);
 
 function requiredPool(pool) {
@@ -49,6 +50,12 @@ function assignmentError(message, code) {
   const error = new Error(message);
   error.code = code;
   return error;
+}
+
+function membershipLockKey(selector) {
+  const normalized = normalizeVaultSelector(selector);
+  if (normalized.chatId) return `${MEMBERSHIP_LOCK_PREFIX}:chat:${normalized.chatId}`;
+  return `${MEMBERSHIP_LOCK_PREFIX}:vault:${normalized.vaultId}`;
 }
 
 class DirectVaultAssignmentStore {
@@ -158,6 +165,27 @@ class DirectVaultAssignmentStore {
     }
   }
 
+  async withMembershipLock(vault, callback) {
+    if (typeof callback !== 'function') throw new Error('Membership lock callback is required.');
+    const lockKey = membershipLockKey(vault);
+    const client = await this.pool.connect();
+    let locked = false;
+    try {
+      // Session-level advisory lock: it remains held across Telegram network
+      // work without keeping an SQL transaction open. Every provisioning or
+      // repair caller for this vault uses the same key and therefore singleflights
+      // membership mutations across Cloud processes.
+      await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+      locked = true;
+      return await callback();
+    } finally {
+      if (locked) {
+        try { await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]); } catch (_) {}
+      }
+      client.release();
+    }
+  }
+
   async setMembershipState(vault, state, expectedTransportBotId = null) {
     const normalizedState = String(state || '').trim().toLowerCase();
     if (!MEMBERSHIP_STATES.includes(normalizedState)) {
@@ -199,10 +227,12 @@ function createDirectVaultAssignmentStore(pool) {
 
 module.exports = {
   ASSIGNMENT_LOCK_KEY,
+  MEMBERSHIP_LOCK_PREFIX,
   MEMBERSHIP_STATES,
   normalizeVaultSelector,
   normalizeTransportBot,
   assignmentFromRow,
+  membershipLockKey,
   DirectVaultAssignmentStore,
   createDirectVaultAssignmentStore,
 };
