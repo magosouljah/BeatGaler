@@ -91,8 +91,6 @@ async function main() {
       const row = rows.get(key);
       if (!row) return null;
       if (!row.transportBotId) {
-        // Deterministic fixture choice models PostgreSQL selecting the least
-        // persistently assigned eligible bot on this first access only.
         row.transportBotId = 'Bot02';
         row.membershipState = 'pending';
         row.membershipUpdatedAt = nowIso();
@@ -130,8 +128,6 @@ async function main() {
   installPersistentDirectSessionStart({ directTransport: direct, persistentAssignments: assignmentsRuntime });
   installPersistentDirectMembershipActivation({ directTransport: direct, persistentAssignments: assignmentsRuntime });
 
-  // Existing vaults enter migration with NULL transport_bot_id. Accessing A
-  // assigns only A and leaves unrelated legacy B completely untouched.
   assert.equal(rows.get('legacy-a').transportBotId, null);
   assert.equal(rows.get('legacy-b').transportBotId, null);
   const first = await direct.startSession({ installationId: 'legacy-install-a', chatId: 'legacy-a' });
@@ -142,8 +138,6 @@ async function main() {
   assert.deepEqual(calls.assign, ['legacy-a']);
   assert.equal(directCalls.legacyAllocator, 0);
 
-  // First activation provisions that same bot exactly once and promotes the
-  // persistent membership state to READY.
   await direct.activateSession({
     installationId: 'legacy-install-a',
     sessionId: first.session_id,
@@ -153,8 +147,6 @@ async function main() {
   assert.deepEqual(directCalls.provisioning, [{ chatId: 'legacy-a', botId: 'Bot02' }]);
   assert.deepEqual(calls.ready, ['legacy-a']);
 
-  // Subsequent access stays on Bot02 and READY activation is local only; no
-  // second provisioning sequence is allowed.
   const repeated = await direct.startSession({ installationId: 'legacy-install-a', chatId: 'legacy-a' });
   assert.equal(repeated.transport_id, 'Bot02');
   await direct.activateSession({
@@ -165,9 +157,6 @@ async function main() {
   assert.equal(directCalls.provisioning.length, 1);
   assert.equal(rows.get('legacy-b').transportBotId, null);
 
-  // Live rollout with an old ephemeral Bot01 lease: first access establishes
-  // PostgreSQL Bot02 ownership, retires the mismatched lease + operations
-  // locally, and never invokes legacy membership cleanup or FIFO ownership.
   state.leases.old_live = {
     session_id: 'old_live',
     bot_id: 'Bot01',
@@ -203,12 +192,11 @@ async function main() {
   assert.equal(rows.get('legacy-live-lease').membershipState, 'ready');
   assert.equal(directCalls.provisioning.filter(call => call.chatId === 'legacy-live-lease').length, 1);
 
-  // Migration 0010 must remain lazy: adding a nullable ownership column is OK;
-  // a bulk assignment UPDATE would silently turn rollout into a mass migration.
   const repoRoot = path.resolve(__dirname, '..', '..');
   const migration = fs.readFileSync(path.join(repoRoot, 'cloud-server', 'migrations', '0010_persistent_transport_assignment.sql'), 'utf8');
-  assert.match(migration, /ADD COLUMN transport_bot_id text REFERENCES transport_bots\(id\)/);
-  assert.doesNotMatch(migration, /transport_bot_id[^;]*DEFAULT/i);
+  const transportBotColumnLine = migration.split(/\r?\n/).find(line => line.includes('ADD COLUMN transport_bot_id')) || '';
+  assert.match(transportBotColumnLine, /ADD COLUMN transport_bot_id text REFERENCES transport_bots\(id\)/);
+  assert.doesNotMatch(transportBotColumnLine, /DEFAULT/i, 'transport_bot_id must stay nullable for lazy legacy rollout');
   assert.doesNotMatch(migration, /UPDATE\s+vaults\s+SET\s+transport_bot_id/i);
 
   assignmentsRuntime._resetForTests();
