@@ -10,6 +10,7 @@ on:
       - cloud-server/direct-vault-assignment.js
       - cloud-server/migrations/**
       - cloud-server/tests/direct-vault-assignment*
+      - cloud-server/tests/postgres-live.integration.cjs
       - .github/workflows/direct-persistent-vault-assignment.yml
   workflow_dispatch:
 
@@ -46,6 +47,7 @@ jobs:
           node --check cloud-server/tests/direct-vault-assignment.test.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.worker.cjs
+          node --check cloud-server/tests/postgres-live.integration.cjs
 
       - name: Run required Cloud unit gate
         run: npm run test:unit:cloud
@@ -83,3 +85,6 @@ jobs:
 
       - name: Run real PostgreSQL assignment integration
         run: node cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
+
+      - name: Run existing PostgreSQL live integration
+        run: node cloud-server/tests/postgres-live.integration.cjs
