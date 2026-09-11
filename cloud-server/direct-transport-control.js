@@ -1058,65 +1058,80 @@ async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
   const snapshot = stateSnapshot(pool);
   const lease = snapshot.leases[String(leaseInput?.session_id || leaseInput || '')];
   if (!lease) return { ok: true, released: false };
+
+  // Session lifecycle is intentionally membership-neutral. Persistent
+  // vault<->transport ownership survives logout, tab close, heartbeat timeout,
+  // crash/stale cleanup and session replacement. No MASTER lookup, getEntity,
+  // kick, unban or membership probe belongs on this path.
   mutateState(pool, state => {
     const current = state.leases[lease.session_id];
     if (current) current.status = 'STOPPING';
   });
 
-  const bot = pool.find(item => item.id === lease.bot_id);
-  let masterInfo = null;
-  let removed = false;
-  try {
-    const runtime = await runtimeForLease(lease);
-    masterInfo = await masterForVault(lease.chat_id);
-    const botEntity = runtime.bot.telegram_username
-      ? await masterInfo.client.getEntity(`@${runtime.bot.telegram_username}`)
-      : await masterInfo.client.getEntity(runtime.bot.telegram_user_id);
-    await kickAndUnban(masterInfo.client, masterInfo.vault, botEntity);
-    removed = true;
-  } catch (error) {
-    if (isDefinitiveMissingVaultError(error)) {
-      // A deleted vault has no remaining membership to clean up.
-      removed = true;
-      diag('SESSION_RELEASE_MISSING_VAULT', {
-        session_id: lease.session_id,
-        transport_id: lease.bot_id,
-        vault: lease.chat_id,
-      });
-    } else {
-      mutateState(pool, state => {
-        state.bots[lease.bot_id].quarantined = true;
-        state.bots[lease.bot_id].quarantine_reason = `vault removal failed: ${error?.message || error}`;
-        if (state.leases[lease.session_id]) state.leases[lease.session_id].status = 'QUARANTINED';
-      });
-      throw new Error(`Transport cleanup could not be confirmed; bot retained for recovery: ${error?.message || error}`);
-    }
-  } finally {
-    try { if (masterInfo?.client) await masterInfo.client.disconnect(); } catch (_) {}
-  }
-
-  if (!removed) throw new Error('Transport cleanup could not be confirmed.');
+  // deleteLease removes every operation owned by the lease. runtimeSessions is
+  // the remaining process-local credential/session material for this lease.
   deleteLease(lease.session_id);
   runtimeSessions.delete(lease.session_id);
-  mutateState(pool, state => {
-    // Repair only a quarantine caused by an earlier vault-removal failure.
-    // Do not clear unrelated quarantines such as failed token rotation.
-    const botState = state.bots[lease.bot_id];
-    if (String(botState?.quarantine_reason || '').startsWith('vault removal failed:')) {
-      botState.quarantined = false;
-      botState.quarantine_reason = null;
-    }
-    state.bots[lease.bot_id].rotation_pending = TOKEN_ROTATION_ENABLED;
+
+  const remaining = leasesForBot(stateSnapshot(pool), lease.bot_id).length;
+  let rotation = { rotated: false, pending: false, disabled: !TOKEN_ROTATION_ENABLED };
+  if (TOKEN_ROTATION_ENABLED && remaining === 0) {
+    mutateState(pool, state => {
+      const botState = state.bots[lease.bot_id];
+      if (botState && !botState.quarantined) botState.rotation_pending = true;
+    });
+    rotation = await maybeRotatePendingBot(lease.bot_id);
+  }
+
+  if (!TOKEN_ROTATION_ENABLED) {
+    diag('SESSION_RELEASE_NO_TOKEN_REVOKE', { session_id: lease.session_id, transport_id: lease.bot_id, reason });
+  }
+  diag('SESSION_RELEASE_MEMBERSHIP_PRESERVED', {
+    session_id: lease.session_id,
+    transport_id: lease.bot_id,
+    vault: lease.chat_id,
+    reason,
+    remaining_vaults: remaining,
   });
-  const rotation = TOKEN_ROTATION_ENABLED
-    ? await maybeRotatePendingBot(lease.bot_id)
-    : { rotated: false, pending: false, disabled: true };
-  if (!TOKEN_ROTATION_ENABLED) diag('SESSION_RELEASE_NO_TOKEN_REVOKE', { session_id: lease.session_id, transport_id: lease.bot_id, reason });
-  const activeCount = leasesForBot(stateSnapshot(pool), lease.bot_id).length;
-  console.log(`[direct] SESSION_RELEASED installation=${lease.installation_id.slice(0, 8)}… transport=${lease.bot_id} reason=${reason} remaining_vaults=${activeCount} rotation_pending=${Boolean(rotation?.pending)}`);
-  return { ok: true, released: true, rotation_pending: Boolean(rotation?.pending), transport_id: bot?.id || lease.bot_id };
+  console.log('[direct] SESSION_RELEASED installation=' + lease.installation_id.slice(0, 8) + '… transport=' + lease.bot_id + ' reason=' + reason + ' remaining_vaults=' + remaining + ' rotation_pending=' + Boolean(rotation?.pending) + ' membership=preserved');
+  return {
+    ok: true,
+    released: true,
+    rotation_pending: Boolean(rotation?.pending),
+    transport_id: lease.bot_id,
+    membership_preserved: true,
+  };
 }
 
+async function decommissionVaultMembership({ chatId, transportBotId }) {
+  const vaultId = String(chatId || '').trim();
+  const botId = String(transportBotId || '').trim();
+  if (!vaultId || !botId) throw new Error('chatId and transportBotId are required for explicit Direct membership decommission.');
+  const pool = loadPool();
+  const bot = pool.find(item => item.id === botId);
+  if (!bot) throw new Error('Unknown transport bot ' + botId + '.');
+
+  let username = bot.telegram_username || null;
+  let userId = bot.telegram_user_id || null;
+  if (!username || !userId) {
+    const token = await resolveManagedToken(bot);
+    const identity = await resolveBotIdentityViaHttp(token);
+    username = username || identity.telegram_username;
+    userId = userId || identity.telegram_user_id;
+  }
+
+  const masterInfo = await masterForVault(vaultId);
+  try {
+    const botEntity = username
+      ? await masterInfo.client.getEntity('@' + String(username).replace(/^@/, ''))
+      : await masterInfo.client.getEntity(userId);
+    await kickAndUnban(masterInfo.client, masterInfo.vault, botEntity);
+    diag('VAULT_MEMBERSHIP_DECOMMISSIONED', { vault: vaultId, transport_id: botId });
+    return { ok: true, decommissioned: true, chat_id: vaultId, transport_id: botId };
+  } finally {
+    try { await masterInfo.client.disconnect(); } catch (_) {}
+  }
+}
 
 async function cleanupLeaseSingleflight(leaseInput, options = {}) {
   const sessionId = String(leaseInput?.session_id || leaseInput || '');
@@ -1335,6 +1350,7 @@ module.exports = {
   beginOperation,
   endOperation,
   stopSession,
+  decommissionVaultMembership,
   verifyMessage,
   commitIndexCopyOnWrite,
   downloadMessageBuffer,
