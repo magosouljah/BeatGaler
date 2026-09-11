@@ -39,4 +39,14 @@ describe("Direct session startup liveness", () => {
     expect(boundary).toContain("BOUNDARY_TIMEOUT_MS");
     expect(boundary).toContain("Temporary transport authorization is unavailable.");
   });
+
+  it("does not publish a source-session invalidation until the worker data plane was initialized", () => {
+    const worker = source("src/features/cloud/webTransportWorkerClient.ts");
+
+    expect(worker).toContain("private dataPlaneInitialized = false;");
+    expect(worker).toContain("private publishTransportInvalidatedIfReady(): void");
+    expect(worker).toContain("this.dataPlaneInitialized = true;");
+    expect(worker).toContain("this.publishTransportInvalidatedIfReady();");
+    expect(worker).toContain("WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000");
+  });
 });
