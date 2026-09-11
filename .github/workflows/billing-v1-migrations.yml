@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   billing-v1-migrations:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:18
@@ -30,10 +30,12 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825aa50bf2007fbd43be
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -42,7 +44,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
       - name: Install Cloud dependencies
         working-directory: cloud-server
-        run: npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test Billing V1 migrations in isolated PostgreSQL
         working-directory: cloud-server
         env:
