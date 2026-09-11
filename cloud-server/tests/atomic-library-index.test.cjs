@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createAtomicLibraryIndexCoordinator } = require('../atomic-library-index');
+const { createAtomicLibraryIndexCoordinator, installAtomicLibraryIndexBootstrap } = require('../atomic-library-index');
 
 function fakeAdvisoryPool() {
   let tail = Promise.resolve();
@@ -91,4 +91,22 @@ test('durability failure cleans the candidate and does not report success', asyn
   await assert.rejects(() => h.coordinator.ensure('vault-5'), /pointer failed/);
   assert.equal(h.pointer, 0);
   assert.deepEqual(h.deleted, [101]);
+});
+
+test('legacy HTTP bootstrap cannot create INDEX with MASTER or return INDEX bytes', async () => {
+  const routes = [];
+  const application = { post(route, ...handlers) { routes.push({ route, handlers }); } };
+  const forbidden = () => { throw new Error('Cloud INDEX data plane must be unreachable'); };
+  installAtomicLibraryIndexBootstrap({ application }, {
+    pool: { connect: forbidden },
+    direct: { getIndexPointer: forbidden, commitIndexCopyOnWrite: forbidden, recordIndexPointer: forbidden, deleteMessages: forbidden },
+  });
+  application.post('/some-route', () => {});
+  const handler = routes.find(row => row.route === '/transport/index/ensure').handlers[0];
+  let status; let body;
+  const res = { status(value) { status = value; return this; }, json(value) { body = value; return this; } };
+  await handler({ body: { beatgalerUserId: 'known-installation' }, beatgalerAuthorizedInstallationId: 'known-installation' }, res);
+  assert.equal(status, 410);
+  assert.equal(body.code, 'DIRECT_INDEX_REQUIRED');
+  assert.equal(Object.hasOwn(body, 'manifest'), false);
 });

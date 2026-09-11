@@ -109,23 +109,8 @@ function installAtomicLibraryIndexBootstrap(express, { pool, dataDir = __dirname
   application.post = function atomicIndexPatchedPost(routePath, ...handlers) {
     if (!this.__beatgalerAtomicIndexRouteInstalled) {
       this.__beatgalerAtomicIndexRouteInstalled = true;
-      previousPost.call(this, '/transport/index/ensure', async (req, res) => {
-        const installationId = String(req.body?.beatgalerUserId || '').trim();
-        const authorizedInstallation = String(req.beatgalerAuthorizedInstallationId || installationId).trim();
-        if (!installationId || !authorizedInstallation || installationId !== authorizedInstallation) {
-          return res.status(403).json({ error: 'Atomic library-index bootstrap requires the authenticated installation.' });
-        }
-        if (!coordinator) {
-          return res.status(503).json({ error: 'Atomic library-index bootstrap requires PostgreSQL authority.' });
-        }
-        try {
-          const vaultId = linkedVaultId(dataDir, installationId);
-          const result = await coordinator.ensure(vaultId);
-          return res.json({ ok: true, status: result.status, message_id: result.messageId, manifest: EMPTY_LIBRARY_INDEX });
-        } catch (error) {
-          console.error('[index] atomic bootstrap failed:', error?.message || error);
-          return res.status(503).json({ error: 'Atomic library-index bootstrap could not be committed.' });
-        }
+      previousPost.call(this, '/transport/index/ensure', (_req, res) => {
+        return res.status(410).json({ error: 'Create the library INDEX through the active Direct transport.', code: 'DIRECT_INDEX_REQUIRED' });
       });
     }
     return previousPost.call(this, routePath, ...handlers);

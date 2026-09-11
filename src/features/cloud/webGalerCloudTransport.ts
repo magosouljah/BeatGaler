@@ -5,6 +5,7 @@ import {
   reconcileWebTransportRouting,
 } from "./webTransportSession";
 import { WebTransportWorkerClient } from "./webTransportWorkerClient";
+import { isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from "./webLibraryBootstrap";
 import type { Beat } from "../../types";
 import { commitWebImportedBeat, type WebImportCommitProgress, type WebImportFiles } from "../import/webImportCommit";
 import { commitWebBeatEdit, type WebBeatEditProgress } from "../edit/webBeatEdit";
@@ -215,6 +216,24 @@ export class WebGalerCloudTransport {
         threadId,
       }, onProgress),
     );
+  }
+
+  async ensureLibraryIndex(): Promise<WebLibraryBootstrapResult> {
+    return this.controller.withOperation("replace_index", { objectType: "index", objectIds: ["pinned"] }, async () => {
+      // Re-read after acquiring the existing per-vault INDEX operation. A second
+      // installation must reuse the first winner, including its real manifest.
+      try {
+        const current = await this.worker.getLibraryIndex();
+        if (!current.messageId) throw new Error("Direct INDEX returned no message id.");
+        return { ...current, messageId: current.messageId, status: "existing" };
+      } catch (error) {
+        if (!isMissingWebLibraryIndexError(error)) throw error;
+      }
+      const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] };
+      const result = await this.worker.replaceLibraryIndex({ manifest, expectedMessageId: 0 });
+      await commitWebTransportIndexPointer({ messageId: result.messageId, sourceId: "direct-bootstrap", beatCount: 0 });
+      return { status: "created", messageId: result.messageId, manifest };
+    });
   }
 
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {

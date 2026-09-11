@@ -12,6 +12,7 @@ const libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.t
 const beatCard = readFileSync("src/components/BeatCard.tsx", "utf8");
 const webAdapter = readFileSync("src/platform/webAdapter.ts", "utf8");
 const viteConfig = readFileSync("vite.config.ts", "utf8");
+const accountGate = readFileSync("src/components/AccountGate.tsx", "utf8");
 const nginx = readFileSync("deploy/web/beatgaler.com.conf", "utf8");
 
 describe("Issue #97 startup reveal architecture", () => {
@@ -65,9 +66,9 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("keeps productive Web auth on the same-origin proxy and clears remembered legacy endpoints", () => {
-    expect(viteConfig).toContain('if (platform.kind === "web") {\\n    if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);');
-    expect(viteConfig).toContain('if (platform.kind === "web") return sameOriginProxyApi() || "";');
-    expect(viteConfig).not.toContain('if (trustedRememberedApi(remembered) && await probe(remembered, 1200)) return remembered;\\n  const sameOriginProxy = sameOriginProxyApi();');
+    expect(accountGate).toContain('if (platform.kind === "web") {\n    if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);');
+    expect(accountGate).toContain('if (platform.kind === "web") return sameOriginProxyApi() || "";');
+    expect(viteConfig).not.toContain('code.replace(unsafeCloudResolver');
   });
 
   it("serves WebAssembly with the streaming MIME type", () => {

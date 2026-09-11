@@ -619,7 +619,7 @@ function assertIndexNotCancelled(requestId: string | null): void {
   }
 }
 
-async function getLibraryIndex(requestId: string | null = null): Promise<WebTransportLibraryIndexResult> {
+async function getLibraryIndex(requestId: string | null = null, allowMissing = false): Promise<WebTransportLibraryIndexResult> {
   const active = requireConnected();
   const started = Date.now();
   let failures = 0;
@@ -639,7 +639,10 @@ async function getLibraryIndex(requestId: string | null = null): Promise<WebTran
         assertIndexNotCancelled(requestId);
         if (!indexPriorityAllowed()) { resumed = true; continue; }
         const pinnedId = Number(fullChat.pinnedMsgId || 0);
-        if (!Number.isInteger(pinnedId) || pinnedId <= 0) throw new Error("Galer Cloud library index is still synchronizing.");
+        if (!Number.isInteger(pinnedId) || pinnedId <= 0) {
+          if (allowMissing) return { messageId: 0, manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] } };
+          throw new Error("Galer Cloud library index is still synchronizing.");
+        }
         const [message] = await active.getMessages(chatId, [pinnedId]);
         assertIndexNotCancelled(requestId);
         if (!indexPriorityAllowed()) { resumed = true; continue; }
@@ -711,7 +714,9 @@ async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promis
   const root = input.manifest && typeof input.manifest === "object" && !Array.isArray(input.manifest)
     ? input.manifest as Record<string, unknown> : null;
   if (!root || root.schema !== "beatgaler.telegram.library" || Number(root.version) !== 2) throw new Error("Galer Cloud refused an invalid library update.");
-  const current = await getLibraryIndex();
+  // Only an explicit empty-vault bootstrap may start without an INDEX. Network,
+  // corrupt-document and foreign-pin errors still fail closed.
+  const current = await getLibraryIndex(null, input.expectedMessageId === 0);
   if (current.messageId !== input.expectedMessageId) throw new Error("Your library changed on another device. Retry Save to use the latest version.");
   const candidateIds = libraryIdentityIds(root);
   const missing = Array.from(libraryIdentityIds(current.manifest)).filter(id => !candidateIds.has(id));

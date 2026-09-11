@@ -3,6 +3,7 @@ import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics
 import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession } from "../../components/AccountGate";
 import { readWebCsrfToken } from "../auth/webSessionBootstrap";
 import { getWebClientId } from "../../platform/webClientId";
+import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
 import {
   prepareWebTempAuth,
   type TempAuthBinding,
@@ -415,5 +416,7 @@ export async function commitWebTransportIndexPointer(input: {
 
 /** Telegram remains authoritative. Reconcile repairs Cloud routing after the full INDEX is read. */
 export async function reconcileWebTransportRouting(manifest: unknown): Promise<void> {
-  await transportRequest("/transport/routing/reconcile", { manifest });
+  const routes = updatePlaybackRoutingCacheFromManifest(manifest).routes;
+  const routingSnapshot = Object.fromEntries(Object.entries(routes).map(([beatId, route]) => [beatId, route.messageId]));
+  await transportRequest("/transport/routing/reconcile", { routingSnapshot });
 }

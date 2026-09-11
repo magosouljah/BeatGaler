@@ -21,6 +21,7 @@
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-tauri.ps1",
     "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-direct-peer-bootstrap.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
     "test:security-boundary": "node scripts/regression-task-5.1-hardening.mjs",
+    "test:direct:data-plane": "node --test tests/direct-persistent-data-plane.test.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
     "test:windows-authenticode-guard": "node scripts/test-windows-authenticode-guard.mjs",
     "test:upgrade-matrix": "node scripts/test-upgrade-matrix.mjs",

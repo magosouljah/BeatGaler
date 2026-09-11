@@ -1,6 +1,6 @@
 import type { Beat } from "../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../domain/beat";
-import { ensureWebLibraryIndex, isMissingWebLibraryIndexError } from "../cloud/webLibraryBootstrap";
+import { ensureWebLibraryIndex, isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from "../cloud/webLibraryBootstrap";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
 
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
@@ -20,6 +20,7 @@ export interface WebLibraryManifest {
 }
 export interface WebLibraryTransport {
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult>;
+  ensureLibraryIndex?(): Promise<WebLibraryBootstrapResult>;
   downloadFiles(inputs: WebTransportDownloadInput[]): Promise<Array<WebTransportDownloadResult | null>>;
 }
 export type WebLibraryLoadState = "ready" | "empty" | "no-results" | "offline" | "auth-failure" | "cloud-failure";
@@ -227,7 +228,7 @@ async function getOrBootstrapLibraryIndex(transport: WebLibraryTransport): Promi
     return await transport.getLibraryIndex();
   } catch (error) {
     if (!isMissingWebLibraryIndexError(error)) throw error;
-    const bootstrapped = await ensureWebLibraryIndex();
+    const bootstrapped = await ensureWebLibraryIndex(transport);
     return { manifest: bootstrapped.manifest, messageId: bootstrapped.messageId };
   }
 }

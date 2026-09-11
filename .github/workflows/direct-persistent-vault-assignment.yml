@@ -24,6 +24,10 @@ on:
       - cloud-server/package.json
       - src-tauri/direct-transport/transport-helper.source.mjs
       - src-tauri/src/commands.rs
+      - src/features/**
+      - tests/**
+      - cloud-server/atomic-library-index.js
+      - cloud-server/tests/atomic-library-index.test.cjs
       - cloud-server/migrations/**
       - cloud-server/tests/direct-allocator-no-cap.test.cjs
       - cloud-server/tests/direct-membership-provisioning-primitive.test.cjs
@@ -137,3 +141,37 @@ jobs:
 
       - name: Run existing PostgreSQL live integration
         run: node cloud-server/tests/postgres-live.integration.cjs
+
+      - name: Run PostgreSQL Direct capability contract
+        run: node cloud-server/tests/direct-capability-postgres.integration.cjs
+
+  direct_clients:
+    name: Direct data plane and Web regression gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked npm graphs
+        run: |
+          npm ci
+          npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+      - name: Execute Desktop and Web Direct data-plane implementations
+        run: npm run test:direct:data-plane
+      - name: TypeScript unit, component and integration suites
+        run: |
+          npm run test:typecheck
+          npm run test:unit:ts
+          npm run test:component:dom
+          npm run test:integration
+      - name: Full regression suite
+        run: npm run test:regressions
+      - name: Build and smoke real Web bundle
+        run: |
+          npm run build:web
+          npm run test:web:smoke
