@@ -131,16 +131,14 @@ function addVault(pool, id, chatId) {
   assert.equal((await restartedStore.markMembershipRepairNeeded({ vaultId: 'vault-a' }, 'Bot01')).membershipState, 'repair');
   await assert.rejects(() => restartedStore.markMembershipReady({ vaultId: 'vault-a' }, 'Bot02'), error => error.code === 'TRANSPORT_ASSIGNMENT_MISMATCH');
 
+  const callsBeforeMembershipLock = pool.calls.length;
   const lockResult = await restartedStore.withMembershipLock({ chatId: '-1001' }, async () => 'membership-locked');
   assert.equal(lockResult, 'membership-locked');
+  const lockCalls = pool.calls.slice(callsBeforeMembershipLock);
   const expectedMembershipLock = membershipLockKey({ chatId: '-1001' });
-  assert.ok(pool.calls.some(call => call.sql.includes('pg_advisory_lock') && call.params[0] === expectedMembershipLock));
-  assert.ok(pool.calls.some(call => call.sql.includes('pg_advisory_unlock') && call.params[0] === expectedMembershipLock));
-  assert.equal(
-    pool.calls.some(call => call.sql === 'BEGIN' && pool.calls.some(other => other.sql.includes('pg_advisory_lock'))),
-    false,
-    'membership lock is session-level and does not require a transaction',
-  );
+  assert.ok(lockCalls.some(call => call.sql.includes('pg_advisory_lock') && !call.sql.includes('pg_advisory_xact_lock') && call.params[0] === expectedMembershipLock));
+  assert.ok(lockCalls.some(call => call.sql.includes('pg_advisory_unlock') && call.params[0] === expectedMembershipLock));
+  assert.equal(lockCalls.some(call => ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(call.sql.replace(/\s+/g, ' ').trim())), false);
 
   const balancedPool = fakePool();
   const balancedStore = createDirectVaultAssignmentStore(balancedPool);
