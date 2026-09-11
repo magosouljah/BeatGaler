@@ -1,0 +1,57 @@
+name: Temporary Direct Resolver Persisted Fast Path
+
+on:
+  push:
+    branches:
+      - direct/persistent-vault-assignment
+    paths:
+      - .github/workflows/direct-resolver-persisted-fast-path.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: direct/persistent-vault-assignment
+          fetch-depth: 0
+
+      - name: Patch persisted resolver fast path exactly once
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'cloud-server/direct-transport-control.js';
+          const source = fs.readFileSync(file, 'utf8');
+          const before = '        masterInfo = await masterForVault(existingId);';
+          const after = [
+            "        // The resolver group and its bot memberships are persistent infrastructure.",
+            "        // A warm process only needs the durable chat id; re-resolving it through",
+            "        // MASTER here would put MASTER back on every normal READY startup.",
+            "        diag('RESOLVER_READY', { chat_id: existingId, bots: pool.length, bootstrap: 'persisted' });",
+            "        return existingId;",
+          ].join('\n');
+          const matches = source.split(before).length - 1;
+          if (matches !== 1) {
+            throw new Error(`Expected exactly one persisted-resolver MASTER call, found ${matches}.`);
+          }
+          const updated = source.replace(before, after);
+          fs.writeFileSync(file, updated, 'utf8');
+          NODE
+          node --check cloud-server/direct-transport-control.js
+          git diff --check
+
+      - name: Commit exact resolver patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud-server/direct-transport-control.js
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: reuse persisted Direct resolver without MASTER"
+          git push origin HEAD:direct/persistent-vault-assignment
