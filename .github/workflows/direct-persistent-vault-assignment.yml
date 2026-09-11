@@ -16,6 +16,7 @@ on:
       - cloud-server/server-core.js
       - cloud-server/migrations/**
       - cloud-server/tests/direct-allocator-no-cap.test.cjs
+      - cloud-server/tests/direct-membership-provisioning-primitive.test.cjs
       - cloud-server/tests/direct-persistent-assignment-runtime.test.cjs
       - cloud-server/tests/direct-persistent-session-runtime.test.cjs
       - cloud-server/tests/direct-persistent-membership-runtime.test.cjs
@@ -63,6 +64,7 @@ jobs:
           node --check cloud-server/server.js
           node --check cloud-server/server-core.js
           node --check cloud-server/tests/direct-allocator-no-cap.test.cjs
+          node --check cloud-server/tests/direct-membership-provisioning-primitive.test.cjs
           node --check cloud-server/tests/direct-persistent-assignment-runtime.test.cjs
           node --check cloud-server/tests/direct-persistent-session-runtime.test.cjs
           node --check cloud-server/tests/direct-persistent-membership-runtime.test.cjs
