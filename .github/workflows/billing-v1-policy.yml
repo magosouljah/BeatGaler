@@ -1,0 +1,36 @@
+name: Billing V1 Policy and Polar Sandbox Adapter
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/billing-access-resolver.js'
+      - 'cloud-server/billing-commercial-catalog.js'
+      - 'cloud-server/billing-polar-sandbox.js'
+      - 'cloud-server/tests/billing-access-resolver.test.cjs'
+      - 'cloud-server/tests/billing-commercial-catalog.test.cjs'
+      - 'cloud-server/tests/billing-polar-sandbox.test.cjs'
+      - '.github/workflows/billing-v1-policy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  billing-v1-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Assert exact PR head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Test Billing V1 policy, catalog and Polar sandbox adapter
+        run: >-
+          node --test
+          cloud-server/tests/billing-commercial-catalog.test.cjs
+          cloud-server/tests/billing-access-resolver.test.cjs
+          cloud-server/tests/billing-polar-sandbox.test.cjs
