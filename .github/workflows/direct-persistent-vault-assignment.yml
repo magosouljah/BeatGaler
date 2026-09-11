@@ -22,6 +22,7 @@ on:
       - cloud-server/tests/direct-persistent-membership-runtime.test.cjs
       - cloud-server/tests/direct-persistent-ready-no-master.test.cjs
       - cloud-server/tests/direct-persistent-cleanup.test.cjs
+      - cloud-server/tests/direct-persistent-legacy-lazy*
       - cloud-server/tests/direct-vault-assignment*
       - cloud-server/tests/postgres-live.integration.cjs
       - .github/workflows/direct-persistent-vault-assignment.yml
@@ -70,6 +71,8 @@ jobs:
           node --check cloud-server/tests/direct-persistent-membership-runtime.test.cjs
           node --check cloud-server/tests/direct-persistent-ready-no-master.test.cjs
           node --check cloud-server/tests/direct-persistent-cleanup.test.cjs
+          node --check cloud-server/tests/direct-persistent-legacy-lazy.test.cjs
+          node --check cloud-server/tests/direct-persistent-legacy-lazy.postgres.integration.cjs
           node --check cloud-server/tests/direct-vault-assignment.test.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
           node --check cloud-server/tests/direct-vault-assignment.postgres.worker.cjs
@@ -111,6 +114,9 @@ jobs:
 
       - name: Run real PostgreSQL assignment integration
         run: node cloud-server/tests/direct-vault-assignment.postgres.integration.cjs
+
+      - name: Run legacy lazy PostgreSQL rollout integration
+        run: node cloud-server/tests/direct-persistent-legacy-lazy.postgres.integration.cjs
 
       - name: Run existing PostgreSQL live integration
         run: node cloud-server/tests/postgres-live.integration.cjs
