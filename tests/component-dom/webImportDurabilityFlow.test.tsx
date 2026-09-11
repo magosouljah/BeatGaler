@@ -300,6 +300,10 @@ describe("BeatGaler Web import durability", () => {
         mime: "audio/mpeg",
       });
       expect(persistedManifest.beats[0].files).toHaveLength(1);
+      expect(persistedManifest.beats[0].files[0].manifest).toMatchObject({
+        telegram_message_id: 101,
+        filename: `Durable ${entry}.wav`,
+      });
       expect(latestUploadErrors).toEqual({});
 
       // Fresh app-side library load: discard transport/window state and read only persisted INDEX.
@@ -314,7 +318,10 @@ describe("BeatGaler Web import durability", () => {
         has_wav: true,
       });
       expect(reloaded[0].assets?.master?.object_id).toBe("direct:100");
-      expect(reloaded[0].assets?.wav?.object_id).toBe("direct:101");
+      expect(reloaded[0].assets?.wav).toMatchObject({
+        object_id: `WAV:${reloaded[0].id}`,
+        filename: `Durable ${entry}.wav`,
+      });
     },
   );
 });
