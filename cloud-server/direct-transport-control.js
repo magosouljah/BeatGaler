@@ -615,7 +615,11 @@ async function ensureBotApiResolverChat() {
     let masterInfo = null;
     try {
       if (existingId) {
-        masterInfo = await masterForVault(existingId);
+        // The resolver group and its bot memberships are persistent infrastructure.
+        // A warm process only needs the durable chat id; re-resolving it through
+        // MASTER here would put MASTER back on every normal READY startup.
+        diag('RESOLVER_READY', { chat_id: existingId, bots: pool.length, bootstrap: 'persisted' });
+        return existingId;
       } else {
         const config = loadMasters()[0];
         const client = await openMaster(config);
