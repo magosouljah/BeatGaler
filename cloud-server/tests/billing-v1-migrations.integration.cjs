@@ -36,8 +36,8 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
     pool = new Pool({ connectionString: databaseUrl(ADMIN_URL, dbName), max: 2 });
 
     const migrations = listMigrations();
-    assert.equal(migrations.at(-1)?.version, '0011');
-    assert.equal(migrations.at(-1)?.name, '0011_billing_v1_foundation.sql');
+    assert.equal(migrations.at(-1)?.version, '0012');
+    assert.equal(migrations.at(-1)?.name, '0012_billing_webhook_durable_inbox.sql');
 
     const first = await applyMigrations(pool, migrations);
     assert.deepEqual(first.applied, migrations.map(item => item.version));
@@ -54,13 +54,14 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema='public'
-        AND table_name IN ('billing_customers','billing_checkout_requests','billing_payments')
+        AND table_name IN ('billing_customers','billing_checkout_requests','billing_payments','billing_webhook_events')
       ORDER BY table_name
     `);
     assert.deepEqual(tables.rows.map(row => row.table_name), [
       'billing_checkout_requests',
       'billing_customers',
       'billing_payments',
+      'billing_webhook_events',
     ]);
 
     const subscriptionColumns = await pool.query(`
@@ -85,6 +86,19 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
         AND column_name IN ('source_key','revoked_at','revocation_reason','issued_by_actor')
     `);
     assert.equal(entitlementColumns.rowCount, 4);
+
+    const webhookColumns = await pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema='public'
+        AND table_name='billing_webhook_events'
+        AND column_name IN (
+          'provider','provider_environment','raw_body_sha256','validated_payload','resolved_user_id',
+          'provider_customer_id','provider_subscription_id','provider_checkout_id','received_at','processed_at',
+          'next_attempt_at','processing_lease_owner','processing_lease_until','last_error_code','last_error_redacted'
+        )
+    `);
+    assert.equal(webhookColumns.rowCount, 15);
 
     await pool.query(`
       INSERT INTO users(id,email) VALUES
@@ -201,11 +215,41 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
       '23514',
     );
 
+    await pool.query(`
+      INSERT INTO billing_webhook_events(
+        event_id,event_type,subject_id,provider_created_at,state,provider,provider_environment,
+        raw_body_sha256,validated_payload,resolved_user_id,received_at
+      ) VALUES (
+        'webhook_schema_1','subscription.active','polar_sub_1',1789165800000,'RECEIVED','polar','sandbox',
+        $1,'{"type":"subscription.active"}'::jsonb,'billing_test_u1',now()
+      )
+    `, ['c'.repeat(64)]);
+
+    await expectPgCode(
+      () => pool.query(`
+        INSERT INTO billing_webhook_events(
+          event_id,event_type,subject_id,provider_created_at,state,provider,provider_environment,received_at
+        ) VALUES ('webhook_bad_state','subscription.active','sub_bad',1,'IGNORED_OUT_OF_ORDER','polar','sandbox',now())
+      `),
+      '23514',
+    );
+
+    await expectPgCode(
+      () => pool.query(`
+        INSERT INTO billing_webhook_events(
+          event_id,event_type,subject_id,provider_created_at,state,provider,provider_environment,received_at
+        ) VALUES ('webhook_bad_lease','subscription.active','sub_bad_lease',1,'PROCESSING','polar','sandbox',now())
+      `),
+      '23514',
+    );
+
     await pool.query("DELETE FROM users WHERE id='billing_test_u1'");
     for (const table of ['billing_customers','billing_checkout_requests','billing_payments','billing_subscription_state','entitlements']) {
       const count = await pool.query(`SELECT count(*)::int AS count FROM ${table} WHERE user_id='billing_test_u1'`);
       assert.equal(count.rows[0].count, 0, `${table} should cascade user deletion`);
     }
+    const webhookUser = await pool.query("SELECT resolved_user_id FROM billing_webhook_events WHERE event_id='webhook_schema_1'");
+    assert.equal(webhookUser.rows[0].resolved_user_id, null, 'webhook inbox should retain financial history while clearing deleted user FK');
   } finally {
     if (pool) await pool.end().catch(() => {});
     await admin.query(
