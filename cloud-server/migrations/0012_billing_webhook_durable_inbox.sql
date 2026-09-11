@@ -48,7 +48,14 @@ SET processed_at = updated_at
 WHERE state IN ('PROCESSED', 'IGNORED')
   AND processed_at IS NULL;
 
+-- 0006 used event_id as a globally unique primary key. Provider delivery IDs
+-- are only authoritative within a provider/environment namespace, so sandbox
+-- and production must be allowed to reuse the same event ID safely.
 ALTER TABLE billing_webhook_events
+  DROP CONSTRAINT IF EXISTS billing_webhook_events_pkey;
+
+ALTER TABLE billing_webhook_events
+  ADD PRIMARY KEY (provider, provider_environment, event_id),
   ALTER COLUMN received_at SET DEFAULT now(),
   ALTER COLUMN received_at SET NOT NULL,
   ADD CONSTRAINT billing_webhook_events_provider_check
@@ -85,21 +92,18 @@ ALTER TABLE billing_webhook_events
     CHECK (last_error_code IS NULL OR last_error_code ~ '^[A-Z0-9_:-]{1,128}$');
 
 CREATE INDEX billing_webhook_events_ready_idx
-  ON billing_webhook_events(state, next_attempt_at, received_at);
+  ON billing_webhook_events(provider, provider_environment, state, next_attempt_at, received_at);
 
 CREATE INDEX billing_webhook_events_lease_idx
-  ON billing_webhook_events(processing_lease_until)
+  ON billing_webhook_events(provider, provider_environment, processing_lease_until)
   WHERE state = 'PROCESSING';
 
 CREATE INDEX billing_webhook_events_resolved_user_idx
-  ON billing_webhook_events(resolved_user_id, received_at)
+  ON billing_webhook_events(provider, provider_environment, resolved_user_id, received_at)
   WHERE resolved_user_id IS NOT NULL;
 
 CREATE INDEX billing_webhook_events_subscription_idx
   ON billing_webhook_events(provider, provider_environment, provider_subscription_id)
   WHERE provider_subscription_id IS NOT NULL;
-
-CREATE INDEX billing_webhook_events_provider_event_idx
-  ON billing_webhook_events(provider, provider_environment, event_id);
 
 COMMIT;
