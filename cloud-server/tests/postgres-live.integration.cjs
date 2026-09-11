@@ -280,23 +280,21 @@ async function main() {
   const rollbackRows = buildLegacyRows(exported);
   assert.equal(rollbackRows.users.length, 2, 'legacy-compatible rollback state must validate through importer mapping');
 
+  // The session-era cap of four active leases per transport bot was retired by migration 0010.
+  // Five simultaneous ACTIVE leases must now be accepted; operational backpressure is a separate concern.
   await poolA.query("INSERT INTO transport_bots(id) VALUES('bot-live-cap')");
   for (let i = 1; i <= 5; i += 1) {
     const userId = `cap-u${i}`;
     const vaultId = `cap-v${i}`;
     await poolA.query('INSERT INTO users(id, created_at, updated_at) VALUES($1, now(), now())', [userId]);
     await poolA.query('INSERT INTO vaults(id,user_id,telegram_chat_id,created_at,updated_at) VALUES($1,$2,$3,now(),now())', [vaultId, userId, `cap-chat-${i}`]);
-    if (i <= 4) {
-      await poolA.query(`INSERT INTO direct_leases(id,transport_bot_id,vault_id,installation_id,generation,credential_version,status,started_at,last_heartbeat_at)
-        VALUES($1,'bot-live-cap',$2,$3,1,1,'ACTIVE',now(),now())`, [`cap-l${i}`, vaultId, `cap-install-${i}`]);
-    } else {
-      await assert.rejects(
-        () => poolA.query(`INSERT INTO direct_leases(id,transport_bot_id,vault_id,installation_id,generation,credential_version,status,started_at,last_heartbeat_at)
-          VALUES($1,'bot-live-cap',$2,$3,1,1,'ACTIVE',now(),now())`, [`cap-l${i}`, vaultId, `cap-install-${i}`]),
-        /already has 4 active vault leases/,
-      );
-    }
+    await poolA.query(`INSERT INTO direct_leases(id,transport_bot_id,vault_id,installation_id,generation,credential_version,status,started_at,last_heartbeat_at)
+      VALUES($1,'bot-live-cap',$2,$3,1,1,'ACTIVE',now(),now())`, [`cap-l${i}`, vaultId, `cap-install-${i}`]);
   }
+  const activeLeaseCount = (await poolA.query(
+    "SELECT COUNT(*)::int AS n FROM direct_leases WHERE transport_bot_id='bot-live-cap' AND status='ACTIVE'",
+  )).rows[0].n;
+  assert.equal(activeLeaseCount, 5, 'PostgreSQL must not enforce an architectural four-active-lease cap');
 
   // Run the new authority cutover against its own isolated PostgreSQL database so
   // this check cannot mutate the recovery dataset above.
@@ -305,7 +303,7 @@ async function main() {
     env,
   });
 
-  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, garbage crash recovery/retry/blocking, saga states, max-4 cap, controlled authority cutover');
+  console.log('PASS live PostgreSQL: migrations, encrypted import/export, INDEX reconciliation, orphan debt, garbage crash recovery/retry/blocking, saga states, no artificial four-lease cap, controlled authority cutover');
 }
 
 main()
