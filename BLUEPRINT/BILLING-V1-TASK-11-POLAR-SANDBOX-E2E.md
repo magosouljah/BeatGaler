@@ -1,196 +1,185 @@
 # Billing V1 — Tarea 11 — Polar Sandbox E2E real
 
-Estado de este documento: **runbook de ejecución**, no evidencia de PASS.
+Estado de este documento: **runbook de ejecución y diagnóstico**. Tarea 11 permanece **PARCIAL / BLOQUEADA EN RENOVACIÓN REAL ACELERADA**.
 
-La Tarea 11 sólo se puede cerrar cuando una corrida real termine con `result: "PASS"` en la evidencia sanitizada y después vuelvan a pasar los gates Billing. Crear el harness, compilarlo o ejecutar mocks no cierra la tarea.
+La Tarea 11 sólo puede cerrarse cuando una corrida real termine con `result: "PASS"` en evidencia sanitizada y después vuelvan a pasar los gates Billing. Crear el harness, compilarlo, ejecutar mocks o producir sólo `subscription.cycled` no cierra la tarea.
 
-## Alcance
+## Estado verificado el 12 de septiembre de 2026
 
-Proveedor: **Polar**  
-Ambiente: **Sandbox**  
-Persistencia: **PostgreSQL aislado creado por la corrida**  
-Rama: `billing/v1-policy`  
-Runner: `cloud-server/scripts/polar-sandbox-e2e.cjs`
+Corrida real de referencia:
 
-El runner valida:
+- Run ID: `20260912044806_61ffb048`.
+- Polar Sandbox real.
+- PostgreSQL aislado real.
+- Webhooks reales mediante `polar listen`, aceptados con `202 Accepted`.
+- Checkout y pago inicial reales de Sandbox.
 
-- Free inicial.
-- Checkout persistente real.
-- Retry con el mismo `request_id`.
-- Segundo intento cercano bloqueado mientras existe checkout abierto.
-- Redirect sin autoridad de acceso.
-- Pago Sandbox real.
-- Webhook real entregado por Polar mediante `polar listen`.
-- Firma sobre raw body.
-- Persistencia durable antes de procesamiento.
-- Replay exacto del webhook sin duplicar efectos.
-- PostgreSQL → resolver → Paid.
-- `paid_through` respaldado por Order pagado.
-- Paid Entry → Highest programado con `proration_behavior=next_period`.
-- Highest sólo después de un nuevo pago real.
-- Cancelación real al final del período sin downgrade inmediato.
-- Límite exacto de `paid_through` con reloj local inyectado sobre la cobertura financiera real.
-- Refund completo real y revoke durable del proveedor.
-- Refund parcial real sin pérdida automática de acceso.
-- Primera compra fallida que permanece Free.
-- Recuperación de la misma compra sin segunda suscripción.
-- Renovación fallida real → `subscription.past_due` → siete días de gracia BeatGaler.
-- Recuperación de renovación después de pago exitoso.
-- Reconciliación con objetos reales, reparación inequívoca, rechazo de discrepancia ambigua y outage que no se interpreta como Free.
+La corrida demostró correctamente:
 
-No valida uploads, cuotas de biblioteca, PROJECT, YouTube, bots, Direct, playback, downloads, INDEX, Trash ni Desktop helper.
+- Free → checkout real → pago real → webhook firmado real → PostgreSQL → Paid Entry.
+- Retry/idempotencia del checkout y redirect sin autoridad de acceso.
+- Paid Entry → Highest programado con `proration_behavior=next_period` sin conceder Highest antes del siguiente pago.
+- La política de BeatGaler conservó Paid Entry cuando Polar cambió la suscripción a Highest pero no existía un segundo Order pagado.
 
-## Seguridad obligatoria
+La corrida NO alcanzó PASS completo.
 
-- Usar únicamente organización, token, productos y precios de **Polar Sandbox**.
-- No usar secrets live.
-- No apuntar `BILLING_E2E_TEST_ADMIN_URL` a la base histórica de BeatGaler.
-- El URL de admin debe terminar en `/postgres`; el runner crea una DB `beatgaler_billing_e2e_*` y la elimina al final.
-- No pegar tokens ni webhook secrets en issues, PRs, artifacts o logs.
-- No guardar métodos de pago de prueba en fixtures ni evidencia.
-- La evidencia no guarda URLs de checkout/portal ni raw provider payloads.
+## Blocker confirmado: `current_billing_period_end` NO es un test clock de cobro
 
-## Antes de ejecutar
+El runner histórico adelantaba:
 
-El token Sandbox necesita acceso a los objetos comerciales usados por Billing. La organización debe tener configurados los dos mappings de V1:
+`current_billing_period_end = now + ~90s`
 
-- `paid_entry_monthly_v1` → USD 6.99 mensual.
-- `highest_paid_monthly_v1` → USD 11.99 mensual.
+Polar aceptó la modificación y emitió `subscription.cycled`. Sin embargo, no produjo un nuevo `order.created`, `order.paid` ni pago de renovación.
 
-Polar documenta Sandbox aislado y el relay oficial de webhooks locales con Polar CLI:
+Esto no fue pérdida de webhook, fallo de PostgreSQL ni fallo de firma. El comportamiento del backend de Polar explica la evidencia: al ciclar una suscripción, Polar intenta crear la orden desde billing entries pendientes con un `cutoff` en el cierre del ciclo; si no existen billing entries pendientes, `NoPendingBillingEntries` hace que no se cree una orden. En nuestra corrida, la cobertura financiera inicial ya alcanzaba aproximadamente un mes y mover sólo la fecha de ciclo a ~90 segundos no creó nueva deuda cobrable.
 
-- https://polar.sh/docs/integrate/webhooks/locally
-- https://polar.sh/docs/integrate/webhooks/delivery
+Por tanto:
 
-Para métodos de pago, usar únicamente los métodos de prueba oficiales documentados por Polar/Stripe. Durante la corrida el runner pedirá tres comportamientos, no números concretos:
+- `subscription.cycled` = ciclo del proveedor.
+- `order.paid` = evidencia financiera.
+- un ciclo sin Order pagado NO extiende `paid_through`.
+- un ciclo sin Order pagado NO concede Highest.
 
-1. pago exitoso;
-2. rechazo genérico durante checkout;
-3. método que se puede guardar pero falla en el próximo cobro off-session.
+BeatGaler debe mantener esta separación.
 
-## Preparación automatizable
+## SDK JS exacto inspeccionado
 
-Ejecutar desde WSL/Linux para quedar junto al PostgreSQL de pruebas.
+Paquete fijado por BeatGaler:
+
+- `@polar-sh/sdk@1.0.0-alpha.20`
+- entrypoint: `@polar-sh/sdk/2026-04`
+
+Firmas relevantes de ESA versión:
+
+- `subscriptions.get(id)` → una suscripción.
+- `subscriptions.list(query)` → `Promise<ListResourceSubscription>` con `.items`.
+- `subscriptions.iterList(query)` → `AsyncGenerator<Subscription>` que entrega suscripciones individuales, no páginas.
+- `subscriptions.update(id, body)` → actualización de la suscripción.
+- `orders.list(query)` → `Promise<ListResourceOrder>` con `.items`.
+- `orders.iterList(query)` → `AsyncGenerator<Order>`.
+
+El probe anterior `for await (const page of await subscriptions.list(...))` era incorrecto para este SDK y explica el `TypeError`. El adapter real de BeatGaler ya usa correctamente `list(...).items` mediante su normalizador; no requiere reparación por ese probe.
+
+### `trial_end`
+
+El probe `trial_end: "now"` se hizo sobre una suscripción `active` con `trial_end = null`. En la versión fijada, terminar un trial con `"now"` corresponde a una conversión de trial. Aunque se preparase artificialmente un trial antes, **trial → active + charge** sería una conversión de trial, no una renovación mensual natural. No se acepta como sustituto de Tarea 11.
+
+### pause/resume
+
+El SDK expone `resume: true` como variante de `subscriptions.update(...)`. Reanudar una suscripción pausada abre un período nuevo y cobra inmediatamente. Pero **pause → resume** es una reanudación comercial, no una renovación natural. Tampoco se acepta como sustituto.
+
+### Orders manuales
+
+El SDK también expone creación/finalización de Orders off-session. Un cargo manual puede demostrar que un método guardado se puede cobrar, pero no demuestra que el motor de renovaciones de la suscripción haya generado y cobrado una renovación. Tampoco sustituye el requisito.
+
+## Decisión técnica
+
+No existe actualmente una forma demostrada y honesta, con el Polar Sandbox y SDK fijados por BeatGaler, de adelantar un mes de una suscripción mensual y obtener bajo demanda una **renovación natural + Order de renovación + pago** equivalente a producción.
+
+No se encontró un equivalente documentado al Stripe Test Clock para este flujo.
+
+Por eso el harness oficial ahora se detiene **antes de cualquier efecto externo** con:
+
+`BILLING_E2E_REAL_RENEWAL_ACCELERATION_UNAVAILABLE`
+
+El runner histórico `cloud-server/scripts/polar-sandbox-e2e.cjs` se conserva para evidencia y comparación, pero el comando oficial NO lo ejecuta mientras este blocker siga abierto.
+
+No ejecutar directamente el runner histórico para intentar conseguir PASS mediante `current_billing_period_end`.
+
+## Comando oficial mientras exista el blocker
 
 ```bash
 cd /mnt/e/777/app/beatvault # Entra al checkout habitual de BeatGaler.
-git fetch origin billing/v1-policy # Actualiza únicamente la referencia remota de la rama Billing.
-git switch billing/v1-policy # Cambia a la rama vigente de Billing; no continúes si Git reporta conflicto con trabajo local.
-git pull --ff-only origin billing/v1-policy # Exige fast-forward y evita crear un merge local accidental.
-cd cloud-server # Entra al paquete Cloud que contiene Billing y el runner E2E.
+git fetch origin billing/v1-policy # Actualiza la referencia remota de la rama Billing.
+git switch billing/v1-policy # Cambia a la rama de Billing sin tocar otros archivos locales.
+git pull --ff-only origin billing/v1-policy # Exige fast-forward y evita un merge local accidental.
+cd cloud-server # Entra al paquete Cloud.
 npm ci --ignore-scripts --no-audit --no-fund # Instala exactamente las dependencias fijadas por package-lock.
-npm run preflight:polar-sandbox-e2e # Comprueba la sintaxis del runner sin contactar Polar ni crear cobros.
-export BILLING_E2E_EXPECTED_HEAD="$(git rev-parse HEAD)" # Fija el SHA exacto que la evidencia debe probar.
-export BILLING_E2E_TEST_ADMIN_URL='postgresql://TEST_CREATEDB_USER:LOCAL_TEST_PASSWORD@127.0.0.1:5432/postgres' # Usa un usuario local con CREATEDB y sólo el DB admin postgres.
-export POLAR_SANDBOX_E2E_EMAIL='billing-task11-sandbox@example.test' # Define un correo exclusivo de prueba; puede sustituirse por otro correo Sandbox controlado.
-export POLAR_SANDBOX_E2E_WEBHOOK_TRANSPORT='polar-cli-listen' # Obliga al runner a usar el transporte real de webhooks de Polar CLI.
+npm run preflight:polar-sandbox-e2e # Comprueba sintaxis del runner histórico, guard y contrato de bloqueo sin contactar Polar.
+export BILLING_E2E_EXPECTED_HEAD="$(git rev-parse HEAD)" # Fija el HEAD exacto que deberá probar una futura corrida real.
+npm run e2e:polar-sandbox # Debe detenerse antes de checkout o mutaciones con BILLING_E2E_REAL_RENEWAL_ACCELERATION_UNAVAILABLE mientras siga el blocker.
 ```
 
-Configurar después los IDs no secretos del catálogo Sandbox:
+Mientras el guard esté activo NO hace falta iniciar `POLAR LISTEN`, introducir access token, introducir webhook secret ni crear una DB E2E: el comando oficial se detiene antes de usar esos recursos.
+
+## Qué debe ocurrir para retirar el guard
+
+Sólo retirar el guard cuando exista una de estas dos evidencias:
+
+1. Polar exponga/documente un mecanismo Sandbox para provocar una renovación recurrente cobrable equivalente a la renovación natural; o
+2. se ejecute/observe una renovación natural real de la suscripción mensual Sandbox.
+
+Antes de aceptar un mecanismo nuevo hay que demostrar que genera, para la MISMA suscripción:
+
+- un nuevo ciclo recurrente;
+- un nuevo Order de renovación;
+- intento de cobro real Sandbox;
+- `order.paid` en éxito o `subscription.past_due`/evidencia equivalente de fallo de cobro;
+- período financiero nuevo;
+- actualización de `paid_through` sólo después del pago.
+
+No aceptar únicamente cambios de estado de suscripción.
+
+## Alcance que falta para cerrar Tarea 11
+
+Una corrida final PASS todavía debe cubrir realmente:
+
+1. Checkout / pago inicial.
+2. Webhook firmado real.
+3. PostgreSQL.
+4. Paid Entry.
+5. Upgrade a Highest.
+6. Renovación real y cobrada.
+7. Cancelación.
+8. `paid_through` / expiración.
+9. Full refund.
+10. Partial refund.
+11. Primer pago fallido.
+12. Recuperación del MISMO checkout.
+13. `past_due`.
+14. grace.
+15. recovery.
+16. reconciliation.
+17. idempotency.
+18. replay exacto de webhook / dedupe.
+
+Un FAIL parcial sigue siendo FAIL.
+
+## Seguridad obligatoria
+
+- Usar únicamente organización, token, productos y precios de Polar Sandbox.
+- Nunca usar producción.
+- Nunca imprimir access tokens, webhook secrets, passwords ni URLs PostgreSQL con credenciales.
+- No guardar métodos de pago de prueba en fixtures ni evidencia.
+- No guardar URLs completas de checkout/portal ni raw provider payloads en evidencia.
+- Los secrets que se pegaron accidentalmente durante pruebas anteriores deben rotarse/revocarse al cerrar la campaña de pruebas reales.
+
+## Cuando Polar permita una renovación acelerada válida
+
+Antes de modificar el guard:
 
 ```bash
-export POLAR_SANDBOX_ORGANIZATION_ID='REPLACE_SANDBOX_ORG_ID' # Identifica exclusivamente la organización Polar Sandbox.
-export POLAR_SANDBOX_PAID_ENTRY_MONTHLY_PRODUCT_ID='REPLACE_SANDBOX_PRODUCT_ID' # Mapea Paid Entry al producto Sandbox real.
-export POLAR_SANDBOX_PAID_ENTRY_MONTHLY_PRICE_ID='REPLACE_SANDBOX_PRICE_ID' # Mapea Paid Entry al precio Sandbox real.
-export POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRODUCT_ID='REPLACE_SANDBOX_PRODUCT_ID' # Mapea Highest al producto Sandbox real.
-export POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID='REPLACE_SANDBOX_PRICE_ID' # Mapea Highest al precio Sandbox real.
+cd /mnt/e/777/app/beatvault # Entra al repositorio local.
+git fetch origin billing/v1-policy # Recupera el HEAD remoto real antes de modificar nada.
+git switch billing/v1-policy # Cambia a la rama Billing.
+git pull --ff-only origin billing/v1-policy # Sincroniza sólo mediante fast-forward.
+git status --short # Revisa trabajo local y conserva cualquier cambio ajeno como BLUEPRINT/BRUNO.md.
+git diff --ignore-cr-at-eol # Distingue cambios reales del ruido CRLF/LF.
+cd cloud-server # Entra al paquete Cloud.
+npm ci --ignore-scripts --no-audit --no-fund # Restaura el SDK exacto fijado por package-lock.
+npm run test:billing-v1 # Revalida contrato Billing y el guard antes de cambiarlo.
 ```
 
-Introducir el access token sin escribirlo en el historial del shell:
+Después de implementar un mecanismo oficialmente válido, volver a ejecutar el E2E completo con `E2E` + `POLAR LISTEN`, obtener evidencia sanitizada `result: "PASS"`, y entonces ejecutar:
 
 ```bash
-read -rsp 'POLAR_SANDBOX_ACCESS_TOKEN: ' POLAR_SANDBOX_ACCESS_TOKEN && export POLAR_SANDBOX_ACCESS_TOKEN && printf '\n' # Lee el token Sandbox en modo silencioso y sólo lo exporta al proceso actual.
-```
-
-## Webhook real — terminal separado
-
-Instalar Polar CLI si todavía no existe y autenticarlo siguiendo la documentación oficial. Después:
-
-```bash
-polar login # Inicia la sesión interactiva de Polar CLI; selecciona la cuenta/organización Sandbox correcta.
-polar listen http://127.0.0.1:4011/webhooks/polar # Abre el relay oficial que entrega webhooks reales de Polar al runner local.
-```
-
-El comando `polar listen` muestra un secret temporal de firma. En la terminal donde se ejecutará BeatGaler, introducirlo sin guardarlo en archivo ni historial:
-
-```bash
-read -rsp 'POLAR_SANDBOX_WEBHOOK_SECRET from polar listen: ' POLAR_SANDBOX_WEBHOOK_SECRET && export POLAR_SANDBOX_WEBHOOK_SECRET && printf '\n' # Mantiene el secret temporal sólo en el entorno del proceso.
-```
-
-No usar simultáneamente el secret de un endpoint distinto: el webhook debe verificarse con el secret emitido por el relay activo.
-
-## Ejecutar la corrida
-
-```bash
-npm run e2e:polar-sandbox # Crea PostgreSQL aislado, aplica migraciones, levanta el receptor local y conduce el journey real completo.
-```
-
-### Interactivo inevitable
-
-El runner imprimirá únicamente URLs temporales necesarias para completar acciones en navegador. No las guarda en la evidencia.
-
-Cuando lo pida:
-
-1. Completar el checkout principal con el método Sandbox de **pago exitoso**.
-2. Completar el checkout del escenario de **refund completo** con el método Sandbox de pago exitoso.
-3. En el checkout de recuperación, usar primero el método Sandbox de **rechazo genérico**; confirmar el fallo y luego recuperar **la misma sesión** con el método exitoso.
-4. En Customer Portal, cambiar el método guardado al test method que **se adjunta correctamente pero falla en el próximo cobro off-session**; el runner adelanta oficialmente `current_billing_period_end` para provocar la renovación.
-5. Tras `subscription.past_due`, volver al Customer Portal y restaurar el método Sandbox exitoso para que Polar reintente y recupere el cobro.
-
-Refund completo/parcial, cambio programado, cancelación, reconciliación y cleanup no necesitan intervención humana: los ejecuta el harness mediante Polar Sandbox y PostgreSQL.
-
-## Expiración: qué es Polar real y qué es reloj local
-
-Polar no ofrece un equivalente documentado al test clock de Stripe para saltar arbitrariamente un período ya pagado. Por eso la corrida separa dos pruebas:
-
-- **Real Polar Sandbox:** cancelación `cancel_at_period_end=true` y evento real de cancelación conservando el estado comercial vigente.
-- **Comprobación temporal local complementaria:** resolver evaluado a `paid_through - 1 ms` y `paid_through + 1 ms` usando el `paid_through` que provino del Order real.
-
-No se etiqueta esa segunda parte como tiempo acelerado por Polar.
-
-## Evidencia
-
-Por defecto se escribe fuera del worktree, dentro del área privada de Git:
-
-`<git-dir>/beatgaler-billing-e2e/<run-id>.json`
-
-Contiene, de forma sanitizada:
-
-- commit SHA probado;
-- usuario BeatGaler de prueba;
-- request IDs;
-- IDs externos de checkout/customer/subscription/order/payment/event;
-- estado PostgreSQL antes/después;
-- resultado del resolver;
-- pruebas de persist-before-process y replay idempotente;
-- timestamps y PASS/FAIL por escenario.
-
-No contiene access token, webhook secret, raw payload, números de método de pago ni URL completa de checkout/portal.
-
-Si la corrida falla, la evidencia termina con `result: "FAIL"` y un código de error sanitizado. Un FAIL no debe reinterpretarse como PASS parcial del escenario que falló.
-
-## Cleanup
-
-La DB aislada se elimina automáticamente en `finally`. Sólo para diagnóstico explícito puede conservarse temporalmente:
-
-```bash
-export BILLING_E2E_KEEP_DATABASE=1 # Conserva exclusivamente la DB efímera de esta corrida para inspección; nunca usar contra una DB histórica.
-```
-
-Después del diagnóstico, eliminar manualmente esa DB efímera antes de otra corrida.
-
-## Cierre
-
-Después de obtener una evidencia real con `result: "PASS"`, volver a ejecutar todos los gates Billing del HEAD exacto:
-
-```bash
-npm run test:billing-v1 # Revalida catálogo, resolver y contratos Polar.
+npm run test:billing-v1 # Revalida catálogo, resolver, contratos Polar y contrato de renovación.
 npm run test:billing-checkout-pg # Revalida checkout persistente en PostgreSQL aislado de test.
 npm run test:billing-webhook-pg # Revalida inbox durable y replay.
 npm run test:billing-lifecycle-pg # Revalida lifecycle comercial completo.
 npm run test:billing-reconciliation-pg # Revalida reconciliación y logs seguros.
 ```
 
-Los tests PostgreSQL anteriores requieren sus variables `*_TEST_ADMIN_URL` habituales apuntando a una instancia de pruebas, nunca a la base histórica/productiva.
+Sólo después de una evidencia real `PASS` + gates Billing verdes puede escribirse `TAREA 11 = TERMINADA`.
 
-**Sólo entonces** puede escribirse `TAREA 11 = TERMINADA`. Hasta que exista esa evidencia, el estado correcto es `TAREA 11 = PARCIAL`.
+PR #140 debe permanecer **draft** y NO debe mergearse como parte de Tarea 11.
