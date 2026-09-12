@@ -29,6 +29,22 @@ test('pinned Polar SDK entry loads the 2026-04 contract through CommonJS', () =>
   assert.equal(typeof sdk.webhooks?.validateEvent, 'function');
 });
 
+test('pinned Polar SDK entry exposes every real lifecycle primitive required by Task 11', () => {
+  const sdk = require(POLAR_SDK_ENTRY);
+  const client = sdk.createPolar({
+    accessToken: 'polar_oat_sandbox_contract_only',
+    server: 'sandbox',
+  });
+  assert.equal(typeof client.checkouts?.get, 'function');
+  assert.equal(typeof client.orders?.get, 'function');
+  assert.equal(typeof client.orders?.list, 'function');
+  assert.equal(typeof client.subscriptions?.get, 'function');
+  assert.equal(typeof client.subscriptions?.list, 'function');
+  assert.equal(typeof client.subscriptions?.update, 'function');
+  assert.equal(typeof client.subscriptions?.revoke, 'function');
+  assert.equal(typeof client.refunds?.create, 'function');
+});
+
 test('pinned Polar SDK entry loads the same 2026-04 contract through ESM import', async () => {
   const sdk = await import(POLAR_SDK_ENTRY);
   assert.equal(typeof sdk.createPolar, 'function');
