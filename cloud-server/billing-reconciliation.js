@@ -311,10 +311,10 @@ function createBillingReconciliationService({ pool, adapter, lifecycle = null, l
       safeLogger.emit('reconciliation_mismatch', details);
       safeLogger.emit('reconciliation_repaired', details);
     }
-    const beforeRank = RANK[accessBefore?.planId] ?? 0;
-    const afterRank = RANK[accessAfter?.planId] ?? 0;
-    return { reconciled: true, divergent: repaired, repaired, accessChanged: accessBefore?.planId !== accessAfter?.planId,
-      effectivePlanBefore: accessBefore?.planId || 'free', effectivePlanAfter: accessAfter?.planId || 'free', entitlementGranted: afterRank > beforeRank };
+    const beforeRank = RANK[accessBefore?.effectivePlanId] ?? 0;
+    const afterRank = RANK[accessAfter?.effectivePlanId] ?? 0;
+    return { reconciled: true, divergent: repaired, repaired, accessChanged: accessBefore?.effectivePlanId !== accessAfter?.effectivePlanId,
+      effectivePlanBefore: accessBefore?.effectivePlanId || 'free', effectivePlanAfter: accessAfter?.effectivePlanId || 'free', entitlementGranted: afterRank > beforeRank };
   }
 
   async function runSweep(candidates, runId, mode) {
