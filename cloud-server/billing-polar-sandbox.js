@@ -275,7 +275,7 @@ function createPolarSandboxAdapter(options = {}) {
 
   async function validateOffer(offer) {
     const product = await call('POLAR_SANDBOX_PRODUCT_GET_FAILED', () => productsGet(offer.providerMapping.productId));
-    return validateProviderProductForOffer({ product, offer, organizationId: config.organizationId });
+    return (options.validateProduct || validateProviderProductForOffer)({ product, offer, organizationId: config.organizationId });
   }
 
   return Object.freeze({
