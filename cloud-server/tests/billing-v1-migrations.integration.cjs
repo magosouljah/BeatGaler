@@ -36,8 +36,8 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
     pool = new Pool({ connectionString: databaseUrl(ADMIN_URL, dbName), max: 2 });
 
     const migrations = listMigrations();
-    assert.equal(migrations.at(-1)?.version, '0012');
-    assert.equal(migrations.at(-1)?.name, '0012_billing_webhook_durable_inbox.sql');
+    assert.equal(migrations.at(-1)?.version, '0013');
+    assert.equal(migrations.at(-1)?.name, '0013_billing_lifecycle.sql');
 
     const first = await applyMigrations(pool, migrations);
     assert.deepEqual(first.applied, migrations.map(item => item.version));
@@ -54,13 +54,17 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema='public'
-        AND table_name IN ('billing_customers','billing_checkout_requests','billing_payments','billing_webhook_events')
+        AND table_name IN (
+          'billing_customers','billing_checkout_requests','billing_payments',
+          'billing_provider_actions','billing_webhook_events'
+        )
       ORDER BY table_name
     `);
     assert.deepEqual(tables.rows.map(row => row.table_name), [
       'billing_checkout_requests',
       'billing_customers',
       'billing_payments',
+      'billing_provider_actions',
       'billing_webhook_events',
     ]);
 
@@ -99,6 +103,18 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
         )
     `);
     assert.equal(webhookColumns.rowCount, 15);
+
+    const providerActionColumns = await pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema='public'
+        AND table_name='billing_provider_actions'
+        AND column_name IN (
+          'action_type','state','attempt_count','processing_lease_owner','processing_lease_until',
+          'next_attempt_at','last_error_code','succeeded_at','idempotency_key'
+        )
+    `);
+    assert.equal(providerActionColumns.rowCount, 9);
 
     await pool.query(`
       INSERT INTO users(id,email) VALUES
@@ -193,6 +209,30 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
         'paid_entry_monthly_v1',now(),now()+interval '30 days',699,'usd','succeeded',0
       )
     `);
+
+    await pool.query(`
+      INSERT INTO billing_payments(
+        id,provider,provider_environment,provider_payment_id,provider_order_id,user_id,
+        provider_subscription_id,offer_id,period_start,period_end,amount_minor,currency,status,refunded_amount_minor
+      ) VALUES (
+        'order_identity_payment','polar','sandbox',NULL,'polar_order_1','billing_test_u1',
+        'polar_sub_1','paid_entry_monthly_v1',now(),now()+interval '30 days',699,'usd','succeeded',0
+      )
+    `);
+
+    await expectPgCode(
+      () => pool.query(`
+        INSERT INTO billing_payments(
+          id,provider,provider_environment,provider_payment_id,provider_order_id,user_id,offer_id,
+          amount_minor,currency,status,refunded_amount_minor
+        ) VALUES (
+          'payment_no_identity','polar','sandbox',NULL,NULL,'billing_test_u1',
+          'paid_entry_monthly_v1',699,'usd','succeeded',0
+        )
+      `),
+      '23514',
+    );
+
     await expectPgCode(
       () => pool.query(`
         INSERT INTO billing_payments(
@@ -201,6 +241,29 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
         ) VALUES (
           'payment_bad_refund','polar','sandbox','polar_payment_bad','billing_test_u1',
           'paid_entry_monthly_v1',699,'usd','refunded',700
+        )
+      `),
+      '23514',
+    );
+
+    await pool.query(`
+      INSERT INTO billing_provider_actions(
+        id,user_id,provider,provider_environment,action_type,provider_subscription_id,
+        idempotency_key,state,attempt_count
+      ) VALUES (
+        'provider_action_1','billing_test_u1','polar','sandbox','REVOKE_SUBSCRIPTION','polar_sub_1',
+        'refund-revoke:polar:sandbox:polar_sub_1','PENDING',0
+      )
+    `);
+
+    await expectPgCode(
+      () => pool.query(`
+        INSERT INTO billing_provider_actions(
+          id,user_id,provider,provider_environment,action_type,provider_subscription_id,
+          idempotency_key,state,attempt_count
+        ) VALUES (
+          'provider_action_bad_lease','billing_test_u2','polar','sandbox','REVOKE_SUBSCRIPTION','polar_sub_bad',
+          'refund-revoke:polar:sandbox:polar_sub_bad','PROCESSING',1
         )
       `),
       '23514',
@@ -244,7 +307,14 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
     );
 
     await pool.query("DELETE FROM users WHERE id='billing_test_u1'");
-    for (const table of ['billing_customers','billing_checkout_requests','billing_payments','billing_subscription_state','entitlements']) {
+    for (const table of [
+      'billing_customers',
+      'billing_checkout_requests',
+      'billing_payments',
+      'billing_provider_actions',
+      'billing_subscription_state',
+      'entitlements',
+    ]) {
       const count = await pool.query(`SELECT count(*)::int AS count FROM ${table} WHERE user_id='billing_test_u1'`);
       assert.equal(count.rows[0].count, 0, `${table} should cascade user deletion`);
     }
