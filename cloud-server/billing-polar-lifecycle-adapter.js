@@ -19,6 +19,7 @@ const REFUND_REASONS = Object.freeze(new Set([
   'customer_request',
   'service_disruption',
   'satisfaction_guarantee',
+  'dispute_prevention',
   'other',
 ]));
 
@@ -140,6 +141,7 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
     webhooks,
   });
 
+  const checkoutGet = assertService(client, 'checkouts', 'get');
   const orderGet = assertService(client, 'orders', 'get');
   const ordersList = assertService(client, 'orders', 'list');
   const subscriptionsList = assertService(client, 'subscriptions', 'list');
@@ -158,6 +160,13 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
 
   return Object.freeze({
     ...base,
+
+    async getCheckout(checkoutId) {
+      return call(
+        'POLAR_SANDBOX_CHECKOUT_GET_FAILED',
+        () => checkoutGet(requiredText(checkoutId, 'checkoutId')),
+      );
+    },
 
     async getOrder(orderId) {
       return call(
