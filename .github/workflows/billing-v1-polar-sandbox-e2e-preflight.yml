@@ -89,5 +89,11 @@ jobs:
           BILLING_RECONCILIATION_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: npm run test:billing-reconciliation-pg
 
-      - name: State limitation explicitly
+      - name: Validate daily equivalents and resume database identity
+        working-directory: cloud-server
+        env:
+          BILLING_E2E_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: node --test tests/billing-polar-daily.integration.cjs
+
+      - name: State preflight limitation explicitly
         run: echo 'PRECHECK PASS only. This workflow never proves a real Polar checkout, payment, webhook delivery, refund, failed payment, recovery, or cancellation journey.'

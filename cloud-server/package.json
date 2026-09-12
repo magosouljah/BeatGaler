@@ -6,10 +6,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:containment": "node ../scripts/regression-http-containment.mjs",
-    "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-sdk-contract.test.cjs tests/billing-polar-lifecycle-adapter.test.cjs tests/billing-polar-renewal-proof.test.cjs",
+    "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-sdk-contract.test.cjs tests/billing-polar-lifecycle-adapter.test.cjs tests/billing-polar-renewal-proof.test.cjs tests/billing-polar-daily.test.cjs",
     "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
-    "preflight:polar-sandbox-e2e": "node --check scripts/polar-sandbox-e2e.cjs && node --check scripts/polar-sandbox-e2e-guard.cjs && node --check billing-polar-renewal-proof.js",
+    "preflight:polar-sandbox-e2e": "node --check scripts/polar-sandbox-e2e.cjs && node --check scripts/polar-sandbox-e2e-guard.cjs && node --check billing-polar-renewal-proof.js && node --check scripts/polar-sandbox-daily-e2e.cjs && node --check scripts/polar-sandbox-daily-config.cjs && node --check scripts/polar-sandbox-daily-state.cjs",
     "e2e:polar-sandbox": "node scripts/polar-sandbox-e2e-guard.cjs",
     "test:billing-checkout-pg": "node --test tests/billing-checkout-persistent.integration.cjs",
     "test:billing-webhook-pg": "node --test tests/billing-webhook-durable.integration.cjs",

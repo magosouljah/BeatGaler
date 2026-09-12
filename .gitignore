@@ -76,3 +76,4 @@ cloud-server/transport-pool-state*.tmp*
 
 # Automated test build output
 .unit-build/
+.billing-e2e/

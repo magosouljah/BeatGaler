@@ -1,3 +1,5 @@
+> Natural daily Sandbox implementation: see [the daily runbook](BILLING-V1-TASK-11-DAILY-NATURAL.md). The historical accelerated monthly path below remains blocked; implementation support is not renewal PASS.
+
 # Billing V1 — Tarea 11 — Polar Sandbox E2E real
 
 Estado de este documento: **runbook de ejecución y diagnóstico**. Tarea 11 permanece **PARCIAL / BLOQUEADA EN RENOVACIÓN REAL ACELERADA**.

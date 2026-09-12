@@ -9,6 +9,11 @@ on:
       - 'cloud-server/billing-access-resolver.js'
       - 'cloud-server/billing-commercial-catalog.js'
       - 'cloud-server/billing-polar-sandbox.js'
+      - 'cloud-server/billing-polar-lifecycle-adapter.js'
+      - 'cloud-server/billing-polar-renewal-proof.js'
+      - 'cloud-server/scripts/polar-sandbox-daily-*.cjs'
+      - 'cloud-server/scripts/polar-sandbox-e2e-guard.cjs'
+      - 'cloud-server/tests/billing-polar-daily*.cjs'
       - 'cloud-server/tests/billing-access-resolver.test.cjs'
       - 'cloud-server/tests/billing-commercial-catalog.test.cjs'
       - 'cloud-server/tests/billing-polar-sandbox.test.cjs'
@@ -41,9 +46,4 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test Billing V1 policy, catalog, adapter and real SDK contract
         working-directory: cloud-server
-        run: >-
-          node --test
-          tests/billing-commercial-catalog.test.cjs
-          tests/billing-access-resolver.test.cjs
-          tests/billing-polar-sandbox.test.cjs
-          tests/billing-polar-sdk-contract.test.cjs
+        run: npm run test:billing-v1
