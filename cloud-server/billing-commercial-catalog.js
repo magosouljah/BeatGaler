@@ -4,7 +4,7 @@
 // Pure configuration/domain module only: it does not call a billing provider,
 // mutate subscriptions, grant access, or touch transport/runtime wiring.
 
-const { PLAN_CATALOG } = require('./plans');
+const { BILLING_V1_ACCESS_CATALOG } = require('./billing-access-resolver');
 
 const BILLING_CURRENCY = 'usd';
 const BILLING_PROVIDER = 'polar';
@@ -79,7 +79,7 @@ function validateOfferDefinition(offer) {
   if (!offer || typeof offer !== 'object') {
     throw new BillingCatalogConfigError('Offer definition is required.');
   }
-  if (!PLAN_CATALOG[offer.planId] || offer.planId === 'free') {
+  if (!BILLING_V1_ACCESS_CATALOG[offer.planId] || offer.planId === 'free') {
     throw new BillingCatalogConfigError(`Offer ${offer.id} maps to an unknown or non-purchasable plan.`);
   }
   if (!BILLING_INTERVALS.includes(offer.interval)) {

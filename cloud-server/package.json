@@ -6,7 +6,15 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:containment": "node ../scripts/regression-http-containment.mjs",
-    "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs"
+    "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-sdk-contract.test.cjs tests/billing-polar-lifecycle-adapter.test.cjs tests/billing-polar-renewal-proof.test.cjs tests/billing-polar-daily.test.cjs",
+    "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
+    "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
+    "preflight:polar-sandbox-e2e": "node --check scripts/polar-sandbox-e2e.cjs && node --check scripts/polar-sandbox-e2e-guard.cjs && node --check billing-polar-renewal-proof.js && node --check scripts/polar-sandbox-daily-e2e.cjs && node --check scripts/polar-sandbox-daily-config.cjs && node --check scripts/polar-sandbox-daily-state.cjs",
+    "e2e:polar-sandbox": "node scripts/polar-sandbox-e2e-guard.cjs",
+    "test:billing-checkout-pg": "node --test tests/billing-checkout-persistent.integration.cjs",
+    "test:billing-webhook-pg": "node --test tests/billing-webhook-durable.integration.cjs",
+    "test:billing-lifecycle-pg": "node --test tests/billing-lifecycle.integration.cjs",
+    "test:billing-reconciliation-pg": "node --test tests/billing-reconciliation.integration.cjs"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +22,7 @@
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "3.1116.0",
     "@mtcute/web": "0.31.0",
+    "@polar-sh/sdk": "1.0.0-alpha.20",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "multer": "^1.4.5-lts.1",

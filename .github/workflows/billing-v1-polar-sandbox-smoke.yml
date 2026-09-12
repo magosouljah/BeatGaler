@@ -1,0 +1,39 @@
+name: Billing V1 Polar Sandbox Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  polar-sandbox-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cloud-server/package-lock.json
+      - name: Install locked Cloud dependencies
+        working-directory: cloud-server
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run Polar sandbox smoke
+        working-directory: cloud-server
+        env:
+          POLAR_SANDBOX_ACCESS_TOKEN: ${{ secrets.POLAR_SANDBOX_ACCESS_TOKEN }}
+          POLAR_SANDBOX_WEBHOOK_SECRET: ${{ secrets.POLAR_SANDBOX_WEBHOOK_SECRET }}
+          POLAR_SANDBOX_ORGANIZATION_ID: ${{ secrets.POLAR_SANDBOX_ORGANIZATION_ID }}
+          POLAR_SANDBOX_PAID_ENTRY_MONTHLY_PRODUCT_ID: ${{ secrets.POLAR_SANDBOX_PAID_ENTRY_MONTHLY_PRODUCT_ID }}
+          POLAR_SANDBOX_PAID_ENTRY_MONTHLY_PRICE_ID: ${{ secrets.POLAR_SANDBOX_PAID_ENTRY_MONTHLY_PRICE_ID }}
+          POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRODUCT_ID: ${{ secrets.POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRODUCT_ID }}
+          POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID: ${{ secrets.POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID }}
+          POLAR_SANDBOX_SMOKE_USER_ID: ${{ secrets.POLAR_SANDBOX_SMOKE_USER_ID }}
+          POLAR_SANDBOX_SMOKE_EXISTING_USER_ID: ${{ secrets.POLAR_SANDBOX_SMOKE_EXISTING_USER_ID }}
+          POLAR_SANDBOX_SMOKE_EMAIL: ${{ secrets.POLAR_SANDBOX_SMOKE_EMAIL }}
+          POLAR_SANDBOX_SMOKE_SUCCESS_URL: ${{ secrets.POLAR_SANDBOX_SMOKE_SUCCESS_URL }}
+          POLAR_SANDBOX_SMOKE_RETURN_URL: ${{ secrets.POLAR_SANDBOX_SMOKE_RETURN_URL }}
+        run: npm run smoke:polar-sandbox

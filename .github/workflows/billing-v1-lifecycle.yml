@@ -1,0 +1,96 @@
+name: Billing V1 Commercial Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/billing-lifecycle.js'
+      - 'cloud-server/billing-polar-lifecycle-adapter.js'
+      - 'cloud-server/billing-polar-sandbox.js'
+      - 'cloud-server/billing-webhook-durable.js'
+      - 'cloud-server/billing-access-resolver.js'
+      - 'cloud-server/billing-commercial-catalog.js'
+      - 'cloud-server/scripts/polar-sandbox-e2e.cjs'
+      - 'cloud-server/migrations/**'
+      - 'cloud-server/postgres-migrations.js'
+      - 'cloud-server/tests/billing-lifecycle.integration.cjs'
+      - 'cloud-server/tests/billing-polar-lifecycle-adapter.test.cjs'
+      - 'cloud-server/tests/billing-polar-sdk-contract.test.cjs'
+      - 'cloud-server/tests/billing-v1-migrations.integration.cjs'
+      - 'cloud-server/package.json'
+      - 'cloud-server/package-lock.json'
+      - 'BLUEPRINT/BILLING-V1-LIFECYCLE.md'
+      - 'BLUEPRINT/BILLING-V1-TASK-11-POLAR-SANDBOX-E2E.md'
+      - '.github/workflows/billing-v1-lifecycle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  commercial-lifecycle:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloud-server/package-lock.json
+
+      - name: Assert exact PR head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Install Cloud dependencies
+        working-directory: cloud-server
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run Billing V1 and pinned Polar contracts
+        working-directory: cloud-server
+        run: npm run test:billing-v1
+
+      - name: Syntax-check real Polar Sandbox E2E runner
+        working-directory: cloud-server
+        run: npm run preflight:polar-sandbox-e2e
+
+      - name: Validate Billing V1 migration set through lifecycle
+        working-directory: cloud-server
+        env:
+          BILLING_MIGRATION_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: node --test tests/billing-v1-migrations.integration.cjs
+
+      - name: Keep durable webhook inbox green
+        working-directory: cloud-server
+        env:
+          BILLING_WEBHOOK_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: npm run test:billing-webhook-pg
+
+      - name: Keep persistent checkout green
+        working-directory: cloud-server
+        env:
+          BILLING_CHECKOUT_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: npm run test:billing-checkout-pg
+
+      - name: Test complete commercial lifecycle projection
+        working-directory: cloud-server
+        env:
+          BILLING_LIFECYCLE_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: npm run test:billing-lifecycle-pg
