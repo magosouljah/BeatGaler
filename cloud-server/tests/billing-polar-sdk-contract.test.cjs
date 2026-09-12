@@ -33,7 +33,8 @@ test('pinned Polar SDK entry exposes every real lifecycle primitive required by 
   const sdk = require(POLAR_SDK_ENTRY);
   const client = sdk.createPolar({
     accessToken: 'polar_oat_sandbox_contract_only',
-    server: 'sandbox',
+    environment: 'sandbox',
+    version: POLAR_API_VERSION,
   });
   assert.equal(typeof client.checkouts?.get, 'function');
   assert.equal(typeof client.orders?.get, 'function');
