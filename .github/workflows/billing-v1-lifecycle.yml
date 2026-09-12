@@ -9,14 +9,17 @@ on:
       - 'cloud-server/billing-webhook-durable.js'
       - 'cloud-server/billing-access-resolver.js'
       - 'cloud-server/billing-commercial-catalog.js'
+      - 'cloud-server/scripts/polar-sandbox-e2e.cjs'
       - 'cloud-server/migrations/**'
       - 'cloud-server/postgres-migrations.js'
       - 'cloud-server/tests/billing-lifecycle.integration.cjs'
       - 'cloud-server/tests/billing-polar-lifecycle-adapter.test.cjs'
+      - 'cloud-server/tests/billing-polar-sdk-contract.test.cjs'
       - 'cloud-server/tests/billing-v1-migrations.integration.cjs'
       - 'cloud-server/package.json'
       - 'cloud-server/package-lock.json'
       - 'BLUEPRINT/BILLING-V1-LIFECYCLE.md'
+      - 'BLUEPRINT/BILLING-V1-TASK-11-POLAR-SANDBOX-E2E.md'
       - '.github/workflows/billing-v1-lifecycle.yml'
 
 permissions:
@@ -63,6 +66,10 @@ jobs:
       - name: Run Billing V1 and pinned Polar contracts
         working-directory: cloud-server
         run: npm run test:billing-v1
+
+      - name: Syntax-check real Polar Sandbox E2E runner
+        working-directory: cloud-server
+        run: npm run preflight:polar-sandbox-e2e
 
       - name: Validate Billing V1 migration set through lifecycle
         working-directory: cloud-server
