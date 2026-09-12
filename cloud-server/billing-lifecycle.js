@@ -15,6 +15,7 @@ const SUBSCRIPTION_EVENT_TYPES = Object.freeze([
   'subscription.active',
   'subscription.canceled',
   'subscription.uncanceled',
+  'subscription.past_due',
   'subscription.revoked',
 ]);
 
@@ -575,8 +576,8 @@ function createBillingLifecycle({ adapter, graceMs = DEFAULT_GRACE_MS } = {}) {
     throw new BillingLifecycleError('graceMs must be a positive integer.', 'BILLING_LIFECYCLE_CONFIG_INVALID');
   }
 
-  const provider = requiredText(adapter.provider, 'adapter provider');
-  const environment = requiredText(adapter.environment, 'adapter environment');
+  const provider = requiredText(adapter.provider, 'provider');
+  const environment = requiredText(adapter.environment, 'provider environment');
   const catalog = adapter.catalog;
 
   const subscriptionHandler = Object.freeze({
