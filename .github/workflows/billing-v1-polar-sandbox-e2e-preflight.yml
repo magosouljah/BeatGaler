@@ -1,6 +1,14 @@
 name: Billing V1 Polar Sandbox E2E Preflight Only
 
 on:
+  pull_request:
+    paths:
+      - 'cloud-server/scripts/polar-sandbox-daily-*.cjs'
+      - 'cloud-server/scripts/polar-sandbox-e2e-guard.cjs'
+      - 'cloud-server/billing-polar-*.js'
+      - 'cloud-server/tests/billing-polar-daily*.cjs'
+      - 'cloud-server/package.json'
+      - '.github/workflows/billing-v1-polar-sandbox-e2e-preflight.yml'
   workflow_dispatch:
     inputs:
       expected_head:
@@ -37,7 +45,7 @@ jobs:
 
       - name: Assert exact requested HEAD
         run: |
-          test "$(git rev-parse HEAD)" = "${{ inputs.expected_head }}"
+          test "$(git rev-parse HEAD)" = "${{ inputs.expected_head || github.event.pull_request.head.sha }}"
           test "$(git branch --show-current)" = "billing/v1-policy"
 
       - name: Set up pinned Node

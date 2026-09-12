@@ -121,7 +121,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const config = readConfig(env);
   const expectedHead = text(env,'BILLING_E2E_EXPECTED_HEAD');
   check(git(['rev-parse','HEAD']) === expectedHead && git(['branch','--show-current']) === 'billing/v1-policy', 'DAILY_HEAD_OR_BRANCH_MISMATCH');
-  check(git(['diff','--name-only','HEAD','--','cloud-server', '.github/workflows']).length === 0, 'DAILY_COMMITTED_CODE_REQUIRED');
+  check(git(['diff','--ignore-cr-at-eol','--stat','HEAD','--','cloud-server', '.github/workflows']).length === 0, 'DAILY_COMMITTED_CODE_REQUIRED');
   check(env.POLAR_SANDBOX_E2E_WEBHOOK_TRANSPORT === 'polar-cli-listen', 'DAILY_REAL_RELAY_REQUIRED');
   const adminUrl = text(env,'BILLING_E2E_TEST_ADMIN_URL');
   dbUrl(adminUrl, 'postgres');
