@@ -38,7 +38,10 @@ function fakeClient(calls) {
         };
       },
     },
-    checkouts: { create: async () => ({ id: 'co_1', url: 'https://sandbox.polar.sh/checkout/co_1' }) },
+    checkouts: {
+      create: async () => ({ id: 'co_1', url: 'https://sandbox.polar.sh/checkout/co_1' }),
+      get: async id => (calls.checkout = id, { id, status: 'open' }),
+    },
     customerSessions: { create: async () => ({ customer_portal_url: 'https://sandbox.polar.sh/portal/session' }) },
     customers: {
       get: async id => ({ id }),
@@ -72,6 +75,14 @@ function adapter(calls = {}) {
     webhooks: { validateEvent: async () => ({ type: 'order.paid', timestamp: new Date().toISOString(), data: { id: 'order_1' } }) },
   });
 }
+
+test('lifecycle adapter can inspect a provider checkout without exposing its client secret', async () => {
+  const calls = {};
+  const result = await adapter(calls).getCheckout('co_1');
+  assert.equal(calls.checkout, 'co_1');
+  assert.equal(result.id, 'co_1');
+  assert.equal(result.status, 'open');
+});
 
 test('lifecycle adapter exposes canonical Polar order lookup', async () => {
   const calls = {};
