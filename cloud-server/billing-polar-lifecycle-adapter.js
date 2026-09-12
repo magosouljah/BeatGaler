@@ -13,11 +13,43 @@ const { getCheckoutReadyOffer } = require('./billing-commercial-catalog');
 
 const DEFAULT_DISCOVERY_LIMIT = 100;
 const MAX_DISCOVERY_ITEMS = 500;
+const REFUND_REASONS = Object.freeze(new Set([
+  'duplicate',
+  'fraudulent',
+  'customer_request',
+  'service_disruption',
+  'satisfaction_guarantee',
+  'other',
+]));
 
 function requiredText(value, label) {
   const text = String(value == null ? '' : value).trim();
   if (!text) throw new PolarSandboxConfigError(`${label} is required.`);
   return text;
+}
+
+function positiveSafeInteger(value, label) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 1) {
+    throw new PolarSandboxConfigError(`${label} must be a positive integer.`);
+  }
+  return number;
+}
+
+function isoTimestamp(value, label) {
+  const date = value instanceof Date ? value : new Date(String(value == null ? '' : value));
+  if (!Number.isFinite(date.getTime())) {
+    throw new PolarSandboxConfigError(`${label} must be a valid timestamp.`);
+  }
+  return date.toISOString();
+}
+
+function refundReason(value) {
+  const reason = requiredText(value == null ? 'customer_request' : value, 'reason');
+  if (!REFUND_REASONS.has(reason)) {
+    throw new PolarSandboxConfigError('reason is not supported by the Polar sandbox refund contract.');
+  }
+  return reason;
 }
 
 function assertService(client, serviceName, methodName) {
@@ -113,6 +145,7 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
   const subscriptionsList = assertService(client, 'subscriptions', 'list');
   const subscriptionUpdate = assertService(client, 'subscriptions', 'update');
   const subscriptionRevoke = assertService(client, 'subscriptions', 'revoke');
+  const refundCreate = assertService(client, 'refunds', 'create');
 
   async function call(code, action) {
     try {
@@ -183,6 +216,38 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
       });
     },
 
+    async cancelSubscriptionAtPeriodEnd({ subscriptionId }) {
+      const id = requiredText(subscriptionId, 'subscriptionId');
+      return call(
+        'POLAR_SANDBOX_SUBSCRIPTION_CANCEL_FAILED',
+        () => subscriptionUpdate(id, { cancel_at_period_end: true }),
+      );
+    },
+
+    async rescheduleSubscriptionRenewal({ subscriptionId, currentBillingPeriodEnd }) {
+      const id = requiredText(subscriptionId, 'subscriptionId');
+      const periodEnd = isoTimestamp(currentBillingPeriodEnd, 'currentBillingPeriodEnd');
+      return call(
+        'POLAR_SANDBOX_SUBSCRIPTION_RESCHEDULE_FAILED',
+        () => subscriptionUpdate(id, { current_billing_period_end: periodEnd }),
+      );
+    },
+
+    async createRefund({ orderId, amountMinor, reason = 'customer_request' }) {
+      const id = requiredText(orderId, 'orderId');
+      const amount = positiveSafeInteger(amountMinor, 'amountMinor');
+      const normalizedReason = refundReason(reason);
+      return call(
+        'POLAR_SANDBOX_REFUND_CREATE_FAILED',
+        () => refundCreate({
+          order_id: id,
+          amount,
+          reason: normalizedReason,
+          revoke_benefits: false,
+        }),
+      );
+    },
+
     async revokeSubscription({ subscriptionId }) {
       return call(
         'POLAR_SANDBOX_SUBSCRIPTION_REVOKE_FAILED',
@@ -195,6 +260,7 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
 module.exports = {
   DEFAULT_DISCOVERY_LIMIT,
   MAX_DISCOVERY_ITEMS,
+  REFUND_REASONS,
   collectList,
   createPolarSandboxLifecycleAdapter,
 };
