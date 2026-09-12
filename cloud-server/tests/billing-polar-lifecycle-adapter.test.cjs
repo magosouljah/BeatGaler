@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readPolarSandboxConfig } = require('../billing-polar-sandbox');
 const { createPolarSandboxLifecycleAdapter } = require('../billing-polar-lifecycle-adapter');
+const { SUBSCRIPTION_EVENT_TYPES } = require('../billing-lifecycle');
 
 function env() {
   return {
@@ -75,6 +76,10 @@ function adapter(calls = {}) {
     webhooks: { validateEvent: async () => ({ type: 'order.paid', timestamp: new Date().toISOString(), data: { id: 'order_1' } }) },
   });
 }
+
+test('commercial lifecycle registers the real Polar subscription.past_due webhook', () => {
+  assert.equal(SUBSCRIPTION_EVENT_TYPES.includes('subscription.past_due'), true);
+});
 
 test('lifecycle adapter can inspect a provider checkout without exposing its client secret', async () => {
   const calls = {};
