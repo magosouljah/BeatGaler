@@ -6,8 +6,11 @@ BEGIN;
 -- Polar 2026-04 exposes recurring financial confirmation through Order resources.
 -- An Order ID is therefore a durable provider financial identity even when no
 -- separate provider payment ID is present on the webhook/resource.
+-- 0011 encoded provider_payment_id twice: NOT NULL plus an inline nonblank CHECK.
+-- Evolve both constraints here; do not rewrite the historical migration.
 ALTER TABLE billing_payments
-  ALTER COLUMN provider_payment_id DROP NOT NULL;
+  ALTER COLUMN provider_payment_id DROP NOT NULL,
+  DROP CONSTRAINT billing_payments_provider_payment_id_check;
 
 ALTER TABLE billing_payments
   ADD CONSTRAINT billing_payments_provider_financial_identity_check
