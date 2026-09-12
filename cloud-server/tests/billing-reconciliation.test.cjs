@@ -1,61 +1,82 @@
 'use strict';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createBillingReconciliationService, BillingReconciliationError } = require('../billing-reconciliation');
+const {
+  normalizeListResult,
+  selectSubscription,
+  BillingReconciliationError,
+} = require('../billing-reconciliation');
+const {
+  createBillingLogEntry,
+  sanitizeDetails,
+  safeErrorCode,
+} = require('../billing-safe-log');
 
-function fakePool(local) {
-  const exceptions = new Map();
-  const client = {
-    async query(sql,args=[]) {
-      if (sql==='BEGIN'||sql==='COMMIT'||sql==='ROLLBACK'||sql.includes('pg_advisory_xact_lock')) return {rows:[]};
-      if (sql.includes('FROM billing_subscription_state')) return {rows: local ? [local] : []};
-      if (sql.startsWith('INSERT INTO billing_reconciliation_exceptions')) {
-        const prev=exceptions.get(args[0]);
-        exceptions.set(args[0],{attempt_count:(prev?.attempt_count||0)+1,provider:JSON.parse(args[4]),local:JSON.parse(args[5]),state:'OPEN'});
-        return {rows:[]};
-      }
-      if (sql.startsWith("UPDATE billing_reconciliation_exceptions SET state='RESOLVED'")) { if(exceptions.has(args[0])) exceptions.get(args[0]).state='RESOLVED'; return {rows:[]}; }
-      throw new Error(`unexpected sql ${sql}`);
-    }, release() {}
-  };
-  return { connect:async()=>client, query:async()=>({rows:[]}), exceptions };
+const NOW = '2026-09-15T00:00:00.000Z';
+
+function sub(id, status = 'active', end = '2026-10-01T00:00:00.000Z') {
+  return { id, status, current_period_end: end };
 }
 
-const providerState={customerId:'cus_1',subscriptionId:'sub_1',planId:'paid_entry',status:'active'};
-
-test('matching authoritative provider/local state reconciles without granting entitlement', async()=>{
-  const pool=fakePool({provider_customer_id:'cus_1',provider_subscription_id:'sub_1',plan_id:'paid_entry',status:'active'});
-  const service=createBillingReconciliationService({pool,provider:{fetchSubscription:async()=>providerState}});
-  const result=await service.reconcile({userId:'u1',reconciliationId:'rec_1'});
-  assert.deepEqual(result,{reconciled:true,divergent:false,entitlementGranted:false});
+test('provider discovery accepts arrays and explicit item envelopes but rejects unknown shapes', () => {
+  assert.deepEqual(normalizeListResult([sub('sub_1')], 'Subscription').items.map(item => item.id), ['sub_1']);
+  assert.deepEqual(normalizeListResult({ items: [sub('sub_2')], truncated: true }, 'Subscription'), {
+    items: [sub('sub_2')],
+    truncated: true,
+  });
+  assert.throws(
+    () => normalizeListResult({ surprise: [] }, 'Subscription'),
+    error => error instanceof BillingReconciliationError && error.code === 'BILLING_PROVIDER_SNAPSHOT_INVALID',
+  );
 });
 
-test('divergence creates durable exception and never grants entitlement', async()=>{
-  const pool=fakePool({provider_customer_id:'cus_1',provider_subscription_id:'sub_1',plan_id:'free',status:'inactive'});
-  const service=createBillingReconciliationService({pool,provider:{fetchSubscription:async()=>providerState}});
-  const result=await service.reconcile({userId:'u1',reconciliationId:'rec_2'});
-  assert.equal(result.divergent,true); assert.equal(result.entitlementGranted,false);
-  assert.equal(pool.exceptions.get('rec_2').state,'OPEN');
+test('one current provider subscription is selected while multiple live subscriptions fail closed', () => {
+  assert.equal(selectSubscription([sub('sub_1')], null, NOW).subscription.id, 'sub_1');
+  const ambiguous = selectSubscription([sub('sub_1'), sub('sub_2', 'past_due')], null, NOW);
+  assert.equal(ambiguous.ambiguous, true);
+  assert.equal(ambiguous.reason, 'MULTIPLE_SUBSCRIPTIONS_UNEXPECTED');
 });
 
-test('replay is idempotent by exception identity and increments retry attempt', async()=>{
-  const pool=fakePool(null);
-  const service=createBillingReconciliationService({pool,provider:{fetchSubscription:async()=>providerState}});
-  await service.reconcile({userId:'u1',reconciliationId:'rec_3'});
-  await service.reconcile({userId:'u1',reconciliationId:'rec_3'});
-  assert.equal(pool.exceptions.size,1); assert.equal(pool.exceptions.get('rec_3').attempt_count,2);
+test('historical provider subscriptions do not fabricate a current subscription', () => {
+  const result = selectSubscription([
+    sub('old_1', 'canceled', '2026-07-01T00:00:00.000Z'),
+    sub('old_2', 'canceled', '2026-08-01T00:00:00.000Z'),
+  ], null, NOW);
+  assert.equal(result.subscription, null);
+  assert.equal(result.historicalOnly, true);
 });
 
-test('ambiguous provider state fails closed before local mutation', async()=>{
-  const pool=fakePool(null);
-  const service=createBillingReconciliationService({pool,provider:{fetchSubscription:async()=>({customerId:'cus_1',subscriptionId:'sub_1',planId:'highest_paid',status:'mystery'})}});
-  await assert.rejects(()=>service.reconcile({userId:'u1',reconciliationId:'rec_4'}), e=>e instanceof BillingReconciliationError && e.code==='BILLING_PROVIDER_SNAPSHOT_INVALID');
-  assert.equal(pool.exceptions.size,0);
+test('safe billing logs are allowlisted and cannot leak tokens, signed URLs, card fields or raw provider payloads', () => {
+  const details = sanitizeDetails({
+    userId: 'u1',
+    provider: 'polar',
+    environment: 'sandbox',
+    reason: 'PROVIDER_UNAVAILABLE',
+    errorCode: 'POLAR_TIMEOUT',
+    token: 'polar_oat_secret',
+    url: 'https://signed.example.invalid/path?token=secret',
+    cardNumber: '4242424242424242',
+    rawPayload: { card: 'secret' },
+    previousState: { planId: 'paid_entry', status: 'active', accessToken: 'secret' },
+  });
+  const serialized = JSON.stringify(details);
+  assert.match(serialized, /paid_entry/);
+  for (const forbidden of ['polar_oat_secret', 'signed.example.invalid', '4242424242424242', 'rawPayload', 'accessToken']) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
 });
 
-test('provider lookup failure fails closed and does not grant or queue fabricated state', async()=>{
-  const pool=fakePool(null);
-  const service=createBillingReconciliationService({pool,provider:{fetchSubscription:async()=>{throw new Error('timeout')}}});
-  await assert.rejects(()=>service.reconcile({userId:'u1',reconciliationId:'rec_5'}), e=>e.code==='BILLING_PROVIDER_UNAVAILABLE');
-  assert.equal(pool.exceptions.size,0);
+test('unsafe error messages are reduced to a bounded code before logging', () => {
+  const error = Object.assign(new Error('secret https://signed.example.invalid'), { code: 'polar-timeout' });
+  assert.equal(safeErrorCode(error), 'POLAR-TIMEOUT');
+  const entry = createBillingLogEntry('reconciliation_failed', {
+    userId: 'u1',
+    errorCode: safeErrorCode(error),
+    message: error.message,
+  }, new Date(NOW));
+  const serialized = JSON.stringify(entry);
+  assert.equal(serialized.includes('signed.example.invalid'), false);
+  assert.equal(serialized.includes('secret'), false);
+  assert.match(serialized, /POLAR-TIMEOUT/);
 });

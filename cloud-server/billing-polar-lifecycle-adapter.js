@@ -11,6 +11,9 @@ const {
 } = require('./billing-polar-sandbox');
 const { getCheckoutReadyOffer } = require('./billing-commercial-catalog');
 
+const DEFAULT_DISCOVERY_LIMIT = 100;
+const MAX_DISCOVERY_ITEMS = 500;
+
 function requiredText(value, label) {
   const text = String(value == null ? '' : value).trim();
   if (!text) throw new PolarSandboxConfigError(`${label} is required.`);
@@ -36,6 +39,61 @@ function loadSdk() {
   }
 }
 
+function validateDiscoveryLimit(value) {
+  const number = value == null ? DEFAULT_DISCOVERY_LIMIT : Number(value);
+  if (!Number.isInteger(number) || number < 1 || number > MAX_DISCOVERY_ITEMS) {
+    throw new PolarSandboxConfigError(`limit must be between 1 and ${MAX_DISCOVERY_ITEMS}.`);
+  }
+  return number;
+}
+
+function pageItems(page) {
+  if (Array.isArray(page)) return page;
+  if (!page || typeof page !== 'object') return null;
+  if (Array.isArray(page.items)) return page.items;
+  if (Array.isArray(page.result?.items)) return page.result.items;
+  if (Array.isArray(page.data?.items)) return page.data.items;
+  return null;
+}
+
+async function collectList(raw, maxItems) {
+  if (raw && typeof raw[Symbol.asyncIterator] === 'function') {
+    const items = [];
+    let truncated = false;
+    for await (const page of raw) {
+      const batch = pageItems(page);
+      if (!batch) {
+        throw new PolarSandboxAdapterError(
+          'Polar sandbox paginated response is invalid.',
+          'POLAR_SANDBOX_LIST_INVALID',
+        );
+      }
+      for (const item of batch) {
+        if (items.length >= maxItems) {
+          truncated = true;
+          break;
+        }
+        items.push(item);
+      }
+      if (truncated) break;
+    }
+    return Object.freeze({ items: Object.freeze(items), truncated });
+  }
+
+  const direct = pageItems(raw);
+  if (direct) {
+    return Object.freeze({
+      items: Object.freeze(direct.slice(0, maxItems)),
+      truncated: direct.length > maxItems,
+    });
+  }
+
+  throw new PolarSandboxAdapterError(
+    'Polar sandbox list response is invalid.',
+    'POLAR_SANDBOX_LIST_INVALID',
+  );
+}
+
 function createPolarSandboxLifecycleAdapter(options = {}) {
   const config = options.config || readPolarSandboxConfig(options.env || process.env);
   const catalog = options.catalog || createSandboxCommercialCatalog(config);
@@ -51,6 +109,8 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
   });
 
   const orderGet = assertService(client, 'orders', 'get');
+  const ordersList = assertService(client, 'orders', 'list');
+  const subscriptionsList = assertService(client, 'subscriptions', 'list');
   const subscriptionUpdate = assertService(client, 'subscriptions', 'update');
   const subscriptionRevoke = assertService(client, 'subscriptions', 'revoke');
 
@@ -71,6 +131,37 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
         'POLAR_SANDBOX_ORDER_GET_FAILED',
         () => orderGet(requiredText(orderId, 'orderId')),
       );
+    },
+
+    async listSubscriptionsForUser({ userId, limit = DEFAULT_DISCOVERY_LIMIT } = {}) {
+      const externalCustomerId = requiredText(userId, 'userId');
+      const maxItems = validateDiscoveryLimit(limit);
+      const result = await call(
+        'POLAR_SANDBOX_SUBSCRIPTIONS_LIST_FAILED',
+        () => subscriptionsList({
+          organization_id: config.organizationId || undefined,
+          external_customer_id: externalCustomerId,
+          page: 1,
+          limit: Math.min(maxItems, 100),
+        }),
+      );
+      return collectList(result, maxItems);
+    },
+
+    async listOrdersForUser({ userId, limit = DEFAULT_DISCOVERY_LIMIT } = {}) {
+      const externalCustomerId = requiredText(userId, 'userId');
+      const maxItems = validateDiscoveryLimit(limit);
+      const result = await call(
+        'POLAR_SANDBOX_ORDERS_LIST_FAILED',
+        () => ordersList({
+          organization_id: config.organizationId || undefined,
+          external_customer_id: externalCustomerId,
+          product_billing_type: 'recurring',
+          page: 1,
+          limit: Math.min(maxItems, 100),
+        }),
+      );
+      return collectList(result, maxItems);
     },
 
     async scheduleSubscriptionChange({ subscriptionId, offerId }) {
@@ -102,5 +193,8 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
 }
 
 module.exports = {
+  DEFAULT_DISCOVERY_LIMIT,
+  MAX_DISCOVERY_ITEMS,
+  collectList,
   createPolarSandboxLifecycleAdapter,
 };

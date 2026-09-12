@@ -11,7 +11,8 @@
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
     "test:billing-checkout-pg": "node --test tests/billing-checkout-persistent.integration.cjs",
     "test:billing-webhook-pg": "node --test tests/billing-webhook-durable.integration.cjs",
-    "test:billing-lifecycle-pg": "node --test tests/billing-lifecycle.integration.cjs"
+    "test:billing-lifecycle-pg": "node --test tests/billing-lifecycle.integration.cjs",
+    "test:billing-reconciliation-pg": "node --test tests/billing-reconciliation.integration.cjs"
   },
   "keywords": [],
   "author": "",
