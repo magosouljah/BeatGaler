@@ -402,7 +402,7 @@ async function main() {
     await createDatabase(adminUrl, dbName);
     pool = new Pool({ connectionString: dbUrl, max: 6 });
     const migrations = listMigrations();
-    evidence.migrationsApplied = migrations.map(file => path.basename(file));
+    evidence.migrationsApplied = migrations.map(migration => migration.name);
     await applyMigrations(pool, migrations);
     for (const user of Object.values(users)) await insertUser(pool, user);
 
