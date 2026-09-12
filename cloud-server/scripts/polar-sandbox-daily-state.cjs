@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const { MODE, check } = require('./polar-sandbox-daily-config.cjs');
 const STATE_KEYS = new Set(['schemaVersion','mode','provider','environment','runId','commitSha','databaseName','organizationId',
   'products','userId','requestId','checkoutId','subscriptionId','customerId','initialOrder','expectedRenewalAt',
-  'initialPaymentCount','preRenewal','startedAt','updatedAt','result','checkpoint','lastErrorCode','renewalOrder','verification','scenarios']);
+  'initialPaymentCount','preRenewal','startedAt','updatedAt','result','checkpoint','lastErrorCode','renewalOrder','verification','scenarios','codeTransitions']);
 function databaseName(runId) { check(/^[0-9]{14}_[a-f0-9]{8}$/.test(runId), 'DAILY_RUN_ID_INVALID'); return `beatgaler_billing_e2e_daily_${runId}`; }
 function sanitize(value, secrets = []) {
   const encoded = JSON.stringify(value);
@@ -28,6 +28,14 @@ function validateState(state, expected) {
   check(state?.schemaVersion === 1 && state.mode === MODE && state.provider === 'polar' && state.environment === 'sandbox', 'DAILY_STATE_INVALID');
   check(Object.keys(state).every(k => STATE_KEYS.has(k)), 'DAILY_STATE_UNKNOWN_FIELD');
   check(/^[a-f0-9]{40}$/.test(state.commitSha), 'DAILY_HEAD_INVALID');
+  if (state.codeTransitions) {
+    check(Array.isArray(state.codeTransitions) && state.codeTransitions.length > 0, 'DAILY_CODE_LINEAGE_INVALID');
+    state.codeTransitions.forEach((t,i) => check(/^[a-f0-9]{40}$/.test(t.fromCommitSha) && /^[a-f0-9]{40}$/.test(t.toCommitSha)
+      && t.fromCommitSha!==t.toCommitSha && Number.isFinite(Date.parse(t.at))
+      && t.reason==='LATE_INITIAL_ORDER_UPDATE_CLEARED_PENDING_CHANGE'
+      && (i===0 || state.codeTransitions[i-1].toCommitSha===t.fromCommitSha), 'DAILY_CODE_LINEAGE_INVALID'));
+    check(state.codeTransitions.at(-1).toCommitSha===state.commitSha,'DAILY_CODE_LINEAGE_INVALID');
+  }
   check(state.databaseName === databaseName(state.runId) && state.userId === `daily_${state.runId}`, 'DAILY_STATE_BINDING_INVALID');
   for (const k of ['runId','commitSha','databaseName']) check(state[k] === expected[k], `DAILY_RESUME_${k.toUpperCase()}_MISMATCH`);
   sanitize(state); return state;

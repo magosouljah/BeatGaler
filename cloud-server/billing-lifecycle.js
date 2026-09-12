@@ -481,6 +481,13 @@ async function upsertOrderProjection(client, context, order, subscription, { cat
       const subStatus = normalizeProviderStatus(subscription?.status || 'active');
       const subPeriodStart = isoTime(subscription?.current_period_start, 'subscription current period start') || periodStart;
       const subPeriodEnd = isoTime(subscription?.current_period_end, 'subscription current period end') || periodEnd;
+      // A late update/replay of the already paid Order must not consume a change
+      // scheduled for coverage that this Order has not paid for. The fresh provider
+      // subscription is authoritative; an applied or canceled pending update clears it.
+      const pending = subscription?.pending_update?.product_id
+        && new Date(subscription.pending_update.applies_at).getTime() >= incomingPaidThroughMs
+        ? pendingPlanFromSubscription(catalog, subscription, null, offer)
+        : { nextPlanId: null, nextInterval: null, nextPlanEffectiveAt: null };
       await client.query(`
         INSERT INTO billing_subscription_state(
           user_id,provider,provider_environment,provider_customer_id,provider_subscription_id,
@@ -490,7 +497,7 @@ async function upsertOrderProjection(client, context, order, subscription, { cat
           last_synced_at,local_version,updated_at
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,NULL,$15,
-          NULL,NULL,NULL,NULL,NULL,now(),1,now()
+          $16,$17,$18,NULL,NULL,now(),1,now()
         )
         ON CONFLICT(user_id) DO UPDATE SET
           provider=EXCLUDED.provider,
@@ -509,9 +516,9 @@ async function upsertOrderProjection(client, context, order, subscription, { cat
           past_due_at=NULL,
           grace_until=NULL,
           ended_at=EXCLUDED.ended_at,
-          next_plan_id=NULL,
-          next_interval=NULL,
-          next_plan_effective_at=NULL,
+          next_plan_id=EXCLUDED.next_plan_id,
+          next_interval=EXCLUDED.next_interval,
+          next_plan_effective_at=EXCLUDED.next_plan_effective_at,
           access_invalidated_at=NULL,
           invalidation_reason=NULL,
           last_synced_at=now(),
@@ -523,6 +530,7 @@ async function upsertOrderProjection(client, context, order, subscription, { cat
         offer.planId, subStatus, Boolean(subscription?.cancel_at_period_end),
         subPeriodStart || periodStart, subPeriodEnd || periodEnd, periodEnd,
         isoTime(subscription?.ended_at ?? subscription?.ends_at, 'subscription ended at'),
+        pending.nextPlanId, pending.nextInterval, pending.nextPlanEffectiveAt,
       ]);
     }
   }

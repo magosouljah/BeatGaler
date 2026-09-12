@@ -77,6 +77,21 @@ After proof, cancellation and natural expiration can continue on the same daily 
 
 ## Validation
 
+### Recorded real-run repair: late initial Order update
+
+Run `20260912123817_e7cfaa52` exposed a lifecycle race: a real `subscription.updated` projected the deferred Highest change, then a late `order.updated` for the initial paid Order cleared the pending fields. The provider still had the scheduled change and the resolver still returned Paid Entry. The fix retains a provider pending update whose effective timestamp is at or beyond the paid Order's coverage end. Paying the new period consumes an applied update normally.
+
+For this incident only, an explicit code-repair handoff preserves the original state file, records old/new SHAs and reason in state and a DB audit table, and moves the run marker to the tested descendant commit. It requires the exact old SHA in `BILLING_E2E_REPAIR_FROM_HEAD`, new SHA in `BILLING_E2E_EXPECTED_HEAD`, and the existing run/DB identity. It refuses an active runtime or anything other than the initial paid checkpoint with one real payment. Normal resume continues rejecting a mismatched commit. No financial facts, dates or provider subscription are rewritten by the handoff.
+
+After stopping the old runtime and configuring those identities:
+
+```bash
+node scripts/polar-sandbox-daily-repair-code.cjs ../.billing-e2e/20260912123817_e7cfaa52.json # Audits the explicit code repair while preserving the original state and existing DB.
+npm run e2e:polar-sandbox -- resume ../.billing-e2e/20260912123817_e7cfaa52.json # Reconciles real provider facts with the corrected code, then verifies the pending upgrade.
+```
+
+The handoff writes a staged state before its DB commit. If interrupted after the DB commit but before the file rename, repeating the same repair finishes the staged handoff. After successful completion use ordinary resume, not another repair. The original checkout and payment are retained, so the repair does not require another purchase.
+
 ```bash
 npm run test:billing-v1 # Runs normal policy/SDK contracts and the daily fail-closed/state/financial-proof tests.
 npm run preflight:polar-sandbox-e2e # Checks historical guard and daily runner syntax without provider mutations.

@@ -95,7 +95,13 @@ async function readLocal(client, userId) {
   `, [userId])).rows;
   return { customer, subscription, payments };
 }
-function fingerprint(local) { return JSON.stringify(local); }
+function fingerprint(local) {
+  if (!local.subscription) return JSON.stringify(local);
+  // Projection writes refresh these bookkeeping fields even when provider facts
+  // are unchanged. They cannot turn an idempotent reconciliation into a repair.
+  const { local_version, updated_at, last_synced_at, ...subscription } = local.subscription;
+  return JSON.stringify({ ...local, subscription });
+}
 function auditState(local) {
   const row = local?.subscription;
   return sanitizeState({

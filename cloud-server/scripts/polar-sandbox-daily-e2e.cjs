@@ -205,6 +205,16 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     }
     if (!state.preRenewal) {
       check(Date.now()<Date.parse(state.expectedRenewalAt),'DAILY_MISSED_UPGRADE_WINDOW');
+      if (state.codeTransitions?.length) {
+        const beforeRepair=await snapshot(pool,runtime.lifecycle,state);
+        const reconciler=createBillingReconciliationService({pool,adapter,lifecycle:runtime.lifecycle});
+        const repaired=await reconciler.reconcileUser({userId:state.userId,reconciliationId:`daily-code-repair:${state.runId}:${Date.now()}`});
+        check(repaired.reconciled,'DAILY_REPAIR_RECONCILIATION_FAILED');
+        const afterRepair=await snapshot(pool,runtime.lifecycle,state);
+        assertBefore(afterRepair,state.initialOrder.id);
+        state.scenarios.push({name:'real_provider_reconciliation_after_code_repair',result:'PASS',before:beforeRepair,after:afterRepair});
+        await save();
+      }
       const sub=await adapter.getSubscription(state.subscriptionId);
       if (!sub.pending_update) await adapter.scheduleSubscriptionChange({subscriptionId:state.subscriptionId,offerId:HIGHEST});
       else check(sub.pending_update.product_id===products[1].productId,'DAILY_UNEXPECTED_PENDING_CHANGE');
