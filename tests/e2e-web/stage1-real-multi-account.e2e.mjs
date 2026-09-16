@@ -34,13 +34,15 @@ const report = {
     browser: true,
     ui_login: true,
     cloud_control_plane: true,
-    postgres_assignment: true,
+    postgres_persistent_assignment_via_productive_control_plane: true,
     direct_bootstrap: true,
+    authoritative_library_data_plane: true,
   },
   simulated: [],
   accounts: {},
   scenarios: [
     { name: "two_account_auth_isolation", status: "NOT_TESTED", severity: null },
+    { name: "authoritative_library_data_plane", status: "NOT_TESTED", severity: null },
     { name: "two_account_direct_identity", status: "NOT_TESTED", severity: null },
     { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
     { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
@@ -116,6 +118,48 @@ async function browserCookiePresence(client) {
     session_cookie: cookies.some(cookie => cookie.name === SESSION_COOKIE),
     csrf_cookie: cookies.some(cookie => cookie.name === CSRF_COOKIE),
   };
+}
+
+async function libraryAuthoritySnapshot(client) {
+  return client.execute(() => {
+    const library = document.querySelector('[data-library-scroll="true"]');
+    const text = String(document.body?.innerText || "");
+    const beatIds = Array.from(document.querySelectorAll("[data-beat-card-id]"))
+      .map(node => String(node.getAttribute("data-beat-card-id") || "").trim())
+      .filter(Boolean);
+    return {
+      present: Boolean(library),
+      aria_busy: library?.getAttribute("aria-busy") ?? null,
+      beat_ids: beatIds,
+      beat_count: beatIds.length,
+      empty_gallery: text.includes("Empty Gallery"),
+      poor_connection: text.includes("Poor connection."),
+      offline: text.includes("You're offline."),
+      load_error: text.includes("Galer Cloud could not load your library"),
+    };
+  });
+}
+
+async function waitForAuthoritativeLibrary(client, label) {
+  let latest = null;
+  try {
+    await client.waitUntil(async () => {
+      latest = await libraryAuthoritySnapshot(client);
+      const materialized = latest?.empty_gallery === true || Number(latest?.beat_count || 0) > 0;
+      return latest?.present === true && latest?.aria_busy === "false" && materialized &&
+        latest?.poor_connection !== true && latest?.offline !== true && latest?.load_error !== true;
+    }, {
+      timeout: 90_000,
+      interval: 750,
+      timeoutMsg: `Account ${label} did not reach an authoritative online library state.`,
+    });
+    return latest;
+  } catch (error) {
+    const detail = latest
+      ? `busy=${latest.aria_busy} beats=${latest.beat_count} empty=${latest.empty_gallery} poor=${latest.poor_connection} offline=${latest.offline} load_error=${latest.load_error}`
+      : "no library snapshot";
+    throw taggedError(`Account ${label} authoritative library did not become ready (${detail}).`, "STAGE1_LIBRARY_AUTHORITY_TIMEOUT", "P1");
+  }
 }
 
 async function runtimeSnapshot(client) {
@@ -206,6 +250,7 @@ async function runtimeSnapshot(client) {
           "Could not reach BeatGaler Cloud",
           "Session expired",
           "Poor connection",
+          "Galer Cloud could not load your library",
         ].find(value => text.includes(value));
         return known || null;
       })(),
@@ -272,7 +317,7 @@ function validatePersistentReload(before, after, label) {
 }
 
 describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
-  it("runs two isolated real accounts concurrently and preserves persistent Direct assignment across Reload", async () => {
+  it("runs two isolated real accounts concurrently and preserves productive Direct authority across Reload", async () => {
     const missing = accounts.flatMap(account => [
       !account.identifier ? `STAGE1_ACCOUNT_${account.label}_IDENTIFIER` : null,
       !account.password ? `STAGE1_ACCOUNT_${account.label}_PASSWORD` : null,
@@ -295,6 +340,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
       ]);
 
       const startupStartedAt = Date.now();
+      const [libraryBeforeA, libraryBeforeB] = await Promise.all([
+        waitForAuthoritativeLibrary(clientA, "A"),
+        waitForAuthoritativeLibrary(clientB, "B"),
+      ]);
+      markScenario("authoritative_library_data_plane", "PASS");
+
       const [beforeA, beforeB] = await Promise.all([
         waitForRuntimeSnapshot(clientA, "A"),
         waitForRuntimeSnapshot(clientB, "B"),
@@ -309,6 +360,10 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
 
       const reloadStartedAt = Date.now();
       await Promise.all([clientA.refresh(), clientB.refresh()]);
+      const [libraryAfterA, libraryAfterB] = await Promise.all([
+        waitForAuthoritativeLibrary(clientA, "A"),
+        waitForAuthoritativeLibrary(clientB, "B"),
+      ]);
       const [afterA, afterB] = await Promise.all([
         waitForRuntimeSnapshot(clientA, "A"),
         waitForRuntimeSnapshot(clientB, "B"),
@@ -332,6 +387,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           membership_bootstrap_mode: beforeA.direct.mode,
           session_id_before: beforeA.direct.session_id,
           session_id_after: afterA.direct.session_id,
+          library_before: { beat_count: libraryBeforeA.beat_count, beat_ids: libraryBeforeA.beat_ids, empty_gallery: libraryBeforeA.empty_gallery },
+          library_after: { beat_count: libraryAfterA.beat_count, beat_ids: libraryAfterA.beat_ids, empty_gallery: libraryAfterA.empty_gallery },
           visible_error_before: beforeA.visible_error,
           visible_error_after: afterA.visible_error,
         },
@@ -344,6 +401,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           membership_bootstrap_mode: beforeB.direct.mode,
           session_id_before: beforeB.direct.session_id,
           session_id_after: afterB.direct.session_id,
+          library_before: { beat_count: libraryBeforeB.beat_count, beat_ids: libraryBeforeB.beat_ids, empty_gallery: libraryBeforeB.empty_gallery },
+          library_after: { beat_count: libraryAfterB.beat_count, beat_ids: libraryAfterB.beat_ids, empty_gallery: libraryAfterB.empty_gallery },
           visible_error_before: beforeB.visible_error,
           visible_error_after: afterB.visible_error,
         },
@@ -353,7 +412,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
       report.severity = null;
       await writeReport();
 
-      console.log(`[stage1-real] PASS two accounts isolated; reload preserved vault+transport. report=${REPORT_FILE}`);
+      console.log(`[stage1-real] PASS two accounts isolated; authoritative library + reload preserved vault+transport. report=${REPORT_FILE}`);
     } catch (error) {
       const severity = error?.severity || "P1";
       report.overall = error?.code === "STAGE1_CREDENTIALS_MISSING" ? "BLOCKED" : "FAIL";
@@ -365,6 +424,9 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
       };
       if (scenario("two_account_auth_isolation")?.status === "NOT_TESTED") {
         markScenario("two_account_auth_isolation", report.overall === "BLOCKED" ? "BLOCKED" : "FAIL", severity);
+      }
+      if (error?.code === "STAGE1_LIBRARY_AUTHORITY_TIMEOUT") {
+        markScenario("authoritative_library_data_plane", "FAIL", severity, error.message);
       }
       await writeReport();
       throw error;
