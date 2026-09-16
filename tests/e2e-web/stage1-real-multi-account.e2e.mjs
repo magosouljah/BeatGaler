@@ -88,25 +88,25 @@ async function loginThroughUi(client, account) {
   await clearBrowserProfile(client);
 
   await client.waitUntil(async () => {
-    const field = await client.$("#beatgaler-login-identifier");
+    const field = await client.$("#auth-login-identifier");
     return field.isDisplayed().catch(() => false);
   }, {
     timeout: 30_000,
     interval: 250,
-    timeoutMsg: `Account ${account.label} did not reach the BeatGaler sign-in UI.`,
+    timeoutMsg: `Account ${account.label} did not reach the current BeatGaler Web sign-in UI.`,
   });
 
-  await (await client.$("#beatgaler-login-identifier")).setValue(account.identifier);
-  await (await client.$("#beatgaler-login-password")).setValue(account.password);
-  await (await client.$("button.bg-account-submit")).click();
+  await (await client.$("#auth-login-identifier")).setValue(account.identifier);
+  await (await client.$("#auth-login-password")).setValue(account.password);
+  await (await client.$('.bg-auth-form button[type="submit"]')).click();
 
   await client.waitUntil(async () => {
-    const field = await client.$("#beatgaler-login-identifier");
+    const field = await client.$("#auth-login-identifier");
     return !(await field.isExisting());
   }, {
     timeout: 60_000,
     interval: 300,
-    timeoutMsg: `Account ${account.label} did not leave the sign-in gate.`,
+    timeoutMsg: `Account ${account.label} did not leave the current Web sign-in gate.`,
   });
 
   return Date.now() - startedAt;
