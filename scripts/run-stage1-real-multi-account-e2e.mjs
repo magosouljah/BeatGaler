@@ -9,22 +9,31 @@ const root = path.resolve(here, "..");
 const envFile = path.join(root, ".env.stage1");
 const reportFile = path.join(root, "tmp", "stage1-real-multi-account-report.json");
 
-if (fs.existsSync(envFile)) {
-  process.loadEnvFile(envFile);
+if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
+
+function cliAccountCount() {
+  const index = process.argv.indexOf("--accounts");
+  if (index < 0) return null;
+  const value = Number(process.argv[index + 1]);
+  return Number.isInteger(value) ? value : NaN;
 }
 
-const required = [
-  "STAGE1_ACCOUNT_A_IDENTIFIER",
-  "STAGE1_ACCOUNT_A_PASSWORD",
-  "STAGE1_ACCOUNT_B_IDENTIFIER",
-  "STAGE1_ACCOUNT_B_PASSWORD",
-];
-const missing = required.filter(name => !String(process.env[name] || "").trim());
+const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
+const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
+const cohortSize = Number(process.env.STAGE1_COHORT_SIZE || 10);
+const requestedCount = cliAccountCount() ?? Number(process.env.STAGE1_RUN_ACCOUNTS || 2);
 
-if (missing.length) {
-  console.error("BLOCKED Stage 1 real multi-account E2E: dedicated local account credentials are not configured.");
-  console.error(`Missing variables: ${missing.join(", ")}`);
-  console.error("Create an ignored .env.stage1 file locally. Do not commit or paste its values.");
+if (!cohortId || !cohortPassword) {
+  console.error("BLOCKED Stage 1 real multi-account E2E: the reusable account cohort does not exist yet.");
+  console.error("Run first: node scripts/seed-stage1-real-accounts.mjs");
+  process.exit(2);
+}
+if (!Number.isInteger(cohortSize) || cohortSize < 2 || cohortSize > 50) {
+  console.error(`BLOCKED Stage 1: invalid STAGE1_COHORT_SIZE=${process.env.STAGE1_COHORT_SIZE || ""}.`);
+  process.exit(2);
+}
+if (!Number.isInteger(requestedCount) || requestedCount < 2 || requestedCount > cohortSize) {
+  console.error(`BLOCKED Stage 1: --accounts must be between 2 and ${cohortSize}.`);
   process.exit(2);
 }
 
@@ -43,8 +52,8 @@ try {
 }
 
 console.log(`[stage1-real] baseline=${gitHead}`);
-console.log("[stage1-real] accounts=2 browser_sessions=2 mode=real");
-console.log("[stage1-real] secrets are loaded locally and are never printed.");
+console.log(`[stage1-real] cohort=${cohortId} accounts=${requestedCount}/${cohortSize} browser_sessions=${requestedCount} mode=real`);
+console.log("[stage1-real] cohort password stays local and is never printed.");
 
 const result = spawnSync(wdioBin, ["run", "wdio.stage1-real.conf.mjs"], {
   cwd: root,
@@ -52,13 +61,12 @@ const result = spawnSync(wdioBin, ["run", "wdio.stage1-real.conf.mjs"], {
   env: {
     ...process.env,
     STAGE1_GIT_HEAD: gitHead,
+    STAGE1_RUN_ACCOUNTS: String(requestedCount),
   },
   shell: process.platform === "win32",
 });
 
-if (fs.existsSync(reportFile)) {
-  console.log(`[stage1-real] report=${reportFile}`);
-}
+if (fs.existsSync(reportFile)) console.log(`[stage1-real] report=${reportFile}`);
 
 if (result.error) {
   console.error(`[stage1-real] runner error: ${result.error.message}`);
