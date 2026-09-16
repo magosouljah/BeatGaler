@@ -62,14 +62,17 @@ async function preflight() {
   }
 }
 
-async function verifyLogin(account) {
-  const login = await postJson("/auth/login", {
+function loginBody(account) {
+  return {
     identifier: account.identifier,
     password: account.password,
     beatgalerUserId: account.seedInstallationId,
-  });
+  };
+}
+
+function verifiedUserFromLogin(account, login) {
   if (!login.ok) {
-    throw new Error(`Account ${account.label} could not sign in after seed (HTTP ${login.status}: ${String(login.payload?.error || "unknown error")}).`);
+    throw new Error(`Account ${account.label} could not sign in (HTTP ${login.status}: ${String(login.payload?.error || "unknown error")}).`);
   }
   const user = login.payload?.user || {};
   if (!String(user.id || "").trim()) throw new Error(`Account ${account.label} login returned no BeatGaler user id.`);
@@ -78,22 +81,36 @@ async function verifyLogin(account) {
 }
 
 async function seedAccount(account) {
-  const registration = await postJson("/auth/register", {
-    usernameBase: account.usernameBase,
-    email: account.identifier,
-    password: account.password,
-    beatgalerUserId: account.seedInstallationId,
-  });
+  // Idempotency matters: registration owns an installation id, so on a rerun
+  // we first prove that the previously seeded account is still reusable.
+  const existingLogin = await postJson("/auth/login", loginBody(account));
+  let state = "EXISTING";
+  let user;
 
-  let state = "CREATED";
-  if (!registration.ok) {
-    if (registration.status !== 409) {
+  if (existingLogin.ok) {
+    user = verifiedUserFromLogin(account, existingLogin);
+  } else {
+    const registration = await postJson("/auth/register", {
+      usernameBase: account.usernameBase,
+      email: account.identifier,
+      password: account.password,
+      beatgalerUserId: account.seedInstallationId,
+    });
+
+    if (!registration.ok) {
+      if (registration.status === 403 || registration.status === 409) {
+        throw new Error(
+          `Account ${account.label} appears to exist but the locally stored cohort password no longer signs in. ` +
+          `Refusing to create duplicates (register HTTP ${registration.status}).`,
+        );
+      }
       throw new Error(`Account ${account.label} registration failed (HTTP ${registration.status}: ${String(registration.payload?.error || "unknown error")}).`);
     }
-    state = "EXISTING";
+
+    state = "CREATED";
+    user = verifiedUserFromLogin(account, await postJson("/auth/login", loginBody(account)));
   }
 
-  const user = await verifyLogin(account);
   return {
     label: account.label,
     state,
@@ -118,8 +135,7 @@ async function main() {
   await preflight();
   const seeded = [];
   for (let index = 1; index <= COHORT_SIZE; index += 1) {
-    const account = accountFor(index);
-    const result = await seedAccount(account);
+    const result = await seedAccount(accountFor(index));
     seeded.push(result);
     console.log(`[stage1-seed] ${result.label}/10 ${result.state} user=${result.user_id} storage_ready=${result.storage_ready}`);
     if (index < COHORT_SIZE) await new Promise(resolve => setTimeout(resolve, 250));
