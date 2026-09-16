@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,7 +8,6 @@ const bindHost = "127.0.0.1";
 const browserHost = "localhost";
 const port = Number(process.env.STAGE1_WEB_PORT || 1421);
 const webUrl = `http://${browserHost}:${port}`;
-const probeUrl = `http://${bindHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
 const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
@@ -23,21 +23,33 @@ async function preflightCloud() {
   }
 }
 
+function canConnectToWeb() {
+  return new Promise(resolve => {
+    const socket = net.createConnection({ host: bindHost, port });
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(1_000);
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.once("timeout", () => finish(false));
+  });
+}
+
 async function waitForWeb() {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (viteProcess?.exitCode != null) {
       throw new Error(`Vite Web E2E server exited before Stage 1 could start (exit ${viteProcess.exitCode}).`);
     }
-    try {
-      const response = await fetch(probeUrl, { signal: AbortSignal.timeout(1_500) });
-      if (response.ok) return;
-    } catch {
-      // Vite can take a moment to bind on a clean checkout.
-    }
+    if (await canConnectToWeb()) return;
     await sleep(250);
   }
-  throw new Error(`Timed out waiting for BeatGaler Web at ${probeUrl}.`);
+  throw new Error(`Timed out waiting for BeatGaler Web to accept connections on ${bindHost}:${port}.`);
 }
 
 function stopVite() {
@@ -46,7 +58,7 @@ function stopVite() {
 }
 
 function chromeCapability() {
-  const args = ["--no-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800", "--incognito"];
+  const args = ["--no-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800"];
   if (!headed) args.unshift("--headless=new");
   return {
     browserName: "chrome",
