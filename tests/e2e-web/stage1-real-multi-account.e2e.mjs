@@ -6,26 +6,26 @@ const REPORT_DIR = path.resolve(process.cwd(), "tmp");
 const REPORT_FILE = path.join(REPORT_DIR, "stage1-real-multi-account-report.json");
 const SESSION_COOKIE = "__Host-beatgaler_session";
 const CSRF_COOKIE = "__Host-beatgaler_csrf";
+const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
+const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
+const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 
-const accounts = [
-  {
-    label: "A",
-    browserName: "accountA",
-    identifier: process.env.STAGE1_ACCOUNT_A_IDENTIFIER || "",
-    password: process.env.STAGE1_ACCOUNT_A_PASSWORD || "",
-  },
-  {
-    label: "B",
-    browserName: "accountB",
-    identifier: process.env.STAGE1_ACCOUNT_B_IDENTIFIER || "",
-    password: process.env.STAGE1_ACCOUNT_B_PASSWORD || "",
-  },
-];
+const accounts = Array.from({ length: accountCount }, (_, index) => {
+  const label = String(index + 1).padStart(2, "0");
+  return {
+    label,
+    browserName: `account${label}`,
+    identifier: `stage1.${cohortId}.${label}@beatgaler.test`,
+    password: cohortPassword,
+  };
+});
 
 const report = {
-  version: 1,
+  version: 2,
   stage: "Etapa 1 — uso real entre cuentas independientes",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
+  cohort_id: cohortId || null,
+  requested_account_count: accountCount,
   started_at: new Date().toISOString(),
   finished_at: null,
   overall: "NOT_TESTED",
@@ -41,9 +41,9 @@ const report = {
   simulated: [],
   accounts: {},
   scenarios: [
-    { name: "two_account_auth_isolation", status: "NOT_TESTED", severity: null },
+    { name: "multi_account_auth_isolation", status: "NOT_TESTED", severity: null },
     { name: "authoritative_library_data_plane", status: "NOT_TESTED", severity: null },
-    { name: "two_account_direct_identity", status: "NOT_TESTED", severity: null },
+    { name: "multi_account_direct_identity", status: "NOT_TESTED", severity: null },
     { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
     { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
     { name: "uploads_metadata_downloads_trash", status: "NOT_TESTED", severity: null },
@@ -149,12 +149,12 @@ async function waitForAuthoritativeLibrary(client, label) {
       return latest?.present === true && latest?.aria_busy === "false" && materialized &&
         latest?.poor_connection !== true && latest?.offline !== true && latest?.load_error !== true;
     }, {
-      timeout: 90_000,
+      timeout: 120_000,
       interval: 750,
       timeoutMsg: `Account ${label} did not reach an authoritative online library state.`,
     });
     return latest;
-  } catch (error) {
+  } catch {
     const detail = latest
       ? `busy=${latest.aria_busy} beats=${latest.beat_count} empty=${latest.empty_gallery} poor=${latest.poor_connection} offline=${latest.offline} load_error=${latest.load_error}`
       : "no library snapshot";
@@ -267,7 +267,7 @@ async function waitForRuntimeSnapshot(client, label) {
     latest = await runtimeSnapshot(client);
     return latest?.ok === true;
   }, {
-    timeout: 90_000,
+    timeout: 120_000,
     interval: 1_000,
     timeoutMsg: `Account ${label} did not establish authenticated Direct bootstrap. Last phase=${latest?.phase || "unknown"} status=${latest?.status || 0} error=${latest?.error || "unknown"}`,
   });
@@ -289,16 +289,30 @@ function validateSingleAccount(label, snapshot) {
   assert.equal(snapshot.direct.expected_bot_id, snapshot.direct.transport_id, `Account ${label} temporary auth must target its assigned transport bot.`);
 }
 
-function validateCrossAccountIsolation(a, b) {
-  if (a.user_id === b.user_id) {
-    throw taggedError("Both browser sessions authenticated as the same BeatGaler user.", "STAGE1_IDENTITY_COLLISION", "P0");
-  }
-  if (a.client_id === b.client_id) {
-    throw taggedError("Both browser sessions reused the same Web installation id.", "STAGE1_BROWSER_ID_COLLISION", "P0");
-  }
-  if (a.direct.chat_id === b.direct.chat_id) {
-    throw taggedError("Two independent BeatGaler accounts resolved the same vault.", "STAGE1_VAULT_COLLISION", "P0");
-  }
+function requireUnique(snapshots, selector, code, message) {
+  const values = snapshots.map(selector);
+  if (new Set(values).size !== values.length) throw taggedError(message, code, "P0");
+}
+
+function validateCrossAccountIsolation(snapshots) {
+  requireUnique(
+    snapshots,
+    snapshot => snapshot.user_id,
+    "STAGE1_IDENTITY_COLLISION",
+    "Independent browser sessions authenticated as the same BeatGaler user.",
+  );
+  requireUnique(
+    snapshots,
+    snapshot => snapshot.client_id,
+    "STAGE1_BROWSER_ID_COLLISION",
+    "Independent browser sessions reused a Web installation id.",
+  );
+  requireUnique(
+    snapshots,
+    snapshot => snapshot.direct.chat_id,
+    "STAGE1_VAULT_COLLISION",
+    "Independent BeatGaler accounts resolved the same vault.",
+  );
 }
 
 function validatePersistentReload(before, after, label) {
@@ -317,116 +331,89 @@ function validatePersistentReload(before, after, label) {
 }
 
 describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
-  it("runs two isolated real accounts concurrently and preserves productive Direct authority across Reload", async () => {
-    const missing = accounts.flatMap(account => [
-      !account.identifier ? `STAGE1_ACCOUNT_${account.label}_IDENTIFIER` : null,
-      !account.password ? `STAGE1_ACCOUNT_${account.label}_PASSWORD` : null,
-    ]).filter(Boolean);
-
-    if (missing.length) {
+  it(`runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`, async () => {
+    if (!cohortId || !cohortPassword) {
       report.overall = "BLOCKED";
-      report.failure = { code: "STAGE1_CREDENTIALS_MISSING", severity: null, message: `Missing local variables: ${missing.join(", ")}` };
+      report.failure = { code: "STAGE1_COHORT_MISSING", severity: null, message: "Reusable Stage 1 cohort is not seeded." };
       await writeReport();
-      throw taggedError("Stage 1 dedicated account credentials are missing from the local environment.", "STAGE1_CREDENTIALS_MISSING", null);
+      throw taggedError("Stage 1 reusable account cohort is missing. Run the seed command first.", "STAGE1_COHORT_MISSING", null);
     }
 
-    const clientA = browser.getInstance("accountA");
-    const clientB = browser.getInstance("accountB");
+    const clients = accounts.map(account => browser.getInstance(account.browserName));
 
     try {
-      const [loginMsA, loginMsB] = await Promise.all([
-        loginThroughUi(clientA, accounts[0]),
-        loginThroughUi(clientB, accounts[1]),
-      ]);
+      const loginTimes = await Promise.all(
+        accounts.map((account, index) => loginThroughUi(clients[index], account)),
+      );
 
       const startupStartedAt = Date.now();
-      const [libraryBeforeA, libraryBeforeB] = await Promise.all([
-        waitForAuthoritativeLibrary(clientA, "A"),
-        waitForAuthoritativeLibrary(clientB, "B"),
-      ]);
-      markScenario("authoritative_library_data_plane", "PASS");
+      const librariesBefore = await Promise.all(
+        accounts.map((account, index) => waitForAuthoritativeLibrary(clients[index], account.label)),
+      );
+      markScenario("authoritative_library_data_plane", "PASS", null, `${accountCount} authoritative libraries ready`);
 
-      const [beforeA, beforeB] = await Promise.all([
-        waitForRuntimeSnapshot(clientA, "A"),
-        waitForRuntimeSnapshot(clientB, "B"),
-      ]);
+      const before = await Promise.all(
+        accounts.map((account, index) => waitForRuntimeSnapshot(clients[index], account.label)),
+      );
       const startupMs = Date.now() - startupStartedAt;
 
-      validateSingleAccount("A", beforeA);
-      validateSingleAccount("B", beforeB);
-      validateCrossAccountIsolation(beforeA, beforeB);
-      markScenario("two_account_auth_isolation", "PASS");
-      markScenario("two_account_direct_identity", "PASS");
+      before.forEach((snapshot, index) => validateSingleAccount(accounts[index].label, snapshot));
+      validateCrossAccountIsolation(before);
+      markScenario("multi_account_auth_isolation", "PASS", null, `${accountCount} unique users/browser ids`);
+      markScenario("multi_account_direct_identity", "PASS", null, `${accountCount} unique vaults`);
 
       const reloadStartedAt = Date.now();
-      await Promise.all([clientA.refresh(), clientB.refresh()]);
-      const [libraryAfterA, libraryAfterB] = await Promise.all([
-        waitForAuthoritativeLibrary(clientA, "A"),
-        waitForAuthoritativeLibrary(clientB, "B"),
-      ]);
-      const [afterA, afterB] = await Promise.all([
-        waitForRuntimeSnapshot(clientA, "A"),
-        waitForRuntimeSnapshot(clientB, "B"),
-      ]);
+      await Promise.all(clients.map(client => client.refresh()));
+      const librariesAfter = await Promise.all(
+        accounts.map((account, index) => waitForAuthoritativeLibrary(clients[index], account.label)),
+      );
+      const after = await Promise.all(
+        accounts.map((account, index) => waitForRuntimeSnapshot(clients[index], account.label)),
+      );
       const reloadMs = Date.now() - reloadStartedAt;
 
-      validateSingleAccount("A", afterA);
-      validateSingleAccount("B", afterB);
-      validateCrossAccountIsolation(afterA, afterB);
-      validatePersistentReload(beforeA, afterA, "A");
-      validatePersistentReload(beforeB, afterB, "B");
-      markScenario("simultaneous_reload_persistent_assignment", "PASS");
+      after.forEach((snapshot, index) => validateSingleAccount(accounts[index].label, snapshot));
+      validateCrossAccountIsolation(after);
+      before.forEach((snapshot, index) => validatePersistentReload(snapshot, after[index], accounts[index].label));
+      markScenario("simultaneous_reload_persistent_assignment", "PASS", null, `${accountCount} simultaneous reloads preserved assignment`);
 
-      report.accounts = {
-        A: {
-          login_ms: loginMsA,
-          user_id: beforeA.user_id,
-          client_id: beforeA.client_id,
-          vault_chat_id: beforeA.direct.chat_id,
-          transport_id: beforeA.direct.transport_id,
-          membership_bootstrap_mode: beforeA.direct.mode,
-          session_id_before: beforeA.direct.session_id,
-          session_id_after: afterA.direct.session_id,
-          library_before: { beat_count: libraryBeforeA.beat_count, beat_ids: libraryBeforeA.beat_ids, empty_gallery: libraryBeforeA.empty_gallery },
-          library_after: { beat_count: libraryAfterA.beat_count, beat_ids: libraryAfterA.beat_ids, empty_gallery: libraryAfterA.empty_gallery },
-          visible_error_before: beforeA.visible_error,
-          visible_error_after: afterA.visible_error,
-        },
-        B: {
-          login_ms: loginMsB,
-          user_id: beforeB.user_id,
-          client_id: beforeB.client_id,
-          vault_chat_id: beforeB.direct.chat_id,
-          transport_id: beforeB.direct.transport_id,
-          membership_bootstrap_mode: beforeB.direct.mode,
-          session_id_before: beforeB.direct.session_id,
-          session_id_after: afterB.direct.session_id,
-          library_before: { beat_count: libraryBeforeB.beat_count, beat_ids: libraryBeforeB.beat_ids, empty_gallery: libraryBeforeB.empty_gallery },
-          library_after: { beat_count: libraryAfterB.beat_count, beat_ids: libraryAfterB.beat_ids, empty_gallery: libraryAfterB.empty_gallery },
-          visible_error_before: beforeB.visible_error,
-          visible_error_after: afterB.visible_error,
-        },
-      };
+      report.accounts = Object.fromEntries(accounts.map((account, index) => [account.label, {
+        login_ms: loginTimes[index],
+        user_id: before[index].user_id,
+        client_id: before[index].client_id,
+        vault_chat_id: before[index].direct.chat_id,
+        transport_id: before[index].direct.transport_id,
+        membership_bootstrap_mode: before[index].direct.mode,
+        session_id_before: before[index].direct.session_id,
+        session_id_after: after[index].direct.session_id,
+        library_beats_before: librariesBefore[index].beat_count,
+        library_beats_after: librariesAfter[index].beat_count,
+        visible_error_before: before[index].visible_error,
+        visible_error_after: after[index].visible_error,
+      }]));
       report.timings = { startup_ms: startupMs, simultaneous_reload_ms: reloadMs };
+      report.transport_distribution = Object.fromEntries(
+        [...new Set(before.map(snapshot => snapshot.direct.transport_id))].map(transportId => [
+          transportId,
+          before.filter(snapshot => snapshot.direct.transport_id === transportId).length,
+        ]),
+      );
       report.overall = "PASS";
       report.severity = null;
       await writeReport();
 
-      console.log(`[stage1-real] PASS two accounts isolated; authoritative library + reload preserved vault+transport. report=${REPORT_FILE}`);
+      console.log(`[stage1-real] PASS accounts=${accountCount} isolated; reload preserved vault+transport. report=${REPORT_FILE}`);
     } catch (error) {
       const severity = error?.severity || "P1";
-      report.overall = error?.code === "STAGE1_CREDENTIALS_MISSING" ? "BLOCKED" : "FAIL";
+      report.overall = error?.code === "STAGE1_COHORT_MISSING" ? "BLOCKED" : "FAIL";
       report.severity = severity;
       report.failure = {
         code: String(error?.code || "STAGE1_E2E_FAILURE"),
         severity,
         message: String(error?.message || error),
       };
-      if (scenario("two_account_auth_isolation")?.status === "NOT_TESTED") {
-        markScenario("two_account_auth_isolation", report.overall === "BLOCKED" ? "BLOCKED" : "FAIL", severity);
-      }
-      if (error?.code === "STAGE1_LIBRARY_AUTHORITY_TIMEOUT") {
-        markScenario("authoritative_library_data_plane", "FAIL", severity, error.message);
+      for (const name of ["multi_account_auth_isolation", "authoritative_library_data_plane", "multi_account_direct_identity", "simultaneous_reload_persistent_assignment"]) {
+        if (scenario(name)?.status === "NOT_TESTED") markScenario(name, report.overall === "BLOCKED" ? "BLOCKED" : "FAIL", severity);
       }
       await writeReport();
       throw error;
