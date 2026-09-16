@@ -3,9 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const host = "127.0.0.1";
+const bindHost = "127.0.0.1";
+const browserHost = "localhost";
 const port = Number(process.env.STAGE1_WEB_PORT || 1421);
-const webUrl = `http://${host}:${port}`;
+const webUrl = `http://${browserHost}:${port}`;
+const probeUrl = `http://${bindHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
 let viteProcess = null;
@@ -27,14 +29,14 @@ async function waitForWeb() {
       throw new Error(`Vite Web E2E server exited before Stage 1 could start (exit ${viteProcess.exitCode}).`);
     }
     try {
-      const response = await fetch(webUrl, { signal: AbortSignal.timeout(1_500) });
+      const response = await fetch(probeUrl, { signal: AbortSignal.timeout(1_500) });
       if (response.ok) return;
     } catch {
       // Vite can take a moment to bind on a clean checkout.
     }
     await sleep(250);
   }
-  throw new Error(`Timed out waiting for BeatGaler Web at ${webUrl}.`);
+  throw new Error(`Timed out waiting for BeatGaler Web at ${probeUrl}.`);
 }
 
 function stopVite() {
@@ -80,7 +82,7 @@ export const config = {
     const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");
     viteProcess = spawn(
       process.execPath,
-      [viteBin, "--mode", "web", "--host", host, "--port", String(port), "--strictPort"],
+      [viteBin, "--mode", "web", "--host", bindHost, "--port", String(port), "--strictPort"],
       {
         cwd: root,
         env: { ...process.env },
