@@ -10,6 +10,7 @@ const webUrl = `http://${browserHost}:${port}`;
 const probeUrl = `http://${bindHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
+const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 let viteProcess = null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -53,6 +54,13 @@ function chromeCapability() {
   };
 }
 
+const capabilities = Object.fromEntries(
+  Array.from({ length: accountCount }, (_, index) => {
+    const label = String(index + 1).padStart(2, "0");
+    return [`account${label}`, { capabilities: chromeCapability() }];
+  }),
+);
+
 export const config = {
   runner: "local",
   specs: ["./tests/e2e-web/stage1-real-multi-account.e2e.mjs"],
@@ -68,14 +76,11 @@ export const config = {
   reporters: ["spec"],
   mochaOpts: {
     ui: "bdd",
-    timeout: 180_000,
+    timeout: accountCount > 4 ? 420_000 : 240_000,
   },
 
   services: [],
-  capabilities: {
-    accountA: { capabilities: chromeCapability() },
-    accountB: { capabilities: chromeCapability() },
-  },
+  capabilities,
 
   onPrepare: async () => {
     await preflightCloud();
