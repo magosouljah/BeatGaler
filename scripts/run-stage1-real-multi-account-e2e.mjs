@@ -53,7 +53,7 @@ const result = spawnSync(wdioBin, ["run", "wdio.stage1-real.conf.mjs"], {
     ...process.env,
     STAGE1_GIT_HEAD: gitHead,
   },
-  shell: false,
+  shell: process.platform === "win32",
 });
 
 if (fs.existsSync(reportFile)) {
