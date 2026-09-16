@@ -1,104 +1,124 @@
 # Stage 1 — real multi-account Web E2E
 
-This harness is the first productive Stage 1 browser test. It is intentionally small: two independent BeatGaler accounts, two isolated Chrome sessions, one real Cloud, real PostgreSQL control-plane state, the productive Web Direct runtime and an authoritative library read.
+This harness creates and reuses a fixed cohort of **10 real BeatGaler test accounts**. The accounts are created through the productive `/auth/register` path, so each account receives normal BeatGaler identity/storage provisioning instead of database fixtures, fake vaults or monkey-patched transport clients.
 
-It does **not** replace `cloud-server/tests/stage1-multi-account-concurrency.test.cjs`. That older test is useful synthetic coverage, but it does not prove the browser-to-Cloud-to-Direct path.
+It does **not** replace `cloud-server/tests/stage1-multi-account-concurrency.test.cjs`. That older test remains useful synthetic coverage; this harness exists to prove the browser → Cloud → Direct → authoritative library path with real accounts.
 
-## What this first scenario proves
+## 1. Seed the real account cohort once
 
-For account A and account B, concurrently:
+Prerequisites:
 
-1. opens an independent Chrome session;
-2. clears that browser profile before the run;
-3. signs in through the current `AuthExperienceGate` Web UI;
-4. verifies the browser received a Web cookie session and CSRF state;
-5. verifies the two browsers have different BeatGaler user ids and different stable Web client ids;
-6. waits until the real Web library leaves `aria-busy` and materializes either authoritative beat cards or the verified `Empty Gallery` state;
-7. that UI state is downstream of `libraryStateManager.reloadAuthoritative()`, whose Web adapter refreshes/loads through `WebGalerCloudTransport`;
-8. calls the authenticated productive `/transport/session/start` path through the same-origin Web proxy to capture the safe control-plane identity for the established browser;
-9. records the real vault `chat_id` and persistent `transport_id` returned by the control plane;
-10. requires the two accounts to resolve different vaults;
-11. reloads both browsers concurrently;
-12. repeats the authoritative library proof and verifies each account keeps the same user, Web client id, vault and persistent transport bot after Reload.
+- BeatGaler Cloud running on `http://127.0.0.1:4000` unless `STAGE1_CLOUD_URL` is intentionally overridden;
+- PostgreSQL available to that Cloud;
+- MASTER storage account configured and able to create real vaults;
+- productive Direct transport configuration available.
 
-The two accounts are **allowed to share the same transport bot**. Persistent ownership is per vault; Stage 1 must not accidentally reintroduce a one-vault-per-bot assumption.
+Run from the repository root:
 
-## What is real
-
-- Chrome/WebdriverIO browser sessions;
-- the current BeatGaler `AuthExperienceGate` password-login UI;
-- browser cookies, localStorage and sessionStorage;
-- BeatGaler account session;
-- Web same-origin Cloud proxy;
-- Cloud authentication/control plane;
-- PostgreSQL-backed persistent vault → transport assignment used by the current runtime;
-- productive Web Direct bootstrap;
-- authoritative Web library refresh/load through the actual Web transport runtime;
-- real vault ids, transport ids and materialized library beat ids/counts.
-
-No fake bot, fake token, fake vault, fabricated lease or monkey-patched provider client is used by this E2E.
-
-The first scenario does **not** yet prove playback bytes, upload, metadata edit, download, Trash or high account counts. Those remain `NOT_TESTED` in the JSON result until later scenarios are added.
-
-## Local prerequisites
-
-Before running the E2E:
-
-- use the validated BeatGaler checkout and dependencies;
-- run the real BeatGaler Cloud on `http://127.0.0.1:4000` unless `STAGE1_CLOUD_URL` is intentionally overridden;
-- keep PostgreSQL and the real Direct transport configuration available to that Cloud;
-- have two dedicated, verified BeatGaler password-login test accounts with different vaults and without an MFA step for this first harness.
-
-Do not put account credentials in Git, command history, screenshots, chat messages or test source.
-
-Create this ignored local file at the repository root:
-
-```dotenv
-STAGE1_ACCOUNT_A_IDENTIFIER=...
-STAGE1_ACCOUNT_A_PASSWORD=...
-STAGE1_ACCOUNT_B_IDENTIFIER=...
-STAGE1_ACCOUNT_B_PASSWORD=...
+```bash
+node scripts/seed-stage1-real-accounts.mjs
 ```
 
-Name it exactly:
+The seed command:
+
+1. creates a local random `STAGE1_COHORT_ID`;
+2. creates a strong random cohort password;
+3. stores both only in ignored `.env.stage1`;
+4. creates 10 deterministic test emails for that cohort;
+5. calls the real `/auth/register` endpoint sequentially;
+6. therefore provisions real BeatGaler accounts and real vaults through normal Cloud code;
+7. immediately signs each account in to prove the generated credentials are reusable;
+8. treats an already-existing cohort account as reusable only if its password still signs in successfully.
+
+The password is never printed and is not written to the JSON report.
+
+The generated account identifiers have this form:
 
 ```text
-.env.stage1
+stage1.<cohort-id>.01@beatgaler.test
+...
+stage1.<cohort-id>.10@beatgaler.test
 ```
 
-The repository already ignores `.env.*`, so `.env.stage1` is local-only.
+`beatgaler.test` is used only as a reserved test-domain identifier; these accounts are not intended for real email delivery.
 
-The harness deliberately reuses dedicated accounts instead of registering fresh accounts every run. Registration provisions real external storage, so automatically creating disposable accounts on every execution would create persistent provider-side vaults and make repeated load runs destructive/noisy.
+Seed evidence is written to:
 
-No official disposable multi-account fixture/factory was found in the current repository. If one is added later, it can replace this local credential contract without changing the browser-isolation model.
+```text
+tmp/stage1-real-account-seed-report.json
+```
 
-## Run
+## 2. Run the real browser test
 
-From the repository root:
+A normal first run uses the first two accounts from the already-created 10-account cohort:
 
 ```bash
 node scripts/run-stage1-real-multi-account-e2e.mjs
 ```
 
-To watch both browsers while developing the harness:
+Scale without creating new accounts:
 
 ```bash
-STAGE1_HEADED=1 node scripts/run-stage1-real-multi-account-e2e.mjs
+node scripts/run-stage1-real-multi-account-e2e.mjs --accounts 4
+node scripts/run-stage1-real-multi-account-e2e.mjs --accounts 10
 ```
 
-On PowerShell:
+To watch the browsers:
+
+PowerShell:
 
 ```powershell
-$env:STAGE1_HEADED="1"; node scripts/run-stage1-real-multi-account-e2e.mjs
+$env:STAGE1_HEADED="1"; node scripts/run-stage1-real-multi-account-e2e.mjs --accounts 2
 ```
 
-The runner starts its own Vite Web dev server on port `1421` by default. Chrome uses `http://localhost:1421`; Vite binds only to `127.0.0.1`. This keeps the normal localhost browser origin while still using the existing `/beatgaler-api` proxy to the real Cloud instead of inventing a second E2E backend.
+The runner starts its own Vite Web server on `localhost:1421` and uses the existing `/beatgaler-api` proxy to the real Cloud.
 
-Optional local overrides:
+## What the current scenario proves
 
-- `STAGE1_WEB_PORT`
-- `STAGE1_CLOUD_URL`
-- `STAGE1_HEADED=1`
+For every active account concurrently:
+
+1. opens an independent Chrome session;
+2. clears that browser profile before the run;
+3. signs in through the real BeatGaler Web UI;
+4. verifies the real browser session cookie + CSRF state;
+5. waits for the authoritative Web library to finish loading;
+6. verifies productive `/transport/session/start` identity;
+7. records real BeatGaler user id, browser client id, vault `chat_id` and persistent `transport_id`;
+8. requires every active account to have a unique BeatGaler user, browser client id and vault;
+9. allows multiple independent vaults to share a transport bot;
+10. reloads all active browsers simultaneously;
+11. requires every account to keep the same user, browser id, vault and persistent transport assignment after Reload.
+
+The active count is selectable from 2 through the 10 seeded accounts. The intended progression is 2 → 4 → 10 so a harness defect is not confused with a real scaling defect.
+
+## What is real
+
+- account registration;
+- vault provisioning;
+- Chrome/WebdriverIO browser sessions;
+- BeatGaler Web UI login;
+- browser cookies/localStorage/sessionStorage;
+- BeatGaler account sessions;
+- Web same-origin Cloud proxy;
+- Cloud auth/control plane;
+- PostgreSQL-backed persistent vault → transport assignment;
+- productive Direct bootstrap metadata;
+- authoritative Web library load;
+- real vault ids and transport ids.
+
+No fake bot, fake token, fake vault, fabricated lease or monkey-patched provider client is used.
+
+## Still NOT_TESTED by this first scenario
+
+- playback concurrency/bytes;
+- upload while another account plays or reloads;
+- metadata edit;
+- downloads;
+- Trash isolation;
+- disconnect/session expiry;
+- transport-pool saturation and larger cohorts beyond 10.
+
+These stay explicitly `NOT_TESTED` in the report instead of being inferred from the startup test.
 
 ## Result artifact
 
@@ -108,33 +128,6 @@ The E2E writes:
 tmp/stage1-real-multi-account-report.json
 ```
 
-`tmp/` is ignored by Git.
+It contains identifiers/measurements useful for Stage 1 but never the cohort password, auth-cookie values, CSRF values, bot tokens, API hashes or permanent Direct credentials.
 
-The report contains only safe identifiers and observations needed for Stage 1. It never writes passwords, auth-cookie values, CSRF values, bot tokens, API hashes or permanent Direct credentials.
-
-Per account it records the observed user id, stable Web client id, vault id, transport id, safe session id, library beat count/ids, timings and visible known errors before/after Reload.
-
-Top-level outcome uses:
-
-- `PASS`
-- `FAIL`
-- `BLOCKED`
-- `FLAKY`
-- `NOT_TESTED`
-
-Failures use the Stage 1 severities when applicable:
-
-- `P0` — account/vault isolation or corruption risk;
-- `P1` — principal flow unusable;
-- `P2` — degraded flow with workaround;
-- `P3` — minor/cosmetic.
-
-## Next scaling steps
-
-Only after the two-account proof is stable:
-
-1. add a concurrent playback scenario while preserving the known playback progress/seek bug as evidence rather than hiding it;
-2. add upload + metadata edit while the other account plays/reloads;
-3. add download and Trash isolation;
-4. parameterize the account cohort and grow progressively (for example 2 → 4 → 10) rather than jumping directly to the size of the transport pool;
-5. add controlled disconnect/session-expiry and Cloud/pool pressure scenarios.
+Top-level outcome uses `PASS`, `FAIL`, `BLOCKED`, `FLAKY` or `NOT_TESTED`. Failures use Stage 1 severity (`P0` through `P3`).
