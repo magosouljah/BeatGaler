@@ -238,6 +238,7 @@ async function runtimeSnapshot(client) {
         mode: String(payload.mode || ""),
         session_id: String(payload.session_id || ""),
         transport_id: String(payload.transport_id || ""),
+        transport_user_id: String(payload.transport_user_id || ""),
         chat_id: String(payload.chat_id || ""),
         generation: Number(payload.generation || 0),
         credential_version: Number(payload.credential_version || 0),
@@ -286,7 +287,8 @@ function validateSingleAccount(label, snapshot) {
   assert.equal(snapshot.direct.mode, "galer-direct-temp-mtproto", `Account ${label} must use productive Web Direct mode.`);
   assert.ok(snapshot.direct.chat_id, `Account ${label} must resolve a real vault chat id.`);
   assert.ok(snapshot.direct.transport_id, `Account ${label} must resolve a persistent transport bot.`);
-  assert.equal(snapshot.direct.expected_bot_id, snapshot.direct.transport_id, `Account ${label} temporary auth must target its assigned transport bot.`);
+  assert.ok(snapshot.direct.transport_user_id, `Account ${label} must expose the assigned transport bot user id.`);
+  assert.equal(snapshot.direct.expected_bot_id, snapshot.direct.transport_user_id, `Account ${label} temporary auth must target its assigned transport bot user identity.`);
 }
 
 function requireUnique(snapshots, selector, code, message) {
@@ -383,6 +385,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         client_id: before[index].client_id,
         vault_chat_id: before[index].direct.chat_id,
         transport_id: before[index].direct.transport_id,
+        transport_user_id: before[index].direct.transport_user_id,
         membership_bootstrap_mode: before[index].direct.mode,
         session_id_before: before[index].direct.session_id,
         session_id_after: after[index].direct.session_id,
