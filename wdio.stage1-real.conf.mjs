@@ -101,7 +101,7 @@ export const config = {
   reporters: ["spec"],
   mochaOpts: {
     ui: "bdd",
-    timeout: accountCount > 4 ? 420_000 : 240_000,
+    timeout: accountCount >= 4 ? 420_000 : 240_000,
   },
 
   services: [],
