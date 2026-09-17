@@ -1,6 +1,7 @@
 import { useCallback, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { Beat } from "../../types";
-import { loadOfflineLibrary, recordOfflineTrashIntent, removeBeatFromLibrary } from "../../lib/tauri";
+import { loadOfflineLibrary, recordOfflineTrashIntent } from "../../lib/tauri";
+import { platform } from "../../platform";
 import { libraryStateManager } from "../../lib/libraryStateManager";
 import { appAlert, appConfirm } from "../../lib/dialog";
 import { sanitizeUserVisibleText } from "../../lib/userVisibleError";
@@ -74,7 +75,10 @@ export function useTrashActions({
         transitionRuntime(beat.id, { type: "PLAYBACK_IDLE" }, beat);
         releaseFile();
       }
-      await removeBeatFromLibrary(beat.id);
+      const moved = await platform.trash.moveBeats([beat.id]);
+      if (!moved.includes(beat.id)) {
+        throw new Error("BeatGaler could not confirm this beat was moved to Trash.");
+      }
       let trashIntentError: unknown = null;
       if (connectionState !== "online" && beat.telegram_file_id) {
         try {
@@ -89,16 +93,20 @@ export function useTrashActions({
       setBeats(nextLibrary);
 
       if (connectionState === "online" && beat.telegram_file_id) {
-        try {
-          await libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash");
+        if (platform.capabilities.cloudTrashTransactions) {
           forgetRuntimeState(beat.id);
-        } catch (error) {
-          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-          const runtime = beatRuntimeStatesRef.current[beat.id];
-          if (runtime?.sync_state === "deleting") {
-            transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "DELETE_INDEX_SYNC_FAILED", message, retryable: true }, beat);
+        } else {
+          try {
+            await libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash");
+            forgetRuntimeState(beat.id);
+          } catch (error) {
+            const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+            const runtime = beatRuntimeStatesRef.current[beat.id];
+            if (runtime?.sync_state === "deleting") {
+              transitionRuntime(beat.id, { type: "SYNC_FAILED", code: "DELETE_INDEX_SYNC_FAILED", message, retryable: true }, beat);
+            }
+            console.warn("Galer Cloud library index refresh after Remove failed:", error);
           }
-          console.warn("Telegram library index refresh after Remove failed:", error);
         }
       }
 
@@ -139,25 +147,51 @@ export function useTrashActions({
     if (!approved) return;
 
     const deleted = new Set<string>();
-    for (const id of ids) {
-      if (deleteInFlightRef.current.has(id)) continue;
-      deleteInFlightRef.current.add(id);
-      const beat = beats.find(item => item.id === id);
-      if (beat?.telegram_file_id) {
-        if (connectionState === "online") transitionRuntime(id, { type: "SYNC_DELETE_STARTED" }, beat);
-        else transitionRuntime(id, { type: "SET_TRASH_SYNC_REQUIRED", required: true }, beat);
+
+    if (connectionState === "online" && platform.capabilities.cloudTrashTransactions) {
+      for (const id of ids) {
+        if (deleteInFlightRef.current.has(id)) continue;
+        deleteInFlightRef.current.add(id);
+        const beat = beats.find(item => item.id === id);
+        if (beat?.telegram_file_id) transitionRuntime(id, { type: "SYNC_DELETE_STARTED" }, beat);
       }
       try {
-        await removeBeatFromLibrary(id);
-        deleted.add(id);
+        const moved = await platform.trash.moveBeats(ids);
+        for (const id of moved) deleted.add(id);
       } catch (err) {
         console.error(err);
-        const runtime = beatRuntimeStatesRef.current[id];
-        if (runtime?.sync_state === "deleting") {
-          transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message: sanitizeUserVisibleText(runtimeErrorMessage(err), "Cloud operation failed."), retryable: true }, beat);
+        const message = sanitizeUserVisibleText(runtimeErrorMessage(err), "Cloud operation failed.");
+        for (const id of ids) {
+          const beat = beats.find(item => item.id === id);
+          const runtime = beatRuntimeStatesRef.current[id];
+          if (runtime?.sync_state === "deleting") {
+            transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message, retryable: true }, beat);
+          }
         }
       } finally {
-        deleteInFlightRef.current.delete(id);
+        for (const id of ids) deleteInFlightRef.current.delete(id);
+      }
+    } else {
+      for (const id of ids) {
+        if (deleteInFlightRef.current.has(id)) continue;
+        deleteInFlightRef.current.add(id);
+        const beat = beats.find(item => item.id === id);
+        if (beat?.telegram_file_id) {
+          if (connectionState === "online") transitionRuntime(id, { type: "SYNC_DELETE_STARTED" }, beat);
+          else transitionRuntime(id, { type: "SET_TRASH_SYNC_REQUIRED", required: true }, beat);
+        }
+        try {
+          const moved = await platform.trash.moveBeats([id]);
+          if (moved.includes(id)) deleted.add(id);
+        } catch (err) {
+          console.error(err);
+          const runtime = beatRuntimeStatesRef.current[id];
+          if (runtime?.sync_state === "deleting") {
+            transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_FAILED", message: sanitizeUserVisibleText(runtimeErrorMessage(err), "Cloud operation failed."), retryable: true }, beat);
+          }
+        } finally {
+          deleteInFlightRef.current.delete(id);
+        }
       }
     }
 
@@ -181,16 +215,20 @@ export function useTrashActions({
       } else {
         const cloudBacked = next.filter(beat => !!beat.telegram_file_id);
         cloudLibrarySnapshotRef.current = cloudBacked.map(cloudBeatFingerprint).join("\u001c");
-        try {
-          await libraryStateManager.commitSnapshot(next, "bulk-remove");
+        if (platform.capabilities.cloudTrashTransactions) {
           for (const id of deleted) forgetRuntimeState(id);
-        } catch (error) {
-          console.warn("Telegram library index refresh after Remove all failed:", error);
-          const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
-          for (const id of deleted) {
-            const runtime = beatRuntimeStatesRef.current[id];
-            if (runtime?.sync_state === "deleting") {
-              transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_INDEX_SYNC_FAILED", message, retryable: true });
+        } else {
+          try {
+            await libraryStateManager.commitSnapshot(next, "bulk-remove");
+            for (const id of deleted) forgetRuntimeState(id);
+          } catch (error) {
+            console.warn("Galer Cloud library index refresh after Remove all failed:", error);
+            const message = sanitizeUserVisibleText(runtimeErrorMessage(error), "Cloud operation failed.");
+            for (const id of deleted) {
+              const runtime = beatRuntimeStatesRef.current[id];
+              if (runtime?.sync_state === "deleting") {
+                transitionRuntime(id, { type: "SYNC_FAILED", code: "DELETE_INDEX_SYNC_FAILED", message, retryable: true });
+              }
             }
           }
         }
