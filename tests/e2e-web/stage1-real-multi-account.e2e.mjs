@@ -590,7 +590,7 @@ function validatePersistentReload(before, after, label) {
 
 
 function playbackBeatName(account) {
-  return \`Stage1 Playback \${account.label}\`;
+  return `Stage1 Playback ${account.label}`;
 }
 
 async function playbackBeatSnapshot(client, beatName) {
@@ -612,7 +612,7 @@ async function waitForPlaybackBeat(client, account, timeout = 120_000) {
   await client.waitUntil(async () => {
     latest = await playbackBeatSnapshot(client, beatName);
     return Boolean(latest?.beat_id);
-  }, { timeout, interval: 500, timeoutMsg: \`Account \${account.label} did not materialize \${beatName}.\` });
+  }, { timeout, interval: 500, timeoutMsg: `Account ${account.label} did not materialize ${beatName}.` });
   return { ...latest, beat_name: beatName };
 }
 
@@ -621,7 +621,7 @@ async function provisionPlaybackBeat(client, account) {
   if (existing?.beat_id) return { ...existing, beat_name: playbackBeatName(account), created: false };
 
   await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
-  const localFixture = path.join(PLAYBACK_TMP_DIR, \`\${playbackBeatName(account)}.mp3\`);
+  const localFixture = path.join(PLAYBACK_TMP_DIR, `${playbackBeatName(account)}.mp3`);
   await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
 
   const addButton = await client.$('//button[normalize-space(.)="Add beat"]');
@@ -669,7 +669,7 @@ async function playbackIsolationSnapshot(client) {
 async function validatePlaybackFixtureIsolation(clients) {
   const snapshots = await Promise.all(clients.map(client => playbackIsolationSnapshot(client)));
   snapshots.forEach((names, index) => {
-    assert.deepEqual(names, [playbackBeatName(accounts[index])], \`Account \${accounts[index].label} must see only its own Stage 1 playback fixture.\`);
+    assert.deepEqual(names, [playbackBeatName(accounts[index])], `Account ${accounts[index].label} must see only its own Stage 1 playback fixture.`);
   });
   return snapshots;
 }
@@ -712,7 +712,7 @@ async function waitForPlaybackProgress(client, account) {
   await client.waitUntil(async () => {
     latest = await playbackProbeSnapshot(client);
     return latest?.playing_seen === true && latest?.max_current_time >= PLAYBACK_MIN_PROGRESS_SECONDS;
-  }, { timeout: 30_000, interval: 100, timeoutMsg: \`Account \${account.label} did not prove real playback progress.\` });
+  }, { timeout: 30_000, interval: 100, timeoutMsg: `Account ${account.label} did not prove real playback progress.` });
   return latest;
 }
 
@@ -720,12 +720,12 @@ async function runConcurrentPlayback(clients, playbackBeats) {
   await Promise.all(playbackBeats.map((beat, index) => installPlaybackProbe(clients[index], beat.beat_id)));
 
   const artworks = await Promise.all(playbackBeats.map(async (beat, index) => {
-    const artwork = await clients[index].$(\`[data-beat-artwork-id="\${beat.beat_id}"]\`);
+    const artwork = await clients[index].$(`[data-beat-artwork-id="${beat.beat_id}"]`);
     await artwork.waitForDisplayed({ timeout: 30_000 });
     await clients[index].waitUntil(async () => (await artwork.getAttribute("aria-disabled")) !== "true", {
       timeout: 60_000,
       interval: 250,
-      timeoutMsg: \`Account \${accounts[index].label} playback never became interactive.\`,
+      timeoutMsg: `Account ${accounts[index].label} playback never became interactive.`,
     });
     return artwork;
   }));
@@ -737,7 +737,7 @@ async function runConcurrentPlayback(clients, playbackBeats) {
   const starts = snapshots.map(snapshot => Number(snapshot.first_playing_at || 0));
   const startSpreadMs = Math.max(...starts) - Math.min(...starts);
   assert.ok(starts.every(Boolean), "Every account must observe the real HTMLAudioElement playing state.");
-  assert.ok(startSpreadMs <= PLAYBACK_MAX_START_SPREAD_MS, \`Concurrent playback start spread was \${startSpreadMs} ms; expected <= \${PLAYBACK_MAX_START_SPREAD_MS} ms.\`);
+  assert.ok(startSpreadMs <= PLAYBACK_MAX_START_SPREAD_MS, `Concurrent playback start spread was ${startSpreadMs} ms; expected <= ${PLAYBACK_MAX_START_SPREAD_MS} ms.`);
 
   return { trigger_started_at: triggerStartedAt, start_spread_ms: startSpreadMs, accounts: snapshots };
 }
