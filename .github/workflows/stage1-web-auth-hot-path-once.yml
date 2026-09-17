@@ -1,0 +1,129 @@
+name: Stage1 Web auth hot-path one-shot
+
+on:
+  push:
+    branches:
+      - stage1/real-multi-account-e2e
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Patch Web auth hot path and Stage1 guards
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one anchor, found {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once(
+              'src/components/AccountGate.tsx',
+              '''  if (platform.kind === "web") {
+              if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);
+              if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
+                localStorage.setItem(API_KEY, sameOriginProxy);
+                return sameOriginProxy;
+              }
+              throw new Error("Could not reach BeatGaler Cloud.");
+            }''',
+              '''  if (platform.kind === "web") {
+              if (!sameOriginProxy) throw new Error("Could not resolve BeatGaler Cloud API.");
+              if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);
+              localStorage.setItem(API_KEY, sameOriginProxy);
+              return sameOriginProxy;
+            }''',
+          )
+
+          replace_once(
+              'tests/integration/webCloudApiOriginPolicy.test.ts',
+              '''      if (url.endsWith("/auth/health")) {
+                return new Response(JSON.stringify({ ok: true, account_auth: true }), {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                });
+              }
+''',
+              '',
+          )
+
+          replace_once(
+              'tests/integration/webCloudApiOriginPolicy.test.ts',
+              '''    expect(requestedUrls).toContain(`${expectedBase}/auth/health`);
+              expect(requestedUrls).toContain(`${expectedBase}/auth/login`);''',
+              '''    expect(requestedUrls).toEqual([`${expectedBase}/auth/login`]);''',
+          )
+
+          Path('tests/e2e-web/stage1-health-validation.mjs').write_text('''export function validateAuthHealth(entries, label) {
+            const health = entries.filter(entry => entry.route === '/beatgaler-api/auth/health');
+            const failure = health.find(entry => ['aborted', 'network-error'].includes(entry.state) || (entry.state === 'response' && entry.status !== 200));
+            if (failure) throw Object.assign(new Error(`Account ${label} health failed: ${failure.state}, HTTP ${failure.status ?? 'none'}, ${failure.duration_ms}ms, phase=${failure.harness_phase}.`), { code: 'STAGE1_HEALTH_UNSTABLE', severity: 'P1' });
+            return { observed: health.length, successful: health.filter(entry => entry.state === 'response' && entry.status === 200).length };
+          }
+          ''', encoding='utf-8')
+
+          Path('tests/e2e-web/stage1-health-validation.test.mjs').write_text('''import { test } from 'node:test';
+          import assert from 'node:assert/strict';
+          import { validateAuthHealth } from './stage1-health-validation.mjs';
+          const entry = phase => ({ route:'/beatgaler-api/auth/health', state:'response', status:200, harness_phase:phase, duration_ms:10 });
+          test('successful final UI cannot hide an observed timed-out health probe', () => {
+            assert.throws(() => validateAuthHealth([{...entry('simultaneous-reload'),state:'aborted',status:null,duration_ms:1501}], '01'), {code:'STAGE1_HEALTH_UNSTABLE'});
+          });
+          test('Web auth does not require health preflights, but any observed health failure remains fatal', () => {
+            assert.deepEqual(validateAuthHealth([], '01'), {observed:0, successful:0});
+            assert.deepEqual(validateAuthHealth([entry('diagnostic')], '01'), {observed:1, successful:1});
+            assert.throws(() => validateAuthHealth([{...entry('diagnostic'),status:503}], '01'), {code:'STAGE1_HEALTH_UNSTABLE'});
+          });
+          ''', encoding='utf-8')
+
+          replace_once(
+              'tests/e2e-web/stage1-real-multi-account.e2e.mjs',
+              '"No observed failed health probes; login and Reload health HTTP 200 for every account"',
+              '"No observed health probe failed; Web auth no longer depends on a mandatory health preflight"',
+          )
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused Web auth regressions
+        run: |
+          node tests/e2e-web/stage1-health-validation.test.mjs
+          node tests/e2e-web/stage1-auth-observer.test.mjs
+          npx vitest run tests/integration/webCloudApiOriginPolicy.test.ts --environment jsdom
+          npx vitest run tests/component-dom/accountGateWeb.test.tsx --environment jsdom
+
+      - name: Typecheck and Web build
+        run: |
+          npm run test:typecheck
+          npm run build:web
+
+      - name: Commit verified fix and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/AccountGate.tsx tests/integration/webCloudApiOriginPolicy.test.ts tests/e2e-web/stage1-health-validation.mjs tests/e2e-web/stage1-health-validation.test.mjs tests/e2e-web/stage1-real-multi-account.e2e.mjs
+          git commit -m "fix(web): remove health probe from auth hot path"
+          git rm .github/workflows/stage1-web-auth-hot-path-once.yml
+          git commit --amend --no-edit
+          git push origin HEAD:stage1/real-multi-account-e2e
