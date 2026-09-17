@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
@@ -11,6 +12,12 @@ const webUrl = `http://${browserHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
 const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
+const browserProfileRoot = path.join(
+  root,
+  "tmp",
+  "stage1-browser-profiles",
+  `run-${process.pid}-${Date.now()}`,
+);
 let viteProcess = null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -57,8 +64,14 @@ function stopVite() {
   viteProcess = null;
 }
 
-function chromeCapability() {
-  const args = ["--no-sandbox", "--disable-dev-shm-usage", "--window-size=1280,800"];
+function chromeCapability(label) {
+  const profileDir = path.join(browserProfileRoot, label);
+  const args = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--window-size=1280,800",
+    `--user-data-dir=${profileDir}`,
+  ];
   if (!headed) args.unshift("--headless=new");
   return {
     browserName: "chrome",
@@ -69,7 +82,7 @@ function chromeCapability() {
 const capabilities = Object.fromEntries(
   Array.from({ length: accountCount }, (_, index) => {
     const label = String(index + 1).padStart(2, "0");
-    return [`account${label}`, { capabilities: chromeCapability() }];
+    return [`account${label}`, { capabilities: chromeCapability(`account${label}`) }];
   }),
 );
 
@@ -96,6 +109,7 @@ export const config = {
 
   onPrepare: async () => {
     await preflightCloud();
+    await fs.mkdir(browserProfileRoot, { recursive: true });
     const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");
     viteProcess = spawn(
       process.execPath,
@@ -115,7 +129,8 @@ export const config = {
     }
   },
 
-  onComplete: () => {
+  onComplete: async () => {
     stopVite();
+    await fs.rm(browserProfileRoot, { recursive: true, force: true }).catch(() => {});
   },
 };
