@@ -295,6 +295,28 @@ async function waitForAuthoritativeLibrary(client, label) {
 
     return latest;
   } catch {
+    const diagnostic = await client.execute(() => {
+      const library = document.querySelector('[data-library-scroll="true"]');
+      const cards = Array.from(document.querySelectorAll("[data-beat-card-id]"));
+      return {
+        aria_busy: library?.getAttribute("aria-busy") ?? null,
+        card_count: cards.length,
+        playback_disabled: cards.map(card => ({
+          beat_id: String(card.getAttribute("data-beat-card-id") || ""),
+          aria_disabled: card.querySelector("[data-beat-artwork-id]")?.getAttribute("aria-disabled") ?? null,
+        })),
+        relevant_console: Array.isArray(window.__stage1DiagnosticLogs)
+          ? window.__stage1DiagnosticLogs.slice(-40)
+          : [],
+      };
+    }).catch(() => ({ unavailable: true }));
+
+    report.accounts[label] ||= {};
+    report.accounts[label].library_authority_failure = {
+      snapshot: latest,
+      diagnostic,
+    };
+
     const detail = latest
       ? `busy=${latest.aria_busy} beats=${latest.beat_count} empty=${latest.empty_gallery} poor=${latest.poor_connection} offline=${latest.offline} load_error=${latest.load_error}`
       : "no library snapshot";
@@ -1425,9 +1447,6 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "simultaneous_reload_persistent_assignment",
           "playback_fixture_provisioning",
           "playback_concurrency",
-          "metadata_edit_persistence",
-          "master_download",
-          "remove_from_library_persistence",
         ]) {
           if (
             scenario(name)?.status === "NOT_TESTED" &&
@@ -1443,6 +1462,42 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 : "FAIL",
               severity,
             );
+          }
+        }
+
+        const postCoreScenarios = [
+          "metadata_edit_persistence",
+          "master_download",
+          "remove_from_library_persistence",
+        ];
+        const coreReachedPostPhase = [
+          "multi_account_auth_isolation",
+          "authoritative_library_data_plane",
+          "multi_account_direct_identity",
+          "simultaneous_reload_persistent_assignment",
+          "playback_fixture_provisioning",
+          "playback_concurrency",
+        ].every(name => scenario(name)?.status === "PASS");
+
+        if (!coreReachedPostPhase || report.overall === "BLOCKED") {
+          for (const name of postCoreScenarios) {
+            if (scenario(name)?.status === "NOT_TESTED") {
+              markScenario(name, "BLOCKED", severity, "Not reached because an earlier Stage 1 gate failed.");
+            }
+          }
+        } else {
+          let firstPending = true;
+          for (const name of postCoreScenarios) {
+            if (scenario(name)?.status !== "NOT_TESTED") continue;
+            markScenario(
+              name,
+              firstPending ? "FAIL" : "BLOCKED",
+              severity,
+              firstPending
+                ? "This was the active Stage 1 scenario when the run failed."
+                : "Not reached because the previous Stage 1 scenario failed.",
+            );
+            firstPending = false;
           }
         }
 
