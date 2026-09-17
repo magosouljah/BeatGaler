@@ -29,7 +29,7 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 });
 
 const report = {
-  version: 4,
+  version: 5,
   stage: "Etapa 1 — uso real entre cuentas independientes",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
   cohort_id: cohortId || null,
@@ -58,7 +58,9 @@ const report = {
     { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
     { name: "playback_fixture_provisioning", status: "NOT_TESTED", severity: null },
     { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
-    { name: "uploads_metadata_downloads_trash", status: "NOT_TESTED", severity: null },
+    { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
+    { name: "master_download", status: "NOT_TESTED", severity: null },
+    { name: "remove_from_library_persistence", status: "NOT_TESTED", severity: null },
   ],
   failure: null,
 };
@@ -763,6 +765,239 @@ async function runConcurrentPlayback(clients, playbackBeats) {
   return { trigger_started_at: triggerStartedAt, start_spread_ms: startSpreadMs, accounts: snapshots };
 }
 
+
+function metadataForAccount(account) {
+  return { bpm: String(120 + Number(account.label)), key: "c#m" };
+}
+
+async function openBeatContextAction(client, beatId, actionLabel) {
+  await client.execute(id => {
+    const card = document.querySelector(`[data-beat-card-id="${id}"]`);
+    if (!card) throw new Error(`Beat card ${id} is not present.`);
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: Math.max(1, rect.left + 24),
+      clientY: Math.max(1, rect.top + 24),
+      button: 2,
+      buttons: 2,
+    }));
+  }, beatId);
+
+  const action = await client.$(`//div[normalize-space(.)="${actionLabel}"]`);
+  await action.waitForDisplayed({ timeout: 30_000 });
+  await action.click();
+}
+
+async function beatCardText(client, beatId) {
+  return client.execute(id => {
+    const card = document.querySelector(`[data-beat-card-id="${id}"]`);
+    return card ? String(card.innerText || "").replace(/\s+/g, " ").trim() : null;
+  }, beatId);
+}
+
+async function editFixtureMetadata(client, account, beat) {
+  const expected = metadataForAccount(account);
+  await openBeatContextAction(client, beat.beat_id, "Edit metadata");
+
+  const header = await client.$('//span[normalize-space(.)="Edit metadata"]');
+  await header.waitForDisplayed({ timeout: 30_000 });
+
+  const bpmInput = await client.$('//div[normalize-space(.)="BPM"]/parent::div//input');
+  const keyInput = await client.$('//div[normalize-space(.)="KEY"]/parent::div//input');
+  await bpmInput.waitForDisplayed({ timeout: 30_000 });
+  await keyInput.waitForDisplayed({ timeout: 30_000 });
+  await bpmInput.setValue(expected.bpm);
+  await keyInput.setValue(expected.key);
+
+  const save = await client.$('//button[starts-with(normalize-space(.), "Save")]');
+  await save.waitForDisplayed({ timeout: 30_000 });
+  await save.waitForEnabled({ timeout: 30_000 });
+  await save.click();
+
+  await client.waitUntil(async () => !(await header.isExisting()), {
+    timeout: 120_000,
+    interval: 300,
+    timeoutMsg: `Account ${account.label} metadata editor did not close after save.`,
+  });
+
+  let text = null;
+  await client.waitUntil(async () => {
+    text = await beatCardText(client, beat.beat_id);
+    return Boolean(text?.includes(`${expected.bpm} · ${expected.key}`));
+  }, {
+    timeout: 120_000,
+    interval: 500,
+    timeoutMsg: `Account ${account.label} did not render saved metadata.`,
+  });
+
+  return { ...expected, card_text_after_save: text };
+}
+
+async function verifyFixtureMetadataAfterReload(client, account, beat) {
+  const expected = metadataForAccount(account);
+  const reloaded = await waitForPlaybackBeat(client, account);
+  assert.equal(
+    reloaded.beat_id,
+    beat.beat_id,
+    `Account ${account.label} metadata edit changed beat identity after Reload.`,
+  );
+
+  let text = null;
+  await client.waitUntil(async () => {
+    text = await beatCardText(client, beat.beat_id);
+    return Boolean(text?.includes(`${expected.bpm} · ${expected.key}`));
+  }, {
+    timeout: 120_000,
+    interval: 500,
+    timeoutMsg: `Account ${account.label} metadata did not persist after Reload.`,
+  });
+
+  return { ...expected, beat_id: beat.beat_id, persisted_after_reload: true, card_text: text };
+}
+
+async function installDownloadProbe(client) {
+  await client.execute(() => {
+    const state = {
+      blobs: [],
+      anchors: [],
+      originalCreateObjectURL: URL.createObjectURL.bind(URL),
+      originalAnchorClick: HTMLAnchorElement.prototype.click,
+      originalSavePickerDescriptor: Object.getOwnPropertyDescriptor(window, "showSaveFilePicker"),
+      originalSavePickerValue: window.showSaveFilePicker,
+    };
+    window.__beatgalerStage1DownloadProbe = state;
+
+    try {
+      Object.defineProperty(window, "showSaveFilePicker", {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      });
+    } catch {
+      try { window.showSaveFilePicker = undefined; } catch {}
+    }
+
+    URL.createObjectURL = function stage1CreateObjectURL(blob) {
+      if (blob instanceof Blob) state.blobs.push({ size: blob.size, type: blob.type || "" });
+      return state.originalCreateObjectURL(blob);
+    };
+
+    HTMLAnchorElement.prototype.click = function stage1AnchorClick() {
+      state.anchors.push({ download: String(this.download || ""), href: String(this.href || "") });
+    };
+  });
+}
+
+async function downloadProbeSnapshot(client) {
+  return client.execute(() => {
+    const state = window.__beatgalerStage1DownloadProbe;
+    return {
+      blobs: Array.isArray(state?.blobs) ? state.blobs.map(item => ({ ...item })) : [],
+      anchors: Array.isArray(state?.anchors) ? state.anchors.map(item => ({ ...item })) : [],
+    };
+  });
+}
+
+async function restoreDownloadProbe(client) {
+  await client.execute(() => {
+    const state = window.__beatgalerStage1DownloadProbe;
+    if (!state) return;
+    if (state.originalCreateObjectURL) URL.createObjectURL = state.originalCreateObjectURL;
+    if (state.originalAnchorClick) HTMLAnchorElement.prototype.click = state.originalAnchorClick;
+    try {
+      if (state.originalSavePickerDescriptor) {
+        Object.defineProperty(window, "showSaveFilePicker", state.originalSavePickerDescriptor);
+      } else if (state.originalSavePickerValue === undefined) {
+        delete window.showSaveFilePicker;
+      } else {
+        window.showSaveFilePicker = state.originalSavePickerValue;
+      }
+    } catch {}
+    delete window.__beatgalerStage1DownloadProbe;
+  });
+}
+
+async function downloadFixtureMaster(client, account, beat) {
+  await installDownloadProbe(client);
+  try {
+    await openBeatContextAction(client, beat.beat_id, "Download");
+
+    const mp3 = await client.$('//button[.//div[normalize-space(.)="MP3"]]');
+    await mp3.waitForDisplayed({ timeout: 30_000 });
+    await mp3.waitForEnabled({ timeout: 30_000 });
+    await mp3.click();
+
+    let latest = null;
+    await client.waitUntil(async () => {
+      latest = await downloadProbeSnapshot(client);
+      const blob = latest.blobs.at(-1);
+      const anchor = latest.anchors.at(-1);
+      return Boolean(
+        blob &&
+        blob.size > 0 &&
+        blob.type === "audio/mpeg" &&
+        anchor?.download?.toLowerCase().endsWith(".mp3")
+      );
+    }, {
+      timeout: 120_000,
+      interval: 250,
+      timeoutMsg: `Account ${account.label} did not complete a real MASTER MP3 download.`,
+    });
+
+    const close = await client.$('button[aria-label="Close download window"]');
+    if (await close.isExisting()) await close.click();
+
+    return {
+      beat_id: beat.beat_id,
+      blob_size: latest.blobs.at(-1).size,
+      mime_type: latest.blobs.at(-1).type,
+      filename: latest.anchors.at(-1).download,
+      completed: true,
+    };
+  } finally {
+    await restoreDownloadProbe(client).catch(() => {});
+  }
+}
+
+async function removeFixtureAndVerifyPersistence(client, account, beat) {
+  await openBeatContextAction(client, beat.beat_id, "Remove from library");
+
+  const dialog = await client.$('[data-beatgaler-dialog="true"]');
+  await dialog.waitForDisplayed({ timeout: 30_000 });
+
+  const confirm = await client.$('//div[@data-beatgaler-dialog="true"]//button[normalize-space(.)="Remove beat"]');
+  await confirm.waitForDisplayed({ timeout: 30_000 });
+  await confirm.click();
+
+  const selector = `[data-beat-card-id="${beat.beat_id}"]`;
+  await client.waitUntil(async () => !(await (await client.$(selector)).isExisting()), {
+    timeout: 120_000,
+    interval: 300,
+    timeoutMsg: `Account ${account.label} beat did not leave the active library after Remove.`,
+  });
+
+  await client.refresh();
+  await waitForAuthoritativeLibrary(client, account.label);
+
+  const resurrected = await playbackBeatSnapshot(client, playbackBeatName(account));
+  if (resurrected?.beat_id) {
+    throw taggedError(
+      `Account ${account.label} removed beat resurrected after Reload.`,
+      "STAGE1_TRASH_REMOVE_NOT_PERSISTED",
+      "P1",
+    );
+  }
+
+  return {
+    beat_id: beat.beat_id,
+    removed_from_active_library: true,
+    absent_after_reload: true,
+  };
+}
+
+
 describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
   it(
     `runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`,
@@ -1024,6 +1259,90 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           ]),
         );
 
+
+        const metadataEdits = await Promise.all(
+          accounts.map((account, index) =>
+            editFixtureMetadata(clients[index], account, playbackAfterReload[index])
+          ),
+        );
+
+        for (const observer of authObservers.values()) {
+          observer.setPhase("metadata-persistence-reload");
+        }
+
+        await Promise.all(clients.map(client => client.refresh()));
+        await Promise.all(
+          accounts.map((account, index) =>
+            waitForAuthoritativeLibrary(clients[index], account.label)
+          ),
+        );
+
+        const metadataPersisted = await Promise.all(
+          accounts.map((account, index) =>
+            verifyFixtureMetadataAfterReload(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+            )
+          ),
+        );
+
+        metadataPersisted.forEach((result, index) => {
+          report.accounts[accounts[index].label].metadata = {
+            ...metadataEdits[index],
+            ...result,
+          };
+        });
+
+        markScenario(
+          "metadata_edit_persistence",
+          "PASS",
+          null,
+          `${accountCount} accounts committed BPM/Key edits and preserved them across Reload`,
+        );
+
+        const downloads = await Promise.all(
+          accounts.map((account, index) =>
+            downloadFixtureMaster(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+            )
+          ),
+        );
+
+        downloads.forEach((result, index) => {
+          report.accounts[accounts[index].label].master_download = result;
+        });
+
+        markScenario(
+          "master_download",
+          "PASS",
+          null,
+          `${accountCount} accounts streamed and materialized real MASTER MP3 downloads`,
+        );
+
+        const removals = await Promise.all(
+          accounts.map((account, index) =>
+            removeFixtureAndVerifyPersistence(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+            )
+          ),
+        );
+
+        removals.forEach((result, index) => {
+          report.accounts[accounts[index].label].remove_from_library = result;
+        });
+
+        markScenario(
+          "remove_from_library_persistence",
+          "PASS",
+          null,
+          `${accountCount} removals stayed absent from the authoritative library after Reload`,
+        );
+
         report.timings = {
           startup_ms: startupMs,
           simultaneous_reload_ms: reloadMs,
@@ -1106,6 +1425,9 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "simultaneous_reload_persistent_assignment",
           "playback_fixture_provisioning",
           "playback_concurrency",
+          "metadata_edit_persistence",
+          "master_download",
+          "remove_from_library_persistence",
         ]) {
           if (
             scenario(name)?.status === "NOT_TESTED" &&
