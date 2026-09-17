@@ -104,7 +104,9 @@ export default defineConfig(async ({ command, mode }) => ({
         "**/runtime/**",
         "**/src-tauri/**",
         "**/.vs/**",
-        "**/node_modules/**"
+        "**/node_modules/**",
+        "**/tmp/stage1-browser-profiles/**",
+        "**/tmp/stage1-playback-fixtures/**"
       ],
     },
   },
