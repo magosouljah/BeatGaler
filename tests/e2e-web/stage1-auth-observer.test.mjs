@@ -142,3 +142,78 @@ test('resource timing emits only numeric timing fields for an observed auth requ
   context.window.__stage1RestoreFetch();
   assert.equal(disconnected, true);
 });
+
+test("transport observation keeps only safe Direct metadata and preserves the real response", async () => {
+  const browser = fakeBrowser();
+  const observer = await observeAuth(browser.client);
+  let cloneCalls = 0;
+
+  const response = {
+    status: 200,
+    ok: true,
+    clone() {
+      cloneCalls += 1;
+
+      return {
+        async json() {
+          return {
+            mode: "galer-direct-temp-mtproto",
+            session_id: "session-1",
+            transport_id: "transport-1",
+            transport_user_id: "bot-user-1",
+            chat_id: "vault-1",
+            generation: 2,
+            credential_version: 3,
+            token: "SECRET",
+            credentials: "SECRET",
+            temp_auth: {
+              expected_bot_id: "bot-user-1",
+              token: "SECRET",
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const page = browser.navigate(async () => response);
+
+  const returned = await page.fetch(
+    "/beatgaler-api/transport/session/start",
+    {
+      method: "POST",
+      body: "SECRET",
+    },
+  );
+
+  assert.equal(returned, response);
+  assert.equal(cloneCalls, 1);
+
+  const [entry] = observer.snapshot();
+
+  assert.equal(
+    entry.route,
+    "/beatgaler-api/transport/session/start",
+  );
+
+  assert.equal(entry.state, "response");
+  assert.equal(entry.status, 200);
+
+  assert.deepEqual(entry.transport, {
+    mode: "galer-direct-temp-mtproto",
+    session_id: "session-1",
+    transport_id: "transport-1",
+    transport_user_id: "bot-user-1",
+    chat_id: "vault-1",
+    generation: 2,
+    credential_version: 3,
+    expected_bot_id: "bot-user-1",
+  });
+
+  assert.equal(
+    JSON.stringify(entry).includes("SECRET"),
+    false,
+  );
+
+  await observer.remove();
+});
