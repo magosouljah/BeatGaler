@@ -1,0 +1,201 @@
+name: Stage 1 storage refactor once
+
+on:
+  push:
+    branches:
+      - stage1/real-multi-account-e2e
+    paths:
+      - .github/workflows/stage1-storage-refactor-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+
+      - name: Patch storage assignment hot path
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'cloud-server/server-core.js';
+          let source = fs.readFileSync(file, 'utf8');
+
+          const importAnchor = 'const { hashPassword, verifyPassword } = require("./password-kdf");';
+          if (source.split(importAnchor).length !== 2) {
+            throw new Error('password-kdf import anchor changed; refusing to patch server-core.js');
+          }
+          source = source.replace(
+            importAnchor,
+            `${importAnchor}\nconst { createUserStorageLifecycle } = require("./user-storage-lifecycle");`,
+          );
+
+          const startMarker = 'async function ensureUserStorage(user) {';
+          const endMarker = '\nfunction accountPublicPayload(user, token) {';
+          const start = source.indexOf(startMarker);
+          const end = source.indexOf(endMarker, start);
+          if (start < 0 || end <= start || source.indexOf(startMarker, start + startMarker.length) >= 0) {
+            throw new Error('ensureUserStorage boundary changed or became ambiguous; refusing to patch');
+          }
+
+          const replacement = `const userStorageLifecycle = createUserStorageLifecycle({
+            validateStoredChatId: botApiChatIdFromStored,
+            createPrivateUserStorageGroup,
+            verifyPrivateUserStorageGroup,
+            ensurePrivateUserStorageBotAbsent,
+            masterStorageReady,
+            managerBotUsername: MANAGER_BOT_USERNAME,
+            storageGroupLimit: MASTER_STORAGE_GROUP_LIMIT,
+            getProvisionedStorageCount: () => [...beatGalerUsers.values()].filter(entry => entry.storageChatId).length,
+            saveAuthData,
+            clearStorageBindingsForUser,
+            rebindStorageBindingsForUser,
+            ensureEmptyIndexForStorage,
+            logger: console,
+          });
+
+          async function ensureUserStorage(user) {
+            return userStorageLifecycle.ensureAssigned(user);
+          }
+          `;
+
+          source = source.slice(0, start) + replacement + source.slice(end);
+
+          if (source.includes('provisioning a replacement vault')) {
+            throw new Error('automatic missing-vault reprovisioning remains in server-core.js');
+          }
+          fs.writeFileSync(file, source, 'utf8');
+          NODE
+
+      - name: Replace legacy recovery regression
+        shell: bash
+        run: |
+          cat > cloud-server/tests/master-storage-recovery.test.cjs <<'EOF'
+          'use strict';
+
+          const assert = require('assert');
+          const fs = require('fs');
+          const path = require('path');
+          const Module = require('module');
+          const { isDefinitiveMissingStorageError } = require('../user-storage-lifecycle');
+
+          process.env.BEATGALER_MASTER_SESSION = 'test-master-session';
+          process.env.TELEGRAM_API_ID = '12345';
+          process.env.TELEGRAM_API_HASH = 'test-api-hash';
+
+          let dialogs = [];
+          let disconnectCount = 0;
+
+          class FakeTelegramClient {
+            constructor() {}
+            setLogLevel() {}
+            async connect() {}
+            async checkAuthorization() { return true; }
+            async getDialogs() { return dialogs; }
+            async disconnect() { disconnectCount += 1; }
+          }
+
+          class FakeStringSession {
+            constructor(value) { this.value = value; }
+          }
+
+          const originalLoad = Module._load;
+          Module._load = function(request, parent, isMain) {
+            if (request === 'telegram') return { TelegramClient: FakeTelegramClient, Api: {} };
+            if (request === 'telegram/sessions') return { StringSession: FakeStringSession };
+            return originalLoad.call(this, request, parent, isMain);
+          };
+
+          (async () => {
+            try {
+              delete require.cache[require.resolve('../master-storage.js')];
+              const storage = require('../master-storage.js');
+
+              await assert.rejects(
+                () => storage.verifyPrivateUserStorageGroup({ botApiChatId: '-100123' }),
+                /private storage group could not be found by MASTER/i,
+              );
+
+              dialogs = [{ entity: { id: 123 } }];
+              assert.equal(
+                await storage.verifyPrivateUserStorageGroup({ botApiChatId: '-100123' }),
+                true,
+              );
+              assert.equal(disconnectCount, 2, 'MASTER client must disconnect on both success and missing-vault paths');
+
+              assert.equal(isDefinitiveMissingStorageError(new Error('CHANNEL_INVALID')), true);
+              assert.equal(isDefinitiveMissingStorageError(new Error('CHANNEL_PRIVATE')), true);
+              assert.equal(isDefinitiveMissingStorageError(new Error('ETIMEDOUT')), false);
+              assert.equal(isDefinitiveMissingStorageError(new Error('ECONNRESET')), false);
+
+              const coreSource = fs.readFileSync(path.join(__dirname, '..', 'server-core.js'), 'utf8');
+              const start = coreSource.indexOf('async function ensureUserStorage(user) {');
+              const end = coreSource.indexOf('\nfunction accountPublicPayload(user, token) {', start);
+              assert(start >= 0 && end > start, 'ensureUserStorage boundary must remain explicit');
+              const ensureBlock = coreSource.slice(start, end);
+
+              assert(coreSource.includes('createUserStorageLifecycle'));
+              assert(ensureBlock.includes('return userStorageLifecycle.ensureAssigned(user);'));
+              assert(!ensureBlock.includes('verifyPrivateUserStorageGroup'));
+              assert(!ensureBlock.includes('ensurePrivateUserStorageBotAbsent'));
+              assert(!ensureBlock.includes('masterStorageReady'));
+              assert(!ensureBlock.includes('return ensureUserStorage(user)'));
+              assert(!coreSource.includes('provisioning a replacement vault'));
+
+              console.log('PASS MASTER verification remains available but is outside the normal login/session storage path');
+            } finally {
+              Module._load = originalLoad;
+            }
+          })().catch(error => {
+            Module._load = originalLoad;
+            console.error(error);
+            process.exitCode = 1;
+          });
+          EOF
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix cloud-server
+
+      - name: Focused storage and Stage 1 guards
+        run: |
+          node --check cloud-server/user-storage-lifecycle.js
+          node --check cloud-server/server-core.js
+          node cloud-server/tests/user-storage-lifecycle.test.cjs
+          node cloud-server/tests/master-storage-recovery.test.cjs
+          node cloud-server/tests/direct-persistent-ready-no-master.test.cjs
+          node cloud-server/tests/stage1-multi-account-concurrency.test.cjs
+          node tests/e2e-web/stage1-wdio-profile-isolation.test.mjs
+
+      - name: Cloud unit gate
+        run: npm run test:unit:cloud
+
+      - name: Direct architecture regressions
+        run: npm run test:regressions
+
+      - name: Typecheck and Web build
+        run: |
+          npm run test:typecheck
+          npm run build:web
+
+      - name: Commit verified refactor and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/stage1-storage-refactor-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud-server/server-core.js cloud-server/tests/master-storage-recovery.test.cjs .github/workflows/stage1-storage-refactor-once.yml
+          git diff --cached --check
+          git commit -m "refactor(stage1): remove MASTER verification from auth hot path"
+          git push origin HEAD:stage1/real-multi-account-e2e
