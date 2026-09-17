@@ -285,11 +285,7 @@ function mutateState(pool, mutator) {
 }
 
 function stateSnapshot(pool) {
-  return withPoolLock(() => {
-    const state = normalizeState(pool);
-    writeJsonAtomic(STATE_FILE, state);
-    return state;
-  });
+  return withPoolLock(() => normalizeState(pool));
 }
 
 function leasesForBot(state, botId) {
