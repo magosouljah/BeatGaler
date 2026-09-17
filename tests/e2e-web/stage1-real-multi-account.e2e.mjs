@@ -630,15 +630,36 @@ async function provisionPlaybackBeat(client, account) {
 
   const chooseButton = await client.$('//button[contains(normalize-space(.), "Choose MP3 or WAV")]');
   await chooseButton.waitForDisplayed({ timeout: 30_000 });
+
+  await client.execute(() => {
+    if (window.__beatgalerStage1OriginalFileInputClick) return;
+    window.__beatgalerStage1OriginalFileInputClick = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function patchedStage1FileInputClick(...args) {
+      if (this.type === "file") return;
+      return window.__beatgalerStage1OriginalFileInputClick.apply(this, args);
+    };
+  });
+
   await chooseButton.click();
 
   const input = await client.$('input[type="file"][accept*=".mp3"]');
   await input.waitForExist({ timeout: 30_000 });
   await client.execute(element => {
+    const original = window.__beatgalerStage1OriginalFileInputClick;
+    if (original) {
+      HTMLInputElement.prototype.click = original;
+      delete window.__beatgalerStage1OriginalFileInputClick;
+    }
+
     element.style.display = "block";
     element.style.position = "fixed";
-    element.style.left = "-10000px";
-    element.style.top = "0";
+    element.style.left = "8px";
+    element.style.top = "8px";
+    element.style.width = "240px";
+    element.style.height = "40px";
+    element.style.opacity = "0.01";
+    element.style.zIndex = "2147483647";
+    element.style.pointerEvents = "auto";
   }, input);
 
   const remoteFixture = await client.uploadFile(localFixture);
