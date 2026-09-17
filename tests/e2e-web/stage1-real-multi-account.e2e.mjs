@@ -13,6 +13,10 @@ const CSRF_COOKIE = "__Host-beatgaler_csrf";
 const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
 const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
 const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
+const PLAYBACK_FIXTURE_FILE = path.resolve(process.cwd(), "tests", "e2e-web", "fixtures", "stage1-playback.mp3");
+const PLAYBACK_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-playback-fixtures");
+const PLAYBACK_MIN_PROGRESS_SECONDS = 0.5;
+const PLAYBACK_MAX_START_SPREAD_MS = 2_000;
 
 const accounts = Array.from({ length: accountCount }, (_, index) => {
   const label = String(index + 1).padStart(2, "0");
@@ -41,6 +45,8 @@ const report = {
     postgres_persistent_assignment_via_productive_control_plane: true,
     direct_bootstrap: true,
     authoritative_library_data_plane: true,
+    productive_fixture_upload: true,
+    concurrent_playback: true,
   },
   simulated: [],
   accounts: {},
@@ -50,6 +56,7 @@ const report = {
     { name: "authoritative_library_data_plane", status: "NOT_TESTED", severity: null },
     { name: "multi_account_direct_identity", status: "NOT_TESTED", severity: null },
     { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
+    { name: "playback_fixture_provisioning", status: "NOT_TESTED", severity: null },
     { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
     { name: "uploads_metadata_downloads_trash", status: "NOT_TESTED", severity: null },
   ],
@@ -581,6 +588,160 @@ function validatePersistentReload(before, after, label) {
   }
 }
 
+
+function playbackBeatName(account) {
+  return \`Stage1 Playback \${account.label}\`;
+}
+
+async function playbackBeatSnapshot(client, beatName) {
+  return client.execute(name => {
+    const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+    const cards = Array.from(document.querySelectorAll("[data-beat-card-id]"));
+    const card = cards.find(candidate => Array.from(candidate.querySelectorAll("*"))
+      .some(node => node.children.length === 0 && normalize(node.textContent) === name));
+    if (!card) return null;
+    const beatId = String(card.getAttribute("data-beat-card-id") || "").trim();
+    const artwork = card.querySelector("[data-beat-artwork-id]");
+    return { beat_id: beatId, playback_disabled: artwork?.getAttribute("aria-disabled") === "true" };
+  }, beatName);
+}
+
+async function waitForPlaybackBeat(client, account, timeout = 120_000) {
+  const beatName = playbackBeatName(account);
+  let latest = null;
+  await client.waitUntil(async () => {
+    latest = await playbackBeatSnapshot(client, beatName);
+    return Boolean(latest?.beat_id);
+  }, { timeout, interval: 500, timeoutMsg: \`Account \${account.label} did not materialize \${beatName}.\` });
+  return { ...latest, beat_name: beatName };
+}
+
+async function provisionPlaybackBeat(client, account) {
+  const existing = await playbackBeatSnapshot(client, playbackBeatName(account));
+  if (existing?.beat_id) return { ...existing, beat_name: playbackBeatName(account), created: false };
+
+  await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
+  const localFixture = path.join(PLAYBACK_TMP_DIR, \`\${playbackBeatName(account)}.mp3\`);
+  await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
+
+  const addButton = await client.$('//button[normalize-space(.)="Add beat"]');
+  await addButton.waitForDisplayed({ timeout: 30_000 });
+  await addButton.click();
+
+  const chooseButton = await client.$('//button[contains(normalize-space(.), "Choose MP3 or WAV")]');
+  await chooseButton.waitForDisplayed({ timeout: 30_000 });
+  await chooseButton.click();
+
+  const input = await client.$('input[type="file"][accept*=".mp3"]');
+  await input.waitForExist({ timeout: 30_000 });
+  await client.execute(element => {
+    element.style.display = "block";
+    element.style.position = "fixed";
+    element.style.left = "-10000px";
+    element.style.top = "0";
+  }, input);
+
+  const remoteFixture = await client.uploadFile(localFixture);
+  await input.setValue(remoteFixture);
+
+  const saveButton = await client.$('//button[starts-with(normalize-space(.), "Save")]');
+  await saveButton.waitForDisplayed({ timeout: 30_000 });
+  await saveButton.waitForEnabled({ timeout: 30_000 });
+  await saveButton.click();
+
+  const saved = await waitForPlaybackBeat(client, account);
+  return { ...saved, created: true };
+}
+
+async function playbackIsolationSnapshot(client) {
+  return client.execute(() => {
+    const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+    return Array.from(document.querySelectorAll("[data-beat-card-id]"))
+      .flatMap(card => Array.from(card.querySelectorAll("*"))
+        .filter(node => node.children.length === 0)
+        .map(node => normalize(node.textContent))
+        .filter(value => /^Stage1 Playback \d{2}$/.test(value))
+        .slice(0, 1))
+      .sort();
+  });
+}
+
+async function validatePlaybackFixtureIsolation(clients) {
+  const snapshots = await Promise.all(clients.map(client => playbackIsolationSnapshot(client)));
+  snapshots.forEach((names, index) => {
+    assert.deepEqual(names, [playbackBeatName(accounts[index])], \`Account \${accounts[index].label} must see only its own Stage 1 playback fixture.\`);
+  });
+  return snapshots;
+}
+
+async function installPlaybackProbe(client, beatId) {
+  await client.execute(id => {
+    const previous = window.__beatgalerStage1PlaybackProbe;
+    if (previous?.handler) window.removeEventListener("beatgaler:web-playback-state", previous.handler);
+    const probe = { beatId: id, events: [], handler: null };
+    probe.handler = event => {
+      const detail = event?.detail || {};
+      if (String(detail.beatId || "") !== id) return;
+      probe.events.push({ at: Date.now(), current_time: Math.max(0, Number(detail.currentTime) || 0), playing: Boolean(detail.playing), waiting: Boolean(detail.waiting) });
+      if (probe.events.length > 200) probe.events.shift();
+    };
+    window.__beatgalerStage1PlaybackProbe = probe;
+    window.addEventListener("beatgaler:web-playback-state", probe.handler);
+  }, beatId);
+}
+
+async function playbackProbeSnapshot(client) {
+  return client.execute(() => {
+    const probe = window.__beatgalerStage1PlaybackProbe;
+    const events = Array.isArray(probe?.events) ? probe.events : [];
+    const playingEvents = events.filter(event => event.playing);
+    return {
+      beat_id: probe?.beatId || null,
+      event_count: events.length,
+      max_current_time: events.reduce((max, event) => Math.max(max, Number(event.current_time) || 0), 0),
+      playing_seen: playingEvents.length > 0,
+      first_playing_at: playingEvents[0]?.at || null,
+      waiting_seen: events.some(event => event.waiting),
+      last: events.at(-1) || null,
+    };
+  });
+}
+
+async function waitForPlaybackProgress(client, account) {
+  let latest = null;
+  await client.waitUntil(async () => {
+    latest = await playbackProbeSnapshot(client);
+    return latest?.playing_seen === true && latest?.max_current_time >= PLAYBACK_MIN_PROGRESS_SECONDS;
+  }, { timeout: 30_000, interval: 100, timeoutMsg: \`Account \${account.label} did not prove real playback progress.\` });
+  return latest;
+}
+
+async function runConcurrentPlayback(clients, playbackBeats) {
+  await Promise.all(playbackBeats.map((beat, index) => installPlaybackProbe(clients[index], beat.beat_id)));
+
+  const artworks = await Promise.all(playbackBeats.map(async (beat, index) => {
+    const artwork = await clients[index].$(\`[data-beat-artwork-id="\${beat.beat_id}"]\`);
+    await artwork.waitForDisplayed({ timeout: 30_000 });
+    await clients[index].waitUntil(async () => (await artwork.getAttribute("aria-disabled")) !== "true", {
+      timeout: 60_000,
+      interval: 250,
+      timeoutMsg: \`Account \${accounts[index].label} playback never became interactive.\`,
+    });
+    return artwork;
+  }));
+
+  const triggerStartedAt = Date.now();
+  await Promise.all(artworks.map(artwork => artwork.click()));
+
+  const snapshots = await Promise.all(clients.map((client, index) => waitForPlaybackProgress(client, accounts[index])));
+  const starts = snapshots.map(snapshot => Number(snapshot.first_playing_at || 0));
+  const startSpreadMs = Math.max(...starts) - Math.min(...starts);
+  assert.ok(starts.every(Boolean), "Every account must observe the real HTMLAudioElement playing state.");
+  assert.ok(startSpreadMs <= PLAYBACK_MAX_START_SPREAD_MS, \`Concurrent playback start spread was \${startSpreadMs} ms; expected <= \${PLAYBACK_MAX_START_SPREAD_MS} ms.\`);
+
+  return { trigger_started_at: triggerStartedAt, start_spread_ms: startSpreadMs, accounts: snapshots };
+}
+
 describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
   it(
     `runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`,
@@ -685,6 +846,21 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           `${accountCount} unique vaults`,
         );
 
+        const playbackFixtures = await Promise.all(
+          accounts.map((account, index) =>
+            provisionPlaybackBeat(clients[index], account)
+          ),
+        );
+
+        await validatePlaybackFixtureIsolation(clients);
+
+        markScenario(
+          "playback_fixture_provisioning",
+          "PASS",
+          null,
+          `${accountCount} productive MASTER uploads committed to isolated authoritative libraries`,
+        );
+
         const reloadStartedAt = Date.now();
 
         for (const observer of authObservers.values()) {
@@ -739,6 +915,34 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           `${accountCount} simultaneous reloads preserved assignment`,
         );
 
+        const playbackAfterReload = await Promise.all(
+          accounts.map((account, index) =>
+            waitForPlaybackBeat(clients[index], account)
+          ),
+        );
+
+        playbackAfterReload.forEach((beat, index) => {
+          assert.equal(
+            beat.beat_id,
+            playbackFixtures[index].beat_id,
+            `Account ${accounts[index].label} playback fixture identity changed after Reload.`,
+          );
+        });
+
+        await validatePlaybackFixtureIsolation(clients);
+
+        const playbackRun = await runConcurrentPlayback(
+          clients,
+          playbackAfterReload,
+        );
+
+        markScenario(
+          "playback_concurrency",
+          "PASS",
+          null,
+          `${accountCount} accounts advanced real playback concurrently; start_spread_ms=${playbackRun.start_spread_ms}`,
+        );
+
         report.accounts = Object.fromEntries(
           accounts.map((account, index) => [
             account.label,
@@ -765,6 +969,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 before[index].visible_error,
               visible_error_after:
                 after[index].visible_error,
+              playback_fixture: {
+                beat_id: playbackAfterReload[index].beat_id,
+                beat_name: playbackAfterReload[index].beat_name,
+                created_this_run: playbackFixtures[index].created,
+              },
+              playback: playbackRun.accounts[index],
               before_reload: {
                 user_id: before[index].user_id,
                 client_id: before[index].client_id,
@@ -796,6 +1006,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         report.timings = {
           startup_ms: startupMs,
           simultaneous_reload_ms: reloadMs,
+          playback_start_spread_ms: playbackRun.start_spread_ms,
         };
 
         report.transport_distribution = Object.fromEntries(
@@ -872,6 +1083,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "authoritative_library_data_plane",
           "multi_account_direct_identity",
           "simultaneous_reload_persistent_assignment",
+          "playback_fixture_provisioning",
+          "playback_concurrency",
         ]) {
           if (
             scenario(name)?.status === "NOT_TESTED" &&
@@ -900,6 +1113,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         );
 
         authObservers.clear();
+        await fs.rm(PLAYBACK_TMP_DIR, { recursive: true, force: true }).catch(() => {});
       }
     },
   );
