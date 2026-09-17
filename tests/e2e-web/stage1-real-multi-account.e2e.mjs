@@ -826,7 +826,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "auth_health_stability",
           "PASS",
           null,
-          "No observed failed health probes; login and Reload health HTTP 200 for every account",
+          "No observed health probe failed; Web auth no longer depends on a mandatory health preflight",
         );
 
         report.overall = "PASS";
