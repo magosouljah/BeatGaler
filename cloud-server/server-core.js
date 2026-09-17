@@ -31,6 +31,7 @@ const directTransport = require("./direct-transport-control");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
 const { hashPassword, verifyPassword } = require("./password-kdf");
+const { createUserStorageLifecycle } = require("./user-storage-lifecycle");
 
 const PORT = process.env.PORT || 4000;
 const MANAGER_BOT_USERNAME = String(process.env.MANAGER_BOT_USERNAME_1 || process.env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim();
@@ -1191,90 +1192,24 @@ function rebindStorageBindingsForUser(user) {
   }
 }
 
+const userStorageLifecycle = createUserStorageLifecycle({
+  validateStoredChatId: botApiChatIdFromStored,
+  createPrivateUserStorageGroup,
+  verifyPrivateUserStorageGroup,
+  ensurePrivateUserStorageBotAbsent,
+  masterStorageReady,
+  managerBotUsername: MANAGER_BOT_USERNAME,
+  storageGroupLimit: MASTER_STORAGE_GROUP_LIMIT,
+  getProvisionedStorageCount: () => [...beatGalerUsers.values()].filter(entry => entry.storageChatId).length,
+  saveAuthData,
+  clearStorageBindingsForUser,
+  rebindStorageBindingsForUser,
+  ensureEmptyIndexForStorage,
+  logger: console,
+});
+
 async function ensureUserStorage(user) {
-  if (user.storageChatId) {
-    const account = {
-      telegramUserId: botApiChatIdFromStored(user.storageChatId),
-      storageChatId: botApiChatIdFromStored(user.storageChatId),
-      storageChatTitle: user.storageChatTitle,
-    };
-
-    // Direct index bootstrap no longer touches MASTER, so it cannot prove
-    // that a persisted vault still exists. Verify the stored chat explicitly.
-    // Only a definitive missing-vault signal reprovisions; transient failures
-    // keep the current vault and retry on a later auth/session restore.
-    if (masterStorageReady()) {
-      try {
-        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });
-      } catch (error) {
-        const message = String(error?.errorMessage || error?.message || error);
-        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
-          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
-          user.storageChatId = null;
-          user.storageChatTitle = null;
-          user.storageCreatedAt = null;
-          saveAuthData();
-          clearStorageBindingsForUser(user);
-          return ensureUserStorage(user);
-        }
-        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
-      }
-    }
-
-    // Migration invariant: the manager bot (001BeatGaler) never belongs to a
-    // user vault. If an older BeatGaler build left it there, MASTER removes it.
-    const managerBotUsername = MANAGER_BOT_USERNAME;
-    if (managerBotUsername) {
-      try {
-        await ensurePrivateUserStorageBotAbsent({
-          botApiChatId: user.storageChatId,
-          botUsername: managerBotUsername,
-        });
-      } catch (error) {
-        console.warn(`[storage] manager-bot cleanup deferred for @${user.username}:`, error?.message || error);
-      }
-    }
-
-    try {
-      await ensureEmptyIndexForStorage(account);
-      return user;
-    } catch (error) {
-      const message = String(error?.message || error);
-      if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
-        console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
-        user.storageChatId = null;
-        user.storageChatTitle = null;
-        user.storageCreatedAt = null;
-        saveAuthData();
-        clearStorageBindingsForUser(user);
-        return ensureUserStorage(user);
-      }
-      throw error;
-    }
-  }
-
-  const used = [...beatGalerUsers.values()].filter(entry => entry.storageChatId).length;
-  if (used >= MASTER_STORAGE_GROUP_LIMIT) {
-    throw new Error(`Master Telegram storage account is full (${MASTER_STORAGE_GROUP_LIMIT} user groups). Add master account #2 before registering more users.`);
-  }
-  if (!masterStorageReady()) {
-    throw new Error("Master Telegram storage account is not configured. Run: node setup-master-account.js");
-  }
-
-  const created = await createPrivateUserStorageGroup({ username: user.username, accountId: user.id });
-  user.storageChatId = String(created.botApiChatId);
-  user.storageChatTitle = created.title;
-  user.storageCreatedAt = Date.now();
-  saveAuthData();
-  rebindStorageBindingsForUser(user);
-
-  const account = {
-    telegramUserId: botApiChatIdFromStored(user.storageChatId),
-    storageChatId: botApiChatIdFromStored(user.storageChatId),
-    storageChatTitle: user.storageChatTitle,
-  };
-  await ensureEmptyIndexForStorage(account);
-  return user;
+  return userStorageLifecycle.ensureAssigned(user);
 }
 
 function accountPublicPayload(user, token) {

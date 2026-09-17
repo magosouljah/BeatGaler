@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const Module = require('module');
+const { isDefinitiveMissingStorageError } = require('../user-storage-lifecycle');
 
 process.env.BEATGALER_MASTER_SESSION = 'test-master-session';
 process.env.TELEGRAM_API_ID = '12345';
@@ -49,13 +50,26 @@ Module._load = function(request, parent, isMain) {
     );
     assert.equal(disconnectCount, 2, 'MASTER client must disconnect on both success and missing-vault paths');
 
-    const coreSource = fs.readFileSync(path.join(__dirname, '..', 'server-core.js'), 'utf8');
-    assert(coreSource.includes('verifyPrivateUserStorageGroup'));
-    assert(coreSource.includes('await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId })'));
-    assert(coreSource.includes('vault no longer exists'));
-    assert(coreSource.includes('return ensureUserStorage(user)'));
+    assert.equal(isDefinitiveMissingStorageError(new Error('CHANNEL_INVALID')), true);
+    assert.equal(isDefinitiveMissingStorageError(new Error('CHANNEL_PRIVATE')), true);
+    assert.equal(isDefinitiveMissingStorageError(new Error('ETIMEDOUT')), false);
+    assert.equal(isDefinitiveMissingStorageError(new Error('ECONNRESET')), false);
 
-    console.log('PASS deleted vault is detected and wired to replacement provisioning');
+    const coreSource = fs.readFileSync(path.join(__dirname, '..', 'server-core.js'), 'utf8');
+    const start = coreSource.indexOf('async function ensureUserStorage(user) {');
+    const end = coreSource.indexOf('\nfunction accountPublicPayload(user, token) {', start);
+    assert(start >= 0 && end > start, 'ensureUserStorage boundary must remain explicit');
+    const ensureBlock = coreSource.slice(start, end);
+
+    assert(coreSource.includes('createUserStorageLifecycle'));
+    assert(ensureBlock.includes('return userStorageLifecycle.ensureAssigned(user);'));
+    assert(!ensureBlock.includes('verifyPrivateUserStorageGroup'));
+    assert(!ensureBlock.includes('ensurePrivateUserStorageBotAbsent'));
+    assert(!ensureBlock.includes('masterStorageReady'));
+    assert(!ensureBlock.includes('return ensureUserStorage(user)'));
+    assert(!coreSource.includes('provisioning a replacement vault'));
+
+    console.log('PASS MASTER verification remains available but is outside the normal login/session storage path');
   } finally {
     Module._load = originalLoad;
   }
