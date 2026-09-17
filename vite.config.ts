@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { stage1ProxyTiming, stage1ViteTiming } from "./scripts/stage1-proxy-timing.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,7 +74,7 @@ function productiveTrustBoundaryPlugin() {
 }
 
 export default defineConfig(async ({ command, mode }) => ({
-  plugins: [productiveTrustBoundaryPlugin(), react()],
+  plugins: [productiveTrustBoundaryPlugin(), react(), stage1ViteTiming()],
   base: command === "serve" ? "/" : "./",
   clearScreen: false,
   resolve: {
@@ -92,11 +93,15 @@ export default defineConfig(async ({ command, mode }) => ({
       "/beatgaler-api": {
         target: "http://127.0.0.1:4000",
         changeOrigin: true,
+        configure: stage1ProxyTiming,
         rewrite: requestPath => requestPath.replace(/^\/beatgaler-api/, ""),
       },
     },
     watch: {
       ignored: [
+        // Packaged runtimes are not Web sources. Watching their tens of
+        // thousands of files can starve the same-process auth proxy on Windows.
+        "**/runtime/**",
         "**/src-tauri/**",
         "**/.vs/**",
         "**/node_modules/**"

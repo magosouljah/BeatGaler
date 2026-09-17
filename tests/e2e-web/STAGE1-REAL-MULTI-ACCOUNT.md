@@ -131,3 +131,122 @@ tmp/stage1-real-multi-account-report.json
 It contains identifiers/measurements useful for Stage 1 but never the cohort password, auth-cookie values, CSRF values, bot tokens, API hashes or permanent Direct credentials.
 
 Top-level outcome uses `PASS`, `FAIL`, `BLOCKED`, `FLAKY` or `NOT_TESTED`. Failures use Stage 1 severity (`P0` through `P3`).
+
+## Login diagnostics (report v3)
+
+Each account retains a `login` record even when another account fails. Concurrent
+login attempts settle before the failure report is written. It records the label,
+elapsed time (including profile setup), form/login/MFA presence, visible phase,
+sanitized alert text, submit disabled/aria-busy state, URL without query/hash,
+Web client ID, and observed auth HTTP status and request duration.
+The observer uses the installed WebdriverIO `addInitScript` (WebDriver BiDi),
+registered before the first `client.url()`. Chrome runs it before application
+scripts in every new document, including profile-reset refresh and simultaneous
+Reload. There is no late `execute()` fallback if preload installation fails.
+The fetch observer forwards request bodies and responses unchanged. The health
+probe adds a non-sensitive `x-stage1-trace` correlation header. Existing headers
+are forwarded but never serialized. No request/response bodies are inspected.
+
+Only same-origin `/beatgaler-api/auth/health`, `/auth/session`, `/auth/account`
+and `/auth/login` under that API prefix are observed. `/auth/session` is the
+productive restore check (the app can skip it when no session marker exists).
+Route, HTTP status, state, duration, harness phase, correlation ID, browser epoch
+timestamps and allowlisted Resource Timing numbers are retained per request.
+Query strings, headers and credential values are excluded from reports.
+Sanitized metadata is emitted to a separate Node collector per browser, so
+navigation and local/session storage clearing cannot erase earlier evidence.
+The phase is captured when the request-start event reaches the collector.
+`accounts[label].login.http` is the login-time snapshot; `auth_network` contains
+the full observation up to report writing, including Reload or early failures
+where no login form/DOM snapshot was available. Both are saved in the usual JSON
+report. The observer is removed in the scenario's `finally` block.
+`pending` means no completion was observed at snapshot time (including requests
+whose document was destroyed); it is not evidence of a timeout or abort. Its
+duration is elapsed observation time; completed durations use browser timing.
+WebDriver exceptions are not serialized because they can contain input arguments.
+Downstream scenarios remain `NOT_TESTED` when login prevents reaching them.
+
+Isolated observer regression tests use Node VM documents without Cloud or accounts:
+
+```powershell
+node --test tests/e2e-web/stage1-auth-observer.test.mjs # Verifies early capture, navigation persistence, isolation and metadata filtering.
+```
+
+### Evidence collected on 2026-09-16 (two accounts only)
+
+Local and GitHub Stage 1 HEAD were both `7ee4f3d321ce3cf88052dd3c11c109dd56ce8d3a`;
+the integration branch remained `38b0ec770ca8e923f6d1f16e13b84c21d9fb1776`.
+These runs used the uncommitted v3 harness changes on that baseline.
+No product code, quota, account fixture or database data was manually changed.
+The existing local runtime diagnostic modification was preserved.
+
+- 22:49:49–22:50:39 UTC: FAIL. Both accounts displayed
+  `Could not reach BeatGaler Cloud.` with distinct Web client IDs and no MFA.
+  No `/auth/login` request was observed. This locates this run's failure before
+  credentials are submitted, in the Cloud availability probe. The first observer
+  did not record health requests, so timeout versus network/HTTP failure is unknown.
+  Local evidence: `tmp/stage1-real-multi-account-report-20260916-225039.json`.
+- 22:51:15–22:52:59 UTC: PASS, after adding health observation. Health returned
+  HTTP 200 in 427/246 ms; login returned HTTP 200 in 5180/5342 ms. Both accounts
+  had unique users, Web IDs and vaults. Both authoritative empty libraries loaded.
+  Productive Direct used Bot03/Bot02 respectively; expected bot identity matched
+  `transport_user_id`. Simultaneous Reload preserved user, Web ID, vault and
+  persistent transport. Evidence: `tmp/stage1-real-multi-account-report.json`.
+
+This PASS is evidence for the immediate two-account scenario, not proof that the
+earlier intermittent login failure is fixed. The original account02 failure did
+not include sufficient diagnostics to assign a root cause. Do not infer one from
+the newer availability failure. Do not scale to 4/10 accounts yet.
+
+### Auth path and residual state findings
+
+Web resolves/probes the same-origin API before posting `/auth/login`, including
+the adapter's installation ID. Server startup installs abuse, containment,
+session-security and lifecycle middleware. Containment checks installation
+ownership and reserves an unowned installation claim. The login handler resolves
+the user, verifies password/MFA, syncs provider identity, verifies existing storage,
+binds the installation, creates the auth session and returns the decorated response.
+Containment binds the session to the installation; Web session security supplies
+cookie/CSRF handling. Web `storeSession` stores the session marker/CSRF and dispatches
+transport prewarm before `AuthExperienceGate` calls `setAccount`.
+
+The historical device/session quota fields occur in `plans.js`; no corresponding
+enforcement was found in the login/session creation path. Billing V1 omits those
+fields. Auth abuse controls do enforce rate limits by IP/account/installation.
+Ownership/claim errors, rate limits, storage verification failures and UI/harness
+interaction remain diagnostic possibilities when future attempts fail.
+
+Read-only PostgreSQL inspection during the second run found account01 with five
+unexpired sessions and four installation bindings (one seed, three Web), and
+account02 with four sessions and three bindings (one seed, two Web). The accounts
+therefore have residual state, but exceeding the historical limits did not prevent
+this PASS. These are binding counts, not proof of an enforced active-device quota.
+The on-disk legacy JSON did not contain the cohort; PostgreSQL is the relevant
+source here, exposed to server code through the compatibility layer.
+
+### Stability continuation (2026-09-16/17 UTC): NOT CLOSED
+
+See [STAGE1-STABILITY-INVESTIGATION.md](STAGE1-STABILITY-INVESTIGATION.md) for the
+correlated failures, the demonstrated Vite watcher defect, its minimal correction,
+the remaining unexplained delay, and all nine real-run artifacts.
+
+Report v4 adds explicit before/after Reload identities and `auth_health_stability`.
+A final successful UI no longer hides aborted, network-failed or non-200 health
+probes. Successful observed health responses are required for both login and
+Reload, per account. No timeout, retry, account or quota was changed.
+
+Opt-in proxy tracing uses `STAGE1_PROXY_TIMING_FILE` (JSONL). Optional
+`STAGE1_VITE_PROFILE` writes a CPU profile ending at the first correlated health
+request. Neither is enabled by ordinary application startup. Cloud tracing is a
+manual local diagnostic, installed/removed using
+`scripts/stage1-install-live-timing.mjs` against an already-enabled local Node
+inspector; it does not restart Cloud. The Cloud log path is WSL
+`/tmp/beatgaler-stage1-cloud-timing.jsonl`. Use `--remove` after collecting evidence.
+Cloud and Windows epoch clocks differed during this investigation: use monotonic
+within-process durations, never subtract their epoch timestamps as one-way latency.
+
+Local regressions:
+
+```powershell
+node --test tests/e2e-web/stage1-auth-observer.test.mjs tests/e2e-web/stage1-cloud-timing.test.cjs tests/e2e-web/stage1-health-validation.test.mjs tests/e2e-web/stage1-vite-watch.test.mjs
+```
