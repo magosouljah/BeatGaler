@@ -1,6 +1,41 @@
 // Serialized by WebdriverIO and installed before any application script.
 export function authPreload(emit) {
   const original = window.fetch;
+  const originalConsole = {
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+  };
+  const diagnosticLogs = [];
+  window.__stage1DiagnosticLogs = diagnosticLogs;
+
+  const diagnosticText = value => {
+    if (value instanceof Error) return `${value.name}: ${value.message}`;
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  };
+  const shouldCaptureDiagnostic = text =>
+    /\[web\/library\]|Telegram vault startup check failed|Telegram startup connectivity check failed|\[library-refresh\]|Reconnect attempt/i.test(text);
+
+  for (const level of ["info", "warn", "error"]) {
+    console[level] = (...args) => {
+      try {
+        const text = args.map(diagnosticText).join(" ");
+        if (shouldCaptureDiagnostic(text)) {
+          diagnosticLogs.push({
+            level,
+            at: Date.now(),
+            text: text
+              .replace(/\b[A-Za-z0-9_+\/-]{32,}={0,2}\b/g, "[REDACTED]")
+              .slice(0, 1600),
+          });
+          if (diagnosticLogs.length > 100) diagnosticLogs.shift();
+        }
+      } catch {}
+      return originalConsole[level](...args);
+    };
+  }
+
   const documentId = crypto.randomUUID();
   let sequence = 0;
 
@@ -50,6 +85,9 @@ export function authPreload(emit) {
 
   window.__stage1RestoreFetch = () => {
     window.fetch = original;
+    for (const level of ["info", "warn", "error"]) {
+      console[level] = originalConsole[level];
+    }
     resourceObserver?.disconnect();
   };
 
