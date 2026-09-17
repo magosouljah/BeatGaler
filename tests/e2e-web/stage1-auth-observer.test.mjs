@@ -199,7 +199,7 @@ test("transport observation keeps only safe Direct metadata and preserves the re
   assert.equal(entry.state, "response");
   assert.equal(entry.status, 200);
 
-  assert.deepEqual(entry.transport, {
+  assert.deepEqual({ ...entry.transport }, {
     mode: "galer-direct-temp-mtproto",
     session_id: "session-1",
     transport_id: "transport-1",
