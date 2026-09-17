@@ -830,8 +830,22 @@ async function editFixtureMetadata(client, account, beat) {
   const keyInput = await client.$('//div[normalize-space(.)="KEY"]/parent::div//input');
   await bpmInput.waitForDisplayed({ timeout: 30_000 });
   await keyInput.waitForDisplayed({ timeout: 30_000 });
+
+  await bpmInput.clearValue();
   await bpmInput.setValue(expected.bpm);
+  await keyInput.clearValue();
   await keyInput.setValue(expected.key);
+
+  assert.equal(
+    await bpmInput.getValue(),
+    expected.bpm,
+    `Account ${account.label} BPM input did not replace its previous value.`,
+  );
+  assert.equal(
+    await keyInput.getValue(),
+    expected.key,
+    `Account ${account.label} Key input did not replace its previous value.`,
+  );
 
   const save = await client.$('//button[starts-with(normalize-space(.), "Save")]');
   await save.waitForDisplayed({ timeout: 30_000 });
