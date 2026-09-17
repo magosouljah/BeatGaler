@@ -831,10 +831,24 @@ async function editFixtureMetadata(client, account, beat) {
   await bpmInput.waitForDisplayed({ timeout: 30_000 });
   await keyInput.waitForDisplayed({ timeout: 30_000 });
 
-  await bpmInput.clearValue();
-  await bpmInput.setValue(expected.bpm);
-  await keyInput.clearValue();
-  await keyInput.setValue(expected.key);
+  const replaceControlledInputValue = async (element, value) => {
+    await client.execute((input, nextValue) => {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      );
+      descriptor?.set?.call(input, nextValue);
+      input.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: nextValue,
+      }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, element, value);
+  };
+
+  await replaceControlledInputValue(bpmInput, expected.bpm);
+  await replaceControlledInputValue(keyInput, expected.key);
 
   assert.equal(
     await bpmInput.getValue(),
