@@ -30,7 +30,7 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 });
 
 const report = {
-  version: 5,
+  version: 6,
   stage: "Etapa 1 — uso real entre cuentas independientes",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
   cohort_id: cohortId || null,
@@ -62,6 +62,8 @@ const report = {
     { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
     { name: "master_download", status: "NOT_TESTED", severity: null },
     { name: "remove_from_library_persistence", status: "NOT_TESTED", severity: null },
+    { name: "trash_visibility_persistence", status: "NOT_TESTED", severity: null },
+    { name: "trash_purge_persistence", status: "NOT_TESTED", severity: null },
   ],
   failure: null,
 };
@@ -1055,7 +1057,7 @@ async function downloadFixtureMaster(client, account, beat) {
   }
 }
 
-async function removeFixtureAndVerifyPersistence(client, account, beat) {
+async function removeFixtureFromLibrary(client, account, beat) {
   await openBeatContextAction(client, beat.beat_id, "Remove from library");
 
   const dialog = await client.$('[data-beatgaler-dialog="true"]');
@@ -1072,22 +1074,175 @@ async function removeFixtureAndVerifyPersistence(client, account, beat) {
     timeoutMsg: `Account ${account.label} beat did not leave the active library after Remove.`,
   });
 
-  await client.refresh();
-  await waitForAuthoritativeLibrary(client, account.label);
+  return {
+    beat_id: beat.beat_id,
+    removed_from_active_library: true,
+  };
+}
 
-  const resurrected = await playbackBeatSnapshot(client, playbackBeatName(account));
-  if (resurrected?.beat_id) {
+async function verifyFixtureAbsentFromLibrary(client, account, beat, phase) {
+  const selector = `[data-beat-card-id="${beat.beat_id}"]`;
+  const byId = await (await client.$(selector)).isExisting();
+  const byName = await playbackBeatSnapshot(client, beat.beat_name);
+
+  if (byId || byName?.beat_id) {
     throw taggedError(
-      `Account ${account.label} removed beat resurrected after Reload.`,
-      "STAGE1_TRASH_REMOVE_NOT_PERSISTED",
+      `Account ${account.label} removed beat resurrected in Library during ${phase}.`,
+      "STAGE1_TRASH_LIBRARY_RESURRECTION",
+      "P1",
+    );
+  }
+
+  return true;
+}
+
+async function trashUiSnapshot(client) {
+  return client.execute(() => {
+    const visible = node => Boolean(node && node.getClientRects().length);
+    const main = document.querySelector("main");
+    const text = String(main?.innerText || "");
+    const items = Array.from(document.querySelectorAll("[data-trash-item-id]"))
+      .filter(visible)
+      .map(node => ({
+        trash_id: String(node.getAttribute("data-trash-item-id") || ""),
+        beat_name: String(node.getAttribute("data-trash-beat-name") || ""),
+      }));
+
+    return {
+      settings_open: Boolean(main && visible(main)),
+      trash_heading: Array.from(main?.querySelectorAll("div") || [])
+        .some(node => visible(node) && String(node.textContent || "").trim() === "Trash"),
+      loading: text.includes("Loading…"),
+      empty: text.includes("Trash is empty"),
+      purge_acknowledged: text.includes("queued for permanent deletion."),
+      items,
+    };
+  });
+}
+
+function trashFixtureMatch(snapshot, beat) {
+  const prefix = `cloud-trash:${beat.beat_id}:`;
+  return snapshot?.items?.find(item =>
+    item.trash_id.startsWith(prefix) &&
+    item.beat_name === beat.beat_name
+  ) || null;
+}
+
+async function openTrashUi(client, account) {
+  const settings = await client.$('button[title="Settings"]');
+  await settings.waitForDisplayed({ timeout: 30_000 });
+  await settings.click();
+
+  const trashTab = await client.$('//aside//button[normalize-space(.)="trash"]');
+  await trashTab.waitForDisplayed({ timeout: 30_000 });
+  await trashTab.click();
+
+  let latest = null;
+  await client.waitUntil(async () => {
+    latest = await trashUiSnapshot(client);
+    return latest?.settings_open === true &&
+      latest?.trash_heading === true &&
+      latest?.loading === false;
+  }, {
+    timeout: 120_000,
+    interval: 300,
+    timeoutMsg: `Account ${account.label} Trash did not reach a loaded UI state.`,
+  });
+
+  return latest;
+}
+
+async function openTrashAndVerifyFixture(client, account, beat, allBeats, phase) {
+  let latest = await openTrashUi(client, account);
+
+  await client.waitUntil(async () => {
+    latest = await trashUiSnapshot(client);
+    return Boolean(trashFixtureMatch(latest, beat));
+  }, {
+    timeout: 120_000,
+    interval: 300,
+    timeoutMsg: `Account ${account.label} fixture did not appear in Trash during ${phase}.`,
+  });
+
+  const leaked = allBeats.filter(other => {
+    if (other.beat_id === beat.beat_id) return false;
+    const prefix = `cloud-trash:${other.beat_id}:`;
+    return latest.items.some(item =>
+      item.trash_id.startsWith(prefix) ||
+      item.beat_name === other.beat_name
+    );
+  });
+
+  if (leaked.length > 0) {
+    throw taggedError(
+      `Account ${account.label} Trash exposed fixture(s) from another vault during ${phase}.`,
+      "STAGE1_TRASH_CROSS_VAULT_LEAK",
+      "P0",
+    );
+  }
+
+  return {
+    beat_id: beat.beat_id,
+    visible: true,
+    matched_by_authoritative_trash_identity: true,
+    cross_account_fixture_visible: false,
+    observed_trash_item_count: latest.items.length,
+  };
+}
+
+async function purgeFixtureThroughTrashUi(client, account, beat) {
+  const before = await trashUiSnapshot(client);
+  if (!trashFixtureMatch(before, beat)) {
+    throw taggedError(
+      `Account ${account.label} fixture was not present in Trash immediately before purge.`,
+      "STAGE1_TRASH_FIXTURE_MISSING_BEFORE_PURGE",
+      "P1",
+    );
+  }
+
+  const empty = await client.$('//main//button[normalize-space(.)="Empty beat trash"]');
+  await empty.waitForDisplayed({ timeout: 30_000 });
+  await empty.waitForEnabled({ timeout: 30_000 });
+  await empty.click();
+
+  let latest = null;
+  await client.waitUntil(async () => {
+    latest = await trashUiSnapshot(client);
+    return (
+      latest?.purge_acknowledged === true &&
+      !trashFixtureMatch(latest, beat)
+    );
+  }, {
+    timeout: 120_000,
+    interval: 300,
+    timeoutMsg: `Account ${account.label} Empty Trash did not receive authoritative purge acknowledgement.`,
+  });
+
+  return {
+    beat_id: beat.beat_id,
+    purge_executed: true,
+    purge_backend_acknowledged: true,
+    absent_from_trash_after_purge_ui: true,
+  };
+}
+
+async function verifyFixtureAbsentFromTrashAfterReload(client, account, beat) {
+  const latest = await openTrashUi(client, account);
+  const matchingByIdentity = trashFixtureMatch(latest, beat);
+  const matchingByName = latest.items.some(item => item.beat_name === beat.beat_name);
+
+  if (matchingByIdentity || matchingByName) {
+    throw taggedError(
+      `Account ${account.label} permanently deleted fixture resurrected in Trash after Reload.`,
+      "STAGE1_TRASH_PURGE_RESURRECTION",
       "P1",
     );
   }
 
   return {
     beat_id: beat.beat_id,
-    removed_from_active_library: true,
-    absent_after_reload: true,
+    absent_from_trash_after_purge_reload: true,
+    observed_trash_item_count: latest.items.length,
   };
 }
 
@@ -1426,7 +1581,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
 
         const removals = await Promise.all(
           accounts.map((account, index) =>
-            removeFixtureAndVerifyPersistence(
+            removeFixtureFromLibrary(
               clients[index],
               account,
               playbackAfterReload[index],
@@ -1438,11 +1593,209 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           report.accounts[accounts[index].label].remove_from_library = result;
         });
 
+        const trashBeforeReload = await Promise.all(
+          accounts.map((account, index) =>
+            openTrashAndVerifyFixture(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+              playbackAfterReload,
+              "before Reload",
+            )
+          ),
+        );
+
+        trashBeforeReload.forEach((result, index) => {
+          report.accounts[accounts[index].label].trash = {
+            beat_id: result.beat_id,
+            visible_before_reload: result.visible,
+            matched_by_authoritative_trash_identity_before_reload:
+              result.matched_by_authoritative_trash_identity,
+            cross_account_fixture_visible_before_reload:
+              result.cross_account_fixture_visible,
+            observed_trash_item_count_before_reload:
+              result.observed_trash_item_count,
+          };
+        });
+
+        for (const observer of authObservers.values()) {
+          observer.setPhase("trash-visibility-reload");
+        }
+
+        await Promise.all(clients.map(client => client.refresh()));
+        await Promise.all(
+          accounts.map((account, index) =>
+            waitForAuthoritativeLibrary(clients[index], account.label)
+          ),
+        );
+
+        await Promise.all(
+          accounts.map((account, index) =>
+            verifyFixtureAbsentFromLibrary(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+              "Remove + Reload",
+            )
+          ),
+        );
+
+        removals.forEach((_, index) => {
+          report.accounts[accounts[index].label].remove_from_library.absent_after_reload = true;
+        });
+
         markScenario(
           "remove_from_library_persistence",
           "PASS",
           null,
           `${accountCount} removals stayed absent from the authoritative library after Reload`,
+        );
+
+        const trashAfterReload = await Promise.all(
+          accounts.map((account, index) =>
+            openTrashAndVerifyFixture(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+              playbackAfterReload,
+              "after Reload",
+            )
+          ),
+        );
+
+        trashAfterReload.forEach((result, index) => {
+          Object.assign(report.accounts[accounts[index].label].trash, {
+            visible_after_reload: result.visible,
+            matched_by_authoritative_trash_identity_after_reload:
+              result.matched_by_authoritative_trash_identity,
+            cross_account_fixture_visible_after_reload:
+              result.cross_account_fixture_visible,
+            observed_trash_item_count_after_reload:
+              result.observed_trash_item_count,
+          });
+        });
+
+        markScenario(
+          "trash_visibility_persistence",
+          "PASS",
+          null,
+          `${accountCount} fixtures remained in isolated Trash views after authoritative Reload`,
+        );
+
+        const firstPurge = await purgeFixtureThroughTrashUi(
+          clients[0],
+          accounts[0],
+          playbackAfterReload[0],
+        );
+        Object.assign(report.accounts[accounts[0].label].trash, firstPurge);
+
+        if (accountCount > 1) {
+          for (const observer of authObservers.values()) {
+            observer.setPhase("trash-cross-vault-purge-isolation");
+          }
+
+          await Promise.all(clients.slice(1).map(client => client.refresh()));
+          await Promise.all(
+            accounts.slice(1).map((account, offset) =>
+              waitForAuthoritativeLibrary(clients[offset + 1], account.label)
+            ),
+          );
+
+          await Promise.all(
+            accounts.slice(1).map((account, offset) =>
+              verifyFixtureAbsentFromLibrary(
+                clients[offset + 1],
+                account,
+                playbackAfterReload[offset + 1],
+                "another vault purge",
+              )
+            ),
+          );
+
+          const survivedFirstVaultPurge = await Promise.all(
+            accounts.slice(1).map((account, offset) =>
+              openTrashAndVerifyFixture(
+                clients[offset + 1],
+                account,
+                playbackAfterReload[offset + 1],
+                playbackAfterReload,
+                `after Account ${accounts[0].label} purged its own vault`,
+              )
+            ),
+          );
+
+          survivedFirstVaultPurge.forEach((result, offset) => {
+            Object.assign(report.accounts[accounts[offset + 1].label].trash, {
+              survived_other_vault_purge_after_authoritative_reload: result.visible,
+              cross_account_fixture_visible_after_other_vault_purge:
+                result.cross_account_fixture_visible,
+            });
+          });
+        }
+
+        const remainingPurges = await Promise.all(
+          accounts.slice(1).map((account, offset) =>
+            purgeFixtureThroughTrashUi(
+              clients[offset + 1],
+              account,
+              playbackAfterReload[offset + 1],
+            )
+          ),
+        );
+
+        remainingPurges.forEach((result, offset) => {
+          Object.assign(report.accounts[accounts[offset + 1].label].trash, result);
+        });
+
+        for (const observer of authObservers.values()) {
+          observer.setPhase("trash-purge-persistence-reload");
+        }
+
+        await Promise.all(clients.map(client => client.refresh()));
+        await Promise.all(
+          accounts.map((account, index) =>
+            waitForAuthoritativeLibrary(clients[index], account.label)
+          ),
+        );
+
+        await Promise.all(
+          accounts.map((account, index) =>
+            verifyFixtureAbsentFromLibrary(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+              "Empty Trash + Reload",
+            )
+          ),
+        );
+
+        const trashAfterPurgeReload = await Promise.all(
+          accounts.map((account, index) =>
+            verifyFixtureAbsentFromTrashAfterReload(
+              clients[index],
+              account,
+              playbackAfterReload[index],
+            )
+          ),
+        );
+
+        trashAfterPurgeReload.forEach((result, index) => {
+          Object.assign(report.accounts[accounts[index].label].trash, {
+            absent_from_library_after_purge_reload: true,
+            absent_from_trash_after_purge_reload:
+              result.absent_from_trash_after_purge_reload,
+            observed_trash_item_count_after_purge_reload:
+              result.observed_trash_item_count,
+          });
+        });
+
+        markScenario(
+          "trash_purge_persistence",
+          "PASS",
+          null,
+          accountCount === 1
+            ? "Fixture was purged permanently and stayed absent from Library + Trash after Reload"
+            : `${accountCount} vaults purged their fixtures; Account ${accounts[0].label} purge was proven isolated before the remaining vaults purged, and no fixture resurrected after Reload`,
         );
 
         report.timings = {
@@ -1549,6 +1902,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "metadata_edit_persistence",
           "master_download",
           "remove_from_library_persistence",
+          "trash_visibility_persistence",
+          "trash_purge_persistence",
         ];
         const coreReachedPostPhase = [
           "multi_account_auth_isolation",
