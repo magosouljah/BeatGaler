@@ -12,7 +12,8 @@ const SESSION_COOKIE = "__Host-beatgaler_session";
 const CSRF_COOKIE = "__Host-beatgaler_csrf";
 const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
 const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
-const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
+const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
+const singleAccountDiagnostic = accountCount === 1;
 const PLAYBACK_FIXTURE_FILE = path.resolve(process.cwd(), "tests", "e2e-web", "fixtures", "stage1-playback.mp3");
 const PLAYBACK_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-playback-fixtures");
 const PLAYBACK_MIN_PROGRESS_SECONDS = 0.5;
@@ -46,7 +47,7 @@ const report = {
     direct_bootstrap: true,
     authoritative_library_data_plane: true,
     productive_fixture_upload: true,
-    concurrent_playback: true,
+    concurrent_playback: !singleAccountDiagnostic,
   },
   simulated: [],
   accounts: {},
@@ -75,6 +76,18 @@ function markScenario(name, status, severity = null, detail = null) {
   item.status = status;
   item.severity = severity;
   if (detail) item.detail = detail;
+}
+
+const singleAccountSkippedScenarios = new Set([
+  "multi_account_auth_isolation",
+  "multi_account_direct_identity",
+  "playback_concurrency",
+]);
+
+if (singleAccountDiagnostic) {
+  for (const name of singleAccountSkippedScenarios) {
+    markScenario(name, "SKIPPED", null, "Single-account diagnostic mode; multi-account evidence is intentionally not evaluated.");
+  }
 }
 
 async function writeReport() {
@@ -1141,21 +1154,23 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           )
         );
 
-        validateCrossAccountIsolation(before);
+        if (!singleAccountDiagnostic) {
+          validateCrossAccountIsolation(before);
 
-        markScenario(
-          "multi_account_auth_isolation",
-          "PASS",
-          null,
-          `${accountCount} unique users/browser ids`,
-        );
+          markScenario(
+            "multi_account_auth_isolation",
+            "PASS",
+            null,
+            `${accountCount} unique users/browser ids`,
+          );
 
-        markScenario(
-          "multi_account_direct_identity",
-          "PASS",
-          null,
-          `${accountCount} unique vaults`,
-        );
+          markScenario(
+            "multi_account_direct_identity",
+            "PASS",
+            null,
+            `${accountCount} unique vaults`,
+          );
+        }
 
         const playbackFixtures = await Promise.all(
           accounts.map((account, index) =>
@@ -1163,13 +1178,15 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           ),
         );
 
-        await validatePlaybackFixtureIsolation(clients);
+        if (!singleAccountDiagnostic) await validatePlaybackFixtureIsolation(clients);
 
         markScenario(
           "playback_fixture_provisioning",
           "PASS",
           null,
-          `${accountCount} productive MASTER uploads committed to isolated authoritative libraries`,
+          singleAccountDiagnostic
+            ? "1 productive MASTER upload committed to the authoritative library"
+            : `${accountCount} productive MASTER uploads committed to isolated authoritative libraries`,
         );
 
         const reloadStartedAt = Date.now();
@@ -1209,7 +1226,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           )
         );
 
-        validateCrossAccountIsolation(after);
+        if (!singleAccountDiagnostic) validateCrossAccountIsolation(after);
 
         before.forEach((snapshot, index) =>
           validatePersistentReload(
@@ -1223,7 +1240,9 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "simultaneous_reload_persistent_assignment",
           "PASS",
           null,
-          `${accountCount} simultaneous reloads preserved assignment`,
+          singleAccountDiagnostic
+            ? "Single-account diagnostic Reload preserved the persistent assignment"
+            : `${accountCount} simultaneous reloads preserved assignment`,
         );
 
         const playbackAfterReload = await Promise.all(
@@ -1240,19 +1259,21 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           );
         });
 
-        await validatePlaybackFixtureIsolation(clients);
+        if (!singleAccountDiagnostic) await validatePlaybackFixtureIsolation(clients);
 
         const playbackRun = await runConcurrentPlayback(
           clients,
           playbackAfterReload,
         );
 
-        markScenario(
-          "playback_concurrency",
-          "PASS",
-          null,
-          `${accountCount} accounts advanced real playback concurrently; start_spread_ms=${playbackRun.start_spread_ms}; soft_target_exceeded=${playbackRun.soft_target_exceeded}`,
-        );
+        if (!singleAccountDiagnostic) {
+          markScenario(
+            "playback_concurrency",
+            "PASS",
+            null,
+            `${accountCount} accounts advanced real playback concurrently; start_spread_ms=${playbackRun.start_spread_ms}; soft_target_exceeded=${playbackRun.soft_target_exceeded}`,
+          );
+        }
 
         report.accounts = Object.fromEntries(
           accounts.map((account, index) => [
@@ -1510,7 +1531,10 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           "simultaneous_reload_persistent_assignment",
           "playback_fixture_provisioning",
           "playback_concurrency",
-        ].every(name => scenario(name)?.status === "PASS");
+        ].every(name => {
+          const status = scenario(name)?.status;
+          return status === "PASS" || (singleAccountDiagnostic && status === "SKIPPED");
+        });
 
         if (!coreReachedPostPhase || report.overall === "BLOCKED") {
           for (const name of postCoreScenarios) {
