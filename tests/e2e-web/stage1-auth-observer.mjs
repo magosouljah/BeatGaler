@@ -110,6 +110,8 @@ export function authPreload(emit) {
           "/beatgaler-api/auth/account",
           "/beatgaler-api/auth/login",
           "/beatgaler-api/transport/session/start",
+          "/beatgaler-api/transport/operation/begin",
+          "/beatgaler-api/transport/operation/end",
         ].includes(url.pathname)
       ) {
         route = url.pathname;
@@ -123,6 +125,32 @@ export function authPreload(emit) {
 
     const id = `${documentId}:${++sequence}`;
     const start = performance.now();
+
+    let operationRequest = null;
+    if (
+      route.endsWith("/transport/operation/begin") ||
+      route.endsWith("/transport/operation/end")
+    ) {
+      try {
+        const rawBody = args[1]?.body;
+        const payload =
+          typeof rawBody === "string"
+            ? JSON.parse(rawBody)
+            : null;
+        operationRequest = route.endsWith("/transport/operation/begin")
+          ? {
+              kind: typeof payload?.kind === "string" ? payload.kind : null,
+            }
+          : {
+              operation_id:
+                typeof payload?.operationId === "string"
+                  ? payload.operationId
+                  : null,
+            };
+      } catch {
+        // Observation must not affect the real request.
+      }
+    }
 
     requests.set(id, {
       id,
@@ -152,6 +180,8 @@ export function authPreload(emit) {
         started_at_ms,
         abort_at_ms,
         observed_at_ms: Date.now(),
+        document_id: documentId,
+        ...(operationRequest ? { operation_request: operationRequest } : {}),
       });
 
     send({
@@ -166,6 +196,37 @@ export function authPreload(emit) {
       const response = await original.apply(this, args);
 
       let transport = null;
+      let operationResponse = null;
+
+      if (
+        route.endsWith("/transport/operation/begin") ||
+        route.endsWith("/transport/operation/end")
+      ) {
+        try {
+          const payload = await response.clone().json();
+          operationResponse = route.endsWith("/transport/operation/begin")
+            ? {
+                operation_id:
+                  typeof payload?.operation_id === "string"
+                    ? payload.operation_id
+                    : null,
+                wait: payload?.wait === true,
+                reason:
+                  typeof payload?.reason === "string"
+                    ? payload.reason
+                    : null,
+                retry_after_ms:
+                  Number.isFinite(Number(payload?.retry_after_ms))
+                    ? Number(payload.retry_after_ms)
+                    : null,
+              }
+            : {
+                ok: payload?.ok === true,
+              };
+        } catch {
+          // Observation must not affect the real response.
+        }
+      }
 
       if (route.endsWith("/transport/session/start") && response.ok) {
         try {
@@ -193,6 +254,7 @@ export function authPreload(emit) {
         state: "response",
         duration_ms: Math.round(performance.now() - start),
         ...(transport ? { transport } : {}),
+        ...(operationResponse ? { operation_response: operationResponse } : {}),
       });
 
       return response;
@@ -243,6 +305,9 @@ export async function observeAuth(client) {
           ? { resource_timing: previous.entry.resource_timing }
           : {}),
         ...(data.transport ? { transport: data.transport } : {}),
+        ...(data.document_id ? { document_id: data.document_id } : {}),
+        ...(data.operation_request ? { operation_request: data.operation_request } : {}),
+        ...(data.operation_response ? { operation_response: data.operation_response } : {}),
       },
     });
   });
