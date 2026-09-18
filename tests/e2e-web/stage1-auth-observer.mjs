@@ -15,7 +15,7 @@ export function authPreload(emit) {
     try { return JSON.stringify(value); } catch { return String(value); }
   };
   const shouldCaptureDiagnostic = text =>
-    /\[web\/library\]|Telegram vault startup check failed|Telegram startup connectivity check failed|\[library-refresh\]|Reconnect attempt/i.test(text);
+    /\[web\/library\]|Telegram vault startup check failed|Telegram startup connectivity check failed|\[library-refresh\]|Reconnect attempt|\[library-tx\]|TRANSPORT_GET_INDEX|WORKER_(?:INITIALIZE|REQUEST|RESPONSE|INDEX)|CONTROLLER_SESSION|CONTROLLER_BACKGROUND_VERIFY|DIRECT_BACKGROUND_GET_(?:ME|CHAT)|INDEX_(?:BEGIN|RESUMED|DONE|PREEMPTED)/i.test(text);
 
   for (const level of ["info", "warn", "error"]) {
     console[level] = (...args) => {
