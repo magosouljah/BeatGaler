@@ -32,8 +32,8 @@ if (!Number.isInteger(cohortSize) || cohortSize < 2 || cohortSize > 50) {
   console.error(`BLOCKED Stage 1: invalid STAGE1_COHORT_SIZE=${process.env.STAGE1_COHORT_SIZE || ""}.`);
   process.exit(2);
 }
-if (!Number.isInteger(requestedCount) || requestedCount < 2 || requestedCount > cohortSize) {
-  console.error(`BLOCKED Stage 1: --accounts must be between 2 and ${cohortSize}.`);
+if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > cohortSize) {
+  console.error(`BLOCKED Stage 1: --accounts must be between 1 and ${cohortSize}.`);
   process.exit(2);
 }
 
@@ -52,7 +52,7 @@ try {
 }
 
 console.log(`[stage1-real] baseline=${gitHead}`);
-console.log(`[stage1-real] cohort=${cohortId} accounts=${requestedCount}/${cohortSize} browser_sessions=${requestedCount} mode=real`);
+console.log(`[stage1-real] cohort=${cohortId} accounts=${requestedCount}/${cohortSize} browser_sessions=${requestedCount} mode=${requestedCount === 1 ? "single-account-diagnostic" : "real"}`);
 console.log("[stage1-real] cohort password stays local and is never printed.");
 
 const result = spawnSync(wdioBin, ["run", "wdio.stage1-real.conf.mjs"], {
