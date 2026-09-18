@@ -50,7 +50,7 @@ Module._load = function(request, parent, isMain) {
   }
   if (request === 'telegram/sessions') return { StringSession: class {} };
   if (request === 'telegram/client/uploads') return { CustomFile: class {} };
-  return originalLoad.call(this, request, isMain);
+  return originalLoad.call(this, request, parent, isMain);
 };
 
 function context(tab, document, generation) {
