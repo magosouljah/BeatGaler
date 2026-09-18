@@ -11,7 +11,7 @@ const port = Number(process.env.STAGE1_WEB_PORT || 1421);
 const webUrl = `http://${browserHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
-const accountCount = Math.max(2, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
+const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const browserProfileRoot = path.join(
   root,
   "tmp",
