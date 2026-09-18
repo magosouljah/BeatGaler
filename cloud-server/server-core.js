@@ -2016,6 +2016,11 @@ app.post("/transport/operation/begin", async (req, res) => {
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
       kind: String(req.body?.kind || "data"),
+      documentContext: {
+        tab_id: String(req.body?.documentContext?.tab_id || ""),
+        document_id: String(req.body?.documentContext?.document_id || ""),
+        generation: Number(req.body?.documentContext?.generation || 0),
+      },
     });
     if (operation?.credential_refresh) {
       operation.credential_refresh = wrapWebTransportSession(

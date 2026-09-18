@@ -93,6 +93,61 @@ export interface WebTransportOperationResponse {
 
 const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
 const WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS = 70_000;
+const WEB_TRANSPORT_TAB_ID_KEY = "beatgaler:web-transport-tab-id:v1";
+const WEB_TRANSPORT_DOCUMENT_GENERATION_KEY = "beatgaler:web-transport-document-generation:v1";
+
+export interface WebTransportDocumentContext {
+  tab_id: string;
+  document_id: string;
+  generation: number;
+}
+
+let cachedWebTransportDocumentContext: WebTransportDocumentContext | null = null;
+
+function webTransportContextId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `ctx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function getWebTransportDocumentContext(): WebTransportDocumentContext {
+  if (cachedWebTransportDocumentContext) return { ...cachedWebTransportDocumentContext };
+
+  const documentId = webTransportContextId();
+  let tabId = webTransportContextId();
+  let generation = 1;
+
+  try {
+    if (typeof window !== "undefined") {
+      const storedTabId = window.sessionStorage.getItem(WEB_TRANSPORT_TAB_ID_KEY);
+      if (storedTabId) {
+        tabId = storedTabId;
+      } else {
+        window.sessionStorage.setItem(WEB_TRANSPORT_TAB_ID_KEY, tabId);
+      }
+
+      const previousGeneration = Number(
+        window.sessionStorage.getItem(WEB_TRANSPORT_DOCUMENT_GENERATION_KEY) || 0,
+      );
+      generation =
+        Number.isSafeInteger(previousGeneration) && previousGeneration >= 0
+          ? previousGeneration + 1
+          : 1;
+      window.sessionStorage.setItem(
+        WEB_TRANSPORT_DOCUMENT_GENERATION_KEY,
+        String(generation),
+      );
+    }
+  } catch {
+    // Private browsing/storage policy failures still get a per-document context.
+  }
+
+  cachedWebTransportDocumentContext = {
+    tab_id: tabId,
+    document_id: documentId,
+    generation,
+  };
+  return { ...cachedWebTransportDocumentContext };
+}
 
 export function isTransientWebTempAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -328,6 +383,7 @@ export async function beginWebTransportOperation(
     ...sessionIdentity(session),
     kind,
     scope,
+    documentContext: getWebTransportDocumentContext(),
   });
   assertNoPermanentCredentials(response);
   if (response.expired === true) {

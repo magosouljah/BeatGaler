@@ -877,7 +877,28 @@ async function maybeRotatePendingBot(botId) {
   return promise;
 }
 
-async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind }) {
+function normalizeOperationDocumentContext(input) {
+  const tabId = String(input?.tab_id || '').trim();
+  const documentId = String(input?.document_id || '').trim();
+  const documentGeneration = Number(input?.generation || 0);
+  if (
+    !tabId ||
+    !documentId ||
+    tabId.length > 128 ||
+    documentId.length > 128 ||
+    !Number.isSafeInteger(documentGeneration) ||
+    documentGeneration <= 0
+  ) {
+    return null;
+  }
+  return {
+    tab_id: tabId,
+    document_id: documentId,
+    generation: documentGeneration,
+  };
+}
+
+async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind, documentContext }) {
   const checked = getLeaseChecked({ installationId, sessionId, generation });
   if (!checked) return { ok: false, expired: true };
   const { pool, lease } = checked;
@@ -902,6 +923,7 @@ async function beginOperation({ installationId, sessionId, generation, credentia
   }
 
   const normalizedKind = String(kind || 'data');
+  const normalizedDocumentContext = normalizeOperationDocumentContext(documentContext);
   const opId = `op_${crypto.randomBytes(12).toString('hex')}`;
   const admitted = mutateState(pool, state => {
     const current = state.leases[lease.session_id];
@@ -915,6 +937,29 @@ async function beginOperation({ installationId, sessionId, generation, credentia
     // connected to the same vault.
     const isIndexOperation = normalizedKind === 'get_index' || normalizedKind === 'replace_index';
     if (isIndexOperation) {
+      // Browser reload/navigation replaces the active Document and terminates its
+      // dedicated Worker. A later generation from the SAME tab + SAME Direct
+      // session may therefore fence and reclaim only that tab's older orphaned
+      // INDEX operation. Different tabs/devices remain serialized, and an older
+      // request arriving late can never steal a newer generation's operation.
+      if (normalizedDocumentContext) {
+        for (const [existingId, existing] of Object.entries(state.operations)) {
+          const existingIsIndex = existing?.kind === 'get_index' || existing?.kind === 'replace_index';
+          const sameVault = String(existing?.chat_id || '') === String(lease.chat_id || '');
+          const sameSession = String(existing?.session_id || '') === String(lease.session_id || '');
+          const sameTab = String(existing?.document_tab_id || '') === normalizedDocumentContext.tab_id;
+          const existingGeneration = Number(existing?.document_generation || 0);
+          const supersededDocument =
+            Number.isSafeInteger(existingGeneration) &&
+            existingGeneration > 0 &&
+            existingGeneration < normalizedDocumentContext.generation;
+
+          if (existingIsIndex && sameVault && sameSession && sameTab && supersededDocument) {
+            delete state.operations[existingId];
+          }
+        }
+      }
+
       const busy = Object.values(state.operations).some(op =>
         (op.kind === 'get_index' || op.kind === 'replace_index') &&
         String(op.chat_id || '') === String(lease.chat_id || '')
@@ -930,6 +975,11 @@ async function beginOperation({ installationId, sessionId, generation, credentia
       installation_id: lease.installation_id,
       chat_id: lease.chat_id,
       kind: normalizedKind,
+      ...(normalizedDocumentContext ? {
+        document_tab_id: normalizedDocumentContext.tab_id,
+        document_id: normalizedDocumentContext.document_id,
+        document_generation: normalizedDocumentContext.generation,
+      } : {}),
       started_at: nowIso(),
     };
     return true;
