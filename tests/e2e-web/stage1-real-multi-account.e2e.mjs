@@ -639,7 +639,14 @@ async function playbackBeatSnapshot(client, beatName) {
     if (!card) return null;
     const beatId = String(card.getAttribute("data-beat-card-id") || "").trim();
     const artwork = card.querySelector("[data-beat-artwork-id]");
-    return { beat_id: beatId, playback_disabled: artwork?.getAttribute("aria-disabled") === "true" };
+    const cloudCommitted = Boolean(
+      card.querySelector('[aria-label="Cloud only"], [aria-label="Synced to Galer Cloud"]'),
+    );
+    return {
+      beat_id: beatId,
+      playback_disabled: artwork?.getAttribute("aria-disabled") === "true",
+      cloud_committed: cloudCommitted,
+    };
   }, beatName);
 }
 
@@ -653,9 +660,28 @@ async function waitForPlaybackBeat(client, account, timeout = 120_000) {
   return { ...latest, beat_name: beatName };
 }
 
+async function waitForPlaybackBeatCommitted(client, account, timeout = 120_000) {
+  const beatName = playbackBeatName(account);
+  let latest = null;
+  await client.waitUntil(async () => {
+    latest = await playbackBeatSnapshot(client, beatName);
+    return Boolean(latest?.beat_id && latest?.cloud_committed === true);
+  }, {
+    timeout,
+    interval: 500,
+    timeoutMsg: `Account ${account.label} did not commit ${beatName} to the authoritative Cloud library.`,
+  });
+  return { ...latest, beat_name: beatName };
+}
+
 async function provisionPlaybackBeat(client, account) {
   const existing = await playbackBeatSnapshot(client, playbackBeatName(account));
-  if (existing?.beat_id) return { ...existing, beat_name: playbackBeatName(account), created: false };
+  if (existing?.beat_id) {
+    const committed = existing.cloud_committed
+      ? existing
+      : await waitForPlaybackBeatCommitted(client, account);
+    return { ...committed, beat_name: playbackBeatName(account), created: false };
+  }
 
   await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
   const localFixture = path.join(PLAYBACK_TMP_DIR, `${playbackBeatName(account)}.mp3`);
@@ -707,7 +733,7 @@ async function provisionPlaybackBeat(client, account) {
   await saveButton.waitForEnabled({ timeout: 30_000 });
   await saveButton.click();
 
-  const saved = await waitForPlaybackBeat(client, account);
+  const saved = await waitForPlaybackBeatCommitted(client, account);
   return { ...saved, created: true };
 }
 
