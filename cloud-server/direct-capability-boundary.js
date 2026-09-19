@@ -160,6 +160,20 @@ function createMemoryStore({ now = () => Date.now(), maxActivePerTenant = DEFAUL
       record.consumed_at_ms = now();
       return { ok: true, authorized: true, record: { ...record } };
     },
+    async revokeMissingOperations({ tenantId, installationId, sessionId, liveOperationIds, reason }) {
+      const live = new Set((liveOperationIds || []).map(value => String(value)));
+      let count = 0;
+      for (const record of records.values()) {
+        if (!LIVE_STATUSES.has(record.status)) continue;
+        if (record.tenant_id !== tenantId || record.installation_id !== installationId || record.session_id !== sessionId) continue;
+        if (live.has(String(record.internal_operation_id))) continue;
+        record.status = "REVOKED";
+        record.revoke_reason = reason;
+        record.revoked_at_ms = now();
+        count += 1;
+      }
+      return count;
+    },
     async revokeSession({ installationId, sessionId, reason }) {
       let count = 0;
       for (const record of records.values()) {
@@ -262,6 +276,13 @@ function createPostgresStore(pool, { maxActivePerTenant = DEFAULT_TENANT_ACTIVE_
         String(record.session_id) === input.sessionId && Number(record.generation) === Number(input.generation);
       if (sameIdentity && String(record.status) === "CONSUMED") return { ok: true, authorized: true, replay: true, record };
       return { ok: false, reason: sameIdentity ? String(record.status || "denied").toLowerCase() : "scope", record };
+    },
+    async revokeMissingOperations({ tenantId, installationId, sessionId, liveOperationIds, reason }) {
+      const result = await pool.query(
+        "UPDATE direct_capabilities SET status='REVOKED', revoked_at=now(), revoke_reason=$5 WHERE tenant_id=$1 AND installation_id=$2 AND session_id=$3 AND status IN ('ACTIVE','AUTHORIZED') AND NOT (internal_operation_id = ANY($4::text[]))",
+        [tenantId, installationId, sessionId, liveOperationIds, reason],
+      );
+      return result.rowCount || 0;
     },
     async revokeSession({ installationId, sessionId, reason }) {
       const result = await pool.query("UPDATE direct_capabilities SET status='REVOKED', revoked_at=now(), revoke_reason=$3 WHERE installation_id=$1 AND session_id=$2 AND status IN ('ACTIVE','AUTHORIZED')", [installationId,sessionId,reason]);
@@ -418,7 +439,31 @@ function installDirectCapabilityBoundary(express, options = {}) {
         generation: Number(req.body?.generation || 0),
         kind,
       });
-      void store.issue(record).then(() => {
+      const liveDirectOperationIds = directTransport.activeOperationIdsForSession?.({
+        installationId: claims.installationId,
+        sessionId: String(req.body?.sessionId || ""),
+        generation: Number(req.body?.generation || 0),
+      });
+      const reconcilePromise =
+        Array.isArray(liveDirectOperationIds) && typeof store.revokeMissingOperations === "function"
+          ? store.revokeMissingOperations({
+              tenantId: claims.tenantId,
+              installationId: claims.installationId,
+              sessionId: String(req.body?.sessionId || ""),
+              liveOperationIds: [...new Set([...liveDirectOperationIds, internalOperationId])],
+              reason: "direct_operation_missing",
+            })
+          : Promise.resolve(0);
+      void reconcilePromise.then(revoked => {
+        if (revoked > 0) {
+          directTransport.recordDiagnostic?.("CAPABILITY_STALE_REVOKED", {
+            session_id: String(req.body?.sessionId || ""),
+            kind,
+            revoked,
+          });
+        }
+        return store.issue(record);
+      }).then(() => {
         directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_DONE", {
           internal_operation_id: internalOperationId,
           session_id: String(req.body?.sessionId || ""),
