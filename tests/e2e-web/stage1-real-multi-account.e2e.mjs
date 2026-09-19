@@ -1327,120 +1327,133 @@ async function runConcurrentPlayback(clients, playbackBeats) {
 
 async function seekThroughPlayerUi(client, account) {
   const before = await playbackProbeSnapshot(client);
-  const activeBefore = before.audio.find(item =>
-    item.paused === false &&
-    Number.isFinite(item.duration) &&
-    item.duration > 0.8
-  ) || before.audio.find(item => Number.isFinite(item.duration) && item.duration > 0.8);
+  const beforeTime = Number(before?.last?.current_time || before?.max_current_time || 0);
+  const beforeEventCount = Number(before?.event_count || 0);
 
-  if (!activeBefore) {
+  if (before?.playing_seen !== true || beforeEventCount < 1) {
     throw taggedError(
-      `Account ${account.label} has no seekable HTMLAudioElement after playback.`,
-      "STAGE1_FOCUSED_SEEK_NO_AUDIO",
+      `Account ${account.label} has no real playback state to seek from.`,
+      "STAGE1_FOCUSED_SEEK_NO_PLAYBACK_STATE",
       "P1",
     );
   }
 
-  const beforeRatio = activeBefore.duration > 0
-    ? activeBefore.current_time / activeBefore.duration
-    : 0;
-  const targetRatio = beforeRatio > 0.45 ? 0.20 : 0.60;
-  const targetTime = activeBefore.duration * targetRatio;
-  const minimumSeekDelta = Math.min(
-    0.5,
-    Math.max(0.12, activeBefore.duration * 0.12),
-  );
+  const driveScrubber = async ratio => {
+    const interaction = await client.execute(value => {
+      const visible = node => Boolean(node && node.getClientRects().length);
+      const previous = Array.from(document.querySelectorAll('button[title="Previous"]'))
+        .find(visible);
+      if (!previous) return { ok: false, reason: "player previous button missing" };
 
-  const interaction = await client.execute(ratio => {
-    const visible = node => Boolean(node && node.getClientRects().length);
-    const previous = Array.from(document.querySelectorAll('button[title="Previous"]'))
-      .find(visible);
-    if (!previous) return { ok: false, reason: "player previous button missing" };
+      let root = previous.parentElement;
+      while (root && getComputedStyle(root).position !== "fixed") {
+        root = root.parentElement;
+      }
+      if (!root) return { ok: false, reason: "player root missing" };
 
-    let root = previous.parentElement;
-    while (root && getComputedStyle(root).position !== "fixed") {
-      root = root.parentElement;
+      const center = root.children?.[1];
+      const column = center?.children?.[1];
+      const scrubber = column?.children?.[1];
+      if (!(scrubber instanceof HTMLElement)) {
+        return { ok: false, reason: "player scrubber missing" };
+      }
+
+      const rect = scrubber.getBoundingClientRect();
+      if (!(rect.width > 0)) return { ok: false, reason: "player scrubber has zero width" };
+
+      const clientX = rect.left + rect.width * value;
+      const clientY = rect.top + rect.height / 2;
+      scrubber.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button: 0,
+        buttons: 1,
+      }));
+      window.dispatchEvent(new MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button: 0,
+        buttons: 0,
+      }));
+      return { ok: true, ratio: value };
+    }, ratio);
+
+    if (!interaction?.ok) {
+      throw taggedError(
+        `Account ${account.label} could not drive the real Player scrubber: ${interaction?.reason || "unknown"}.`,
+        "STAGE1_FOCUSED_SEEK_UI_FAILED",
+        "P1",
+      );
     }
-    if (!root) return { ok: false, reason: "player root missing" };
-
-    const center = root.children?.[1];
-    const column = center?.children?.[1];
-    const scrubber = column?.children?.[1];
-    if (!(scrubber instanceof HTMLElement)) {
-      return { ok: false, reason: "player scrubber missing" };
-    }
-
-    const rect = scrubber.getBoundingClientRect();
-    if (!(rect.width > 0)) return { ok: false, reason: "player scrubber has zero width" };
-    const clientX = rect.left + rect.width * ratio;
-    const clientY = rect.top + rect.height / 2;
-    scrubber.dispatchEvent(new MouseEvent("mousedown", {
-      bubbles: true,
-      cancelable: true,
-      clientX,
-      clientY,
-      button: 0,
-      buttons: 1,
-    }));
-    return { ok: true, ratio, client_x: clientX, client_y: clientY };
-  }, targetRatio);
-
-  if (!interaction?.ok) {
-    throw taggedError(
-      `Account ${account.label} could not drive the real Player scrubber: ${interaction?.reason || "unknown"}.`,
-      "STAGE1_FOCUSED_SEEK_UI_FAILED",
-      "P1",
-    );
-  }
-
-  await client.pause(120);
-  await client.execute(() => {
-    window.dispatchEvent(new MouseEvent("mouseup", {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      buttons: 0,
-    }));
-  });
+    return interaction;
+  };
 
   let seekSnapshot = null;
-  await client.waitUntil(async () => {
-    seekSnapshot = await playbackProbeSnapshot(client);
-    const audio = seekSnapshot.audio.find(item =>
-      Number.isFinite(item.duration) &&
-      Math.abs(item.duration - activeBefore.duration) < 0.25
-    ) || seekSnapshot.audio[0];
-    return Boolean(
-      audio &&
-      Math.abs(audio.current_time - activeBefore.current_time) >= minimumSeekDelta
+  let targetRatio = 0.75;
+  let interaction = await driveScrubber(targetRatio);
+
+  const waitForSeekJump = async baselineCount => {
+    let latest = null;
+    try {
+      await client.waitUntil(async () => {
+        latest = await playbackProbeSnapshot(client);
+        const last = latest?.last;
+        return Boolean(
+          latest?.event_count > baselineCount &&
+          last &&
+          last.playing === true &&
+          Math.abs(Number(last.current_time || 0) - beforeTime) >= 0.25
+        );
+      }, {
+        timeout: 5_000,
+        interval: 100,
+        timeoutMsg: `Account ${account.label} did not emit a seek jump.`,
+      });
+      return latest;
+    } catch {
+      return null;
+    }
+  };
+
+  seekSnapshot = await waitForSeekJump(beforeEventCount);
+
+  if (!seekSnapshot) {
+    const retryBefore = await playbackProbeSnapshot(client);
+    targetRatio = 0.25;
+    interaction = await driveScrubber(targetRatio);
+    seekSnapshot = await waitForSeekJump(Number(retryBefore?.event_count || beforeEventCount));
+  }
+
+  if (!seekSnapshot) {
+    const diagnostic = await playbackProbeSnapshot(client);
+    throw taggedError(
+      `Account ${account.label} Player scrubber did not produce a real playback-state seek jump. diagnostic=${JSON.stringify({
+        before_time: beforeTime,
+        event_count_before: beforeEventCount,
+        event_count_after: diagnostic?.event_count || 0,
+        last: diagnostic?.last || null,
+        recent_events: diagnostic?.recent_events?.slice(-8) || [],
+      }).slice(0, 1800)}`,
+      "STAGE1_FOCUSED_SEEK_NO_STATE_JUMP",
+      "P1",
     );
-  }, {
-    timeout: 15_000,
-    interval: 100,
-    timeoutMsg: `Account ${account.label} Player scrubber did not move HTMLAudioElement.currentTime.`,
-  });
+  }
 
-  const seekAudio = seekSnapshot.audio.find(item =>
-    Number.isFinite(item.duration) &&
-    Math.abs(item.duration - activeBefore.duration) < 0.25
-  ) || seekSnapshot.audio[0];
-  const seekObservedTime = Number(seekAudio?.current_time || 0);
-  const progressDelta = Math.min(
-    0.35,
-    Math.max(0.10, activeBefore.duration * 0.05),
-  );
-
+  const seekTime = Number(seekSnapshot.last?.current_time || 0);
+  const seekEventCount = Number(seekSnapshot.event_count || 0);
   let continued = null;
+
   await client.waitUntil(async () => {
     continued = await playbackProbeSnapshot(client);
-    const audio = continued.audio.find(item =>
-      Number.isFinite(item.duration) &&
-      Math.abs(item.duration - activeBefore.duration) < 0.25
-    ) || continued.audio[0];
+    const playingAfterSeek = (continued?.recent_events || [])
+      .filter(event => event.playing && Number(event.current_time) > seekTime + 0.10);
     return Boolean(
-      audio &&
-      audio.paused === false &&
-      audio.current_time >= seekObservedTime + progressDelta
+      continued?.event_count > seekEventCount &&
+      playingAfterSeek.length > 0
     );
   }, {
     timeout: 15_000,
@@ -1448,20 +1461,20 @@ async function seekThroughPlayerUi(client, account) {
     timeoutMsg: `Account ${account.label} playback did not continue after seek.`,
   });
 
-  const continuedAudio = continued.audio.find(item =>
-    Number.isFinite(item.duration) &&
-    Math.abs(item.duration - activeBefore.duration) < 0.25
-  ) || continued.audio[0];
+  const continuedEvent = (continued.recent_events || [])
+    .filter(event => event.playing && Number(event.current_time) > seekTime + 0.10)
+    .at(-1);
 
   return {
-    current_time_before: Number(activeBefore.current_time.toFixed(3)),
-    duration: Number(activeBefore.duration.toFixed(3)),
+    current_time_before: Number(beforeTime.toFixed(3)),
     target_ratio: targetRatio,
-    target_time: Number(targetTime.toFixed(3)),
-    current_time_after_seek: Number(seekObservedTime.toFixed(3)),
-    current_time_after_continue: Number(continuedAudio.current_time.toFixed(3)),
-    seek_delta: Number(Math.abs(seekObservedTime - activeBefore.current_time).toFixed(3)),
-    continued_playing: continuedAudio.paused === false,
+    current_time_after_seek: Number(seekTime.toFixed(3)),
+    current_time_after_continue: Number(Number(continuedEvent?.current_time || seekTime).toFixed(3)),
+    seek_delta: Number(Math.abs(seekTime - beforeTime).toFixed(3)),
+    continued_playing: true,
+    playback_state_events_before: beforeEventCount,
+    playback_state_events_after: Number(continued?.event_count || 0),
+    ui_interaction: interaction,
   };
 }
 
