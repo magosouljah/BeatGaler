@@ -995,9 +995,8 @@ async function runSoakReloadRole(client, account, beforeSnapshot, deadline, metr
   while (Date.now() < deadline) {
     const startedAt = Date.now();
     await client.refresh();
-    const libraryStartedAt = Date.now();
     const library = await waitForAuthoritativeLibrary(client, account.label);
-    const libraryReadyMs = Date.now() - libraryStartedAt;
+    const libraryReadyMs = Date.now() - startedAt;
     const after = await waitForRuntimeSnapshot(client, account.label);
     validateSingleAccount(account.label, after);
     validatePersistentReload(beforeSnapshot, after, account.label);
@@ -1035,9 +1034,8 @@ async function runSoakMetadataRole(
 
     const reloadStartedAt = Date.now();
     await client.refresh();
-    const libraryStartedAt = Date.now();
     await waitForAuthoritativeLibrary(client, account.label);
-    const libraryReadyMs = Date.now() - libraryStartedAt;
+    const libraryReadyMs = Date.now() - reloadStartedAt;
     const after = await waitForRuntimeSnapshot(client, account.label);
     validateSingleAccount(account.label, after);
     validatePersistentReload(beforeSnapshot, after, account.label);
@@ -1829,6 +1827,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               roleCounts[accounts[downloadIndex].label].download += 1;
               for (const index of reloadIndices) roleCounts[accounts[index].label].reload += 1;
 
+              await Promise.all(clients.map(client => resetPlaybackForSoak(client)));
+
               const roundEvidence = {
                 round: round + 1,
                 started_at: new Date(roundStartedAt).toISOString(),
@@ -1988,12 +1988,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             }
 
             const finalReloadStartedAt = Date.now();
+            const perClientFinalReloadStartedAt = accounts.map(() => Date.now());
             await Promise.all(clients.map(client => client.refresh()));
             const finalLibraryResults = await Promise.all(
               accounts.map(async (account, index) => {
-                const startedAt = Date.now();
                 const library = await waitForAuthoritativeLibrary(clients[index], account.label);
-                const readyMs = Date.now() - startedAt;
+                const readyMs = Date.now() - perClientFinalReloadStartedAt[index];
                 metrics.hot_library_ms.push(readyMs);
                 return { library, ready_ms: readyMs };
               }),
