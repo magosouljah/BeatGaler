@@ -16,7 +16,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;");
     expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;");
     expect(worker).toContain("const MAX_CONFIGURABLE_DATA_LANES = 16;");
-    expect(worker).toContain("const limit = Math.min(STARTUP_PREFIX_BYTES");
+    expect(worker).toContain("const desired = Math.min(STARTUP_PREFIX_BYTES");
+    expect(worker).toContain("const limit = playbackChunkLimit(desired);");
   });
 
   it("persists an all-beat playback routing cache plus at most fourteen startup routes", () => {
