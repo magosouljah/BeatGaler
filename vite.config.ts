@@ -110,6 +110,16 @@ export default defineConfig(async ({ command, mode }) => ({
       ],
     },
   },
+  preview: {
+    proxy: {
+      "/beatgaler-api": {
+        target: "http://127.0.0.1:4000",
+        changeOrigin: true,
+        configure: stage1ProxyTiming,
+        rewrite: requestPath => requestPath.replace(/^\/beatgaler-api/, ""),
+      },
+    },
+  },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
     // Web transport dependencies use native BigInt. The browser build therefore
