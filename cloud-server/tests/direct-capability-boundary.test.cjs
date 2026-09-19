@@ -9,7 +9,7 @@ const {
   createMemoryStore,
   installDirectCapabilityBoundary,
 } = require("../direct-capability-boundary");
-const { validateCapabilitySessionState } = require("../direct-transport-capability-view");
+const { activeOperationIdsForSessionState, validateCapabilitySessionState } = require("../direct-transport-capability-view");
 const { installProductiveTempAuthBoundary } = require("../productive-temp-auth-boundary");
 
 function record(overrides = {}) {
@@ -169,6 +169,86 @@ test("tenant ceiling counts authorized operations as live", async () => {
   await assert.rejects(
     store.issue(record({ capability_hash: "d".repeat(64), internal_operation_id: "op-3" })),
     error => error?.code === "DIRECT_TENANT_CAP_REACHED" && error?.status === 429,
+  );
+});
+
+test("orphaned authorized capabilities are revoked when their Direct operations disappeared", async () => {
+  let now = 2_000;
+  const store = createMemoryStore({ now: () => now, maxActivePerTenant: 4 });
+  const hashes = ["a", "c", "d", "e"].map(value => value.repeat(64));
+  for (let index = 0; index < hashes.length; index += 1) {
+    const hash = hashes[index];
+    await store.issue(record({
+      capability_hash: hash,
+      internal_operation_id: `op-${index + 1}`,
+      issued_at_ms: 1_000 + index,
+      expires_at_ms: 20_000,
+    }));
+    assert.equal((await store.authorize(request({ capabilityHash: hash }))).ok, true);
+  }
+  await assert.rejects(
+    store.issue(record({ capability_hash: "f".repeat(64), internal_operation_id: "op-5", expires_at_ms: 20_000 })),
+    error => error?.code === "DIRECT_TENANT_CAP_REACHED",
+  );
+
+  now = 3_000;
+  const revoked = await store.revokeMissingOperations({
+    tenantId: "tenant-a",
+    installationId: "install-a",
+    sessionId: "session-a",
+    liveOperationIds: ["op-4", "op-5"],
+    reason: "direct_operation_missing",
+  });
+  assert.equal(revoked, 3);
+  assert.equal(store.__records.get(hashes[0]).status, "REVOKED");
+  assert.equal(store.__records.get(hashes[1]).status, "REVOKED");
+  assert.equal(store.__records.get(hashes[2]).status, "REVOKED");
+  assert.equal(store.__records.get(hashes[3]).status, "AUTHORIZED");
+
+  await store.issue(record({
+    capability_hash: "f".repeat(64),
+    internal_operation_id: "op-5",
+    issued_at_ms: 3_000,
+    expires_at_ms: 20_000,
+  }));
+  assert.equal(store.__records.get("f".repeat(64)).status, "ACTIVE");
+});
+
+test("Direct capability view returns only operations owned by the exact live session", () => {
+  const nowMs = Date.parse("2026-08-28T18:00:30.000Z");
+  const state = {
+    leases: {
+      "session-a": {
+        session_id: "session-a",
+        installation_id: "install-a",
+        bot_id: "bot-a",
+        generation: 1,
+        status: "ACTIVE",
+        last_heartbeat_at: "2026-08-28T18:00:00.000Z",
+      },
+    },
+    bots: { "bot-a": { quarantined: false } },
+    operations: {
+      "op-1": { operation_id: "op-1", session_id: "session-a", installation_id: "install-a" },
+      "op-2": { operation_id: "op-2", session_id: "session-b", installation_id: "install-a" },
+      "op-3": { operation_id: "op-3", session_id: "session-a", installation_id: "install-b" },
+    },
+  };
+  assert.deepEqual(
+    activeOperationIdsForSessionState(
+      state,
+      { installationId: "install-a", sessionId: "session-a", generation: 1 },
+      { nowMs, heartbeatTimeoutMs: 60_000 },
+    ),
+    ["op-1"],
+  );
+  assert.equal(
+    activeOperationIdsForSessionState(
+      state,
+      { installationId: "install-a", sessionId: "session-a", generation: 2 },
+      { nowMs, heartbeatTimeoutMs: 60_000 },
+    ),
+    null,
   );
 });
 
