@@ -565,16 +565,8 @@ async function verifyReady(): Promise<void> {
   }
 }
 
-function hasWarmWork(): boolean {
-  for (const control of activePrefetchBatches.values()) {
-    if (control.cancelAll) continue;
-    if (control.states.some(state => !state.done && !state.cancelled && !state.error)) return true;
-  }
-  return activeWarmTransfers.size > 0;
-}
-
 function indexPriorityAllowed(): boolean {
-  return playbackSchedulerState !== "PLAY_CRITICAL" && !hasWarmWork();
+  return playbackSchedulerState !== "PLAY_CRITICAL";
 }
 
 async function waitUntilIndexPriorityAllowed(): Promise<void> {
@@ -1049,7 +1041,6 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
     maxConcurrency,
   };
   activePrefetchBatches.set(requestId, control);
-  preemptActiveIndex("warm");
   playTrace("WARM_BATCH_BEGIN", { count: states.length, prefix_bytes: STARTUP_PREFIX_BYTES, lanes: maxConcurrency });
   try {
     await resolveBatchStates(requestId, active, states);
