@@ -78,7 +78,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(coordinator).toContain("endPlayback");
     expect(coordinator).toContain("getWebStartupPlaybackCoordinator");
     expect(coordinator).toContain('playTrace("STARTUP_LOCAL_ROUTING_READY"');
-    expect(coordinator).toContain('playTrace("INDEX_WAIT_STARTUP"');
+    expect(coordinator).toContain('playTrace("INDEX_WAIT_DIRECT_READY"');
   });
 
   it("starts Direct from remembered-session OPEN even when the local routing cache is empty", () => {
@@ -212,7 +212,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(playback).toContain("this.transport.focusPlayback(entry.messageId)");
   });
 
-  it("keeps INDEX below WARM/PLAY and makes the INDEX byte download abortable", () => {
+  it("keeps INDEX above WARM but below Play and makes the INDEX byte download abortable", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
@@ -220,7 +220,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain("activeIndexAbortController");
     expect(worker).toContain("waitUntilIndexPriorityAllowed");
     expect(worker).toContain("abortSignal: controller.signal");
-    expect(worker).toContain('playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM", {');
+    expect(worker).toContain('preemptActiveIndex("play")');
+    expect(worker).not.toContain('preemptActiveIndex("warm")');
     expect(worker).toContain("request_id: activeIndexRequestId");
     expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", {');
     expect(worker).toContain("request_id: requestId");
