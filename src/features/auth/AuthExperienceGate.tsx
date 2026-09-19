@@ -154,6 +154,25 @@ export default function AuthExperienceGate({ children }: { children: React.React
   }, [account]);
 
   useEffect(() => {
+    if (platform.kind !== "web") return;
+    const handleLoggedOut = () => {
+      setAccount(null);
+      setOptimisticRememberedSession(false);
+      setChecking(false);
+      setPhase("login");
+      setBusy(false);
+      setError(null);
+      setNotice(null);
+      setIdentifier("");
+      setPassword("");
+      setMfaCode("");
+      setUseRecoveryCode(false);
+    };
+    window.addEventListener("beatgaler:account-logged-out", handleLoggedOut);
+    return () => window.removeEventListener("beatgaler:account-logged-out", handleLoggedOut);
+  }, []);
+
+  useEffect(() => {
     headingRef.current?.focus();
   }, [phase]);
 
