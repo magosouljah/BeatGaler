@@ -58,6 +58,7 @@ const report = {
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
   cohort_id: cohortId || null,
   requested_account_count: accountCount,
+  web_server_mode: process.env.STAGE1_WEB_PREVIEW === "1" ? "vite-preview" : "vite-dev",
   started_at: new Date().toISOString(),
   finished_at: null,
   overall: "NOT_TESTED",
@@ -1895,6 +1896,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               download_samples: [],
               metadata_samples: [],
               reload_samples: [],
+              final_reload_samples: [],
             };
             const roleCounts = Object.fromEntries(
               accounts.map(account => [
@@ -2112,14 +2114,30 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             }
 
             const finalReloadStartedAt = Date.now();
-            const perClientFinalReloadStartedAt = accounts.map(() => Date.now());
-            await Promise.all(clients.map(client => client.refresh()));
             const finalLibraryResults = await Promise.all(
               accounts.map(async (account, index) => {
+                const refreshStartedAt = Date.now();
+                await clients[index].refresh();
+                const refreshResolvedAt = Date.now();
                 const library = await waitForAuthoritativeLibrary(clients[index], account.label);
-                const readyMs = Date.now() - perClientFinalReloadStartedAt[index];
+                const libraryReadyAt = Date.now();
+                const refreshCommandMs = refreshResolvedAt - refreshStartedAt;
+                const libraryAfterRefreshMs = libraryReadyAt - refreshResolvedAt;
+                const readyMs = libraryReadyAt - refreshStartedAt;
                 metrics.hot_library_ms.push(readyMs);
-                return { library, ready_ms: readyMs };
+                metrics.final_reload_samples.push({
+                  account_label: account.label,
+                  refresh_command_ms: refreshCommandMs,
+                  library_after_refresh_ms: libraryAfterRefreshMs,
+                  library_ready_ms: readyMs,
+                  library_beat_count: library.beat_count,
+                });
+                return {
+                  library,
+                  ready_ms: readyMs,
+                  refresh_command_ms: refreshCommandMs,
+                  library_after_refresh_ms: libraryAfterRefreshMs,
+                };
               }),
             );
             const finalSnapshots = await Promise.all(
