@@ -3028,6 +3028,15 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               "mixed_master_download",
               "mixed_reload_persistence",
               "mixed_post_workload_isolation",
+              ...(soakMode
+                ? [
+                    "mixed_soak_duration",
+                    "mixed_role_rotation",
+                    "mixed_large_transfer",
+                    "mixed_hot_library_budget",
+                    "mixed_first_audio_budget",
+                  ]
+                : []),
             ]
           : [
               "metadata_edit_persistence",
