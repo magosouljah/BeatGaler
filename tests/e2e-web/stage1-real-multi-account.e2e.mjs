@@ -15,8 +15,14 @@ const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const singleAccountDiagnostic = accountCount === 1;
 const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1";
+const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
+const soakMode = mixedWorkload && soakMinutes > 0;
 const MIXED_REQUIRED_ACCOUNTS = 7;
 const MIXED_RUN_SUFFIX = String(Date.now());
+const SOAK_ROTATIONS = MIXED_REQUIRED_ACCOUNTS;
+const SOAK_FIRST_AUDIO_BUDGET_MS = 2_000;
+const SOAK_HOT_LIBRARY_BUDGET_MS = 5_000;
+const SOAK_LARGE_WAV_MB = Math.max(8, Math.min(256, Number(process.env.STAGE1_SOAK_LARGE_WAV_MB || 64)));
 const PLAYBACK_FIXTURE_FILE = path.resolve(process.cwd(), "tests", "e2e-web", "fixtures", "stage1-playback.mp3");
 const PLAYBACK_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-playback-fixtures");
 const PLAYBACK_MIN_PROGRESS_SECONDS = 0.5;
@@ -33,9 +39,13 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 });
 
 const report = {
-  version: 7,
+  version: 8,
   stage: "Etapa 1 — uso real entre cuentas independientes",
-  workload_mode: mixedWorkload ? "mixed-7-account" : "full-lifecycle",
+  workload_mode: soakMode
+    ? "mixed-7-account-30m-soak"
+    : mixedWorkload
+      ? "mixed-7-account"
+      : "full-lifecycle",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
   cohort_id: cohortId || null,
   requested_account_count: accountCount,
@@ -70,6 +80,15 @@ const report = {
           { name: "mixed_master_download", status: "NOT_TESTED", severity: null },
           { name: "mixed_reload_persistence", status: "NOT_TESTED", severity: null },
           { name: "mixed_post_workload_isolation", status: "NOT_TESTED", severity: null },
+          ...(soakMode
+            ? [
+                { name: "mixed_soak_duration", status: "NOT_TESTED", severity: null },
+                { name: "mixed_role_rotation", status: "NOT_TESTED", severity: null },
+                { name: "mixed_large_transfer", status: "NOT_TESTED", severity: null },
+                { name: "mixed_hot_library_budget", status: "NOT_TESTED", severity: null },
+                { name: "mixed_first_audio_budget", status: "NOT_TESTED", severity: null },
+              ]
+            : []),
         ]
       : [
           { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
@@ -773,7 +792,7 @@ async function waitForNamedBeatCommitted(client, account, beatName, timeout = 12
   return { ...latest, beat_name: beatName };
 }
 
-async function uploadNamedMp3Fixture(client, account, beatName) {
+async function uploadNamedMp3Fixture(client, account, beatName, options = {}) {
   const existing = await playbackBeatSnapshot(client, beatName);
   if (existing?.beat_id) {
     throw taggedError(
@@ -784,8 +803,11 @@ async function uploadNamedMp3Fixture(client, account, beatName) {
   }
 
   await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
-  const localFixture = path.join(PLAYBACK_TMP_DIR, `${beatName}.mp3`);
-  await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
+  const extension = options.extension === ".wav" ? ".wav" : ".mp3";
+  const localFixture = options.localFixture || path.join(PLAYBACK_TMP_DIR, `${beatName}${extension}`);
+  if (!options.localFixture) {
+    await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
+  }
 
   const addButton = await client.$('//button[normalize-space(.)="Add beat"]');
   await addButton.waitForDisplayed({ timeout: 30_000 });
@@ -833,8 +855,210 @@ async function uploadNamedMp3Fixture(client, account, beatName) {
   await saveButton.waitForEnabled({ timeout: 30_000 });
   await saveButton.click();
 
-  const saved = await waitForNamedBeatCommitted(client, account, beatName);
-  return { ...saved, created: true };
+  const saved = await waitForNamedBeatCommitted(
+    client,
+    account,
+    beatName,
+    Math.max(120_000, Number(options.commitTimeoutMs || 0)),
+  );
+  const stat = await fs.stat(localFixture);
+  return {
+    ...saved,
+    created: true,
+    source_extension: extension,
+    source_bytes: stat.size,
+  };
+}
+
+async function createSoakLargeWavFixture(beatName) {
+  await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
+  const file = path.join(PLAYBACK_TMP_DIR, `${beatName}.wav`);
+  const sampleRate = 44_100;
+  const channels = 2;
+  const bitsPerSample = 16;
+  const blockAlign = channels * (bitsPerSample / 8);
+  const targetBytes = Math.floor(SOAK_LARGE_WAV_MB * 1024 * 1024);
+  const dataBytes = Math.max(
+    blockAlign,
+    Math.floor((targetBytes - 44) / blockAlign) * blockAlign,
+  );
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, 4, "ascii");
+  header.writeUInt32LE(36 + dataBytes, 4);
+  header.write("WAVE", 8, 4, "ascii");
+  header.write("fmt ", 12, 4, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * blockAlign, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36, 4, "ascii");
+  header.writeUInt32LE(dataBytes, 40);
+  await fs.writeFile(file, header);
+  await fs.truncate(file, 44 + dataBytes);
+  return {
+    file,
+    bytes: 44 + dataBytes,
+    mb: (44 + dataBytes) / (1024 * 1024),
+  };
+}
+
+function soakMetadataFor(account, round, iteration) {
+  const keys = ["c#m", "d#m", "f#m", "g#m", "am", "bm", "em"];
+  return {
+    bpm: String(105 + ((round * 11 + iteration * 7 + Number(account.label)) % 90)),
+    key: keys[(round + iteration + Number(account.label)) % keys.length],
+  };
+}
+
+function metricSummary(values) {
+  const clean = values
+    .map(Number)
+    .filter(value => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => a - b);
+  if (clean.length === 0) {
+    return { samples: 0, min_ms: null, avg_ms: null, p95_ms: null, max_ms: null };
+  }
+  const percentileIndex = Math.max(0, Math.ceil(clean.length * 0.95) - 1);
+  return {
+    samples: clean.length,
+    min_ms: clean[0],
+    avg_ms: Math.round(clean.reduce((sum, value) => sum + value, 0) / clean.length),
+    p95_ms: clean[percentileIndex],
+    max_ms: clean.at(-1),
+  };
+}
+
+async function sleepUntilNextSoakAction(deadline, maxDelayMs = 12_000) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return;
+  await new Promise(resolve => setTimeout(resolve, Math.min(maxDelayMs, remaining)));
+}
+
+async function resetPlaybackForSoak(client) {
+  await client.execute(() => {
+    for (const audio of document.querySelectorAll("audio")) {
+      try { audio.pause(); } catch {}
+      try { audio.currentTime = 0; } catch {}
+    }
+  });
+}
+
+async function runSoakPlaybackRole(pairClients, pairAccounts, pairBeats, deadline, metrics) {
+  let iteration = 0;
+  while (Date.now() < deadline) {
+    await Promise.all(pairClients.map(client => resetPlaybackForSoak(client)));
+    const startedAt = Date.now();
+    const playback = await runConcurrentPlayback(pairClients, pairBeats);
+    const durationMs = Date.now() - startedAt;
+    const firstAudio = playback.accounts.map(snapshot =>
+      Math.max(0, Number(snapshot.first_playing_at || 0) - playback.trigger_started_at)
+    );
+    metrics.playback_operation_ms.push(durationMs);
+    metrics.playback_start_spread_ms.push(playback.start_spread_ms);
+    metrics.first_audio_ms.push(...firstAudio);
+    metrics.playback_samples.push({
+      iteration,
+      account_labels: pairAccounts.map(account => account.label),
+      duration_ms: durationMs,
+      start_spread_ms: playback.start_spread_ms,
+      first_audio_ms: firstAudio,
+      waiting_seen: playback.accounts.map(snapshot => snapshot.waiting_seen === true),
+    });
+    iteration += 1;
+    await sleepUntilNextSoakAction(deadline, 12_000);
+  }
+}
+
+async function runSoakDownloadRole(client, account, beat, deadline, metrics) {
+  let iteration = 0;
+  while (Date.now() < deadline) {
+    const startedAt = Date.now();
+    const result = await downloadFixtureMaster(client, account, beat);
+    const durationMs = Date.now() - startedAt;
+    metrics.download_ms.push(durationMs);
+    metrics.download_samples.push({
+      iteration,
+      account_label: account.label,
+      duration_ms: durationMs,
+      blob_size: result.blob_size,
+    });
+    iteration += 1;
+    await sleepUntilNextSoakAction(deadline, 15_000);
+  }
+}
+
+async function runSoakReloadRole(client, account, beforeSnapshot, deadline, metrics) {
+  let iteration = 0;
+  while (Date.now() < deadline) {
+    const startedAt = Date.now();
+    await client.refresh();
+    const libraryStartedAt = Date.now();
+    const library = await waitForAuthoritativeLibrary(client, account.label);
+    const libraryReadyMs = Date.now() - libraryStartedAt;
+    const after = await waitForRuntimeSnapshot(client, account.label);
+    validateSingleAccount(account.label, after);
+    validatePersistentReload(beforeSnapshot, after, account.label);
+    const durationMs = Date.now() - startedAt;
+    metrics.reload_ms.push(durationMs);
+    metrics.hot_library_ms.push(libraryReadyMs);
+    metrics.reload_samples.push({
+      iteration,
+      account_label: account.label,
+      duration_ms: durationMs,
+      library_ready_ms: libraryReadyMs,
+      library_beat_count: library.beat_count,
+    });
+    iteration += 1;
+    await sleepUntilNextSoakAction(deadline, 15_000);
+  }
+}
+
+async function runSoakMetadataRole(
+  client,
+  account,
+  beat,
+  beforeSnapshot,
+  deadline,
+  round,
+  metrics,
+  lastMetadataByAccount,
+) {
+  let iteration = 0;
+  while (Date.now() < deadline) {
+    const expected = soakMetadataFor(account, round, iteration);
+    const editStartedAt = Date.now();
+    await editFixtureMetadata(client, account, beat, expected);
+    const editMs = Date.now() - editStartedAt;
+
+    const reloadStartedAt = Date.now();
+    await client.refresh();
+    const libraryStartedAt = Date.now();
+    await waitForAuthoritativeLibrary(client, account.label);
+    const libraryReadyMs = Date.now() - libraryStartedAt;
+    const after = await waitForRuntimeSnapshot(client, account.label);
+    validateSingleAccount(account.label, after);
+    validatePersistentReload(beforeSnapshot, after, account.label);
+    await verifyFixtureMetadataAfterReload(client, account, beat, expected);
+    const reloadMs = Date.now() - reloadStartedAt;
+
+    metrics.metadata_edit_ms.push(editMs);
+    metrics.metadata_reload_ms.push(reloadMs);
+    metrics.hot_library_ms.push(libraryReadyMs);
+    metrics.metadata_samples.push({
+      iteration,
+      account_label: account.label,
+      edit_ms: editMs,
+      reload_ms: reloadMs,
+      library_ready_ms: libraryReadyMs,
+      expected,
+    });
+    lastMetadataByAccount[account.label] = expected;
+    iteration += 1;
+    await sleepUntilNextSoakAction(deadline, 12_000);
+  }
 }
 
 async function validateNamedFixtureIsolation(clients, ownerIndex, beat) {
@@ -1002,8 +1226,7 @@ async function beatCardText(client, beatId) {
   }, beatId);
 }
 
-async function editFixtureMetadata(client, account, beat) {
-  const expected = metadataForAccount(account);
+async function editFixtureMetadata(client, account, beat, expected = metadataForAccount(account)) {
   await openBeatContextAction(client, beat.beat_id, "Edit metadata");
 
   const header = await client.$('//span[normalize-space(.)="Edit metadata"]');
@@ -1068,8 +1291,7 @@ async function editFixtureMetadata(client, account, beat) {
   return { ...expected, card_text_after_save: text };
 }
 
-async function verifyFixtureMetadataAfterReload(client, account, beat) {
-  const expected = metadataForAccount(account);
+async function verifyFixtureMetadataAfterReload(client, account, beat, expected = metadataForAccount(account)) {
   const reloaded = await waitForPlaybackBeat(client, account);
   assert.equal(
     reloaded.beat_id,
@@ -1539,6 +1761,440 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               },
             ]),
           );
+
+
+          if (soakMode) {
+            const soakTargetMs = Math.round(soakMinutes * 60_000);
+            const roundTargetMs = Math.max(1, Math.floor(soakTargetMs / SOAK_ROTATIONS));
+            const soakStartedAt = Date.now();
+            const metrics = {
+              first_audio_ms: [],
+              playback_operation_ms: [],
+              playback_start_spread_ms: [],
+              hot_library_ms: [],
+              upload_ms: [],
+              download_ms: [],
+              metadata_edit_ms: [],
+              metadata_reload_ms: [],
+              reload_ms: [],
+              playback_samples: [],
+              upload_samples: [],
+              download_samples: [],
+              metadata_samples: [],
+              reload_samples: [],
+            };
+            const roleCounts = Object.fromEntries(
+              accounts.map(account => [
+                account.label,
+                { playback: 0, upload: 0, metadata_reload: 0, download: 0, reload: 0 },
+              ]),
+            );
+            const createdUploads = [];
+            const lastMetadataByAccount = {};
+            report.soak = {
+              requested_minutes: soakMinutes,
+              target_duration_ms: soakTargetMs,
+              large_transfer_target_mb: SOAK_LARGE_WAV_MB,
+              transfer_budgets: "observational-only; no single-account transfer budget was established",
+              started_at: new Date(soakStartedAt).toISOString(),
+              finished_at: null,
+              rounds: [],
+              role_counts: roleCounts,
+              metrics,
+            };
+
+            const largeOwnerIndex = 2;
+            const largeBeatName = `Stage1 Soak Large ${accounts[largeOwnerIndex].label} ${MIXED_RUN_SUFFIX}`;
+            const largeFixture = await createSoakLargeWavFixture(largeBeatName);
+            report.soak.large_transfer_fixture = {
+              owner_account: accounts[largeOwnerIndex].label,
+              beat_name: largeBeatName,
+              bytes: largeFixture.bytes,
+              mb: Number(largeFixture.mb.toFixed(2)),
+            };
+
+            for (let round = 0; round < SOAK_ROTATIONS; round += 1) {
+              const roundStartedAt = Date.now();
+              const deadline = roundStartedAt + roundTargetMs;
+              const slotAccountIndex = slot => (slot + round) % accountCount;
+              const playbackIndices = [slotAccountIndex(0), slotAccountIndex(1)];
+              const uploadIndex = slotAccountIndex(2);
+              const metadataIndex = slotAccountIndex(3);
+              const downloadIndex = slotAccountIndex(4);
+              const reloadIndices = [slotAccountIndex(5), slotAccountIndex(6)];
+
+              for (const index of playbackIndices) roleCounts[accounts[index].label].playback += 1;
+              roleCounts[accounts[uploadIndex].label].upload += 1;
+              roleCounts[accounts[metadataIndex].label].metadata_reload += 1;
+              roleCounts[accounts[downloadIndex].label].download += 1;
+              for (const index of reloadIndices) roleCounts[accounts[index].label].reload += 1;
+
+              const roundEvidence = {
+                round: round + 1,
+                started_at: new Date(roundStartedAt).toISOString(),
+                target_ms: roundTargetMs,
+                roles: {
+                  playback: playbackIndices.map(index => accounts[index].label),
+                  upload: accounts[uploadIndex].label,
+                  metadata_reload: accounts[metadataIndex].label,
+                  download: accounts[downloadIndex].label,
+                  reload: reloadIndices.map(index => accounts[index].label),
+                },
+                status: "RUNNING",
+              };
+              report.soak.rounds.push(roundEvidence);
+
+              for (const observer of authObservers.values()) {
+                observer.setPhase(`mixed-soak-round-${round + 1}`);
+              }
+
+              const uploadBeatName = round === 0
+                ? largeBeatName
+                : `Stage1 Soak Upload ${accounts[uploadIndex].label} R${String(round + 1).padStart(2, "0")} ${MIXED_RUN_SUFFIX}`;
+
+              const uploadTask = (async () => {
+                const startedAt = Date.now();
+                const result = round === 0
+                  ? await uploadNamedMp3Fixture(
+                      clients[uploadIndex],
+                      accounts[uploadIndex],
+                      uploadBeatName,
+                      {
+                        extension: ".wav",
+                        localFixture: largeFixture.file,
+                        commitTimeoutMs: 300_000,
+                      },
+                    )
+                  : await uploadNamedMp3Fixture(
+                      clients[uploadIndex],
+                      accounts[uploadIndex],
+                      uploadBeatName,
+                    );
+                const durationMs = Date.now() - startedAt;
+                metrics.upload_ms.push(durationMs);
+                metrics.upload_samples.push({
+                  round: round + 1,
+                  account_label: accounts[uploadIndex].label,
+                  duration_ms: durationMs,
+                  source_bytes: result.source_bytes,
+                  source_extension: result.source_extension,
+                  large_transfer: round === 0,
+                });
+                createdUploads.push({
+                  owner_index: uploadIndex,
+                  large_transfer: round === 0,
+                  ...result,
+                });
+                return result;
+              })();
+
+              const roundResults = await Promise.allSettled([
+                runSoakPlaybackRole(
+                  playbackIndices.map(index => clients[index]),
+                  playbackIndices.map(index => accounts[index]),
+                  playbackIndices.map(index => playbackFixtures[index]),
+                  deadline,
+                  metrics,
+                ),
+                uploadTask,
+                runSoakMetadataRole(
+                  clients[metadataIndex],
+                  accounts[metadataIndex],
+                  playbackFixtures[metadataIndex],
+                  before[metadataIndex],
+                  deadline,
+                  round,
+                  metrics,
+                  lastMetadataByAccount,
+                ),
+                runSoakDownloadRole(
+                  clients[downloadIndex],
+                  accounts[downloadIndex],
+                  playbackFixtures[downloadIndex],
+                  deadline,
+                  metrics,
+                ),
+                ...reloadIndices.map(index =>
+                  runSoakReloadRole(
+                    clients[index],
+                    accounts[index],
+                    before[index],
+                    deadline,
+                    metrics,
+                  )
+                ),
+              ]);
+
+              const failures = roundResults
+                .map((result, index) => ({ result, index }))
+                .filter(({ result }) => result.status === "rejected");
+              if (failures.length > 0) {
+                roundEvidence.status = "FAIL";
+                roundEvidence.finished_at = new Date().toISOString();
+                roundEvidence.failures = failures.map(({ result, index }) => ({
+                  task_index: index,
+                  message: String(result.reason?.message || result.reason).slice(0, 800),
+                }));
+                throw taggedError(
+                  `Mixed soak round ${round + 1} failed: ${roundEvidence.failures.map(item => item.message).join(" | ")}`,
+                  "STAGE1_MIXED_SOAK_ROUND_FAILED",
+                  "P1",
+                );
+              }
+
+              if (Date.now() < deadline) {
+                await new Promise(resolve => setTimeout(resolve, deadline - Date.now()));
+              }
+              roundEvidence.status = "PASS";
+              roundEvidence.finished_at = new Date().toISOString();
+              roundEvidence.actual_ms = Date.now() - roundStartedAt;
+              await writeReport();
+            }
+
+            const soakElapsedMs = Date.now() - soakStartedAt;
+            report.soak.finished_at = new Date().toISOString();
+            report.soak.actual_duration_ms = soakElapsedMs;
+
+            for (const counts of Object.values(roleCounts)) {
+              assert.ok(counts.playback >= 2, "Every account must rotate through playback twice.");
+              assert.ok(counts.upload >= 1, "Every account must rotate through upload.");
+              assert.ok(counts.metadata_reload >= 1, "Every account must rotate through metadata + Reload.");
+              assert.ok(counts.download >= 1, "Every account must rotate through download.");
+              assert.ok(counts.reload >= 2, "Every account must rotate through Reload twice.");
+            }
+
+            markScenario(
+              "mixed_role_rotation",
+              "PASS",
+              null,
+              "Seven rotations covered every account in playback, upload, metadata+Reload, download, and Reload roles",
+            );
+            if (soakElapsedMs < soakTargetMs) {
+              throw taggedError(
+                `Mixed soak ended early at ${soakElapsedMs} ms; target was ${soakTargetMs} ms.`,
+                "STAGE1_MIXED_SOAK_TOO_SHORT",
+                "P1",
+              );
+            }
+            markScenario(
+              "mixed_soak_duration",
+              "PASS",
+              null,
+              `Mixed workload remained active for ${soakElapsedMs} ms (target ${soakTargetMs} ms)`,
+            );
+
+            for (const observer of authObservers.values()) {
+              observer.setPhase("mixed-soak-final-authoritative-reload");
+            }
+
+            const finalReloadStartedAt = Date.now();
+            await Promise.all(clients.map(client => client.refresh()));
+            const finalLibraryResults = await Promise.all(
+              accounts.map(async (account, index) => {
+                const startedAt = Date.now();
+                const library = await waitForAuthoritativeLibrary(clients[index], account.label);
+                const readyMs = Date.now() - startedAt;
+                metrics.hot_library_ms.push(readyMs);
+                return { library, ready_ms: readyMs };
+              }),
+            );
+            const finalSnapshots = await Promise.all(
+              accounts.map((account, index) =>
+                waitForRuntimeSnapshot(clients[index], account.label)
+              ),
+            );
+
+            finalSnapshots.forEach((snapshot, index) => {
+              validateSingleAccount(accounts[index].label, snapshot);
+              validatePersistentReload(before[index], snapshot, accounts[index].label);
+            });
+            validateCrossAccountIsolation(finalSnapshots);
+            await validatePlaybackFixtureIsolation(clients);
+
+            for (const upload of createdUploads) {
+              const persisted = await waitForNamedBeatCommitted(
+                clients[upload.owner_index],
+                accounts[upload.owner_index],
+                upload.beat_name,
+              );
+              assert.equal(
+                persisted.beat_id,
+                upload.beat_id,
+                `Account ${accounts[upload.owner_index].label} soak upload changed identity after final Reload.`,
+              );
+              await validateNamedFixtureIsolation(
+                clients,
+                upload.owner_index,
+                upload,
+              );
+            }
+
+            for (let index = 0; index < accounts.length; index += 1) {
+              const expected = lastMetadataByAccount[accounts[index].label];
+              assert.ok(expected, `Account ${accounts[index].label} never completed its metadata role.`);
+              await verifyFixtureMetadataAfterReload(
+                clients[index],
+                accounts[index],
+                playbackFixtures[index],
+                expected,
+              );
+            }
+
+            const largeUpload = createdUploads.find(upload => upload.large_transfer);
+            assert.ok(largeUpload, "The mixed soak must include one large transfer.");
+            assert.ok(
+              largeUpload.source_bytes >= Math.floor(SOAK_LARGE_WAV_MB * 1024 * 1024 * 0.99),
+              "The large transfer fixture was smaller than requested.",
+            );
+            markScenario(
+              "mixed_large_transfer",
+              "PASS",
+              null,
+              `A ${(largeUpload.source_bytes / (1024 * 1024)).toFixed(2)} MiB WAV committed while the other six accounts remained active`,
+            );
+
+            const summaries = {
+              first_audio: metricSummary(metrics.first_audio_ms),
+              hot_library: metricSummary(metrics.hot_library_ms),
+              upload: metricSummary(metrics.upload_ms),
+              download: metricSummary(metrics.download_ms),
+              metadata_edit: metricSummary(metrics.metadata_edit_ms),
+              metadata_reload: metricSummary(metrics.metadata_reload_ms),
+              reload: metricSummary(metrics.reload_ms),
+              playback_operation: metricSummary(metrics.playback_operation_ms),
+              playback_start_spread: metricSummary(metrics.playback_start_spread_ms),
+            };
+            report.soak.metric_summaries = summaries;
+            report.soak.budgets = {
+              first_audio: {
+                budget_ms: SOAK_FIRST_AUDIO_BUDGET_MS,
+                p95_ms: summaries.first_audio.p95_ms,
+                samples: summaries.first_audio.samples,
+                within_budget:
+                  summaries.first_audio.samples > 0 &&
+                  summaries.first_audio.p95_ms <= SOAK_FIRST_AUDIO_BUDGET_MS,
+              },
+              hot_library: {
+                budget_ms: SOAK_HOT_LIBRARY_BUDGET_MS,
+                p95_ms: summaries.hot_library.p95_ms,
+                samples: summaries.hot_library.samples,
+                within_budget:
+                  summaries.hot_library.samples > 0 &&
+                  summaries.hot_library.p95_ms <= SOAK_HOT_LIBRARY_BUDGET_MS,
+              },
+            };
+
+            const firstAudioBudgetOk = report.soak.budgets.first_audio.within_budget;
+            const hotLibraryBudgetOk = report.soak.budgets.hot_library.within_budget;
+            markScenario(
+              "mixed_first_audio_budget",
+              firstAudioBudgetOk ? "PASS" : "FAIL",
+              firstAudioBudgetOk ? null : "P1",
+              `p95=${summaries.first_audio.p95_ms} ms; budget<=${SOAK_FIRST_AUDIO_BUDGET_MS} ms; samples=${summaries.first_audio.samples}`,
+            );
+            markScenario(
+              "mixed_hot_library_budget",
+              hotLibraryBudgetOk ? "PASS" : "FAIL",
+              hotLibraryBudgetOk ? null : "P1",
+              `p95=${summaries.hot_library.p95_ms} ms; budget<=${SOAK_HOT_LIBRARY_BUDGET_MS} ms; samples=${summaries.hot_library.samples}`,
+            );
+
+            markScenario(
+              "mixed_playback",
+              "PASS",
+              null,
+              `${metrics.first_audio_ms.length} playback starts completed during the soak`,
+            );
+            markScenario(
+              "mixed_upload",
+              "PASS",
+              null,
+              `${createdUploads.length} real audio uploads committed and remained isolated after final Reload`,
+            );
+            markScenario(
+              "mixed_metadata_edit",
+              "PASS",
+              null,
+              `${metrics.metadata_edit_ms.length} metadata edits persisted through Reload`,
+            );
+            markScenario(
+              "mixed_master_download",
+              "PASS",
+              null,
+              `${metrics.download_ms.length} MASTER MP3 downloads materialized during the soak`,
+            );
+            markScenario(
+              "mixed_reload_persistence",
+              "PASS",
+              null,
+              `${metrics.reload_ms.length + metrics.metadata_reload_ms.length} Reload cycles preserved identity/vault/transport`,
+            );
+            markScenario(
+              "mixed_workload_concurrency",
+              "PASS",
+              null,
+              `Seven rotating real accounts remained under mixed workload for ${soakElapsedMs} ms`,
+            );
+            markScenario(
+              "mixed_post_workload_isolation",
+              "PASS",
+              null,
+              "Final authoritative Reload preserved seven unique accounts/vaults/transports; all soak uploads remained vault-isolated",
+            );
+
+            report.timings = {
+              startup_ms: startupMs,
+              mixed_soak_ms: soakElapsedMs,
+              final_authoritative_reload_ms: Date.now() - finalReloadStartedAt,
+              first_audio_p95_ms: summaries.first_audio.p95_ms,
+              hot_library_p95_ms: summaries.hot_library.p95_ms,
+            };
+            report.transport_distribution = Object.fromEntries(
+              [...new Set(before.map(snapshot => snapshot.direct.transport_id))].map(transportId => [
+                transportId,
+                before.filter(snapshot => snapshot.direct.transport_id === transportId).length,
+              ]),
+            );
+
+            finalSnapshots.forEach((snapshot, index) => {
+              Object.assign(report.accounts[accounts[index].label], {
+                soak_role_counts: roleCounts[accounts[index].label],
+                session_id_after_soak: snapshot.direct.session_id,
+                library_beats_after_soak: finalLibraryResults[index].library.beat_count,
+                final_library_ready_ms: finalLibraryResults[index].ready_ms,
+                visible_error_after_soak: snapshot.visible_error,
+              });
+            });
+
+            for (const [label, observer] of authObservers) {
+              validateAuthHealth(observer.snapshot(), label);
+            }
+            markScenario(
+              "auth_health_stability",
+              "PASS",
+              null,
+              "No observed health probe failed during the 30-minute mixed soak",
+            );
+
+            if (!firstAudioBudgetOk || !hotLibraryBudgetOk) {
+              report.overall = "FAIL";
+              report.severity = "P1";
+              await writeReport();
+              throw taggedError(
+                `Mixed soak completed functionally but missed performance budget(s): first_audio_p95=${summaries.first_audio.p95_ms} ms, hot_library_p95=${summaries.hot_library.p95_ms} ms.`,
+                "STAGE1_MIXED_SOAK_BUDGET_MISS",
+                "P1",
+              );
+            }
+
+            report.overall = "PASS";
+            report.severity = null;
+            await writeReport();
+            console.log(
+              `[stage1-real] PASS mixed-soak accounts=${accountCount} duration_ms=${soakElapsedMs}; rotations=7; large_transfer_mb=${largeUpload.source_bytes / (1024 * 1024)}. report=${REPORT_FILE}`,
+            );
+            return;
+          }
 
           const mixedBeatName = mixedUploadBeatName(accounts[2]);
           for (const observer of authObservers.values()) {
