@@ -99,8 +99,9 @@ export class WebStartupPlaybackCoordinator {
       // ensuring the first transport request uses the same origin as auth.
       await resolveBeatGalerCloudApi();
       await this.transport.connectPlaybackDataPlane();
-    })().finally(() => {
+    })().catch(error => {
       if (this.connectPromise === pending) this.connectPromise = null;
+      throw error;
     });
     this.connectPromise = pending;
     return pending;
