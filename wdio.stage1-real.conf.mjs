@@ -11,6 +11,7 @@ const port = Number(process.env.STAGE1_WEB_PORT || 1421);
 const webUrl = `http://${browserHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
+const preview = process.env.STAGE1_WEB_PREVIEW === "1";
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
 const soakTimeoutMs = soakMinutes > 0
@@ -114,10 +115,20 @@ export const config = {
   onPrepare: async () => {
     await preflightCloud();
     await fs.mkdir(browserProfileRoot, { recursive: true });
+    if (preview) {
+      try {
+        await fs.access(path.join(root, "dist", "index.html"));
+      } catch {
+        throw new Error("STAGE1_WEB_PREVIEW=1 requires an existing Web build. Run npm run build:web first.");
+      }
+    }
     const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");
+    const viteArgs = preview
+      ? [viteBin, "preview", "--host", bindHost, "--port", String(port), "--strictPort"]
+      : [viteBin, "--mode", "web", "--host", bindHost, "--port", String(port), "--strictPort"];
     viteProcess = spawn(
       process.execPath,
-      [viteBin, "--mode", "web", "--host", bindHost, "--port", String(port), "--strictPort"],
+      viteArgs,
       {
         cwd: root,
         env: { ...process.env },
