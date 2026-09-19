@@ -960,7 +960,25 @@ async function runSoakPlaybackRole(pairClients, pairAccounts, pairBeats, deadlin
   while (Date.now() < deadline) {
     await Promise.all(pairClients.map(client => resetPlaybackForSoak(client)));
     const startedAt = Date.now();
-    const playback = await runConcurrentPlayback(pairClients, pairBeats);
+    let playback;
+    try {
+      playback = await runConcurrentPlayback(pairClients, pairBeats);
+    } catch (error) {
+      const snapshots = await Promise.all(
+        pairClients.map(client => playbackProbeSnapshot(client).catch(snapshotError => ({
+          snapshot_error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
+        }))),
+      );
+      metrics.playback_failures.push({
+        iteration,
+        account_labels: pairAccounts.map(account => account.label),
+        elapsed_ms: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+        thrown_diagnostic: error?.stage1PlaybackDiagnostic || null,
+        snapshots,
+      });
+      throw error;
+    }
     const durationMs = Date.now() - startedAt;
     const firstAudio = playback.accounts.map(snapshot =>
       Math.max(0, Number(snapshot.first_playing_at || 0) - playback.trigger_started_at)
@@ -1132,11 +1150,53 @@ async function installPlaybackProbe(client, beatId) {
   await client.execute(id => {
     const previous = window.__beatgalerStage1PlaybackProbe;
     if (previous?.handler) window.removeEventListener("beatgaler:web-playback-state", previous.handler);
+
+    if (!window.__beatgalerStage1TraceCaptureInstalled) {
+      const originalInfo = console.info.bind(console);
+      window.__beatgalerStage1PlayTraceLines = [];
+      console.info = (...args) => {
+        try {
+          const line = args.map(value => typeof value === "string" ? value : JSON.stringify(value)).join(" ");
+          if (line.includes("[play-trace]")) {
+            window.__beatgalerStage1PlayTraceLines.push({ at: Date.now(), line });
+            if (window.__beatgalerStage1PlayTraceLines.length > 300) window.__beatgalerStage1PlayTraceLines.shift();
+          }
+        } catch {}
+        return originalInfo(...args);
+      };
+      window.__beatgalerStage1PlaybackErrors = [];
+      window.addEventListener("error", event => {
+        window.__beatgalerStage1PlaybackErrors.push({
+          at: Date.now(),
+          type: "error",
+          message: String(event?.message || "window error"),
+        });
+        if (window.__beatgalerStage1PlaybackErrors.length > 50) window.__beatgalerStage1PlaybackErrors.shift();
+      });
+      window.addEventListener("unhandledrejection", event => {
+        const reason = event?.reason;
+        window.__beatgalerStage1PlaybackErrors.push({
+          at: Date.now(),
+          type: "unhandledrejection",
+          message: reason instanceof Error ? reason.message : String(reason || "unhandled rejection"),
+        });
+        if (window.__beatgalerStage1PlaybackErrors.length > 50) window.__beatgalerStage1PlaybackErrors.shift();
+      });
+      window.__beatgalerStage1TraceCaptureInstalled = true;
+    }
+
+    window.__beatgalerStage1PlayTraceLines = [];
+    window.__beatgalerStage1PlaybackErrors = [];
     const probe = { beatId: id, events: [], handler: null };
     probe.handler = event => {
       const detail = event?.detail || {};
       if (String(detail.beatId || "") !== id) return;
-      probe.events.push({ at: Date.now(), current_time: Math.max(0, Number(detail.currentTime) || 0), playing: Boolean(detail.playing), waiting: Boolean(detail.waiting) });
+      probe.events.push({
+        at: Date.now(),
+        current_time: Math.max(0, Number(detail.currentTime) || 0),
+        playing: Boolean(detail.playing),
+        waiting: Boolean(detail.waiting),
+      });
       if (probe.events.length > 200) probe.events.shift();
     };
     window.__beatgalerStage1PlaybackProbe = probe;
@@ -1149,6 +1209,27 @@ async function playbackProbeSnapshot(client) {
     const probe = window.__beatgalerStage1PlaybackProbe;
     const events = Array.isArray(probe?.events) ? probe.events : [];
     const playingEvents = events.filter(event => event.playing);
+    const audio = Array.from(document.querySelectorAll("audio")).map((node, index) => {
+      const buffered = [];
+      try {
+        for (let i = 0; i < node.buffered.length; i += 1) {
+          buffered.push([Number(node.buffered.start(i).toFixed(3)), Number(node.buffered.end(i).toFixed(3))]);
+        }
+      } catch {}
+      return {
+        index,
+        paused: Boolean(node.paused),
+        ended: Boolean(node.ended),
+        current_time: Math.max(0, Number(node.currentTime) || 0),
+        duration: Number.isFinite(Number(node.duration)) ? Number(node.duration) : null,
+        ready_state: Number(node.readyState),
+        network_state: Number(node.networkState),
+        error_code: Number(node.error?.code || 0) || null,
+        error_message: String(node.error?.message || "") || null,
+        current_src_kind: String(node.currentSrc || "").startsWith("blob:") ? "blob" : String(node.currentSrc || "").startsWith("data:") ? "data" : String(node.currentSrc || "") ? "other" : "empty",
+        buffered,
+      };
+    });
     return {
       beat_id: probe?.beatId || null,
       event_count: events.length,
@@ -1157,17 +1238,41 @@ async function playbackProbeSnapshot(client) {
       first_playing_at: playingEvents[0]?.at || null,
       waiting_seen: events.some(event => event.waiting),
       last: events.at(-1) || null,
+      recent_events: events.slice(-30),
+      audio,
+      visibility_state: document.visibilityState,
+      online: navigator.onLine,
+      play_trace: Array.isArray(window.__beatgalerStage1PlayTraceLines)
+        ? window.__beatgalerStage1PlayTraceLines.slice(-120)
+        : [],
+      runtime_errors: Array.isArray(window.__beatgalerStage1PlaybackErrors)
+        ? window.__beatgalerStage1PlaybackErrors.slice(-30)
+        : [],
     };
   });
 }
 
 async function waitForPlaybackProgress(client, account) {
   let latest = null;
-  await client.waitUntil(async () => {
-    latest = await playbackProbeSnapshot(client);
-    return latest?.playing_seen === true && latest?.max_current_time >= PLAYBACK_MIN_PROGRESS_SECONDS;
-  }, { timeout: 30_000, interval: 100, timeoutMsg: `Account ${account.label} did not prove real playback progress.` });
-  return latest;
+  try {
+    await client.waitUntil(async () => {
+      latest = await playbackProbeSnapshot(client);
+      return latest?.playing_seen === true && latest?.max_current_time >= PLAYBACK_MIN_PROGRESS_SECONDS;
+    }, { timeout: 30_000, interval: 100, timeoutMsg: `Account ${account.label} did not prove real playback progress.` });
+    return latest;
+  } catch (error) {
+    latest = await playbackProbeSnapshot(client).catch(() => latest);
+    const diagnostic = {
+      account_label: account.label,
+      ...(latest || {}),
+    };
+    const wrapped = new Error(
+      `Account ${account.label} did not prove real playback progress. diagnostic=${JSON.stringify(diagnostic).slice(0, 6000)}`
+    );
+    wrapped.stage1PlaybackDiagnostic = diagnostic;
+    wrapped.cause = error;
+    throw wrapped;
+  }
 }
 
 async function runConcurrentPlayback(clients, playbackBeats) {
@@ -1785,6 +1890,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               metadata_reload_ms: [],
               reload_ms: [],
               playback_samples: [],
+              playback_failures: [],
               upload_samples: [],
               download_samples: [],
               metadata_samples: [],
