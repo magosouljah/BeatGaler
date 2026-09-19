@@ -2009,6 +2009,29 @@ app.post("/transport/operation/begin", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId } = auth;
+  const requestStartedAt = Date.now();
+  let responseFinished = false;
+  res.once("finish", () => {
+    responseFinished = true;
+    directTransport.recordDiagnostic?.("OPERATION_BEGIN_HTTP_FINISH", {
+      session_id: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+      kind: String(req.body?.kind || "data"),
+      status_code: res.statusCode,
+      elapsed_ms: Date.now() - requestStartedAt,
+      document_generation: Number(req.body?.documentContext?.generation || 0) || null,
+    });
+  });
+  res.once("close", () => {
+    if (responseFinished) return;
+    directTransport.recordDiagnostic?.("OPERATION_BEGIN_HTTP_PREMATURE_CLOSE", {
+      session_id: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+      kind: String(req.body?.kind || "data"),
+      elapsed_ms: Date.now() - requestStartedAt,
+      document_generation: Number(req.body?.documentContext?.generation || 0) || null,
+    });
+  });
   try {
     const operation = await directTransport.beginOperation({
       installationId: beatgalerUserId,
