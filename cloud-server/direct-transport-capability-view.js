@@ -43,15 +43,43 @@ function validateCapabilitySessionState(state, input, {
   return { ok: true };
 }
 
-function validateCapabilitySession(input) {
+function readCapabilityState() {
   const stateFile = backendPath(process.env.TRANSPORT_POOL_STATE, 'transport-pool-state.json');
-  let state;
   try {
-    state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    return JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   } catch {
-    return { ok: false, reason: 'state_unavailable' };
+    return null;
   }
+}
+
+function validateCapabilitySession(input) {
+  const state = readCapabilityState();
+  if (!state) return { ok: false, reason: 'state_unavailable' };
   return validateCapabilitySessionState(state, input);
+}
+
+function activeOperationIdsForSessionState(state, input, options = {}) {
+  const validity = validateCapabilitySessionState(state, input, options);
+  if (!validity.ok) return null;
+  const sessionId = String(input?.sessionId || '');
+  const installationId = String(input?.installationId || '');
+  return Object.values(state?.operations || {})
+    .filter(operation =>
+      String(operation?.session_id || '') === sessionId &&
+      String(operation?.installation_id || '') === installationId
+    )
+    .map(operation => String(operation?.operation_id || '').trim())
+    .filter(Boolean);
+}
+
+function activeOperationIdsForSession(input) {
+  const state = readCapabilityState();
+  if (!state) return null;
+  return activeOperationIdsForSessionState(state, input);
+}
+
+function recordDiagnostic(event, fields = {}) {
+  return require('./direct-transport-control').recordDiagnostic(event, fields);
 }
 
 async function endOperation(input) {
@@ -59,7 +87,10 @@ async function endOperation(input) {
 }
 
 module.exports = {
+  activeOperationIdsForSession,
+  activeOperationIdsForSessionState,
   endOperation,
+  recordDiagnostic,
   validateCapabilitySession,
   validateCapabilitySessionState,
 };
