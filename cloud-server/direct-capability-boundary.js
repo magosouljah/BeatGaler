@@ -362,6 +362,12 @@ function installDirectCapabilityBoundary(express, options = {}) {
 
   async function cleanupInternalOperation(req, internalOperationId) {
     if (!internalOperationId) return;
+    const cleanupStartedAt = now();
+    directTransport.recordDiagnostic?.("CAPABILITY_INTERNAL_CLEANUP_BEGIN", {
+      internal_operation_id: String(internalOperationId),
+      session_id: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+    });
     try {
       await directTransport.endOperation({
         installationId: String(req.beatgalerAuthorizedInstallationId || req.body?.beatgalerUserId || ""),
@@ -369,7 +375,20 @@ function installDirectCapabilityBoundary(express, options = {}) {
         generation: Number(req.body?.generation || 0),
         operationId: internalOperationId,
       });
-    } catch {}
+      directTransport.recordDiagnostic?.("CAPABILITY_INTERNAL_CLEANUP_DONE", {
+        internal_operation_id: String(internalOperationId),
+        session_id: String(req.body?.sessionId || ""),
+        elapsed_ms: now() - cleanupStartedAt,
+      });
+    } catch (error) {
+      directTransport.recordDiagnostic?.("CAPABILITY_INTERNAL_CLEANUP_FAILED", {
+        internal_operation_id: String(internalOperationId),
+        session_id: String(req.body?.sessionId || ""),
+        elapsed_ms: now() - cleanupStartedAt,
+        error_code: String(error?.code || ""),
+        error_name: String(error?.name || ""),
+      });
+    }
   }
 
   function beginCapability(req, res, next) {
@@ -392,16 +411,51 @@ function installDirectCapabilityBoundary(express, options = {}) {
         generation: Number(req.body?.generation || 0), vault_scope: readVaultScope(dataDir, claims.installationId, claims.tenantId),
         operation_type: kind, object_scope: scope, issued_at_ms: issuedAt, expires_at_ms: issuedAt + ttlMs,
       };
-      void store.issue(record).then(() => originalJson({
-        ...payload,
-        operation_id: token,
-        capability: {
-          token, user_id: claims.userId, tenant_id: claims.tenantId, installation_id: claims.installationId,
-          vault_scope: record.vault_scope, operation: kind, object_scope: scope,
-          issued_at: new Date(issuedAt).toISOString(), expires_at: new Date(record.expires_at_ms).toISOString(),
-        },
-      })).catch(async error => {
+      const capabilityIssueStartedAt = now();
+      directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_BEGIN", {
+        internal_operation_id: internalOperationId,
+        session_id: String(req.body?.sessionId || ""),
+        generation: Number(req.body?.generation || 0),
+        kind,
+      });
+      void store.issue(record).then(() => {
+        directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_DONE", {
+          internal_operation_id: internalOperationId,
+          session_id: String(req.body?.sessionId || ""),
+          kind,
+          elapsed_ms: now() - capabilityIssueStartedAt,
+        });
+        directTransport.recordDiagnostic?.("CAPABILITY_RESPONSE_SEND", {
+          internal_operation_id: internalOperationId,
+          session_id: String(req.body?.sessionId || ""),
+          kind,
+        });
+        return originalJson({
+          ...payload,
+          operation_id: token,
+          capability: {
+            token, user_id: claims.userId, tenant_id: claims.tenantId, installation_id: claims.installationId,
+            vault_scope: record.vault_scope, operation: kind, object_scope: scope,
+            issued_at: new Date(issuedAt).toISOString(), expires_at: new Date(record.expires_at_ms).toISOString(),
+          },
+        });
+      }).catch(async error => {
+        directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_FAILED", {
+          internal_operation_id: internalOperationId,
+          session_id: String(req.body?.sessionId || ""),
+          kind,
+          elapsed_ms: now() - capabilityIssueStartedAt,
+          error_code: String(error?.code || ""),
+          error_name: String(error?.name || ""),
+          status_code: Number(error?.status || 0) || null,
+        });
         await cleanupInternalOperation(req, internalOperationId);
+        directTransport.recordDiagnostic?.("CAPABILITY_ERROR_RESPONSE_SEND", {
+          internal_operation_id: internalOperationId,
+          session_id: String(req.body?.sessionId || ""),
+          kind,
+          status_code: Number(error?.status || 500),
+        });
         responseError(res, error);
       });
       return res;
