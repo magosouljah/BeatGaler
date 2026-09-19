@@ -81,7 +81,21 @@ function harness(desktop = false) {
       for (const id of ids) messages.delete(id);
     },
     async downloadAsBuffer(media) { calls.push(['download', media.messageId]); return messages.get(media.messageId).data; },
-    async downloadChunk({ location, offset = 0, limit }) { calls.push(['chunk', location.messageId, offset]); return messages.get(location.messageId).data.subarray(offset, offset + limit); },
+    async downloadChunk({ location, offset = 0, limit }) {
+      calls.push(['chunk', location.messageId, offset, limit]);
+      const source = messages.get(location.messageId).data;
+      let alignedOffset = offset;
+      let alignedLimit = limit;
+      if (alignedOffset % 1024 !== 0) alignedOffset = Math.floor(alignedOffset / 1024) * 1024;
+      const stripStart = offset - alignedOffset;
+      if (stripStart > 0) alignedLimit += 1024 - stripStart;
+      if (alignedLimit % 1024 !== 0) alignedLimit = Math.ceil(alignedLimit / 1024) * 1024;
+      const stripEnd = alignedLimit - limit - stripStart;
+      let result = source.subarray(alignedOffset, alignedOffset + alignedLimit);
+      if (stripStart > 0) result = result.subarray(stripStart);
+      if (stripEnd > 0) result = result.subarray(0, -stripEnd);
+      return result;
+    },
     async *downloadAsIterable(media, options = {}) {
       calls.push(['stream', media.messageId, options.offset || 0]);
       const bytes = messages.get(media.messageId).data;
@@ -116,7 +130,7 @@ function harness(desktop = false) {
   vm.runInContext(executableSource(filename, desktop), context, { filename });
   const api = vm.runInContext(desktop
     ? 'client=telegram; session={chat_id:String(CHAT),transport_id:"Bot02",transport_user_id:BOT}; tempExpiresAt=Number.MAX_SAFE_INTEGER; ({getIndex,replaceIndex,upload,download,downloadRange,ensureIndex})'
-    : 'client=telegram; chatId=CHAT; expectedBotId=BOT; vaultVerified=true; ({getLibraryIndex,replaceLibraryIndex,upload,download,stream,prefetch,verifyIdentity,verifyReady})', context);
+    : 'client=telegram; chatId=CHAT; expectedBotId=BOT; vaultVerified=true; ({getLibraryIndex,replaceLibraryIndex,upload,download,stream,prefetch,prefetchBatch,verifyIdentity,verifyReady})', context);
   return { api, calls, events, messages, faults, add, get pinned() { return pinned; }, set pinned(id) { pinned = id; } };
 }
 
@@ -197,6 +211,32 @@ test('Web bootstrap never interprets network failure or a foreign pinned message
   h.faults.read = false; h.add(9, 'not an index', '1001', 'foreign pinned message'); h.pinned = 9;
   await assert.rejects(h.api.replaceLibraryIndex({ manifest: empty(), expectedMessageId: 0 }), /not available/);
   assert.equal(h.calls.some(call => call[0] === 'sendMedia'), false);
+});
+
+test('Web playback prefix reads avoid mtcute precise EOF truncation and stay resumable', async () => {
+  const h = harness(); await h.api.verifyIdentity(); await h.api.verifyReady();
+  const bytes = Buffer.alloc(4284, 91);
+  const single = h.add(60, bytes, BOT, 'short playback');
+  const batch = h.add(61, bytes, BOT, 'short warm playback');
+
+  const prefetched = await h.api.prefetch({ messageId: single.id, mimeType: 'audio/mpeg' });
+  assert.equal(Buffer.from(prefetched.prefix).length, 4284);
+  assert.deepEqual(Buffer.from(prefetched.prefix), bytes);
+  const singleCall = h.calls.find(call => call[0] === 'chunk' && call[1] === single.id);
+  assert.deepEqual(singleCall, ['chunk', single.id, 0, 8192]);
+
+  const batchResult = await h.api.prefetchBatch('short-batch', {
+    inputs: [{ messageId: batch.id, mimeType: 'audio/mpeg' }],
+    maxConcurrency: 1,
+  });
+  assert.equal(batchResult.results.length, 1);
+  assert.equal(batchResult.results[0].ok, true);
+  assert.deepEqual(Buffer.from(batchResult.results[0].result.prefix), bytes);
+  const batchCall = h.calls.find(call => call[0] === 'chunk' && call[1] === batch.id);
+  assert.deepEqual(batchCall, ['chunk', batch.id, 0, 8192]);
+  const event = h.events.find(item => item.requestId === 'short-batch' && item.event === 'prefetch-chunk');
+  assert.equal(event.progress.chunk.byteLength, 4284);
+  assert.equal(event.progress.totalBytes, 4284);
 });
 
 test('Web MP3/WAV/artwork/PROJECT upload, export/playback streams and warm prefixes stay on Telegram adapter', async () => {
