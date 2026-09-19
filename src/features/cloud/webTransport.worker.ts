@@ -792,6 +792,11 @@ function downloadMime(value: unknown): string {
   return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i.test(mime) ? mime : "application/octet-stream";
 }
 
+function playbackChunkLimit(desiredBytes: number): number {
+  const desired = Math.max(1, Math.floor(Number(desiredBytes) || 0));
+  return Math.ceil(desired / 4096) * 4096;
+}
+
 async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
   const started = Date.now();
   const active = requireConnected();
@@ -801,7 +806,8 @@ async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportP
   const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
   if (offsetBytes % 4096 !== 0) throw new WorkerTransportError("TRANSFER_FAILED", "Galer Cloud playback offset must be aligned to 4 KiB.");
   const remaining = resolved.totalBytes > 0 ? Math.max(0, resolved.totalBytes - offsetBytes) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
-  const limit = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+  const desired = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+  const limit = playbackChunkLimit(desired);
   const bytes = await withDataLane(() => active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit }), "foreground");
   if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
   const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -952,8 +958,9 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
   if (state.done || state.error || state.cancelled || !state.media) return;
   const absoluteOffset = state.offsetBytes;
   const remainingFile = state.totalBytes > 0 ? Math.max(0, state.totalBytes - absoluteOffset) : STARTUP_PREFIX_BYTES;
-  const limit = Math.min(STARTUP_PREFIX_BYTES, remainingFile || STARTUP_PREFIX_BYTES);
-  if (limit <= 0) {
+  const desired = Math.min(STARTUP_PREFIX_BYTES, remainingFile || STARTUP_PREFIX_BYTES);
+  const limit = playbackChunkLimit(desired);
+  if (desired <= 0) {
     state.done = true;
     state.targetMet = true;
     state.warmState = "ready";
