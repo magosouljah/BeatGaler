@@ -43,11 +43,13 @@ test("preload observes before UI, survives fresh documents, preserves phases and
   observer.setPhase("submitting-sign-in");
   await page.fetch({ url: "http://localhost:1421/beatgaler-api/auth/login", body: "SECRET" }, { headers: { cookie: "SECRET" } });
   await page.fetch("/beatgaler-api/auth/account");
+  observer.setPhase("focused-logout");
+  await page.fetch("/beatgaler-api/auth/logout", { method: "POST", body: "SECRET" });
   await page.fetch("http://elsewhere.test/beatgaler-api/auth/login");
   await page.fetch("/unrelated");
   const entries = observer.snapshot();
-  assert.equal(entries.length, 4);
-  assert.deepEqual(entries.map(e => e.harness_phase), ["initial-navigation", "profile-reset-refresh", "submitting-sign-in", "submitting-sign-in"]);
+  assert.equal(entries.length, 5);
+  assert.deepEqual(entries.map(e => e.harness_phase), ["initial-navigation", "profile-reset-refresh", "submitting-sign-in", "submitting-sign-in", "focused-logout"]);
   for (const entry of entries) {
     assert.deepEqual(Object.keys(entry).sort(), ["abort_at_ms", "document_id", "duration_ms", "harness_phase", "observed_at_ms", "route", "started_at_ms", "state", "status", "trace_id"]);
     assert.match(entry.document_id, /^document-\d+$/);
@@ -59,7 +61,7 @@ test("preload observes before UI, survives fresh documents, preserves phases and
   assert.equal(page.fetch, original);
   page = browser.navigate(original);
   await page.fetch("/beatgaler-api/auth/login");
-  assert.equal(observer.snapshot().length, 4);
+  assert.equal(observer.snapshot().length, 5);
 });
 
 test("early failures and pending requests survive navigation without a DOM snapshot", async () => {
