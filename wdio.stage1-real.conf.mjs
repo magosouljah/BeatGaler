@@ -12,6 +12,10 @@ const webUrl = `http://${browserHost}:${port}`;
 const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
 const headed = process.env.STAGE1_HEADED === "1";
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
+const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
+const soakTimeoutMs = soakMinutes > 0
+  ? Math.ceil(soakMinutes * 60_000 + 15 * 60_000)
+  : null;
 const browserProfileRoot = path.join(
   root,
   "tmp",
@@ -101,7 +105,7 @@ export const config = {
   reporters: ["spec"],
   mochaOpts: {
     ui: "bdd",
-    timeout: accountCount >= 4 ? 600_000 : 240_000,
+    timeout: soakTimeoutMs ?? (accountCount >= 4 ? 600_000 : 240_000),
   },
 
   services: [],
