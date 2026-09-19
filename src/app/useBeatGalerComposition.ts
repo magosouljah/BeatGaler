@@ -495,6 +495,7 @@ const {
   } = useSessionActions({
     setSettings,
     setCloudSessionVerified,
+    disconnectCloudData: () => platform.cloudData.disconnect(),
     logoutAccount: logoutBeatGalerAccount,
     releaseFile,
     progressiveRevealRunRef,

@@ -61,6 +61,7 @@ function harness() {
     replaceCredentials: vi.fn(async () => {}),
     verifyIdentity: vi.fn(async () => {}),
     verifyReady: vi.fn(async () => {}),
+    abortImmediately: vi.fn(),
     shutdown: vi.fn(async () => {}),
   };
   const api: WebTransportControlApi = {
@@ -221,6 +222,66 @@ describe("WebTransportController lifecycle behavior", () => {
     // Expiry clears the old local generation. A later operation can only create
     // a brand-new session; it cannot authorize against the expired object.
     expect(api.authorize).not.toHaveBeenCalled();
+    await controller.disconnect();
+  });
+
+  it("renews an active operation lease and stops renewing it at disconnect", async () => {
+    vi.useFakeTimers();
+    const { api, controller } = harness();
+    api.renew = vi.fn(async () => ({ expired: false }));
+    await controller.connect();
+    await vi.advanceTimersByTimeAsync(1);
+    await controller.beginOperation("get_index", { objectType: "index", objectIds: ["pinned"] });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(api.renew).toHaveBeenCalledWith(expect.objectContaining({ session_id: "session-1" }), "op-1");
+    await controller.disconnect();
+    const renewalsAtDisconnect = vi.mocked(api.renew).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(api.renew).toHaveBeenCalledTimes(renewalsAtDisconnect);
+  });
+
+  it("fences an isolated replace_index Worker before the server can hand its lease to another installation", async () => {
+    vi.useFakeTimers();
+    const { runtime, api, controller } = harness();
+    const workerWrite = deferred<void>();
+    let workerHasWriteAuthority = true;
+    let bWasGranted = false;
+    const authorityAtGrant: boolean[] = [];
+
+    vi.mocked(runtime.abortImmediately!).mockImplementation(() => {
+      workerHasWriteAuthority = false;
+      workerWrite.reject(new Error("Worker terminated after liveness loss"));
+    });
+    api.renew = vi.fn(async () => { throw new Error("network partition"); });
+
+    // The fake Cloud refuses B until the 15s server lease ends. At that point
+    // it records whether A still has a usable Worker; this models the only
+    // dangerous handoff boundary for a pinned-index replacement.
+    setTimeout(() => {
+      authorityAtGrant.push(workerHasWriteAuthority);
+      bWasGranted = !workerHasWriteAuthority;
+    }, 15_000);
+
+    const writeA = controller.withOperation(
+      "replace_index",
+      { objectType: "index", objectIds: ["pinned"] },
+      async () => workerWrite.promise,
+    );
+    // The Worker is intentionally aborted by the watchdog before this test
+    // awaits the operation below; mark the expected rejection handled now.
+    void writeA.catch(() => {});
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(api.renew).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    expect(runtime.abortImmediately).toHaveBeenCalledOnce();
+    expect(workerHasWriteAuthority).toBe(false);
+    await expect(writeA).rejects.toThrow("Worker terminated");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(bWasGranted).toBe(true);
+    expect(authorityAtGrant).toEqual([false]);
     await controller.disconnect();
   });
 });

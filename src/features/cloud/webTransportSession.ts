@@ -89,6 +89,13 @@ export interface WebTransportOperationResponse {
   operation_id?: string;
   capability?: WebTransportCapabilityPublic;
   credential_refresh?: WebTransportSessionPublic | null;
+  operation_liveness_timeout_ms?: number;
+}
+
+export interface WebTransportOperationRenewalResponse {
+  ok?: boolean;
+  expired?: boolean;
+  liveness_timeout_ms?: number;
 }
 
 const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
@@ -378,6 +385,7 @@ export async function beginWebTransportOperation(
   waitMs: number | null;
   credentialRefresh: WebTransportSession | null;
   operationId: string | null;
+  livenessTimeoutMs: number | null;
 }> {
   const response = await transportRequest<WebTransportOperationResponse>("/transport/operation/begin", {
     ...sessionIdentity(session),
@@ -387,7 +395,7 @@ export async function beginWebTransportOperation(
   });
   assertNoPermanentCredentials(response);
   if (response.expired === true) {
-    return { expired: true, waitMs: null, credentialRefresh: null, operationId: null };
+    return { expired: true, waitMs: null, credentialRefresh: null, operationId: null, livenessTimeoutMs: null };
   }
   if (response.refresh_required === true || response.temp_auth_required === true) {
     return {
@@ -395,6 +403,7 @@ export async function beginWebTransportOperation(
       waitMs: null,
       credentialRefresh: await renewWebTransportSession(session),
       operationId: null,
+      livenessTimeoutMs: null,
     };
   }
   const operationId = typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null;
@@ -406,6 +415,7 @@ export async function beginWebTransportOperation(
     waitMs: response.wait === true ? Math.min(1000, Math.max(100, Number(response.retry_after_ms) || 250)) : null,
     credentialRefresh: null,
     operationId,
+    livenessTimeoutMs: operationId ? Math.max(5_000, Number(response.operation_liveness_timeout_ms) || 15_000) : null,
   };
 }
 
@@ -437,6 +447,24 @@ export async function endWebTransportOperation(
     generation: session.generation,
     operationId,
   });
+}
+
+export async function renewWebTransportOperation(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+  operationId: string,
+): Promise<{ expired: boolean; livenessTimeoutMs: number | null }> {
+  const response = await transportRequest<WebTransportOperationRenewalResponse>("/transport/operation/renew", {
+    sessionId: session.session_id,
+    generation: session.generation,
+    operationId,
+  });
+  assertNoPermanentCredentials(response);
+  return {
+    expired: response.expired === true || response.ok !== true,
+    livenessTimeoutMs: Number.isFinite(Number(response.liveness_timeout_ms))
+      ? Math.max(5_000, Number(response.liveness_timeout_ms))
+      : null,
+  };
 }
 
 export async function stopWebTransportSession(

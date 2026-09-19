@@ -258,6 +258,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
       sessionId: "web-session",
       generation: 7,
       scope: uploadScope,
+      livenessTimeoutMs: 15_000,
     });
     await controller.disconnect();
   });

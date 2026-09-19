@@ -657,4 +657,21 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     this.failPending("Galer Cloud Web transport closed.");
     this.publishTransportInvalidatedIfReady();
   }
+
+  abortImmediately(): void {
+    const worker = this.worker;
+    // A lost operation lease is a fencing event, not normal navigation. Do
+    // not wait for a potentially stuck replace_index command to acknowledge a
+    // graceful shutdown; terminate its execution context synchronously first.
+    this.worker = null;
+    this.desiredPlaybackMessageId = null;
+    this.playbackCritical = false;
+    this.activeBackgroundStreamRequests.clear();
+    this.preemptedBackgroundStreamRequests.clear();
+    this.releaseBackgroundResumeWaiters();
+    this.sessionStartupMessageIds = [];
+    worker?.terminate();
+    this.failPending("Galer Cloud Web transport lease was lost.");
+    this.publishTransportInvalidatedIfReady();
+  }
 }

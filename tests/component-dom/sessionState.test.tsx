@@ -17,6 +17,7 @@ let latestBeats: Beat[] = [];
 let latestRevealed = new Set<string>();
 let revealRun = 0;
 const logoutAccount = vi.fn(async () => undefined);
+const disconnectCloudData = vi.fn(async () => undefined);
 const releaseFile = vi.fn();
 const clearPlaybackPreparation = vi.fn();
 const clearArtworkHydration = vi.fn();
@@ -37,6 +38,7 @@ function Harness() {
   actions = useSessionActions({
     setSettings: session.setSettings,
     setCloudSessionVerified: session.setCloudSessionVerified,
+    disconnectCloudData,
     logoutAccount,
     releaseFile,
     progressiveRevealRunRef,
@@ -58,6 +60,7 @@ async function renderHarness() {
 
 beforeEach(() => {
   logoutAccount.mockClear();
+  disconnectCloudData.mockClear();
   releaseFile.mockClear();
   clearPlaybackPreparation.mockClear();
   clearArtworkHydration.mockClear();
@@ -120,6 +123,7 @@ describe("session ownership", () => {
       session!.setCloudSessionVerified(true);
     });
     await act(async () => { await actions!.handleDisconnectTelegramAccount(); });
+    expect(disconnectCloudData).toHaveBeenCalledTimes(1);
     expect(logoutAccount).toHaveBeenCalledTimes(1);
     expect(releaseFile).toHaveBeenCalledTimes(1);
     expect(clearPlaybackPreparation).toHaveBeenCalledTimes(1);
@@ -131,5 +135,18 @@ describe("session ownership", () => {
     expect(latestBeats).toEqual([]);
     expect(Array.from(latestRevealed)).toEqual([]);
     expect(revealRun).toBe(1);
+  });
+
+  it("releases Direct before account logout and still returns the UI to Login if release fails", async () => {
+    const order: string[] = [];
+    disconnectCloudData.mockImplementationOnce(async () => { order.push("disconnect"); throw new Error("offline"); });
+    logoutAccount.mockImplementationOnce(async () => { order.push("logout"); });
+    await renderHarness();
+
+    await act(async () => { await actions!.handleDisconnectTelegramAccount(); });
+
+    expect(order).toEqual(["disconnect", "logout"]);
+    expect(session!.cloudSessionVerified).toBe(false);
+    expect(latestBeats).toEqual([]);
   });
 });

@@ -5,6 +5,7 @@ import {
   bindWebTransportSession,
   endWebTransportOperation,
   heartbeatWebTransportSession,
+  renewWebTransportOperation,
   reserveWebTransportSession,
   stopWebTransportSession,
   type WebTransportCapabilityScope,
@@ -18,6 +19,8 @@ export interface WebTransportRuntime {
   replaceCredentials(session: WebTransportSession): Promise<void>;
   verifyIdentity(session: WebTransportSession): Promise<void>;
   verifyReady(session: WebTransportSession): Promise<void>;
+  /** Irrevocably terminates the Worker without waiting for graceful cleanup. */
+  abortImmediately?(): void;
   shutdown(): Promise<void>;
 }
 
@@ -32,6 +35,11 @@ export interface WebTransportControlApi {
     waitMs: number | null;
     credentialRefresh: WebTransportSession | null;
     operationId: string | null;
+    livenessTimeoutMs?: number | null;
+  }>;
+  renew?(session: Pick<WebTransportSession, "session_id" | "generation">, operationId: string): Promise<{
+    expired: boolean;
+    livenessTimeoutMs?: number | null;
   }>;
   end(session: Pick<WebTransportSession, "session_id" | "generation">, operationId: string): Promise<void>;
   stop(session: Pick<WebTransportSessionPublic, "session_id" | "generation">): Promise<void>;
@@ -42,6 +50,7 @@ export interface WebTransportOperationLease {
   sessionId: string;
   generation: number;
   scope: WebTransportCapabilityScope;
+  livenessTimeoutMs: number;
 }
 
 export interface WebTransportStartupConfig {
@@ -55,12 +64,21 @@ const defaultApi: WebTransportControlApi = {
   authorize: authorizeWebTransportOperation,
   heartbeat: heartbeatWebTransportSession,
   begin: beginWebTransportOperation,
+  renew: renewWebTransportOperation,
   end: endWebTransportOperation,
   stop: stopWebTransportSession,
 };
 
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds));
 const MAX_STARTUP_BEATS = 14;
+const OPERATION_LIVENESS_RENEW_INTERVAL_MS = 4_000;
+const DEFAULT_OPERATION_LIVENESS_TIMEOUT_MS = 15_000;
+
+interface OperationLivenessTimers {
+  renewal: ReturnType<typeof setTimeout> | null;
+  watchdog: ReturnType<typeof setTimeout> | null;
+  timeoutMs: number;
+}
 
 type StartupBranchResult = { ok: true } | { ok: false; error: unknown };
 
@@ -93,6 +111,7 @@ export class WebTransportController {
   private refreshPromise: Promise<void> | null = null;
   private verificationPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private operationLivenessTimers = new Map<string, OperationLivenessTimers>();
   private closed = false;
   private lifecycleGeneration = 0;
   private readonly startupMessageIds: number[];
@@ -213,13 +232,14 @@ export class WebTransportController {
     if (!this.session) throw new Error("Galer Cloud Web transport verification failed.");
   }
 
-  private async failClosedSession(session: WebTransportSession): Promise<void> {
+  private async failClosedSession(session: WebTransportSession, runtimeAlreadyFenced = false): Promise<void> {
     if (this.session !== session) return;
     this.lifecycleGeneration += 1;
+    this.stopAllOperationLiveness();
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
-    await this.runtime.shutdown().catch(() => {});
+    if (!runtimeAlreadyFenced) await this.runtime.shutdown().catch(() => {});
     await this.api.stop(session).catch(() => {});
   }
 
@@ -269,6 +289,7 @@ export class WebTransportController {
         if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = null;
         if (this.isCurrentLifecycle(lifecycleGeneration)) this.lifecycleGeneration += 1;
+        this.stopAllOperationLiveness();
         this.session = null;
         await this.runtime.shutdown().catch(() => {});
         throw error;
@@ -282,6 +303,7 @@ export class WebTransportController {
 
   private async resetLocalSession(): Promise<void> {
     this.lifecycleGeneration += 1;
+    this.stopAllOperationLiveness();
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
@@ -325,12 +347,15 @@ export class WebTransportController {
           ).catch(() => {});
           throw error;
         }
-        return {
+        const lease = {
           operationId: response.operationId,
           sessionId: session.session_id,
           generation: session.generation,
           scope,
+          livenessTimeoutMs: response.livenessTimeoutMs || DEFAULT_OPERATION_LIVENESS_TIMEOUT_MS,
         };
+        this.startOperationLiveness(lease);
+        return lease;
       }
       throw new Error("Galer Cloud returned incomplete operation information.");
     }
@@ -338,7 +363,85 @@ export class WebTransportController {
   }
 
   async endOperation(lease: WebTransportOperationLease): Promise<void> {
+    this.stopOperationLiveness(lease.operationId);
     await this.api.end({ session_id: lease.sessionId, generation: lease.generation }, lease.operationId);
+  }
+
+  private startOperationLiveness(lease: WebTransportOperationLease): void {
+    if (!this.api.renew) return;
+    const timeoutMs = Math.max(5_000, Number(lease.livenessTimeoutMs) || DEFAULT_OPERATION_LIVENESS_TIMEOUT_MS);
+    // The server will not release an INDEX lock until its full liveness TTL.
+    // Stop the local Worker well before that point so an isolated tab can never
+    // keep writing Direct while another installation is admitted after expiry.
+    const failClosedAfter = (value: number) => Math.max(1_000, Math.floor(value * 2 / 3));
+    const renewEvery = (value: number) => Math.max(1_000, Math.min(OPERATION_LIVENESS_RENEW_INTERVAL_MS, Math.floor(value / 3)));
+    const armWatchdog = () => {
+      const active = this.operationLivenessTimers.get(lease.operationId);
+      if (!active) return;
+      if (active.watchdog) clearTimeout(active.watchdog);
+      active.watchdog = setTimeout(() => {
+        if (!this.operationLivenessTimers.has(lease.operationId) || this.closed) return;
+        playTrace("CONTROLLER_OPERATION_LIVENESS_LOST_FAIL_CLOSED", { operation_id: lease.operationId });
+        this.stopOperationLiveness(lease.operationId);
+        // Worker shutdown is deliberately before the best-effort control-plane
+        // stop below. This is the local fencing boundary for Direct writes.
+        void this.failClosedOperationLiveness(lease);
+      }, failClosedAfter(active.timeoutMs));
+    };
+    const renew = async () => {
+      if (!this.operationLivenessTimers.has(lease.operationId) || this.closed) return;
+      try {
+        const result = await this.api.renew!({ session_id: lease.sessionId, generation: lease.generation }, lease.operationId);
+        if (result.expired) {
+          playTrace("CONTROLLER_OPERATION_LIVENESS_EXPIRED", { operation_id: lease.operationId });
+          this.stopOperationLiveness(lease.operationId);
+          void this.failClosedOperationLiveness(lease);
+          return;
+        }
+        const active = this.operationLivenessTimers.get(lease.operationId);
+        if (!active) return;
+        active.timeoutMs = Math.max(5_000, Number(result.livenessTimeoutMs) || active.timeoutMs);
+        armWatchdog();
+      } catch {
+        // Retry while the independently armed watchdog still proves that the
+        // server has acknowledged this operation recently.
+        playTrace("CONTROLLER_OPERATION_LIVENESS_RETRY", { operation_id: lease.operationId });
+      }
+      const active = this.operationLivenessTimers.get(lease.operationId);
+      if (active && !this.closed) {
+        active.renewal = setTimeout(() => { void renew(); }, renewEvery(active.timeoutMs));
+      }
+    };
+    this.stopOperationLiveness(lease.operationId);
+    this.operationLivenessTimers.set(lease.operationId, { renewal: null, watchdog: null, timeoutMs });
+    armWatchdog();
+    const active = this.operationLivenessTimers.get(lease.operationId);
+    if (active) active.renewal = setTimeout(() => { void renew(); }, renewEvery(active.timeoutMs));
+  }
+
+  private async failClosedOperationLiveness(lease: WebTransportOperationLease): Promise<void> {
+    const session = this.session;
+    if (!session || session.session_id !== lease.sessionId || session.generation !== lease.generation) return;
+    // Do not use the graceful shutdown path here: it can wait for an active
+    // Worker command, which would consume the entire fence margin before Cloud
+    // is allowed to reassign the INDEX lease.
+    if (this.runtime.abortImmediately) {
+      try { this.runtime.abortImmediately(); } catch {}
+      await this.failClosedSession(session, true);
+      return;
+    }
+    await this.failClosedSession(session);
+  }
+
+  private stopOperationLiveness(operationId: string): void {
+    const timers = this.operationLivenessTimers.get(operationId);
+    if (timers?.renewal) clearTimeout(timers.renewal);
+    if (timers?.watchdog) clearTimeout(timers.watchdog);
+    this.operationLivenessTimers.delete(operationId);
+  }
+
+  private stopAllOperationLiveness(): void {
+    for (const operationId of this.operationLivenessTimers.keys()) this.stopOperationLiveness(operationId);
   }
 
   async withOperation<T>(kind: string, scope: WebTransportCapabilityScope, operation: () => Promise<T>): Promise<T> {
@@ -354,6 +457,7 @@ export class WebTransportController {
     if (this.closed) return;
     this.closed = true;
     this.lifecycleGeneration += 1;
+    this.stopAllOperationLiveness();
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     const session = this.session;

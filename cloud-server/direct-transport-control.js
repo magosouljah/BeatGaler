@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { performance } = require('perf_hooks');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
@@ -26,8 +27,10 @@ const PROCESS_INSTANCE_ID = crypto.randomBytes(8).toString('hex');
 const HEARTBEAT_INTERVAL_MS = Math.max(30_000, Number(process.env.DIRECT_HEARTBEAT_INTERVAL_MS || 60_000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.DIRECT_HEARTBEAT_TIMEOUT_MS || 5 * 60_000));
 const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(process.env.DIRECT_TOKEN_ROTATION_ENABLED || 'false').trim().toLowerCase());
-const INDEX_OPERATION_TTL_MS = Math.max(60_000, Number(process.env.DIRECT_INDEX_OPERATION_TTL_MS || 5 * 60_000));
 const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DATA_OPERATION_TTL_MS || 4 * 60 * 60_000));
+// INDEX locks are renewable leases.  A dead tab therefore releases quickly,
+// while a deliberately paused but still-live Worker keeps renewing its lease.
+const INDEX_OPERATION_LIVENESS_TIMEOUT_MS = Math.max(5_000, Number(process.env.DIRECT_INDEX_OPERATION_LIVENESS_TIMEOUT_MS || 15_000));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
@@ -35,6 +38,9 @@ const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 const runtimeSessions = new Map(); // session_id -> hydrated session + current token
 const botRotationLocks = new Map();
 const leaseCleanupLocks = new Map();
+const unconfirmedOperationSince = new Map();
+let monotonicNowImpl = () => performance.now();
+const busyOperationDiagnostics = new Map();
 let resolverBootstrapPromise = null;
 let maintenanceStarted = false;
 
@@ -130,6 +136,59 @@ function todayKey() { return nowIso().slice(0, 10); }
 function parseTime(value) {
   const n = Date.parse(String(value || ''));
   return Number.isFinite(n) ? n : 0;
+}
+function monotonicNow() { return monotonicNowImpl(); }
+function elapsedSinceMonotonic(value) {
+  const elapsed = monotonicNow() - Number(value || 0);
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+function operationLivenessTimeout(op) {
+  return op?.kind === 'get_index' || op?.kind === 'replace_index'
+    ? INDEX_OPERATION_LIVENESS_TIMEOUT_MS
+    : DATA_OPERATION_TTL_MS;
+}
+function operationLivenessAge(op, opId) {
+  // performance.now() is process-local and monotonic.  A persisted operation
+  // from an earlier process has no comparable monotonic timestamp, so it gets
+  // a bounded re-confirmation grace period instead of trusting wall-clock age.
+  if (op?.liveness_owner_instance === PROCESS_INSTANCE_ID && Number.isFinite(Number(op?.last_liveness_monotonic_ms))) {
+    return elapsedSinceMonotonic(op.last_liveness_monotonic_ms);
+  }
+  const key = String(opId || op?.operation_id || 'unknown');
+  let firstSeen = unconfirmedOperationSince.get(key);
+  if (firstSeen === undefined) {
+    firstSeen = monotonicNow();
+    unconfirmedOperationSince.set(key, firstSeen);
+  }
+  return elapsedSinceMonotonic(firstSeen);
+}
+function operationIsStale(op, opId) {
+  return !op || operationLivenessAge(op, opId) >= operationLivenessTimeout(op);
+}
+function operationDurationMs(op) {
+  if (op?.liveness_owner_instance === PROCESS_INSTANCE_ID && Number.isFinite(Number(op?.started_monotonic_ms))) {
+    return elapsedSinceMonotonic(op.started_monotonic_ms);
+  }
+  return Math.max(0, Date.now() - parseTime(op?.started_at));
+}
+function operationDiagnosticOwner(op) {
+  if (!op) return {};
+  return {
+    owner_session_id: op.session_id || null,
+    owner_installation: op.installation_id ? `${String(op.installation_id).slice(0, 8)}…` : null,
+    owner_tab_id: op.document_tab_id || null,
+    owner_document_id: op.document_id || null,
+    owner_document_generation: op.document_generation || null,
+    owner_kind: op.kind || null,
+    owner_liveness_age_ms: Math.round(operationLivenessAge(op, op.operation_id)),
+  };
+}
+function diagBusyOperationOnce(key, fields) {
+  const now = monotonicNow();
+  const previous = busyOperationDiagnostics.get(key) || 0;
+  if (now - previous < 2_000) return;
+  busyOperationDiagnostics.set(key, now);
+  diag('OPERATION_BEGIN_WAIT', fields);
 }
 
 function loadPool() {
@@ -236,13 +295,18 @@ function normalizeState(pool) {
   }
   for (const opId of Object.keys(state.operations)) {
     const op = state.operations[opId];
-    const startedAt = parseTime(op?.started_at);
-    const isIndexOp = op?.kind === 'get_index' || op?.kind === 'replace_index';
-    const operationTtlMs = isIndexOp ? INDEX_OPERATION_TTL_MS : DATA_OPERATION_TTL_MS;
-    const stale = !startedAt || Date.now() - startedAt >= operationTtlMs;
+    const stale = operationIsStale(op, opId);
     if (!op || !state.leases[String(op.session_id || '')] || stale) {
-      if (op && stale) diag('STALE_OPERATION_REAPED', { operation_id: opId, session_id: op.session_id || null, kind: op.kind || null });
+      if (op && stale) diag('STALE_OPERATION_REAPED', {
+        operation_id: opId,
+        session_id: op.session_id || null,
+        kind: op.kind || null,
+        liveness_age_ms: Math.round(operationLivenessAge(op, opId)),
+        liveness_timeout_ms: operationLivenessTimeout(op),
+        reason: 'operation_liveness_expired',
+      });
       delete state.operations[opId];
+      unconfirmedOperationSince.delete(opId);
     }
   }
   return state;
@@ -322,7 +386,10 @@ function deleteLease(sessionId) {
     const lease = state.leases[sessionId];
     if (!lease) return null;
     for (const [opId, op] of Object.entries(state.operations)) {
-      if (op.session_id === sessionId) delete state.operations[opId];
+      if (op.session_id === sessionId) {
+        delete state.operations[opId];
+        unconfirmedOperationSince.delete(opId);
+      }
     }
     delete state.leases[sessionId];
     return { ...lease };
@@ -899,14 +966,14 @@ function normalizeOperationDocumentContext(input) {
 }
 
 async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind, documentContext }) {
-  const beginStartedAt = Date.now();
+  const beginStartedAt = monotonicNow();
   const checked = getLeaseChecked({ installationId, sessionId, generation });
   if (!checked) {
     diag('OPERATION_BEGIN_EXPIRED', {
       session_id: String(sessionId || ''),
       generation: Number(generation || 0),
       kind: String(kind || 'data'),
-      elapsed_ms: Date.now() - beginStartedAt,
+      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
     });
     return { ok: false, expired: true };
   }
@@ -935,7 +1002,7 @@ async function beginOperation({ installationId, sessionId, generation, credentia
         vault: lease.chat_id,
         kind: String(kind || 'data'),
         reason: 'rotation_pending',
-        elapsed_ms: Date.now() - beginStartedAt,
+        elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
       });
       return { ok: false, wait: true, retry_after_ms: 250, reason: 'rotation_pending' };
     }
@@ -948,7 +1015,7 @@ async function beginOperation({ installationId, sessionId, generation, credentia
       transport_id: lease.bot_id,
       vault: lease.chat_id,
       kind: String(kind || 'data'),
-      elapsed_ms: Date.now() - beginStartedAt,
+      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
     });
     return { ok: false, refresh_required: true, credential_refresh: sessionPublic(runtime) };
   }
@@ -987,6 +1054,14 @@ async function beginOperation({ installationId, sessionId, generation, credentia
 
           if (existingIsIndex && sameVault && sameSession && sameTab && supersededDocument) {
             delete state.operations[existingId];
+            unconfirmedOperationSince.delete(existingId);
+            diag('INDEX_OPERATION_DOCUMENT_SUPERSEDED', {
+              operation_id: existingId,
+              session_id: existing.session_id,
+              vault: existing.chat_id,
+              old_document_generation: existingGeneration,
+              new_document_generation: normalizedDocumentContext.generation,
+            });
           }
         }
       }
@@ -1012,18 +1087,27 @@ async function beginOperation({ installationId, sessionId, generation, credentia
         document_generation: normalizedDocumentContext.generation,
       } : {}),
       started_at: nowIso(),
+      started_monotonic_ms: monotonicNow(),
+      liveness_owner_instance: PROCESS_INSTANCE_ID,
+      last_liveness_at: nowIso(),
+      last_liveness_monotonic_ms: monotonicNow(),
     };
     return true;
   });
   if (!admitted) {
-    diag('OPERATION_BEGIN_WAIT', {
+    const blocking = Object.values(stateSnapshot(pool).operations).find(op =>
+      (op.kind === 'get_index' || op.kind === 'replace_index') &&
+      String(op.chat_id || '') === String(lease.chat_id || '')
+    );
+    diagBusyOperationOnce(`${lease.chat_id}:${normalizedKind}`, {
       session_id: lease.session_id,
       transport_id: lease.bot_id,
       vault: lease.chat_id,
       kind: normalizedKind,
       reason: 'index_busy',
-      elapsed_ms: Date.now() - beginStartedAt,
+      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
       document_generation: normalizedDocumentContext?.generation || null,
+      ...operationDiagnosticOwner(blocking),
     });
     return { ok: false, wait: true, retry_after_ms: 200, reason: 'index_busy' };
   }
@@ -1033,10 +1117,15 @@ async function beginOperation({ installationId, sessionId, generation, credentia
     transport_id: lease.bot_id,
     vault: lease.chat_id,
     kind: normalizedKind,
-    elapsed_ms: Date.now() - beginStartedAt,
+    elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
     document_generation: normalizedDocumentContext?.generation || null,
   });
-  return { ok: true, operation_id: opId, credential_version: botState.credential_version };
+  return {
+    ok: true,
+    operation_id: opId,
+    credential_version: botState.credential_version,
+    operation_liveness_timeout_ms: operationLivenessTimeout({ kind: normalizedKind }),
+  };
 }
 
 async function endOperation({ installationId, sessionId, generation, operationId }) {
@@ -1054,6 +1143,7 @@ async function endOperation({ installationId, sessionId, generation, operationId
       botId = botId || op.bot_id;
       endedOperation = { ...op };
       delete state.operations[String(operationId)];
+      unconfirmedOperationSince.delete(String(operationId));
     }
   });
   if (endedOperation) {
@@ -1063,12 +1153,35 @@ async function endOperation({ installationId, sessionId, generation, operationId
       transport_id: endedOperation.bot_id,
       vault: endedOperation.chat_id,
       kind: endedOperation.kind,
-      duration_ms: Math.max(0, Date.now() - parseTime(endedOperation.started_at)),
+      duration_ms: Math.round(operationDurationMs(endedOperation)),
+      last_liveness_age_ms: Math.round(operationLivenessAge(endedOperation, operationId)),
       document_generation: endedOperation.document_generation || null,
     });
   }
   if (botId) await maybeRotatePendingBot(botId);
   return { ok: true };
+}
+
+async function renewOperation({ installationId, sessionId, generation, operationId }) {
+  const pool = loadPool();
+  let renewed = false;
+  let operation = null;
+  mutateState(pool, state => {
+    const lease = state.leases[String(sessionId || '')];
+    const current = state.operations[String(operationId || '')];
+    if (!lease || !current) return;
+    if (lease.installation_id !== String(installationId || '') || Number(lease.generation) !== Number(generation)) return;
+    if (current.session_id !== lease.session_id) return;
+    lease.last_heartbeat_at = nowIso();
+    current.last_liveness_at = nowIso();
+    current.last_liveness_monotonic_ms = monotonicNow();
+    current.liveness_owner_instance = PROCESS_INSTANCE_ID;
+    unconfirmedOperationSince.delete(String(operationId));
+    operation = { ...current };
+    renewed = true;
+  });
+  if (!renewed) return { ok: false, expired: true };
+  return { ok: true, operation_id: String(operationId || ''), liveness_timeout_ms: operationLivenessTimeout(operation) };
 }
 
 async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
@@ -1372,6 +1485,7 @@ module.exports = {
   activateSession,
   heartbeat,
   beginOperation,
+  renewOperation,
   endOperation,
   stopSession,
   decommissionVaultMembership,
@@ -1389,6 +1503,9 @@ module.exports = {
     normalizeState,
     stateSnapshot,
     mutateState,
+    setMonotonicNow(fn) {
+      monotonicNowImpl = typeof fn === 'function' ? fn : () => performance.now();
+    },
     leasesForBot,
     activeOpsForBot,
     inviteAndPromote,

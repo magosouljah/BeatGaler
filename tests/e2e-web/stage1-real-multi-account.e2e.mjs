@@ -1513,6 +1513,11 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
       entry.route === "/beatgaler-api/auth/logout" &&
       entry.state === "response",
   );
+  const directStopHttp = observer?.snapshot().findLast(
+    entry =>
+      entry.route === "/beatgaler-api/transport/session/stop" &&
+      entry.state === "response",
+  );
 
   if (!afterLogout.login_visible) {
     throw taggedError(
@@ -1561,6 +1566,14 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
     logoutHttp && logoutHttp.status >= 200 && logoutHttp.status < 300,
     `Account ${account.label} must observe a successful real /auth/logout response.`,
   );
+  assert.ok(
+    directStopHttp && directStopHttp.status >= 200 && directStopHttp.status < 300,
+    `Account ${account.label} must stop the Direct session before account logout.`,
+  );
+  assert.ok(
+    Number(directStopHttp.observed_at_ms) <= Number(logoutHttp.observed_at_ms),
+    `Account ${account.label} must finish Direct stop before /auth/logout.`,
+  );
 
   const reloginMs = await loginThroughUi(
     client,
@@ -1601,6 +1614,7 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
 
   return {
     logout_http_status: logoutHttp.status,
+    direct_stop_http_status: directStopHttp.status,
     client_id_preserved_while_signed_out: afterLogout.client_id === beforeLogout.client_id,
     signed_out_beat_count: afterLogout.beat_count,
     relogin_ms: reloginMs,

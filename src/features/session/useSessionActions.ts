@@ -5,6 +5,7 @@ import type { AppSettings, Beat } from "../../types";
 interface SessionActionsOptions {
   setSettings: Dispatch<SetStateAction<AppSettings | null>>;
   setCloudSessionVerified: Dispatch<SetStateAction<boolean>>;
+  disconnectCloudData: () => Promise<void>;
   logoutAccount: () => Promise<unknown>;
   releaseFile: () => void;
   progressiveRevealRunRef: { current: number };
@@ -25,6 +26,7 @@ export interface SessionActions {
 export function useSessionActions({
   setSettings,
   setCloudSessionVerified,
+  disconnectCloudData,
   logoutAccount,
   releaseFile,
   progressiveRevealRunRef,
@@ -53,6 +55,10 @@ export function useSessionActions({
   }, [setSettings]);
 
   const handleDisconnectTelegramAccount = useCallback(async () => {
+    // The Direct control plane is authenticated by the account cookie.  Release
+    // it while that authority still exists; logout must remain best-effort even
+    // if a network failure prevents the remote release.
+    await disconnectCloudData().catch(() => {});
     await logoutAccount().catch(() => {});
     releaseFile();
     progressiveRevealRunRef.current += 1;
@@ -68,6 +74,7 @@ export function useSessionActions({
       telegram_cloud_username: null,
     } : current);
   }, [
+    disconnectCloudData,
     logoutAccount,
     releaseFile,
     progressiveRevealRunRef,

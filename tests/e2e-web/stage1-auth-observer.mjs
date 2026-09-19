@@ -111,7 +111,9 @@ export function authPreload(emit) {
           "/beatgaler-api/auth/login",
           "/beatgaler-api/auth/logout",
           "/beatgaler-api/transport/session/start",
+          "/beatgaler-api/transport/session/stop",
           "/beatgaler-api/transport/operation/begin",
+          "/beatgaler-api/transport/operation/renew",
           "/beatgaler-api/transport/operation/end",
         ].includes(url.pathname)
       ) {

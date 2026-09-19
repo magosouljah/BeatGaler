@@ -79,6 +79,7 @@ describe("Issue #97 startup routing runtime", () => {
   it("keeps routing reconcile behind the authenticated installation containment boundary", () => {
     const containment = source("cloud-server/http-containment.js");
     expect(containment).toContain('"/transport/routing/reconcile"');
+    expect(containment).toContain('"/transport/operation/renew"');
     expect(containment).toContain("if (INSTALLATION_POST_ROUTES.has(routePath))");
     expect(containment).toContain("containment.installationOwner");
   });

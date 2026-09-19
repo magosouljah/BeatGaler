@@ -2082,6 +2082,26 @@ app.post("/transport/operation/end", async (req, res) => {
   }
 });
 
+// A short-lived INDEX operation is renewed independently of the much slower
+// session heartbeat.  This is what distinguishes a paused-but-live Worker from
+// a browser/tab that disappeared without operation/end or session/stop.
+app.post("/transport/operation/renew", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  const { beatgalerUserId } = auth;
+  try {
+    res.json(await directTransport.renewOperation({
+      installationId: beatgalerUserId,
+      sessionId: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+      operationId: String(req.body?.operationId || ""),
+    }));
+  } catch (error) {
+    console.error("[direct] operation liveness renewal failed:", error?.message || error);
+    res.status(500).json({ error: "Could not renew the transport operation." });
+  }
+});
+
 app.post("/transport/index/commit", (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
