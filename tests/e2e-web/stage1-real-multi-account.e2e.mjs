@@ -15,6 +15,7 @@ const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const singleAccountDiagnostic = accountCount === 1;
 const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1";
+const focusedLifecycle = process.env.STAGE1_FOCUSED_LIFECYCLE === "1";
 const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
 const soakMode = mixedWorkload && soakMinutes > 0;
 const MIXED_REQUIRED_ACCOUNTS = 7;
@@ -48,13 +49,15 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 const report = {
   version: 8,
   stage: "Etapa 1 — uso real entre cuentas independientes",
-  workload_mode: soakMode
-    ? diagnosticSoakRound
-      ? "mixed-7-account-diagnostic-soak"
-      : "mixed-7-account-30m-soak"
-    : mixedWorkload
-      ? "mixed-7-account"
-      : "full-lifecycle",
+  workload_mode: focusedLifecycle
+    ? "focused-single-account-lifecycle"
+    : soakMode
+      ? diagnosticSoakRound
+        ? "mixed-7-account-diagnostic-soak"
+        : "mixed-7-account-30m-soak"
+      : mixedWorkload
+        ? "mixed-7-account"
+        : "full-lifecycle",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
   cohort_id: cohortId || null,
   requested_account_count: accountCount,
@@ -100,15 +103,20 @@ const report = {
               ]
             : []),
         ]
-      : [
-          { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
-          { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
-          { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
-          { name: "master_download", status: "NOT_TESTED", severity: null },
-          { name: "remove_from_library_persistence", status: "NOT_TESTED", severity: null },
-          { name: "trash_visibility_persistence", status: "NOT_TESTED", severity: null },
-          { name: "trash_purge_persistence", status: "NOT_TESTED", severity: null },
-        ]),
+      : focusedLifecycle
+        ? [
+            { name: "focused_seek", status: "NOT_TESTED", severity: null },
+            { name: "focused_logout_relogin_authoritative", status: "NOT_TESTED", severity: null },
+          ]
+        : [
+            { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
+            { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
+            { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
+            { name: "master_download", status: "NOT_TESTED", severity: null },
+            { name: "remove_from_library_persistence", status: "NOT_TESTED", severity: null },
+            { name: "trash_visibility_persistence", status: "NOT_TESTED", severity: null },
+            { name: "trash_purge_persistence", status: "NOT_TESTED", severity: null },
+          ]),
   ],
   failure: null,
 };
@@ -163,19 +171,29 @@ async function clearBrowserProfile(client, observer) {
   await client.refresh();
 }
 
-async function loginThroughUi(client, account) {
+async function loginThroughUi(
+  client,
+  account,
+  { resetProfile = true, reuseObserver = false } = {},
+) {
   const startedAt = Date.now();
   let phase = "installing-auth-observer";
-  let observer;
+  let observer = reuseObserver ? authObservers.get(account.label) : null;
   const setPhase = value => { phase = value; observer?.setPhase(value); };
   let failure = null;
 
   try {
-    observer = await observeAuth(client);
-    authObservers.set(account.label, observer);
+    if (!observer) {
+      observer = await observeAuth(client);
+      authObservers.set(account.label, observer);
+    }
 
-    setPhase("profile-reset");
-    await clearBrowserProfile(client, observer);
+    if (resetProfile) {
+      setPhase("profile-reset");
+      await clearBrowserProfile(client, observer);
+    } else {
+      setPhase("relogin-existing-profile");
+    }
 
     setPhase("waiting-for-sign-in");
 
@@ -1307,6 +1325,265 @@ async function runConcurrentPlayback(clients, playbackBeats) {
   };
 }
 
+async function seekThroughPlayerUi(client, account) {
+  const before = await playbackProbeSnapshot(client);
+  const activeBefore = before.audio.find(item =>
+    item.paused === false &&
+    Number.isFinite(item.duration) &&
+    item.duration > 0.8
+  ) || before.audio.find(item => Number.isFinite(item.duration) && item.duration > 0.8);
+
+  if (!activeBefore) {
+    throw taggedError(
+      `Account ${account.label} has no seekable HTMLAudioElement after playback.`,
+      "STAGE1_FOCUSED_SEEK_NO_AUDIO",
+      "P1",
+    );
+  }
+
+  const beforeRatio = activeBefore.duration > 0
+    ? activeBefore.current_time / activeBefore.duration
+    : 0;
+  const targetRatio = beforeRatio > 0.45 ? 0.20 : 0.60;
+  const targetTime = activeBefore.duration * targetRatio;
+  const minimumSeekDelta = Math.min(
+    0.5,
+    Math.max(0.12, activeBefore.duration * 0.12),
+  );
+
+  const interaction = await client.execute(ratio => {
+    const visible = node => Boolean(node && node.getClientRects().length);
+    const previous = Array.from(document.querySelectorAll('button[title="Previous"]'))
+      .find(visible);
+    if (!previous) return { ok: false, reason: "player previous button missing" };
+
+    let root = previous.parentElement;
+    while (root && getComputedStyle(root).position !== "fixed") {
+      root = root.parentElement;
+    }
+    if (!root) return { ok: false, reason: "player root missing" };
+
+    const center = root.children?.[1];
+    const column = center?.children?.[1];
+    const scrubber = column?.children?.[1];
+    if (!(scrubber instanceof HTMLElement)) {
+      return { ok: false, reason: "player scrubber missing" };
+    }
+
+    const rect = scrubber.getBoundingClientRect();
+    if (!(rect.width > 0)) return { ok: false, reason: "player scrubber has zero width" };
+    const clientX = rect.left + rect.width * ratio;
+    const clientY = rect.top + rect.height / 2;
+    scrubber.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      button: 0,
+      buttons: 1,
+    }));
+    return { ok: true, ratio, client_x: clientX, client_y: clientY };
+  }, targetRatio);
+
+  if (!interaction?.ok) {
+    throw taggedError(
+      `Account ${account.label} could not drive the real Player scrubber: ${interaction?.reason || "unknown"}.`,
+      "STAGE1_FOCUSED_SEEK_UI_FAILED",
+      "P1",
+    );
+  }
+
+  await client.pause(120);
+  await client.execute(() => {
+    window.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 0,
+    }));
+  });
+
+  let seekSnapshot = null;
+  await client.waitUntil(async () => {
+    seekSnapshot = await playbackProbeSnapshot(client);
+    const audio = seekSnapshot.audio.find(item =>
+      Number.isFinite(item.duration) &&
+      Math.abs(item.duration - activeBefore.duration) < 0.25
+    ) || seekSnapshot.audio[0];
+    return Boolean(
+      audio &&
+      Math.abs(audio.current_time - activeBefore.current_time) >= minimumSeekDelta
+    );
+  }, {
+    timeout: 15_000,
+    interval: 100,
+    timeoutMsg: `Account ${account.label} Player scrubber did not move HTMLAudioElement.currentTime.`,
+  });
+
+  const seekAudio = seekSnapshot.audio.find(item =>
+    Number.isFinite(item.duration) &&
+    Math.abs(item.duration - activeBefore.duration) < 0.25
+  ) || seekSnapshot.audio[0];
+  const seekObservedTime = Number(seekAudio?.current_time || 0);
+  const progressDelta = Math.min(
+    0.35,
+    Math.max(0.10, activeBefore.duration * 0.05),
+  );
+
+  let continued = null;
+  await client.waitUntil(async () => {
+    continued = await playbackProbeSnapshot(client);
+    const audio = continued.audio.find(item =>
+      Number.isFinite(item.duration) &&
+      Math.abs(item.duration - activeBefore.duration) < 0.25
+    ) || continued.audio[0];
+    return Boolean(
+      audio &&
+      audio.paused === false &&
+      audio.current_time >= seekObservedTime + progressDelta
+    );
+  }, {
+    timeout: 15_000,
+    interval: 100,
+    timeoutMsg: `Account ${account.label} playback did not continue after seek.`,
+  });
+
+  const continuedAudio = continued.audio.find(item =>
+    Number.isFinite(item.duration) &&
+    Math.abs(item.duration - activeBefore.duration) < 0.25
+  ) || continued.audio[0];
+
+  return {
+    current_time_before: Number(activeBefore.current_time.toFixed(3)),
+    duration: Number(activeBefore.duration.toFixed(3)),
+    target_ratio: targetRatio,
+    target_time: Number(targetTime.toFixed(3)),
+    current_time_after_seek: Number(seekObservedTime.toFixed(3)),
+    current_time_after_continue: Number(continuedAudio.current_time.toFixed(3)),
+    seek_delta: Number(Math.abs(seekObservedTime - activeBefore.current_time).toFixed(3)),
+    continued_playing: continuedAudio.paused === false,
+  };
+}
+
+async function logoutReloginAuthoritative(client, account, beforeLogout, fixture) {
+  const observer = authObservers.get(account.label);
+  observer?.setPhase("focused-logout");
+
+  const settings = await client.$('button[title="Settings"]');
+  await settings.waitForDisplayed({ timeout: 30_000 });
+  await settings.click();
+
+  const signOut = await client.$('//button[normalize-space(.)="Sign out of BeatGaler"]');
+  await signOut.waitForDisplayed({ timeout: 30_000 });
+  await signOut.click();
+
+  await client.waitUntil(async () => {
+    const login = await client.$("#auth-login-identifier");
+    return login.isDisplayed().catch(() => false);
+  }, {
+    timeout: 60_000,
+    interval: 250,
+    timeoutMsg: `Account ${account.label} did not return to the sign-in gate after logout.`,
+  });
+
+  const afterLogoutCookies = await browserCookiePresence(client);
+  const afterLogout = await client.execute(() => ({
+    client_id: localStorage.getItem("beatgaler:web-client-id:v1"),
+    web_session_marker:
+      localStorage.getItem("beatgaler:web-session-present:v1") === "1",
+    csrf_present: Boolean(sessionStorage.getItem("beatgaler:web-csrf:v1")),
+    beat_count: document.querySelectorAll("[data-beat-card-id]").length,
+  }));
+
+  assert.equal(
+    afterLogoutCookies.session_cookie,
+    false,
+    `Account ${account.label} session cookie must be cleared by logout.`,
+  );
+  assert.equal(
+    afterLogoutCookies.csrf_cookie,
+    false,
+    `Account ${account.label} CSRF cookie must be cleared by logout.`,
+  );
+  assert.equal(
+    afterLogout.web_session_marker,
+    false,
+    `Account ${account.label} Web session marker must be cleared by logout.`,
+  );
+  assert.equal(
+    afterLogout.csrf_present,
+    false,
+    `Account ${account.label} Web CSRF state must be cleared by logout.`,
+  );
+  assert.equal(
+    afterLogout.client_id,
+    beforeLogout.client_id,
+    `Account ${account.label} logout must preserve the browser installation id.`,
+  );
+
+  const logoutHttp = observer?.snapshot().findLast(
+    entry =>
+      entry.route === "/beatgaler-api/auth/logout" &&
+      entry.state === "response",
+  );
+  assert.ok(
+    logoutHttp && logoutHttp.status >= 200 && logoutHttp.status < 300,
+    `Account ${account.label} must observe a successful real /auth/logout response.`,
+  );
+
+  const reloginMs = await loginThroughUi(
+    client,
+    account,
+    { resetProfile: false, reuseObserver: true },
+  );
+  const finalLibrary = await waitForAuthoritativeLibrary(client, account.label);
+  const afterRelogin = await waitForRuntimeSnapshot(client, account.label);
+  validateSingleAccount(account.label, afterRelogin);
+
+  assert.equal(
+    afterRelogin.user_id,
+    beforeLogout.user_id,
+    `Account ${account.label} relogin changed authenticated user.`,
+  );
+  assert.equal(
+    afterRelogin.client_id,
+    beforeLogout.client_id,
+    `Account ${account.label} relogin changed browser installation id.`,
+  );
+  assert.equal(
+    afterRelogin.direct.chat_id,
+    beforeLogout.direct.chat_id,
+    `Account ${account.label} relogin changed authoritative vault.`,
+  );
+  assert.equal(
+    afterRelogin.direct.transport_id,
+    beforeLogout.direct.transport_id,
+    `Account ${account.label} relogin changed persistent transport assignment.`,
+  );
+
+  const restoredFixture = await waitForPlaybackBeat(client, account);
+  assert.equal(
+    restoredFixture.beat_id,
+    fixture.beat_id,
+    `Account ${account.label} relogin did not reopen the same authoritative fixture.`,
+  );
+
+  return {
+    logout_http_status: logoutHttp.status,
+    client_id_preserved_while_signed_out: afterLogout.client_id === beforeLogout.client_id,
+    signed_out_beat_count: afterLogout.beat_count,
+    relogin_ms: reloginMs,
+    user_id_preserved: afterRelogin.user_id === beforeLogout.user_id,
+    client_id_preserved: afterRelogin.client_id === beforeLogout.client_id,
+    vault_preserved: afterRelogin.direct.chat_id === beforeLogout.direct.chat_id,
+    transport_preserved: afterRelogin.direct.transport_id === beforeLogout.direct.transport_id,
+    session_id_before_logout: beforeLogout.direct.session_id,
+    session_id_after_relogin: afterRelogin.direct.session_id,
+    library_beat_count_after_relogin: finalLibrary.beat_count,
+    fixture_beat_id_after_relogin: restoredFixture.beat_id,
+  };
+}
+
 
 function metadataForAccount(account) {
   return { bpm: String(120 + Number(account.label)), key: "c#m" };
@@ -1723,6 +2000,14 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
   it(
     `runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`,
     async () => {
+      if (focusedLifecycle && accountCount !== 1) {
+        throw taggedError(
+          "STAGE1_FOCUSED_LIFECYCLE requires --accounts 1.",
+          "STAGE1_FOCUSED_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
       if (!cohortId || !cohortPassword) {
         report.overall = "BLOCKED";
 
@@ -2717,6 +3002,68 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           );
         }
 
+        if (focusedLifecycle) {
+          const seek = await seekThroughPlayerUi(clients[0], accounts[0]);
+          markScenario(
+            "focused_seek",
+            "PASS",
+            null,
+            `Player scrubber moved currentTime by ${seek.seek_delta}s and playback continued to ${seek.current_time_after_continue}s`,
+          );
+
+          const logoutRelogin = await logoutReloginAuthoritative(
+            clients[0],
+            accounts[0],
+            after[0],
+            playbackAfterReload[0],
+          );
+          markScenario(
+            "focused_logout_relogin_authoritative",
+            "PASS",
+            null,
+            "Real Sign out cleared auth state; relogin without profile reset preserved installation/user/vault/transport and reopened the authoritative fixture",
+          );
+
+          const observer = authObservers.get(accounts[0].label);
+          validateAuthHealth(observer?.snapshot() || [], accounts[0].label);
+          markScenario(
+            "auth_health_stability",
+            "PASS",
+            null,
+            "No observed health probe failed during focused seek + logout/relogin",
+          );
+
+          report.accounts[accounts[0].label] = {
+            ...report.accounts[accounts[0].label],
+            login_ms: loginTimes[0],
+            user_id: after[0].user_id,
+            client_id: after[0].client_id,
+            vault_chat_id: after[0].direct.chat_id,
+            transport_id: after[0].direct.transport_id,
+            playback_fixture: {
+              beat_id: playbackAfterReload[0].beat_id,
+              beat_name: playbackAfterReload[0].beat_name,
+              created_this_run: playbackFixtures[0].created,
+            },
+            playback: playbackRun.accounts[0],
+            seek,
+            logout_relogin: logoutRelogin,
+          };
+          report.timings = {
+            startup_ms: startupMs,
+            simultaneous_reload_ms: reloadMs,
+            playback_start_spread_ms: playbackRun.start_spread_ms,
+            relogin_ms: logoutRelogin.relogin_ms,
+          };
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          console.log(
+            `[stage1-real] PASS focused lifecycle account=${accounts[0].label}; seek+logout+relogin authoritative. report=${REPORT_FILE}`,
+          );
+          return;
+        }
+
         report.accounts = Object.fromEntries(
           accounts.map((account, index) => [
             account.label,
@@ -3142,14 +3489,19 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               "playback_fixture_provisioning",
               "mixed_workload_concurrency",
             ]
-          : [
-              "multi_account_auth_isolation",
-              "authoritative_library_data_plane",
-              "multi_account_direct_identity",
-              "simultaneous_reload_persistent_assignment",
-              "playback_fixture_provisioning",
-              "playback_concurrency",
-            ];
+          : focusedLifecycle
+            ? [
+                "authoritative_library_data_plane",
+                "playback_fixture_provisioning",
+              ]
+            : [
+                "multi_account_auth_isolation",
+                "authoritative_library_data_plane",
+                "multi_account_direct_identity",
+                "simultaneous_reload_persistent_assignment",
+                "playback_fixture_provisioning",
+                "playback_concurrency",
+              ];
 
         for (const name of coreFailureScenarios) {
           if (
@@ -3187,13 +3539,18 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                   ]
                 : []),
             ]
-          : [
-              "metadata_edit_persistence",
-              "master_download",
-              "remove_from_library_persistence",
-              "trash_visibility_persistence",
-              "trash_purge_persistence",
-            ];
+          : focusedLifecycle
+            ? [
+                "focused_seek",
+                "focused_logout_relogin_authoritative",
+              ]
+            : [
+                "metadata_edit_persistence",
+                "master_download",
+                "remove_from_library_persistence",
+                "trash_visibility_persistence",
+                "trash_purge_persistence",
+              ];
         const coreReachedPostPhase = (
           mixedWorkload
             ? [
@@ -3202,14 +3559,19 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 "multi_account_direct_identity",
                 "playback_fixture_provisioning",
               ]
-            : [
-                "multi_account_auth_isolation",
-                "authoritative_library_data_plane",
-                "multi_account_direct_identity",
-                "simultaneous_reload_persistent_assignment",
-                "playback_fixture_provisioning",
-                "playback_concurrency",
-              ]
+            : focusedLifecycle
+              ? [
+                  "authoritative_library_data_plane",
+                  "playback_fixture_provisioning",
+                ]
+              : [
+                  "multi_account_auth_isolation",
+                  "authoritative_library_data_plane",
+                  "multi_account_direct_identity",
+                  "simultaneous_reload_persistent_assignment",
+                  "playback_fixture_provisioning",
+                  "playback_concurrency",
+                ]
         ).every(name => {
           const status = scenario(name)?.status;
           return status === "PASS" || (singleAccountDiagnostic && status === "SKIPPED");
