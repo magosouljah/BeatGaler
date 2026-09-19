@@ -61,13 +61,10 @@ export class WebStartupPlaybackCoordinator {
   private readonly transport = new WebGalerCloudTransport(this.candidates);
   private readonly sources: WebPlaybackSourceManager;
   private startPromise: Promise<void> | null = null;
+  private connectPromise: Promise<void> | null = null;
   private warmSettled = false;
-  private resolveIndexBarrier!: () => void;
   private listeningForInvalidation = false;
   private currentPlaybackMessageId: number | null = null;
-  private readonly indexBarrierPromise = new Promise<void>(resolve => {
-    this.resolveIndexBarrier = resolve;
-  });
   private readonly onTransportInvalidated = () => {
     this.currentPlaybackMessageId = null;
     playTrace("SOURCE_SESSION_INVALIDATED");
@@ -92,18 +89,30 @@ export class WebStartupPlaybackCoordinator {
     playTrace("STARTUP_LOCAL_ROUTING_READY", { count: this.candidates.length });
   }
 
-  start(): Promise<void> {
-    if (this.startPromise) return this.startPromise;
-    playTrace("DIRECT_START_DISPATCHED", { startup_candidate_count: this.candidates.length });
-
-    let attempt!: Promise<void>;
-    attempt = (async () => {
+  private connect(): Promise<void> {
+    if (this.connectPromise) return this.connectPromise;
+    let pending!: Promise<void>;
+    pending = (async () => {
       // Direct is intentionally dispatched before account restore finishes, but
       // it must never choose an unresolved synchronous fallback API. Resolve the
       // Cloud origin first; this keeps the fast path parallel with auth while
       // ensuring the first transport request uses the same origin as auth.
       await resolveBeatGalerCloudApi();
       await this.transport.connectPlaybackDataPlane();
+    })().finally(() => {
+      if (this.connectPromise === pending) this.connectPromise = null;
+    });
+    this.connectPromise = pending;
+    return pending;
+  }
+
+  start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    playTrace("DIRECT_START_DISPATCHED", { startup_candidate_count: this.candidates.length });
+
+    let attempt!: Promise<void>;
+    attempt = (async () => {
+      await this.connect();
       if (this.candidates.length === 0) {
         this.finishStartupWarm(0, 0);
         return;
@@ -131,13 +140,13 @@ export class WebStartupPlaybackCoordinator {
     if (this.warmSettled) return;
     this.warmSettled = true;
     playTrace("ADAPTER_STARTUP_WARM_SETTLED", { count, failures });
-    this.resolveIndexBarrier();
   }
 
   async waitUntilIndexAllowed(): Promise<void> {
-    if (!this.warmSettled) playTrace("INDEX_WAIT_STARTUP", { count: this.candidates.length });
-    await this.start();
-    await this.indexBarrierPromise;
+    if (!this.warmSettled) playTrace("INDEX_WAIT_DIRECT_READY", { warm_count: this.candidates.length });
+    const startup = this.start();
+    void startup.catch(() => {});
+    await this.connect();
   }
 
   private async restoreCurrentFocusAfter(staleMessageId: number): Promise<void> {
