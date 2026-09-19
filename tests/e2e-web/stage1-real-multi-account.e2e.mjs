@@ -14,6 +14,9 @@ const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
 const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const singleAccountDiagnostic = accountCount === 1;
+const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1";
+const MIXED_REQUIRED_ACCOUNTS = 7;
+const MIXED_RUN_SUFFIX = String(Date.now());
 const PLAYBACK_FIXTURE_FILE = path.resolve(process.cwd(), "tests", "e2e-web", "fixtures", "stage1-playback.mp3");
 const PLAYBACK_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-playback-fixtures");
 const PLAYBACK_MIN_PROGRESS_SECONDS = 0.5;
@@ -30,8 +33,9 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 });
 
 const report = {
-  version: 6,
+  version: 7,
   stage: "Etapa 1 — uso real entre cuentas independientes",
+  workload_mode: mixedWorkload ? "mixed-7-account" : "full-lifecycle",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
   cohort_id: cohortId || null,
   requested_account_count: accountCount,
@@ -56,14 +60,26 @@ const report = {
     { name: "multi_account_auth_isolation", status: "NOT_TESTED", severity: null },
     { name: "authoritative_library_data_plane", status: "NOT_TESTED", severity: null },
     { name: "multi_account_direct_identity", status: "NOT_TESTED", severity: null },
-    { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
     { name: "playback_fixture_provisioning", status: "NOT_TESTED", severity: null },
-    { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
-    { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
-    { name: "master_download", status: "NOT_TESTED", severity: null },
-    { name: "remove_from_library_persistence", status: "NOT_TESTED", severity: null },
-    { name: "trash_visibility_persistence", status: "NOT_TESTED", severity: null },
-    { name: "trash_purge_persistence", status: "NOT_TESTED", severity: null },
+    ...(mixedWorkload
+      ? [
+          { name: "mixed_workload_concurrency", status: "NOT_TESTED", severity: null },
+          { name: "mixed_playback", status: "NOT_TESTED", severity: null },
+          { name: "mixed_upload", status: "NOT_TESTED", severity: null },
+          { name: "mixed_metadata_edit", status: "NOT_TESTED", severity: null },
+          { name: "mixed_master_download", status: "NOT_TESTED", severity: null },
+          { name: "mixed_reload_persistence", status: "NOT_TESTED", severity: null },
+          { name: "mixed_post_workload_isolation", status: "NOT_TESTED", severity: null },
+        ]
+      : [
+          { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
+          { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
+          { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
+          { name: "master_download", status: "NOT_TESTED", severity: null },
+          { name: "remove_from_library_persistence", status: "NOT_TESTED", severity: null },
+          { name: "trash_visibility_persistence", status: "NOT_TESTED", severity: null },
+          { name: "trash_purge_persistence", status: "NOT_TESTED", severity: null },
+        ]),
   ],
   failure: null,
 };
@@ -739,6 +755,127 @@ async function provisionPlaybackBeat(client, account) {
   return { ...saved, created: true };
 }
 
+
+function mixedUploadBeatName(account) {
+  return `Stage1 Mixed Upload ${account.label} ${MIXED_RUN_SUFFIX}`;
+}
+
+async function waitForNamedBeatCommitted(client, account, beatName, timeout = 120_000) {
+  let latest = null;
+  await client.waitUntil(async () => {
+    latest = await playbackBeatSnapshot(client, beatName);
+    return Boolean(latest?.beat_id && latest?.cloud_committed === true);
+  }, {
+    timeout,
+    interval: 500,
+    timeoutMsg: `Account ${account.label} did not commit ${beatName} to the authoritative Cloud library.`,
+  });
+  return { ...latest, beat_name: beatName };
+}
+
+async function uploadNamedMp3Fixture(client, account, beatName) {
+  const existing = await playbackBeatSnapshot(client, beatName);
+  if (existing?.beat_id) {
+    throw taggedError(
+      `Account ${account.label} mixed-workload fixture already exists unexpectedly.`,
+      "STAGE1_MIXED_UPLOAD_NAME_COLLISION",
+      "P1",
+    );
+  }
+
+  await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
+  const localFixture = path.join(PLAYBACK_TMP_DIR, `${beatName}.mp3`);
+  await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
+
+  const addButton = await client.$('//button[normalize-space(.)="Add beat"]');
+  await addButton.waitForDisplayed({ timeout: 30_000 });
+  await addButton.click();
+
+  const chooseButton = await client.$('//button[contains(normalize-space(.), "Choose MP3 or WAV")]');
+  await chooseButton.waitForDisplayed({ timeout: 30_000 });
+
+  await client.execute(() => {
+    if (window.__beatgalerStage1OriginalFileInputClick) return;
+    window.__beatgalerStage1OriginalFileInputClick = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function patchedStage1FileInputClick(...args) {
+      if (this.type === "file") return;
+      return window.__beatgalerStage1OriginalFileInputClick.apply(this, args);
+    };
+  });
+
+  await chooseButton.click();
+
+  const input = await client.$('input[type="file"][accept*=".mp3"]');
+  await input.waitForExist({ timeout: 30_000 });
+  await client.execute(element => {
+    const original = window.__beatgalerStage1OriginalFileInputClick;
+    if (original) {
+      HTMLInputElement.prototype.click = original;
+      delete window.__beatgalerStage1OriginalFileInputClick;
+    }
+
+    element.style.display = "block";
+    element.style.position = "fixed";
+    element.style.left = "8px";
+    element.style.top = "8px";
+    element.style.width = "240px";
+    element.style.height = "40px";
+    element.style.opacity = "0.01";
+    element.style.zIndex = "2147483647";
+    element.style.pointerEvents = "auto";
+  }, input);
+
+  const remoteFixture = await client.uploadFile(localFixture);
+  await input.setValue(remoteFixture);
+
+  const saveButton = await client.$('//button[starts-with(normalize-space(.), "Save")]');
+  await saveButton.waitForDisplayed({ timeout: 30_000 });
+  await saveButton.waitForEnabled({ timeout: 30_000 });
+  await saveButton.click();
+
+  const saved = await waitForNamedBeatCommitted(client, account, beatName);
+  return { ...saved, created: true };
+}
+
+async function validateNamedFixtureIsolation(clients, ownerIndex, beat) {
+  const snapshots = await Promise.all(
+    clients.map(client => playbackBeatSnapshot(client, beat.beat_name)),
+  );
+
+  snapshots.forEach((snapshot, index) => {
+    if (index === ownerIndex) {
+      assert.equal(
+        snapshot?.beat_id,
+        beat.beat_id,
+        `Account ${accounts[index].label} must retain its mixed upload fixture.`,
+      );
+      return;
+    }
+
+    assert.equal(
+      snapshot,
+      null,
+      `Account ${accounts[index].label} must not see Account ${accounts[ownerIndex].label}'s mixed upload fixture.`,
+    );
+  });
+
+  return snapshots.map(snapshot => snapshot?.beat_id || null);
+}
+
+async function reloadDuringMixedWorkload(client, account, beforeSnapshot) {
+  await client.refresh();
+  const library = await waitForAuthoritativeLibrary(client, account.label);
+  const after = await waitForRuntimeSnapshot(client, account.label);
+  validateSingleAccount(account.label, after);
+  validatePersistentReload(beforeSnapshot, after, account.label);
+  return {
+    library_beat_count: library.beat_count,
+    session_id: after.direct.session_id,
+    vault_chat_id: after.direct.chat_id,
+    transport_id: after.direct.transport_id,
+  };
+}
+
 async function playbackIsolationSnapshot(client) {
   return client.execute(() => {
     const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -1370,6 +1507,325 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             : `${accountCount} productive MASTER uploads committed to isolated authoritative libraries`,
         );
 
+
+        if (mixedWorkload) {
+          if (accountCount !== MIXED_REQUIRED_ACCOUNTS) {
+            throw taggedError(
+              `Mixed workload mode requires exactly ${MIXED_REQUIRED_ACCOUNTS} accounts; received ${accountCount}.`,
+              "STAGE1_MIXED_ACCOUNT_COUNT",
+              null,
+            );
+          }
+
+          report.accounts = Object.fromEntries(
+            accounts.map((account, index) => [
+              account.label,
+              {
+                ...report.accounts[account.label],
+                login_ms: loginTimes[index],
+                user_id: before[index].user_id,
+                client_id: before[index].client_id,
+                vault_chat_id: before[index].direct.chat_id,
+                transport_id: before[index].direct.transport_id,
+                transport_user_id: before[index].direct.transport_user_id,
+                membership_bootstrap_mode: before[index].direct.mode,
+                session_id_before: before[index].direct.session_id,
+                library_beats_before: librariesBefore[index].beat_count,
+                playback_fixture: {
+                  beat_id: playbackFixtures[index].beat_id,
+                  beat_name: playbackFixtures[index].beat_name,
+                  created_this_run: playbackFixtures[index].created,
+                },
+              },
+            ]),
+          );
+
+          const mixedBeatName = mixedUploadBeatName(accounts[2]);
+          for (const observer of authObservers.values()) {
+            observer.setPhase("mixed-workload-concurrency");
+          }
+
+          const mixedStartedAt = Date.now();
+          const mixedTasks = [
+            {
+              name: "playback",
+              scenario: "mixed_playback",
+              run: runConcurrentPlayback(
+                clients.slice(0, 2),
+                playbackFixtures.slice(0, 2),
+              ),
+            },
+            {
+              name: "upload",
+              scenario: "mixed_upload",
+              run: uploadNamedMp3Fixture(
+                clients[2],
+                accounts[2],
+                mixedBeatName,
+              ),
+            },
+            {
+              name: "metadata",
+              scenario: "mixed_metadata_edit",
+              run: editFixtureMetadata(
+                clients[3],
+                accounts[3],
+                playbackFixtures[3],
+              ),
+            },
+            {
+              name: "download",
+              scenario: "mixed_master_download",
+              run: downloadFixtureMaster(
+                clients[4],
+                accounts[4],
+                playbackFixtures[4],
+              ),
+            },
+            {
+              name: "reload-06",
+              scenario: "mixed_reload_persistence",
+              run: reloadDuringMixedWorkload(
+                clients[5],
+                accounts[5],
+                before[5],
+              ),
+            },
+            {
+              name: "reload-07",
+              scenario: "mixed_reload_persistence",
+              run: reloadDuringMixedWorkload(
+                clients[6],
+                accounts[6],
+                before[6],
+              ),
+            },
+          ];
+
+          const mixedResults = await Promise.allSettled(
+            mixedTasks.map(task => task.run),
+          );
+          const mixedMs = Date.now() - mixedStartedAt;
+          const mixedFailures = mixedResults
+            .map((result, index) => ({ result, task: mixedTasks[index] }))
+            .filter(({ result }) => result.status === "rejected");
+
+          if (mixedFailures.length > 0) {
+            for (const { task } of mixedFailures) {
+              markScenario(
+                task.scenario,
+                "FAIL",
+                "P1",
+                `Mixed role ${task.name} failed while the other roles were active.`,
+              );
+            }
+            throw taggedError(
+              mixedFailures
+                .map(({ result, task }) =>
+                  `${task.name}: ${String(result.reason?.message || result.reason).slice(0, 600)}`
+                )
+                .join(" | "),
+              "STAGE1_MIXED_WORKLOAD_FAILED",
+              "P1",
+            );
+          }
+
+          const playbackRun = mixedResults[0].value;
+          const mixedUpload = mixedResults[1].value;
+          const metadataEdit = mixedResults[2].value;
+          const masterDownload = mixedResults[3].value;
+          const reload06 = mixedResults[4].value;
+          const reload07 = mixedResults[5].value;
+
+          markScenario(
+            "mixed_playback",
+            "PASS",
+            null,
+            `Accounts 01-02 advanced real playback while upload/edit/download/Reload operations were in flight; start_spread_ms=${playbackRun.start_spread_ms}`,
+          );
+          markScenario(
+            "mixed_master_download",
+            "PASS",
+            null,
+            "Account 05 materialized a real MASTER MP3 while the other mixed roles were active",
+          );
+          markScenario(
+            "mixed_reload_persistence",
+            "PASS",
+            null,
+            "Accounts 06-07 reloaded during the mixed workload and preserved user/client/vault/transport identity",
+          );
+          markScenario(
+            "mixed_workload_concurrency",
+            "PASS",
+            null,
+            `Six concurrent role operations covered all 7 accounts in ${mixedMs} ms`,
+          );
+
+          report.accounts["01"].mixed_role = {
+            role: "playback",
+            playback: playbackRun.accounts[0],
+          };
+          report.accounts["02"].mixed_role = {
+            role: "playback",
+            playback: playbackRun.accounts[1],
+          };
+          report.accounts["03"].mixed_role = {
+            role: "upload",
+            upload: mixedUpload,
+          };
+          report.accounts["04"].mixed_role = {
+            role: "metadata_edit",
+            metadata_after_save: metadataEdit,
+          };
+          report.accounts["05"].mixed_role = {
+            role: "master_download",
+            master_download: masterDownload,
+          };
+          report.accounts["06"].mixed_role = {
+            role: "reload",
+            reload: reload06,
+          };
+          report.accounts["07"].mixed_role = {
+            role: "reload",
+            reload: reload07,
+          };
+
+          for (const observer of authObservers.values()) {
+            observer.setPhase("mixed-post-workload-authoritative-reload");
+          }
+
+          const postReloadStartedAt = Date.now();
+          await Promise.all(clients.map(client => client.refresh()));
+
+          const finalLibraries = await Promise.all(
+            accounts.map((account, index) =>
+              waitForAuthoritativeLibrary(clients[index], account.label)
+            ),
+          );
+          const finalSnapshots = await Promise.all(
+            accounts.map((account, index) =>
+              waitForRuntimeSnapshot(clients[index], account.label)
+            ),
+          );
+
+          finalSnapshots.forEach((snapshot, index) => {
+            validateSingleAccount(accounts[index].label, snapshot);
+            validatePersistentReload(before[index], snapshot, accounts[index].label);
+          });
+          validateCrossAccountIsolation(finalSnapshots);
+
+          const finalPlaybackFixtures = await Promise.all(
+            accounts.map((account, index) =>
+              waitForPlaybackBeat(clients[index], account)
+            ),
+          );
+          finalPlaybackFixtures.forEach((beat, index) => {
+            assert.equal(
+              beat.beat_id,
+              playbackFixtures[index].beat_id,
+              `Account ${accounts[index].label} playback fixture changed identity after mixed workload.`,
+            );
+          });
+          await validatePlaybackFixtureIsolation(clients);
+
+          const uploadPersisted = await waitForNamedBeatCommitted(
+            clients[2],
+            accounts[2],
+            mixedUpload.beat_name,
+          );
+          assert.equal(
+            uploadPersisted.beat_id,
+            mixedUpload.beat_id,
+            "Account 03 mixed upload changed identity after authoritative Reload.",
+          );
+          const mixedUploadVisibility = await validateNamedFixtureIsolation(
+            clients,
+            2,
+            mixedUpload,
+          );
+          markScenario(
+            "mixed_upload",
+            "PASS",
+            null,
+            "Account 03 uploaded a new MP3 during concurrent activity; it persisted after Reload and remained isolated to its vault",
+          );
+
+          const metadataPersisted = await verifyFixtureMetadataAfterReload(
+            clients[3],
+            accounts[3],
+            playbackFixtures[3],
+          );
+          markScenario(
+            "mixed_metadata_edit",
+            "PASS",
+            null,
+            "Account 04 committed BPM/Key during concurrent activity and preserved the edit after Reload",
+          );
+
+          const postReloadMs = Date.now() - postReloadStartedAt;
+
+          finalSnapshots.forEach((snapshot, index) => {
+            Object.assign(report.accounts[accounts[index].label], {
+              session_id_after_mixed_reload: snapshot.direct.session_id,
+              library_beats_after_mixed_reload: finalLibraries[index].beat_count,
+              visible_error_after_mixed_reload: snapshot.visible_error,
+            });
+          });
+          report.accounts["03"].mixed_role.upload_after_reload = uploadPersisted;
+          report.accounts["03"].mixed_role.visibility_across_accounts =
+            mixedUploadVisibility;
+          report.accounts["04"].mixed_role.metadata_after_reload =
+            metadataPersisted;
+
+          markScenario(
+            "mixed_post_workload_isolation",
+            "PASS",
+            null,
+            "All 7 accounts survived the authoritative post-workload Reload with unique users/client ids/vaults; fixtures remained isolated",
+          );
+
+          report.timings = {
+            startup_ms: startupMs,
+            mixed_workload_ms: mixedMs,
+            post_mixed_authoritative_reload_ms: postReloadMs,
+            playback_start_spread_ms: playbackRun.start_spread_ms,
+          };
+
+          report.transport_distribution = Object.fromEntries(
+            [
+              ...new Set(
+                before.map(snapshot => snapshot.direct.transport_id),
+              ),
+            ].map(transportId => [
+              transportId,
+              before.filter(
+                snapshot => snapshot.direct.transport_id === transportId,
+              ).length,
+            ]),
+          );
+
+          for (const [label, observer] of authObservers) {
+            validateAuthHealth(observer.snapshot(), label);
+          }
+
+          markScenario(
+            "auth_health_stability",
+            "PASS",
+            null,
+            "No observed health probe failed during the 7-account mixed workload",
+          );
+
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+
+          console.log(
+            `[stage1-real] PASS mixed-workload accounts=${accountCount}; playback+upload+metadata+download+reload overlapped and persisted. report=${REPORT_FILE}`,
+          );
+          return;
+        }
+
         const reloadStartedAt = Date.now();
 
         for (const observer of authObservers.values()) {
@@ -1873,14 +2329,24 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           );
         }
 
-        for (const name of [
-          "multi_account_auth_isolation",
-          "authoritative_library_data_plane",
-          "multi_account_direct_identity",
-          "simultaneous_reload_persistent_assignment",
-          "playback_fixture_provisioning",
-          "playback_concurrency",
-        ]) {
+        const coreFailureScenarios = mixedWorkload
+          ? [
+              "multi_account_auth_isolation",
+              "authoritative_library_data_plane",
+              "multi_account_direct_identity",
+              "playback_fixture_provisioning",
+              "mixed_workload_concurrency",
+            ]
+          : [
+              "multi_account_auth_isolation",
+              "authoritative_library_data_plane",
+              "multi_account_direct_identity",
+              "simultaneous_reload_persistent_assignment",
+              "playback_fixture_provisioning",
+              "playback_concurrency",
+            ];
+
+        for (const name of coreFailureScenarios) {
           if (
             scenario(name)?.status === "NOT_TESTED" &&
             (
@@ -1898,21 +2364,39 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           }
         }
 
-        const postCoreScenarios = [
-          "metadata_edit_persistence",
-          "master_download",
-          "remove_from_library_persistence",
-          "trash_visibility_persistence",
-          "trash_purge_persistence",
-        ];
-        const coreReachedPostPhase = [
-          "multi_account_auth_isolation",
-          "authoritative_library_data_plane",
-          "multi_account_direct_identity",
-          "simultaneous_reload_persistent_assignment",
-          "playback_fixture_provisioning",
-          "playback_concurrency",
-        ].every(name => {
+        const postCoreScenarios = mixedWorkload
+          ? [
+              "mixed_playback",
+              "mixed_upload",
+              "mixed_metadata_edit",
+              "mixed_master_download",
+              "mixed_reload_persistence",
+              "mixed_post_workload_isolation",
+            ]
+          : [
+              "metadata_edit_persistence",
+              "master_download",
+              "remove_from_library_persistence",
+              "trash_visibility_persistence",
+              "trash_purge_persistence",
+            ];
+        const coreReachedPostPhase = (
+          mixedWorkload
+            ? [
+                "multi_account_auth_isolation",
+                "authoritative_library_data_plane",
+                "multi_account_direct_identity",
+                "playback_fixture_provisioning",
+              ]
+            : [
+                "multi_account_auth_isolation",
+                "authoritative_library_data_plane",
+                "multi_account_direct_identity",
+                "simultaneous_reload_persistent_assignment",
+                "playback_fixture_provisioning",
+                "playback_concurrency",
+              ]
+        ).every(name => {
           const status = scenario(name)?.status;
           return status === "PASS" || (singleAccountDiagnostic && status === "SKIPPED");
         });
