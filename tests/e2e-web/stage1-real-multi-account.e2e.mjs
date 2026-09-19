@@ -1489,15 +1489,7 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
   const signOut = await client.$('//button[normalize-space(.)="Sign out of BeatGaler"]');
   await signOut.waitForDisplayed({ timeout: 30_000 });
   await signOut.click();
-
-  await client.waitUntil(async () => {
-    const login = await client.$("#auth-login-identifier");
-    return login.isDisplayed().catch(() => false);
-  }, {
-    timeout: 60_000,
-    interval: 250,
-    timeoutMsg: `Account ${account.label} did not return to the sign-in gate after logout.`,
-  });
+  await client.pause(1_500);
 
   const afterLogoutCookies = await browserCookiePresence(client);
   const afterLogout = await client.execute(() => ({
@@ -1506,7 +1498,38 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
       localStorage.getItem("beatgaler:web-session-present:v1") === "1",
     csrf_present: Boolean(sessionStorage.getItem("beatgaler:web-csrf:v1")),
     beat_count: document.querySelectorAll("[data-beat-card-id]").length,
+    login_visible: Boolean(
+      document.querySelector("#auth-login-identifier")?.getClientRects().length
+    ),
+    settings_signout_visible: Array.from(document.querySelectorAll("button"))
+      .some(node =>
+        node.textContent?.trim() === "Sign out of BeatGaler" &&
+        node.getClientRects().length > 0
+      ),
   }));
+
+  const logoutHttp = observer?.snapshot().findLast(
+    entry =>
+      entry.route === "/beatgaler-api/auth/logout" &&
+      entry.state === "response",
+  );
+
+  if (!afterLogout.login_visible) {
+    throw taggedError(
+      `Account ${account.label} logout did not return to the sign-in gate. diagnostic=${JSON.stringify({
+        logout_http_status: logoutHttp?.status ?? null,
+        session_cookie_present: afterLogoutCookies.session_cookie,
+        csrf_cookie_present: afterLogoutCookies.csrf_cookie,
+        web_session_marker_present: afterLogout.web_session_marker,
+        session_storage_csrf_present: afterLogout.csrf_present,
+        client_id_preserved: afterLogout.client_id === beforeLogout.client_id,
+        beat_count_after_logout: afterLogout.beat_count,
+        settings_signout_visible: afterLogout.settings_signout_visible,
+      }).slice(0, 1800)}`,
+      "STAGE1_FOCUSED_LOGOUT_GATE_STALE",
+      "P1",
+    );
+  }
 
   assert.equal(
     afterLogoutCookies.session_cookie,
@@ -1534,11 +1557,6 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
     `Account ${account.label} logout must preserve the browser installation id.`,
   );
 
-  const logoutHttp = observer?.snapshot().findLast(
-    entry =>
-      entry.route === "/beatgaler-api/auth/logout" &&
-      entry.state === "response",
-  );
   assert.ok(
     logoutHttp && logoutHttp.status >= 200 && logoutHttp.status < 300,
     `Account ${account.label} must observe a successful real /auth/logout response.`,
