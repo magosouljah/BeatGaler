@@ -19,7 +19,14 @@ const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
 const soakMode = mixedWorkload && soakMinutes > 0;
 const MIXED_REQUIRED_ACCOUNTS = 7;
 const MIXED_RUN_SUFFIX = String(Date.now());
-const SOAK_ROTATIONS = MIXED_REQUIRED_ACCOUNTS;
+const SOAK_ROTATIONS = Math.max(
+  1,
+  Math.min(
+    MIXED_REQUIRED_ACCOUNTS,
+    Number(process.env.STAGE1_SOAK_ROTATIONS || MIXED_REQUIRED_ACCOUNTS),
+  ),
+);
+const diagnosticSoakRound = soakMode && SOAK_ROTATIONS < MIXED_REQUIRED_ACCOUNTS;
 const SOAK_FIRST_AUDIO_BUDGET_MS = 2_000;
 const SOAK_HOT_LIBRARY_BUDGET_MS = 5_000;
 const SOAK_LARGE_WAV_MB = Math.max(8, Math.min(256, Number(process.env.STAGE1_SOAK_LARGE_WAV_MB || 64)));
@@ -42,7 +49,9 @@ const report = {
   version: 8,
   stage: "Etapa 1 — uso real entre cuentas independientes",
   workload_mode: soakMode
-    ? "mixed-7-account-30m-soak"
+    ? diagnosticSoakRound
+      ? "mixed-7-account-diagnostic-soak"
+      : "mixed-7-account-30m-soak"
     : mixedWorkload
       ? "mixed-7-account"
       : "full-lifecycle",
@@ -1955,20 +1964,29 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             report.soak.finished_at = new Date().toISOString();
             report.soak.actual_duration_ms = soakElapsedMs;
 
-            for (const counts of Object.values(roleCounts)) {
-              assert.ok(counts.playback >= 2, "Every account must rotate through playback twice.");
-              assert.ok(counts.upload >= 1, "Every account must rotate through upload.");
-              assert.ok(counts.metadata_reload >= 1, "Every account must rotate through metadata + Reload.");
-              assert.ok(counts.download >= 1, "Every account must rotate through download.");
-              assert.ok(counts.reload >= 2, "Every account must rotate through Reload twice.");
-            }
+            if (!diagnosticSoakRound) {
+              for (const counts of Object.values(roleCounts)) {
+                assert.ok(counts.playback >= 2, "Every account must rotate through playback twice.");
+                assert.ok(counts.upload >= 1, "Every account must rotate through upload.");
+                assert.ok(counts.metadata_reload >= 1, "Every account must rotate through metadata + Reload.");
+                assert.ok(counts.download >= 1, "Every account must rotate through download.");
+                assert.ok(counts.reload >= 2, "Every account must rotate through Reload twice.");
+              }
 
-            markScenario(
-              "mixed_role_rotation",
-              "PASS",
-              null,
-              "Seven rotations covered every account in playback, upload, metadata+Reload, download, and Reload roles",
-            );
+              markScenario(
+                "mixed_role_rotation",
+                "PASS",
+                null,
+                "Seven rotations covered every account in playback, upload, metadata+Reload, download, and Reload roles",
+              );
+            } else {
+              markScenario(
+                "mixed_role_rotation",
+                "SKIPPED",
+                null,
+                `Diagnostic reproduction requested ${SOAK_ROTATIONS} fixed round(s); full role rotation is intentionally not evaluated.`,
+              );
+            }
             if (soakElapsedMs < soakTargetMs) {
               throw taggedError(
                 `Mixed soak ended early at ${soakElapsedMs} ms; target was ${soakTargetMs} ms.`,
@@ -2031,7 +2049,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
 
             for (let index = 0; index < accounts.length; index += 1) {
               const expected = lastMetadataByAccount[accounts[index].label];
-              assert.ok(expected, `Account ${accounts[index].label} never completed its metadata role.`);
+              if (!expected) {
+                if (!diagnosticSoakRound) {
+                  assert.fail(`Account ${accounts[index].label} never completed its metadata role.`);
+                }
+                continue;
+              }
               await verifyFixtureMetadataAfterReload(
                 clients[index],
                 accounts[index],
@@ -2173,7 +2196,9 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               "auth_health_stability",
               "PASS",
               null,
-              "No observed health probe failed during the 30-minute mixed soak",
+              diagnosticSoakRound
+                ? "No observed health probe failed during the diagnostic mixed-soak reproduction"
+                : "No observed health probe failed during the 30-minute mixed soak",
             );
 
             if (!firstAudioBudgetOk || !hotLibraryBudgetOk) {
@@ -2191,7 +2216,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             report.severity = null;
             await writeReport();
             console.log(
-              `[stage1-real] PASS mixed-soak accounts=${accountCount} duration_ms=${soakElapsedMs}; rotations=7; large_transfer_mb=${largeUpload.source_bytes / (1024 * 1024)}. report=${REPORT_FILE}`,
+              `[stage1-real] PASS mixed-soak accounts=${accountCount} duration_ms=${soakElapsedMs}; rotations=${SOAK_ROTATIONS}; large_transfer_mb=${largeUpload.source_bytes / (1024 * 1024)}. report=${REPORT_FILE}`,
             );
             return;
           }
