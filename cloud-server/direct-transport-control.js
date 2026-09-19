@@ -899,9 +899,25 @@ function normalizeOperationDocumentContext(input) {
 }
 
 async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind, documentContext }) {
+  const beginStartedAt = Date.now();
   const checked = getLeaseChecked({ installationId, sessionId, generation });
-  if (!checked) return { ok: false, expired: true };
+  if (!checked) {
+    diag('OPERATION_BEGIN_EXPIRED', {
+      session_id: String(sessionId || ''),
+      generation: Number(generation || 0),
+      kind: String(kind || 'data'),
+      elapsed_ms: Date.now() - beginStartedAt,
+    });
+    return { ok: false, expired: true };
+  }
   const { pool, lease } = checked;
+  diag('OPERATION_BEGIN_ENTER', {
+    session_id: lease.session_id,
+    transport_id: lease.bot_id,
+    vault: lease.chat_id,
+    kind: String(kind || 'data'),
+    generation: Number(generation || 0),
+  });
   mutateState(pool, state => {
     if (state.leases[lease.session_id]) state.leases[lease.session_id].last_heartbeat_at = nowIso();
   });
@@ -913,12 +929,27 @@ async function beginOperation({ installationId, sessionId, generation, credentia
     snapshot = stateSnapshot(pool);
     botState = snapshot.bots[lease.bot_id];
     if (botState.rotation_pending) {
+      diag('OPERATION_BEGIN_WAIT', {
+        session_id: lease.session_id,
+        transport_id: lease.bot_id,
+        vault: lease.chat_id,
+        kind: String(kind || 'data'),
+        reason: 'rotation_pending',
+        elapsed_ms: Date.now() - beginStartedAt,
+      });
       return { ok: false, wait: true, retry_after_ms: 250, reason: 'rotation_pending' };
     }
   }
 
   if (Number(credentialVersion || 0) !== Number(botState.credential_version)) {
     const runtime = await runtimeForLease(snapshot.leases[lease.session_id], { freshMarker: true });
+    diag('OPERATION_BEGIN_REFRESH_REQUIRED', {
+      session_id: lease.session_id,
+      transport_id: lease.bot_id,
+      vault: lease.chat_id,
+      kind: String(kind || 'data'),
+      elapsed_ms: Date.now() - beginStartedAt,
+    });
     return { ok: false, refresh_required: true, credential_refresh: sessionPublic(runtime) };
   }
 
@@ -985,14 +1016,33 @@ async function beginOperation({ installationId, sessionId, generation, credentia
     return true;
   });
   if (!admitted) {
+    diag('OPERATION_BEGIN_WAIT', {
+      session_id: lease.session_id,
+      transport_id: lease.bot_id,
+      vault: lease.chat_id,
+      kind: normalizedKind,
+      reason: 'index_busy',
+      elapsed_ms: Date.now() - beginStartedAt,
+      document_generation: normalizedDocumentContext?.generation || null,
+    });
     return { ok: false, wait: true, retry_after_ms: 200, reason: 'index_busy' };
   }
+  diag('OPERATION_BEGIN_GRANTED', {
+    operation_id: opId,
+    session_id: lease.session_id,
+    transport_id: lease.bot_id,
+    vault: lease.chat_id,
+    kind: normalizedKind,
+    elapsed_ms: Date.now() - beginStartedAt,
+    document_generation: normalizedDocumentContext?.generation || null,
+  });
   return { ok: true, operation_id: opId, credential_version: botState.credential_version };
 }
 
 async function endOperation({ installationId, sessionId, generation, operationId }) {
   const pool = loadPool();
   let botId = null;
+  let endedOperation = null;
   mutateState(pool, state => {
     const lease = state.leases[String(sessionId || '')];
     if (lease && lease.installation_id === String(installationId || '') && Number(lease.generation) === Number(generation)) {
@@ -1002,9 +1052,21 @@ async function endOperation({ installationId, sessionId, generation, operationId
     const op = state.operations[String(operationId || '')];
     if (op && op.session_id === String(sessionId || '')) {
       botId = botId || op.bot_id;
+      endedOperation = { ...op };
       delete state.operations[String(operationId)];
     }
   });
+  if (endedOperation) {
+    diag('OPERATION_END', {
+      operation_id: String(operationId || ''),
+      session_id: endedOperation.session_id,
+      transport_id: endedOperation.bot_id,
+      vault: endedOperation.chat_id,
+      kind: endedOperation.kind,
+      duration_ms: Math.max(0, Date.now() - parseTime(endedOperation.started_at)),
+      document_generation: endedOperation.document_generation || null,
+    });
+  }
   if (botId) await maybeRotatePendingBot(botId);
   return { ok: true };
 }
@@ -1286,6 +1348,10 @@ function recordIndexPointer(chatId, pointer = {}) {
   return registry.vaults[key];
 }
 
+function recordDiagnostic(event, fields = {}) {
+  diag(String(event || 'DIRECT_DIAGNOSTIC'), fields);
+}
+
 function getIndexPointer(chatId) {
   const key = String(chatId || '').trim();
   const registry = loadVaultRegistry();
@@ -1298,6 +1364,7 @@ function getIndexPointer(chatId) {
 }
 module.exports = {
   TOKEN_ROTATION_ENABLED,
+  recordDiagnostic,
   recordIndexPointer,
   getIndexPointer,
   enabled,
