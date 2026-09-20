@@ -2537,7 +2537,7 @@ async function ensureIsolationSecretBeat(client, account) {
   await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
   const localFixture = path.join(
     PLAYBACK_TMP_DIR,
-    `stage1-isolation-secret-${account.label}-v1.mp3`,
+    `${beatName}.mp3`,
   );
   const marker = `BEATGALER-STAGE1-OFFENSIVE-${account.label}-MEDIA-v1`;
   await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
