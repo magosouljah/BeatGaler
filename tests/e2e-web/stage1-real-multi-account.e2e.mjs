@@ -2154,6 +2154,104 @@ async function playbackRouteSnapshot(client, beatId) {
   }, beatId);
 }
 
+
+async function ensureIsolationSecretBeat(client, account) {
+  const beatName = \`Stage1 Isolation Secret \${account.label} v1\`;
+  const existing = await playbackBeatSnapshot(client, beatName);
+  if (existing?.beat_id) {
+    const committed = existing.cloud_committed
+      ? existing
+      : await waitForNamedBeatCommitted(client, account, beatName);
+    return {
+      ...committed,
+      beat_name: beatName,
+      created: false,
+      marker: \`BEATGALER-STAGE1-OFFENSIVE-\${account.label}-MEDIA-v1\`,
+    };
+  }
+
+  await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
+  const localFixture = path.join(
+    PLAYBACK_TMP_DIR,
+    \`stage1-isolation-secret-\${account.label}-v1.mp3\`,
+  );
+  const marker = \`BEATGALER-STAGE1-OFFENSIVE-\${account.label}-MEDIA-v1\`;
+  await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
+  await fs.appendFile(localFixture, Buffer.from(\`\\n\${marker}\\n\`, "utf8"));
+
+  const uploaded = await uploadNamedMp3Fixture(
+    client,
+    account,
+    beatName,
+    {
+      extension: ".mp3",
+      localFixture,
+    },
+  );
+  return {
+    ...uploaded,
+    marker,
+  };
+}
+
+async function directMediaReadProbe(client, messageId, mimeType = "audio/mpeg") {
+  return client.execute(async input => {
+    const hex = buffer =>
+      Array.from(new Uint8Array(buffer))
+        .map(value => value.toString(16).padStart(2, "0"))
+        .join("");
+
+    try {
+      const module = await import(
+        "/src/features/playback/webStartupPlaybackCoordinator.ts"
+      );
+      const coordinator = module.getWebStartupPlaybackCoordinator();
+      const transport = coordinator.getTransport();
+      const chunks = [];
+
+      const stream = await transport.streamFile(
+        {
+          messageId: Number(input.messageId),
+          mimeType: input.mimeType || "audio/mpeg",
+          purpose: "export",
+        },
+        chunk => {
+          chunks.push(chunk.slice(0));
+        },
+      );
+      const result = await stream.completed;
+      const totalBytes = chunks.reduce(
+        (sum, chunk) => sum + chunk.byteLength,
+        0,
+      );
+      const joined = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        joined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
+      const digest = await crypto.subtle.digest("SHA-256", joined);
+
+      return {
+        ok: true,
+        message_id: Number(input.messageId),
+        total_bytes: totalBytes,
+        stream_total_bytes: Number(result?.totalBytes || 0),
+        mime_type: String(result?.mimeType || input.mimeType || ""),
+        sha256: hex(digest),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message_id: Number(input.messageId),
+        code: String(error?.code || "") || null,
+        name: String(error?.name || "") || null,
+        error: String(error?.message || error || "").slice(0, 800),
+      };
+    }
+  }, { messageId, mimeType });
+}
+
 async function proveOwnHeartbeat(client, runtime, label) {
   const response = await isolationApiPost(
     client,
@@ -2497,8 +2595,15 @@ async function runFocusedOffensiveIsolation(
   const [accountA, accountB] = accounts;
   const [runtimeA, runtimeB] = before;
   const [fixtureA, fixtureB] = playbackFixtures;
+  const isolationSecretA = await ensureIsolationSecretBeat(
+    clientA,
+    accountA,
+  );
 
-  const routeA = await playbackRouteSnapshot(clientA, fixtureA.beat_id);
+  const routeA = await playbackRouteSnapshot(
+    clientA,
+    isolationSecretA.beat_id,
+  );
   const routeB = await playbackRouteSnapshot(clientB, fixtureB.beat_id);
 
   if (
@@ -2524,6 +2629,9 @@ async function runFocusedOffensiveIsolation(
       session_id_prefix:
         String(runtimeA.direct.session_id || "").slice(0, 12) + "…",
       media_message_id: routeA.message_id,
+      media_beat_id: isolationSecretA.beat_id,
+      media_beat_name: isolationSecretA.beat_name,
+      media_fixture_created_this_run: isolationSecretA.created,
     },
     account_b: {
       label: accountB.label,
@@ -2804,6 +2912,50 @@ async function runFocusedOffensiveIsolation(
     "B scoped media probe must finish cleanly.",
   );
 
+  const ownerMediaRead = await directMediaReadProbe(
+    clientA,
+    routeA.message_id,
+    routeA.mime_type || "audio/mpeg",
+  );
+  const attackerMediaRead = await directMediaReadProbe(
+    clientB,
+    routeA.message_id,
+    routeA.mime_type || "audio/mpeg",
+  );
+  report.offensive_isolation.attacks.owner_a_media_read = ownerMediaRead;
+  report.offensive_isolation.attacks.attacker_b_media_read = attackerMediaRead;
+
+  if (
+    ownerMediaRead.ok !== true ||
+    !ownerMediaRead.sha256 ||
+    Number(ownerMediaRead.total_bytes || 0) <= 0
+  ) {
+    throw taggedError(
+      "Account A could not read the unique offensive media fixture used as the byte-level control. diagnostic=" +
+        JSON.stringify(ownerMediaRead).slice(0, 1800),
+      "STAGE1_OFFENSIVE_OWNER_MEDIA_CONTROL_FAILED",
+      "P1",
+    );
+  }
+
+  if (
+    attackerMediaRead.ok === true &&
+    Number(attackerMediaRead.total_bytes || 0) > 0 &&
+    attackerMediaRead.sha256 === ownerMediaRead.sha256
+  ) {
+    throw taggedError(
+      "Account B received byte-identical media while presenting Account A message_id. diagnostic=" +
+        JSON.stringify({
+          owner: ownerMediaRead,
+          attacker: attackerMediaRead,
+          a_vault: runtimeA.direct.chat_id,
+          b_vault: runtimeB.direct.chat_id,
+        }).slice(0, 1800),
+      "STAGE1_OFFENSIVE_MEDIA_BYTES_CROSS_VAULT",
+      "P0",
+    );
+  }
+
   report.offensive_isolation.attacks.owner_a_after_media_reference_attack =
     await proveOwnHeartbeat(clientA, runtimeA, accountA.label);
 
@@ -2811,7 +2963,9 @@ async function runFocusedOffensiveIsolation(
     "offensive_media_reference_isolation",
     "PASS",
     null,
-    "A real A message_id presented by B remained capability-scoped to B vault, never A vault.",
+    attackerMediaRead.ok
+      ? "B resolved the stolen numeric message_id only inside B vault and the returned bytes did not match A unique media."
+      : "B could not resolve A message_id in B vault; A unique media bytes remained inaccessible.",
   );
 
   for (const observer of authObservers.values()) {
