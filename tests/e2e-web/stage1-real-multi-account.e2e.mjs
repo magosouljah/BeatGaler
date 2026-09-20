@@ -16,6 +16,7 @@ const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const singleAccountDiagnostic = accountCount === 1;
 const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1";
 const focusedLifecycle = process.env.STAGE1_FOCUSED_LIFECYCLE === "1";
+const focusedIsolation = process.env.STAGE1_FOCUSED_ISOLATION === "1";
 const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
 const soakMode = mixedWorkload && soakMinutes > 0;
 const MIXED_REQUIRED_ACCOUNTS = 7;
@@ -47,10 +48,12 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 });
 
 const report = {
-  version: 8,
+  version: 9,
   stage: "Etapa 1 — uso real entre cuentas independientes",
-  workload_mode: focusedLifecycle
-    ? "focused-single-account-lifecycle"
+  workload_mode: focusedIsolation
+    ? "focused-two-account-offensive-isolation"
+    : focusedLifecycle
+      ? "focused-single-account-lifecycle"
     : soakMode
       ? diagnosticSoakRound
         ? "mixed-7-account-diagnostic-soak"
@@ -103,12 +106,21 @@ const report = {
               ]
             : []),
         ]
-      : focusedLifecycle
+      : focusedIsolation
         ? [
-            { name: "focused_seek", status: "NOT_TESTED", severity: null },
-            { name: "focused_logout_relogin_authoritative", status: "NOT_TESTED", severity: null },
+            { name: "offensive_installation_isolation", status: "NOT_TESTED", severity: null },
+            { name: "offensive_session_isolation", status: "NOT_TESTED", severity: null },
+            { name: "offensive_capability_isolation", status: "NOT_TESTED", severity: null },
+            { name: "offensive_media_reference_isolation", status: "NOT_TESTED", severity: null },
+            { name: "same_profile_account_switch_isolation", status: "NOT_TESTED", severity: null },
+            { name: "final_authoritative_isolation", status: "NOT_TESTED", severity: null },
           ]
-        : [
+        : focusedLifecycle
+          ? [
+              { name: "focused_seek", status: "NOT_TESTED", severity: null },
+              { name: "focused_logout_relogin_authoritative", status: "NOT_TESTED", severity: null },
+            ]
+          : [
             { name: "simultaneous_reload_persistent_assignment", status: "NOT_TESTED", severity: null },
             { name: "playback_concurrency", status: "NOT_TESTED", severity: null },
             { name: "metadata_edit_persistence", status: "NOT_TESTED", severity: null },
@@ -2041,6 +2053,975 @@ async function verifyFixtureAbsentFromTrashAfterReload(client, account, beat) {
 }
 
 
+
+function safeIsolationResponse(response) {
+  const payload = response?.payload && typeof response.payload === "object"
+    ? response.payload
+    : {};
+  const operationId = typeof payload.operation_id === "string" ? payload.operation_id : "";
+  return {
+    status: Number(response?.status || 0),
+    http_ok: response?.http_ok === true,
+    code: typeof payload.code === "string" ? payload.code : null,
+    error: typeof payload.error === "string" ? payload.error.slice(0, 500) : null,
+    ok: payload.ok === true,
+    expired: payload.expired === true,
+    released: payload.released === true,
+    authorized: payload.authorized === true,
+    wait: payload.wait === true,
+    reason: typeof payload.reason === "string" ? payload.reason : null,
+    operation_id_present: Boolean(operationId),
+    operation_id_prefix: operationId ? operationId.slice(0, 12) + "…" : null,
+    capability_vault_scope:
+      typeof payload.capability?.vault_scope === "string"
+        ? payload.capability.vault_scope
+        : null,
+    capability_object_scope:
+      payload.capability?.object_scope &&
+      typeof payload.capability.object_scope === "object"
+        ? payload.capability.object_scope
+        : null,
+  };
+}
+
+async function isolationApiPost(
+  client,
+  route,
+  body,
+  { transportAuth = false } = {},
+) {
+  return client.execute(async input => {
+    const headers = {
+      "Content-Type": "application/json",
+      "X-BeatGaler-Client": "web",
+    };
+    const csrf = window.sessionStorage.getItem("beatgaler:web-csrf:v1") || "";
+    if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
+    if (input.transportAuth) {
+      headers.Authorization = "Bearer browser-cookie-session";
+    }
+
+    try {
+      const response = await window.fetch(
+        window.location.origin + "/beatgaler-api" + input.route,
+        {
+          method: "POST",
+          headers,
+          credentials: "include",
+          body: JSON.stringify(input.body || {}),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      return {
+        status: response.status,
+        http_ok: response.ok,
+        payload,
+      };
+    } catch (error) {
+      return {
+        status: 0,
+        http_ok: false,
+        payload: {
+          code: "NETWORK_ERROR",
+          error: String(error?.message || error),
+        },
+      };
+    }
+  }, { route, body, transportAuth });
+}
+
+async function playbackRouteSnapshot(client, beatId) {
+  return client.execute(id => {
+    try {
+      const parsed = JSON.parse(
+        window.localStorage.getItem("beatgaler:web-playback-routing:v1") || "{}",
+      );
+      const route = parsed?.routes?.[id] || null;
+      return {
+        authoritative: parsed?.authoritative === true,
+        message_id: Number(route?.messageId || 0) || null,
+        mime_type: typeof route?.mimeType === "string" ? route.mimeType : null,
+        route_present: Boolean(route),
+      };
+    } catch {
+      return {
+        authoritative: false,
+        message_id: null,
+        mime_type: null,
+        route_present: false,
+      };
+    }
+  }, beatId);
+}
+
+async function proveOwnHeartbeat(client, runtime, label) {
+  const response = await isolationApiPost(
+    client,
+    "/transport/session/heartbeat",
+    {
+      beatgalerUserId: runtime.client_id,
+      sessionId: runtime.direct.session_id,
+      generation: runtime.direct.generation,
+      credentialVersion: runtime.direct.credential_version,
+    },
+    { transportAuth: true },
+  );
+  const evidence = safeIsolationResponse(response);
+  if (
+    !response.http_ok ||
+    response.payload?.expired === true ||
+    response.payload?.ok === false
+  ) {
+    throw taggedError(
+      "Account " + label + " lost its own Direct authority after an offensive isolation attempt. diagnostic=" +
+        JSON.stringify(evidence).slice(0, 1800),
+      "STAGE1_OFFENSIVE_OWNER_SESSION_DAMAGED",
+      "P0",
+    );
+  }
+  return evidence;
+}
+
+async function beginIsolationCapability(
+  client,
+  runtime,
+  messageId,
+  label,
+) {
+  let latest = null;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    latest = await isolationApiPost(
+      client,
+      "/transport/operation/begin",
+      {
+        beatgalerUserId: runtime.client_id,
+        sessionId: runtime.direct.session_id,
+        generation: runtime.direct.generation,
+        credentialVersion: runtime.direct.credential_version,
+        kind: "probe_media",
+        scope: {
+          objectType: "message",
+          objectIds: [String(messageId)],
+        },
+        documentContext: {
+          tab_id: "stage1-offensive-" + label,
+          document_id: "stage1-offensive-" + label + "-" + String(Date.now()),
+          generation: attempt,
+        },
+      },
+      { transportAuth: true },
+    );
+
+    if (
+      latest.http_ok &&
+      typeof latest.payload?.operation_id === "string" &&
+      latest.payload.operation_id.startsWith("cap_")
+    ) {
+      return latest;
+    }
+
+    if (latest.payload?.wait === true) {
+      await client.pause(
+        Math.max(100, Math.min(1_000, Number(latest.payload?.retry_after_ms || 250))),
+      );
+      continue;
+    }
+
+    throw taggedError(
+      "Account " + label + " could not create the scoped media capability used by the isolation attack. diagnostic=" +
+        JSON.stringify(safeIsolationResponse(latest)).slice(0, 1800),
+      "STAGE1_OFFENSIVE_CAPABILITY_SETUP_FAILED",
+      "P1",
+    );
+  }
+
+  throw taggedError(
+    "Account " + label + " remained backpressured while creating the scoped media capability. diagnostic=" +
+      JSON.stringify(safeIsolationResponse(latest)).slice(0, 1800),
+    "STAGE1_OFFENSIVE_CAPABILITY_SETUP_TIMEOUT",
+    "P1",
+  );
+}
+
+async function authorizeIsolationCapability(
+  client,
+  runtime,
+  operationId,
+  messageId,
+) {
+  return isolationApiPost(
+    client,
+    "/transport/capability/authorize",
+    {
+      beatgalerUserId: runtime.client_id,
+      sessionId: runtime.direct.session_id,
+      generation: runtime.direct.generation,
+      operationId,
+      kind: "probe_media",
+      scope: {
+        objectType: "message",
+        objectIds: [String(messageId)],
+      },
+    },
+    { transportAuth: true },
+  );
+}
+
+async function endIsolationCapability(
+  client,
+  runtime,
+  operationId,
+) {
+  return isolationApiPost(
+    client,
+    "/transport/operation/end",
+    {
+      beatgalerUserId: runtime.client_id,
+      sessionId: runtime.direct.session_id,
+      generation: runtime.direct.generation,
+      operationId,
+    },
+    { transportAuth: true },
+  );
+}
+
+async function signOutForIsolation(client, account, observerLabel) {
+  const observer = authObservers.get(observerLabel);
+  observer?.setPhase("offensive-same-profile-signout-" + account.label);
+
+  const beforeClientId = await client.execute(
+    () => window.localStorage.getItem("beatgaler:web-client-id:v1"),
+  );
+
+  let signOut = await client.$('//button[normalize-space(.)="Sign out of BeatGaler"]');
+  if (!(await signOut.isDisplayed().catch(() => false))) {
+    const settings = await client.$('button[title="Settings"]');
+    await settings.waitForDisplayed({ timeout: 30_000 });
+    await settings.click();
+    signOut = await client.$('//button[normalize-space(.)="Sign out of BeatGaler"]');
+  }
+
+  await signOut.waitForDisplayed({ timeout: 30_000 });
+  await signOut.click();
+
+  await client.waitUntil(async () => {
+    const login = await client.$("#auth-login-identifier");
+    return login.isDisplayed().catch(() => false);
+  }, {
+    timeout: 30_000,
+    interval: 200,
+    timeoutMsg: "Account " + account.label + " did not return to the sign-in gate during offensive isolation.",
+  });
+
+  const state = await client.execute(() => ({
+    client_id: window.localStorage.getItem("beatgaler:web-client-id:v1"),
+    web_session_marker:
+      window.localStorage.getItem("beatgaler:web-session-present:v1") === "1",
+    csrf_present: Boolean(
+      window.sessionStorage.getItem("beatgaler:web-csrf:v1"),
+    ),
+    beat_count: document.querySelectorAll("[data-beat-card-id]").length,
+    audio: Array.from(document.querySelectorAll("audio")).map(node => ({
+      paused: Boolean(node.paused),
+      current_time: Number(node.currentTime || 0),
+      src_kind: String(node.currentSrc || "").startsWith("blob:")
+        ? "blob"
+        : String(node.currentSrc || "")
+          ? "other"
+          : "empty",
+    })),
+  }));
+
+  const http = observer?.snapshot() || [];
+  const logout = http.findLast(
+    entry =>
+      entry.route === "/beatgaler-api/auth/logout" &&
+      entry.state === "response",
+  );
+  const stop = http.findLast(
+    entry =>
+      entry.route === "/beatgaler-api/transport/session/stop" &&
+      entry.state === "response",
+  );
+
+  assert.equal(
+    state.client_id,
+    beforeClientId,
+    "Same-profile sign out must preserve the browser installation id.",
+  );
+  assert.equal(
+    state.web_session_marker,
+    false,
+    "Same-profile sign out must clear the Web session marker.",
+  );
+  assert.equal(
+    state.csrf_present,
+    false,
+    "Same-profile sign out must clear Web CSRF state.",
+  );
+  assert.ok(
+    logout && logout.status >= 200 && logout.status < 300,
+    "Same-profile sign out must receive a successful /auth/logout response.",
+  );
+  assert.ok(
+    stop && stop.status >= 200 && stop.status < 300,
+    "Same-profile sign out must stop the current Direct session.",
+  );
+
+  return {
+    client_id_preserved: state.client_id === beforeClientId,
+    beat_count_after_logout: state.beat_count,
+    audio_after_logout: state.audio,
+    logout_http_status: logout?.status ?? null,
+    direct_stop_http_status: stop?.status ?? null,
+  };
+}
+
+async function loginExistingProfileForIsolation(
+  client,
+  account,
+  observerLabel,
+) {
+  const observer = authObservers.get(observerLabel);
+  observer?.setPhase("offensive-same-profile-login-" + account.label);
+
+  const field = await client.$("#auth-login-identifier");
+  await field.waitForDisplayed({ timeout: 30_000 });
+  await field.setValue(account.identifier);
+  await (await client.$("#auth-login-password")).setValue(account.password);
+  await (await client.$('.bg-auth-form button[type="submit"]')).click();
+
+  await client.waitUntil(async () => {
+    const login = await client.$("#auth-login-identifier");
+    const alert = await client.$('[role="alert"]');
+    const mfa = await client.$("#auth-login-mfa");
+    return (
+      !(await login.isExisting()) ||
+      await alert.isDisplayed().catch(() => false) ||
+      await mfa.isExisting()
+    );
+  }, {
+    timeout: 60_000,
+    interval: 250,
+    timeoutMsg: "Account " + account.label + " did not leave the sign-in gate during same-profile isolation.",
+  });
+
+  const diagnostic = await client.execute(() => {
+    const visible = node => Boolean(node && node.getClientRects().length);
+    return {
+      login_visible: visible(document.querySelector("#auth-login-identifier")),
+      mfa_visible: visible(document.querySelector("#auth-login-mfa")),
+      alerts: Array.from(document.querySelectorAll('[role="alert"]'))
+        .filter(visible)
+        .map(node => String(node.textContent || "").slice(0, 600)),
+    };
+  });
+
+  if (
+    diagnostic.login_visible ||
+    diagnostic.mfa_visible ||
+    diagnostic.alerts.length > 0
+  ) {
+    throw taggedError(
+      "Account " + account.label + " could not enter the existing browser profile. diagnostic=" +
+        JSON.stringify(diagnostic).slice(0, 1800),
+      "STAGE1_OFFENSIVE_SAME_PROFILE_LOGIN_FAILED",
+      "P1",
+    );
+  }
+
+  const library = await waitForAuthoritativeLibrary(client, account.label);
+  const runtime = await waitForRuntimeSnapshot(client, observerLabel);
+  validateSingleAccount(account.label, runtime);
+  return { library, runtime };
+}
+
+async function sameProfileVisibleState(
+  client,
+  ownFixture,
+  foreignFixture,
+) {
+  return client.execute(input => {
+    const cards = Array.from(document.querySelectorAll("[data-beat-card-id]"));
+    let routing = {};
+    try {
+      routing = JSON.parse(
+        window.localStorage.getItem("beatgaler:web-playback-routing:v1") || "{}",
+      );
+    } catch {}
+    const bodyText = String(document.body?.innerText || "");
+    return {
+      beat_ids: cards
+        .map(node => String(node.getAttribute("data-beat-card-id") || ""))
+        .filter(Boolean),
+      own_name_visible: bodyText.includes(input.ownName),
+      foreign_name_visible: bodyText.includes(input.foreignName),
+      own_route_present: Boolean(routing?.routes?.[input.ownId]),
+      foreign_route_present: Boolean(routing?.routes?.[input.foreignId]),
+      routing_authoritative: routing?.authoritative === true,
+      audio_playing: Array.from(document.querySelectorAll("audio"))
+        .some(node => !node.paused && !node.ended),
+    };
+  }, {
+    ownId: ownFixture.beat_id,
+    ownName: ownFixture.beat_name,
+    foreignId: foreignFixture.beat_id,
+    foreignName: foreignFixture.beat_name,
+  });
+}
+
+async function runSingleIsolationPlayback(client, account, beat) {
+  await installPlaybackProbe(client, beat.beat_id);
+  const artwork = await client.$(
+    '[data-beat-artwork-id="' + beat.beat_id + '"]',
+  );
+  await artwork.waitForDisplayed({ timeout: 30_000 });
+  await client.waitUntil(
+    async () => (await artwork.getAttribute("aria-disabled")) !== "true",
+    {
+      timeout: 60_000,
+      interval: 250,
+      timeoutMsg: "Account " + account.label + " same-profile playback never became interactive.",
+    },
+  );
+  await artwork.click();
+  return waitForPlaybackProgress(client, account);
+}
+
+async function runFocusedOffensiveIsolation(
+  clients,
+  before,
+  playbackFixtures,
+) {
+  const [clientA, clientB] = clients;
+  const [accountA, accountB] = accounts;
+  const [runtimeA, runtimeB] = before;
+  const [fixtureA, fixtureB] = playbackFixtures;
+
+  const routeA = await playbackRouteSnapshot(clientA, fixtureA.beat_id);
+  const routeB = await playbackRouteSnapshot(clientB, fixtureB.beat_id);
+
+  if (
+    !routeA.authoritative ||
+    !routeB.authoritative ||
+    !routeA.message_id ||
+    !routeB.message_id
+  ) {
+    throw taggedError(
+      "Task 2 requires real authoritative media references for both accounts. diagnostic=" +
+        JSON.stringify({ routeA, routeB }).slice(0, 1800),
+      "STAGE1_OFFENSIVE_MEDIA_REFERENCE_MISSING",
+      "P1",
+    );
+  }
+
+  report.offensive_isolation = {
+    account_a: {
+      label: accountA.label,
+      user_id: runtimeA.user_id,
+      installation_id: runtimeA.client_id,
+      vault_chat_id: runtimeA.direct.chat_id,
+      session_id_prefix:
+        String(runtimeA.direct.session_id || "").slice(0, 12) + "…",
+      media_message_id: routeA.message_id,
+    },
+    account_b: {
+      label: accountB.label,
+      user_id: runtimeB.user_id,
+      installation_id: runtimeB.client_id,
+      vault_chat_id: runtimeB.direct.chat_id,
+      session_id_prefix:
+        String(runtimeB.direct.session_id || "").slice(0, 12) + "…",
+      media_message_id: routeB.message_id,
+    },
+    attacks: {},
+    same_profile: null,
+    final: null,
+  };
+
+  for (const observer of authObservers.values()) {
+    observer.setPhase("offensive-installation-isolation");
+  }
+
+  const installationClaim = await isolationApiPost(
+    clientB,
+    "/auth/session",
+    { beatgalerUserId: runtimeA.client_id },
+  );
+  report.offensive_isolation.attacks.installation_claim = safeIsolationResponse(
+    installationClaim,
+  );
+
+  if (installationClaim.status !== 403) {
+    throw taggedError(
+      "Account B was not rejected when it attempted to bind Account A installation. diagnostic=" +
+        JSON.stringify(safeIsolationResponse(installationClaim)).slice(0, 1800),
+      "STAGE1_OFFENSIVE_INSTALLATION_CROSS_AUTHORITY",
+      "P0",
+    );
+  }
+
+  const protectedBodySpoof = await isolationApiPost(
+    clientB,
+    "/transport/session/heartbeat",
+    {
+      beatgalerUserId: runtimeA.client_id,
+      sessionId: runtimeB.direct.session_id,
+      generation: runtimeB.direct.generation,
+      credentialVersion: runtimeB.direct.credential_version,
+    },
+    { transportAuth: true },
+  );
+  report.offensive_isolation.attacks.installation_body_spoof =
+    safeIsolationResponse(protectedBodySpoof);
+
+  if (
+    !protectedBodySpoof.http_ok ||
+    protectedBodySpoof.payload?.expired === true ||
+    protectedBodySpoof.payload?.ok === false
+  ) {
+    throw taggedError(
+      "Protected-route installation spoof did not canonicalize back to Account B authority. diagnostic=" +
+        JSON.stringify(safeIsolationResponse(protectedBodySpoof)).slice(0, 1800),
+      "STAGE1_OFFENSIVE_INSTALLATION_CANONICALIZATION_FAILED",
+      "P1",
+    );
+  }
+
+  report.offensive_isolation.attacks.owner_a_after_installation_attack =
+    await proveOwnHeartbeat(clientA, runtimeA, accountA.label);
+
+  markScenario(
+    "offensive_installation_isolation",
+    "PASS",
+    null,
+    "B could not claim A installation; protected-route body spoof remained canonically bound to B.",
+  );
+
+  for (const observer of authObservers.values()) {
+    observer.setPhase("offensive-session-isolation");
+  }
+
+  const stolenHeartbeat = await isolationApiPost(
+    clientB,
+    "/transport/session/heartbeat",
+    {
+      beatgalerUserId: runtimeB.client_id,
+      sessionId: runtimeA.direct.session_id,
+      generation: runtimeA.direct.generation,
+      credentialVersion: runtimeA.direct.credential_version,
+    },
+    { transportAuth: true },
+  );
+  report.offensive_isolation.attacks.stolen_session_heartbeat =
+    safeIsolationResponse(stolenHeartbeat);
+
+  if (
+    stolenHeartbeat.http_ok &&
+    stolenHeartbeat.payload?.expired !== true &&
+    stolenHeartbeat.payload?.ok !== false
+  ) {
+    throw taggedError(
+      "Account B gained live heartbeat authority over Account A Direct session. diagnostic=" +
+        JSON.stringify(safeIsolationResponse(stolenHeartbeat)).slice(0, 1800),
+      "STAGE1_OFFENSIVE_SESSION_HEARTBEAT_CROSS_AUTHORITY",
+      "P0",
+    );
+  }
+
+  const stolenStop = await isolationApiPost(
+    clientB,
+    "/transport/session/stop",
+    {
+      beatgalerUserId: runtimeB.client_id,
+      sessionId: runtimeA.direct.session_id,
+      generation: runtimeA.direct.generation,
+    },
+    { transportAuth: true },
+  );
+  report.offensive_isolation.attacks.stolen_session_stop =
+    safeIsolationResponse(stolenStop);
+
+  if (stolenStop.payload?.released === true) {
+    throw taggedError(
+      "Account B released Account A Direct session.",
+      "STAGE1_OFFENSIVE_SESSION_STOP_CROSS_AUTHORITY",
+      "P0",
+    );
+  }
+
+  report.offensive_isolation.attacks.owner_a_after_session_attack =
+    await proveOwnHeartbeat(clientA, runtimeA, accountA.label);
+
+  markScenario(
+    "offensive_session_isolation",
+    "PASS",
+    null,
+    "B heartbeat could not use A session; B stop returned no authority and A remained live.",
+  );
+
+  for (const observer of authObservers.values()) {
+    observer.setPhase("offensive-capability-isolation");
+  }
+
+  const capabilityA = await beginIsolationCapability(
+    clientA,
+    runtimeA,
+    routeA.message_id,
+    accountA.label,
+  );
+  const capA = capabilityA.payload.operation_id;
+  report.offensive_isolation.attacks.owner_a_capability =
+    safeIsolationResponse(capabilityA);
+
+  const stolenAuthorize = await authorizeIsolationCapability(
+    clientB,
+    runtimeB,
+    capA,
+    routeA.message_id,
+  );
+  report.offensive_isolation.attacks.stolen_capability_authorize =
+    safeIsolationResponse(stolenAuthorize);
+
+  if (
+    stolenAuthorize.status !== 403 ||
+    stolenAuthorize.payload?.authorized === true
+  ) {
+    throw taggedError(
+      "Account B authorized Account A scoped capability. diagnostic=" +
+        JSON.stringify(safeIsolationResponse(stolenAuthorize)).slice(0, 1800),
+      "STAGE1_OFFENSIVE_CAPABILITY_CROSS_AUTHORITY",
+      "P0",
+    );
+  }
+
+  const stolenFinish = await endIsolationCapability(
+    clientB,
+    runtimeB,
+    capA,
+  );
+  report.offensive_isolation.attacks.stolen_capability_finish =
+    safeIsolationResponse(stolenFinish);
+
+  if (stolenFinish.status !== 403) {
+    throw taggedError(
+      "Account B was able to finish Account A capability. diagnostic=" +
+        JSON.stringify(safeIsolationResponse(stolenFinish)).slice(0, 1800),
+      "STAGE1_OFFENSIVE_OPERATION_FINISH_CROSS_AUTHORITY",
+      "P0",
+    );
+  }
+
+  const ownerAuthorize = await authorizeIsolationCapability(
+    clientA,
+    runtimeA,
+    capA,
+    routeA.message_id,
+  );
+  report.offensive_isolation.attacks.owner_a_capability_authorize =
+    safeIsolationResponse(ownerAuthorize);
+  assert.equal(
+    ownerAuthorize.payload?.authorized,
+    true,
+    "Account A must retain authority over its own capability after B attacks.",
+  );
+
+  const ownerFinish = await endIsolationCapability(
+    clientA,
+    runtimeA,
+    capA,
+  );
+  report.offensive_isolation.attacks.owner_a_capability_finish =
+    safeIsolationResponse(ownerFinish);
+  assert.ok(
+    ownerFinish.http_ok,
+    "Account A must finish its own capability after B attacks.",
+  );
+
+  markScenario(
+    "offensive_capability_isolation",
+    "PASS",
+    null,
+    "B could neither authorize nor finish A capability; A retained both operations.",
+  );
+
+  for (const observer of authObservers.values()) {
+    observer.setPhase("offensive-media-reference-isolation");
+  }
+
+  const mediaScopeB = await beginIsolationCapability(
+    clientB,
+    runtimeB,
+    routeA.message_id,
+    accountB.label,
+  );
+  const capB = mediaScopeB.payload.operation_id;
+  report.offensive_isolation.attacks.stolen_media_reference_scope =
+    safeIsolationResponse(mediaScopeB);
+
+  assert.equal(
+    String(mediaScopeB.payload?.capability?.vault_scope || ""),
+    String(runtimeB.direct.chat_id),
+    "A stolen numeric media reference must remain scoped to Account B vault.",
+  );
+  assert.notEqual(
+    String(mediaScopeB.payload?.capability?.vault_scope || ""),
+    String(runtimeA.direct.chat_id),
+    "A stolen numeric media reference must never acquire Account A vault scope.",
+  );
+  assert.deepEqual(
+    mediaScopeB.payload?.capability?.object_scope,
+    {
+      object_type: "message",
+      object_ids: [String(routeA.message_id)],
+    },
+    "The offensive media capability must prove the exact stolen A message reference was presented.",
+  );
+
+  const mediaAuthorizeB = await authorizeIsolationCapability(
+    clientB,
+    runtimeB,
+    capB,
+    routeA.message_id,
+  );
+  report.offensive_isolation.attacks.stolen_media_reference_authorize =
+    safeIsolationResponse(mediaAuthorizeB);
+  assert.equal(
+    mediaAuthorizeB.payload?.authorized,
+    true,
+    "B may only authorize the stolen numeric message reference inside B vault scope.",
+  );
+
+  const mediaFinishB = await endIsolationCapability(
+    clientB,
+    runtimeB,
+    capB,
+  );
+  report.offensive_isolation.attacks.stolen_media_reference_finish =
+    safeIsolationResponse(mediaFinishB);
+  assert.ok(
+    mediaFinishB.http_ok,
+    "B scoped media probe must finish cleanly.",
+  );
+
+  report.offensive_isolation.attacks.owner_a_after_media_reference_attack =
+    await proveOwnHeartbeat(clientA, runtimeA, accountA.label);
+
+  markScenario(
+    "offensive_media_reference_isolation",
+    "PASS",
+    null,
+    "A real A message_id presented by B remained capability-scoped to B vault, never A vault.",
+  );
+
+  for (const observer of authObservers.values()) {
+    observer.setPhase("offensive-same-profile-switch");
+  }
+
+  const aPlayback = await runSingleIsolationPlayback(
+    clientA,
+    accountA,
+    fixtureA,
+  );
+  const logoutA = await signOutForIsolation(
+    clientA,
+    accountA,
+    accountA.label,
+  );
+  const logoutBOriginal = await signOutForIsolation(
+    clientB,
+    accountB,
+    accountB.label,
+  );
+
+  const bOnAProfile = await loginExistingProfileForIsolation(
+    clientA,
+    accountB,
+    accountA.label,
+  );
+
+  assert.equal(
+    bOnAProfile.runtime.user_id,
+    runtimeB.user_id,
+    "Same browser profile must authenticate as B after A logout.",
+  );
+  assert.equal(
+    bOnAProfile.runtime.client_id,
+    runtimeA.client_id,
+    "Same-profile A to B switch must preserve the browser installation id.",
+  );
+  assert.equal(
+    bOnAProfile.runtime.direct.chat_id,
+    runtimeB.direct.chat_id,
+    "Same-profile B login must resolve B authoritative vault.",
+  );
+
+  const bVisible = await sameProfileVisibleState(
+    clientA,
+    fixtureB,
+    fixtureA,
+  );
+  assert.ok(
+    bVisible.beat_ids.includes(fixtureB.beat_id),
+    "B fixture must be visible after same-profile switch.",
+  );
+  assert.equal(
+    bVisible.beat_ids.includes(fixtureA.beat_id),
+    false,
+    "A fixture must not remain visible after same-profile switch to B.",
+  );
+  assert.equal(
+    bVisible.foreign_name_visible,
+    false,
+    "A fixture name must not remain visible after same-profile switch to B.",
+  );
+  assert.equal(
+    bVisible.foreign_route_present,
+    false,
+    "A playback routing cache entry must not survive into B.",
+  );
+  assert.equal(
+    bVisible.audio_playing,
+    false,
+    "A playback must not continue after same-profile switch to B.",
+  );
+
+  const bPlayback = await runSingleIsolationPlayback(
+    clientA,
+    accountB,
+    fixtureB,
+  );
+
+  const logoutBOnAProfile = await signOutForIsolation(
+    clientA,
+    accountB,
+    accountA.label,
+  );
+  const aRestored = await loginExistingProfileForIsolation(
+    clientA,
+    accountA,
+    accountA.label,
+  );
+  const bRestored = await loginExistingProfileForIsolation(
+    clientB,
+    accountB,
+    accountB.label,
+  );
+
+  assert.equal(
+    aRestored.runtime.user_id,
+    runtimeA.user_id,
+    "Account A must restore its original identity after same-profile test.",
+  );
+  assert.equal(
+    aRestored.runtime.direct.chat_id,
+    runtimeA.direct.chat_id,
+    "Account A must restore its original vault after same-profile test.",
+  );
+  assert.equal(
+    bRestored.runtime.user_id,
+    runtimeB.user_id,
+    "Account B must restore its original identity after same-profile test.",
+  );
+  assert.equal(
+    bRestored.runtime.direct.chat_id,
+    runtimeB.direct.chat_id,
+    "Account B must restore its original vault after same-profile test.",
+  );
+
+  const aVisible = await sameProfileVisibleState(
+    clientA,
+    fixtureA,
+    fixtureB,
+  );
+  const bRestoredVisible = await sameProfileVisibleState(
+    clientB,
+    fixtureB,
+    fixtureA,
+  );
+  assert.equal(aVisible.foreign_name_visible, false);
+  assert.equal(aVisible.foreign_route_present, false);
+  assert.equal(bRestoredVisible.foreign_name_visible, false);
+  assert.equal(bRestoredVisible.foreign_route_present, false);
+
+  report.offensive_isolation.same_profile = {
+    a_playback_progress_s: Number(aPlayback?.max_current_time || 0),
+    logout_a: logoutA,
+    logout_b_original: logoutBOriginal,
+    b_on_a_profile: {
+      preserved_installation_id:
+        bOnAProfile.runtime.client_id === runtimeA.client_id,
+      resolved_b_user:
+        bOnAProfile.runtime.user_id === runtimeB.user_id,
+      resolved_b_vault:
+        bOnAProfile.runtime.direct.chat_id === runtimeB.direct.chat_id,
+      a_beat_visible: bVisible.beat_ids.includes(fixtureA.beat_id),
+      a_name_visible: bVisible.foreign_name_visible,
+      a_route_present: bVisible.foreign_route_present,
+      inherited_audio_playing: bVisible.audio_playing,
+      b_playback_progress_s: Number(bPlayback?.max_current_time || 0),
+    },
+    logout_b_on_a_profile: logoutBOnAProfile,
+    restored: {
+      a_user: aRestored.runtime.user_id === runtimeA.user_id,
+      a_vault: aRestored.runtime.direct.chat_id === runtimeA.direct.chat_id,
+      b_user: bRestored.runtime.user_id === runtimeB.user_id,
+      b_vault: bRestored.runtime.direct.chat_id === runtimeB.direct.chat_id,
+    },
+  };
+
+  markScenario(
+    "same_profile_account_switch_isolation",
+    "PASS",
+    null,
+    "A playback stopped; A UI/routing state disappeared; B opened B vault and played B fixture in the same browser profile.",
+  );
+
+  const finalLibraries = await Promise.all([
+    waitForAuthoritativeLibrary(clientA, accountA.label),
+    waitForAuthoritativeLibrary(clientB, accountB.label),
+  ]);
+  const finalSnapshots = [aRestored.runtime, bRestored.runtime];
+
+  validateCrossAccountIsolation(finalSnapshots);
+  await validatePlaybackFixtureIsolation(clients);
+
+  const finalA = await playbackBeatSnapshot(clientA, fixtureA.beat_name);
+  const finalB = await playbackBeatSnapshot(clientB, fixtureB.beat_name);
+  assert.equal(finalA?.beat_id, fixtureA.beat_id);
+  assert.equal(finalB?.beat_id, fixtureB.beat_id);
+
+  report.offensive_isolation.final = {
+    account_a: {
+      user_id: finalSnapshots[0].user_id,
+      installation_id: finalSnapshots[0].client_id,
+      vault_chat_id: finalSnapshots[0].direct.chat_id,
+      library_beat_count: finalLibraries[0].beat_count,
+      fixture_beat_id: finalA?.beat_id || null,
+    },
+    account_b: {
+      user_id: finalSnapshots[1].user_id,
+      installation_id: finalSnapshots[1].client_id,
+      vault_chat_id: finalSnapshots[1].direct.chat_id,
+      library_beat_count: finalLibraries[1].beat_count,
+      fixture_beat_id: finalB?.beat_id || null,
+    },
+  };
+
+  markScenario(
+    "final_authoritative_isolation",
+    "PASS",
+    null,
+    "Both accounts restored unique installations and authoritative vaults with their own fixtures intact.",
+  );
+
+  return {
+    finalSnapshots,
+    finalLibraries,
+  };
+}
+
+
 describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
   it(
     `runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`,
@@ -2049,6 +3030,22 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         throw taggedError(
           "STAGE1_FOCUSED_LIFECYCLE requires --accounts 1.",
           "STAGE1_FOCUSED_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (focusedIsolation && accountCount !== 2) {
+        throw taggedError(
+          "STAGE1_FOCUSED_ISOLATION requires --accounts 2.",
+          "STAGE1_FOCUSED_ISOLATION_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (focusedIsolation && (focusedLifecycle || mixedWorkload)) {
+        throw taggedError(
+          "STAGE1_FOCUSED_ISOLATION cannot be combined with lifecycle or mixed-workload modes.",
+          "STAGE1_FOCUSED_ISOLATION_MODE_CONFLICT",
           "P1",
         );
       }
@@ -2172,6 +3169,61 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             : `${accountCount} productive MASTER uploads committed to isolated authoritative libraries`,
         );
 
+        if (focusedIsolation) {
+          const isolation = await runFocusedOffensiveIsolation(
+            clients,
+            before,
+            playbackFixtures,
+          );
+
+          for (const account of accounts) {
+            const observer = authObservers.get(account.label);
+            validateAuthHealth(observer?.snapshot() || [], account.label);
+          }
+          markScenario(
+            "auth_health_stability",
+            "PASS",
+            null,
+            "No observed auth health request failed during the two-account offensive isolation run",
+          );
+
+          report.accounts = Object.fromEntries(
+            accounts.map((account, index) => [
+              account.label,
+              {
+                ...report.accounts[account.label],
+                login_ms: loginTimes[index],
+                initial_user_id: before[index].user_id,
+                initial_client_id: before[index].client_id,
+                initial_vault_chat_id: before[index].direct.chat_id,
+                initial_session_id_prefix:
+                  String(before[index].direct.session_id || "").slice(0, 12) + "…",
+                final_user_id: isolation.finalSnapshots[index].user_id,
+                final_client_id: isolation.finalSnapshots[index].client_id,
+                final_vault_chat_id:
+                  isolation.finalSnapshots[index].direct.chat_id,
+                final_library_beat_count:
+                  isolation.finalLibraries[index].beat_count,
+                playback_fixture: {
+                  beat_id: playbackFixtures[index].beat_id,
+                  beat_name: playbackFixtures[index].beat_name,
+                  created_this_run: playbackFixtures[index].created,
+                },
+              },
+            ]),
+          );
+
+          report.timings = {
+            startup_ms: startupMs,
+          };
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          console.log(
+            `[stage1-real] PASS focused offensive isolation accounts=${accounts[0].label}/${accounts[1].label}; installation+session+capability+media-scope+same-profile. report=${REPORT_FILE}`,
+          );
+          return;
+        }
 
         if (mixedWorkload) {
           if (accountCount !== MIXED_REQUIRED_ACCOUNTS) {
@@ -3534,12 +4586,19 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               "playback_fixture_provisioning",
               "mixed_workload_concurrency",
             ]
-          : focusedLifecycle
+          : focusedIsolation
             ? [
+                "multi_account_auth_isolation",
                 "authoritative_library_data_plane",
+                "multi_account_direct_identity",
                 "playback_fixture_provisioning",
               ]
-            : [
+            : focusedLifecycle
+              ? [
+                  "authoritative_library_data_plane",
+                  "playback_fixture_provisioning",
+                ]
+              : [
                 "multi_account_auth_isolation",
                 "authoritative_library_data_plane",
                 "multi_account_direct_identity",
@@ -3584,12 +4643,21 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                   ]
                 : []),
             ]
-          : focusedLifecycle
+          : focusedIsolation
             ? [
-                "focused_seek",
-                "focused_logout_relogin_authoritative",
+                "offensive_installation_isolation",
+                "offensive_session_isolation",
+                "offensive_capability_isolation",
+                "offensive_media_reference_isolation",
+                "same_profile_account_switch_isolation",
+                "final_authoritative_isolation",
               ]
-            : [
+            : focusedLifecycle
+              ? [
+                  "focused_seek",
+                  "focused_logout_relogin_authoritative",
+                ]
+              : [
                 "metadata_edit_persistence",
                 "master_download",
                 "remove_from_library_persistence",
@@ -3604,12 +4672,19 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 "multi_account_direct_identity",
                 "playback_fixture_provisioning",
               ]
-            : focusedLifecycle
+            : focusedIsolation
               ? [
+                  "multi_account_auth_isolation",
                   "authoritative_library_data_plane",
+                  "multi_account_direct_identity",
                   "playback_fixture_provisioning",
                 ]
-              : [
+              : focusedLifecycle
+                ? [
+                    "authoritative_library_data_plane",
+                    "playback_fixture_provisioning",
+                  ]
+                : [
                   "multi_account_auth_isolation",
                   "authoritative_library_data_plane",
                   "multi_account_direct_identity",
