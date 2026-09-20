@@ -106,7 +106,13 @@ export const config = {
   reporters: ["spec"],
   mochaOpts: {
     ui: "bdd",
-    timeout: soakTimeoutMs ?? (accountCount >= 4 ? 600_000 : 240_000),
+    timeout: soakTimeoutMs ?? (
+      process.env.STAGE1_FOCUSED_DOWNLOAD_INTEGRITY === "1"
+        ? 600_000
+        : accountCount >= 4
+          ? 600_000
+          : 240_000
+    ),
   },
 
   services: [],

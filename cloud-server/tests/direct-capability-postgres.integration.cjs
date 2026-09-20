@@ -76,6 +76,16 @@ async function main() {
     assert.equal(authorized.ok, true);
     assert.equal(authorized.record.status, 'AUTHORIZED');
 
+    const renewed = await store.renew(request('a', 101, { renewalLeaseMs: 30_000 }));
+    assert.equal(renewed.ok, true);
+    assert.equal(renewed.record.status, 'AUTHORIZED');
+    assert.equal(renewed.record.internal_operation_id, `op-a-${suffix}`);
+    const renewedAgain = await store.renew(request('a', 101, { renewalLeaseMs: 30_000 }));
+    assert.equal(renewedAgain.ok, true);
+    const wrongRenewal = await store.renew(request('a', 101, { generation: 2 }));
+    assert.equal(wrongRenewal.ok, false);
+    assert.equal(wrongRenewal.reason, 'scope');
+
     const replay = await store.authorize(request('a', 101));
     assert.equal(replay.ok, false);
     assert.equal(replay.reason, 'authorized');
@@ -112,6 +122,9 @@ async function main() {
     const finishRetry = await store.finish(request('a', 101));
     assert.equal(finishRetry.ok, true);
     assert.equal(finishRetry.replay, true);
+    const consumedRenewal = await store.renew(request('a', 101));
+    assert.equal(consumedRenewal.ok, false);
+    assert.equal(consumedRenewal.reason, 'consumed');
 
     // CONSUMED no longer counts against the live tenant ceiling.
     await store.issue(record('d', 'op-d', 404));

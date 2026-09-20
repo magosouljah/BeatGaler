@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSZip from "jszip";
 import { observeAuth } from "./stage1-auth-observer.mjs";
 import { validateAuthHealth } from "./stage1-health-validation.mjs";
+import { sha256Hex, stripMp3ContainerTags } from "./stage1-download-integrity.mjs";
 
 const authObservers = new Map();
 
@@ -16,6 +18,7 @@ const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const singleAccountDiagnostic = accountCount === 1;
 const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1";
 const focusedLifecycle = process.env.STAGE1_FOCUSED_LIFECYCLE === "1";
+const focusedDownloadIntegrity = process.env.STAGE1_FOCUSED_DOWNLOAD_INTEGRITY === "1";
 const focusedIsolation = process.env.STAGE1_FOCUSED_ISOLATION === "1";
 const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
 const soakMode = mixedWorkload && soakMinutes > 0;
@@ -34,6 +37,7 @@ const SOAK_HOT_LIBRARY_BUDGET_MS = 5_000;
 const SOAK_LARGE_WAV_MB = Math.max(8, Math.min(256, Number(process.env.STAGE1_SOAK_LARGE_WAV_MB || 64)));
 const PLAYBACK_FIXTURE_FILE = path.resolve(process.cwd(), "tests", "e2e-web", "fixtures", "stage1-playback.mp3");
 const PLAYBACK_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-playback-fixtures");
+const DOWNLOAD_INTEGRITY_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-download-integrity-fixtures");
 const PLAYBACK_MIN_PROGRESS_SECONDS = 0.5;
 const PLAYBACK_SOFT_START_SPREAD_MS = 2_000;
 
@@ -51,10 +55,12 @@ const report = {
   version: 9,
   stage: "Etapa 1 — uso real entre cuentas independientes",
   workload_mode: focusedIsolation
-    ? "focused-two-account-offensive-isolation"
+  ? "focused-two-account-offensive-isolation"
+  : focusedDownloadIntegrity
+    ? "focused-single-account-download-integrity"
     : focusedLifecycle
       ? "focused-single-account-lifecycle"
-    : soakMode
+      : soakMode
       ? diagnosticSoakRound
         ? "mixed-7-account-diagnostic-soak"
         : "mixed-7-account-30m-soak"
@@ -87,7 +93,23 @@ const report = {
     { name: "authoritative_library_data_plane", status: "NOT_TESTED", severity: null },
     { name: "multi_account_direct_identity", status: "NOT_TESTED", severity: null },
     { name: "playback_fixture_provisioning", status: "NOT_TESTED", severity: null },
-    ...(mixedWorkload
+    ...(focusedIsolation
+      ? [
+          { name: "offensive_installation_isolation", status: "NOT_TESTED", severity: null },
+          { name: "offensive_session_isolation", status: "NOT_TESTED", severity: null },
+          { name: "offensive_capability_isolation", status: "NOT_TESTED", severity: null },
+          { name: "offensive_media_reference_isolation", status: "NOT_TESTED", severity: null },
+          { name: "same_profile_account_switch_isolation", status: "NOT_TESTED", severity: null },
+          { name: "final_authoritative_isolation", status: "NOT_TESTED", severity: null },
+        ]
+      : focusedDownloadIntegrity
+      ? [
+          { name: "focused_download_wav_integrity", status: "NOT_TESTED", severity: null, evidence_status: "PENDIENTE POR INFRAESTRUCTURA" },
+          { name: "focused_download_project_integrity", status: "NOT_TESTED", severity: null, evidence_status: "PENDIENTE POR INFRAESTRUCTURA" },
+          { name: "focused_download_mp3_audio_integrity", status: "NOT_TESTED", severity: null, evidence_status: "PENDIENTE POR INFRAESTRUCTURA" },
+          { name: "focused_download_mp3_id3_integrity", status: "NOT_TESTED", severity: null, evidence_status: "PENDIENTE POR INFRAESTRUCTURA" },
+        ]
+      : mixedWorkload
       ? [
           { name: "mixed_workload_concurrency", status: "NOT_TESTED", severity: null },
           { name: "mixed_playback", status: "NOT_TESTED", severity: null },
@@ -106,15 +128,6 @@ const report = {
               ]
             : []),
         ]
-      : focusedIsolation
-        ? [
-            { name: "offensive_installation_isolation", status: "NOT_TESTED", severity: null },
-            { name: "offensive_session_isolation", status: "NOT_TESTED", severity: null },
-            { name: "offensive_capability_isolation", status: "NOT_TESTED", severity: null },
-            { name: "offensive_media_reference_isolation", status: "NOT_TESTED", severity: null },
-            { name: "same_profile_account_switch_isolation", status: "NOT_TESTED", severity: null },
-            { name: "final_authoritative_isolation", status: "NOT_TESTED", severity: null },
-          ]
         : focusedLifecycle
           ? [
               { name: "focused_seek", status: "NOT_TESTED", severity: null },
@@ -133,6 +146,29 @@ const report = {
   failure: null,
 };
 
+if (focusedDownloadIntegrity || focusedIsolation) {
+  const focusedScenarios = new Set([
+    "auth_health_stability",
+    "authoritative_library_data_plane",
+    ...(focusedIsolation
+      ? [
+          "offensive_installation_isolation",
+          "offensive_session_isolation",
+          "offensive_capability_isolation",
+          "offensive_media_reference_isolation",
+          "same_profile_account_switch_isolation",
+          "final_authoritative_isolation",
+        ]
+      : [
+          "focused_download_wav_integrity",
+          "focused_download_project_integrity",
+          "focused_download_mp3_audio_integrity",
+          "focused_download_mp3_id3_integrity",
+        ]),
+  ]);
+  report.scenarios = report.scenarios.filter(item => focusedScenarios.has(item.name));
+}
+
 function scenario(name) {
   return report.scenarios.find(item => item.name === name);
 }
@@ -142,6 +178,9 @@ function markScenario(name, status, severity = null, detail = null) {
   if (!item) return;
   item.status = status;
   item.severity = severity;
+  if (status === "PASS") item.evidence_status = "COMPROBADO";
+  if (status === "FAIL") item.evidence_status = "FALLÓ";
+  if (status === "BLOCKED") item.evidence_status = "PENDIENTE POR INFRAESTRUCTURA";
   if (detail) item.detail = detail;
 }
 
@@ -165,6 +204,14 @@ async function writeReport() {
   report.finished_at = new Date().toISOString();
   await fs.mkdir(REPORT_DIR, { recursive: true });
   await fs.writeFile(REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+}
+
+async function archiveFocusedDownloadIntegrityReport() {
+  if (!focusedDownloadIntegrity) return null;
+  const shortSha = String(report.baseline_sha || "unknown").slice(0, 8);
+  const archive = path.join(REPORT_DIR, `stage1-download-integrity-${shortSha}.json`);
+  await fs.writeFile(archive, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return archive;
 }
 
 function taggedError(message, code, severity = "P1") {
@@ -890,6 +937,10 @@ async function uploadNamedMp3Fixture(client, account, beatName, options = {}) {
   const remoteFixture = await client.uploadFile(localFixture);
   await input.setValue(remoteFixture);
 
+  if (options.reviewIntegrity) {
+    await configureDownloadIntegrityReview(client, options.reviewIntegrity);
+  }
+
   const saveButton = await client.$('//button[starts-with(normalize-space(.), "Save")]');
   await saveButton.waitForDisplayed({ timeout: 30_000 });
   await saveButton.waitForEnabled({ timeout: 30_000 });
@@ -942,6 +993,192 @@ async function createSoakLargeWavFixture(beatName) {
     file,
     bytes: 44 + dataBytes,
     mb: (44 + dataBytes) / (1024 * 1024),
+  };
+}
+
+function downloadIntegrityBeatName(account) {
+  return `Stage1 Download Integrity ${account.label} ${MIXED_RUN_SUFFIX}`;
+}
+
+async function createDownloadIntegrityFixtures(account) {
+  const beatName = downloadIntegrityBeatName(account);
+  await fs.mkdir(DOWNLOAD_INTEGRITY_TMP_DIR, { recursive: true });
+  const mp3 = path.join(DOWNLOAD_INTEGRITY_TMP_DIR, `${beatName}.mp3`);
+  const wav = path.join(DOWNLOAD_INTEGRITY_TMP_DIR, `${beatName}.wav`);
+  const project = path.join(DOWNLOAD_INTEGRITY_TMP_DIR, `${beatName}.zip`);
+  await fs.copyFile(PLAYBACK_FIXTURE_FILE, mp3);
+
+  // 1.25 MiB PCM WAV: valid, deterministic and deliberately much smaller than the soak fixture.
+  const sampleRate = 44_100;
+  const channels = 2;
+  const bitsPerSample = 16;
+  const blockAlign = channels * (bitsPerSample / 8);
+  const dataBytes = Math.floor(((1.25 * 1024 * 1024) - 44) / blockAlign) * blockAlign;
+  const wavBytes = Buffer.alloc(44 + dataBytes);
+  wavBytes.write("RIFF", 0, 4, "ascii");
+  wavBytes.writeUInt32LE(36 + dataBytes, 4);
+  wavBytes.write("WAVEfmt ", 8, 8, "ascii");
+  wavBytes.writeUInt32LE(16, 16);
+  wavBytes.writeUInt16LE(1, 20);
+  wavBytes.writeUInt16LE(channels, 22);
+  wavBytes.writeUInt32LE(sampleRate, 24);
+  wavBytes.writeUInt32LE(sampleRate * blockAlign, 28);
+  wavBytes.writeUInt16LE(blockAlign, 32);
+  wavBytes.writeUInt16LE(bitsPerSample, 34);
+  wavBytes.write("data", 36, 4, "ascii");
+  wavBytes.writeUInt32LE(dataBytes, 40);
+  let state = 0x51a7c0de;
+  for (let offset = 44; offset < wavBytes.length; offset += 2) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    wavBytes.writeInt16LE((state >>> 16) - 32768, offset);
+  }
+  await fs.writeFile(wav, wavBytes);
+
+  const archive = new JSZip();
+  const zipDate = new Date("2024-01-01T00:00:00.000Z");
+  archive.file("project.flp", Buffer.from("BeatGaler deterministic FLP fixture\n", "utf8"), { date: zipDate, compression: "DEFLATE" });
+  archive.file("Audio/reference.txt", "reference audio: integrity fixture\n", { date: zipDate, compression: "DEFLATE" });
+  archive.file("Samples/sample.txt", "sample: byte-for-byte project verification\n", { date: zipDate, compression: "DEFLATE" });
+  await fs.writeFile(project, await archive.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 }, platform: "DOS" }));
+
+  const [mp3Bytes, wavSource, projectSource] = await Promise.all([fs.readFile(mp3), fs.readFile(wav), fs.readFile(project)]);
+  const mp3Audio = stripMp3ContainerTags(mp3Bytes);
+  return {
+    beat_name: beatName,
+    files: { mp3, wav, project },
+    source: {
+      mp3: { bytes: mp3Bytes.byteLength, audio_bytes: mp3Audio.bytes.byteLength, audio_sha256: sha256Hex(mp3Audio.bytes), id3v2_bytes_removed: mp3Audio.prefixBytesRemoved, id3v1_bytes_removed: mp3Audio.suffixBytesRemoved },
+      wav: { bytes: wavSource.byteLength, sha256: sha256Hex(wavSource) },
+      project: { bytes: projectSource.byteLength, sha256: sha256Hex(projectSource) },
+    },
+    expected_metadata: { name: beatName, bpm: "128", key: "c#m", tags: ["integrity-fixture-alpha", "integrity-fixture-beta"] },
+  };
+}
+
+async function setControlledInputValue(client, element, value) {
+  await client.execute((input, nextValue) => {
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    descriptor?.set?.call(input, nextValue);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, element, value);
+}
+
+async function attachReviewSlotFile(client, kind, localFile) {
+  const button = await client.$(`//button[normalize-space(.)="+ ${kind}"]`);
+  await button.waitForDisplayed({ timeout: 30_000 });
+  await client.execute(() => {
+    if (window.__beatgalerStage1OriginalFileInputClick) return;
+    window.__beatgalerStage1OriginalFileInputClick = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function stage1PreventNativePicker(...args) {
+      if (this.type === "file") return;
+      return window.__beatgalerStage1OriginalFileInputClick.apply(this, args);
+    };
+  });
+  await button.click();
+  const accept = kind === "WAV" ? ".wav" : ".zip";
+  const input = await client.$(`input[type="file"][accept*="${accept}"]`);
+  await input.waitForExist({ timeout: 30_000 });
+  await client.execute(element => {
+    const original = window.__beatgalerStage1OriginalFileInputClick;
+    if (original) {
+      HTMLInputElement.prototype.click = original;
+      delete window.__beatgalerStage1OriginalFileInputClick;
+    }
+    element.style.display = "block";
+    element.style.position = "fixed";
+    element.style.left = "8px";
+    element.style.top = "8px";
+    element.style.width = "240px";
+    element.style.height = "40px";
+    element.style.opacity = "0.01";
+    element.style.zIndex = "2147483647";
+    element.style.pointerEvents = "auto";
+    }, input);
+  await input.setValue(await client.uploadFile(localFile));
+}
+
+async function configureDownloadIntegrityReview(client, fixture) {
+  const nameInput = await client.$('input[value*="Stage1 Download Integrity"]');
+  const bpmInput = await client.$('//div[normalize-space(.)="BPM"]/parent::div//input');
+  const keyInput = await client.$('//div[normalize-space(.)="KEY"]/parent::div//input');
+  await setControlledInputValue(client, nameInput, fixture.expected_metadata.name);
+  await setControlledInputValue(client, bpmInput, fixture.expected_metadata.bpm);
+  await setControlledInputValue(client, keyInput, fixture.expected_metadata.key);
+  const tagInput = await client.$('//div[normalize-space(.)="TAGS"]/following::input[not(@type="file")][1]');
+  await tagInput.waitForDisplayed({ timeout: 30_000 });
+  const addTagButton = await tagInput.$(
+    './following-sibling::button[normalize-space(.)="Add"]',
+  );
+  await addTagButton.waitForDisplayed({ timeout: 30_000 });
+  for (const tag of fixture.expected_metadata.tags) {
+    await setControlledInputValue(client, tagInput, tag);
+
+    await client.waitUntil(
+      async () => (await tagInput.getValue()) === tag,
+      {
+        timeout: 5_000,
+        interval: 100,
+        timeoutMsg: `Tag input did not receive ${tag}.`,
+      },
+    );
+
+    await addTagButton.click();
+
+    await client.waitUntil(
+      async () => (await tagInput.getValue()) === "",
+      {
+        timeout: 5_000,
+        interval: 100,
+        timeoutMsg: `Tag ${tag} was not committed by TagEditor.`,
+      },
+    );
+  }
+  await attachReviewSlotFile(client, "WAV", fixture.files.wav);
+  await attachReviewSlotFile(client, "PROJECT", fixture.files.project);
+}
+
+async function provisionDownloadIntegrityBeat(client, account, fixture) {
+  const committed = await uploadNamedMp3Fixture(client, account, fixture.beat_name, {
+    localFixture: fixture.files.mp3,
+    reviewIntegrity: fixture,
+    commitTimeoutMs: 180_000,
+  });
+  const cardText = await beatCardText(client, committed.beat_id);
+  assert.ok(cardText?.includes("128 · c#m"), "Authoritative beat did not expose the expected BPM/key.");
+  return { ...committed, card_text: cardText };
+}
+
+async function offensiveTransportRequest(client, account, phase, route, body) {
+  authObservers.get(account.label)?.setPhase(phase);
+  return client.execute(async (requestRoute, requestBody) => {
+    const response = await fetch(`${location.origin}/beatgaler-api${requestRoute}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(requestBody),
+    });
+    const payload = await response.json().catch(() => ({}));
+    return {
+      status: response.status,
+      ok: response.ok,
+      code: typeof payload?.code === "string" ? payload.code : null,
+      error: typeof payload?.error === "string" ? payload.error.slice(0, 240) : null,
+      expired: payload?.expired === true,
+      released: payload?.released === true,
+      operation_id: typeof payload?.operation_id === "string" ? payload.operation_id : null,
+    };
+  }, route, body);
+}
+
+function isolationEvidence(actor, owner, presented, result, authorityObtained = false) {
+  return {
+    actor,
+    resource_owner: owner,
+    resource_presented: presented,
+    http_status: result?.status ?? null,
+    semantic_code: result?.code || result?.error || null,
+    authority_obtained: authorityObtained,
   };
 }
 
@@ -1757,6 +1994,133 @@ async function verifyFixtureMetadataAfterReload(client, account, beat, expected 
   });
 
   return { ...expected, beat_id: beat.beat_id, persisted_after_reload: true, card_text: text };
+}
+
+async function installDownloadIntegrityPicker(client) {
+  await client.execute(() => {
+    const toBytes = async value => {
+      if (value instanceof Blob) return new Uint8Array(await value.arrayBuffer());
+      if (value instanceof ArrayBuffer) return new Uint8Array(value);
+      if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      if (typeof value === "string") return new TextEncoder().encode(value);
+      throw new TypeError(`Unsupported writable chunk: ${Object.prototype.toString.call(value)}`);
+    };
+    const hex = async bytes => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map(byte => byte.toString(16).padStart(2, "0")).join("");
+    const id3Length = bytes => {
+      if (bytes.length < 10 || bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33 || bytes[3] !== 3) return 0;
+      const size = [bytes[6], bytes[7], bytes[8], bytes[9]];
+      if (size.some(byte => byte > 0x7f)) return 0;
+      const total = 10 + (size[0] << 21) + (size[1] << 14) + (size[2] << 7) + size[3];
+      return total <= bytes.length ? total : 0;
+    };
+    const text = bytes => {
+      if (!bytes.length) return "";
+      if (bytes[0] === 1 && bytes.length >= 3) {
+        const little = bytes[1] === 0xff && bytes[2] === 0xfe;
+        let value = "";
+        for (let offset = 3; offset + 1 < bytes.length; offset += 2) {
+          const unit = little ? bytes[offset] | (bytes[offset + 1] << 8) : (bytes[offset] << 8) | bytes[offset + 1];
+          if (unit === 0) break;
+          value += String.fromCharCode(unit);
+        }
+        return value;
+      }
+      return new TextDecoder(bytes[0] === 3 ? "utf-8" : "latin1").decode(bytes.slice(1)).replace(/\0+$/, "");
+    };
+    const parse = bytes => {
+      const length = id3Length(bytes);
+      const frames = {};
+      let popm = null;
+      for (let offset = 10; length && offset + 10 <= length;) {
+        const id = String.fromCharCode(...bytes.slice(offset, offset + 4));
+        if (!/^[A-Z0-9]{4}$/.test(id)) break;
+        const size = (bytes[offset + 4] * 0x1000000) + (bytes[offset + 5] << 16) + (bytes[offset + 6] << 8) + bytes[offset + 7];
+        const end = offset + 10 + size;
+        if (end > length) throw new Error(`Malformed ID3 ${id} frame.`);
+        const payload = bytes.slice(offset + 10, end);
+        if (id.startsWith("T")) frames[id] = text(payload);
+        if (id === "POPM") {
+          const zero = payload.indexOf(0);
+          if (zero >= 0 && zero + 1 < payload.length) popm = { email: new TextDecoder("latin1").decode(payload.slice(0, zero)), rating: payload[zero + 1] };
+        }
+        offset = end;
+      }
+      return { id3v2_bytes: length, frames, popm };
+    };
+    const state = {
+      records: [],
+      originalSavePickerDescriptor: Object.getOwnPropertyDescriptor(window, "showSaveFilePicker"),
+      originalSavePickerValue: window.showSaveFilePicker,
+    };
+    window.__beatgalerStage1DownloadIntegrityPicker = state;
+    const picker = async options => {
+      const record = { filename: String(options?.suggestedName || ""), chunks: [], closed: false, aborted: false };
+      state.records.push(record);
+      return {
+        createWritable: async () => ({
+          write: async value => { record.chunks.push(await toBytes(value)); },
+          close: async () => {
+            const bytes = new Uint8Array(await new Blob(record.chunks).arrayBuffer());
+            const parsed = parse(bytes);
+            record.closed = true;
+            record.byte_count = bytes.byteLength;
+            record.sha256 = await hex(bytes);
+            record.audio_payload_byte_count = parsed.id3v2_bytes ? bytes.byteLength - parsed.id3v2_bytes : null;
+            record.audio_payload_sha256 = parsed.id3v2_bytes ? await hex(bytes.slice(parsed.id3v2_bytes)) : null;
+            record.id3 = parsed;
+            delete record.chunks;
+          },
+          abort: async () => { record.aborted = true; record.chunks = []; },
+        }),
+      };
+    };
+    try {
+      Object.defineProperty(window, "showSaveFilePicker", { configurable: true, writable: true, value: picker });
+    } catch {
+      window.showSaveFilePicker = picker;
+    }
+  });
+}
+
+async function downloadIntegrityPickerSnapshot(client) {
+  return client.execute(() => {
+    const records = window.__beatgalerStage1DownloadIntegrityPicker?.records || [];
+    return records.map(({ chunks, ...record }) => record);
+  });
+}
+
+async function restoreDownloadIntegrityPicker(client) {
+  await client.execute(() => {
+    const state = window.__beatgalerStage1DownloadIntegrityPicker;
+    if (!state) return;
+    try {
+      if (state.originalSavePickerDescriptor) Object.defineProperty(window, "showSaveFilePicker", state.originalSavePickerDescriptor);
+      else if (state.originalSavePickerValue === undefined) delete window.showSaveFilePicker;
+      else window.showSaveFilePicker = state.originalSavePickerValue;
+    } catch {}
+    delete window.__beatgalerStage1DownloadIntegrityPicker;
+  });
+}
+
+async function downloadIntegrityAsset(client, account, beat, label) {
+  const startedAt = Date.now();
+  await installDownloadIntegrityPicker(client);
+  try {
+    await openBeatContextAction(client, beat.beat_id, "Download");
+    const button = await client.$(`//button[.//div[normalize-space(.)="${label}"]]`);
+    await button.waitForEnabled({ timeout: 30_000 });
+    await button.click();
+    let latest = null;
+    await client.waitUntil(async () => {
+      latest = await downloadIntegrityPickerSnapshot(client);
+      return latest.at(-1)?.closed === true;
+    }, { timeout: 180_000, interval: 200, timeoutMsg: `Account ${account.label} did not materialize ${label} in the integrity picker.` });
+    const close = await client.$('button[aria-label="Close download window"]');
+    if (await close.isExisting()) await close.click();
+    return { ...latest.at(-1), duration_ms: Date.now() - startedAt };
+  } finally {
+    await restoreDownloadIntegrityPicker(client).catch(() => {});
+  }
 }
 
 async function installDownloadProbe(client) {
@@ -3180,9 +3544,9 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
   it(
     `runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`,
     async () => {
-      if (focusedLifecycle && accountCount !== 1) {
+      if ((focusedLifecycle || focusedDownloadIntegrity) && accountCount !== 1) {
         throw taggedError(
-          "STAGE1_FOCUSED_LIFECYCLE requires --accounts 1.",
+          "Focused Stage 1 modes require --accounts 1.",
           "STAGE1_FOCUSED_ACCOUNT_COUNT",
           "P1",
         );
@@ -3214,6 +3578,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         };
 
         await writeReport();
+        await archiveFocusedDownloadIntegrityReport();
 
         throw taggedError(
           "Stage 1 reusable account cohort is missing. Run the seed command first.",
@@ -3304,6 +3669,84 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             null,
             `${accountCount} unique vaults`,
           );
+        }
+
+        if (focusedDownloadIntegrity) {
+          const fixture = await createDownloadIntegrityFixtures(accounts[0]);
+          const integrityBeat = await provisionDownloadIntegrityBeat(clients[0], accounts[0], fixture);
+          const observer = authObservers.get(accounts[0].label);
+          observer?.setPhase("download-integrity-authoritative-reload");
+          await clients[0].refresh();
+          await waitForAuthoritativeLibrary(clients[0], accounts[0].label);
+          const authoritativeIntegrityBeat = await waitForNamedBeatCommitted(
+            clients[0],
+            accounts[0],
+            fixture.beat_name,
+          );
+          assert.equal(
+            authoritativeIntegrityBeat.beat_id,
+            integrityBeat.beat_id,
+            "Focused download-integrity beat changed identity after authoritative Reload.",
+          );
+
+          const wav = await downloadIntegrityAsset(clients[0], accounts[0], authoritativeIntegrityBeat, "WAV");
+          if (!wav.filename.toLowerCase().endsWith(".wav") || wav.byte_count <= 0 || wav.byte_count !== fixture.source.wav.bytes || wav.sha256 !== fixture.source.wav.sha256) {
+            throw taggedError("WAV download bytes/hash/name differ from the uploaded fixture.", "STAGE1_DOWNLOAD_INTEGRITY_WAV", "P1");
+          }
+          markScenario("focused_download_wav_integrity", "PASS", null, "WAV bytes and SHA-256 match the original fixture.");
+
+          const project = await downloadIntegrityAsset(clients[0], accounts[0], authoritativeIntegrityBeat, "Full Project");
+          if (!project.filename.toLowerCase().endsWith(".zip") || project.byte_count <= 0 || project.byte_count !== fixture.source.project.bytes || project.sha256 !== fixture.source.project.sha256) {
+            throw taggedError("PROJECT download bytes/hash/name differ from the uploaded ZIP fixture.", "STAGE1_DOWNLOAD_INTEGRITY_PROJECT", "P1");
+          }
+          markScenario("focused_download_project_integrity", "PASS", null, "Project ZIP bytes and SHA-256 match the original fixture.");
+
+          const mp3 = await downloadIntegrityAsset(clients[0], accounts[0], authoritativeIntegrityBeat, "MP3");
+          if (!mp3.filename.toLowerCase().endsWith(".mp3") || !mp3.id3?.id3v2_bytes || mp3.audio_payload_byte_count <= 0 || mp3.audio_payload_sha256 !== fixture.source.mp3.audio_sha256) {
+            throw taggedError("MP3 MPEG payload SHA-256 differs after removing only the generated ID3v2 tag.", "STAGE1_DOWNLOAD_INTEGRITY_MP3_AUDIO", "P1");
+          }
+          markScenario("focused_download_mp3_audio_integrity", "PASS", null, "Generated ID3v2 was excluded; the remaining MPEG payload SHA-256 matches the upload payload.");
+
+          const observed = mp3.id3.frames || {};
+          const expectedTags = fixture.expected_metadata.tags.join("; ");
+          if (observed.TIT2 !== fixture.expected_metadata.name || observed.TBPM !== fixture.expected_metadata.bpm || observed.TKEY !== fixture.expected_metadata.key || observed.TCON !== expectedTags) {
+            throw taggedError("Generated MP3 ID3v2.3 metadata does not match the authoritative fixture metadata.", "STAGE1_DOWNLOAD_INTEGRITY_MP3_ID3", "P1");
+          }
+          markScenario("focused_download_mp3_id3_integrity", "PASS", null, "ID3v2.3 TIT2/TBPM/TKEY/TCON match the authoritative Review metadata.");
+
+          validateAuthHealth(observer?.snapshot() || [], accounts[0].label);
+          markScenario("auth_health_stability", "PASS", null, "No observed health probe failed during the focused download-integrity flow.");
+          report.accounts[accounts[0].label] = {
+            ...report.accounts[accounts[0].label],
+            login_ms: loginTimes[0],
+            user_id: before[0].user_id,
+            client_id: before[0].client_id,
+            vault_chat_id: before[0].direct.chat_id,
+            transport_id: before[0].direct.transport_id,
+            download_integrity_beat: { beat_id: authoritativeIntegrityBeat.beat_id, beat_name: authoritativeIntegrityBeat.beat_name },
+          };
+          report.download_integrity = {
+            baseline_sha: report.baseline_sha,
+            beat_id: authoritativeIntegrityBeat.beat_id,
+            beat_name: authoritativeIntegrityBeat.beat_name,
+            authoritative_reload_verified: true,
+            beat_id_before_reload: integrityBeat.beat_id,
+            beat_id_after_reload: authoritativeIntegrityBeat.beat_id,
+            source: fixture.source,
+            expected_id3_metadata: fixture.expected_metadata,
+            downloads: {
+              wav: { filename: wav.filename, byte_count: wav.byte_count, sha256: wav.sha256, duration_ms: wav.duration_ms },
+              project: { filename: project.filename, byte_count: project.byte_count, sha256: project.sha256, duration_ms: project.duration_ms },
+              mp3: { filename: mp3.filename, byte_count: mp3.byte_count, sha256: mp3.sha256, audio_payload_byte_count: mp3.audio_payload_byte_count, audio_payload_sha256: mp3.audio_payload_sha256, generated_id3_bytes: mp3.id3.id3v2_bytes, observed_id3_metadata: observed, duration_ms: mp3.duration_ms },
+            },
+          };
+          report.timings = { startup_ms: startupMs, wav_download_ms: wav.duration_ms, project_download_ms: project.duration_ms, mp3_download_ms: mp3.duration_ms };
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          const archive = await archiveFocusedDownloadIntegrityReport();
+          console.log(`[stage1-real] PASS focused download integrity account=${accounts[0].label}; report=${archive}`);
+          return;
         }
 
         const playbackFixtures = await Promise.all(
@@ -4732,7 +5175,13 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           );
         }
 
-        const coreFailureScenarios = mixedWorkload
+        const coreFailureScenarios = focusedIsolation
+          ? ["authoritative_library_data_plane", "multi_account_auth_isolation", "multi_account_direct_identity"]
+          : focusedDownloadIntegrity
+          ? [
+              "authoritative_library_data_plane",
+            ]
+          : mixedWorkload
           ? [
               "multi_account_auth_isolation",
               "authoritative_library_data_plane",
@@ -4779,7 +5228,16 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           }
         }
 
-        const postCoreScenarios = mixedWorkload
+        const postCoreScenarios = focusedIsolation
+          ? ["offensive_installation_isolation", "offensive_session_isolation", "offensive_capability_isolation", "offensive_media_reference_isolation", "same_profile_account_switch_isolation", "final_authoritative_isolation"]
+          : focusedDownloadIntegrity
+          ? [
+              "focused_download_wav_integrity",
+              "focused_download_project_integrity",
+              "focused_download_mp3_audio_integrity",
+              "focused_download_mp3_id3_integrity",
+            ]
+          : mixedWorkload
           ? [
               "mixed_playback",
               "mixed_upload",
@@ -4826,19 +5284,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 "multi_account_direct_identity",
                 "playback_fixture_provisioning",
               ]
-            : focusedIsolation
+            : focusedLifecycle
               ? [
-                  "multi_account_auth_isolation",
                   "authoritative_library_data_plane",
-                  "multi_account_direct_identity",
                   "playback_fixture_provisioning",
                 ]
-              : focusedLifecycle
-                ? [
-                    "authoritative_library_data_plane",
-                    "playback_fixture_provisioning",
-                  ]
-                : [
+              : [
                   "multi_account_auth_isolation",
                   "authoritative_library_data_plane",
                   "multi_account_direct_identity",
@@ -4874,6 +5325,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         }
 
         await writeReport();
+        await archiveFocusedDownloadIntegrityReport();
         throw error;
       } finally {
         await Promise.allSettled(
@@ -4884,6 +5336,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
 
         authObservers.clear();
         await fs.rm(PLAYBACK_TMP_DIR, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(DOWNLOAD_INTEGRITY_TMP_DIR, { recursive: true, force: true }).catch(() => {});
       }
     },
   );

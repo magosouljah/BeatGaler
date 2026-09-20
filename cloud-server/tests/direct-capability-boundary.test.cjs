@@ -9,6 +9,7 @@ const {
   createMemoryStore,
   installDirectCapabilityBoundary,
 } = require("../direct-capability-boundary");
+const directTransport = require("../direct-transport-capability-view");
 const { activeOperationIdsForSessionState, validateCapabilitySessionState } = require("../direct-transport-capability-view");
 const { installProductiveTempAuthBoundary } = require("../productive-temp-auth-boundary");
 
@@ -86,6 +87,17 @@ function authHash(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+function capabilityRouteRequest(body, overrides = {}) {
+  return {
+    headers: { authorization: "Bearer session-secret" },
+    beatgalerAuthorizedUserId: "user-a",
+    beatgalerAuthorizedTenantId: "tenant-a",
+    beatgalerAuthorizedInstallationId: "install-a",
+    body,
+    ...overrides,
+  };
+}
+
 test("operation kinds are deny-by-default", () => {
   assert.equal(normalizeOperationKind("download"), "download");
   assert.throws(() => normalizeOperationKind("data"), /DIRECT_CAPABILITY_DENIED/);
@@ -159,6 +171,160 @@ test("memory capability store honors the same bounded expiry skew as PostgreSQL"
   const withinSkew = await store.authorize(request({ clockSkewMs: 1_000 }));
   assert.equal(withinSkew.ok, true);
   assert.equal(withinSkew.record.status, "AUTHORIZED");
+});
+
+test("renewal keeps an authorized capability reusable and extends its lease", async () => {
+  let now = 2_000;
+  const store = createMemoryStore({ now: () => now, maxActivePerTenant: 4 });
+  await store.issue(record({ expires_at_ms: 10_000 }));
+  assert.equal((await store.authorize(request())).ok, true);
+
+  now = 5_000;
+  const first = await store.renew(request({ renewalLeaseMs: 30_000 }));
+  assert.equal(first.ok, true);
+  assert.equal(first.record.status, "AUTHORIZED");
+  assert.equal(first.record.expires_at_ms, 35_000);
+
+  now = 12_000;
+  const second = await store.renew(request({ renewalLeaseMs: 30_000 }));
+  assert.equal(second.ok, true);
+  assert.equal(second.record.status, "AUTHORIZED");
+  assert.equal(second.record.expires_at_ms, 42_000);
+  assert.equal((await store.finish(request())).record.status, "CONSUMED");
+});
+
+test("renewal rejects mismatched, revoked, consumed and expired capabilities", async () => {
+  let now = 2_000;
+  const store = createMemoryStore({ now: () => now, maxActivePerTenant: 8 });
+  await store.issue(record({ capability_hash: "a".repeat(64), internal_operation_id: "op-active" }));
+  assert.equal((await store.authorize(request())).ok, true);
+  for (const change of [{ sessionId: "session-b" }, { generation: 2 }, { installationId: "install-b" }]) {
+    const denied = await store.renew(request(change));
+    assert.equal(denied.ok, false);
+    assert.equal(denied.reason, "scope");
+  }
+
+  await store.issue(record({ capability_hash: "c".repeat(64), internal_operation_id: "op-revoked" }));
+  assert.equal((await store.authorize(request({ capabilityHash: "c".repeat(64) }))).ok, true);
+  await store.revokeSession({ installationId: "install-a", sessionId: "session-a", reason: "lease_end" });
+  const revoked = await store.renew(request());
+  assert.equal(revoked.ok, false);
+  assert.equal(revoked.reason, "revoked");
+
+  await store.issue(record({ capability_hash: "d".repeat(64), internal_operation_id: "op-consumed" }));
+  const consumedInput = request({ capabilityHash: "d".repeat(64) });
+  assert.equal((await store.authorize(consumedInput)).ok, true);
+  assert.equal((await store.finish(consumedInput)).ok, true);
+  const consumed = await store.renew(consumedInput);
+  assert.equal(consumed.ok, false);
+  assert.equal(consumed.reason, "consumed");
+
+  await store.issue(record({ capability_hash: "e".repeat(64), internal_operation_id: "op-expired", expires_at_ms: 3_000 }));
+  const expiredInput = request({ capabilityHash: "e".repeat(64) });
+  assert.equal((await store.authorize(expiredInput)).ok, true);
+  now = 10_000;
+  const expired = await store.renew(expiredInput);
+  assert.equal(expired.ok, false);
+  assert.equal(expired.reason, "expired");
+});
+
+test("boundary renews public capabilities without exposing internal operation ids", async () => {
+  const previousValidate = directTransport.validateCapabilitySession;
+  directTransport.validateCapabilitySession = () => ({ ok: true });
+  try {
+    let now = 2_000;
+    const store = createMemoryStore({ now: () => now, maxActivePerTenant: 4 });
+    const fakeExpress = createFakeExpress();
+    installDirectCapabilityBoundary(fakeExpress, {
+      store,
+      now: () => now,
+      env: { BEATGALER_DIRECT_CAPABILITY_TTL_MS: "30000" },
+    });
+    const renewedOperationIds = [];
+    const endedOperationIds = [];
+    fakeExpress.application.post("/transport/operation/begin", (_req, res) => res.json({
+      ok: true,
+      operation_id: "op_internal_renew",
+      internal_operation_id: "op_internal_renew",
+    }));
+    fakeExpress.application.post("/transport/operation/renew", (req, res) => {
+      renewedOperationIds.push(req.body.operationId);
+      return res.json({ ok: true, operation_id: req.body.operationId, liveness_timeout_ms: 15_000 });
+    });
+    fakeExpress.application.post("/transport/operation/end", (req, res) => {
+      endedOperationIds.push(req.body.operationId);
+      return res.json({ ok: true, operation_id: req.body.operationId });
+    });
+    fakeExpress.application.post("/transport/session/stop", (_req, res) => res.json({ ok: true }));
+
+    const beginRequest = capabilityRouteRequest({
+      sessionId: "session-a",
+      generation: 1,
+      kind: "commit_import",
+      scope: { objectType: "beat", objectIds: ["beat-a"] },
+    });
+    const begin = await runRoute(fakeExpress.routes.get("/transport/operation/begin"), beginRequest);
+    assert.equal(begin.statusCode, 200);
+    const capability = begin.payload.operation_id;
+    assert.match(capability, /^cap_/);
+    assert.equal(begin.payload.capability.token, capability);
+    assert.doesNotMatch(JSON.stringify(begin.payload), /op_internal_renew/);
+
+    const authorize = await runRoute(fakeExpress.routes.get("/transport/capability/authorize"), capabilityRouteRequest({
+      sessionId: "session-a", generation: 1, operationId: capability, kind: "commit_import",
+      scope: { objectType: "beat", objectIds: ["beat-a"] },
+    }));
+    assert.equal(authorize.statusCode, 200);
+    assert.equal(authorize.payload.operation_id, capability);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      now += 5_000;
+      const renewed = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
+        sessionId: "session-a", generation: 1, operationId: capability,
+      }));
+      assert.equal(renewed.statusCode, 200);
+      assert.equal(renewed.payload.operation_id, capability);
+      assert.doesNotMatch(JSON.stringify(renewed.payload), /op_internal_renew/);
+    }
+    assert.deepEqual(renewedOperationIds, ["op_internal_renew", "op_internal_renew"]);
+    assert.equal(store.__records.get(authHash(capability)).status, "AUTHORIZED");
+
+    for (const change of [
+      { body: { sessionId: "session-b", generation: 1, operationId: capability } },
+      { body: { sessionId: "session-a", generation: 2, operationId: capability } },
+      { beatgalerAuthorizedInstallationId: "install-b", body: { sessionId: "session-a", generation: 1, operationId: capability } },
+    ]) {
+      const rejected = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest(change.body, change));
+      assert.equal(rejected.statusCode, 403);
+      assert.match(rejected.payload.code, /DIRECT_CAPABILITY_(SCOPE_DENIED|REPLAY_OR_EXPIRED)/);
+    }
+
+    const ended = await runRoute(fakeExpress.routes.get("/transport/operation/end"), capabilityRouteRequest({
+      sessionId: "session-a", generation: 1, operationId: capability,
+    }));
+    assert.equal(ended.statusCode, 200);
+    assert.equal(ended.payload.operation_id, capability);
+    assert.deepEqual(endedOperationIds, ["op_internal_renew"]);
+    const consumed = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
+      sessionId: "session-a", generation: 1, operationId: capability,
+    }));
+    assert.equal(consumed.statusCode, 403);
+
+    const secondBegin = await runRoute(fakeExpress.routes.get("/transport/operation/begin"), beginRequest);
+    const secondCapability = secondBegin.payload.operation_id;
+    await runRoute(fakeExpress.routes.get("/transport/capability/authorize"), capabilityRouteRequest({
+      sessionId: "session-a", generation: 1, operationId: secondCapability, kind: "commit_import",
+      scope: { objectType: "beat", objectIds: ["beat-a"] },
+    }));
+    const stopped = await runRoute(fakeExpress.routes.get("/transport/session/stop"), capabilityRouteRequest({ sessionId: "session-a" }));
+    assert.equal(stopped.statusCode, 200);
+    const revoked = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
+      sessionId: "session-a", generation: 1, operationId: secondCapability,
+    }));
+    assert.equal(revoked.statusCode, 403);
+  } finally {
+    directTransport.validateCapabilitySession = previousValidate;
+  }
 });
 
 test("tenant ceiling counts authorized operations as live", async () => {

@@ -108,6 +108,13 @@ function identityMatches(record, input) {
     record.session_id === input.sessionId && Number(record.generation) === Number(input.generation);
 }
 
+function renewalLeaseMs(input) {
+  return Math.max(
+    30_000,
+    Math.min(30 * 60 * 1000, Number(input?.renewalLeaseMs || DEFAULT_CAPABILITY_TTL_MS)),
+  );
+}
+
 function createMemoryStore({ now = () => Date.now(), maxActivePerTenant = DEFAULT_TENANT_ACTIVE_CAP } = {}) {
   const records = new Map();
   function expire() {
@@ -138,6 +145,19 @@ function createMemoryStore({ now = () => Date.now(), maxActivePerTenant = DEFAUL
       }
       record.status = "AUTHORIZED";
       record.authorized_at_ms = now();
+      return { ok: true, record: { ...record } };
+    },
+    async renew(input) {
+      const record = records.get(input.capabilityHash);
+      if (!record) return { ok: false, reason: "unknown" };
+      if (!identityMatches(record, input)) return { ok: false, reason: "scope", record: { ...record } };
+      if (record.status !== "AUTHORIZED") return { ok: false, reason: record.status.toLowerCase(), record: { ...record } };
+      if (record.expires_at_ms + input.clockSkewMs < now()) {
+        record.status = "EXPIRED";
+        return { ok: false, reason: "expired", record: { ...record } };
+      }
+      record.expires_at_ms = Math.max(record.expires_at_ms, now() + renewalLeaseMs(input));
+      record.renewed_at_ms = now();
       return { ok: true, record: { ...record } };
     },
     async finish(input) {
@@ -253,6 +273,33 @@ function createPostgresStore(pool, { maxActivePerTenant = DEFAULT_TENANT_ACTIVE_
       const sameOperation = String(record.operation_type) === input.operationType && sameScope(record.object_scope, input.objectScope);
       return { ok: false, reason: sameIdentity && sameOperation ? String(record.status || "denied").toLowerCase() : "scope", record };
     },
+    async renew(input) {
+      const updated = await pool.query(`UPDATE direct_capabilities SET
+          expires_at=GREATEST(expires_at, now() + ($8::bigint * interval '1 millisecond'))
+        WHERE capability_hash=$1 AND user_id=$2 AND tenant_id=$3 AND installation_id=$4 AND auth_session_hash=$5
+          AND session_id=$6 AND generation=$7 AND status='AUTHORIZED'
+          AND expires_at >= now() - ($9::bigint * interval '1 millisecond')
+        RETURNING internal_operation_id,user_id,tenant_id,installation_id,auth_session_hash,session_id,generation,vault_scope,operation_type,object_scope,status,expires_at`, [
+        input.capabilityHash,input.userId,input.tenantId,input.installationId,input.authSessionHash,input.sessionId,
+        input.generation,renewalLeaseMs(input),input.clockSkewMs,
+      ]);
+      if (updated.rows.length === 1) return { ok: true, record: updated.rows[0] };
+      const expired = await pool.query(`UPDATE direct_capabilities SET status='EXPIRED'
+        WHERE capability_hash=$1 AND user_id=$2 AND tenant_id=$3 AND installation_id=$4 AND auth_session_hash=$5
+          AND session_id=$6 AND generation=$7 AND status='AUTHORIZED'
+          AND expires_at < now() - ($8::bigint * interval '1 millisecond')
+        RETURNING internal_operation_id,user_id,tenant_id,installation_id,auth_session_hash,session_id,generation,vault_scope,operation_type,object_scope,status,expires_at`, [
+        input.capabilityHash,input.userId,input.tenantId,input.installationId,input.authSessionHash,input.sessionId,
+        input.generation,input.clockSkewMs,
+      ]);
+      if (expired.rows.length === 1) return { ok: false, reason: "expired", record: expired.rows[0] };
+      const record = await find(input.capabilityHash);
+      if (!record) return { ok: false, reason: "unknown" };
+      const sameIdentity = String(record.user_id) === input.userId && String(record.tenant_id) === input.tenantId &&
+        String(record.installation_id) === input.installationId && String(record.auth_session_hash) === input.authSessionHash &&
+        String(record.session_id) === input.sessionId && Number(record.generation) === Number(input.generation);
+      return { ok: false, reason: sameIdentity ? String(record.status || "denied").toLowerCase() : "scope", record };
+    },
     async finish(input) {
       const updated = await pool.query(`UPDATE direct_capabilities SET
           status=CASE WHEN status='AUTHORIZED' THEN 'CONSUMED' ELSE 'REVOKED' END,
@@ -332,6 +379,16 @@ function capabilityInput(req, claims, { requireScope = false } = {}) {
     input.objectScope = normalizeScope(input.operationType, req.body?.scope);
   }
   return { capability, input };
+}
+
+function keepOperationIdPublic(res, capability) {
+  const originalJson = res.json.bind(res);
+  res.json = payload => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return originalJson(payload);
+    const { internal_operation_id: _internalOperationId, ...publicPayload } = payload;
+    if (Object.hasOwn(publicPayload, "operation_id")) publicPayload.operation_id = capability;
+    return originalJson(publicPayload);
+  };
 }
 
 async function authorizePresentedCapability(req, fallbackIdentity = null) {
@@ -475,8 +532,9 @@ function installDirectCapabilityBoundary(express, options = {}) {
           session_id: String(req.body?.sessionId || ""),
           kind,
         });
+        const { internal_operation_id: _internalOperationId, ...publicPayload } = payload;
         return originalJson({
-          ...payload,
+          ...publicPayload,
           operation_id: token,
           capability: {
             token, user_id: claims.userId, tenant_id: claims.tenantId, installation_id: claims.installationId,
@@ -521,6 +579,33 @@ function installDirectCapabilityBoundary(express, options = {}) {
         return responseError(res, codedError(code, "capability cannot be finished for this session."));
       }
       req.body.operationId = String(result.record.internal_operation_id);
+      keepOperationIdPublic(res, parsed.capability);
+      next();
+    } catch (error) { responseError(res, error); }
+  }
+
+  async function renewCapability(req, res, next) {
+    let claims, parsed;
+    try {
+      claims = requestIdentity(req);
+      parsed = capabilityInput(req, claims);
+    } catch (error) { return responseError(res, error); }
+    const liveSession = directTransport.validateCapabilitySession({
+      installationId: parsed.input.installationId,
+      sessionId: parsed.input.sessionId,
+      generation: parsed.input.generation,
+    });
+    if (!liveSession?.ok) {
+      return responseError(res, codedError("DIRECT_CAPABILITY_SESSION_INACTIVE", `Direct session is not live (${liveSession?.reason || "unknown"}).`));
+    }
+    try {
+      const result = await store.renew({ ...parsed.input, renewalLeaseMs: ttlMs });
+      if (!result.ok) {
+        const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
+        return responseError(res, codedError(code, "capability cannot be renewed for this session."));
+      }
+      req.body.operationId = String(result.record.internal_operation_id);
+      keepOperationIdPublic(res, parsed.capability);
       next();
     } catch (error) { responseError(res, error); }
   }
@@ -584,6 +669,7 @@ function installDirectCapabilityBoundary(express, options = {}) {
       return originalPost.call(this, routePath, beginCapability, ...handlers);
     }
     if (routePath === "/transport/operation/end") return originalPost.call(this, routePath, finishCapability, ...handlers);
+    if (routePath === "/transport/operation/renew") return originalPost.call(this, routePath, renewCapability, ...handlers);
     if (routePath === "/transport/session/stop") return originalPost.call(this, routePath, revokeSession, ...handlers);
     if (routePath === "/auth/logout") return originalPost.call(this, routePath, revokeAuthOnSuccess("logout"), ...handlers);
     if (routePath === "/auth/password/change") return originalPost.call(this, routePath, revokeAuthOnSuccess("password_change"), ...handlers);
