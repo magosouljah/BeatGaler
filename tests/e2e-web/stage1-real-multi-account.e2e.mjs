@@ -2156,7 +2156,7 @@ async function playbackRouteSnapshot(client, beatId) {
 
 
 async function ensureIsolationSecretBeat(client, account) {
-  const beatName = \`Stage1 Isolation Secret \${account.label} v1\`;
+  const beatName = `Stage1 Isolation Secret ${account.label} v1`;
   const existing = await playbackBeatSnapshot(client, beatName);
   if (existing?.beat_id) {
     const committed = existing.cloud_committed
@@ -2166,18 +2166,18 @@ async function ensureIsolationSecretBeat(client, account) {
       ...committed,
       beat_name: beatName,
       created: false,
-      marker: \`BEATGALER-STAGE1-OFFENSIVE-\${account.label}-MEDIA-v1\`,
+      marker: `BEATGALER-STAGE1-OFFENSIVE-${account.label}-MEDIA-v1`,
     };
   }
 
   await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
   const localFixture = path.join(
     PLAYBACK_TMP_DIR,
-    \`stage1-isolation-secret-\${account.label}-v1.mp3\`,
+    `stage1-isolation-secret-${account.label}-v1.mp3`,
   );
-  const marker = \`BEATGALER-STAGE1-OFFENSIVE-\${account.label}-MEDIA-v1\`;
+  const marker = `BEATGALER-STAGE1-OFFENSIVE-${account.label}-MEDIA-v1`;
   await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
-  await fs.appendFile(localFixture, Buffer.from(\`\\n\${marker}\\n\`, "utf8"));
+  await fs.appendFile(localFixture, Buffer.from(`\\n${marker}\\n`, "utf8"));
 
   const uploaded = await uploadNamedMp3Fixture(
     client,
