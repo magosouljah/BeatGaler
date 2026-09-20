@@ -22,6 +22,7 @@ const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
 const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
 const cohortSize = Number(process.env.STAGE1_COHORT_SIZE || 10);
 const requestedCount = cliAccountCount() ?? Number(process.env.STAGE1_RUN_ACCOUNTS || 2);
+const focusedIsolation = process.env.STAGE1_FOCUSED_ISOLATION === "1";
 
 if (!cohortId || !cohortPassword) {
   console.error("BLOCKED Stage 1 real multi-account E2E: the reusable account cohort does not exist yet.");
@@ -34,6 +35,10 @@ if (!Number.isInteger(cohortSize) || cohortSize < 2 || cohortSize > 50) {
 }
 if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > cohortSize) {
   console.error(`BLOCKED Stage 1: --accounts must be between 1 and ${cohortSize}.`);
+  process.exit(2);
+}
+if (focusedIsolation && requestedCount !== 2) {
+  console.error("BLOCKED Stage 1: STAGE1_FOCUSED_ISOLATION requires --accounts 2.");
   process.exit(2);
 }
 
@@ -52,7 +57,7 @@ try {
 }
 
 console.log(`[stage1-real] baseline=${gitHead}`);
-console.log(`[stage1-real] cohort=${cohortId} accounts=${requestedCount}/${cohortSize} browser_sessions=${requestedCount} mode=${requestedCount === 1 ? "single-account-diagnostic" : "real"}`);
+console.log(`[stage1-real] cohort=${cohortId} accounts=${requestedCount}/${cohortSize} browser_sessions=${requestedCount} mode=${focusedIsolation ? "focused-offensive-isolation" : requestedCount === 1 ? "single-account-diagnostic" : "real"}`);
 console.log("[stage1-real] cohort password stays local and is never printed.");
 
 const result = spawnSync(wdioBin, ["run", "wdio.stage1-real.conf.mjs"], {
