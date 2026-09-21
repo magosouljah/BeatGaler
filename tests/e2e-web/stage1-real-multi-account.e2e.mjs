@@ -1397,19 +1397,30 @@ async function playbackIsolationSnapshot(client) {
   return client.execute(() => {
     const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
     return Array.from(document.querySelectorAll("[data-beat-card-id]"))
-      .flatMap(card => Array.from(card.querySelectorAll("*"))
-        .filter(node => node.children.length === 0)
-        .map(node => normalize(node.textContent))
-        .filter(value => /^Stage1 Playback \d{2}$/.test(value))
-        .slice(0, 1))
-      .sort();
+      .map(card => {
+        const name = Array.from(card.querySelectorAll("*"))
+          .filter(node => node.children.length === 0)
+          .map(node => normalize(node.textContent))
+          .find(value => /^Stage1 Playback \d{2}$/.test(value));
+        if (!name) return null;
+        return {
+          beat_id: String(card.getAttribute("data-beat-card-id") || "").trim(),
+          name,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.name.localeCompare(right.name) || left.beat_id.localeCompare(right.beat_id));
   });
 }
 
 async function validatePlaybackFixtureIsolation(clients) {
   const snapshots = await Promise.all(clients.map(client => playbackIsolationSnapshot(client)));
-  snapshots.forEach((names, index) => {
-    assert.deepEqual(names, [playbackBeatName(accounts[index])], `Account ${accounts[index].label} must see only its own Stage 1 playback fixture.`);
+  snapshots.forEach((cards, index) => {
+    assert.deepEqual(
+      cards.map(card => card.name),
+      [playbackBeatName(accounts[index])],
+      `Account ${accounts[index].label} must see only its own Stage 1 playback fixture. Observed Stage 1 playback cards: ${JSON.stringify(cards)}`,
+    );
   });
   return snapshots;
 }
