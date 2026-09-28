@@ -14,3 +14,26 @@ ABANDON: G2 Full causal closure is blocked by the unexplained residual delay aft
 ABANDON: G4 Residual health failure remains; no blind reruns to manufacture three green reports.
 - [x] G5: Final syntax/tests/diff checks and protected-file preservation verified; no merge, branch switch, seeding or state cleanup.
   EVIDENCE: Final checks PASS; branch and HEAD unchanged, staged list empty. Original protected 8943-byte prefix retains SHA256 793A8C1EE4E09412D4CC23A59BA9960D1DD896AA8426CAA9C8BD7A2B97DEFA34; live Cloud appended 3770 bytes, not edited/reverted by agent. Cloud timing uninstalled and temporary inspector closed, Cloud not restarted.
+
+## Task 6 — Final Verification Gates
+
+- [x] Repository state and prior Task 1–5 evidence inspected.
+  EVIDENCE: Branch stage1/real-multi-account-e2e at a5fa39061d621dce9f3ff20a7f13fe73cc932533; retained Task 4, Task 5 and Task 1 download-integrity reports read before the run.
+- [x] Existing final-verification support/harness identified and minimally extended only if needed.
+  EVIDENCE: Added STAGE1_TASK6_FINAL_VERIFICATION to the existing real browser harness; it reuses authoritative library, runtime, observer, and strong-download helpers.
+- [x] All five account-to-user-to-vault-to-transport mappings verified from authoritative state with no cross-account mapping.
+  EVIDENCE: Task 6 report accounts 01–05 records five unique user/vault pairs and expected direct transport authority: Bot03, Bot02, Bot04, Bot05, Bot09.
+- [x] `get_index` completed authoritatively for every vault; beats, metadata, and retained files correlated to current state and prior evidence.
+  EVIDENCE: Five completed observed get_index operations; authoritative counts 9, 2, 20, 2, 2. Task 1 fixture, Task 4 playback fixtures, Task 5 recovery beat and Account 04 persisted 116/bm metadata all found in owner state.
+- [x] Representative strong download validation proves the download route remains correct.
+  EVIDENCE: Account 01 Task 1 fixture: WAV SHA-256 b0adef60bbf724ec53770fc3393b3b99d198b5359b72a6b8fa8f39334a584481; ZIP SHA-256 392f93b529952f8206919dbc74599f2fc1646e87a73a9038bc6eba3db60bfb8c; MP3 payload SHA-256 7efd8bdf4fcfead1f1be9bf7cdd63343484f617f5b032a7d7ef6918e6cfdacbb and expected ID3 fields passed.
+- [x] Final five-vault isolation comparison found no crossed beat/file/media or visible state.
+  EVIDENCE: 35 unique beat ids; foreign_references is [] in the Task 6 report.
+- [x] Read-only final control-plane and health inspection captured sessions, leases, operations/index state, locks, PostgreSQL, transport status, and readyz.
+  EVIDENCE: Report /readyz 200 with PostgreSQL ready; transport/status sessions=9 operations=0; post-run transport/status sessions=8 operations=0; browser-observed pending get_index=[] for all five. Direct PG counters/locks are explicitly NOT_CONFIGURED because no read-only URL was supplied.
+- [x] `tmp/stage1-task-6-final-verification-report.json` written without secrets and with a supported final classification.
+  CHECK: Test-Path -LiteralPath 'tmp/stage1-task-6-final-verification-report.json'
+  EXPECT: True
+  EVIDENCE: Present; overall PASS, task_6.classification COMPROBADO; sensitive-term scan returned no matches.
+- [x] Final report and source changes rechecked against all gates and no unrelated work altered.
+  EVIDENCE: node --check, git diff --check, and 8 focused observer/download tests pass; user-existing modified diagnostics and application files remain preserved and unedited by Task 6.

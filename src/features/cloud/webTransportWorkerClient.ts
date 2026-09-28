@@ -1,4 +1,4 @@
-import { playTrace } from "../playback/playTrace";
+import { playTrace, playTraceSpan } from "../playback/playTrace";
 import { isPlaybackMessageRouteSuspect, markPlaybackMessageRouteSuspect } from "../playback/webPlaybackRoutingSuspect";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
@@ -33,6 +33,17 @@ export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidate
 const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
 const NON_RESUMABLE_PREFIX_ERROR = "Galer Cloud returned a non-resumable partial playback prefix.";
 const SUSPECT_ROUTE_ERROR = "Galer Cloud playback route is awaiting authoritative reconciliation.";
+
+function stage1TraceContext(): { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean } | null {
+  const value = (globalThis as typeof globalThis & { __stage1TraceContext?: unknown }).__stage1TraceContext;
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const correlation_id = typeof candidate.correlation_id === "string" ? candidate.correlation_id.trim() : "";
+  const account_label = typeof candidate.account_label === "string" ? candidate.account_label.trim() : "";
+  return correlation_id && account_label
+    ? { correlation_id, account_label, ...(candidate.task2_passive_ping_trace === true ? { task2_passive_ping_trace: true } : {}) }
+    : null;
+}
 
 function publishTransportInvalidated(): void {
   if (typeof window === "undefined") return;
@@ -222,6 +233,15 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   private onMessage(message: WebTransportWorkerResponse): void {
+    if ("event" in message && message.event === "stage1-trace") {
+      playTrace(message.trace.stage, {
+        ...message.trace.detail,
+        worker_at_ms: message.trace.at_ms,
+        worker_monotonic_ms: message.trace.monotonic_ms,
+        worker_correlation_id: message.trace.correlation_id,
+      });
+      return;
+    }
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
     if ("event" in message) {
@@ -346,7 +366,8 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
           playTrace("WORKER_REQUEST_POSTED", { request_id: requestId, operation: command.op });
         }
-        worker.postMessage({ ...command, requestId } as WebTransportWorkerCommand);
+        const traceContext = stage1TraceContext();
+        worker.postMessage({ ...command, requestId, ...(traceContext ? { stage1TraceContext: traceContext } : {}) } as WebTransportWorkerCommand);
       } catch (error) {
         const failed = this.takePending(requestId);
         failed?.reject(error instanceof Error ? error : new Error(String(error)));
@@ -393,6 +414,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_session_id: session.temp_session_id,
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
+        index_pointer: session.index_pointer,
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
 
@@ -424,15 +446,23 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+    const requestId = crypto.randomUUID();
+    const finish = playTraceSpan("WORKER_INDEX", { request_id: requestId });
     return this.request<WebTransportLibraryIndexResult>(
       { op: "get_index" },
       undefined,
       undefined,
-      undefined,
-      null,
-      undefined,
-      undefined,
+      requestId,
       this.bootstrapRequestTimeoutMs,
+    ).then(
+      result => {
+        finish();
+        return result;
+      },
+      error => {
+        finish("error");
+        throw error;
+      },
     );
   }
 

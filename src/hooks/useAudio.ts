@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { platform } from "../platform";
 import { playTrace } from "../features/playback/playTrace";
-import { invalidateAllWebPlaybackIntents, shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
+import { invalidateAllWebPlaybackIntents, invalidateWebPlaybackIntentForBeat, shouldAcceptWebPlaybackRequest } from "../features/playback/webPlaybackIntent";
 import { WEB_PLAYBACK_ROUTE_RECOVERY_EVENT, type WebPlaybackRouteRecoveryDetail } from "../features/playback/webPlaybackRouteRecoveryEvents";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../features/cloud/webTransportEvents";
 
@@ -170,7 +170,7 @@ export function useAudio() {
     if (previousBeatId && previousBeatId !== beatId) platform.media.releasePlayback(previousBeatId); void platform.diagnostics.audioEvent("AUDIO_SRC_SET", beatId, null, sources[0]).catch(() => {}); playTrace("AUDIO_SRC_SET", { beat_id: beatId, ready_state: audio.readyState, url_scheme: String(sources[0] || "").split(":")[0] || null }); setState(s => ({ ...s, playingId: beatId, progress: 0, duration: 0 })); playTrace("AUDIO_PLAY_PROMISE_BEGIN", { beat_id: beatId }); audio.play().then(() => playTrace("AUDIO_PLAY_PROMISE_RESOLVED", { beat_id: beatId }), error => { playTrace("AUDIO_PLAY_PROMISE_REJECTED", { beat_id: beatId, error_name: error instanceof Error ? error.name : "unknown" }); console.error(error); });
   }, [state.playingId, getAudio]);
 
-  const togglePause = useCallback(() => { const audio = getAudio(); audio.paused ? audio.play().catch(console.error) : audio.pause(); }, [getAudio]);
+  const togglePause = useCallback(() => { const audio = getAudio(); if (audio.paused) audio.play().catch(console.error); else { invalidateWebPlaybackIntentForBeat(currentBeatIdRef.current); audio.pause(); } }, [getAudio]);
   const seek = useCallback((ratio: number) => { const audio = getAudio(); if (audio.duration > 0) { audio.currentTime = ratio * audio.duration; setState(s => ({ ...s, progress: ratio })); const beatId = currentBeatIdRef.current; if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", { detail: { beatId, currentTime: audio.currentTime, playing: !audio.paused, waiting: waitingRef.current } })); } }, [getAudio]);
   const setVolume = useCallback((volume: number) => { const audio = getAudio(); const next = Math.max(0, Math.min(1, volume)); audio.volume = next; setState(s => ({ ...s, volume: next })); }, [getAudio]);
   const releaseFile = useCallback(() => { const audio = getAudio(); const releasedBeatId = currentBeatIdRef.current; audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; waitingRef.current = false; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; platform.media.releasePlayback(releasedBeatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 })); }, [getAudio]);

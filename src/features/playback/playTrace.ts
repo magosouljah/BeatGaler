@@ -4,13 +4,34 @@ export type PlayTraceDetail = Record<string, unknown>;
 
 let spanSequence = 0;
 
+function stage1TraceContext(): PlayTraceDetail {
+  try {
+    const value = (globalThis as typeof globalThis & {
+      __stage1TraceContext?: unknown;
+    }).__stage1TraceContext;
+    if (!value || typeof value !== "object") return {};
+    const candidate = value as Record<string, unknown>;
+    const correlationId = typeof candidate.correlation_id === "string"
+      ? candidate.correlation_id.trim()
+      : "";
+    const accountLabel = typeof candidate.account_label === "string"
+      ? candidate.account_label.trim()
+      : "";
+    return correlationId && accountLabel
+      ? { correlation_id: correlationId, account_label: accountLabel }
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Playback runtime trace. Keep payloads free of credentials/chat ids.
  * Epoch time lets main-thread and Worker events be correlated in one console log.
  */
 export function playTrace(stage: string, detail: PlayTraceDetail = {}): void {
   try {
-    console.info(`[play-trace] ${JSON.stringify({ ...detail, ...traceClock(), stage })}`);
+    console.info(`[play-trace] ${JSON.stringify({ ...detail, ...stage1TraceContext(), ...traceClock(), stage })}`);
   } catch { /* Diagnostics must never break the operation being measured. */ }
 }
 

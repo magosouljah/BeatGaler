@@ -31,6 +31,10 @@ const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DA
 // INDEX locks are renewable leases.  A dead tab therefore releases quickly,
 // while a deliberately paused but still-live Worker keeps renewing its lease.
 const INDEX_OPERATION_LIVENESS_TIMEOUT_MS = Math.max(5_000, Number(process.env.DIRECT_INDEX_OPERATION_LIVENESS_TIMEOUT_MS || 15_000));
+const MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS || 3)));
+const MANAGED_TOKEN_FETCH_RETRY_BASE_MS = Math.max(25, Math.min(500, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_BASE_MS || 150)));
+const MANAGED_TOKEN_FETCH_RETRY_MAX_MS = Math.max(MANAGED_TOKEN_FETCH_RETRY_BASE_MS, Math.min(1_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_MAX_MS || 500)));
+const MANAGED_TOKEN_FETCH_TIMEOUT_MS = Math.max(500, Math.min(5_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_TIMEOUT_MS || 3_000)));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
@@ -43,6 +47,13 @@ let monotonicNowImpl = () => performance.now();
 const busyOperationDiagnostics = new Map();
 let resolverBootstrapPromise = null;
 let maintenanceStarted = false;
+let managerBotFetch = (...args) => fetch(...args);
+let managedTokenFetchRetryPolicy = {
+  attempts: MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS,
+  baseMs: MANAGED_TOKEN_FETCH_RETRY_BASE_MS,
+  maxMs: MANAGED_TOKEN_FETCH_RETRY_MAX_MS,
+  timeoutMs: MANAGED_TOKEN_FETCH_TIMEOUT_MS,
+};
 
 function enabled() {
   const raw = String(process.env.BEATGALER_DIRECT_TRANSPORT || 'true').trim().toLowerCase();
@@ -499,15 +510,111 @@ async function masterForVault(chatId) {
   throw lastError || new Error(`No MASTER could resolve vault ${key}.`);
 }
 
-async function managerBotApiCall(token, method, payload) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+async function managerBotApiCall(token, method, payload, options = {}) {
+  const response = await managerBotFetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.ok) throw new Error(body.description || `${method} failed (${response.status}).`);
+  if (!response.ok || !body.ok) {
+    const error = new Error(body.description || `${method} failed (${response.status}).`);
+    // API responses are deliberately non-retryable here. This retry is only
+    // a narrow guard for transient transport/fetch failures.
+    error.manager_bot_api_response = true;
+    error.http_status = Number(response.status) || null;
+    error.api_error_code = Number(body?.error_code) || null;
+    throw error;
+  }
   return body.result;
+}
+
+function boundedDiagnosticValue(value) {
+  const text = String(value || '').trim();
+  return text ? text.slice(0, 120) : null;
+}
+
+function managedTokenErrorDiagnostic(error) {
+  const cause = error?.cause;
+  return {
+    error_class: boundedDiagnosticValue(error?.name) || 'Error',
+    error_code: boundedDiagnosticValue(error?.code),
+    http_status: Number.isInteger(error?.http_status) ? error.http_status : null,
+    api_error_code: Number.isInteger(error?.api_error_code) ? error.api_error_code : null,
+    cause_class: boundedDiagnosticValue(cause?.name),
+    cause_code: boundedDiagnosticValue(cause?.code),
+    errno: boundedDiagnosticValue(error?.errno || cause?.errno),
+  };
+}
+
+function transientManagedTokenFetchError(error) {
+  if (!error || error.manager_bot_api_response === true) return false;
+  const cause = error.cause || {};
+  const codes = new Set([
+    error.code, cause.code, error.errno, cause.errno,
+  ].map(value => String(value || '').toUpperCase()));
+  if ([
+    'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN',
+    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
+  ].some(code => codes.has(code))) return true;
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return true;
+  const message = `${error?.message || ''} ${cause?.message || ''}`;
+  return error?.name === 'TypeError' && /fetch failed|socket hang up|network error/i.test(message);
+}
+
+function managedTokenRetryDelayMs(attempt) {
+  return Math.min(
+    managedTokenFetchRetryPolicy.maxMs,
+    managedTokenFetchRetryPolicy.baseMs * (2 ** Math.max(0, attempt - 1)),
+  );
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getManagedTokenWithRetry(managerToken, botConfig) {
+  let lastError = null;
+  const { attempts } = managedTokenFetchRetryPolicy;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const startedAt = performance.now();
+    try {
+      const token = await managerBotApiCall(
+        managerToken,
+        'getManagedBotToken',
+        { user_id: Number(botConfig.telegram_user_id) },
+        { signal: AbortSignal.timeout(managedTokenFetchRetryPolicy.timeoutMs) },
+      );
+      if (attempt > 1) {
+        diag('MANAGED_TOKEN_FETCH_RECOVERED', {
+          attempt,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+      }
+      return token;
+    } catch (error) {
+      lastError = error;
+      const retryable = transientManagedTokenFetchError(error);
+      const durationMs = Math.round(performance.now() - startedAt);
+      const detail = {
+        attempt,
+        attempts,
+        duration_ms: durationMs,
+        timeout_ms: managedTokenFetchRetryPolicy.timeoutMs,
+        retryable,
+        ...managedTokenErrorDiagnostic(error),
+      };
+      if (!retryable || attempt >= attempts) {
+        diag('MANAGED_TOKEN_FETCH_FAILED', detail);
+        throw error;
+      }
+      const delayMs = managedTokenRetryDelayMs(attempt);
+      diag('MANAGED_TOKEN_FETCH_RETRY', { ...detail, delay_ms: delayMs });
+      await wait(delayMs);
+    }
+  }
+  throw lastError || new Error('Managed token fetch failed.');
 }
 
 // IMPORTANT: transport tokens are NOT rotated on lease/start. They are fetched
@@ -531,7 +638,7 @@ async function resolveManagedToken(botConfig) {
   }
   const managerToken = String(process.env[botConfig.manager_token_env] || '').trim();
   if (!managerToken) throw new Error(`${botConfig.id}: missing ${botConfig.manager_token_env}.`);
-  const token = await managerBotApiCall(managerToken, 'getManagedBotToken', { user_id: Number(botConfig.telegram_user_id) });
+  const token = await getManagedTokenWithRetry(managerToken, botConfig);
   if (!token) throw new Error(`${botConfig.id}: Telegram returned no managed token.`);
   return String(token);
 }
@@ -689,25 +796,36 @@ async function ensureBotApiResolverChat() {
   }
 }
 
-async function runtimeForLease(lease, { freshMarker = false } = {}) {
-  const pool = loadPool();
+async function runtimeForLease(
+  lease,
+  { freshMarker = false, startupTrace = noDirectStartupTrace } = {},
+) {
+  const pool = await startupTrace.step("START_POOL", async () => loadPool());
   const bot = pool.find(item => item.id === lease.bot_id);
   if (!bot) throw new Error(`Unknown transport bot ${lease.bot_id}.`);
-  const state = stateSnapshot(pool);
+
+  const state = await startupTrace.step("START_STATE", async () => stateSnapshot(pool));
   const botState = state.bots[bot.id];
+
   let runtime = runtimeSessions.get(lease.session_id);
   if (!runtime || runtime.credentialVersion !== botState.credential_version) {
-    const token = await resolveManagedToken(bot);
-    // Resolve server-side identity without importing bot authorization per lease.
-    // The productive HTTP boundary strips permanent credentials and hands clients
-    // temporary MTProto authorization; normal media and INDEX bytes stay Direct.
+    const token = await startupTrace.step(
+      "START_TOKEN",
+      () => resolveManagedToken(bot),
+    );
+
     let username = bot.telegram_username || runtime?.bot?.telegram_username || null;
     let userId = bot.telegram_user_id || runtime?.bot?.telegram_user_id || null;
+
     if (!username || !userId) {
-      const identity = await resolveBotIdentityViaHttp(token);
+      const identity = await startupTrace.step(
+        "START_IDENTITY",
+        () => resolveBotIdentityViaHttp(token),
+      );
       username = username || identity.telegram_username;
       userId = userId || identity.telegram_user_id;
     }
+
     runtime = {
       id: lease.session_id,
       installationId: lease.installation_id,
@@ -720,9 +838,17 @@ async function runtimeForLease(lease, { freshMarker = false } = {}) {
       masterId: null,
       resolverChatId: null,
     };
+
     runtimeSessions.set(lease.session_id, runtime);
   }
-  if (!runtime.resolverChatId) runtime.resolverChatId = await ensureBotApiResolverChat();
+
+  if (!runtime.resolverChatId) {
+    runtime.resolverChatId = await startupTrace.step(
+      "START_RESOLVER",
+      () => ensureBotApiResolverChat(),
+    );
+  }
+
   return runtime;
 }
 
@@ -773,7 +899,7 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
   if (existing) {
     if (!leaseExpired(existing) && existing.chat_id === vaultId && existing.status !== 'STOPPING') {
       startupTrace.mark("LEASE_SELECTED", { server_lease: "reused", lease_state: existing.status });
-      const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(existing));
+      const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(existing, { startupTrace }));
       mutateState(pool, state => {
         if (state.leases[existing.session_id]) {
           // The desktop helper will call /activate only after its raw Telegram
@@ -1509,5 +1635,30 @@ module.exports = {
     leasesForBot,
     activeOpsForBot,
     inviteAndPromote,
+    resolveManagedToken,
+    transientManagedTokenFetchError,
+    setManagerBotFetch(fn) {
+      managerBotFetch = typeof fn === 'function' ? fn : (...args) => fetch(...args);
+    },
+    setManagedTokenFetchRetryPolicy(policy = {}) {
+      managedTokenFetchRetryPolicy = {
+        attempts: Math.max(1, Math.min(3, Number(policy.attempts || MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS))),
+        baseMs: Math.max(0, Math.min(500, Number(policy.baseMs ?? MANAGED_TOKEN_FETCH_RETRY_BASE_MS))),
+        maxMs: Math.max(0, Math.min(1_000, Number(policy.maxMs ?? MANAGED_TOKEN_FETCH_RETRY_MAX_MS))),
+        timeoutMs: Math.max(1, Math.min(5_000, Number(policy.timeoutMs ?? MANAGED_TOKEN_FETCH_TIMEOUT_MS))),
+      };
+      if (managedTokenFetchRetryPolicy.maxMs < managedTokenFetchRetryPolicy.baseMs) {
+        managedTokenFetchRetryPolicy.maxMs = managedTokenFetchRetryPolicy.baseMs;
+      }
+    },
+    resetManagedTokenFetchTestHooks() {
+      managerBotFetch = (...args) => fetch(...args);
+      managedTokenFetchRetryPolicy = {
+        attempts: MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS,
+        baseMs: MANAGED_TOKEN_FETCH_RETRY_BASE_MS,
+        maxMs: MANAGED_TOKEN_FETCH_RETRY_MAX_MS,
+        timeoutMs: MANAGED_TOKEN_FETCH_TIMEOUT_MS,
+      };
+    },
   },
 };

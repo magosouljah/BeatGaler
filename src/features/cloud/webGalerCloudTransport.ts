@@ -231,7 +231,7 @@ export class WebGalerCloudTransport {
       }
       const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] };
       const result = await this.worker.replaceLibraryIndex({ manifest, expectedMessageId: 0 });
-      await commitWebTransportIndexPointer({ messageId: result.messageId, sourceId: "direct-bootstrap", beatCount: 0 });
+      await commitWebTransportIndexPointer({ messageId: result.messageId, expectedMessageId: result.previousMessageId, pointerSource: "publish", sourceId: "direct-bootstrap", beatCount: 0 });
       return { status: "created", messageId: result.messageId, manifest };
     });
   }
@@ -255,6 +255,15 @@ export class WebGalerCloudTransport {
         { objectType: "index", objectIds: ["pinned"] },
         () => this.worker.getLibraryIndex(),
       );
+      if (result.pointerRepair) {
+        await commitWebTransportIndexPointer({
+          messageId: Number(result.messageId || 0),
+          expectedMessageId: result.pointerRepair.expectedMessageId,
+          pointerSource: result.pointerRepair.source,
+          sourceId: "direct-index-recovery",
+          beatCount: Array.isArray((result.manifest as { beats?: unknown[] })?.beats) ? (result.manifest as { beats: unknown[] }).beats.length : 0,
+        });
+      }
       void reconcileWebTransportRouting(result.manifest).catch(error => {
         playTrace("TRANSPORT_ROUTING_RECONCILE_DEFERRED", {
           error_name: error instanceof Error ? error.name : "unknown",
@@ -421,6 +430,8 @@ export class WebGalerCloudTransport {
     sourceId: string,
     onProgress?: (progress: WebImportCommitProgress) => void,
   ): Promise<Beat> {
+    const started = Date.now();
+    playTrace("IMPORT_COMMIT_BEGIN", { master_bytes: files.master.size, has_wav: Boolean(files.wav), has_project: Boolean(files.project) });
     await this.controller.connect();
     const lease = await this.controller.beginOperation(
       "commit_import",
@@ -429,26 +440,49 @@ export class WebGalerCloudTransport {
     let topic: Promise<number> | null = null;
     try {
       const result = await commitWebImportedBeat(beat, files, {
-        getLibraryIndex: () => this.worker.getLibraryIndex(),
+        // Import must use the same vault-serialized, renewable INDEX path as
+        // normal reads. Calling the Worker directly left a 30s index request
+        // outside the authoritative get_index lease under concurrent imports.
+        getLibraryIndex: () => this.getLibraryIndex(),
         upload: async (input, progress) => {
           topic ||= ensureWebTransportTopic(input.beatId, input.beatName);
           const threadId = await topic;
           return this.uploadOnce({ ...input, threadId }, progress);
         },
-        replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        // The pinned INDEX write is equally authoritative: retain the import
+        // lease for uploaded media, but fence the read/replace pair separately
+        // at the vault INDEX boundary.
+        replaceLibraryIndex: input => this.controller.withOperation(
+          "replace_index",
+          { objectType: "index", objectIds: ["pinned"] },
+          () => this.worker.replaceLibraryIndex(input),
+        ),
       }, onProgress);
+      playTrace("IMPORT_COMMIT_INDEX_PUBLISHED", {
+        index_message_id: result.index?.messageId || null,
+        beat_count: result.index?.beatCount || null,
+        total_ms: Date.now() - started,
+      });
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
           routingChanges: routingChangeForBeat(result.beat),
-        }).catch(() => {});
+        });
       }
       for (const key of Array.from(this.uploadCheckpoints.keys())) {
         if (key.startsWith(`${beat.id}:`)) this.uploadCheckpoints.delete(key);
       }
       return result.beat;
+    } catch (error) {
+      playTrace("IMPORT_COMMIT_FAILED", {
+        error_name: error instanceof Error ? error.name : "unknown",
+        total_ms: Date.now() - started,
+      });
+      throw error;
     } finally {
       await this.controller.endOperation(lease).catch(() => {});
     }
@@ -486,10 +520,12 @@ export class WebGalerCloudTransport {
       }, onProgress);
       await commitWebTransportIndexPointer({
         messageId: result.index.messageId,
+        expectedMessageId: result.index.previousMessageId,
+        pointerSource: "publish",
         sourceId,
         beatCount: result.index.beatCount,
         routingChanges: routingChangeForBeat(result.beat),
-      }).catch(() => {});
+      });
       for (const key of Array.from(this.uploadCheckpoints.keys())) {
         if (key.startsWith(`${original.id}:`)) this.uploadCheckpoints.delete(key);
       }
@@ -519,10 +555,12 @@ export class WebGalerCloudTransport {
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
           routingChanges: Object.fromEntries(beatIds.map(id => [id, null])),
-        }).catch(() => {});
+        });
       }
       return result.value;
     } finally {
@@ -547,10 +585,12 @@ export class WebGalerCloudTransport {
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
           routingChanges: routingChangeForBeat(restored),
-        }).catch(() => {});
+        });
       }
     } finally {
       await this.controller.endOperation(lease).catch(() => {});
@@ -581,9 +621,11 @@ export class WebGalerCloudTransport {
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
-        }).catch(() => {});
+        });
       }
       return result.value;
     } finally {

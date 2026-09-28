@@ -1,6 +1,7 @@
 import type { Beat } from "../../types";
 import { stripId3MetadataForCloud } from "../audio/mp3Metadata";
 import { beatFromWebLibraryEntry, normalizeWebLibraryManifest } from "../library/webLibrary";
+import { playTrace } from "../playback/playTrace";
 import type {
   WebTransportLibraryIndexResult,
   WebTransportProgress,
@@ -129,6 +130,7 @@ export async function commitWebImportedBeat(
   const artworkAsset = beat.image_base64 ? dataUrlFile(beat.image_base64, beat.name) : null;
   const artworkFile = artworkAsset?.file || null;
   const totalBytes = cloudMaster.size + (wav?.size || 0) + (project?.size || 0) + (artworkFile?.size || 0);
+  playTrace("IMPORT_MASTER_UPLOAD_BEGIN", { bytes: cloudMaster.size });
   const primary = await runtime.upload({
     file: cloudMaster,
     filename: master.name,
@@ -140,6 +142,7 @@ export async function commitWebImportedBeat(
     uploadedBytes: Math.min(cloudMaster.size, progress.uploadedBytes),
     totalBytes,
   }));
+  playTrace("IMPORT_MASTER_UPLOAD_DONE", { bytes: cloudMaster.size, message_id: primary.telegram_message_id });
 
   let uploadedBytes = cloudMaster.size;
   let uploadedWav: WebTransportUploadResult | null = null;
@@ -247,7 +250,9 @@ export async function commitWebImportedBeat(
     trash: Array.isArray(root.trash) ? root.trash : [],
   };
   onProgress?.({ stage: "library", uploadedBytes: totalBytes, totalBytes });
+  playTrace("IMPORT_INDEX_REPLACE_BEGIN", { expected_message_id: current.messageId, beat_count: candidate.beats.length });
   const index = await runtime.replaceLibraryIndex({ manifest: candidate, expectedMessageId: current.messageId });
+  playTrace("IMPORT_INDEX_REPLACE_DONE", { message_id: index.messageId, beat_count: index.beatCount });
   onProgress?.({ stage: "library", uploadedBytes: totalBytes, totalBytes });
   return { beat: resultBeat(entry, beat.image_base64), index };
 }

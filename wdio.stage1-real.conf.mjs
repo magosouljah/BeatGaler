@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { effectiveStage1SoakMinutes } from "./tests/e2e-web/stage1-focused-final-reload-config.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const bindHost = "127.0.0.1";
@@ -13,7 +14,13 @@ const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000")
 const headed = process.env.STAGE1_HEADED === "1";
 const preview = process.env.STAGE1_WEB_PREVIEW === "1";
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
-const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
+const focusedFinalReloadTrace = process.env.STAGE1_FOCUSED_FINAL_RELOAD_TRACE === "1";
+const soakMinutes = effectiveStage1SoakMinutes({
+  focusedFinalReloadTrace,
+  configuredSoakMinutes: Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0)),
+});
+const task5Mode = process.env.STAGE1_TASK5_ONE_ACCOUNT_FAILURES === "1";
+const task6Mode = process.env.STAGE1_TASK6_FINAL_VERIFICATION === "1";
 const soakTimeoutMs = soakMinutes > 0
   ? Math.ceil(soakMinutes * 60_000 + 15 * 60_000)
   : null;
@@ -107,7 +114,10 @@ export const config = {
   mochaOpts: {
     ui: "bdd",
     timeout: soakTimeoutMs ?? (
-      process.env.STAGE1_FOCUSED_DOWNLOAD_INTEGRITY === "1"
+      task5Mode
+        || task6Mode
+        ? 1_500_000
+        : process.env.STAGE1_FOCUSED_DOWNLOAD_INTEGRITY === "1"
         ? 600_000
         : accountCount >= 4
           ? 600_000

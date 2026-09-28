@@ -24,6 +24,7 @@ const { installPersistentDirectSessionStart } = require("./direct-persistent-ses
 const { installPersistentDirectMembershipActivation } = require("./direct-persistent-membership-runtime");
 const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index");
 const { installStartupRoutingIndex } = require("./startup-routing-index");
+const vaultIndexPointers = require("./vault-index-pointer-store");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -40,6 +41,7 @@ async function start() {
   }
   configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
   directPersistentAssignments.configure({ pool });
+  vaultIndexPointers.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;

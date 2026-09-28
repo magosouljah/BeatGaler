@@ -132,7 +132,19 @@ export const webAdapter: PlatformAdapter = {
           return { url: prepared.url, completed };
         };
         try {
-          const prepared = await prepareOnce(messageId); rememberPreparedWebPlaybackUrl(prepared.url, intent); playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id, intent_id: intent.id, current: isCurrentWebPlaybackIntent(intent) }); return attachAsyncRouteRecovery(prepared, messageId);
+          const prepared = await prepareOnce(messageId);
+          // A same-beat click can supersede this request while the streaming
+          // source is preparing.  Do not publish that late URL: publishing it
+          // would overwrite the current URL->intent binding and allow an old
+          // player to resume after a newer click/reset.
+          if (!isCurrentWebPlaybackIntent(intent)) {
+            const url = supersededWebPlaybackUrl(intent);
+            playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id, phase: "prepared" });
+            return { url, completed: Promise.resolve() };
+          }
+          rememberPreparedWebPlaybackUrl(prepared.url, intent);
+          playTrace("ADAPTER_PREPARE_READY", { beat_id: beat.id, intent_id: intent.id, current: true });
+          return attachAsyncRouteRecovery(prepared, messageId);
         }
         catch (error) {
           if (isAbortError(error) && !isCurrentWebPlaybackIntent(intent)) { const url = supersededWebPlaybackUrl(intent); playTrace("ADAPTER_PREPARE_SUPERSEDED", { beat_id: beat.id, intent_id: intent.id }); return { url, completed: Promise.resolve() }; }

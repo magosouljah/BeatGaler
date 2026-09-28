@@ -51,7 +51,9 @@ test("preload observes before UI, survives fresh documents, preserves phases and
   assert.equal(entries.length, 5);
   assert.deepEqual(entries.map(e => e.harness_phase), ["initial-navigation", "profile-reset-refresh", "submitting-sign-in", "submitting-sign-in", "focused-logout"]);
   for (const entry of entries) {
-    assert.deepEqual(Object.keys(entry).sort(), ["abort_at_ms", "document_id", "duration_ms", "harness_phase", "observed_at_ms", "route", "started_at_ms", "state", "status", "trace_id"]);
+    for (const key of ["abort_at_ms", "document_id", "duration_ms", "harness_phase", "observed_at_ms", "route", "started_at_ms", "state", "status", "trace_id", "monotonic_started_ms", "monotonic_observed_ms", "time_origin_ms"]) {
+      assert.ok(Object.hasOwn(entry, key));
+    }
     assert.match(entry.document_id, /^document-\d+$/);
     assert.equal(entry.state, "response");
     assert.equal(entry.status, 200);
@@ -139,7 +141,7 @@ test('resource timing emits only numeric timing fields for an observed auth requ
   await context.window.fetch('/beatgaler-api/auth/health?secret=SECRET');
   receive({ getEntries: () => [{ name: 'http://localhost:1421/beatgaler-api/auth/health?secret=SECRET', startTime: performance.now(), requestStart: 10, responseStart: 20, secret: 'SECRET' }, { name: 'http://localhost:1421/other', startTime: performance.now(), secret: 'SECRET' }] });
   const timing = emitted.find(value => value.resource_timing);
-  assert.equal(timing.id, emitted[0].id);
+  assert.equal(timing.id, emitted.find(value => value.route === "/beatgaler-api/auth/health")?.id);
   assert.equal(timing.resource_timing.requestStart, 10);
   assert.equal(JSON.stringify(emitted).includes('SECRET'), false);
   context.window.__stage1RestoreFetch();

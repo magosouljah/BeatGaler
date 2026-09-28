@@ -89,7 +89,39 @@ For every active account concurrently:
 10. reloads all active browsers simultaneously;
 11. requires every account to keep the same user, browser id, vault and persistent transport assignment after Reload.
 
-The active count is selectable from 2 through the 10 seeded accounts. The intended progression is 2 → 4 → 10 so a harness defect is not confused with a real scaling defect.
+The seed cohort retains 10 accounts for older startup diagnostics, but Task 4 does
+not scale through that cohort: its Phase 1 scope is capped at five simultaneous
+accounts.
+
+## Task 4 — five-account mixed real soak
+
+Fase 1 maximum concurrent coverage: 5 accounts. 10-account load testing intentionally omitted from scope.
+
+Task 4 reuses the same real browser harness for a full 30-minute soak. Its first
+round assigns accounts 01–02 to playback plus seek, 03 to a real upload, 04 to
+metadata edit plus Reload plus authoritative read, and 05 to a real download.
+Five rotations then make every account perform playback, seek, upload, metadata,
+Reload and download. The first upload is a configurable large WAV transfer while
+the other four accounts continue their assigned work.
+
+Run it from the repository root (the optional URL enables read-only PostgreSQL
+sampling; it is never used for a write or reset):
+
+```powershell
+$env:STAGE1_MIXED_WORKLOAD="1"
+$env:STAGE1_SOAK_MINUTES="30"
+$env:STAGE1_SOAK_ROTATIONS="5"
+$env:STAGE1_POSTGRES_URL="<read-only PostgreSQL connection URL>"
+node scripts/run-stage1-real-multi-account-e2e.mjs --accounts 5
+```
+
+The Task 4 artifact is `tmp/stage1-task-4-five-account-report.json`; the legacy
+`tmp/stage1-real-multi-account-report.json` remains a compatibility report and is
+not used as the Task 4 evidence artifact. The Task 4 report contains per-account
+operations, transfer bytes/duration/speed, observed errors/retries and playback
+waiting, p95/max/sample performance data, read-only resource samples, final
+transport/PostgreSQL operation-and-lease state, authoritative vault state, and
+cross-vault isolation evidence.
 
 ## What is real
 
@@ -127,6 +159,63 @@ The E2E writes:
 ```text
 tmp/stage1-real-multi-account-report.json
 ```
+
+## Task 5 — fallos inducidos de una cuenta (cinco cuentas)
+
+Task 5 is a separate five-account mode. It deliberately omits Task 4 performance
+budgets: its evidence target is fault containment, not throughput. It drives a
+real Account 01 UI upload, uses Chrome DevTools to make only that browser offline
+after the productive transport operation starts, verifies the uncommitted/retryable
+representation, and verifies authoritative Reload/read service for Accounts 02–05.
+It then restores Account 01 and verifies a new committed upload.
+
+The same run uses `Browser.crash` for Account 01 (no application logout), waits
+for the configured productive heartbeat timeout and Cloud's normal cleanup, checks
+that the old session was released with no active operation, and opens a new browser
+session over the same profile. Finally it performs a real Account 01 logout/relogin
+while the other four reload/read their authoritative libraries. Direct status is
+read from the local Cloud status endpoint and the existing runtime diagnostic is
+read only for session-release correlation; neither source is edited by the test.
+
+```powershell
+$env:STAGE1_TASK5_ONE_ACCOUNT_FAILURES="1"
+$env:STAGE1_SOAK_LARGE_WAV_MB="8" # optional; keeps the controlled real upload bounded
+node scripts/run-stage1-real-multi-account-e2e.mjs --accounts 5
+```
+
+The Task 5 artifact is:
+
+```text
+tmp/stage1-task-5-one-account-failure-report.json
+```
+
+## Task 6 — final five-account verification
+
+Task 6 is a bounded final read, not a performance re-run. It signs in the same
+five accounts, forces and observes a successful productive `get_index` for each,
+then verifies each resolved user/vault/transport authority, retained Task 1/4/5
+fixtures, Account 04's final metadata, and a representative Task 1 strong
+download (WAV SHA-256, project ZIP SHA-256, MP3 payload SHA-256 and ID3 fields).
+It checks cross-vault card/media references and records `/readyz`,
+`/transport/status`, observed `get_index` debt, and optional read-only PostgreSQL
+operation counters. It never creates, deletes, or edits library content.
+
+```powershell
+$env:STAGE1_TASK6_FINAL_VERIFICATION="1"
+node scripts/run-stage1-real-multi-account-e2e.mjs --accounts 5
+```
+
+The artifact is `tmp/stage1-task-6-final-verification-report.json`. Its Task 6
+classification is `COMPROBADO`, `FALLÓ`, or `PENDIENTE POR INFRAESTRUCTURA`;
+the historical Task 4 p95 failures are recorded as context and are not Task 6
+acceptance gates.
+
+It contains only redacted/safe evidence: account labels, opaque IDs needed for
+same-vault comparisons, operation/session counts and booleans. It excludes account
+passwords, cookies, CSRF values, bot tokens, API hashes and Direct credentials.
+When no two active vaults share a transport bot, `shared_bot.status` is
+`NOT_APPLICABLE`; otherwise the Account 01 network fault is also evaluated against
+the distinct shared-bot peer vault.
 
 It contains identifiers/measurements useful for Stage 1 but never the cohort password, auth-cookie values, CSRF values, bot tokens, API hashes or permanent Direct credentials.
 

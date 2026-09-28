@@ -54,6 +54,8 @@ export interface WebTransportSessionPublic {
   token_rotation_enabled: boolean;
   temp_auth_required: boolean;
   temp_auth: WebTransportTempAuthPublic;
+  /** Non-authoritative PostgreSQL shortcut; Telegram INDEX remains authoritative. */
+  index_pointer: { message_id: number; revision: number | null } | null;
 }
 
 export interface WebTransportSession extends WebTransportSessionPublic {
@@ -491,6 +493,8 @@ export async function ensureWebTransportTopic(beatId: string, beatName: string):
 /** Records the authoritative INDEX pointer and the small routing delta produced by the same commit. */
 export async function commitWebTransportIndexPointer(input: {
   messageId: number;
+  expectedMessageId?: number | null;
+  pointerSource?: "publish" | "pin_recovery" | "history_recovery" | "migration";
   sourceId: string;
   beatCount: number;
   routingChanges?: Record<string, number | null>;

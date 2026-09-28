@@ -40,7 +40,12 @@ export interface WebTransportUploadResult {
   transport: "direct-web";
 }
 export interface WebTransportProgress { uploadedBytes: number; totalBytes: number; }
-export interface WebTransportLibraryIndexResult { manifest: unknown; messageId: number | null; }
+export interface WebTransportLibraryIndexResult {
+  manifest: unknown;
+  messageId: number | null;
+  /** Returned only when Telegram recovery repaired a stale/missing Cloud pointer. */
+  pointerRepair?: { expectedMessageId: number | null; source: "pin_recovery" | "history_recovery" };
+}
 export interface WebTransportReplaceIndexInput { manifest: unknown; expectedMessageId: number | null; }
 export interface WebTransportReplaceIndexResult { messageId: number; previousMessageId: number | null; beatCount: number; }
 export interface WebTransportDeleteMessagesInput { messageIds: number[]; }
@@ -91,7 +96,7 @@ export interface WebTransportStreamInput {
 }
 export interface WebTransportStreamResult { messageId: number; totalBytes: number; mimeType: string; }
 
-export type WebTransportWorkerCommand =
+export type WebTransportWorkerCommand = (
   | {
       requestId: string;
       op: "initialize";
@@ -103,6 +108,7 @@ export type WebTransportWorkerCommand =
         | "temp_session_id"
         | "temp_session_state"
         | "temp_primary_dcs"
+        | "index_pointer"
       > & {
         expected_bot_id: string;
         temp_api_id: number;
@@ -125,7 +131,9 @@ export type WebTransportWorkerCommand =
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }
   | { requestId: string; op: "upload"; input: WebTransportUploadInput }
-  | { requestId: string; op: "shutdown" };
+  | { requestId: string; op: "shutdown" }) & {
+    stage1TraceContext?: { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean };
+  };
 
 export type WebTransportWorkerRequest = WebTransportWorkerCommand extends infer Command
   ? Command extends { requestId: string }
@@ -140,4 +148,5 @@ export type WebTransportWorkerResponse =
   | { requestId: string; event: "download-chunk"; chunk: ArrayBuffer; downloadedBytes: number; totalBytes: number }
   | { requestId: string; event: "prefetch-chunk"; progress: WebTransportPrefetchChunk }
   | { requestId: string; event: "prefetch-terminal"; terminal: WebTransportPrefetchTerminal }
-  | { requestId: string; event: "index-state"; state: "active" | "paused" };
+  | { requestId: string; event: "index-state"; state: "active" | "paused" }
+  | { requestId: string; event: "stage1-trace"; trace: { stage: string; at_ms: number; monotonic_ms?: number; correlation_id: string; account_label: string; detail?: Record<string, unknown> } };

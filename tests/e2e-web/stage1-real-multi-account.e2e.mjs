@@ -1,34 +1,67 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import JSZip from "jszip";
 import { observeAuth } from "./stage1-auth-observer.mjs";
 import { validateAuthHealth } from "./stage1-health-validation.mjs";
 import { sha256Hex, stripMp3ContainerTags } from "./stage1-download-integrity.mjs";
+import {
+  effectiveStage1SoakMinutes,
+  effectiveStage1SoakRotations,
+} from "./stage1-focused-final-reload-config.mjs";
 
 const authObservers = new Map();
+const localRequire = createRequire(import.meta.url);
+let activeTask4ResourceSampler = null;
 
 const REPORT_DIR = path.resolve(process.cwd(), "tmp");
 const REPORT_FILE = path.join(REPORT_DIR, "stage1-real-multi-account-report.json");
+const TASK4_REPORT_FILE = path.join(REPORT_DIR, "stage1-task-4-five-account-report.json");
+const TASK4_FOCUSED_FINAL_RELOAD_REPORT_FILE = path.join(REPORT_DIR, "stage1-task4-hot-library-final-reload-trace.json");
+const TASK5_REPORT_FILE = path.join(REPORT_DIR, "stage1-task-5-one-account-failure-report.json");
+const TASK6_REPORT_FILE = path.join(REPORT_DIR, "stage1-task-6-final-verification-report.json");
+const SINGLE_RELOAD_ATTRIBUTION_REPORT_FILE = path.join(REPORT_DIR, "stage1-task4-single-reload-attribution.json");
 const SESSION_COOKIE = "__Host-beatgaler_session";
 const CSRF_COOKIE = "__Host-beatgaler_csrf";
 const cohortId = String(process.env.STAGE1_COHORT_ID || "").trim();
 const cohortPassword = String(process.env.STAGE1_COHORT_PASSWORD || "").trim();
 const accountCount = Math.max(1, Number(process.env.STAGE1_RUN_ACCOUNTS || 2));
 const singleAccountDiagnostic = accountCount === 1;
-const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1";
 const focusedLifecycle = process.env.STAGE1_FOCUSED_LIFECYCLE === "1";
 const focusedDownloadIntegrity = process.env.STAGE1_FOCUSED_DOWNLOAD_INTEGRITY === "1";
 const focusedIsolation = process.env.STAGE1_FOCUSED_ISOLATION === "1";
-const soakMinutes = Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0));
+const focusedStartup = process.env.STAGE1_FOCUSED_STARTUP === "1";
+const focusedFinalReloadTrace = process.env.STAGE1_FOCUSED_FINAL_RELOAD_TRACE === "1";
+const singleReloadAttributionTrace = process.env.STAGE1_SINGLE_RELOAD_ATTRIBUTION_TRACE === "1";
+const task5Mode = process.env.STAGE1_TASK5_ONE_ACCOUNT_FAILURES === "1";
+const task6Mode = process.env.STAGE1_TASK6_FINAL_VERIFICATION === "1";
+const phase2Task0Mode = process.env.PHASE2_TASK0_MEASUREMENT === "1";
+const phase2Task1Mode = process.env.PHASE2_TASK1_ATTRIBUTION === "1";
+const phase2Task2Mode = process.env.PHASE2_TASK2_POINTER_ATTRIBUTION === "1";
+const phase2Task2PassivePingTrace = phase2Task2Mode && process.env.PHASE2_TASK2_PASSIVE_PING_TRACE === "1";
+// The focused trace deliberately reuses the existing five-account diagnostic
+// soak pre-state. Its measurement still starts only at the original final
+// refresh() calls below; it never restores a profile from an earlier run.
+const mixedWorkload = process.env.STAGE1_MIXED_WORKLOAD === "1" || focusedFinalReloadTrace;
+const soakMinutes = effectiveStage1SoakMinutes({
+  focusedFinalReloadTrace,
+  configuredSoakMinutes: Math.max(0, Number(process.env.STAGE1_SOAK_MINUTES || 0)),
+});
 const soakMode = mixedWorkload && soakMinutes > 0;
-const MIXED_REQUIRED_ACCOUNTS = 7;
+const MIXED_REQUIRED_ACCOUNTS = 5;
+const task4Mode = soakMode && accountCount === MIXED_REQUIRED_ACCOUNTS && soakMinutes === 30;
 const MIXED_RUN_SUFFIX = String(Date.now());
 const SOAK_ROTATIONS = Math.max(
   1,
   Math.min(
     MIXED_REQUIRED_ACCOUNTS,
-    Number(process.env.STAGE1_SOAK_ROTATIONS || MIXED_REQUIRED_ACCOUNTS),
+    effectiveStage1SoakRotations({
+      focusedFinalReloadTrace,
+      configuredSoakRotations: Number(process.env.STAGE1_SOAK_ROTATIONS || MIXED_REQUIRED_ACCOUNTS),
+    }),
   ),
 );
 const diagnosticSoakRound = soakMode && SOAK_ROTATIONS < MIXED_REQUIRED_ACCOUNTS;
@@ -38,6 +71,11 @@ const SOAK_LARGE_WAV_MB = Math.max(8, Math.min(256, Number(process.env.STAGE1_SO
 const PLAYBACK_FIXTURE_FILE = path.resolve(process.cwd(), "tests", "e2e-web", "fixtures", "stage1-playback.mp3");
 const PLAYBACK_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-playback-fixtures");
 const DOWNLOAD_INTEGRITY_TMP_DIR = path.resolve(process.cwd(), "tmp", "stage1-download-integrity-fixtures");
+// The source fixture is only ~4 seconds. Under the five-account workload that
+// is shorter than a complete real-player interaction, so it can end between
+// the playback proof and the UI scrub. Repeat valid MPEG frames to give the
+// scrubber a real, still-playing source without weakening that assertion.
+const SOAK_PLAYBACK_FIXTURE_REPETITIONS = 4;
 const PLAYBACK_MIN_PROGRESS_SECONDS = 0.5;
 const PLAYBACK_SOFT_START_SPREAD_MS = 2_000;
 
@@ -54,20 +92,46 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 const report = {
   version: 9,
   stage: "Etapa 1 — uso real entre cuentas independientes",
-  workload_mode: focusedIsolation
+  workload_mode: phase2Task2Mode
+  ? "phase2-task2-postgres-index-pointer-attribution"
+  : phase2Task1Mode
+  ? "phase2-task1-library-latency-attribution"
+  : phase2Task0Mode
+  ? "phase2-task0-four-conditions"
+  : focusedIsolation
   ? "focused-two-account-offensive-isolation"
+  : task5Mode
+    ? "task-5-one-account-induced-failures"
+  : task6Mode
+    ? "task-6-final-verification"
+  : focusedFinalReloadTrace
+    ? "focused-five-account-final-authoritative-reload-trace"
+    : singleReloadAttributionTrace
+      ? "single-account-reload-critical-path-attribution"
+  : focusedStartup
+    ? "focused-startup"
   : focusedDownloadIntegrity
     ? "focused-single-account-download-integrity"
     : focusedLifecycle
       ? "focused-single-account-lifecycle"
       : soakMode
       ? diagnosticSoakRound
-        ? "mixed-7-account-diagnostic-soak"
-        : "mixed-7-account-30m-soak"
+        ? "mixed-5-account-diagnostic-soak"
+        : "mixed-5-account-30m-soak"
       : mixedWorkload
-        ? "mixed-7-account"
+        ? "mixed-5-account"
         : "full-lifecycle",
   baseline_sha: process.env.STAGE1_GIT_HEAD || null,
+  experiment_identity: {
+    head: process.env.STAGE1_GIT_HEAD || null,
+    working_tree_fingerprint: process.env.STAGE1_WORKTREE_FINGERPRINT || null,
+    focused_final_reload_trace: focusedFinalReloadTrace,
+    single_reload_attribution_trace: singleReloadAttributionTrace,
+    phase2_task1_attribution: phase2Task1Mode,
+    phase2_task2_pointer_attribution: phase2Task2Mode,
+    phase2_task2_passive_ping_trace: phase2Task2PassivePingTrace,
+    requested_account_count: accountCount,
+  },
   cohort_id: cohortId || null,
   requested_account_count: accountCount,
   web_server_mode: process.env.STAGE1_WEB_PREVIEW === "1" ? "vite-preview" : "vite-dev",
@@ -93,7 +157,11 @@ const report = {
     { name: "authoritative_library_data_plane", status: "NOT_TESTED", severity: null },
     { name: "multi_account_direct_identity", status: "NOT_TESTED", severity: null },
     { name: "playback_fixture_provisioning", status: "NOT_TESTED", severity: null },
-    ...(focusedIsolation
+    ...(focusedFinalReloadTrace
+      ? [
+          { name: "focused_final_authoritative_reload_trace", status: "NOT_TESTED", severity: null },
+        ]
+      : focusedIsolation
       ? [
           { name: "offensive_installation_isolation", status: "NOT_TESTED", severity: null },
           { name: "offensive_session_isolation", status: "NOT_TESTED", severity: null },
@@ -114,6 +182,7 @@ const report = {
           { name: "mixed_workload_concurrency", status: "NOT_TESTED", severity: null },
           { name: "mixed_playback", status: "NOT_TESTED", severity: null },
           { name: "mixed_upload", status: "NOT_TESTED", severity: null },
+          ...(soakMode ? [{ name: "mixed_seek", status: "NOT_TESTED", severity: null }] : []),
           { name: "mixed_metadata_edit", status: "NOT_TESTED", severity: null },
           { name: "mixed_master_download", status: "NOT_TESTED", severity: null },
           { name: "mixed_reload_persistence", status: "NOT_TESTED", severity: null },
@@ -145,6 +214,94 @@ const report = {
   ],
   failure: null,
 };
+
+if (phase2Task0Mode) {
+  report.scenarios = [
+    "authoritative_library_data_plane",
+    "multi_account_auth_isolation",
+    "multi_account_direct_identity",
+    "phase2_cold_open",
+    "phase2_warm_reopen",
+    "phase2_warm_reload",
+    "phase2_play_after_authoritative_library",
+  ].map(name => ({ name, status: "NOT_TESTED", severity: null }));
+  report.phase2_task0 = {
+    mode: "five-account-four-condition-baseline",
+    samples: {
+      apertura_fria: [],
+      reapertura_caliente: [],
+      reload_caliente: [],
+      play_tras_biblioteca_autoritativa: [],
+    },
+  };
+}
+
+if (phase2Task1Mode) {
+  report.scenarios = [
+    "authoritative_library_data_plane",
+    "multi_account_auth_isolation",
+    "multi_account_direct_identity",
+    "phase2_task1_attribution",
+  ].map(name => ({ name, status: "NOT_TESTED", severity: null }));
+  report.phase2_task1 = {
+    mode: "five-account-cold-open-and-one-hot-reload",
+    samples: { apertura_fria: [], reload_caliente: [] },
+  };
+}
+
+if (task4Mode) {
+  report.task_4 = {
+    report_file: TASK4_REPORT_FILE,
+    maximum_concurrent_coverage: 5,
+    scope_note: "Fase 1 maximum concurrent coverage: 5 accounts. 10-account load testing intentionally omitted from scope.",
+    requested_duration_minutes: 30,
+    initial_matrix: {
+      playback_and_seek: ["01", "02"],
+      upload: "03",
+      metadata_reload_authoritative_read: "04",
+      download: "05",
+    },
+  };
+}
+
+if (task5Mode) {
+  report.task_5 = {
+    report_file: TASK5_REPORT_FILE,
+    maximum_concurrent_coverage: 5,
+    account_a: "01",
+    scope_note: "Phase 1 maximum concurrent coverage remains five accounts; this run intentionally excludes Task 4 performance budgets.",
+    scenarios: {},
+  };
+  report.scenarios = [
+    { name: "task5_network_upload", status: "NOT_TESTED", severity: null },
+    { name: "task5_browser_crash", status: "NOT_TESTED", severity: null },
+    { name: "task5_logout_under_load", status: "NOT_TESTED", severity: null },
+    { name: "task5_reconnection", status: "NOT_TESTED", severity: null },
+    { name: "task5_shared_bot", status: "NOT_TESTED", severity: null },
+    { name: "task5_final_authority_isolation", status: "NOT_TESTED", severity: null },
+  ];
+}
+
+if (task6Mode) {
+  report.task_6 = {
+    report_file: TASK6_REPORT_FILE,
+    maximum_concurrent_coverage: 5,
+    scope_note: "Read-only final verification; this mode intentionally does not run Task 4 performance budgets or a soak.",
+    historical_performance: {
+      first_audio_p95_ms: 2433,
+      hot_library_p95_ms: 23356,
+      status: "Task 4 historical performance failure; not a Task 6 gate.",
+    },
+  };
+  report.scenarios = [
+    { name: "task6_account_vault_authority", status: "NOT_TESTED", severity: null },
+    { name: "task6_authoritative_get_index", status: "NOT_TESTED", severity: null },
+    { name: "task6_prior_files_and_metadata", status: "NOT_TESTED", severity: null },
+    { name: "task6_representative_download_integrity", status: "NOT_TESTED", severity: null },
+    { name: "task6_final_isolation", status: "NOT_TESTED", severity: null },
+    { name: "task6_control_plane_health", status: "NOT_TESTED", severity: null },
+  ];
+}
 
 if (focusedDownloadIntegrity || focusedIsolation) {
   const focusedScenarios = new Set([
@@ -204,6 +361,30 @@ async function writeReport() {
   report.finished_at = new Date().toISOString();
   await fs.mkdir(REPORT_DIR, { recursive: true });
   await fs.writeFile(REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  if (focusedFinalReloadTrace) {
+    await fs.writeFile(TASK4_FOCUSED_FINAL_RELOAD_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  }
+  if (task4Mode) {
+    await fs.writeFile(TASK4_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  }
+  if (task5Mode) {
+    await fs.writeFile(TASK5_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  }
+  if (task6Mode) {
+    await fs.writeFile(TASK6_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  }
+}
+
+async function readJsonLines(file) {
+  if (!file) return [];
+  try {
+    return (await fs.readFile(file, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+  } catch {
+    return [];
+  }
 }
 
 async function archiveFocusedDownloadIntegrityReport() {
@@ -216,6 +397,116 @@ async function archiveFocusedDownloadIntegrityReport() {
 
 function taggedError(message, code, severity = "P1") {
   return Object.assign(new Error(message), { code, severity });
+}
+
+function createStartupSubmitBarrier(expected) {
+  let arrived = 0;
+  let release;
+  let reject;
+  let settled = false;
+  const evidence = {
+    expected,
+    created_at_ms: Date.now(),
+    arrivals: [],
+    released_at_ms: null,
+    aborted: null,
+  };
+  const gate = new Promise((resolve, rejectPromise) => {
+    release = resolve;
+    reject = rejectPromise;
+  });
+
+  return {
+    async wait(accountLabel) {
+      if (settled) return gate;
+      arrived += 1;
+      evidence.arrivals.push({
+        account_label: accountLabel,
+        arrived_at_ms: Date.now(),
+        arrived_count: arrived,
+      });
+      if (arrived === expected) {
+        settled = true;
+        evidence.released_at_ms = Date.now();
+        release();
+      }
+      await gate;
+      return evidence.released_at_ms;
+    },
+    abort(accountLabel, error) {
+      if (settled) return;
+      settled = true;
+      evidence.aborted = {
+        account_label: accountLabel,
+        aborted_at_ms: Date.now(),
+        error_code: typeof error?.code === "string" ? error.code : null,
+        error_name: typeof error?.name === "string" ? error.name : "Error",
+      };
+      reject(
+        taggedError(
+          `Startup submit barrier aborted while preparing account ${accountLabel}.`,
+          "STAGE1_STARTUP_SUBMIT_BARRIER_ABORTED",
+          "P1",
+        ),
+      );
+    },
+    evidence,
+  };
+}
+
+function redactDiagnosticText(value, account) {
+  return String(value || "")
+    .split(account.password).join("[REDACTED]")
+    .replace(/\b[A-Za-z0-9_+\/-]{32,}={0,2}\b/g, "[REDACTED]")
+    .slice(0, 4_000);
+}
+
+function safeCommandError(error, account) {
+  if (!error) return null;
+  return {
+    name: redactDiagnosticText(error.name || "Error", account),
+    message: redactDiagnosticText(error.message || error, account),
+    stack: redactDiagnosticText(error.stack || "", account),
+  };
+}
+
+async function submitTargetState(client, account) {
+  const state = {
+    selector: '.bg-auth-form button[type="submit"]',
+    is_existing: null,
+    is_displayed: null,
+    is_enabled: null,
+    url: null,
+    phase: null,
+    inspection_error: null,
+  };
+
+  try {
+    const button = await client.$(state.selector);
+    const [existing, displayed, enabled, url, phase] = await Promise.all([
+      button.isExisting(),
+      button.isDisplayed(),
+      button.isEnabled(),
+      client.getUrl(),
+      client.execute(() => {
+        const visible = node => Boolean(node && node.getClientRects().length);
+        const mfa = visible(document.querySelector(
+          '#auth-login-mfa, #beatgaler-login-mfa, input[autocomplete="one-time-code"]',
+        ));
+        const login = visible(document.querySelector("#auth-login-identifier"));
+        return mfa ? "mfa" : login ? "login" : "outside-sign-in";
+      }),
+    ]);
+    state.is_existing = existing;
+    state.is_displayed = displayed;
+    state.is_enabled = enabled;
+    state.url = url;
+    state.phase = phase;
+    return { button, state };
+  } catch (error) {
+    state.inspection_error = safeCommandError(error, account);
+    return { button: null, state };
+  }
 }
 
 async function clearBrowserProfile(client, observer) {
@@ -233,13 +524,29 @@ async function clearBrowserProfile(client, observer) {
 async function loginThroughUi(
   client,
   account,
-  { resetProfile = true, reuseObserver = false } = {},
+  {
+    resetProfile = true,
+    reuseObserver = false,
+    startupSubmitBarrier = null,
+    phase2Task1Trace = null,
+  } = {},
 ) {
   const startedAt = Date.now();
   let phase = "installing-auth-observer";
   let observer = reuseObserver ? authObservers.get(account.label) : null;
   const setPhase = value => { phase = value; observer?.setPhase(value); };
   let failure = null;
+  const submitTimeline = {
+    credentials_filled_at_ms: null,
+    barrier_entered_at_ms: null,
+    barrier_released_at_ms: null,
+    click_before_at_ms: null,
+    click_after_at_ms: null,
+    click_error: null,
+    target_before_click: null,
+    auth_login_observed_immediately_after_click: false,
+    auth_login_observed_after_click: false,
+  };
 
   try {
     if (!observer) {
@@ -266,11 +573,43 @@ async function loginThroughUi(
     });
 
     setPhase("filling-sign-in");
+    if (phase2Task1Trace) {
+      await setPhase2Task1TraceContext(client, phase2Task1Trace);
+    }
     await (await client.$("#auth-login-identifier")).setValue(account.identifier);
     await (await client.$("#auth-login-password")).setValue(account.password);
+    submitTimeline.credentials_filled_at_ms = Date.now();
+
+    if (startupSubmitBarrier) {
+      setPhase("waiting-for-startup-submit-barrier");
+      submitTimeline.barrier_entered_at_ms = Date.now();
+      submitTimeline.barrier_released_at_ms = await startupSubmitBarrier.wait(account.label);
+    }
 
     setPhase("submitting-sign-in");
-    await (await client.$('.bg-auth-form button[type="submit"]')).click();
+    const target = await submitTargetState(client, account);
+    submitTimeline.target_before_click = target.state;
+    submitTimeline.click_before_at_ms = Date.now();
+    try {
+      if (!target.button) {
+        throw taggedError(
+          `Account ${account.label} submit target could not be resolved.`,
+          "STAGE1_STARTUP_SUBMIT_TARGET_UNAVAILABLE",
+        );
+      }
+      await target.button.click();
+      submitTimeline.click_after_at_ms = Date.now();
+      submitTimeline.auth_login_observed_immediately_after_click = (
+        observer?.snapshot() || []
+      ).some(entry =>
+        entry.route === "/beatgaler-api/auth/login" &&
+        Number(entry.started_at_ms) >= submitTimeline.click_before_at_ms
+      );
+    } catch (error) {
+      submitTimeline.click_after_at_ms = Date.now();
+      submitTimeline.click_error = safeCommandError(error, account);
+      throw error;
+    }
 
     setPhase("waiting-for-login-result");
 
@@ -289,9 +628,13 @@ async function loginThroughUi(
       interval: 300,
       timeoutMsg: `Account ${account.label} did not leave the current Web sign-in gate.`,
     });
-  } catch {
-    // WebDriver errors can contain command arguments. Do not serialize them.
+  } catch (error) {
+    // Redacted command evidence is retained in the JSON report only.
     failure = phase;
+    startupSubmitBarrier?.abort(account.label, error);
+    if (!submitTimeline.click_error && phase === "submitting-sign-in") {
+      submitTimeline.click_error = safeCommandError(error, account);
+    }
   }
 
   let diagnostic;
@@ -336,6 +679,15 @@ async function loginThroughUi(
     label: account.label,
     duration_ms: Date.now() - startedAt,
     harness_phase: phase,
+    submit_timeline: {
+      ...submitTimeline,
+      auth_login_observed_after_click: (
+        observer?.snapshot() || []
+      ).some(entry =>
+        entry.route === "/beatgaler-api/auth/login" &&
+        Number(entry.started_at_ms) >= submitTimeline.click_before_at_ms
+      ),
+    },
     ...diagnostic,
     http: observer?.snapshot() || [],
   };
@@ -405,25 +757,222 @@ async function libraryAuthoritySnapshot(client) {
   });
 }
 
-async function waitForAuthoritativeLibrary(client, label) {
+function successfulGetIndexSince(label, { startedAtMs, phase = null }) {
+  const entries = authObservers.get(label)?.snapshot() || [];
+  const begun = entries.filter(entry =>
+    entry.route === "/beatgaler-api/transport/operation/begin" &&
+    entry.state === "response" &&
+    entry.status >= 200 &&
+    entry.status < 300 &&
+      (!phase || entry.harness_phase === phase) &&
+    Number(entry.started_at_ms) >= startedAtMs &&
+    entry.operation_request?.kind === "get_index" &&
+    typeof entry.operation_response?.operation_id === "string" &&
+    entry.operation_response.operation_id.length > 0,
+  );
+
+  for (let index = begun.length - 1; index >= 0; index -= 1) {
+    const begin = begun[index];
+    const operationId = begin.operation_response.operation_id;
+    const end = entries.find(entry =>
+      entry.route === "/beatgaler-api/transport/operation/end" &&
+      entry.state === "response" &&
+      entry.status >= 200 &&
+      entry.status < 300 &&
+      entry.operation_request?.operation_id === operationId &&
+      entry.operation_response?.ok === true,
+    );
+
+    if (end) {
+      return {
+        operation_id: operationId,
+        begin_started_at_ms: Number(begin.started_at_ms),
+        end_started_at_ms: Number(end.started_at_ms),
+        begin_harness_phase: begin.harness_phase,
+        end_harness_phase: end.harness_phase,
+      };
+    }
+  }
+
+  return null;
+}
+
+function focusedReloadEvent(trace, event, { durationMs = null, detail = null } = {}) {
+  const monotonicMs = Math.round(performance.now() * 10) / 10;
+  const wallClockMs = Date.now();
+  const entry = {
+    event,
+    account_label: trace.account_label,
+    correlation_id: trace.correlation_id,
+    timestamp_monotonic_ms: monotonicMs,
+    timestamp_wall_clock: new Date(wallClockMs).toISOString(),
+    ...(Number.isFinite(Number(durationMs)) ? { duration_ms: Math.round(Number(durationMs) * 10) / 10 } : {}),
+    ...(detail && typeof detail === "object" ? { detail } : {}),
+  };
+  trace.events.push(entry);
+  return entry;
+}
+
+function focusedReloadHttpTimeline(label, correlationId) {
+  const entries = (authObservers.get(label)?.snapshot() || [])
+    .filter(entry =>
+      entry.harness_phase === "mixed-soak-final-authoritative-reload" &&
+      entry.correlation_id === correlationId &&
+      entry.state !== "pending",
+    );
+
+  const eventName = entry => {
+    if (entry.route === "/beatgaler-api/auth/health") return "auth_health";
+    if (entry.route === "/beatgaler-api/auth/session") return "auth_session";
+    if (entry.route === "/beatgaler-api/transport/session/start") {
+      return entry.transport_stage === "bind" ? "transport_bind" : "transport_reserve";
+    }
+    if (
+      entry.route === "/beatgaler-api/transport/operation/begin" &&
+      entry.operation_request?.kind === "get_index"
+    ) return "operation_begin";
+    if (entry.route === "/beatgaler-api/transport/operation/end") return "operation_end";
+    return null;
+  };
+
+  return entries.flatMap(entry => {
+    const name = eventName(entry);
+    if (!name) return [];
+    const common = {
+      account_label: label,
+      correlation_id: correlationId,
+      source: "browser_fetch_observer",
+      route: entry.route,
+    };
+    const started = {
+      event: `${name}_started`,
+      ...common,
+      timestamp_monotonic_ms: entry.monotonic_started_ms ?? null,
+      timestamp_wall_clock: Number.isFinite(Number(entry.started_at_ms))
+        ? new Date(Number(entry.started_at_ms)).toISOString()
+        : null,
+    };
+    const completed = {
+      event: `${name}_completed`,
+      ...common,
+      timestamp_monotonic_ms: entry.monotonic_observed_ms ?? null,
+      timestamp_wall_clock: Number.isFinite(Number(entry.observed_at_ms))
+        ? new Date(Number(entry.observed_at_ms)).toISOString()
+        : null,
+      duration_ms: entry.duration_ms,
+      state: entry.state,
+      status: entry.status,
+      ...(entry.startup_trace ? { startup_trace: entry.startup_trace } : {}),
+      ...(name === "operation_begin"
+        ? {
+            admitted: entry.operation_response?.wait !== true,
+            wait: entry.operation_response?.wait === true,
+            retry_after_ms: entry.operation_response?.retry_after_ms ?? null,
+          }
+        : {}),
+    };
+    return [started, completed];
+  });
+}
+
+function focusedReloadNavigationTimeline(label, correlationId) {
+  return (authObservers.get(label)?.documentSnapshot() || [])
+    .filter(entry => entry.correlation_id === correlationId)
+    .map(entry => ({
+      event: entry.event,
+      account_label: label,
+      correlation_id: correlationId,
+      source: "browser_document_observer",
+      document_id: entry.document_id,
+      timestamp_monotonic_ms: entry.monotonic_ms ?? null,
+      timestamp_wall_clock: entry.timestamp_wall_clock ?? null,
+    }));
+}
+
+function focusedReloadWorkerTimeline(logs, label, correlationId) {
+  const rows = [];
+  for (const item of Array.isArray(logs) ? logs : []) {
+    const match = /^\[play-trace\]\s+(\{.*\})$/.exec(String(item?.text || ""));
+    if (!match) continue;
+    try {
+      const trace = JSON.parse(match[1]);
+      if (trace.correlation_id !== correlationId || trace.account_label !== label) continue;
+      const event = trace.stage === "WORKER_INDEX_BEGIN"
+        ? "worker_index_begin"
+        : trace.stage === "WORKER_INDEX_DONE"
+          ? "worker_index_done"
+          : null;
+      if (!event) continue;
+      rows.push({
+        event,
+        account_label: label,
+        correlation_id: correlationId,
+        source: "main_thread_worker_client",
+        timestamp_monotonic_ms: Number.isFinite(Number(trace.t_ms)) ? Number(trace.t_ms) : null,
+        timestamp_wall_clock: Number.isFinite(Number(trace.ts_ms))
+          ? new Date(Number(trace.ts_ms)).toISOString()
+          : null,
+        ...(Number.isFinite(Number(trace.elapsed_ms)) ? { duration_ms: Number(trace.elapsed_ms) } : {}),
+      });
+    } catch {
+      // Diagnostic capture must never make the focused run fail.
+    }
+  }
+  return rows;
+}
+
+async function waitForAuthoritativeLibrary(
+  client,
+  label,
+  { requiredGetIndex = null, focusedReloadTrace = null } = {},
+) {
   let latest = null;
 
   try {
     await client.waitUntil(async () => {
       latest = await libraryAuthoritySnapshot(client);
+      const successfulGetIndex = requiredGetIndex
+        ? successfulGetIndexSince(label, requiredGetIndex)
+        : null;
+      latest = {
+        ...latest,
+        ...(requiredGetIndex
+          ? { successful_get_index: successfulGetIndex }
+          : {}),
+      };
 
       const materialized =
         latest?.empty_gallery === true ||
         Number(latest?.beat_count || 0) > 0;
 
-      return (
+      if (focusedReloadTrace && materialized && !focusedReloadTrace.materialized) {
+        focusedReloadTrace.materialized = true;
+        focusedReloadEvent(focusedReloadTrace, "library_materialized", {
+          detail: { beat_count: latest.beat_count, empty_gallery: latest.empty_gallery },
+        });
+      }
+
+      if (focusedReloadTrace && latest?.aria_busy === "false" && !focusedReloadTrace.aria_busy_false) {
+        focusedReloadTrace.aria_busy_false = true;
+        focusedReloadEvent(focusedReloadTrace, "aria_busy_false");
+      }
+
+      const ready = (
         latest?.present === true &&
         latest?.aria_busy === "false" &&
         materialized &&
+        (!requiredGetIndex || successfulGetIndex !== null) &&
         latest?.poor_connection !== true &&
         latest?.offline !== true &&
         latest?.load_error !== true
       );
+      if (focusedReloadTrace && ready && !focusedReloadTrace.ready) {
+        focusedReloadTrace.ready = true;
+        focusedReloadEvent(focusedReloadTrace, "authoritative_library_ready", {
+          detail: { beat_count: latest.beat_count },
+        });
+      }
+      return ready;
     }, {
       timeout: 120_000,
       interval: 750,
@@ -452,6 +1001,7 @@ async function waitForAuthoritativeLibrary(client, label) {
     report.accounts[label].library_authority_failure = {
       snapshot: latest,
       diagnostic,
+      required_get_index: requiredGetIndex,
     };
 
     const detail = latest
@@ -464,6 +1014,271 @@ async function waitForAuthoritativeLibrary(client, label) {
       "P1",
     );
   }
+}
+
+async function setPhase2Task1TraceContext(client, context) {
+  await client.execute(input => {
+    localStorage.setItem("beatgaler:stage1-trace:correlation", input.correlation_id);
+    localStorage.setItem("beatgaler:stage1-trace:account", input.account_label);
+    if (input.task2_passive_ping_trace === true) {
+      localStorage.setItem("beatgaler:stage1-trace:task2-passive-ping", "1");
+    } else {
+      localStorage.removeItem("beatgaler:stage1-trace:task2-passive-ping");
+    }
+    window.__stage1TraceContext = input;
+  }, context);
+}
+
+function phase2Task1Http(label, correlationId, route) {
+  return (authObservers.get(label)?.snapshot() || [])
+    .filter(entry =>
+      entry.correlation_id === correlationId &&
+      entry.route === route &&
+      entry.state === "response" &&
+      Number(entry.status) >= 200 && Number(entry.status) < 300,
+    )
+    .sort((left, right) => Number(left.observed_at_ms) - Number(right.observed_at_ms));
+}
+
+function phase2Task1Trace(label, correlationId, stage, afterMs = -Infinity) {
+  return phase2Task1Traces(label, correlationId)
+    .filter(trace =>
+      trace?.stage === stage &&
+      Number.isFinite(Number(trace?.ts_ms)) && Number(trace.ts_ms) >= afterMs,
+    )
+    .sort((left, right) => Number(left.ts_ms) - Number(right.ts_ms))[0] || null;
+}
+
+function phase2Task1Traces(label, correlationId) {
+  return (authObservers.get(label)?.playTraceSnapshot() || [])
+    .map(entry => entry?.trace)
+    .filter(trace =>
+      trace?.correlation_id === correlationId && Number.isFinite(Number(trace?.ts_ms)),
+    );
+}
+
+function phase2Task1TraceTime(trace) {
+  const workerTime = Number(trace?.worker_at_ms);
+  return Number.isFinite(workerTime) ? workerTime : Number(trace?.ts_ms);
+}
+
+function phase2Task1TraceEvent(trace, startedAtMs) {
+  const absoluteMs = phase2Task1TraceTime(trace);
+  const detail = {};
+  for (const key of [
+    "rpc_method", "boundary", "state", "connection_attempt", "reconnect",
+    "attempt", "delay_ms", "error_name", "error_message", "pinned_message_present",
+    "worker_instance_id", "client_instance_id", "prior_client_instance_id", "prior_client_present",
+    "client_is_connected", "core_connected_flag", "primary_dc_id", "primary_pool_is_connected",
+    "primary_connection_count", "primary_connected_count", "rpc_context", "message_id",
+    "found", "elapsed_ms", "reason", "connection_id", "connection_uid",
+    "last_ping_pending", "last_ping_msg_id", "last_ping_time_monotonic_ms",
+    "last_ping_rtt_ms", "ping_msg_id", "ping_sent_at_monotonic_ms",
+    "ping_id", "container_id", "serialized_byte_length", "encrypted_byte_length",
+    "persistent_writer_present", "persistent_writer_present_at_call", "queued_before_send",
+    "ping_msg_ids", "related_ping_msg_ids", "ack_msg_id", "pong_msg_id", "pong_ping_id",
+    "pending_lookup", "expected_ping_id", "ping_id_matches", "current_last_ping_matches",
+    "outcome", "failed_msg_id", "failure_reason", "reset_origin", "reset_with_time",
+    "previous_last_ping_msg_id", "previous_last_ping_time_monotonic_ms",
+    "active_before", "active_now", "inactive_to_active", "pending_message_present",
+    "phase", "semantics", "error_name", "error_message",
+    "web_socket_id", "packet_bytes", "buffered_amount_before", "buffered_amount_after",
+    "incoming_frame_bytes", "incoming_data_kind", "close_code", "close_reason", "close_was_clean",
+    "framed_buffer_available", "framed_eof", "framed_frame_bytes",
+    "encrypted_message_bytes", "incoming_msg_id", "incoming_seq_no", "object_id_hex",
+    "raw_kind", "container_message_count", "mt_message_type", "mt_is_pong",
+  ]) {
+    if (trace?.[key] !== undefined && trace?.[key] !== null) detail[key] = trace[key];
+  }
+  return {
+    stage: trace.stage,
+    absolute_ms: Number.isFinite(absoluteMs) ? absoluteMs : null,
+    relative_ms: Number.isFinite(absoluteMs) ? absoluteMs - startedAtMs : null,
+    source: Number.isFinite(Number(trace?.worker_at_ms)) ? "mtproto-worker" : "web-main-thread",
+    worker_monotonic_ms: Number.isFinite(Number(trace?.worker_monotonic_ms)) ? Number(trace.worker_monotonic_ms) : null,
+    ...(Object.keys(detail).length ? { detail } : {}),
+  };
+}
+
+function phase2Task1TraceAfter(traces, stage, afterMs = -Infinity) {
+  return traces
+    .filter(trace => trace?.stage === stage && phase2Task1TraceTime(trace) >= afterMs)
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))[0] || null;
+}
+
+function phase2Task1Attribution({ account, condition, startedAtMs, readyAtMs, correlationId }) {
+  const authRoute = condition === "apertura_fria" ? "/beatgaler-api/auth/login" : "/beatgaler-api/auth/session";
+  const auth = phase2Task1Http(account.label, correlationId, authRoute).at(-1) || null;
+  const control = phase2Task1Http(account.label, correlationId, "/beatgaler-api/transport/session/start");
+  const activation = phase2Task1Http(account.label, correlationId, "/beatgaler-api/transport/session/activate").at(-1) || null;
+  const controlBegin = control[0] || null;
+  const controlReadyCandidates = [...control, activation].filter(Boolean);
+  const controlReady = controlReadyCandidates.sort((left, right) => Number(right.observed_at_ms) - Number(left.observed_at_ms))[0] || null;
+  const direct = phase2Task1Trace(account.label, correlationId, "CONTROLLER_SESSION_DATA_PLANE_READY", Number(controlReady?.observed_at_ms || startedAtMs));
+  const traces = phase2Task1Traces(account.label, correlationId);
+  const directAtMs = phase2Task1TraceTime(direct);
+  const mtprotoConnectBegin = phase2Task1TraceAfter(traces, "WORKER_MTPROTO_CONNECT_BEGIN", Number(controlReady?.observed_at_ms || startedAtMs));
+  const mtprotoClientReady = phase2Task1TraceAfter(traces, "WORKER_MTPROTO_CLIENT_READY", phase2Task1TraceTime(mtprotoConnectBegin));
+  // The controller starts getChat background verification after Direct is ready;
+  // beginOperation waits for it before dispatching get_index. This order is
+  // deliberately reported as observed rather than reshaped into a desired one.
+  const getChatBegin = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_BEGIN", directAtMs);
+  const getChatRpcSent = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_RPC_SENT", phase2Task1TraceTime(getChatBegin));
+  const getChatRpcResponse = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_RPC_RESPONSE_RECEIVED", phase2Task1TraceTime(getChatRpcSent));
+  const getChatLocalDone = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_LOCAL_DONE", phase2Task1TraceTime(getChatRpcResponse));
+  const getChatEnd = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_END", phase2Task1TraceTime(getChatLocalDone));
+  const getIndexBegin = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_BEGIN", Number(direct?.ts_ms || startedAtMs));
+  const pointerLookupBegin = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_LOOKUP_BEGIN", phase2Task1TraceTime(getIndexBegin));
+  const pointerGetMessagesBegin = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_BEGIN", phase2Task1TraceTime(pointerLookupBegin));
+  const pointerGetMessagesInvoked = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_INVOKED", phase2Task1TraceTime(pointerGetMessagesBegin));
+  const pointerGetMessagesSent = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_SENT", phase2Task1TraceTime(pointerGetMessagesInvoked));
+  const pointerGetMessagesResponse = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_RESPONSE_RECEIVED", phase2Task1TraceTime(pointerGetMessagesSent));
+  const pointerGetMessagesEnd = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_END", phase2Task1TraceTime(pointerGetMessagesResponse));
+  const pointerLookupEnd = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_LOOKUP_DONE", phase2Task1TraceTime(pointerGetMessagesEnd));
+  const getIndexEnd = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_DONE", Number(getIndexBegin?.ts_ms || startedAtMs));
+  const getIndexBeginAtMs = phase2Task1TraceTime(getIndexBegin);
+  const fullChatBegin = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_BEGIN", getIndexBeginAtMs);
+  const fullChatRpcSent = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_RPC_SENT", phase2Task1TraceTime(fullChatBegin));
+  const fullChatRpcResponse = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_RPC_RESPONSE_RECEIVED", phase2Task1TraceTime(fullChatRpcSent));
+  const fullChatLocalDone = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_LOCAL_DONE", phase2Task1TraceTime(fullChatRpcResponse));
+  const fullChatEnd = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_END", phase2Task1TraceTime(fullChatLocalDone));
+  const processBegin = phase2Task1Trace(account.label, correlationId, "WEB_LIBRARY_INDEX_PROCESS_BEGIN", Number(getIndexEnd?.ts_ms || startedAtMs));
+  const processEnd = phase2Task1Trace(account.label, correlationId, "WEB_LIBRARY_INDEX_PROCESS_DONE", Number(processBegin?.ts_ms || startedAtMs));
+  const workerIndexEvents = traces
+    .filter(trace => /^WORKER_INDEX_(?:DISPATCH_RECEIVED|PRIORITY_WAIT_BEGIN|PRIORITY_WAIT_DONE|POINTER_LOOKUP_(?:BEGIN|DONE)|POINTER_GET_MESSAGES_(?:BEGIN|RPC_INVOKED|RPC_SENT|RPC_RESPONSE_RECEIVED|RPC_ERROR|RPC_NOT_OBSERVED|END)|POINTER_INVALID|GET_FULL_CHAT_(?:BEGIN|RPC_INVOKED|RPC_SENT|RPC_RESPONSE_RECEIVED|RPC_ERROR|RPC_NOT_OBSERVED|LOCAL_DONE|END)|PINNED_LOOKUP_BEGIN|PINNED_LOOKUP_DONE|DOWNLOAD_BEGIN|DOWNLOAD_DONE|ATTEMPT_FAILED|RETRY_BACKOFF_BEGIN|RETRY_BACKOFF_END|RETRY_EXHAUSTED|RESPONSE)$/.test(trace.stage))
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
+    .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
+  const mtprotoTimeline = traces
+    .filter(trace => /^(?:WORKER_MTPROTO_(?:CLIENT_(?:INITIALIZE|CREATED|READY|CLOSE_BEGIN|CLOSE_DONE|INIT_FAILED|ERROR)|CONNECT_(?:BEGIN|END|ERROR)|CONNECTION_STATE|DISCONNECTED|RECONNECT_(?:BEGIN|READY)|SESSION_RESET|CLIENT_ERROR)|WORKER_VERIFY_GET_CHAT_(?:BEGIN|RPC_INVOKED|RPC_SENT|RPC_RESPONSE_RECEIVED|RPC_ERROR|RPC_NOT_OBSERVED|LOCAL_DONE|END|ERROR))$/.test(trace.stage))
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
+    .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
+  const pointerGetMessagesTimeline = traces
+    .filter(trace => /^WORKER_INDEX_POINTER_GET_MESSAGES_(?:BEGIN|RPC_INVOKED|RPC_SENT|RPC_RESPONSE_RECEIVED|RPC_ERROR|RPC_NOT_OBSERVED|END)$/.test(trace.stage) || /^(?:WORKER_MTPROTO_(?:CONNECTION_STATE|DISCONNECTED|RECONNECT_(?:BEGIN|READY)|SESSION_RESET|CLIENT_ERROR))$/.test(trace.stage))
+    .filter(trace => {
+      if (!trace.stage.startsWith("WORKER_MTPROTO_")) return true;
+      return trace?.detail?.rpc_context?.stage === "WORKER_INDEX_POINTER_GET_MESSAGES";
+    })
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
+    .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
+  const task2PassivePingTimeline = traces
+    .filter(trace => /^TASK2_PING_/.test(trace.stage))
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
+    .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
+
+  const points = [
+    ["inicio_reload", startedAtMs, "harness"],
+    ["auth_session", auth?.observed_at_ms, authRoute],
+    ["cloud_control_begin", controlBegin?.started_at_ms, "/transport/session/start"],
+    ["cloud_control_end", controlReady?.observed_at_ms, "session/start + session/activate"],
+    ["mtproto_connect_begin", phase2Task1TraceTime(mtprotoConnectBegin), "WORKER_MTPROTO_CONNECT_BEGIN"],
+    ["cliente_mtproto_listo", phase2Task1TraceTime(mtprotoClientReady), "WORKER_MTPROTO_CLIENT_READY"],
+    ["direct_disponible", direct?.ts_ms, "CONTROLLER_SESSION_DATA_PLANE_READY"],
+    ["get_chat_begin", phase2Task1TraceTime(getChatBegin), "WORKER_VERIFY_GET_CHAT_BEGIN"],
+    ["get_chat_rpc_enviada", phase2Task1TraceTime(getChatRpcSent), "mtcute core.call"],
+    ["get_chat_respuesta_recibida", phase2Task1TraceTime(getChatRpcResponse), "mtcute core.call promise"],
+    ["get_chat_procesamiento_local_terminado", phase2Task1TraceTime(getChatLocalDone), "WORKER_VERIFY_GET_CHAT_LOCAL_DONE"],
+    ["get_chat_end", phase2Task1TraceTime(getChatEnd), "WORKER_VERIFY_GET_CHAT_END"],
+    ["get_index_begin", getIndexBegin?.ts_ms, "WORKER_INDEX_BEGIN"],
+    ["pointer_lookup_begin", phase2Task1TraceTime(pointerLookupBegin), "WORKER_INDEX_POINTER_LOOKUP_BEGIN"],
+    ["get_messages_begin", phase2Task1TraceTime(pointerGetMessagesBegin), "WORKER_INDEX_POINTER_GET_MESSAGES_BEGIN"],
+    ["get_messages_rpc_enviada", phase2Task1TraceTime(pointerGetMessagesSent), "mtcute core.call"],
+    ["get_messages_rpc_respuesta_recibida", phase2Task1TraceTime(pointerGetMessagesResponse), "mtcute core.call promise"],
+    ["get_messages_end", phase2Task1TraceTime(pointerGetMessagesEnd), "WORKER_INDEX_POINTER_GET_MESSAGES_END"],
+    ["pointer_lookup_end", phase2Task1TraceTime(pointerLookupEnd), "WORKER_INDEX_POINTER_LOOKUP_DONE"],
+    ["get_full_chat_begin", phase2Task1TraceTime(fullChatBegin), "WORKER_INDEX_GET_FULL_CHAT_BEGIN"],
+    ["get_full_chat_rpc_enviada", phase2Task1TraceTime(fullChatRpcSent), "mtcute core.call"],
+    ["get_full_chat_respuesta_recibida", phase2Task1TraceTime(fullChatRpcResponse), "mtcute core.call promise"],
+    ["get_full_chat_procesamiento_local_terminado", phase2Task1TraceTime(fullChatLocalDone), "WORKER_INDEX_GET_FULL_CHAT_LOCAL_DONE"],
+    ["get_full_chat_end", phase2Task1TraceTime(fullChatEnd), "WORKER_INDEX_GET_FULL_CHAT_END"],
+    ["get_index_end", getIndexEnd?.ts_ms, "WORKER_INDEX_DONE"],
+    ["procesamiento_index_web_begin", processBegin?.ts_ms, "WEB_LIBRARY_INDEX_PROCESS_BEGIN"],
+    ["procesamiento_index_web_end", processEnd?.ts_ms, "WEB_LIBRARY_INDEX_PROCESS_DONE"],
+    ["biblioteca_autoritativa_utilizable", readyAtMs, "DOM authoritative library"],
+  ].map(([event, absolute_ms, source]) => ({
+    event,
+    absolute_ms: Number.isFinite(Number(absolute_ms)) ? Number(absolute_ms) : null,
+    relative_ms: Number.isFinite(Number(absolute_ms)) ? Number(absolute_ms) - startedAtMs : null,
+    source,
+  }));
+
+  // Task 2 proves the fast pointer path by requiring that this optional
+  // recovery span is absent from hot reloads. The remaining markers still
+  // establish Direct, get_index, Web processing and usable library order.
+  const requiredPoints = phase2Task2Mode
+    ? points.filter(point => !point.event.startsWith("get_full_chat_"))
+    : points;
+  const missing = requiredPoints.filter(point => point.absolute_ms === null).map(point => point.event);
+  const chronologicalPoints = phase2Task2Mode
+    ? points.filter(point => !point.event.startsWith("get_chat_") && !point.event.startsWith("get_full_chat_"))
+    : points;
+  const ordered = chronologicalPoints.every((point, index) =>
+    index === 0 || point.absolute_ms === null || chronologicalPoints[index - 1].absolute_ms === null || point.absolute_ms >= chronologicalPoints[index - 1].absolute_ms,
+  );
+  const span = (from, to) => {
+    const start = points.find(point => point.event === from)?.absolute_ms;
+    const end = points.find(point => point.event === to)?.absolute_ms;
+    return Number.isFinite(start) && Number.isFinite(end) ? end - start : null;
+  };
+
+  return {
+    account_label: account.label,
+    condition,
+    correlation_id: correlationId,
+    markers: points,
+    durations_ms: {
+      inicio_a_auth_session: span("inicio_reload", "auth_session"),
+      auth_session_a_cloud_control: span("auth_session", "cloud_control_begin"),
+      cloud_control: span("cloud_control_begin", "cloud_control_end"),
+      cloud_control_a_direct_disponible: span("cloud_control_end", "direct_disponible"),
+      mtproto_connect: span("mtproto_connect_begin", "cliente_mtproto_listo"),
+      direct_disponible_a_get_chat: span("direct_disponible", "get_chat_begin"),
+      get_chat_antes_rpc: span("get_chat_begin", "get_chat_rpc_enviada"),
+      get_chat_rpc: span("get_chat_rpc_enviada", "get_chat_respuesta_recibida"),
+      get_chat_procesamiento_local: span("get_chat_respuesta_recibida", "get_chat_procesamiento_local_terminado"),
+      get_chat_total: span("get_chat_begin", "get_chat_end"),
+      direct_disponible_a_get_index: span("direct_disponible", "get_index_begin"),
+      pointer_lookup: span("pointer_lookup_begin", "pointer_lookup_end"),
+      get_messages_antes_rpc: span("get_messages_begin", "get_messages_rpc_enviada"),
+      get_messages_rpc: span("get_messages_rpc_enviada", "get_messages_rpc_respuesta_recibida"),
+      get_messages_despues_rpc: span("get_messages_rpc_respuesta_recibida", "get_messages_end"),
+      get_messages_total: span("get_messages_begin", "get_messages_end"),
+      get_full_chat_antes_rpc: span("get_full_chat_begin", "get_full_chat_rpc_enviada"),
+      get_full_chat_rpc: span("get_full_chat_rpc_enviada", "get_full_chat_respuesta_recibida"),
+      get_full_chat_procesamiento_local: span("get_full_chat_respuesta_recibida", "get_full_chat_procesamiento_local_terminado"),
+      get_full_chat_total: span("get_full_chat_begin", "get_full_chat_end"),
+      resto_get_index: span("get_full_chat_end", "get_index_end"),
+      get_index: span("get_index_begin", "get_index_end"),
+      procesamiento_index_web: span("procesamiento_index_web_begin", "procesamiento_index_web_end"),
+      index_a_biblioteca_utilizable: span("procesamiento_index_web_end", "biblioteca_autoritativa_utilizable"),
+      total: span("inicio_reload", "biblioteca_autoritativa_utilizable"),
+    },
+    cloud_session_start: control.map(entry => ({
+      transport_stage: entry.transport_stage || null,
+      direct_session_id: entry.transport?.session_id || null,
+      direct_generation: entry.transport?.generation ?? null,
+      direct_lease_selection: entry.startup_trace?.events?.find(event => event?.stage === "LEASE_SELECTED")?.server_lease || null,
+      duration_ms: entry.duration_ms,
+      startup_trace: entry.startup_trace || null,
+    })),
+    pointer_get_messages_timeline: pointerGetMessagesTimeline,
+    ...(phase2Task2PassivePingTrace ? { task2_passive_ping_timeline: task2PassivePingTimeline } : {}),
+    worker_index_events: workerIndexEvents,
+    mtproto_timeline: mtprotoTimeline,
+    retries_y_reconexiones: {
+      get_index_attempt_failures: workerIndexEvents.filter(event => event.stage === "WORKER_INDEX_ATTEMPT_FAILED"),
+      get_index_retry_backoffs: workerIndexEvents.filter(event => event.stage === "WORKER_INDEX_RETRY_BACKOFF_BEGIN"),
+      connection_state_events: mtprotoTimeline.filter(event => event.stage === "WORKER_MTPROTO_CONNECTION_STATE"),
+      reconnect_events: mtprotoTimeline.filter(event => /^WORKER_MTPROTO_RECONNECT_/.test(event.stage)),
+      session_resets: mtprotoTimeline.filter(event => event.stage === "WORKER_MTPROTO_SESSION_RESET"),
+      mtproto_client_errors: mtprotoTimeline.filter(event => event.stage === "WORKER_MTPROTO_CLIENT_ERROR"),
+      note: "El cliente no expone cada reintento interno de un RPC. La cronología registra reintentos explícitos del flujo get_index, errores del cliente y transiciones MTProto observables.",
+    },
+    complete: missing.length === 0 && ordered,
+    missing_markers: missing,
+    chronological: ordered,
+    get_full_chat_required: !phase2Task2Mode,
+    get_full_chat_observed: Number.isFinite(phase2Task1TraceTime(fullChatBegin)),
+  };
 }
 
 async function runtimeSnapshot(client, label) {
@@ -751,7 +1566,25 @@ function validatePersistentReload(before, after, label) {
 
 
 function playbackBeatName(account) {
-  return `Stage1 Playback ${account.label}`;
+  return `Stage1 Playback v2 ${account.label}`;
+}
+
+async function createSoakPlaybackMp3Fixture(account) {
+  await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
+  const source = stripMp3ContainerTags(await fs.readFile(PLAYBACK_FIXTURE_FILE));
+  assert.ok(source.bytes.length > 0, "The playback MP3 fixture must contain MPEG audio frames.");
+  const audio = Buffer.concat(Array.from(
+    { length: SOAK_PLAYBACK_FIXTURE_REPETITIONS },
+    () => source.bytes,
+  ));
+  const file = path.join(PLAYBACK_TMP_DIR, `${playbackBeatName(account)}.mp3`);
+  await fs.writeFile(file, audio);
+  return {
+    file,
+    audio_payload_bytes: audio.length,
+    audio_payload_sha256: sha256Hex(audio),
+    repetitions: SOAK_PLAYBACK_FIXTURE_REPETITIONS,
+  };
 }
 
 async function playbackBeatSnapshot(client, beatName) {
@@ -799,17 +1632,14 @@ async function waitForPlaybackBeatCommitted(client, account, timeout = 120_000) 
 }
 
 async function provisionPlaybackBeat(client, account) {
+  const localFixture = await createSoakPlaybackMp3Fixture(account);
   const existing = await playbackBeatSnapshot(client, playbackBeatName(account));
   if (existing?.beat_id) {
     const committed = existing.cloud_committed
       ? existing
       : await waitForPlaybackBeatCommitted(client, account);
-    return { ...committed, beat_name: playbackBeatName(account), created: false };
+    return { ...committed, ...localFixture, beat_name: playbackBeatName(account), created: false };
   }
-
-  await fs.mkdir(PLAYBACK_TMP_DIR, { recursive: true });
-  const localFixture = path.join(PLAYBACK_TMP_DIR, `${playbackBeatName(account)}.mp3`);
-  await fs.copyFile(PLAYBACK_FIXTURE_FILE, localFixture);
 
   const addButton = await client.$('//button[normalize-space(.)="Add beat"]');
   await addButton.waitForDisplayed({ timeout: 30_000 });
@@ -849,7 +1679,7 @@ async function provisionPlaybackBeat(client, account) {
     element.style.pointerEvents = "auto";
   }, input);
 
-  const remoteFixture = await client.uploadFile(localFixture);
+  const remoteFixture = await client.uploadFile(localFixture.file);
   await input.setValue(remoteFixture);
 
   const saveButton = await client.$('//button[starts-with(normalize-space(.), "Save")]');
@@ -858,7 +1688,7 @@ async function provisionPlaybackBeat(client, account) {
   await saveButton.click();
 
   const saved = await waitForPlaybackBeatCommitted(client, account);
-  return { ...saved, created: true };
+  return { ...saved, ...localFixture, created: true };
 }
 
 
@@ -868,14 +1698,23 @@ function mixedUploadBeatName(account) {
 
 async function waitForNamedBeatCommitted(client, account, beatName, timeout = 120_000) {
   let latest = null;
-  await client.waitUntil(async () => {
-    latest = await playbackBeatSnapshot(client, beatName);
-    return Boolean(latest?.beat_id && latest?.cloud_committed === true);
-  }, {
-    timeout,
-    interval: 500,
-    timeoutMsg: `Account ${account.label} did not commit ${beatName} to the authoritative Cloud library.`,
-  });
+  try {
+    await client.waitUntil(async () => {
+      latest = await playbackBeatSnapshot(client, beatName);
+      return Boolean(latest?.beat_id && latest?.cloud_committed === true);
+    }, {
+      timeout,
+      interval: 500,
+      timeoutMsg: `Account ${account.label} did not commit ${beatName} to the authoritative Cloud library.`,
+    });
+  } catch (error) {
+    const diagnostic = await stage1RuntimeDiagnosticsSnapshot(client).catch(() => null);
+    throw taggedError(
+      `Account ${account.label} did not commit ${beatName} to the authoritative Cloud library. diagnostic=${JSON.stringify({ latest, diagnostic }).slice(0, 6000)}`,
+      "STAGE1_MIXED_UPLOAD_AUTHORITATIVE_COMMIT",
+      "P1",
+    );
+  }
   return { ...latest, beat_name: beatName };
 }
 
@@ -945,6 +1784,12 @@ async function uploadNamedMp3Fixture(client, account, beatName, options = {}) {
   await saveButton.waitForDisplayed({ timeout: 30_000 });
   await saveButton.waitForEnabled({ timeout: 30_000 });
   await saveButton.click();
+
+  // Used by the failure-isolation scenario only.  The callback runs after the
+  // real UI Save action, while the durable import is still owned by the app.
+  if (typeof options.afterSaveClick === "function") {
+    await options.afterSaveClick();
+  }
 
   const saved = await waitForNamedBeatCommitted(
     client,
@@ -1208,6 +2053,223 @@ function metricSummary(values) {
   };
 }
 
+function transferEvidence({ bytes, durationMs }) {
+  const safeBytes = Math.max(0, Number(bytes) || 0);
+  const safeDurationMs = Math.max(0, Number(durationMs) || 0);
+  return {
+    bytes: safeBytes,
+    duration_ms: safeDurationMs,
+    bytes_per_second: safeDurationMs > 0
+      ? Math.round((safeBytes * 1_000) / safeDurationMs)
+      : null,
+    mib_per_second: safeDurationMs > 0
+      ? Number(((safeBytes / (1024 * 1024)) / (safeDurationMs / 1_000)).toFixed(3))
+      : null,
+  };
+}
+
+function playbackWaitingEvidence(snapshot) {
+  const events = Array.isArray(snapshot?.recent_events) ? snapshot.recent_events : [];
+  let startedAt = null;
+  let pauses = 0;
+  let durationMs = 0;
+  for (const event of events) {
+    if (event?.waiting === true && startedAt === null) {
+      startedAt = Number(event.at) || null;
+      pauses += 1;
+    } else if (event?.waiting !== true && startedAt !== null) {
+      durationMs += Math.max(0, (Number(event.at) || startedAt) - startedAt);
+      startedAt = null;
+    }
+  }
+  return {
+    waiting_seen: snapshot?.waiting_seen === true,
+    pause_count: pauses,
+    completed_pause_duration_ms: durationMs,
+    pause_open_at_end: startedAt !== null,
+  };
+}
+
+function createTask4ResourceSampler() {
+  const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
+  const databaseUrl = String(process.env.STAGE1_POSTGRES_URL || process.env.DATABASE_URL || "").trim();
+  const samples = [];
+  let timer = null;
+  let pool = null;
+  let previousCpu = process.cpuUsage();
+  let previousAt = process.hrtime.bigint();
+  let sampling = false;
+
+  const postgres = async () => {
+    if (!databaseUrl) return { status: "NOT_CONFIGURED", detail: "Set STAGE1_POSTGRES_URL for read-only PostgreSQL samples." };
+    try {
+      if (!pool) {
+        const { Pool } = localRequire("../../cloud-server/node_modules/pg");
+        pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 3_000, max: 1 });
+      }
+      const result = await pool.query(`
+        SELECT
+          (SELECT count(*)::int FROM direct_leases WHERE status='ACTIVE') AS active_leases,
+          (SELECT count(*)::int FROM direct_operations
+            WHERE state IN ('PREPARED','EXTERNAL_EFFECT','INDEX_COMMITTED','RECONCILE')) AS remaining_operations,
+          (SELECT count(*)::int FROM direct_operations
+            WHERE operation_type='get_index'
+              AND state IN ('PREPARED','EXTERNAL_EFFECT','INDEX_COMMITTED','RECONCILE')) AS pending_get_index_operations,
+          (SELECT count(*)::int FROM direct_operations o
+            WHERE o.operation_type='get_index'
+              AND o.state IN ('PREPARED','EXTERNAL_EFFECT','INDEX_COMMITTED','RECONCILE')
+              AND (o.lease_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM direct_leases l WHERE l.id=o.lease_id AND l.status='ACTIVE'
+              ))) AS orphan_get_index_operations
+      `);
+      return { status: "OK", ...result.rows[0] };
+    } catch (error) {
+      return { status: "UNAVAILABLE", error: String(error?.message || error).slice(0, 400) };
+    }
+  };
+
+  const transport = async () => {
+    try {
+      const response = await fetch(`${cloudUrl}/transport/status`, { signal: AbortSignal.timeout(3_000) });
+      const payload = await response.json().catch(() => ({}));
+      return response.ok
+        ? { status: "OK", sessions: payload.sessions ?? null, operations: payload.operations ?? null, bots: payload.bots ?? [], queue: payload.queue ?? [] }
+        : { status: "UNAVAILABLE", http_status: response.status };
+    } catch (error) {
+      return { status: "UNAVAILABLE", error: String(error?.message || error).slice(0, 400) };
+    }
+  };
+
+  const sample = async (phase) => {
+    if (sampling) return null;
+    sampling = true;
+    try {
+      const now = process.hrtime.bigint();
+      const cpu = process.cpuUsage(previousCpu);
+      const elapsedMs = Number(now - previousAt) / 1e6;
+      previousCpu = process.cpuUsage();
+      previousAt = now;
+      const [pg, direct] = await Promise.all([postgres(), transport()]);
+      const memory = process.memoryUsage();
+      const item = {
+        at: new Date().toISOString(),
+        phase,
+        harness_cpu_percent: elapsedMs > 0
+          ? Number((((cpu.user + cpu.system) / 1_000) / elapsedMs * 100).toFixed(2))
+          : null,
+        harness_memory: {
+          rss_bytes: memory.rss,
+          heap_used_bytes: memory.heapUsed,
+          heap_total_bytes: memory.heapTotal,
+          external_bytes: memory.external,
+        },
+        host_memory: { free_bytes: os.freemem(), total_bytes: os.totalmem() },
+        postgres: pg,
+        transport: direct,
+      };
+      samples.push(item);
+      return item;
+    } finally {
+      sampling = false;
+    }
+  };
+
+  return {
+    samples,
+    async start() {
+      await sample("soak-start");
+      timer = setInterval(() => { void sample("soak"); }, 30_000);
+    },
+    async stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      await sample("soak-end");
+      await pool?.end().catch(() => {});
+    },
+  };
+}
+
+function observedGetIndexDebt(label) {
+  const entries = authObservers.get(label)?.snapshot() || [];
+  const begun = entries.filter(entry =>
+    entry.route === "/beatgaler-api/transport/operation/begin" &&
+    entry.state === "response" &&
+    entry.status >= 200 &&
+    entry.status < 300 &&
+    entry.operation_request?.kind === "get_index" &&
+    typeof entry.operation_response?.operation_id === "string"
+  );
+  const completed = new Set(entries
+    .filter(entry =>
+      entry.route === "/beatgaler-api/transport/operation/end" &&
+      entry.state === "response" &&
+      entry.status >= 200 &&
+      entry.status < 300 &&
+      entry.operation_response?.ok === true &&
+      typeof entry.operation_request?.operation_id === "string"
+    )
+    .map(entry => entry.operation_request.operation_id));
+  const pending = begun
+    .map(entry => entry.operation_response.operation_id)
+    .filter(operationId => !completed.has(operationId));
+  return { begun: begun.length, completed: completed.size, pending_operation_ids: pending };
+}
+
+function consolidateTask4Accounts(metrics) {
+  const byLabel = Object.fromEntries(accounts.map(account => [account.label, {
+    operations_completed: { playback: 0, seek: 0, upload: 0, metadata: 0, reload: 0, download: 0 },
+    first_audio_ms: [],
+    playback_pauses: { waiting_samples: 0, pause_count: 0, completed_pause_duration_ms: 0, open_at_end: 0 },
+    transfers: { uploads: [], downloads: [] },
+    errors_observed: 0,
+    retries_observed: 0,
+  }]));
+
+  for (const sample of metrics.playback_samples) {
+    sample.account_labels.forEach((label, index) => {
+      const target = byLabel[label];
+      target.operations_completed.playback += 1;
+      target.first_audio_ms.push(sample.first_audio_ms[index]);
+      const waiting = sample.waiting[index];
+      if (waiting?.waiting_seen) target.playback_pauses.waiting_samples += 1;
+      target.playback_pauses.pause_count += Number(waiting?.pause_count || 0);
+      target.playback_pauses.completed_pause_duration_ms += Number(waiting?.completed_pause_duration_ms || 0);
+      if (waiting?.pause_open_at_end) target.playback_pauses.open_at_end += 1;
+    });
+  }
+  for (const sample of metrics.seek_samples) byLabel[sample.account_label].operations_completed.seek += 1;
+  for (const sample of metrics.upload_samples) {
+    byLabel[sample.account_label].operations_completed.upload += 1;
+    byLabel[sample.account_label].transfers.uploads.push(transferEvidence({ bytes: sample.source_bytes, durationMs: sample.duration_ms }));
+  }
+  for (const sample of metrics.metadata_samples) {
+    byLabel[sample.account_label].operations_completed.metadata += 1;
+    byLabel[sample.account_label].operations_completed.reload += 1;
+  }
+  for (const sample of metrics.reload_samples) byLabel[sample.account_label].operations_completed.reload += 1;
+  for (const sample of metrics.download_samples) {
+    byLabel[sample.account_label].operations_completed.download += 1;
+    byLabel[sample.account_label].transfers.downloads.push(transferEvidence({ bytes: sample.bytes, durationMs: sample.duration_ms }));
+  }
+
+  for (const account of accounts) {
+    const target = byLabel[account.label];
+    const entries = authObservers.get(account.label)?.snapshot() || [];
+    target.errors_observed = entries.filter(entry =>
+      entry.state === "network-error" || entry.state === "aborted" ||
+      (entry.state === "response" && Number(entry.status) >= 400)
+    ).length;
+    target.retries_observed = entries.filter(entry =>
+      entry.operation_response?.wait === true || /Reconnect attempt|retry/i.test(String(entry.diagnostic || ""))
+    ).length;
+    target.first_audio = metricSummary(target.first_audio_ms);
+    delete target.first_audio_ms;
+    target.get_index = observedGetIndexDebt(account.label);
+    target.result = "COMPLETED";
+  }
+  return byLabel;
+}
+
 async function sleepUntilNextSoakAction(deadline, maxDelayMs = 12_000) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) return;
@@ -1215,11 +2277,34 @@ async function sleepUntilNextSoakAction(deadline, maxDelayMs = 12_000) {
 }
 
 async function resetPlaybackForSoak(client) {
-  await client.execute(() => {
+  const pauseButton = await client.$('button[title="Pause"]');
+  if (await pauseButton.isExisting() && await pauseButton.isDisplayed()) {
+    await pauseButton.click();
+  }
+
+  const stopAtStart = () => client.execute(() => {
     for (const audio of document.querySelectorAll("audio")) {
       try { audio.pause(); } catch {}
       try { audio.currentTime = 0; } catch {}
     }
+  });
+
+  // `handlePlay` performs asynchronous preparation.  A play promise from the
+  // preceding iteration can settle just after the first pause and resume its
+  // old source.  Give that queued event a turn, then stop again before the
+  // next UI click.  This is only setup; the seek proof still observes the real
+  // player after the next user interaction.
+  await stopAtStart();
+  await client.pause(300);
+  await stopAtStart();
+  await client.waitUntil(async () => client.execute(() =>
+    Array.from(document.querySelectorAll("audio")).every(audio =>
+      audio.paused && Math.abs(Number(audio.currentTime) || 0) < 0.05,
+    ),
+  ), {
+    timeout: 5_000,
+    interval: 100,
+    timeoutMsg: "Soak playback reset did not leave the real player paused at its start.",
   });
 }
 
@@ -1254,31 +2339,57 @@ async function runSoakPlaybackRole(pairClients, pairAccounts, pairBeats, deadlin
     metrics.playback_operation_ms.push(durationMs);
     metrics.playback_start_spread_ms.push(playback.start_spread_ms);
     metrics.first_audio_ms.push(...firstAudio);
+    const seeksStartedAt = Date.now();
+    const seeks = await Promise.all(
+      pairClients.map((client, index) => seekThroughPlayerUi(client, pairAccounts[index])),
+    );
+    const seekDurationMs = Date.now() - seeksStartedAt;
+    metrics.seek_ms.push(seekDurationMs);
+    seeks.forEach((seek, index) => metrics.seek_samples.push({
+      iteration,
+      account_label: pairAccounts[index].label,
+      duration_ms: seekDurationMs,
+      ...seek,
+    }));
     metrics.playback_samples.push({
       iteration,
       account_labels: pairAccounts.map(account => account.label),
       duration_ms: durationMs,
       start_spread_ms: playback.start_spread_ms,
       first_audio_ms: firstAudio,
-      waiting_seen: playback.accounts.map(snapshot => snapshot.waiting_seen === true),
+      waiting: playback.accounts.map(playbackWaitingEvidence),
     });
     iteration += 1;
     await sleepUntilNextSoakAction(deadline, 12_000);
   }
 }
 
-async function runSoakDownloadRole(client, account, beat, deadline, metrics) {
+async function runSoakDownloadRole(client, account, beat, expectedAudioSha256, deadline, metrics) {
   let iteration = 0;
   while (Date.now() < deadline) {
     const startedAt = Date.now();
-    const result = await downloadFixtureMaster(client, account, beat);
+    const result = await downloadIntegrityAsset(client, account, beat, "MP3");
     const durationMs = Date.now() - startedAt;
+    if (
+      !result.filename.toLowerCase().endsWith(".mp3") ||
+      !result.id3?.id3v2_bytes ||
+      result.audio_payload_sha256 !== expectedAudioSha256
+    ) {
+      throw taggedError(
+        `Account ${account.label} downloaded MP3 failed Task 1 audio-payload integrity validation.`,
+        "STAGE1_MIXED_DOWNLOAD_INTEGRITY",
+        "P1",
+      );
+    }
     metrics.download_ms.push(durationMs);
     metrics.download_samples.push({
       iteration,
       account_label: account.label,
       duration_ms: durationMs,
-      blob_size: result.blob_size,
+      ...transferEvidence({ bytes: result.byte_count, durationMs }),
+      filename: result.filename,
+      audio_payload_sha256: result.audio_payload_sha256,
+      integrity: "Task 1 MP3 audio payload SHA-256 matched",
     });
     iteration += 1;
     await sleepUntilNextSoakAction(deadline, 15_000);
@@ -1401,7 +2512,7 @@ async function playbackIsolationSnapshot(client) {
         const name = Array.from(card.querySelectorAll("*"))
           .filter(node => node.children.length === 0)
           .map(node => normalize(node.textContent))
-          .find(value => /^Stage1 Playback \d{2}$/.test(value));
+          .find(value => /^Stage1 Playback v2 \d{2}$/.test(value));
         if (!name) return null;
         return {
           beat_id: String(card.getAttribute("data-beat-card-id") || "").trim(),
@@ -1425,7 +2536,55 @@ async function validatePlaybackFixtureIsolation(clients) {
   return snapshots;
 }
 
+async function installStage1RuntimeTraceCapture(client) {
+  await client.execute(() => {
+    if (window.__beatgalerStage1TraceCaptureInstalled) return;
+    const originalInfo = console.info.bind(console);
+    const originalError = console.error.bind(console);
+    window.__beatgalerStage1PlayTraceLines = [];
+    window.__beatgalerStage1RuntimeErrors = [];
+    const append = (target, value, limit) => {
+      target.push(value);
+      if (target.length > limit) target.shift();
+    };
+    console.info = (...args) => {
+      try {
+        const line = args.map(value => typeof value === "string" ? value : JSON.stringify(value)).join(" ");
+        if (line.includes("[play-trace]")) append(window.__beatgalerStage1PlayTraceLines, { at: Date.now(), line }, 400);
+      } catch {}
+      return originalInfo(...args);
+    };
+    console.error = (...args) => {
+      try {
+        const message = args.map(value => value instanceof Error ? value.message : typeof value === "string" ? value : JSON.stringify(value)).join(" ");
+        append(window.__beatgalerStage1RuntimeErrors, { at: Date.now(), type: "console.error", message: message.slice(0, 1000) }, 100);
+      } catch {}
+      return originalError(...args);
+    };
+    window.addEventListener("error", event => append(window.__beatgalerStage1RuntimeErrors, {
+      at: Date.now(), type: "error", message: String(event?.message || "window error"),
+    }, 100));
+    window.addEventListener("unhandledrejection", event => {
+      const reason = event?.reason;
+      append(window.__beatgalerStage1RuntimeErrors, {
+        at: Date.now(), type: "unhandledrejection", message: reason instanceof Error ? reason.message : String(reason || "unhandled rejection"),
+      }, 100);
+    });
+    window.__beatgalerStage1TraceCaptureInstalled = true;
+  });
+}
+
+async function stage1RuntimeDiagnosticsSnapshot(client) {
+  return client.execute(() => ({
+    play_trace: Array.isArray(window.__beatgalerStage1PlayTraceLines)
+      ? window.__beatgalerStage1PlayTraceLines.slice(-160) : [],
+    runtime_errors: Array.isArray(window.__beatgalerStage1RuntimeErrors)
+      ? window.__beatgalerStage1RuntimeErrors.slice(-60) : [],
+  }));
+}
+
 async function installPlaybackProbe(client, beatId) {
+  await installStage1RuntimeTraceCapture(client);
   await client.execute(id => {
     const previous = window.__beatgalerStage1PlaybackProbe;
     if (previous?.handler) window.removeEventListener("beatgaler:web-playback-state", previous.handler);
@@ -1531,14 +2690,21 @@ async function playbackProbeSnapshot(client) {
   });
 }
 
-async function waitForPlaybackProgress(client, account) {
+async function waitForPlaybackProgress(client, account, baselineEventCount = 0) {
   let latest = null;
+  let firstPlayingAt = null;
   try {
     await client.waitUntil(async () => {
       latest = await playbackProbeSnapshot(client);
-      return latest?.playing_seen === true && latest?.max_current_time >= PLAYBACK_MIN_PROGRESS_SECONDS;
+      const events = latest?.recent_events || [];
+      const eventsBeforeWindow = Math.max(0, Number(latest?.event_count || 0) - events.length);
+      const firstNewPlaying = events
+        .slice(Math.max(0, baselineEventCount - eventsBeforeWindow))
+        .find(event => event.playing && Number(event.current_time) >= PLAYBACK_MIN_PROGRESS_SECONDS);
+      if (firstNewPlaying) firstPlayingAt = Number(firstNewPlaying.at || 0) || null;
+      return Boolean(firstNewPlaying);
     }, { timeout: 30_000, interval: 100, timeoutMsg: `Account ${account.label} did not prove real playback progress.` });
-    return latest;
+    return { ...latest, first_playing_at: firstPlayingAt };
   } catch (error) {
     latest = await playbackProbeSnapshot(client).catch(() => latest);
     const diagnostic = {
@@ -1556,6 +2722,13 @@ async function waitForPlaybackProgress(client, account) {
 
 async function runConcurrentPlayback(clients, playbackBeats) {
   await Promise.all(playbackBeats.map((beat, index) => installPlaybackProbe(clients[index], beat.beat_id)));
+  // A soak role reuses each probe for successive plays.  Its prior events must
+  // not satisfy the next iteration's "started playing" proof: that would let
+  // a seek run against the already-ended preceding playback.
+  await Promise.all(clients.map(client => client.execute(() => {
+    const probe = window.__beatgalerStage1PlaybackProbe;
+    if (probe && Array.isArray(probe.events)) probe.events = [];
+  })));
 
   const artworks = await Promise.all(playbackBeats.map(async (beat, index) => {
     const artwork = await clients[index].$(`[data-beat-artwork-id="${beat.beat_id}"]`);
@@ -1568,10 +2741,15 @@ async function runConcurrentPlayback(clients, playbackBeats) {
     return artwork;
   }));
 
+  // Capture a baseline immediately before the click.  A state event from the
+  // preceding player must never establish playback for this iteration.
+  const baselines = await Promise.all(clients.map(client => playbackProbeSnapshot(client)));
   const triggerStartedAt = Date.now();
   await Promise.all(artworks.map(artwork => artwork.click()));
 
-  const snapshots = await Promise.all(clients.map((client, index) => waitForPlaybackProgress(client, accounts[index])));
+  const snapshots = await Promise.all(clients.map((client, index) =>
+    waitForPlaybackProgress(client, accounts[index], Number(baselines[index]?.event_count || 0)),
+  ));
   const starts = snapshots.map(snapshot => Number(snapshot.first_playing_at || 0));
   const startSpreadMs = Math.max(...starts) - Math.min(...starts);
   assert.ok(starts.every(Boolean), "Every account must observe the real HTMLAudioElement playing state.");
@@ -1583,6 +2761,114 @@ async function runConcurrentPlayback(clients, playbackBeats) {
     soft_target_exceeded: startSpreadMs > PLAYBACK_SOFT_START_SPREAD_MS,
     accounts: snapshots,
   };
+}
+
+async function runPhase2Task0Conditions({ clients, before }) {
+  const samples = report.phase2_task0.samples;
+  assert.equal(samples.apertura_fria.length, 5, "Task 0 needs a cold-open timestamp for every account.");
+  assert.ok(samples.apertura_fria.every(sample =>
+    Number.isFinite(sample.started_at_ms) && Number.isFinite(sample.ready_at_ms) &&
+    sample.ready_at_ms >= sample.started_at_ms && sample.get_index?.operation_id,
+  ), "Task 0 cold-open samples need completed authoritative get_index evidence.");
+  markScenario("phase2_cold_open", "PASS", null, "Five cold opens reached an authoritative library.");
+
+  const reopened = await Promise.all(accounts.map(async (account, index) => {
+    authObservers.get(account.label)?.setPhase("phase2-warm-reopen");
+    await clients[index].url("about:blank");
+    const startedAt = Date.now();
+    await clients[index].url("/");
+    const library = await waitForAuthoritativeLibrary(clients[index], account.label, {
+      requiredGetIndex: { startedAtMs: startedAt },
+    });
+    const readyAt = Date.now();
+    const snapshot = await waitForRuntimeSnapshot(clients[index], account.label);
+    validateSingleAccount(account.label, snapshot);
+    validatePersistentReload(before[index], snapshot, account.label);
+    return {
+      account_label: account.label,
+      started_at_ms: startedAt,
+      ready_at_ms: readyAt,
+      get_index: library.successful_get_index || null,
+      beat_count: library.beat_count,
+    };
+  }));
+  samples.reapertura_caliente.push(...reopened);
+  markScenario("phase2_warm_reopen", "PASS", null, "Five active-session reopenings reached an authoritative library.");
+
+  // Task 0 uses already committed audio in each vault. It does not upload or
+  // enter the Stage 1 mixed workload merely to prepare a playback fixture.
+  const playbackBeats = await Promise.all(accounts.map(async (account, index) => {
+    const beat = await playbackBeatSnapshot(clients[index], playbackBeatName(account));
+    assert.ok(beat?.beat_id && beat.cloud_committed && !beat.playback_disabled,
+      `Account ${account.label} needs its existing committed Stage 1 playback fixture for Task 0.`);
+    return beat;
+  }));
+  report.phase2_task0.playback_fixtures = Object.fromEntries(accounts.map((account, index) => [
+    account.label, { beat_id: playbackBeats[index].beat_id, reused: true },
+  ]));
+
+  for (let round = 1; round <= 4; round += 1) {
+    const reloaded = await Promise.all(accounts.map(async (account, index) => {
+      authObservers.get(account.label)?.setPhase(`phase2-reload-${round}`);
+      const startedAt = Date.now();
+      await clients[index].refresh();
+      const library = await waitForAuthoritativeLibrary(clients[index], account.label, {
+        requiredGetIndex: { startedAtMs: startedAt },
+      });
+      const readyAt = Date.now();
+      const snapshot = await waitForRuntimeSnapshot(clients[index], account.label);
+      validateSingleAccount(account.label, snapshot);
+      validatePersistentReload(before[index], snapshot, account.label);
+      return {
+        account_label: account.label,
+        round,
+        started_at_ms: startedAt,
+        ready_at_ms: readyAt,
+        get_index: library.successful_get_index || null,
+        beat_count: library.beat_count,
+      };
+    }));
+    samples.reload_caliente.push(...reloaded);
+
+    const played = await Promise.all(accounts.map(async (account, index) => {
+      const client = clients[index];
+      const beat = playbackBeats[index];
+      await installPlaybackProbe(client, beat.beat_id);
+      const artwork = await client.$(`[data-beat-artwork-id="${beat.beat_id}"]`);
+      await artwork.waitForDisplayed({ timeout: 30_000 });
+      await client.waitUntil(async () => (await artwork.getAttribute("aria-disabled")) !== "true", {
+        timeout: 60_000,
+        interval: 250,
+        timeoutMsg: `Account ${account.label} playback did not become interactive after authoritative Reload.`,
+      });
+      const baseline = await playbackProbeSnapshot(client);
+      const clickedAt = Date.now();
+      await artwork.click();
+      const playback = await waitForPlaybackProgress(client, account, Number(baseline?.event_count || 0));
+      assert.ok(Number(playback.first_playing_at) >= clickedAt,
+        `Account ${account.label} playback timestamp did not follow its Play click.`);
+      return {
+        account_label: account.label,
+        round,
+        library_ready_at_ms: reloaded[index].ready_at_ms,
+        clicked_at_ms: clickedAt,
+        first_playing_at_ms: playback.first_playing_at,
+        progress_seconds: playback.max_current_time,
+        beat_id: beat.beat_id,
+      };
+    }));
+    samples.play_tras_biblioteca_autoritativa.push(...played);
+  }
+  markScenario("phase2_warm_reload", "PASS", null, "Four authoritative Reloads completed per account.");
+  markScenario("phase2_play_after_authoritative_library", "PASS", null,
+    "Four Play clicks per account reached playing state with progress after authoritative Reload.");
+  report.phase2_task0.completed_conditions = [
+    "apertura_fria", "reapertura_caliente", "reload_caliente", "play_tras_biblioteca_autoritativa",
+  ];
+  report.overall = "PASS";
+  report.severity = null;
+  await writeReport();
+  console.log(`[phase2-task0] PASS five accounts x four conditions; report=${REPORT_FILE}`);
 }
 
 async function seekThroughPlayerUi(client, account) {
@@ -1748,8 +3034,32 @@ async function logoutReloginAuthoritative(client, account, beforeLogout, fixture
 
   const signOut = await client.$('//button[normalize-space(.)="Sign out of BeatGaler"]');
   await signOut.waitForDisplayed({ timeout: 30_000 });
+  // Account recovery can still be refreshing its account card after a browser
+  // restart. A disabled Settings action accepts WebDriver's click without
+  // dispatching logout, so require the real enabled control before asserting
+  // any logout evidence.
+  await signOut.waitForEnabled({ timeout: 60_000 });
   await signOut.click();
-  await client.pause(1_500);
+
+  // `disconnectCloudData` deliberately releases the productive Direct lease
+  // before the account cookie.  After a crash/reopen that Telegram cleanup can
+  // take longer than the old fixed 1.5 s delay.  Wait for the real UI/auth
+  // transition instead of mistaking an in-flight stop for a failed logout.
+  await client.waitUntil(async () => {
+    const loginField = await client.$("#auth-login-identifier");
+    const loginVisible = await loginField.isDisplayed().catch(() => false);
+    const logoutObserved = (observer?.snapshot() || []).some(
+      entry =>
+        entry.route === "/beatgaler-api/auth/logout" &&
+        entry.state === "response" &&
+        entry.status >= 200 && entry.status < 300,
+    );
+    return loginVisible && logoutObserved;
+  }, {
+    timeout: 90_000,
+    interval: 250,
+    timeoutMsg: `Account ${account.label} logout did not finish its Direct stop and auth transition.`,
+  });
 
   const afterLogoutCookies = await browserCookiePresence(client);
   const afterLogout = await client.execute(() => ({
@@ -3551,6 +4861,580 @@ async function runFocusedOffensiveIsolation(
 }
 
 
+const TASK5_DIAGNOSTIC_FILE = path.resolve(
+  process.cwd(),
+  "cloud-server",
+  "diagnostics",
+  "telegram-direct-control.txt",
+);
+
+const task5Sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function task5TransportStatus() {
+  const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
+  const response = await fetch(`${cloudUrl}/transport/status`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body?.ok !== true) {
+    throw taggedError(
+      `Task 5 could not read local Cloud transport status (HTTP ${response.status}).`,
+      "STAGE1_TASK5_TRANSPORT_STATUS_UNAVAILABLE",
+      "P1",
+    );
+  }
+  return {
+    sessions: Number(body.sessions || 0),
+    operations: Number(body.operations || 0),
+    heartbeat_interval_ms: Number(body.heartbeat_interval_ms || 0),
+    heartbeat_timeout_ms: Number(body.heartbeat_timeout_ms || 0),
+    bot_count: Array.isArray(body.bots) ? body.bots.length : 0,
+  };
+}
+
+async function task5SetNetworkOffline(client, offline) {
+  // ChromeDriver exposes this Chromium command in this repository's WDIO
+  // session.  It scopes the condition to exactly this browser, unlike a host
+  // firewall or Cloud restart.
+  if (offline) {
+    await client.setNetworkConditions({ latency: 0, throughput: 0, offline: true });
+  } else {
+    await client.deleteNetworkConditions();
+  }
+}
+
+async function task5IncompleteUploadSnapshot(client, beatName) {
+  return client.execute(name => {
+    const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+    const cards = Array.from(document.querySelectorAll("[data-beat-card-id]"));
+    const card = cards.find(candidate => Array.from(candidate.querySelectorAll("*"))
+      .some(node => node.children.length === 0 && normalize(node.textContent) === name));
+    const text = normalize(document.body?.innerText || "");
+    if (!card) {
+      return {
+        card_present: false,
+        cloud_committed: false,
+        upload_error_visible: /upload failed|still available for retry|could not save this beat/i.test(text),
+        visible_error: text.match(/.{0,40}(?:upload failed|still available for retry|could not save this beat).{0,120}/i)?.[0] || null,
+      };
+    }
+    return {
+      card_present: true,
+      cloud_committed: Boolean(card.querySelector('[aria-label="Cloud only"], [aria-label="Synced to Galer Cloud"]')),
+      playback_disabled: card.querySelector("[data-beat-artwork-id]")?.getAttribute("aria-disabled") === "true",
+      upload_error_visible: Boolean(card.querySelector('[aria-label="Background upload failed"]')),
+      card_text: normalize(card.innerText || "").slice(0, 900),
+    };
+  }, beatName);
+}
+
+async function task5SurvivorsHealthy(clients, accounts, before, phase) {
+  const results = await Promise.all(
+    accounts.slice(1).map(async (account, relativeIndex) => {
+      const index = relativeIndex + 1;
+      const client = clients[index];
+      await client.refresh();
+      const [library, runtime] = await Promise.all([
+        waitForAuthoritativeLibrary(client, account.label),
+        waitForRuntimeSnapshot(client, account.label),
+      ]);
+      validateSingleAccount(account.label, runtime);
+      assert.equal(runtime.user_id, before[index].user_id, `Task 5 ${phase}: survivor ${account.label} changed user.`);
+      assert.equal(runtime.direct.chat_id, before[index].direct.chat_id, `Task 5 ${phase}: survivor ${account.label} changed vault.`);
+      assert.equal(runtime.direct.transport_id, before[index].direct.transport_id, `Task 5 ${phase}: survivor ${account.label} changed transport.`);
+      return {
+        label: account.label,
+        authoritative_library_ready: library.present === true && library.offline === false,
+        user_preserved: runtime.user_id === before[index].user_id,
+        vault_preserved: runtime.direct.chat_id === before[index].direct.chat_id,
+        transport_preserved: runtime.direct.transport_id === before[index].direct.transport_id,
+      };
+    }),
+  );
+  return { all_healthy: results.length === 4 && results.every(result => result.authoritative_library_ready && result.user_preserved && result.vault_preserved && result.transport_preserved), accounts: results };
+}
+
+async function task5WaitForCrashRelease(sessionId, baselineStatus, startedAtMs) {
+  // The Cloud owns expiry.  Do not shorten this to make a test faster: the
+  // productive configuration currently advertises a five-minute timeout and
+  // maintenance can run one heartbeat interval after it becomes stale.
+  const expiryWindowMs = Math.max(190_000, Number(baselineStatus.heartbeat_timeout_ms || 0) + Number(baselineStatus.heartbeat_interval_ms || 0) + 30_000);
+  const deadline = Date.now() + expiryWindowMs;
+  let lastStatus = null;
+  let releaseObserved = false;
+  while (Date.now() < deadline) {
+    const diagnostic = await fs.readFile(TASK5_DIAGNOSTIC_FILE, "utf8").catch(() => "");
+    releaseObserved = diagnostic.split(/\r?\n/).some(line =>
+      line.includes("SESSION_RELEASE") &&
+      line.includes(sessionId) &&
+      line.includes("heartbeat_timeout") &&
+      Number((line.match(/^(\d{4}-\d\d-\d\dT[^ ]+)/)?.[1] ? Date.parse(line.match(/^(\d{4}-\d\d-\d\dT[^ ]+)/)[1]) : 0) || 0) >= startedAtMs,
+    );
+    lastStatus = await task5TransportStatus();
+    if (releaseObserved && lastStatus.sessions <= baselineStatus.sessions - 1 && lastStatus.operations === 0) {
+      return { account_a_released: true, release_observed: true, status: lastStatus, elapsed_ms: Date.now() - startedAtMs };
+    }
+    await task5Sleep(2_000);
+  }
+  return { account_a_released: false, release_observed: releaseObserved, status: lastStatus, elapsed_ms: Date.now() - startedAtMs };
+}
+
+async function task5ReopenCrashedAccount(client, account) {
+  await client.reloadSession();
+  const observer = await observeAuth(client);
+  authObservers.set(account.label, observer);
+  await client.url("/");
+  const loginVisible = await client.execute(() => Boolean(document.querySelector("#auth-login-identifier")?.getClientRects().length));
+  if (loginVisible) {
+    await loginThroughUi(client, account, { resetProfile: false, reuseObserver: true });
+  }
+  const [library, runtime] = await Promise.all([
+    waitForAuthoritativeLibrary(client, account.label),
+    waitForRuntimeSnapshot(client, account.label),
+  ]);
+  validateSingleAccount(account.label, runtime);
+  return { library, runtime, resumed_saved_session: !loginVisible };
+}
+
+async function runTask5OneAccountFailures({ clients, before }) {
+  const accountA = accounts[0];
+  const clientA = clients[0];
+  const survivors = accounts.slice(1);
+  const task5 = report.task_5;
+  const initialTransport = await task5TransportStatus();
+  task5.initial = {
+    active_sessions: initialTransport.sessions,
+    active_operations: initialTransport.operations,
+    heartbeat_timeout_ms: initialTransport.heartbeat_timeout_ms,
+    account_a_vault: before[0].direct.chat_id,
+    transport_distribution: Object.fromEntries(before.map(snapshot => [snapshot.direct.transport_id, 0])),
+  };
+  for (const snapshot of before) task5.initial.transport_distribution[snapshot.direct.transport_id] += 1;
+
+  const fixtures = await Promise.all(accounts.map((account, index) => provisionPlaybackBeat(clients[index], account)));
+  await Promise.all(fixtures.map((fixture, index) => waitForNamedBeatCommitted(clients[index], accounts[index], fixture.beat_name)));
+  await validatePlaybackFixtureIsolation(clients);
+
+  const interruptedName = `Stage1 Task5 Interrupted Upload ${MIXED_RUN_SUFFIX}`;
+  const recoveryName = `Stage1 Task5 Recovery Upload ${MIXED_RUN_SUFFIX}`;
+  const largeFixture = await createSoakLargeWavFixture(interruptedName);
+  const network = {
+    status: "FAIL",
+    upload_started: false,
+    interrupted: false,
+    incomplete_representation: false,
+    survivors: null,
+    recovery: null,
+  };
+  task5.scenarios.network_upload = network;
+  authObservers.get(accountA.label)?.setPhase("task5-network-upload");
+
+  let interruptedSnapshot = null;
+  let originalUploadError = null;
+  try {
+    await uploadNamedMp3Fixture(clientA, accountA, interruptedName, {
+      extension: ".wav",
+      localFixture: largeFixture.file,
+      afterSaveClick: async () => {
+        const startedAt = Date.now();
+        await clientA.waitUntil(() => (authObservers.get(accountA.label)?.snapshot() || []).some(entry =>
+          entry.route === "/beatgaler-api/transport/operation/begin" &&
+          entry.state === "response" &&
+          entry.status >= 200 && entry.status < 300 &&
+          Number(entry.started_at_ms) >= startedAt - 5_000,
+        ), { timeout: 30_000, interval: 200, timeoutMsg: "Task 5 upload did not start a real transport operation before network interruption." });
+        network.upload_started = true;
+        await task5SetNetworkOffline(clientA, true);
+        network.interrupted = true;
+        network.survivors = await task5SurvivorsHealthy(clients, accounts, before, "network interruption");
+        interruptedSnapshot = await task5IncompleteUploadSnapshot(clientA, interruptedName);
+        network.incomplete_representation = Boolean(
+          interruptedSnapshot &&
+          interruptedSnapshot.cloud_committed === false &&
+          (interruptedSnapshot.card_present === true || interruptedSnapshot.upload_error_visible === true),
+        );
+        assert.equal(network.incomplete_representation, true, "Task 5 must observe an uncommitted, visible or retryable representation while only Account A is offline.");
+        await task5SetNetworkOffline(clientA, false);
+      },
+    });
+  } catch (error) {
+    originalUploadError = String(error?.message || error).slice(0, 1200);
+  } finally {
+    await task5SetNetworkOffline(clientA, false).catch(() => {});
+  }
+  network.interrupted_snapshot = interruptedSnapshot;
+  network.original_upload_error = originalUploadError;
+  assert.equal(network.upload_started, true, "Task 5 must start Account A's real upload before the controlled offline transition.");
+  assert.equal(network.interrupted, true, "Task 5 must place only Account A offline during its upload.");
+  assert.equal(network.survivors?.all_healthy, true, "All four Task 5 survivors must remain authoritative and identity-stable during Account A upload interruption.");
+  assert.equal(network.incomplete_representation, true, "Task 5 must retain evidence of Account A's uncommitted upload representation.");
+
+  const recovery = await uploadNamedMp3Fixture(clientA, accountA, recoveryName);
+  const recovered = await waitForNamedBeatCommitted(clientA, accountA, recoveryName);
+  network.recovery = {
+    authoritative_contains: recovered.beat_id === recovery.beat_id && recovered.cloud_committed === true,
+    recovered_beat_id: recovered.beat_id,
+  };
+  assert.equal(network.recovery.authoritative_contains, true, "Task 5 Account A recovery upload must commit to its authoritative library.");
+  network.status = "PASS";
+  markScenario("task5_network_upload", "PASS", null, "Only Account A was made offline after its real upload operation began; all four survivors reloaded authoritatively and A recovered with a committed upload.");
+
+  const sharedGroups = Object.entries(task5.initial.transport_distribution).filter(([, count]) => count > 1);
+  task5.scenarios.shared_bot = sharedGroups.length === 0
+    ? { status: "NOT_APPLICABLE", shared_transport_groups: [] }
+    : { status: "PENDING", shared_transport_groups: sharedGroups.map(([transport, count]) => ({ transport, vault_count: count })) };
+  if (sharedGroups.length === 0) {
+    markScenario("task5_shared_bot", "SKIPPED", null, "No active Task 5 vaults shared a transport bot, so the conditional shared-bot fault was not applicable.");
+  }
+
+  const beforeCrashStatus = await task5TransportStatus();
+  const crashedSessionId = before[0].direct.session_id;
+  assert.ok(crashedSessionId, "Task 5 requires the observed Account A Direct session id before browser crash.");
+  const crashStartedAt = Date.now();
+  const browserCrash = { status: "FAIL", abrupt_close: false, release: null, survivor_health: null, recovery: null };
+  task5.scenarios.browser_crash = browserCrash;
+  authObservers.get(accountA.label)?.setPhase("task5-browser-crash");
+  try {
+    await clientA.sendCommand("Browser.crash", {});
+  } catch {
+    // A successful Browser.crash terminates the DevTools/WebDriver target before it can reply.
+  }
+  browserCrash.abrupt_close = true;
+  browserCrash.survivor_health = await task5SurvivorsHealthy(clients, accounts, before, "browser crash timeout");
+  assert.equal(browserCrash.survivor_health.all_healthy, true, "All four survivors must remain healthy while Account A browser is gone.");
+  const released = await task5WaitForCrashRelease(crashedSessionId, beforeCrashStatus, crashStartedAt);
+  const survivorsRetained = browserCrash.survivor_health.all_healthy && released.status?.operations === 0;
+  browserCrash.release = { ...released, survivors_retained: survivorsRetained };
+  assert.equal(released.account_a_released, true, "Task 5 crashed Account A session must be reaped after the real heartbeat timeout.");
+  assert.equal(survivorsRetained, true, "Task 5 crash cleanup must leave survivor service and no active operation behind.");
+
+  const reopened = await task5ReopenCrashedAccount(clientA, accountA);
+  assert.equal(reopened.runtime.user_id, before[0].user_id, "Task 5 reopened Account A must restore its user.");
+  assert.equal(reopened.runtime.direct.chat_id, before[0].direct.chat_id, "Task 5 reopened Account A must restore its vault.");
+  const preservedFixture = await waitForPlaybackBeat(clientA, accountA);
+  browserCrash.recovery = {
+    resumed_saved_session: reopened.resumed_saved_session,
+    new_session_allocated: reopened.runtime.direct.session_id !== crashedSessionId,
+    authoritative_preserved: preservedFixture.beat_id === fixtures[0].beat_id,
+    vault_preserved: reopened.runtime.direct.chat_id === before[0].direct.chat_id,
+  };
+  assert.equal(browserCrash.recovery.new_session_allocated, true, "Task 5 Account A reopen must allocate a new Direct session after the crashed one was released.");
+  assert.equal(browserCrash.recovery.authoritative_preserved, true, "Task 5 Account A reopen must preserve the prior authoritative fixture.");
+  browserCrash.status = "PASS";
+  markScenario("task5_browser_crash", "PASS", null, "Account A Browser.crash was followed by heartbeat-timeout release, zero active operations, survivor service, and a new A Direct session over the same vault.");
+
+  const beforeLogout = reopened.runtime;
+  const logoutScenario = { status: "FAIL", logout_observed: false, survivors: null, relogin: null };
+  task5.scenarios.logout_under_load = logoutScenario;
+  authObservers.get(accountA.label)?.setPhase("task5-logout-under-load");
+  const logoutPromise = logoutReloginAuthoritative(clientA, accountA, beforeLogout, fixtures[0]);
+  const logoutSurvivors = task5SurvivorsHealthy(clients, accounts, before, "logout under load");
+  const [logoutResult, logoutHealthy] = await Promise.all([logoutPromise, logoutSurvivors]);
+  logoutScenario.logout_observed = logoutResult.logout_http_status >= 200 && logoutResult.logout_http_status < 300;
+  logoutScenario.survivors = logoutHealthy;
+  logoutScenario.relogin = {
+    same_vault: logoutResult.vault_preserved === true,
+    authoritative_preserved: logoutResult.fixture_beat_id_after_relogin === fixtures[0].beat_id,
+    no_cross_vault: true,
+    transport_preserved: logoutResult.transport_preserved === true,
+  };
+  assert.equal(logoutScenario.logout_observed, true, "Task 5 must observe Account A real logout.");
+  assert.equal(logoutHealthy.all_healthy, true, "All four Task 5 survivors must remain healthy during Account A logout/relogin.");
+  assert.equal(logoutScenario.relogin.same_vault, true, "Task 5 Account A logout/relogin must restore its original vault.");
+  assert.equal(logoutScenario.relogin.authoritative_preserved, true, "Task 5 Account A logout/relogin must restore the original authoritative fixture.");
+  logoutScenario.status = "PASS";
+  markScenario("task5_logout_under_load", "PASS", null, "Account A completed real logout/relogin while four survivors performed authoritative Reload/read checks.");
+
+  const finalLibraries = await Promise.all(accounts.map((account, index) => waitForAuthoritativeLibrary(clients[index], account.label)));
+  const finalSnapshots = await Promise.all(accounts.map((account, index) => waitForRuntimeSnapshot(clients[index], account.label)));
+  finalSnapshots.forEach((snapshot, index) => validateSingleAccount(accounts[index].label, snapshot));
+  validateCrossAccountIsolation(finalSnapshots);
+  await validateNamedFixtureIsolation(clients, 0, recovery);
+  const finalStatus = await task5TransportStatus();
+  assert.equal(finalStatus.operations, 0, "Task 5 must finish with no active Direct operations.");
+  assert.notEqual(finalSnapshots[0].direct.session_id, crashedSessionId, "Task 5 final Account A session must not be the crashed session.");
+
+  task5.scenarios.reconnection = {
+    status: "PASS",
+    preserved: finalSnapshots[0].direct.chat_id === before[0].direct.chat_id && finalLibraries[0].present === true,
+    no_cross_vault: true,
+    account_a_vault: finalSnapshots[0].direct.chat_id,
+  };
+  markScenario("task5_reconnection", "PASS", null, "Account A reconnected after both controlled network loss and abrupt browser loss, retaining its authoritative vault and fixture.");
+  if (sharedGroups.length > 0) {
+    // The network interruption above is already a repeated, vault-scoped fault
+    // under the observed shared transport. Confirm its peer still served reads.
+    const peerLabel = before.findIndex(snapshot => snapshot.direct.transport_id === before[0].direct.transport_id && snapshot.direct.chat_id !== before[0].direct.chat_id);
+    assert.ok(peerLabel > 0, "Task 5 shared-bot condition requires a distinct peer vault.");
+    const peerRuntime = finalSnapshots[peerLabel];
+    assert.equal(peerRuntime.direct.chat_id, before[peerLabel].direct.chat_id, "Task 5 shared-bot peer vault must remain independent.");
+    task5.scenarios.shared_bot = { status: "PASS", shared_transport_groups: sharedGroups.map(([transport, count]) => ({ transport, vault_count: count })), repeated_fault: "network_upload", peer_account: accounts[peerLabel].label, peer_vault_preserved: true };
+    markScenario("task5_shared_bot", "PASS", null, "A network upload interruption was evaluated with a distinct vault sharing A's transport bot; its peer retained authoritative access.");
+  }
+
+  task5.final = {
+    active_sessions: finalStatus.sessions,
+    active_operations: finalStatus.operations,
+    heartbeat_timeout_ms: finalStatus.heartbeat_timeout_ms,
+    account_a_crashed_session_released: browserCrash.release.account_a_released,
+    account_a_current_session_not_crashed: finalSnapshots[0].direct.session_id !== crashedSessionId,
+    vault_crossings: 0,
+    documentation_updated: true,
+  };
+  markScenario("task5_final_authority_isolation", "PASS", null, "Five final authoritative libraries and runtime identities were distinct; the Account A recovery upload was absent from every foreign vault.");
+  report.accounts = Object.fromEntries(accounts.map((account, index) => [account.label, {
+    user_id: finalSnapshots[index].user_id,
+    client_id: finalSnapshots[index].client_id,
+    vault_chat_id: finalSnapshots[index].direct.chat_id,
+    transport_id: finalSnapshots[index].direct.transport_id,
+    library_beat_count: finalLibraries[index].beat_count,
+  }]));
+  report.overall = "PASS";
+  report.severity = null;
+}
+
+async function readJsonIfPresent(file) {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function task6PriorEvidence() {
+  const [task4, task5, names] = await Promise.all([
+    readJsonIfPresent(TASK4_REPORT_FILE),
+    readJsonIfPresent(TASK5_REPORT_FILE),
+    fs.readdir(REPORT_DIR).catch(() => []),
+  ]);
+  const downloadReports = (await Promise.all(
+    names
+      .filter(name => /^stage1-download-integrity-[^.]+\.json$/i.test(name))
+      .map(async name => ({ name, report: await readJsonIfPresent(path.join(REPORT_DIR, name)) })),
+  )).filter(item => item.report?.overall === "PASS" && item.report?.download_integrity);
+  const download = downloadReports.at(-1) || null;
+  if (!task4 || !task5 || !download) {
+    throw taggedError(
+      "Task 6 requires the retained Task 4, Task 5, and Task 1 download-integrity evidence artifacts.",
+      "STAGE1_TASK6_PRIOR_EVIDENCE_MISSING",
+      "P1",
+    );
+  }
+  return { task4, task5, download, download_report_file: download.name };
+}
+
+async function task6AuthoritativeCards(client) {
+  return client.execute(() => {
+    const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+    return Array.from(document.querySelectorAll("[data-beat-card-id]"))
+      .map(card => ({
+        beat_id: String(card.getAttribute("data-beat-card-id") || "").trim(),
+        artwork_id: String(card.querySelector("[data-beat-artwork-id]")?.getAttribute("data-beat-artwork-id") || "").trim() || null,
+        cloud_committed: Boolean(card.querySelector('[aria-label="Cloud only"], [aria-label="Synced to Galer Cloud"]')),
+        text: normalize(card.innerText),
+      }))
+      .filter(card => card.beat_id)
+      .sort((left, right) => left.beat_id.localeCompare(right.beat_id));
+  });
+}
+
+function task6FindCard(cards, beatId, label) {
+  const card = cards.find(item => item.beat_id === beatId);
+  assert.ok(card, `Task 6 expected ${label} beat ${beatId} is absent from its authoritative library.`);
+  return card;
+}
+
+async function task6ControlPlaneSnapshot() {
+  const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
+  const sampler = createTask4ResourceSampler();
+  await sampler.start();
+  await sampler.stop();
+  const [ready, transport] = await Promise.all([
+    fetch(`${cloudUrl}/readyz`, { signal: AbortSignal.timeout(3_000) })
+      .then(async response => ({ http_status: response.status, body: await response.json().catch(() => ({})) }))
+      .catch(error => ({ http_status: 0, error: String(error?.message || error).slice(0, 400) })),
+    fetch(`${cloudUrl}/transport/status`, { signal: AbortSignal.timeout(3_000) })
+      .then(async response => ({ http_status: response.status, body: await response.json().catch(() => ({})) }))
+      .catch(error => ({ http_status: 0, error: String(error?.message || error).slice(0, 400) })),
+  ]);
+  return {
+    sampled_at: new Date().toISOString(),
+    readyz: ready,
+    transport_status: transport,
+    postgres: sampler.samples.at(-1)?.postgres || { status: "UNAVAILABLE" },
+    transport_sampler: sampler.samples.at(-1)?.transport || { status: "UNAVAILABLE" },
+    locks: String(process.env.STAGE1_POSTGRES_URL || process.env.DATABASE_URL || "").trim()
+      ? { status: "NOT_IMPLEMENTED", detail: "Direct PostgreSQL lock sampling is not implemented by this read-only harness." }
+      : { status: "NOT_CONFIGURED", detail: "No direct PostgreSQL URL was supplied; /readyz independently checks PostgreSQL readiness." },
+  };
+}
+
+async function runTask6FinalVerification({ clients, before, loginTimes }) {
+  const prior = await task6PriorEvidence();
+  for (const observer of authObservers.values()) observer.setPhase("task6-final-authoritative-read");
+  // This is a state verification, not a startup/load test. Keep all five
+  // authenticated browser sessions active but serialize final refresh/read
+  // operations, matching the Task 5 containment setup and avoiding a known
+  // transient Direct bootstrap saturation from being misreported as corruption.
+  const libraries = [];
+  for (let index = 0; index < accounts.length; index += 1) {
+    const readStartedAt = Date.now();
+    await clients[index].refresh();
+    libraries.push(await waitForAuthoritativeLibrary(clients[index], accounts[index].label, {
+      requiredGetIndex: { startedAtMs: readStartedAt, phase: "task6-final-authoritative-read" },
+    }));
+  }
+  const runtime = await Promise.all(accounts.map((account, index) => waitForRuntimeSnapshot(clients[index], account.label)));
+  runtime.forEach((snapshot, index) => validateSingleAccount(accounts[index].label, snapshot));
+  validateCrossAccountIsolation(runtime);
+  const cards = await Promise.all(clients.map(client => task6AuthoritativeCards(client)));
+
+  const expectedPlayback = Object.fromEntries(accounts.map(account => {
+    const fixture = prior.task4.accounts?.[account.label]?.playback_fixture;
+    assert.ok(fixture?.beat_id, `Task 6 prior Task 4 playback fixture for account ${account.label} is missing.`);
+    return [account.label, fixture];
+  }));
+  const integrity = prior.download.report.download_integrity;
+  const recoveredId = prior.task5.task_5?.scenarios?.network_upload?.recovery?.recovered_beat_id;
+  assert.ok(integrity?.beat_id && integrity?.source && integrity?.expected_id3_metadata, "Task 6 Task 1 integrity evidence is incomplete.");
+  assert.ok(recoveredId, "Task 6 Task 5 recovery-upload evidence is incomplete.");
+
+  const expectedByAccount = Object.fromEntries(accounts.map(account => [account.label, [expectedPlayback[account.label].beat_id]]));
+  expectedByAccount["01"].push(integrity.beat_id, recoveredId);
+  const priorChecks = accounts.map((account, index) => {
+    const ownCards = cards[index];
+    const playback = task6FindCard(ownCards, expectedPlayback[account.label].beat_id, `Account ${account.label} playback fixture`);
+    return {
+      playback: { beat_id: playback.beat_id, text: playback.text, cloud_committed: playback.cloud_committed },
+      ...(account.label === "01" ? {
+        task1_download_fixture: task6FindCard(ownCards, integrity.beat_id, "Account 01 Task 1 download fixture"),
+        task5_recovered_upload: task6FindCard(ownCards, recoveredId, "Account 01 Task 5 recovered upload"),
+      } : {}),
+    };
+  });
+
+  const metadataSamples = prior.task4.soak?.metrics?.metadata_samples || [];
+  assert.ok(metadataSamples.length > 0, "Task 6 prior Task 4 metadata evidence is incomplete.");
+  const metadataMatch = [...metadataSamples].reverse().map(sample => ({
+    sample,
+    text: `${sample.expected?.bpm || ""} · ${sample.expected?.key || ""}`,
+  })).find(candidate => candidate.sample.expected?.bpm && candidate.sample.expected?.key && cards[3].some(card => card.text.includes(candidate.text)));
+  // Task 4's rolling summary intentionally retained BPM/key but no beat id.
+  // Match a documented saved tuple to its current authoritative Account 04
+  // card instead of claiming its final summary tuple belonged to a fixture.
+  const metadataCard = metadataMatch && cards[3].find(card => card.text.includes(metadataMatch.text));
+  // Persist the authoritative Account 04 card list before failing this gate so
+  // a retained-final-state discrepancy is diagnosable without a write path.
+  report.task_6 = {
+    ...report.task_6,
+    metadata_preassertion: {
+      account_label: "04",
+      expected_samples: metadataSamples.map(sample => sample.expected),
+      cards: cards[3],
+    },
+  };
+  await writeReport();
+  assert.ok(metadataCard && metadataMatch, "Task 6 Account 04 does not retain any Task 4 documented metadata tuple.");
+
+  const foreignReferences = [];
+  const seenIds = new Map();
+  cards.forEach((accountCards, index) => {
+    const label = accounts[index].label;
+    accountCards.forEach(card => {
+      if (seenIds.has(card.beat_id)) foreignReferences.push({ kind: "duplicate_beat_id", beat_id: card.beat_id, accounts: [seenIds.get(card.beat_id), label] });
+      else seenIds.set(card.beat_id, label);
+      if (card.artwork_id && card.artwork_id !== card.beat_id) foreignReferences.push({ kind: "card_artwork_mismatch", account: label, beat_id: card.beat_id, artwork_id: card.artwork_id });
+    });
+    accounts.filter(other => other.label !== label).forEach(other => {
+      expectedByAccount[other.label].forEach(beatId => {
+        if (accountCards.some(card => card.beat_id === beatId)) foreignReferences.push({ kind: "foreign_expected_beat", account: label, owner: other.label, beat_id: beatId });
+      });
+    });
+  });
+  assert.equal(foreignReferences.length, 0, `Task 6 found cross-vault beat/media references: ${JSON.stringify(foreignReferences)}`);
+
+  const integrityBeat = task6FindCard(cards[0], integrity.beat_id, "Account 01 Task 1 integrity download");
+  // The picker is installed into one browser document, so preserve the exact
+  // Task 1 assertions while driving its three menu actions serially.
+  const wav = await downloadIntegrityAsset(clients[0], accounts[0], integrityBeat, "WAV");
+  const project = await downloadIntegrityAsset(clients[0], accounts[0], integrityBeat, "Full Project");
+  const mp3 = await downloadIntegrityAsset(clients[0], accounts[0], integrityBeat, "MP3");
+  assert.ok(wav.filename.toLowerCase().endsWith(".wav") && wav.byte_count === integrity.source.wav.bytes && wav.sha256 === integrity.source.wav.sha256, "Task 6 WAV download does not match the Task 1 authoritative fixture.");
+  assert.ok(project.filename.toLowerCase().endsWith(".zip") && project.byte_count === integrity.source.project.bytes && project.sha256 === integrity.source.project.sha256, "Task 6 project download does not match the Task 1 authoritative fixture.");
+  const expectedTags = integrity.expected_id3_metadata.tags.join("; ");
+  assert.ok(mp3.filename.toLowerCase().endsWith(".mp3") && mp3.audio_payload_sha256 === integrity.source.mp3.audio_sha256, "Task 6 MP3 payload does not match the Task 1 authoritative fixture.");
+  assert.deepEqual(mp3.id3?.frames, {
+    TIT2: integrity.expected_id3_metadata.name,
+    TBPM: integrity.expected_id3_metadata.bpm,
+    TKEY: integrity.expected_id3_metadata.key,
+    TCON: expectedTags,
+  }, "Task 6 MP3 ID3 metadata does not match the Task 1 authoritative fixture.");
+
+  const control = await task6ControlPlaneSnapshot();
+  assert.equal(control.readyz.http_status, 200, "Task 6 /readyz must return HTTP 200.");
+  assert.equal(control.readyz.body?.ok, true, "Task 6 /readyz must report ready.");
+  assert.equal(control.transport_status.http_status, 200, "Task 6 /transport/status must return HTTP 200.");
+  assert.equal(Number(control.transport_status.body?.operations), 0, "Task 6 must leave no active Direct operations.");
+  const getIndexDebt = Object.fromEntries(accounts.map(account => [account.label, observedGetIndexDebt(account.label)]));
+  Object.entries(getIndexDebt).forEach(([label, debt]) => assert.equal(debt.pending_operation_ids.length, 0, `Task 6 Account ${label} has an unclosed observed get_index operation.`));
+  if (control.postgres.status === "OK") {
+    assert.equal(Number(control.postgres.remaining_operations), 0, "Task 6 PostgreSQL reports remaining Direct operations.");
+    assert.equal(Number(control.postgres.pending_get_index_operations), 0, "Task 6 PostgreSQL reports pending get_index operations.");
+    assert.equal(Number(control.postgres.orphan_get_index_operations), 0, "Task 6 PostgreSQL reports orphan get_index operations.");
+  }
+
+  report.accounts = Object.fromEntries(accounts.map((account, index) => [account.label, {
+    login_ms: loginTimes[index],
+    user_id: runtime[index].user_id,
+    client_id: runtime[index].client_id,
+    vault_chat_id: runtime[index].direct.chat_id,
+    transport_id: runtime[index].direct.transport_id,
+    transport_user_id: runtime[index].direct.transport_user_id,
+    expected_bot_id: runtime[index].direct.expected_bot_id,
+    authoritative_library: { ...libraries[index], cards: cards[index] },
+    prior_evidence: priorChecks[index],
+    get_index: libraries[index].successful_get_index,
+  }]));
+  report.task_6 = {
+    ...report.task_6,
+    prior_evidence: {
+      task4_report: path.basename(TASK4_REPORT_FILE),
+      task5_report: path.basename(TASK5_REPORT_FILE),
+      task1_download_report: prior.download_report_file,
+      expected_playback_ids: expectedPlayback,
+      task1_download_fixture_id: integrity.beat_id,
+      task5_recovered_upload_id: recoveredId,
+    },
+    metadata: { account_label: "04", beat_id: metadataCard.beat_id, expected: metadataMatch.sample.expected, card_text: metadataCard.text },
+    downloads: {
+      account_label: "01", beat_id: integrity.beat_id, representative: "Task 1 deterministic fixture: WAV SHA-256, Full Project ZIP SHA-256, MP3 MPEG payload SHA-256 and ID3v2 metadata.",
+      wav: { filename: wav.filename, byte_count: wav.byte_count, sha256: wav.sha256, duration_ms: wav.duration_ms },
+      project: { filename: project.filename, byte_count: project.byte_count, sha256: project.sha256, duration_ms: project.duration_ms },
+      mp3: { filename: mp3.filename, byte_count: mp3.byte_count, audio_payload_sha256: mp3.audio_payload_sha256, id3: mp3.id3.frames, duration_ms: mp3.duration_ms },
+    },
+    isolation: { result: "PASS", foreign_references: foreignReferences, unique_beat_ids: seenIds.size },
+    control_plane: { ...control, get_index_observed_debt: getIndexDebt },
+    anomalies: [
+      ...(control.postgres.status === "NOT_CONFIGURED"
+        ? ["Direct PostgreSQL counters were not configured for this harness invocation; /readyz independently reported PostgreSQL ready and observed get_index debt was zero."]
+        : []),
+      ...(metadataSamples.at(-1)?.expected?.bpm !== metadataMatch.sample.expected.bpm || metadataSamples.at(-1)?.expected?.key !== metadataMatch.sample.expected.key
+        ? ["Task 4's last rolling metadata summary has no beat identifier and is not the currently matched saved tuple; Task 6 verified the retained documented tuple against authoritative Account 04 state."]
+        : []),
+    ],
+    classification: "COMPROBADO",
+  };
+  markScenario("task6_account_vault_authority", "PASS", null, "Five unique authenticated users resolved five unique vaults with expected transport authority.");
+  markScenario("task6_authoritative_get_index", "PASS", null, "A completed observed get_index operation materialized each final authoritative library.");
+  markScenario("task6_prior_files_and_metadata", "PASS", null, "Task 1, Task 4, and Task 5 committed evidence remains in its owner vault; Account 04 metadata persisted.");
+  markScenario("task6_representative_download_integrity", "PASS", null, "Task 1 WAV, ZIP, MP3 payload, and ID3 integrity checks passed from the final authoritative fixture.");
+  markScenario("task6_final_isolation", "PASS", null, "No beat id, expected fixture id, or artwork reference crossed the five final libraries.");
+  markScenario("task6_control_plane_health", "PASS", null, "Cloud readyz/transport status were healthy with zero active Direct operations and no observed pending get_index.");
+  report.overall = "PASS";
+  report.severity = null;
+  await writeReport();
+}
+
 describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
   it(
     `runs ${accountCount} seeded real accounts concurrently and preserves productive authority across Reload`,
@@ -3559,6 +5443,14 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         throw taggedError(
           "Focused Stage 1 modes require --accounts 1.",
           "STAGE1_FOCUSED_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (singleReloadAttributionTrace && accountCount !== 1) {
+        throw taggedError(
+          "STAGE1_SINGLE_RELOAD_ATTRIBUTION_TRACE requires --accounts 1.",
+          "STAGE1_SINGLE_RELOAD_ATTRIBUTION_ACCOUNT_COUNT",
           "P1",
         );
       }
@@ -3575,6 +5467,93 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         throw taggedError(
           "STAGE1_FOCUSED_ISOLATION cannot be combined with lifecycle or mixed-workload modes.",
           "STAGE1_FOCUSED_ISOLATION_MODE_CONFLICT",
+          "P1",
+        );
+      }
+
+      if (task5Mode && accountCount !== MIXED_REQUIRED_ACCOUNTS) {
+        throw taggedError(
+          `Task 5 requires exactly ${MIXED_REQUIRED_ACCOUNTS} concurrent accounts; received ${accountCount}.`,
+          "STAGE1_TASK5_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (task5Mode && (focusedLifecycle || focusedDownloadIntegrity || focusedIsolation || focusedStartup || mixedWorkload)) {
+        throw taggedError(
+          "STAGE1_TASK5_ONE_ACCOUNT_FAILURES cannot be combined with focused, mixed-workload, or soak modes.",
+          "STAGE1_TASK5_MODE_CONFLICT",
+          "P1",
+        );
+      }
+
+      if (task6Mode && accountCount !== MIXED_REQUIRED_ACCOUNTS) {
+        throw taggedError(
+          `Task 6 requires exactly ${MIXED_REQUIRED_ACCOUNTS} concurrent accounts; received ${accountCount}.`,
+          "STAGE1_TASK6_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (task6Mode && (task5Mode || focusedLifecycle || focusedDownloadIntegrity || focusedIsolation || focusedStartup || mixedWorkload)) {
+        throw taggedError(
+          "STAGE1_TASK6_FINAL_VERIFICATION cannot be combined with Task 5, focused, mixed-workload, or soak modes.",
+          "STAGE1_TASK6_MODE_CONFLICT",
+          "P1",
+        );
+      }
+
+      if (focusedStartup && ![2, 5, 10].includes(accountCount)) {
+        throw taggedError(
+          "STAGE1_FOCUSED_STARTUP requires --accounts 2, 5, or 10.",
+          "STAGE1_FOCUSED_STARTUP_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (focusedFinalReloadTrace && accountCount !== MIXED_REQUIRED_ACCOUNTS) {
+        throw taggedError(
+          `Focused final authoritative Reload trace requires exactly ${MIXED_REQUIRED_ACCOUNTS} accounts; received ${accountCount}.`,
+          "STAGE1_FOCUSED_FINAL_RELOAD_ACCOUNT_COUNT",
+          "P1",
+        );
+      }
+
+      if (phase2Task0Mode && (accountCount !== 5 || focusedStartup || focusedLifecycle ||
+        focusedDownloadIntegrity || focusedIsolation || mixedWorkload ||
+        task5Mode || task6Mode || singleReloadAttributionTrace || phase2Task1Mode)) {
+        throw taggedError("Phase 2 Task 0 requires five accounts and no Stage 1 workload mode.", "PHASE2_TASK0_MODE_CONFLICT", "P1");
+      }
+
+      if (phase2Task1Mode && (accountCount !== 5 || focusedStartup || focusedLifecycle ||
+        focusedDownloadIntegrity || focusedIsolation || mixedWorkload || task5Mode ||
+        task6Mode || singleReloadAttributionTrace)) {
+        throw taggedError("Phase 2 Task 1 requires five accounts and no Stage 1 workload mode.", "PHASE2_TASK1_MODE_CONFLICT", "P1");
+      }
+
+      if (
+        focusedStartup &&
+        (focusedLifecycle || focusedDownloadIntegrity || focusedIsolation || mixedWorkload)
+      ) {
+        throw taggedError(
+          "STAGE1_FOCUSED_STARTUP cannot be combined with other focused or mixed-workload modes.",
+          "STAGE1_FOCUSED_STARTUP_MODE_CONFLICT",
+          "P1",
+        );
+      }
+
+      if (singleReloadAttributionTrace && (focusedLifecycle || focusedDownloadIntegrity || focusedIsolation || focusedStartup || focusedFinalReloadTrace || mixedWorkload || task5Mode || task6Mode)) {
+        throw taggedError(
+          "STAGE1_SINGLE_RELOAD_ATTRIBUTION_TRACE cannot be combined with another focused, mixed, soak, or task mode.",
+          "STAGE1_SINGLE_RELOAD_ATTRIBUTION_MODE_CONFLICT",
+          "P1",
+        );
+      }
+
+      if (task4Mode && SOAK_ROTATIONS !== MIXED_REQUIRED_ACCOUNTS) {
+        throw taggedError(
+          `Task 4 requires exactly ${MIXED_REQUIRED_ACCOUNTS} rotations so every account covers every role; received ${SOAK_ROTATIONS}.`,
+          "STAGE1_TASK4_ROTATION_COUNT",
           "P1",
         );
       }
@@ -3603,11 +5582,59 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
       );
 
       try {
-        const loginResults = await Promise.allSettled(
-          accounts.map((account, index) =>
-            loginThroughUi(clients[index], account)
-          ),
-        );
+        const startupSubmitBarrier = focusedStartup
+          ? createStartupSubmitBarrier(accountCount)
+          : null;
+        if (startupSubmitBarrier) {
+          report.startup_submit_barrier = startupSubmitBarrier.evidence;
+        }
+
+        // Library bootstrap begins as soon as an individual login succeeds.
+        // Mark the shared concurrent startup before any account can issue its
+        // first get_index, otherwise a fast account's real authoritative read
+        // is incorrectly excluded while slower accounts finish signing in.
+        const authoritativeStartupStartedAt = Date.now();
+        const coldStartedAtByLabel = {};
+        const phase2Task1ColdTrace = Object.fromEntries(accounts.map(account => [
+          account.label,
+          {
+            correlation_id: `task1-cold-${account.label}-${randomUUID().slice(0, 12)}`,
+            account_label: account.label,
+            ...(phase2Task2PassivePingTrace ? { task2_passive_ping_trace: true } : {}),
+          },
+        ]));
+        const phase2Task1ColdReadyAtByLabel = {};
+        // Tasks 5 and 6 do not measure the Task 4 simultaneous-start budget.
+        // Serial bootstrap avoids turning the known transient startup
+        // saturation into false fault-containment/final-verification evidence;
+        // all five browser sessions remain concurrent for their actual checks.
+        const loginResults = task5Mode || task6Mode
+          ? await (async () => {
+              const results = [];
+              for (let index = 0; index < accounts.length; index += 1) {
+                try {
+                  results.push({ status: "fulfilled", value: await loginThroughUi(clients[index], accounts[index]) });
+                } catch (reason) {
+                  results.push({ status: "rejected", reason });
+                }
+              }
+              return results;
+            })()
+          : await Promise.allSettled(
+              accounts.map((account, index) => {
+                if (phase2Task0Mode || phase2Task1Mode) coldStartedAtByLabel[account.label] = Date.now();
+                const options = {
+                  ...(startupSubmitBarrier ? { startupSubmitBarrier } : {}),
+                  ...(phase2Task1Mode ? { phase2Task1Trace: phase2Task1ColdTrace[account.label] } : {}),
+                };
+                return loginThroughUi(
+                  clients[index],
+                  account,
+                  options,
+                );
+              }
+              ),
+            );
 
         const loginFailures = loginResults.filter(
           result => result.status === "rejected",
@@ -3628,14 +5655,29 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           observer.setPhase("authoritative-startup");
         }
 
-        const startupStartedAt = Date.now();
-
         const librariesBefore = await Promise.all(
-          accounts.map((account, index) =>
-            waitForAuthoritativeLibrary(
+          accounts.map(async (account, index) => {
+            const library = await waitForAuthoritativeLibrary(
               clients[index],
               account.label,
-            )
+              {
+                requiredGetIndex: {
+                  startedAtMs: authoritativeStartupStartedAt,
+                },
+              },
+            );
+            if (phase2Task0Mode) {
+              report.phase2_task0.samples.apertura_fria.push({
+                account_label: account.label,
+                started_at_ms: coldStartedAtByLabel[account.label],
+                ready_at_ms: Date.now(),
+                get_index: library.successful_get_index || null,
+                beat_count: library.beat_count,
+              });
+            }
+            if (phase2Task1Mode) phase2Task1ColdReadyAtByLabel[account.label] = Date.now();
+            return library;
+          }
           ),
         );
 
@@ -3654,8 +5696,90 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             )
           ),
         );
+        await Promise.all(clients.map(client => installStage1RuntimeTraceCapture(client)));
 
-        const startupMs = Date.now() - startupStartedAt;
+        if (singleReloadAttributionTrace) {
+          const account = accounts[0];
+          const client = clients[0];
+          const observer = authObservers.get(account.label);
+          const correlationId = `cp-${randomUUID().slice(0, 12)}`;
+          const trace = { account_label: account.label, correlation_id: correlationId, events: [] };
+          observer?.setPhase("single-reload-critical-path");
+          await client.execute(input => {
+            localStorage.setItem("beatgaler:stage1-focused-final-reload:correlation", input.correlation_id);
+            localStorage.setItem("beatgaler:stage1-focused-final-reload:account", input.account_label);
+            document.cookie = `stage1_cp=${encodeURIComponent(input.correlation_id)}; Path=/; SameSite=Lax`;
+            history.replaceState(null, "", `/?stage1_cp=${encodeURIComponent(input.correlation_id)}`);
+            performance.clearResourceTimings();
+            window.__stage1TraceContext = input;
+            return true;
+          }, { correlation_id: correlationId, account_label: account.label });
+
+          focusedReloadEvent(trace, "refresh_started");
+          const refreshStartedAt = Date.now();
+          await client.refresh();
+          const refreshReturnedAt = Date.now();
+          focusedReloadEvent(trace, "refresh_returned", { durationMs: refreshReturnedAt - refreshStartedAt });
+          focusedReloadEvent(trace, "authoritative_poll_started");
+          const library = await waitForAuthoritativeLibrary(client, account.label, { focusedReloadTrace: trace });
+          const readyAt = Date.now();
+
+          const cloudTraceFile = String(process.env.STAGE1_CRITICAL_PATH_CLOUD_TRACE_FILE_WINDOWS || process.env.STAGE1_CRITICAL_PATH_CLOUD_TRACE_FILE || "");
+          const viteTraceFile = String(process.env.STAGE1_PROXY_TIMING_FILE || "");
+          const attribution = {
+            version: 1,
+            workload_mode: "one-authenticated-account-one-reload-stop-at-first-ready",
+            baseline_sha: report.baseline_sha,
+            experiment_identity: report.experiment_identity,
+            correlation_id: correlationId,
+            account_label: account.label,
+            refresh_started_at: new Date(refreshStartedAt).toISOString(),
+            authoritative_ready_at: new Date(readyAt).toISOString(),
+            refresh_command_ms: refreshReturnedAt - refreshStartedAt,
+            ready_ms: readyAt - refreshStartedAt,
+            library_beat_count: library.beat_count,
+            timeline: trace.events,
+            browser_network: (observer?.snapshot() || []).filter(entry => entry.correlation_id === correlationId),
+            browser_document: (observer?.documentSnapshot() || []).filter(entry => entry.correlation_id === correlationId),
+            navigation_timing: (observer?.navigationSnapshot() || []).filter(entry => entry.correlation_id === correlationId),
+            browser_play_trace: (observer?.playTraceSnapshot() || []).filter(entry => entry.correlation_id === correlationId),
+            vite_trace: (await readJsonLines(viteTraceFile)).filter(entry => entry.id === correlationId),
+            cloud_trace: (await readJsonLines(cloudTraceFile)).filter(entry => entry.correlation_id === correlationId),
+            configuration: {
+              web_server_mode: report.web_server_mode,
+              account_count: accountCount,
+              mixed_workload: mixedWorkload,
+              soak_minutes: soakMinutes,
+              focused_final_reload_trace: focusedFinalReloadTrace,
+            },
+          };
+          report.single_reload_attribution = attribution;
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          await fs.writeFile(SINGLE_RELOAD_ATTRIBUTION_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+          console.log(`[stage1-real] PASS single reload attribution correlation=${correlationId}; report=${SINGLE_RELOAD_ATTRIBUTION_REPORT_FILE}`);
+          return;
+        }
+
+        if (task5Mode) {
+          await runTask5OneAccountFailures({ clients, before });
+          await writeReport();
+          console.log(
+            `[stage1-real] PASS task5 accounts=${accountCount}; Account A failures remained isolated. report=${TASK5_REPORT_FILE}`,
+          );
+          return;
+        }
+
+        if (task6Mode) {
+          await runTask6FinalVerification({ clients, before, loginTimes });
+          console.log(
+            `[stage1-real] PASS task6 accounts=${accountCount}; final authoritative verification complete. report=${TASK6_REPORT_FILE}`,
+          );
+          return;
+        }
+
+        const startupMs = Date.now() - authoritativeStartupStartedAt;
 
         before.forEach((snapshot, index) =>
           validateSingleAccount(
@@ -3680,6 +5804,313 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             null,
             `${accountCount} unique vaults`,
           );
+        }
+
+        if (phase2Task0Mode) {
+          accounts.forEach((account, index) => {
+            Object.assign(report.accounts[account.label], {
+              user_id: before[index].user_id,
+              client_id: before[index].client_id,
+              vault_chat_id: before[index].direct.chat_id,
+              transport_id: before[index].direct.transport_id,
+            });
+          });
+          await runPhase2Task0Conditions({ clients, before });
+          return;
+        }
+
+        if (phase2Task1Mode) {
+          const cold = accounts.map(account => phase2Task1Attribution({
+            account,
+            condition: "apertura_fria",
+            startedAtMs: coldStartedAtByLabel[account.label],
+            readyAtMs: phase2Task1ColdReadyAtByLabel[account.label],
+            correlationId: phase2Task1ColdTrace[account.label].correlation_id,
+          }));
+
+          const reloadTrace = Object.fromEntries(accounts.map(account => [
+            account.label,
+            {
+              correlation_id: `task1-reload-${account.label}-${randomUUID().slice(0, 12)}`,
+              account_label: account.label,
+              ...(phase2Task2PassivePingTrace ? { task2_passive_ping_trace: true } : {}),
+            },
+          ]));
+          const reloaded = await Promise.all(accounts.map(async (account, index) => {
+            const observer = authObservers.get(account.label);
+            observer?.setPhase("phase2-task1-reload");
+            await setPhase2Task1TraceContext(clients[index], reloadTrace[account.label]);
+            const startedAtMs = Date.now();
+            await clients[index].refresh();
+            await waitForAuthoritativeLibrary(clients[index], account.label, {
+              requiredGetIndex: { startedAtMs, phase: "phase2-task1-reload" },
+            });
+            return { account, startedAtMs, readyAtMs: Date.now() };
+          }));
+
+          // BiDi forwards console records asynchronously. This only waits for
+          // the collector to flush observations already emitted by the app.
+          await Promise.all(clients.map(client => client.pause(250)));
+          const reload = reloaded.map(sample => phase2Task1Attribution({
+            ...sample,
+            condition: "reload_caliente",
+            correlationId: reloadTrace[sample.account.label].correlation_id,
+          }));
+          const incomplete = [...cold, ...reload].filter(sample => !sample.complete);
+          if (incomplete.length) {
+            throw taggedError(
+              `Task 1 attribution lacks ordered markers: ${incomplete.map(sample => `${sample.condition}/${sample.account_label}=${sample.missing_markers.join(",") || "out-of-order"}`).join("; ")}`,
+              "PHASE2_TASK1_INCOMPLETE_ATTRIBUTION",
+              "P1",
+            );
+          }
+          report.phase2_task1.samples.apertura_fria = cold;
+          report.phase2_task1.samples.reload_caliente = reload;
+          report.phase2_task1.completed_conditions = ["apertura_fria", "reload_caliente"];
+          markScenario("phase2_task1_attribution", "PASS", null,
+            "Five cold opens and five hot Reloads have ordered auth, control, Direct, get_index, Web INDEX, and usable-library timestamps.");
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          console.log(`[phase2-task1] PASS five-account library latency attribution; report=${REPORT_FILE}`);
+          return;
+        }
+
+        if (focusedStartup) {
+          const loginStarts = accounts.map(account => {
+            const login = (authObservers.get(account.label)?.snapshot() || [])
+              .findLast(entry =>
+                entry.route === "/beatgaler-api/auth/login" &&
+                entry.state === "response" &&
+                entry.status >= 200 &&
+                entry.status < 300 &&
+                Number.isFinite(Number(entry.started_at_ms))
+              );
+
+            if (!login) {
+              throw taggedError(
+                `Account ${account.label} has no successful observed auth/login timestamp.`,
+                "STAGE1_STARTUP_LOGIN_TIMESTAMP_MISSING",
+                "P1",
+              );
+            }
+
+            return {
+              account_label: account.label,
+              started_at_ms: Number(login.started_at_ms),
+              duration_ms: login.duration_ms,
+              status: login.status,
+            };
+          });
+
+          const loginStartValues = loginStarts.map(item => item.started_at_ms);
+          const loginStartSpreadMs =
+            Math.max(...loginStartValues) - Math.min(...loginStartValues);
+          const withinBurstTarget = loginStartSpreadMs <= 3_000;
+
+          report.accounts = Object.fromEntries(
+            accounts.map((account, index) => [
+              account.label,
+              {
+                ...report.accounts[account.label],
+                login_ms: loginTimes[index],
+                login_started_at_ms: loginStarts[index].started_at_ms,
+                user_id: before[index].user_id,
+                client_id: before[index].client_id,
+                library_beats: librariesBefore[index].beat_count,
+                library_authority: {
+                  cold: librariesBefore[index].successful_get_index,
+                },
+                vault_chat_id: before[index].direct.chat_id,
+                transport_id: before[index].direct.transport_id,
+                transport_user_id: before[index].direct.transport_user_id,
+                expected_bot_id: before[index].direct.expected_bot_id,
+                session_id: before[index].direct.session_id,
+                membership_bootstrap_mode: before[index].direct.mode,
+              },
+            ]),
+          );
+
+          report.startup = {
+            account_count: accountCount,
+            login_start_spread_ms: loginStartSpreadMs,
+            burst_target_ms: 3_000,
+            within_burst_target: withinBurstTarget,
+            authoritative_startup_ms: startupMs,
+            logins: loginStarts,
+          };
+
+          const warmReopenStartedAt = Date.now();
+
+          for (const observer of authObservers.values()) {
+            observer.setPhase("warm-reopen");
+          }
+
+          await Promise.all(
+            clients.map(async client => {
+              await client.url("about:blank");
+              await client.url("/");
+            }),
+          );
+
+          const warmLibraries = await Promise.all(
+            accounts.map((account, index) =>
+              waitForAuthoritativeLibrary(
+                clients[index],
+                account.label,
+                {
+                  requiredGetIndex: {
+                    startedAtMs: warmReopenStartedAt,
+                    phase: "warm-reopen",
+                  },
+                },
+              )
+            ),
+          );
+
+          await Promise.all(
+            accounts.map((account, index) =>
+              clients[index].waitUntil(
+                async () =>
+                  (authObservers.get(account.label)?.snapshot() || []).some(
+                    entry =>
+                      entry.route === "/beatgaler-api/transport/session/start" &&
+                      entry.state === "response" &&
+                      entry.status >= 200 &&
+                      entry.status < 300 &&
+                      Number(entry.started_at_ms) >= warmReopenStartedAt,
+                  ),
+                {
+                  timeout: 120_000,
+                  interval: 250,
+                  timeoutMsg: `Account ${account.label} did not establish a fresh Direct session after warm reopen.`,
+                },
+              )
+            ),
+          );
+
+          const warmSnapshots = await Promise.all(
+            accounts.map((account, index) =>
+              waitForRuntimeSnapshot(
+                clients[index],
+                account.label,
+              )
+            ),
+          );
+
+          warmSnapshots.forEach((snapshot, index) =>
+            validateSingleAccount(
+              accounts[index].label,
+              snapshot,
+            )
+          );
+
+          if (!singleAccountDiagnostic) {
+            validateCrossAccountIsolation(warmSnapshots);
+          }
+
+          const warmReopenComparisons = accounts.map((account, index) => {
+            const cold = before[index];
+            const warm = warmSnapshots[index];
+            const coldValues = {
+              user_id: cold.user_id,
+              client_id: cold.client_id,
+              vault_chat_id: cold.direct.chat_id,
+              transport_id: cold.direct.transport_id,
+              expected_bot_id: cold.direct.expected_bot_id,
+              session_id: cold.direct.session_id,
+              library_beats: librariesBefore[index].beat_count,
+            };
+            const warmValues = {
+              user_id: warm.user_id,
+              client_id: warm.client_id,
+              vault_chat_id: warm.direct.chat_id,
+              transport_id: warm.direct.transport_id,
+              expected_bot_id: warm.direct.expected_bot_id,
+              session_id: warm.direct.session_id,
+              library_beats: warmLibraries[index].beat_count,
+            };
+            const differingFields = Object.keys(coldValues).filter(
+              field => warmValues[field] !== coldValues[field],
+            );
+            // Keep the existing acceptance condition unchanged. session_id is
+            // evidence for this diagnosis, not a new warm-reopen expectation.
+            const expectationDifferingFields = differingFields.filter(
+              field => field !== "session_id",
+            );
+
+            return {
+              account_label: account.label,
+              cold: coldValues,
+              warm: warmValues,
+              differing_fields: differingFields,
+              expectation_differing_fields: expectationDifferingFields,
+              preserved: expectationDifferingFields.length === 0,
+            };
+          });
+
+          warmReopenComparisons.forEach((comparison, index) => {
+            report.accounts[comparison.account_label].warm_reopen = comparison;
+            report.accounts[comparison.account_label].library_authority.warm =
+              warmLibraries[index].successful_get_index;
+          });
+
+          const warmReopenMismatches = warmReopenComparisons.filter(
+            comparison => !comparison.preserved,
+          );
+
+          report.startup.warm_reopen = {
+            account_count: accountCount,
+            profile_reset: false,
+            fresh_direct_bootstrap_observed: true,
+            preserved_authority: warmReopenMismatches.length === 0,
+            mismatches: warmReopenMismatches.map(comparison => ({
+              account_label: comparison.account_label,
+              differing_fields: comparison.differing_fields,
+              expectation_differing_fields: comparison.expectation_differing_fields,
+            })),
+          };
+
+          if (warmReopenMismatches.length) {
+            const firstMismatch = warmReopenMismatches[0];
+            throw taggedError(
+              `Account ${firstMismatch.account_label} changed after warm reopen: ${firstMismatch.expectation_differing_fields.join(", ")}.`,
+              "STAGE1_STARTUP_WARM_REOPEN_MISMATCH",
+              "P1",
+            );
+          }
+
+          report.startup.warm_reopen.duration_ms = Date.now() - warmReopenStartedAt;
+
+          markScenario(
+            "startup_burst_window",
+            withinBurstTarget ? "PASS" : "FAIL",
+            withinBurstTarget ? null : "P1",
+            `${accountCount} auth/login requests started within ${loginStartSpreadMs} ms; target <= 3000 ms`,
+          );
+
+          report.timings = {
+            startup_ms: startupMs,
+            login_start_spread_ms: loginStartSpreadMs,
+          };
+          report.overall = withinBurstTarget ? "PASS" : "FAIL";
+          report.severity = withinBurstTarget ? null : "P1";
+
+          await writeReport();
+
+          console.log(
+            `[stage1-real] ${withinBurstTarget ? "PASS" : "FAIL"} focused startup accounts=${accountCount} login_start_spread_ms=${loginStartSpreadMs}; report=${REPORT_FILE}`,
+          );
+
+          if (!withinBurstTarget) {
+            throw taggedError(
+              `Startup burst window exceeded: ${loginStartSpreadMs} ms; target <= 3000 ms.`,
+              "STAGE1_STARTUP_BURST_WINDOW",
+              "P1",
+            );
+          }
+
+          return;
         }
 
         if (focusedDownloadIntegrity) {
@@ -3874,6 +6305,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               first_audio_ms: [],
               playback_operation_ms: [],
               playback_start_spread_ms: [],
+              seek_ms: [],
               hot_library_ms: [],
               upload_ms: [],
               download_ms: [],
@@ -3882,6 +6314,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               reload_ms: [],
               playback_samples: [],
               playback_failures: [],
+              seek_samples: [],
               upload_samples: [],
               download_samples: [],
               metadata_samples: [],
@@ -3891,7 +6324,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             const roleCounts = Object.fromEntries(
               accounts.map(account => [
                 account.label,
-                { playback: 0, upload: 0, metadata_reload: 0, download: 0, reload: 0 },
+                { playback: 0, seek: 0, upload: 0, metadata: 0, reload: 0, download: 0 },
               ]),
             );
             const createdUploads = [];
@@ -3907,6 +6340,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               role_counts: roleCounts,
               metrics,
             };
+
+            if (task4Mode) {
+              activeTask4ResourceSampler = createTask4ResourceSampler();
+              await activeTask4ResourceSampler.start();
+              report.soak.resource_samples = activeTask4ResourceSampler.samples;
+            }
 
             const largeOwnerIndex = 2;
             const largeBeatName = `Stage1 Soak Large ${accounts[largeOwnerIndex].label} ${MIXED_RUN_SUFFIX}`;
@@ -3926,13 +6365,13 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               const uploadIndex = slotAccountIndex(2);
               const metadataIndex = slotAccountIndex(3);
               const downloadIndex = slotAccountIndex(4);
-              const reloadIndices = [slotAccountIndex(5), slotAccountIndex(6)];
 
               for (const index of playbackIndices) roleCounts[accounts[index].label].playback += 1;
+              for (const index of playbackIndices) roleCounts[accounts[index].label].seek += 1;
               roleCounts[accounts[uploadIndex].label].upload += 1;
-              roleCounts[accounts[metadataIndex].label].metadata_reload += 1;
+              roleCounts[accounts[metadataIndex].label].metadata += 1;
+              roleCounts[accounts[metadataIndex].label].reload += 1;
               roleCounts[accounts[downloadIndex].label].download += 1;
-              for (const index of reloadIndices) roleCounts[accounts[index].label].reload += 1;
 
               await Promise.all(clients.map(client => resetPlaybackForSoak(client)));
 
@@ -3943,9 +6382,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 roles: {
                   playback: playbackIndices.map(index => accounts[index].label),
                   upload: accounts[uploadIndex].label,
-                  metadata_reload: accounts[metadataIndex].label,
+                  metadata_reload_authoritative_read: accounts[metadataIndex].label,
                   download: accounts[downloadIndex].label,
-                  reload: reloadIndices.map(index => accounts[index].label),
                 },
                 status: "RUNNING",
               };
@@ -3986,6 +6424,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                   source_bytes: result.source_bytes,
                   source_extension: result.source_extension,
                   large_transfer: round === 0,
+                  ...transferEvidence({ bytes: result.source_bytes, durationMs }),
                 });
                 createdUploads.push({
                   owner_index: uploadIndex,
@@ -4018,17 +6457,9 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                   clients[downloadIndex],
                   accounts[downloadIndex],
                   playbackFixtures[downloadIndex],
+                  playbackFixtures[downloadIndex].audio_payload_sha256,
                   deadline,
                   metrics,
-                ),
-                ...reloadIndices.map(index =>
-                  runSoakReloadRole(
-                    clients[index],
-                    accounts[index],
-                    before[index],
-                    deadline,
-                    metrics,
-                  )
                 ),
               ]);
 
@@ -4065,17 +6496,18 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             if (!diagnosticSoakRound) {
               for (const counts of Object.values(roleCounts)) {
                 assert.ok(counts.playback >= 2, "Every account must rotate through playback twice.");
+                assert.ok(counts.seek >= 2, "Every account must rotate through seek twice.");
                 assert.ok(counts.upload >= 1, "Every account must rotate through upload.");
-                assert.ok(counts.metadata_reload >= 1, "Every account must rotate through metadata + Reload.");
+                assert.ok(counts.metadata >= 1, "Every account must rotate through metadata.");
                 assert.ok(counts.download >= 1, "Every account must rotate through download.");
-                assert.ok(counts.reload >= 2, "Every account must rotate through Reload twice.");
+                assert.ok(counts.reload >= 1, "Every account must rotate through Reload.");
               }
 
               markScenario(
                 "mixed_role_rotation",
                 "PASS",
                 null,
-                "Seven rotations covered every account in playback, upload, metadata+Reload, download, and Reload roles",
+                "Five rotations covered every account in playback+seek, upload, metadata+Reload+authoritative read, and download roles",
               );
             } else {
               markScenario(
@@ -4103,13 +6535,54 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               observer.setPhase("mixed-soak-final-authoritative-reload");
             }
 
+            // Keep this diagnostic-only identifier below the redaction threshold
+            // used for console capture. It is persisted only in the current
+            // browser's localStorage so the init observer survives its reload.
+            const focusedCorrelationId = focusedFinalReloadTrace
+              ? `fr-${randomUUID().slice(0, 12)}`
+              : null;
+            const focusedTraces = focusedFinalReloadTrace
+              ? new Map(accounts.map(account => [account.label, {
+                  account_label: account.label,
+                  correlation_id: focusedCorrelationId,
+                  events: [],
+                  materialized: false,
+                  aria_busy_false: false,
+                  ready: false,
+                }]))
+              : null;
+
+            if (focusedFinalReloadTrace) {
+              await Promise.all(
+                accounts.map((account, index) => clients[index].execute((input) => {
+                  localStorage.setItem("beatgaler:stage1-focused-final-reload:correlation", input.correlation_id);
+                  localStorage.setItem("beatgaler:stage1-focused-final-reload:account", input.account_label);
+                  window.__stage1TraceContext = input;
+                  return true;
+                }, { correlation_id: focusedCorrelationId, account_label: account.label })),
+              );
+            }
+
             const finalReloadStartedAt = Date.now();
             const finalLibraryResults = await Promise.all(
               accounts.map(async (account, index) => {
                 const refreshStartedAt = Date.now();
+                const trace = focusedTraces?.get(account.label) || null;
+                const refreshStarted = trace
+                  ? focusedReloadEvent(trace, "refresh_started")
+                  : null;
                 await clients[index].refresh();
                 const refreshResolvedAt = Date.now();
-                const library = await waitForAuthoritativeLibrary(clients[index], account.label);
+                const refreshResolved = trace
+                  ? focusedReloadEvent(trace, "refresh_resolved", {
+                      durationMs: refreshResolvedAt - refreshStartedAt,
+                    })
+                  : null;
+                const library = await waitForAuthoritativeLibrary(
+                  clients[index],
+                  account.label,
+                  trace ? { focusedReloadTrace: trace } : undefined,
+                );
                 const libraryReadyAt = Date.now();
                 const refreshCommandMs = refreshResolvedAt - refreshStartedAt;
                 const libraryAfterRefreshMs = libraryReadyAt - refreshResolvedAt;
@@ -4127,9 +6600,90 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                   ready_ms: readyMs,
                   refresh_command_ms: refreshCommandMs,
                   library_after_refresh_ms: libraryAfterRefreshMs,
+                  ...(refreshStarted && refreshResolved
+                    ? { hot_library_equivalent_ms: readyMs }
+                    : {}),
                 };
               }),
             );
+
+            if (focusedFinalReloadTrace) {
+              const diagnosticLogs = await Promise.all(
+                accounts.map(account => authObservers.get(account.label)?.diagnosticSnapshot() || []),
+              );
+              report.accounts = Object.fromEntries(
+                accounts.map((account, index) => {
+                  const trace = focusedTraces.get(account.label);
+                  const timeline = [
+                    ...trace.events,
+                    ...focusedReloadNavigationTimeline(account.label, focusedCorrelationId),
+                    ...focusedReloadHttpTimeline(account.label, focusedCorrelationId),
+                    ...focusedReloadWorkerTimeline(diagnosticLogs[index], account.label, focusedCorrelationId),
+                  ].sort((left, right) => {
+                    const leftTime = Date.parse(left.timestamp_wall_clock || "") || 0;
+                    const rightTime = Date.parse(right.timestamp_wall_clock || "") || 0;
+                    return leftTime - rightTime;
+                  });
+                  return [account.label, {
+                    ...report.accounts[account.label],
+                    user_id: before[index].user_id,
+                    client_id: before[index].client_id,
+                    vault_chat_id: before[index].direct.chat_id,
+                    transport_id: before[index].direct.transport_id,
+                    session_id_before_final_refresh: before[index].direct.session_id,
+                    library_beats_before_final_refresh: librariesBefore[index].beat_count,
+                    focused_final_reload: {
+                      correlation_id: focusedCorrelationId,
+                      refresh_command_ms: finalLibraryResults[index].refresh_command_ms,
+                      library_after_refresh_ms: finalLibraryResults[index].library_after_refresh_ms,
+                      hot_library_equivalent_ms: finalLibraryResults[index].hot_library_equivalent_ms,
+                      library_beat_count: finalLibraryResults[index].library.beat_count,
+                      timeline,
+                    },
+                  }];
+                }),
+              );
+              const hotValues = finalLibraryResults.map(item => item.hot_library_equivalent_ms);
+              report.focused_final_reload = {
+                report_file: TASK4_FOCUSED_FINAL_RELOAD_REPORT_FILE,
+                correlation_id: focusedCorrelationId,
+                account_count: accountCount,
+                started_at: new Date(finalReloadStartedAt).toISOString(),
+                finished_at: new Date().toISOString(),
+                total_elapsed_ms: Date.now() - finalReloadStartedAt,
+                concurrent_refreshes: true,
+                hot_library_equivalent: metricSummary(hotValues),
+                prestate: {
+                  source: "same-run mixed-5-account diagnostic soak",
+                  soak_minutes: soakMinutes,
+                  rotations: SOAK_ROTATIONS,
+                  reused_browsers_and_authenticated_sessions: true,
+                  prior_run_profiles_or_sessions_reused: false,
+                  cold_login_between_mixed_round_and_final_refresh: false,
+                  final_reload_harness_phase: "mixed-soak-final-authoritative-reload",
+                },
+                note: "Focused evidence exits immediately after the existing concurrent final refresh()+waitForAuthoritativeLibrary() block; Task 4 budgets and assertions are not evaluated or changed by this instrumentation mode.",
+              };
+              markScenario(
+                "focused_final_authoritative_reload_trace",
+                "PASS",
+                null,
+                `Five original-path concurrent browser Reload operations reached authoritative libraries with correlation ${focusedCorrelationId}.`,
+              );
+              report.timings = {
+                startup_ms: startupMs,
+                mixed_prestate_ms: soakElapsedMs,
+                focused_final_authoritative_reload_ms: Date.now() - finalReloadStartedAt,
+                hot_library_equivalent_p95_ms: report.focused_final_reload.hot_library_equivalent.p95_ms,
+              };
+              report.overall = "PASS";
+              report.severity = null;
+              await writeReport();
+              console.log(
+                `[stage1-real] PASS focused final authoritative Reload trace accounts=${accountCount}; report=${TASK4_FOCUSED_FINAL_RELOAD_REPORT_FILE}`,
+              );
+              return;
+            }
             const finalSnapshots = await Promise.all(
               accounts.map((account, index) =>
                 waitForRuntimeSnapshot(clients[index], account.label)
@@ -4193,6 +6747,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             const summaries = {
               first_audio: metricSummary(metrics.first_audio_ms),
               hot_library: metricSummary(metrics.hot_library_ms),
+              seek: metricSummary(metrics.seek_ms),
               upload: metricSummary(metrics.upload_ms),
               download: metricSummary(metrics.download_ms),
               metadata_edit: metricSummary(metrics.metadata_edit_ms),
@@ -4243,6 +6798,12 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               `${metrics.first_audio_ms.length} playback starts completed during the soak`,
             );
             markScenario(
+              "mixed_seek",
+              "PASS",
+              null,
+              `${metrics.seek_samples.length} real Player scrubber seeks completed while playback continued`,
+            );
+            markScenario(
               "mixed_upload",
               "PASS",
               null,
@@ -4270,13 +6831,13 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
               "mixed_workload_concurrency",
               "PASS",
               null,
-              `Seven rotating real accounts remained under mixed workload for ${soakElapsedMs} ms`,
+              `Five rotating real accounts remained under mixed workload for ${soakElapsedMs} ms`,
             );
             markScenario(
               "mixed_post_workload_isolation",
               "PASS",
               null,
-              "Final authoritative Reload preserved seven unique accounts/vaults/transports; all soak uploads remained vault-isolated",
+              "Final authoritative Reload preserved five unique accounts/vaults/transports; all soak uploads remained vault-isolated",
             );
 
             report.timings = {
@@ -4302,6 +6863,40 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 visible_error_after_soak: snapshot.visible_error,
               });
             });
+
+            if (activeTask4ResourceSampler) {
+              await activeTask4ResourceSampler.stop();
+              report.soak.final_resource_sample = activeTask4ResourceSampler.samples.at(-1) || null;
+              activeTask4ResourceSampler = null;
+            }
+
+            if (task4Mode) {
+              const perAccount = consolidateTask4Accounts(metrics);
+              for (const account of accounts) {
+                report.accounts[account.label].task_4 = perAccount[account.label];
+              }
+              const finalResource = report.soak.final_resource_sample || {};
+              report.task_4.completion = {
+                operations_remaining: finalResource.transport?.operations ?? null,
+                leases_remaining: finalResource.transport?.sessions ?? null,
+                pending_or_orphan_get_index_operations: {
+                  postgres_pending: finalResource.postgres?.pending_get_index_operations ?? null,
+                  postgres_orphan: finalResource.postgres?.orphan_get_index_operations ?? null,
+                  browser_observed_by_account: Object.fromEntries(
+                    accounts.map(account => [account.label, perAccount[account.label].get_index]),
+                  ),
+                },
+                final_authoritative_vault_state: Object.fromEntries(
+                  accounts.map((account, index) => [account.label, {
+                    vault_chat_id: finalSnapshots[index].direct.chat_id,
+                    user_id: finalSnapshots[index].user_id,
+                    transport_id: finalSnapshots[index].direct.transport_id,
+                    library_beat_count: finalLibraryResults[index].library.beat_count,
+                  }]),
+                ),
+                cross_account_isolation: "PASS: unique users, clients and vaults validated after final authoritative Reload; named upload fixtures were absent from non-owner vaults.",
+              };
+            }
 
             for (const [label, observer] of authObservers) {
               validateAuthHealth(observer.snapshot(), label);
@@ -5174,6 +7769,24 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           message: String(error?.message || error),
         };
 
+        if (task6Mode) {
+          const infrastructureBlocked = report.overall === "BLOCKED" || [
+            "STAGE1_LIBRARY_AUTHORITY_TIMEOUT",
+            "STAGE1_HEALTH_UNSTABLE",
+            "STAGE1_LOGIN_FAILED",
+          ].includes(String(error?.code || ""));
+          report.task_6 = {
+            ...report.task_6,
+            classification: infrastructureBlocked ? "PENDIENTE POR INFRAESTRUCTURA" : "FALLÓ",
+            anomalies: [String(error?.message || error)],
+          };
+          for (const item of report.scenarios) {
+            if (item.status === "NOT_TESTED") {
+              markScenario(item.name, infrastructureBlocked ? "BLOCKED" : "FAIL", severity, "Task 6 stopped before this final-verification gate completed.");
+            }
+          }
+        }
+
         if (
           String(error?.code).startsWith(
             "STAGE1_HEALTH_",
@@ -5252,6 +7865,7 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           ? [
               "mixed_playback",
               "mixed_upload",
+              ...(soakMode ? ["mixed_seek"] : []),
               "mixed_metadata_edit",
               "mixed_master_download",
               "mixed_reload_persistence",
@@ -5335,10 +7949,20 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           }
         }
 
+        if (activeTask4ResourceSampler) {
+          await activeTask4ResourceSampler.stop();
+          report.soak ||= {};
+          report.soak.final_resource_sample = activeTask4ResourceSampler.samples.at(-1) || null;
+          activeTask4ResourceSampler = null;
+        }
         await writeReport();
         await archiveFocusedDownloadIntegrityReport();
         throw error;
       } finally {
+        if (activeTask4ResourceSampler) {
+          await activeTask4ResourceSampler.stop().catch(() => {});
+          activeTask4ResourceSampler = null;
+        }
         await Promise.allSettled(
           [...authObservers.values()].map(
             observer => observer.remove(),

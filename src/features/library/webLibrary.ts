@@ -2,6 +2,7 @@ import type { Beat } from "../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../domain/beat";
 import { ensureWebLibraryIndex, isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from "../cloud/webLibraryBootstrap";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
+import { playTrace } from "../playback/playTrace";
 
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
@@ -267,6 +268,9 @@ export async function loadWebLibraryPage(
   const startedAt = now();
   try {
     const index = await getOrBootstrapLibraryIndex(transport);
+    playTrace("WEB_LIBRARY_GET_INDEX_RECEIVED");
+    const processStartedAt = now();
+    playTrace("WEB_LIBRARY_INDEX_PROCESS_BEGIN");
     const manifest = normalizeWebLibraryManifest(index.manifest);
     updatePlaybackRoutingCacheFromManifest(manifest);
     const page = boundedPageFromNormalizedManifest(
@@ -278,6 +282,11 @@ export async function loadWebLibraryPage(
       state: classifyWebLibraryResult(page.totalVisible, options.queryActive),
       durationMs: Math.max(0, now() - startedAt),
       beatCount: page.beats.length,
+    });
+    playTrace("WEB_LIBRARY_INDEX_PROCESS_DONE", {
+      elapsed_ms: Math.max(0, now() - processStartedAt),
+      total_visible: page.totalVisible,
+      materialized_count: page.materializedCount,
     });
     return page;
   } catch (error) {

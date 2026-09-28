@@ -2,6 +2,28 @@ import { createWriteStream, writeFile } from 'node:fs';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { Session } from 'node:inspector';
 
+const CRITICAL_PATH_ROUTES = new Set([
+  '/beatgaler-api/auth/session',
+  '/beatgaler-api/transport/session/start',
+  '/beatgaler-api/transport/session/activate',
+  '/beatgaler-api/transport/operation/begin',
+  '/beatgaler-api/transport/capability/authorize',
+  '/beatgaler-api/transport/operation/end',
+]);
+
+function traceId(req) {
+  const header = String(req.headers['x-stage1-critical-path'] || '').trim();
+  const query = new URL(req.url || '/', 'http://stage1.invalid').searchParams.get('stage1_cp') || '';
+  const value = header || query;
+  return /^[a-zA-Z0-9:-]{1,100}$/.test(value) ? value : null;
+}
+
+function criticalPathRequest(req) {
+  const id = traceId(req);
+  const path = (req.url || '').split('?')[0];
+  return id && (CRITICAL_PATH_ROUTES.has(path) || path === '/');
+}
+
 export function stage1ViteTiming() {
   return {
     name: 'stage1-vite-timing',
@@ -34,10 +56,10 @@ export function stage1ViteTiming() {
       }, 20);
       sampler.unref();
       server.httpServer.prependListener('request', req => {
-        const id = req.headers['x-stage1-trace'];
-        if (!/^[a-zA-Z0-9:-]{1,100}$/.test(id || '') || req.url?.split('?')[0] !== '/beatgaler-api/auth/health') return;
+        const id = traceId(req);
+        if (!id || !criticalPathRequest(req)) return;
         stopProfile();
-        stream.write(JSON.stringify({ id, event: 'vite_arrival', at_ms: Date.now(), mono_ms: performance.now(), loop_max_ms: delay.max / 1e6, loop_p99_ms: delay.percentile(99) / 1e6 }) + '\n');
+        stream.write(JSON.stringify({ id, event: 'vite_ingress', path: req.url?.split('?')[0] || null, at_ms: Date.now(), mono_ms: performance.now(), loop_max_ms: delay.max / 1e6, loop_p99_ms: delay.percentile(99) / 1e6 }) + '\n');
         delay.reset();
       });
       server.httpServer.once('close', () => { stopProfile(); clearInterval(sampler); delay.disable(); stream.end(); });
@@ -51,24 +73,24 @@ export function stage1ProxyTiming(proxy) {
   const stream = createWriteStream(file, { flags: 'a' });
   stream.on('error', () => {});
   const log = (req, event) => {
-    const id = req.headers['x-stage1-trace'];
-    if (!/^[a-zA-Z0-9:-]{1,100}$/.test(id || '') || !req.url?.split('?')[0].endsWith('/auth/health')) return;
-    stream.write(JSON.stringify({ id, event, at_ms: Date.now(), mono_ms: performance.now() }) + '\n');
+    const id = traceId(req);
+    if (!id || !criticalPathRequest(req)) return;
+    stream.write(JSON.stringify({ id, event, path: req.url?.split('?')[0] || null, at_ms: Date.now(), mono_ms: performance.now() }) + '\n');
   };
-  proxy.on('start', req => log(req, 'proxy_arrival'));
+  proxy.on('start', req => log(req, 'vite_proxy_start'));
   proxy.on('proxyReq', (proxyReq, req) => {
-    log(req, 'proxy_request');
+    log(req, 'vite_proxy_upstream_request');
     const socket = proxyReq.socket;
     if (socket) {
       log(req, socket.connecting ? 'proxy_socket_connecting' : 'proxy_socket_connected');
       socket.once('connect', () => log(req, 'proxy_socket_connect'));
     }
-    proxyReq.once('finish', () => log(req, 'proxy_request_finish'));
-    proxyReq.once('close', () => log(req, 'proxy_request_close'));
+    proxyReq.once('finish', () => log(req, 'vite_proxy_upstream_request_finish'));
+    proxyReq.once('close', () => log(req, 'vite_proxy_upstream_request_close'));
   });
   proxy.on('proxyRes', (res, req) => {
-    log(req, 'proxy_response');
-    res.once('end', () => log(req, 'proxy_response_end'));
+    log(req, 'vite_proxy_upstream_response');
+    res.once('end', () => log(req, 'vite_proxy_response_to_browser_end'));
   });
   proxy.on('error', (_error, req) => log(req, 'proxy_error'));
 }

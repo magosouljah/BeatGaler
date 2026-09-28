@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const directTransport = require("./direct-transport-capability-view");
+const criticalPathTrace = require("./stage1-critical-path-trace");
 
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_CLOCK_SKEW_MS = 5 * 1000;
@@ -653,8 +654,11 @@ function installDirectCapabilityBoundary(express, options = {}) {
   }
 
   async function authorizeCapability(req, res) {
+    criticalPathTrace.write(req, "cloud_handler_start");
     try {
-      return res.json(await authorizePresentedCapability(req));
+      const result = await criticalPathTrace.step(req, "capability_authorize", () => authorizePresentedCapability(req));
+      criticalPathTrace.write(req, "cloud_handler_finished");
+      return res.json(result);
     } catch (error) {
       return responseError(res, error);
     }

@@ -56,6 +56,9 @@ type BoundTempSession = {
   recentOutgoingMsgIds?: { add(value: any): unknown };
   recentIncomingMsgIds?: { add(value: any): unknown };
   lastSessionCreatedUid?: any;
+  lastPingMsgId?: any;
+  lastPingTime?: number;
+  lastPingRtt?: number;
 };
 type BoundTempConnection = {
   params?: { isMainConnection?: boolean; isMainDcConnection?: boolean; dc?: { id?: number } };
@@ -117,10 +120,884 @@ type PlaybackSchedulerState = "IDLE" | "PLAY_CRITICAL" | "PLAY_STABLE";
 type IndexAbortReason = "play" | "warm" | "cancel";
 
 const scope = globalThis as unknown as WorkerScope;
+let stage1TraceContext: { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean } | null = null;
+let detachMtprotoDiagnostics: (() => void) | null = null;
+let detachMtprotoSessionDiagnostics: (() => void) | null = null;
+let detachMtprotoPassivePingDiagnostics: (() => void) | null = null;
+let detachMtprotoPassiveIngressDiagnostics: (() => void) | null = null;
+// Diagnostic identities deliberately live only in the Worker. They do not
+// affect a Direct lease, temporary authorization, retry policy, or reconnect.
+const workerInstanceId = typeof crypto.randomUUID === "function"
+  ? crypto.randomUUID()
+  : `worker-${Date.now()}-${Math.random()}`;
+let clientSerial = 0;
+let activeClientInstanceId: string | null = null;
+let activePrimaryDcId = 0;
+let activeMtprotoRpc: { requestId: string; stage: string } | null = null;
+
+function stage1Trace(requestId: string, stage: string, detail: Record<string, unknown> = {}): void {
+  const context = stage1TraceContext;
+  if (!context) return;
+  scope.postMessage({
+    requestId,
+    event: "stage1-trace",
+    trace: { ...context, stage, at_ms: Date.now(), monotonic_ms: performance.now(), detail },
+  });
+}
+
+function mtprotoConnectionSnapshot(active: TelegramClient): Record<string, unknown> {
+  // mtcute's public isConnected reports whether connect() completed. The
+  // primary pool snapshot separately reports live socket state, which lets the
+  // trace distinguish a stale connected client from a usable connection.
+  const base = (active as any)._client || active;
+  const network = base?.mt?.network as BoundTempNetwork | undefined;
+  const diagnosticNetwork = network as any;
+  const dcId = activePrimaryDcId || Number(diagnosticNetwork?.primaryDc?.id || diagnosticNetwork?._primaryDc?.id || 0) || null;
+  const pool = dcId ? network?._dcConnections?.get(dcId)?.main : null;
+  const connections = Array.isArray((pool as any)?._connections)
+    ? (pool as any)._connections
+    : [];
+  return {
+    worker_instance_id: workerInstanceId,
+    client_instance_id: activeClientInstanceId,
+    client_is_connected: Boolean(base?.isConnected ?? (active as any).isConnected),
+    core_connected_flag: Boolean(base?._connected),
+    primary_dc_id: dcId,
+    primary_pool_is_connected: typeof (pool as any)?.isConnected === "boolean"
+      ? Boolean((pool as any).isConnected)
+      : null,
+    primary_connection_count: connections.length,
+    primary_connected_count: connections.filter((connection: any) => connection?.isConnected === true).length,
+    rpc_context: activeMtprotoRpc ? { stage: activeMtprotoRpc.stage } : null,
+  };
+}
+
+function task2PassivePingTraceEnabled(): boolean {
+  return stage1TraceContext?.task2_passive_ping_trace === true;
+}
+
+type Task2IngressTrace = {
+  markPingSend(pingMsgIds: string[]): void;
+  clearPingSend(): void;
+  bindConnection(connectionId: string): void;
+  latestSocketId(): string | null;
+  detach(): void;
+};
+
+/**
+ * Passive browser WebSocket boundary trace for Task 2.  The wrapper preserves
+ * the native socket and only observes its existing calls and events.  It is
+ * installed before TelegramClient creates WebSocketTransport, which captures
+ * the current WebSocket constructor during client construction.
+ */
+function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: string): Task2IngressTrace | null {
+  const NativeWebSocket = globalThis.WebSocket;
+  if (typeof NativeWebSocket !== "function") return null;
+
+  let socketSerial = 0;
+  let currentPingMsgIds: string[] = [];
+  let latestSocketId: string | null = null;
+  let connectionId: string | null = null;
+  let enabled = true;
+  const sockets = new Set<WebSocket>();
+  const trace = (stage: string, detail: Record<string, unknown> = {}) => {
+    if (!enabled) return;
+    try {
+      stage1Trace(requestId, stage, {
+        client_instance_id: clientInstanceId,
+        connection_id: connectionId,
+        ...detail,
+      });
+    } catch {
+      // Diagnostics must never affect the transport.
+    }
+  };
+  const sizeOf = (value: unknown): number | null => {
+    if (value instanceof ArrayBuffer) return value.byteLength;
+    if (ArrayBuffer.isView(value)) return value.byteLength;
+    if (value instanceof Blob) return value.size;
+    if (typeof value === "string") return value.length;
+    return null;
+  };
+
+  try {
+    class ObservedWebSocket extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        if (protocols === undefined) super(url);
+        else super(url, protocols);
+        const socket = this as WebSocket;
+        const webSocketId = `${clientInstanceId}:ws-${++socketSerial}`;
+        latestSocketId = webSocketId;
+        sockets.add(socket);
+        trace("TASK2_INPUT_WEBSOCKET_CREATED", { web_socket_id: webSocketId });
+
+        socket.addEventListener("message", event => {
+          trace("TASK2_INPUT_WEBSOCKET_MESSAGE", {
+            web_socket_id: webSocketId,
+            incoming_frame_bytes: sizeOf(event.data),
+            incoming_data_kind: event.data instanceof ArrayBuffer
+              ? "arraybuffer"
+              : event.data instanceof Blob
+                ? "blob"
+                : typeof event.data,
+          });
+        });
+        socket.addEventListener("error", () => {
+          trace("TASK2_INPUT_WEBSOCKET_ERROR", { web_socket_id: webSocketId });
+        });
+        socket.addEventListener("close", event => {
+          trace("TASK2_INPUT_WEBSOCKET_CLOSE", {
+            web_socket_id: webSocketId,
+            close_code: Number.isFinite(Number(event.code)) ? Number(event.code) : null,
+            close_reason: String(event.reason || "").slice(0, 180),
+            close_was_clean: Boolean(event.wasClean),
+          });
+        });
+
+        const nativeSend = socket.send.bind(socket);
+        (socket as any).send = (data: unknown) => {
+          const bufferedBefore = Number.isFinite(Number(socket.bufferedAmount))
+            ? Number(socket.bufferedAmount)
+            : null;
+          const pingMsgIds = [...currentPingMsgIds];
+          trace("TASK2_INPUT_WEBSOCKET_SEND", {
+            web_socket_id: webSocketId,
+            packet_bytes: sizeOf(data),
+            buffered_amount_before: bufferedBefore,
+            ping_msg_ids: pingMsgIds,
+          });
+          try {
+            const result = nativeSend(data as any);
+            trace("TASK2_INPUT_WEBSOCKET_SEND_RETURNED", {
+              web_socket_id: webSocketId,
+              packet_bytes: sizeOf(data),
+              buffered_amount_after: Number.isFinite(Number(socket.bufferedAmount))
+                ? Number(socket.bufferedAmount)
+                : null,
+              ping_msg_ids: pingMsgIds,
+            });
+            return result;
+          } catch (error) {
+            trace("TASK2_INPUT_WEBSOCKET_SEND_THROW", {
+              web_socket_id: webSocketId,
+              packet_bytes: sizeOf(data),
+              ping_msg_ids: pingMsgIds,
+              error_name: error instanceof Error ? error.name : "Error",
+            });
+            throw error;
+          }
+        };
+      }
+    }
+
+    globalThis.WebSocket = ObservedWebSocket as typeof WebSocket;
+  } catch {
+    return null;
+  }
+
+  return {
+    markPingSend(pingMsgIds) { currentPingMsgIds = [...pingMsgIds]; },
+    clearPingSend() { currentPingMsgIds = []; },
+    bindConnection(nextConnectionId) { connectionId = nextConnectionId; },
+    latestSocketId: () => latestSocketId,
+    detach() {
+      enabled = false;
+      if (globalThis.WebSocket !== NativeWebSocket) {
+        globalThis.WebSocket = NativeWebSocket;
+      }
+      sockets.clear();
+    },
+  };
+}
+
+function primarySessionConnection(active: TelegramClient): any | null {
+  const base = (active as any)._client || active;
+  return base?.mt?.network?._dcConnections?.get(activePrimaryDcId)?.main?._connections?.[0] || null;
+}
+
+function pingTraceSnapshot(active: TelegramClient, connection = primarySessionConnection(active)): Record<string, unknown> {
+  const session = connection?._session as BoundTempSession | undefined;
+  const lastPingMsgId = session?.lastPingMsgId as any;
+  const pending = Boolean(lastPingMsgId && (typeof lastPingMsgId.isZero !== "function" || !lastPingMsgId.isZero()));
+  const finite = (value: unknown): number | null => Number.isFinite(Number(value)) ? Number(value) : null;
+  return {
+    connection_id: connection ? `${activeClientInstanceId || "unknown-client"}:dc-${activePrimaryDcId}:primary-0:uid-${String(connection._uid ?? "unknown")}` : null,
+    connection_uid: connection?._uid ?? null,
+    last_ping_pending: pending,
+    last_ping_msg_id: pending ? String(lastPingMsgId) : null,
+    last_ping_time_monotonic_ms: finite(session?.lastPingTime),
+    last_ping_rtt_ms: finite(session?.lastPingRtt),
+  };
+}
+
+/**
+ * Task 2 passive instrumentation. The hooks only read mtcute's existing
+ * SessionConnection state around methods mtcute invokes itself. They do not
+ * schedule work, wait, send RPCs, or alter the connection outcome.
+ */
+function observeMtprotoPassivePing(
+  active: TelegramClient,
+  requestId: string,
+  ingressTrace: Task2IngressTrace | null = null,
+): () => void {
+  const connection = primarySessionConnection(active);
+  const session = connection?._session as any;
+  if (!connection || !session) return () => {};
+
+  // This observer is limited to calls mtcute already makes. It does not
+  // schedule work, send data, or alter mtcute return values.
+  const PING_DELAY_DISCONNECT_ID = 4_081_220_492;
+  const messageId = (value: unknown): string | null =>
+    value === null || value === undefined ? null : String(value);
+  const pingFromSerializedBytes = (value: unknown): string | null => {
+    if (!ArrayBuffer.isView(value) || value.byteLength < 12) return null;
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== PING_DELAY_DISCONNECT_ID) return null;
+    return typeof view.getBigInt64 === "function"
+      ? String(view.getBigInt64(4, true))
+      : Array.from(bytes.slice(4, 12)).reverse()
+        .reduce((result, byte) => result * 256n + BigInt(byte), 0n).toString();
+  };
+  const pingRecords = new Map<string, {
+    pingId: string;
+    pendingKey: unknown;
+    containerId: string | null;
+    containerKey: unknown;
+  }>();
+  let flushPingIds: string[] | null = null;
+  let resetOrigin: string | null = null;
+  let flushing = false;
+  const trace = (stage: string, detail: Record<string, unknown> = {}) => stage1Trace(requestId, stage, {
+    ...detail,
+    web_socket_id: ingressTrace?.latestSocketId() || null,
+    ...pingTraceSnapshot(active, connection),
+    ...mtprotoConnectionSnapshot(active),
+  });
+  const observedConnectionId = String(pingTraceSnapshot(active, connection).connection_id || "");
+  if (observedConnectionId) ingressTrace?.bindConnection(observedConnectionId);
+  const tracePingRecords = (ids: string[], detail: Record<string, unknown>) => {
+    ids.forEach(pingMsgId => {
+      const record = pingRecords.get(pingMsgId);
+      const pending = record ? session.pendingMessages?.get?.(record.pendingKey) : null;
+      trace("TASK2_PING_BATCH_CONTAINER", {
+        ping_msg_id: pingMsgId,
+        ping_id: record?.pingId || null,
+        container_id: messageId(pending?.containerId) || record?.containerId || pingMsgId,
+        pending_message_present: Boolean(pending),
+        ...detail,
+      });
+    });
+  };
+  const isTrackedPingOrContainer = (id: unknown): string[] => {
+    const key = messageId(id);
+    if (!key) return [];
+    return [...pingRecords.entries()]
+      .filter(([pingMsgId, record]) => pingMsgId === key || record.containerId === key)
+      .map(([pingMsgId]) => pingMsgId);
+  };
+
+  const originalFlush = connection._flush;
+  const originalDoFlush = connection._doFlush;
+  const originalWriteMessage = session.writeMessage;
+  const originalPendingSet = session.pendingMessages?.set;
+  const originalSend = connection.send;
+  const originalPong = connection._onPong;
+  const originalAck = connection._onMessageAcked;
+  const originalFailed = connection._onMessageFailed;
+  const originalResetLastPing = session.resetLastPing;
+  const originalResetState = session.resetState;
+  const originalResetSession = connection._resetSession;
+  const originalOnMessage = connection.onMessage;
+  const originalDecryptMessage = session.decryptMessage;
+  const originalHandleRawMessage = connection._handleRawMessage;
+  const originalHandleMessage = connection._handleMessage;
+  const originalHandleError = connection.handleError;
+  const originalCodecDecode = connection._codec?.decode;
+  const onUsable = () => trace("TASK2_PING_SOCKET_CONNECTED");
+  if (typeof connection.onUsable?.add === "function") connection.onUsable.add(onUsable);
+
+  if (typeof originalWriteMessage === "function") {
+    session.writeMessage = function (this: unknown, writer: unknown, content: unknown, ...args: unknown[]) {
+      const pingId = pingFromSerializedBytes(content);
+      const result = originalWriteMessage.call(this, writer, content, ...args);
+      if (pingId !== null) {
+        const pingMsgId = messageId(result);
+        if (pingMsgId) {
+          pingRecords.set(pingMsgId, {
+            pingId,
+            pendingKey: result,
+            containerId: pingMsgId,
+            containerKey: result,
+          });
+          flushPingIds?.push(pingMsgId);
+          trace("TASK2_PING_SERIALIZED_WRITE_MESSAGE", {
+            ping_msg_id: pingMsgId,
+            ping_id: pingId,
+            serialized_byte_length: ArrayBuffer.isView(content) ? content.byteLength : null,
+          });
+        }
+      }
+      return result;
+    };
+  }
+  if (typeof originalPendingSet === "function") {
+    session.pendingMessages.set = function (this: unknown, key: unknown, value: any) {
+      const result = originalPendingSet.call(this, key, value);
+      if (value?._ === "ping") {
+        const pingMsgId = messageId(key);
+        if (pingMsgId) {
+          const record = pingRecords.get(pingMsgId);
+          if (record) {
+            record.pendingKey = key;
+            record.containerId = messageId(value.containerId) || pingMsgId;
+            record.containerKey = value.containerId || key;
+          }
+          trace("TASK2_PING_PENDING_MESSAGES_SET", {
+            ping_msg_id: pingMsgId,
+            ping_id: messageId(value.pingId) || record?.pingId || null,
+            container_id: messageId(value.containerId) || pingMsgId,
+          });
+        }
+      }
+      if (value?._ === "container") {
+        for (const pingMsgId of value.msgIds || []) {
+          const keyId = messageId(pingMsgId);
+          const record = keyId ? pingRecords.get(keyId) : null;
+          if (record) {
+            record.containerId = messageId(key) || null;
+            record.containerKey = key;
+          }
+        }
+      }
+      return result;
+    };
+  }
+  if (typeof originalFlush === "function") {
+    connection._flush = function (this: unknown, ...args: unknown[]) {
+      flushing = true;
+      try {
+        return originalFlush.apply(this, args);
+      } finally {
+        flushing = false;
+      }
+    };
+  }
+  if (typeof originalDoFlush === "function") {
+    connection._doFlush = function (this: unknown, ...args: unknown[]) {
+      const before = pingTraceSnapshot(active, connection);
+      const parent = flushPingIds;
+      flushPingIds = [];
+      try {
+        const result = originalDoFlush.apply(this, args);
+        const after = pingTraceSnapshot(active, connection);
+        if (before.last_ping_pending !== true && after.last_ping_pending === true) {
+          trace("TASK2_PING_PING_SENT", {
+            ping_msg_id: after.last_ping_msg_id,
+            ping_sent_at_monotonic_ms: after.last_ping_time_monotonic_ms,
+          });
+        }
+        return result;
+      } finally {
+        flushPingIds = parent;
+      }
+    };
+  }
+  if (typeof originalSend === "function") {
+    connection.send = function (this: unknown, data: unknown, ...args: unknown[]) {
+      const ids = [...(flushPingIds || [])];
+      const persistentWriterPresentAtCall = Boolean(connection._writer);
+      if (ids.length) {
+        tracePingRecords(ids, {
+          phase: "before_send",
+          encrypted_byte_length: ArrayBuffer.isView(data) ? data.byteLength : null,
+          persistent_writer_present: persistentWriterPresentAtCall,
+          queued_before_send: Number(connection._sendOnceConnected?.length || 0),
+        });
+        trace("TASK2_PING_SEND_CALLED", {
+          ping_msg_ids: ids,
+          encrypted_byte_length: ArrayBuffer.isView(data) ? data.byteLength : null,
+          persistent_writer_present: persistentWriterPresentAtCall,
+          queued_before_send: Number(connection._sendOnceConnected?.length || 0),
+        });
+      }
+      if (ids.length) ingressTrace?.markPingSend(ids);
+      let result: unknown;
+      try {
+        result = originalSend.call(this, data, ...args);
+      } finally {
+        if (ids.length) ingressTrace?.clearPingSend();
+      }
+      if (ids.length && result && typeof (result as Promise<unknown>).then === "function") {
+        void (result as Promise<unknown>).then(
+          () => trace("TASK2_PING_SEND_RESOLVED", {
+            ping_msg_ids: ids,
+            persistent_writer_present_at_call: persistentWriterPresentAtCall,
+            semantics: "PersistentConnection.send resolved",
+          }),
+          error => trace("TASK2_PING_SEND_REJECTED", {
+            ping_msg_ids: ids,
+            error_name: error instanceof Error ? error.name : String(error || "Error"),
+          }),
+        );
+      }
+      return result;
+    };
+  }
+  if (typeof originalCodecDecode === "function") {
+    connection._codec.decode = async function (this: unknown, buffer: any, eof: unknown, ...args: unknown[]) {
+      trace("TASK2_INPUT_FRAMED_READER_DECODE_BEGIN", {
+        framed_buffer_available: Number.isFinite(Number(buffer?.available)) ? Number(buffer.available) : null,
+        framed_eof: Boolean(eof),
+      });
+      try {
+        const frame = await originalCodecDecode.call(this, buffer, eof, ...args);
+        if (frame !== null && frame !== undefined) {
+          trace("TASK2_INPUT_FRAMED_READER_FRAME", {
+            framed_frame_bytes: ArrayBuffer.isView(frame) ? frame.byteLength : null,
+          });
+        }
+        return frame;
+      } catch (error) {
+        trace("TASK2_INPUT_FRAMED_READER_ERROR", {
+          error_name: error instanceof Error ? error.name : "Error",
+          error_message: diagnosticErrorMessage(error),
+        });
+        throw error;
+      }
+    };
+  }
+  if (typeof originalOnMessage === "function") {
+    connection.onMessage = function (this: unknown, data: unknown, ...args: unknown[]) {
+      trace("TASK2_INPUT_SESSION_ON_MESSAGE_ENTER", {
+        framed_frame_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
+      });
+      try {
+        const result = originalOnMessage.call(this, data, ...args);
+        trace("TASK2_INPUT_SESSION_ON_MESSAGE_EXIT", {
+          framed_frame_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
+        });
+        return result;
+      } catch (error) {
+        trace("TASK2_INPUT_SESSION_ON_MESSAGE_THROW", {
+          error_name: error instanceof Error ? error.name : "Error",
+          error_message: diagnosticErrorMessage(error),
+        });
+        throw error;
+      }
+    };
+  }
+  if (typeof originalDecryptMessage === "function") {
+    session.decryptMessage = function (this: unknown, data: unknown, ...args: unknown[]) {
+      trace("TASK2_INPUT_MTPROTO_DECRYPT_BEGIN", {
+        encrypted_message_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
+      });
+      try {
+        const result = originalDecryptMessage.call(this, data, ...args);
+        trace("TASK2_INPUT_MTPROTO_DECRYPT_OK", {
+          encrypted_message_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
+        });
+        return result;
+      } catch (error) {
+        trace("TASK2_INPUT_MTPROTO_DECRYPT_ERROR", {
+          error_name: error instanceof Error ? error.name : "Error",
+          error_message: diagnosticErrorMessage(error),
+        });
+        throw error;
+      }
+    };
+  }
+  if (typeof originalHandleRawMessage === "function") {
+    connection._handleRawMessage = function (this: unknown, incomingMsgId: unknown, seqNo: unknown, reader: any, ...args: unknown[]) {
+      const originalUint = reader?.uint;
+      let uintCalls = 0;
+      if (typeof originalUint === "function") {
+        reader.uint = function (this: unknown, ...uintArgs: unknown[]) {
+          const value = originalUint.apply(this, uintArgs);
+          uintCalls += 1;
+          if (uintCalls === 1) {
+            const objectId = Number(value);
+            try { reader.__task2RawObjectId = objectId; } catch {}
+            trace("TASK2_INPUT_MT_RAW_OBJECT", {
+              incoming_msg_id: messageId(incomingMsgId),
+              incoming_seq_no: Number.isFinite(Number(seqNo)) ? Number(seqNo) : null,
+              object_id_hex: Number.isFinite(objectId) ? `0x${objectId.toString(16)}` : null,
+              raw_kind: objectId === 1_945_237_724 ? "container" : objectId === 812_830_625 ? "gzip_packed" : "object",
+            });
+          } else if (uintCalls === 2 && Number((reader as any).__task2RawObjectId) === 1_945_237_724) {
+            trace("TASK2_INPUT_MT_CONTAINER", {
+              incoming_msg_id: messageId(incomingMsgId),
+              container_message_count: Number.isFinite(Number(value)) ? Number(value) : null,
+            });
+          }
+          return value;
+        };
+        // The marker is read only by this wrapper and is removed below.
+        try { reader.__task2RawObjectId = undefined; } catch {}
+      }
+      try {
+        return originalHandleRawMessage.call(this, incomingMsgId, seqNo, reader, ...args);
+      } finally {
+        if (typeof originalUint === "function") {
+          try { reader.uint = originalUint; } catch {}
+        }
+      }
+    };
+  }
+  if (typeof originalHandleMessage === "function") {
+    connection._handleMessage = function (this: unknown, incomingMsgId: unknown, message: any, ...args: unknown[]) {
+      trace("TASK2_INPUT_MT_MESSAGE_DECODED", {
+        incoming_msg_id: messageId(incomingMsgId),
+        mt_message_type: typeof message?._ === "string" ? message._ : "unknown",
+        mt_is_pong: message?._ === "mt_pong",
+      });
+      return originalHandleMessage.call(this, incomingMsgId, message, ...args);
+    };
+  }
+  if (typeof originalHandleError === "function") {
+    connection.handleError = function (this: unknown, error: unknown, ...args: unknown[]) {
+      trace("TASK2_INPUT_TRANSPORT_ERROR", {
+        error_name: error instanceof Error ? error.name : "Error",
+        error_message: diagnosticErrorMessage(error),
+      });
+      return originalHandleError.call(this, error, ...args);
+    };
+  }
+  if (typeof originalAck === "function") {
+    connection._onMessageAcked = function (this: unknown, ackMsgId: unknown, ...args: unknown[]) {
+      const relatedPingMsgIds = isTrackedPingOrContainer(ackMsgId);
+      if (relatedPingMsgIds.length) {
+        trace("TASK2_PING_ACK_OBSERVED", {
+          ack_msg_id: messageId(ackMsgId),
+          related_ping_msg_ids: relatedPingMsgIds,
+        });
+      }
+      return originalAck.call(this, ackMsgId, ...args);
+    };
+  }
+  if (typeof originalPong === "function") {
+    connection._onPong = function (this: unknown, pong: any, ...args: unknown[]) {
+      const before = pingTraceSnapshot(active, connection);
+      const pongMsgId = messageId(pong?.msgId);
+      const pongPingId = messageId(pong?.pingId);
+      const info = pong?.msgId ? session.pendingMessages?.get?.(pong.msgId) : null;
+      const expectedPingId = messageId(info?.pingId);
+      const lookup = !info ? "unknown" : info._ === "ping" ? "ping" : String(info._);
+      trace("TASK2_PING_PONG_OBSERVED", {
+        pong_msg_id: pongMsgId,
+        pong_ping_id: pongPingId,
+        pending_lookup: lookup,
+        expected_ping_id: expectedPingId,
+        ping_id_matches: info?._ === "ping" ? expectedPingId === pongPingId : null,
+        current_last_ping_matches: pongMsgId !== null && pongMsgId === messageId(session.lastPingMsgId),
+      });
+      const priorOrigin = resetOrigin;
+      resetOrigin = "on_pong";
+      try {
+        const result = originalPong.call(this, pong, ...args);
+        const after = pingTraceSnapshot(active, connection);
+        if (before.last_ping_pending === true && after.last_ping_pending !== true) {
+          trace("TASK2_PING_PONG_RECEIVED", {
+            ping_msg_id: before.last_ping_msg_id,
+            ping_sent_at_monotonic_ms: before.last_ping_time_monotonic_ms,
+            pong_msg_id: pongMsgId,
+            pong_ping_id: pongPingId,
+          });
+        }
+        trace("TASK2_PING_PONG_HANDLED", {
+          pong_msg_id: pongMsgId,
+          pong_ping_id: pongPingId,
+          pending_lookup: lookup,
+          outcome: lookup === "unknown"
+            ? "unknown"
+            : lookup !== "ping"
+              ? "not_ping"
+              : expectedPingId === pongPingId
+                ? "known_match"
+                : "known_ping_id_mismatch",
+        });
+        return result;
+      } finally {
+        resetOrigin = priorOrigin;
+      }
+    };
+  }
+  if (typeof originalFailed === "function") {
+    connection._onMessageFailed = function (this: unknown, failedMsgId: unknown, reason: unknown, ...args: unknown[]) {
+      const info = session.pendingMessages?.get?.(failedMsgId);
+      const relatedPingMsgIds = isTrackedPingOrContainer(failedMsgId);
+      if (info?._ === "ping" || relatedPingMsgIds.length) {
+        trace("TASK2_PING_MESSAGE_FAILED", {
+          failed_msg_id: messageId(failedMsgId),
+          failure_reason: String(reason || ""),
+          pending_lookup: info?._ || "unknown",
+          related_ping_msg_ids: relatedPingMsgIds,
+        });
+      }
+      const priorOrigin = resetOrigin;
+      resetOrigin = "on_message_failed:" + String(reason || "");
+      try {
+        return originalFailed.call(this, failedMsgId, reason, ...args);
+      } finally {
+        resetOrigin = priorOrigin;
+      }
+    };
+  }
+  if (typeof originalResetState === "function") {
+    session.resetState = function (this: unknown, ...args: unknown[]) {
+      const priorOrigin = resetOrigin;
+      resetOrigin ||= "session_reset_state";
+      try {
+        return originalResetState.apply(this, args);
+      } finally {
+        resetOrigin = priorOrigin;
+      }
+    };
+  }
+  if (typeof originalResetSession === "function") {
+    connection._resetSession = function (this: unknown, reason: unknown, ...args: unknown[]) {
+      const priorOrigin = resetOrigin;
+      resetOrigin = "reset_session:" + String(reason || "");
+      try {
+        return originalResetSession.call(this, reason, ...args);
+      } finally {
+        resetOrigin = priorOrigin;
+      }
+    };
+  }
+  if (typeof originalResetLastPing === "function") {
+    session.resetLastPing = function (this: unknown, withTime = false, ...args: unknown[]) {
+      const previousMsgId = messageId(session.lastPingMsgId);
+      const previousTime = session.lastPingTime;
+      const activeBefore = Boolean(connection._active);
+      const activeNow = typeof connection._isActive === "function"
+        ? Boolean(connection._isActive())
+        : null;
+      const inferredOrigin = resetOrigin ||
+        (flushing && activeBefore === false && activeNow === true
+          ? "inactive_to_active"
+          : "other");
+      trace("TASK2_PING_RESET_LAST_PING", {
+        reset_origin: inferredOrigin,
+        reset_with_time: Boolean(withTime),
+        previous_last_ping_msg_id: previousMsgId,
+        previous_last_ping_time_monotonic_ms: Number.isFinite(Number(previousTime)) ? Number(previousTime) : null,
+        active_before: activeBefore,
+        active_now: activeNow,
+        inactive_to_active: activeBefore === false && activeNow === true,
+      });
+      return originalResetLastPing.call(this, withTime, ...args);
+    };
+  }
+
+  return () => {
+    if (connection._flush !== originalFlush) connection._flush = originalFlush;
+    if (connection._doFlush !== originalDoFlush) connection._doFlush = originalDoFlush;
+    if (connection.send !== originalSend) connection.send = originalSend;
+    if (connection._onPong !== originalPong) connection._onPong = originalPong;
+    if (connection._onMessageAcked !== originalAck) connection._onMessageAcked = originalAck;
+    if (connection._onMessageFailed !== originalFailed) connection._onMessageFailed = originalFailed;
+    if (connection._resetSession !== originalResetSession) connection._resetSession = originalResetSession;
+    if (connection.onMessage !== originalOnMessage) connection.onMessage = originalOnMessage;
+    if (session.decryptMessage !== originalDecryptMessage) session.decryptMessage = originalDecryptMessage;
+    if (connection._handleRawMessage !== originalHandleRawMessage) connection._handleRawMessage = originalHandleRawMessage;
+    if (connection._handleMessage !== originalHandleMessage) connection._handleMessage = originalHandleMessage;
+    if (connection.handleError !== originalHandleError) connection.handleError = originalHandleError;
+    if (connection._codec?.decode !== originalCodecDecode) connection._codec.decode = originalCodecDecode;
+    if (session.writeMessage !== originalWriteMessage) session.writeMessage = originalWriteMessage;
+    if (session.pendingMessages?.set !== originalPendingSet) session.pendingMessages.set = originalPendingSet;
+    if (session.resetLastPing !== originalResetLastPing) session.resetLastPing = originalResetLastPing;
+    if (session.resetState !== originalResetState) session.resetState = originalResetState;
+    connection.onUsable?.remove?.(onUsable);
+  };
+}
+
+function diagnosticErrorMessage(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (!message) return null;
+  return message
+    .replace(/\b[A-Za-z0-9_+\/-]{32,}={0,2}\b/g, "[REDACTED]")
+    .slice(0, 320);
+}
+
+function observeMtprotoSessionReset(active: TelegramClient, requestId: string, passivePingTrace = false): () => void {
+  const base = (active as any)._client || active;
+  const connection = base?.mt?.network?._dcConnections?.get(activePrimaryDcId)?.main?._connections?.[0] as any;
+  const originalReset = connection?._resetSession;
+  if (typeof originalReset !== "function") return () => {};
+  const observedReset = function (this: unknown, reason?: unknown, ...args: unknown[]) {
+    const resetReason = typeof reason === "string" ? reason.slice(0, 180) : String(reason || "unknown").slice(0, 180);
+    stage1Trace(requestId, "WORKER_MTPROTO_SESSION_RESET", {
+      reason: resetReason,
+      ...mtprotoConnectionSnapshot(active),
+    });
+    if (passivePingTrace) {
+      stage1Trace(requestId, "TASK2_PING_RESET_SESSION", {
+        reason: resetReason,
+        ...pingTraceSnapshot(active, connection),
+        ...mtprotoConnectionSnapshot(active),
+      });
+    }
+    return originalReset.apply(this, [reason, ...args]);
+  };
+  connection._resetSession = observedReset;
+  return () => {
+    if (connection._resetSession === observedReset) connection._resetSession = originalReset;
+  };
+}
+
+/**
+ * Diagnostic-only hooks for the Stage 1 browser trace. They do not configure
+ * mtcute retries or reconnects; they only report the state mtcute already
+ * publishes while the real client is running.
+ */
+function observeMtprotoConnection(active: TelegramClient, requestId: string, passivePingTrace = false): () => void {
+  let connectionAttempts = 0;
+  let previouslyConnected = false;
+  let reconnectInFlight = false;
+  const traceState = (stage: string, detail: Record<string, unknown> = {}) => {
+    stage1Trace(requestId, stage, {
+      ...mtprotoConnectionSnapshot(active),
+      ...detail,
+    });
+  };
+  const onState = (state: string) => {
+    const reconnect = state === "connecting" && previouslyConnected;
+    if (state === "connecting") connectionAttempts += 1;
+    traceState("WORKER_MTPROTO_CONNECTION_STATE", {
+      state,
+      connection_attempt: connectionAttempts,
+      reconnect,
+    });
+    if (passivePingTrace && state === "connecting") {
+      stage1Trace(requestId, "TASK2_PING_CONNECTING", {
+        connection_attempt: connectionAttempts,
+        reconnect,
+        ...pingTraceSnapshot(active),
+        ...mtprotoConnectionSnapshot(active),
+      });
+    }
+    if (state === "offline") {
+      traceState("WORKER_MTPROTO_DISCONNECTED", { connection_attempt: connectionAttempts });
+    }
+    if (reconnect) {
+      reconnectInFlight = true;
+      traceState("WORKER_MTPROTO_RECONNECT_BEGIN", { connection_attempt: connectionAttempts });
+    }
+    if (state === "connected") {
+      if (passivePingTrace) {
+        stage1Trace(requestId, "TASK2_PING_CONNECTED", {
+          connection_attempt: connectionAttempts,
+          reconnect,
+          ...pingTraceSnapshot(active),
+          ...mtprotoConnectionSnapshot(active),
+        });
+      }
+      if (reconnectInFlight) {
+        traceState("WORKER_MTPROTO_RECONNECT_READY", { connection_attempt: connectionAttempts });
+        reconnectInFlight = false;
+      }
+      previouslyConnected = true;
+    }
+  };
+  const onError = (error: Error) => {
+    traceState("WORKER_MTPROTO_CLIENT_ERROR", {
+      error_name: error instanceof Error ? error.name : "unknown",
+      error_message: diagnosticErrorMessage(error),
+    });
+  };
+  active.onConnectionState.add(onState as never);
+  active.onError.add(onError as never);
+  return () => {
+    active.onConnectionState.remove(onState as never);
+    active.onError.remove(onError as never);
+  };
+}
+
+/**
+ * `getChat`/`getFullChat` do a little local peer work before issuing their
+ * internal mtcute `call`.  Observing that boundary leaves the elapsed promise
+ * as the exact client/RPC interval, while preserving the productive call.
+ */
+async function observeMtprotoRpc<T>(
+  active: TelegramClient,
+  requestId: string,
+  stagePrefix: string,
+  expectedMethods: readonly string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!stage1TraceContext) return operation();
+  const previousRpc = activeMtprotoRpc;
+  activeMtprotoRpc = { requestId, stage: stagePrefix };
+  const core = (active as unknown as { _client?: { call?: (...args: any[]) => Promise<unknown> } })._client;
+  if (typeof core?.call !== "function") {
+    stage1Trace(requestId, `${stagePrefix}_RPC_INVOKED`, {
+      boundary: "high_level_method",
+      ...mtprotoConnectionSnapshot(active),
+    });
+    try {
+      const result = await operation();
+      stage1Trace(requestId, `${stagePrefix}_RPC_RESPONSE_RECEIVED`, {
+        boundary: "high_level_method",
+        ...mtprotoConnectionSnapshot(active),
+      });
+      return result;
+    } catch (error) {
+      stage1Trace(requestId, `${stagePrefix}_RPC_ERROR`, {
+        error_name: error instanceof Error ? error.name : "unknown",
+        error_message: diagnosticErrorMessage(error),
+        ...mtprotoConnectionSnapshot(active),
+      });
+      throw error;
+    } finally {
+      activeMtprotoRpc = previousRpc;
+    }
+  }
+
+  const originalCall = core.call;
+  let observed = false;
+  core.call = function stage1ObservedCall(this: unknown, request: { _?: unknown }, ...args: any[]): Promise<unknown> {
+    const method = typeof request?._ === "string" ? request._ : "unknown";
+    if (!expectedMethods.includes(method)) return originalCall.apply(this, [request, ...args]);
+    observed = true;
+    stage1Trace(requestId, `${stagePrefix}_RPC_SENT`, {
+      rpc_method: method,
+      ...mtprotoConnectionSnapshot(active),
+    });
+    return originalCall.apply(this, [request, ...args]).then(
+      result => {
+        stage1Trace(requestId, `${stagePrefix}_RPC_RESPONSE_RECEIVED`, {
+          rpc_method: method,
+          ...mtprotoConnectionSnapshot(active),
+        });
+        return result;
+      },
+      error => {
+        stage1Trace(requestId, `${stagePrefix}_RPC_ERROR`, {
+          rpc_method: method,
+          error_name: error instanceof Error ? error.name : "unknown",
+          error_message: diagnosticErrorMessage(error),
+          ...mtprotoConnectionSnapshot(active),
+        });
+        throw error;
+      },
+    );
+  };
+
+  try {
+    stage1Trace(requestId, `${stagePrefix}_RPC_INVOKED`, { boundary: "high_level_method" });
+    return await operation();
+  } finally {
+    core.call = originalCall;
+    if (!observed) stage1Trace(requestId, `${stagePrefix}_RPC_NOT_OBSERVED`, mtprotoConnectionSnapshot(active));
+    activeMtprotoRpc = previousRpc;
+  }
+}
 let client: TelegramClient | null = null;
 let chatId = 0;
 let expectedBotId = "";
 let vaultVerified = false;
+let knownIndexPointer: { messageId: number | null; revision: number | null } = { messageId: null, revision: null };
 const activeStreams = new Map<string, { controller: AbortController; acknowledge: (() => void) | null }>();
 const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
 const activeWarmTransfers = new Map<number, AbortController>();
@@ -274,7 +1151,22 @@ function assertBoundTempPrimarySession(next: TelegramClient, sessionId: BoundTem
   }
 }
 
-async function closeClient(): Promise<void> {
+async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
+  detachMtprotoPassiveIngressDiagnostics?.();
+  detachMtprotoPassiveIngressDiagnostics = null;
+  detachMtprotoPassivePingDiagnostics?.();
+  detachMtprotoPassivePingDiagnostics = null;
+  detachMtprotoSessionDiagnostics?.();
+  detachMtprotoSessionDiagnostics = null;
+  const currentAtClose = client;
+  if (currentAtClose && requestId) {
+    stage1Trace(requestId, "WORKER_MTPROTO_CLIENT_CLOSE_BEGIN", {
+      reason,
+      ...mtprotoConnectionSnapshot(currentAtClose),
+    });
+  }
+  detachMtprotoDiagnostics?.();
+  detachMtprotoDiagnostics = null;
   for (const stream of activeStreams.values()) {
     stream.controller.abort();
     stream.acknowledge?.();
@@ -301,11 +1193,23 @@ async function closeClient(): Promise<void> {
   playbackMessageId = null;
   notifyScheduler();
   const current = client;
+  const closingClientInstanceId = activeClientInstanceId;
   client = null;
   chatId = 0;
   expectedBotId = "";
   vaultVerified = false;
+  knownIndexPointer = { messageId: null, revision: null };
+  activeMtprotoRpc = null;
+  activeClientInstanceId = null;
+  activePrimaryDcId = 0;
   if (current) await current.destroy().catch(() => {});
+  if (currentAtClose && requestId) {
+    stage1Trace(requestId, "WORKER_MTPROTO_CLIENT_CLOSE_DONE", {
+      reason,
+      worker_instance_id: workerInstanceId,
+      client_instance_id: closingClientInstanceId,
+    });
+  }
 }
 
 function downloadableMedia(message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number]): FileDownloadLocation {
@@ -441,7 +1345,12 @@ async function resolvePlaybackMedia(active: TelegramClient, messageId: number): 
 async function initialize(command: Extract<WebTransportWorkerCommand, { op: "initialize" }>): Promise<void> {
   const started = Date.now();
   playTrace("WORKER_INITIALIZE_BEGIN");
-  await closeClient();
+  stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_INITIALIZE", {
+    worker_instance_id: workerInstanceId,
+    prior_client_instance_id: activeClientInstanceId,
+    prior_client_present: Boolean(client),
+  });
+  await closeClient("initialize_replacement", command.requestId);
   const {
     chat_id,
     expected_bot_id,
@@ -450,6 +1359,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     temp_session_id,
     temp_session_state,
     temp_primary_dcs,
+    index_pointer,
   } = command.session;
   const startupMessageIds = Array.from(new Set(
     (command.startupMessageIds || []).map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
@@ -464,6 +1374,12 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud returned incomplete temporary transport authorization.");
   }
 
+  activePrimaryDcId = primaryDcId;
+  const passivePingTrace = task2PassivePingTraceEnabled();
+  activeClientInstanceId = `${workerInstanceId}:client-${++clientSerial}`;
+  const ingressTrace = passivePingTrace
+    ? installTask2PassiveIngressTrace(command.requestId, activeClientInstanceId)
+    : null;
   const next = new TelegramClient({
     apiId: temp_api_id,
     apiHash: "",
@@ -471,6 +1387,20 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     crypto: new WebCryptoProvider({ wasmInput: mtcuteWasmUrl }),
     disableUpdates: true,
   });
+  stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_CREATED", {
+    worker_instance_id: workerInstanceId,
+    client_instance_id: activeClientInstanceId,
+    ...mtprotoConnectionSnapshot(next),
+  });
+  if (passivePingTrace) {
+    stage1Trace(command.requestId, "TASK2_PING_CLIENT_CREATED", {
+      ...pingTraceSnapshot(next),
+      ...mtprotoConnectionSnapshot(next),
+    });
+  }
+  const detachDiagnostics = observeMtprotoConnection(next, command.requestId, passivePingTrace);
+  let detachSessionDiagnostics: (() => void) | null = null;
+  let detachPassivePingDiagnostics: (() => void) | null = null;
   try {
     await next.importSession({
       primaryDcs: temp_primary_dcs as any,
@@ -480,11 +1410,18 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     const restoreConnect = installBoundTempConnectHook(temp_session_id, temp_session_state, primaryDcId);
     const endConnectTrace = playTraceSpan("WORKER_MTPROTO_CONNECT");
     try {
+      stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_BEGIN", mtprotoConnectionSnapshot(next));
       await next.connect();
+      detachSessionDiagnostics = observeMtprotoSessionReset(next, command.requestId, passivePingTrace);
+      if (passivePingTrace) detachPassivePingDiagnostics = observeMtprotoPassivePing(next, command.requestId, ingressTrace);
       endConnectTrace();
+      stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_END", mtprotoConnectionSnapshot(next));
       playTrace("DIRECT_MTPROTO_READY", { elapsed_ms: Date.now() - started });
     } catch (error) {
       endConnectTrace("error");
+      stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_ERROR", {
+        error_name: error instanceof Error ? error.name : "unknown",
+      });
       throw error;
     } finally {
       restoreConnect();
@@ -492,9 +1429,18 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     assertBoundTempPrimarySession(next, temp_session_id, primaryDcId);
 
     client = next;
+    detachMtprotoDiagnostics = detachDiagnostics;
+    detachMtprotoSessionDiagnostics = detachSessionDiagnostics;
+    detachMtprotoPassivePingDiagnostics = detachPassivePingDiagnostics;
+    detachMtprotoPassiveIngressDiagnostics = ingressTrace?.detach || null;
     chatId = numericChatId;
     expectedBotId = String(expected_bot_id);
     vaultVerified = false;
+    knownIndexPointer = {
+      messageId: Number.isSafeInteger(Number(index_pointer?.message_id)) && Number(index_pointer?.message_id) > 0 ? Number(index_pointer?.message_id) : null,
+      revision: Number.isSafeInteger(Number(index_pointer?.revision)) && Number(index_pointer?.revision) > 0 ? Number(index_pointer?.revision) : null,
+    };
+    stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_READY", mtprotoConnectionSnapshot(next));
 
     if (startupMessageIds.length > 0) {
       try {
@@ -515,11 +1461,23 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       }
     }
   } catch (error) {
+    detachPassivePingDiagnostics?.();
+    detachSessionDiagnostics?.();
+    detachDiagnostics();
+    ingressTrace?.detach();
+    if (detachMtprotoDiagnostics === detachDiagnostics) detachMtprotoDiagnostics = null;
     if (client === next) {
       client = null;
       chatId = 0;
       expectedBotId = "";
     }
+    stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_INIT_FAILED", {
+      error_name: error instanceof Error ? error.name : "unknown",
+      error_message: diagnosticErrorMessage(error),
+      ...mtprotoConnectionSnapshot(next),
+    });
+    activeClientInstanceId = null;
+    activePrimaryDcId = 0;
     await next.destroy().catch(() => {});
     throw error;
   } finally {
@@ -553,13 +1511,25 @@ async function verifyIdentity(): Promise<void> {
   }
 }
 
-async function verifyReady(): Promise<void> {
+async function verifyReady(requestId: string): Promise<void> {
   const active = requireConnected();
   try {
-    await active.getChat(chatId);
+    stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_BEGIN");
+    await observeMtprotoRpc(
+      active,
+      requestId,
+      "WORKER_VERIFY_GET_CHAT",
+      ["channels.getChannels", "messages.getChats"],
+      () => active.getChat(chatId),
+    );
+    stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_LOCAL_DONE");
     vaultVerified = true;
+    stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_END");
     playTrace("DIRECT_BACKGROUND_GET_CHAT_OK");
   } catch (error) {
+    stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_ERROR", {
+      error_name: error instanceof Error ? error.name : "unknown",
+    });
     playTrace("DIRECT_BACKGROUND_GET_CHAT_FAILED", { error_name: error instanceof Error ? error.name : "unknown" });
     throw error;
   }
@@ -605,6 +1575,24 @@ function cancelIndex(targetRequestId: string): { cancelled: boolean } {
   return { cancelled: true };
 }
 
+function preemptWarmTransfersForIndex(): void {
+  let batches = 0;
+  for (const control of Array.from(activePrefetchBatches.values())) {
+    batches += 1;
+    cancelPrefetchBatch(control.requestId);
+  }
+  let aborted = 0;
+  for (const controller of activeWarmTransfers.values()) {
+    if (!controller.signal.aborted) {
+      controller.abort();
+      aborted += 1;
+    }
+  }
+  if (batches || aborted) {
+    playTrace("INDEX_WARM_PREEMPT_ALL", { batches, aborted });
+  }
+}
+
 function assertIndexNotCancelled(requestId: string | null): void {
   if (requestId && cancelledIndexRequests.has(requestId)) {
     throw new WorkerTransportError("CANCELLED", "Galer Cloud INDEX read was cancelled.");
@@ -614,45 +1602,140 @@ function assertIndexNotCancelled(requestId: string | null): void {
 async function getLibraryIndex(requestId: string | null = null, allowMissing = false): Promise<WebTransportLibraryIndexResult> {
   const active = requireConnected();
   const started = Date.now();
+  // Startup warming is speculative. A library read is the authoritative
+  // boundary for an import/edit, so it must never wait behind concurrent
+  // prefix downloads on the same MTProto client.
+  preemptWarmTransfersForIndex();
   let failures = 0;
   let resumed = false;
   try {
     while (failures < 5) {
       assertIndexNotCancelled(requestId);
+      if (requestId) stage1Trace(requestId, "WORKER_INDEX_PRIORITY_WAIT_BEGIN");
       await waitUntilIndexPriorityAllowed();
+      if (requestId) stage1Trace(requestId, "WORKER_INDEX_PRIORITY_WAIT_DONE");
       assertIndexNotCancelled(requestId);
       activeIndexRequestId = requestId;
       activeIndexAbortReason = null;
       postIndexState(requestId, "active");
+      if (requestId) stage1Trace(requestId, "WORKER_INDEX_BEGIN", { resumed });
       playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", { request_id: requestId });
       let controller: AbortController | null = null;
       try {
-        const fullChat = await active.getFullChat(chatId);
+        const readCandidate = async (messageId: number): Promise<{ manifest: unknown; bytes: number } | null> => {
+          const lookupStartedAt = Date.now();
+          if (requestId) {
+            stage1Trace(requestId, "WORKER_INDEX_POINTER_LOOKUP_BEGIN", { message_id: messageId });
+            stage1Trace(requestId, "WORKER_INDEX_POINTER_GET_MESSAGES_BEGIN", {
+              message_id: messageId,
+              ...mtprotoConnectionSnapshot(active),
+            });
+            if (task2PassivePingTraceEnabled()) {
+              stage1Trace(requestId, "TASK2_PING_GET_MESSAGES_BEGIN", {
+                message_id: messageId,
+                ...pingTraceSnapshot(active),
+                ...mtprotoConnectionSnapshot(active),
+              });
+            }
+          }
+          let message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number] | undefined;
+          try {
+            const messages = requestId
+              ? await observeMtprotoRpc(
+                active,
+                requestId,
+                "WORKER_INDEX_POINTER_GET_MESSAGES",
+                ["channels.getMessages", "messages.getMessages"],
+                () => active.getMessages(chatId, [messageId]),
+              )
+              : await active.getMessages(chatId, [messageId]);
+            [message] = messages;
+          } finally {
+            if (requestId) {
+              stage1Trace(requestId, "WORKER_INDEX_POINTER_GET_MESSAGES_END", {
+                message_id: messageId,
+                found: Boolean(message),
+                elapsed_ms: Date.now() - lookupStartedAt,
+                ...mtprotoConnectionSnapshot(active),
+              });
+              if (task2PassivePingTraceEnabled()) {
+                stage1Trace(requestId, "TASK2_PING_GET_MESSAGES_END", {
+                  message_id: messageId,
+                  found: Boolean(message),
+                  elapsed_ms: Date.now() - lookupStartedAt,
+                  ...pingTraceSnapshot(active),
+                  ...mtprotoConnectionSnapshot(active),
+                });
+              }
+            }
+          }
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_POINTER_LOOKUP_DONE", { found: Boolean(message) });
+          // Telegram scopes this lookup to chatId, so a pointer from another
+          // vault cannot be read even if numeric message ids overlap.
+          if (!message || !String(message.text || "").startsWith(LIBRARY_INDEX_CAPTION)) return null;
+          controller = new AbortController();
+          activeIndexAbortController = controller;
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DOWNLOAD_BEGIN");
+          const bytes = await active.downloadAsBuffer(downloadableMedia(message), { abortSignal: controller.signal, stallTimeout: 20_000 });
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DOWNLOAD_DONE", { bytes: bytes.byteLength });
+          assertIndexNotCancelled(requestId);
+          if (controller.signal.aborted || !indexPriorityAllowed() || bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) return null;
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DECODE_BEGIN");
+          const decoded = new TextDecoder().decode(bytes);
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DECODE_DONE");
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_PARSE_BEGIN");
+          const manifest = JSON.parse(decoded) as Record<string, unknown>;
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_PARSE_DONE");
+          if (manifest?.schema !== "beatgaler.telegram.library" || Number(manifest?.version) !== 2) return null;
+          return { manifest, bytes: bytes.byteLength };
+        };
+        const finish = (messageId: number, loaded: { manifest: unknown; bytes: number }, pointerRepair?: WebTransportLibraryIndexResult["pointerRepair"]) => {
+          knownIndexPointer = { messageId, revision: knownIndexPointer.revision };
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DONE", { bytes: loaded.bytes, message_id: messageId, pointer_repair: Boolean(pointerRepair) });
+          playTrace("INDEX_DONE", { elapsed_ms: Date.now() - started, bytes: loaded.bytes, request_id: requestId, message_id: messageId });
+          return { manifest: loaded.manifest, messageId, ...(pointerRepair ? { pointerRepair } : {}) };
+        };
+
+        const pointerId = knownIndexPointer.messageId;
+        if (pointerId) {
+          const loaded = await readCandidate(pointerId);
+          assertIndexNotCancelled(requestId);
+          if (loaded) return finish(pointerId, loaded);
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_POINTER_INVALID", { message_id: pointerId });
+        }
+
+        // Pin lookup is recovery only. It repairs a missing/stale PostgreSQL
+        // shortcut without treating a failed shortcut as an empty library.
+        if (requestId) stage1Trace(requestId, "WORKER_INDEX_GET_FULL_CHAT_BEGIN");
+        const fullChat = requestId
+          ? await observeMtprotoRpc(active, requestId, "WORKER_INDEX_GET_FULL_CHAT", ["channels.getFullChannel", "messages.getFullChat"], () => active.getFullChat(chatId))
+          : await active.getFullChat(chatId);
         assertIndexNotCancelled(requestId);
         if (!indexPriorityAllowed()) { resumed = true; continue; }
         const pinnedId = Number(fullChat.pinnedMsgId || 0);
-        if (!Number.isInteger(pinnedId) || pinnedId <= 0) {
-          if (allowMissing) return { messageId: 0, manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] } };
-          throw new Error("Galer Cloud library index is still synchronizing.");
+        if (requestId) {
+          stage1Trace(requestId, "WORKER_INDEX_GET_FULL_CHAT_LOCAL_DONE", { pinned_message_present: pinnedId > 0 });
+          stage1Trace(requestId, "WORKER_INDEX_GET_FULL_CHAT_END");
         }
-        const [message] = await active.getMessages(chatId, [pinnedId]);
-        assertIndexNotCancelled(requestId);
-        if (!indexPriorityAllowed()) { resumed = true; continue; }
-        if (!message || !message.text.startsWith(LIBRARY_INDEX_CAPTION)) throw new Error("Galer Cloud library index is not available.");
-        controller = new AbortController();
-        activeIndexAbortController = controller;
-        const bytes = await active.downloadAsBuffer(downloadableMedia(message), {
-          abortSignal: controller.signal,
-          stallTimeout: 20_000,
-        });
-        assertIndexNotCancelled(requestId);
-        if (controller.signal.aborted || !indexPriorityAllowed()) {
-          resumed = true;
-          continue;
+        if (Number.isSafeInteger(pinnedId) && pinnedId > 0) {
+          const loaded = await readCandidate(pinnedId);
+          if (loaded) return finish(pinnedId, loaded, { expectedMessageId: pointerId || null, source: "pin_recovery" });
         }
-        if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) throw new Error("Galer Cloud library index has an invalid size.");
-        playTrace("INDEX_DONE", { elapsed_ms: Date.now() - started, bytes: bytes.byteLength, request_id: requestId });
-        return { manifest: JSON.parse(new TextDecoder().decode(bytes)), messageId: pinnedId };
+
+        // A bad pin is not proof of absence. Exhaust the vault history only in
+        // recovery, validate candidates, and only then allow initial creation.
+        if (requestId) stage1Trace(requestId, "WORKER_INDEX_HISTORY_RECOVERY_BEGIN");
+        let recovered: { messageId: number; loaded: { manifest: unknown; bytes: number } } | null = null;
+        for await (const candidate of (active as any).iterHistory(chatId, { limit: Infinity })) {
+          const candidateId = Number(candidate?.id || 0);
+          if (!Number.isSafeInteger(candidateId) || candidateId <= 0 || !String(candidate?.text || "").startsWith(LIBRARY_INDEX_CAPTION)) continue;
+          const loaded = await readCandidate(candidateId);
+          if (loaded) { recovered = { messageId: candidateId, loaded }; break; }
+        }
+        if (recovered) return finish(recovered.messageId, recovered.loaded, { expectedMessageId: pointerId || null, source: "history_recovery" });
+        if (requestId) stage1Trace(requestId, "WORKER_INDEX_HISTORY_RECOVERY_EMPTY");
+        if (allowMissing) return { messageId: 0, manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] } };
+        throw new Error("Galer Cloud library index is still synchronizing.");
       } catch (error) {
         const preemptReason = activeIndexAbortReason;
         if (preemptReason === "cancel" || (requestId && cancelledIndexRequests.has(requestId))) {
@@ -660,14 +1743,26 @@ async function getLibraryIndex(requestId: string | null = null, allowMissing = f
             ? error
             : new WorkerTransportError("CANCELLED", "Galer Cloud INDEX read was cancelled.");
         }
-        if ((preemptReason === "play" || preemptReason === "warm") && (controller?.signal.aborted || isAbortError(error) || !indexPriorityAllowed())) {
+        if ((preemptReason === "play" || preemptReason === "warm") && (activeIndexAbortController?.signal.aborted || isAbortError(error) || !indexPriorityAllowed())) {
           resumed = true;
           continue;
         }
+        const failedAttempt = failures + 1;
+        if (requestId) stage1Trace(requestId, "WORKER_INDEX_ATTEMPT_FAILED", {
+          attempt: failedAttempt,
+          error_name: error instanceof Error ? error.name : "unknown",
+        });
         failures += 1;
         playTrace("WORKER_GET_INDEX_RETRY", { attempt: failures, error_name: error instanceof Error ? error.name : "unknown" });
-        if (failures < 5) await new Promise(resolve => setTimeout(resolve, Math.min(1000, 80 * (2 ** (failures - 1)))));
-        else throw error;
+        if (failures < 5) {
+          const delayMs = Math.min(1000, 80 * (2 ** (failures - 1)));
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_RETRY_BACKOFF_BEGIN", { attempt: failures, delay_ms: delayMs });
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_RETRY_BACKOFF_END", { attempt: failures });
+        } else {
+          if (requestId) stage1Trace(requestId, "WORKER_INDEX_RETRY_EXHAUSTED", { attempt: failures });
+          throw error;
+        }
       } finally {
         if (activeIndexAbortController === controller) activeIndexAbortController = null;
         if (activeIndexRequestId === requestId) activeIndexRequestId = null;
@@ -708,6 +1803,7 @@ async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promis
   if (!root || root.schema !== "beatgaler.telegram.library" || Number(root.version) !== 2) throw new Error("Galer Cloud refused an invalid library update.");
   // Only an explicit empty-vault bootstrap may start without an INDEX. Network,
   // corrupt-document and foreign-pin errors still fail closed.
+  playTrace("WORKER_REPLACE_INDEX_BEGIN", { expected_message_id: input.expectedMessageId || 0 });
   const current = await getLibraryIndex(null, input.expectedMessageId === 0);
   if (current.messageId !== input.expectedMessageId) throw new Error("Your library changed on another device. Retry Save to use the latest version.");
   const candidateIds = libraryIdentityIds(root);
@@ -735,7 +1831,12 @@ async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promis
     throw error;
   }
   if (current.messageId && current.messageId !== messageId) await active.deleteMessagesById(chatId, [current.messageId]).catch(() => {});
-  return { messageId, previousMessageId: current.messageId, beatCount: Array.isArray(root.beats) ? root.beats.length : 0 };
+  const result = { messageId, previousMessageId: current.messageId, beatCount: Array.isArray(root.beats) ? root.beats.length : 0 };
+  // A later read in this live Worker must use the newly pinned document even
+  // before the asynchronous Cloud pointer acknowledgement returns.
+  knownIndexPointer = { messageId, revision: knownIndexPointer.revision };
+  playTrace("WORKER_REPLACE_INDEX_DONE", { message_id: result.messageId, previous_message_id: result.previousMessageId, beat_count: result.beatCount });
+  return result;
 }
 
 function sniffImageMime(bytes: Uint8Array): string {
@@ -1228,6 +2329,7 @@ function validateFile(file: File): void {
 async function upload(requestId: string, input: Extract<WebTransportWorkerCommand, { op: "upload" }>["input"]): Promise<WebTransportUploadResult> {
   const active = requireReady();
   validateFile(input.file);
+  playTrace("WORKER_UPLOAD_BEGIN", { kind: input.kind, bytes: input.file.size });
   const message = await active.sendMedia(chatId, InputMedia.document(input.file, {
     fileName: input.filename,
     fileMime: input.file.type || "application/octet-stream",
@@ -1246,6 +2348,7 @@ async function upload(requestId: string, input: Extract<WebTransportWorkerComman
   const messageId = Number(message?.id || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud returned incomplete uploaded file information.");
   const stored = { telegram_file_id: `direct:${messageId}`, telegram_message_id: messageId, index: 0, size: input.file.size, filename: input.filename };
+  playTrace("WORKER_UPLOAD_DONE", { kind: input.kind, bytes: input.file.size, message_id: messageId });
   return { telegram_file_id: stored.telegram_file_id, telegram_message_id: messageId, filename: input.filename, original_size: input.file.size, parts: [stored], transport: "direct-web" };
 }
 
@@ -1253,7 +2356,7 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
   switch (command.op) {
     case "initialize": await initialize(command); return { ready: true };
     case "verify_identity": await verifyIdentity(); return { verified: true };
-    case "verify": await verifyReady(); return { verified: true };
+    case "verify": await verifyReady(command.requestId); return { verified: true };
     case "get_index": return getLibraryIndex(command.requestId);
     case "cancel_index": return cancelIndex(command.targetRequestId);
     case "replace_index": return replaceLibraryIndex(command.input);
@@ -1269,17 +2372,22 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "stream_ack": return acknowledgeStream(command.targetRequestId);
     case "cancel": return cancelStream(command.targetRequestId);
     case "upload": return upload(command.requestId, command.input);
-    case "shutdown": await closeClient(); return { closed: true };
+    case "shutdown": await closeClient("shutdown", command.requestId); return { closed: true };
   }
 }
 
 scope.onmessage = event => {
   const command = event.data;
+  stage1TraceContext = command.stage1TraceContext || null;
+  if (command.op === "get_index") stage1Trace(command.requestId, "WORKER_INDEX_DISPATCH_RECEIVED");
   if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
     playTrace("WORKER_REQUEST_RECEIVED", { request_id: command.requestId, operation: command.op });
   }
   void handle(command).then(
-    result => scope.postMessage({ requestId: command.requestId, ok: true, result }),
+    result => {
+      if (command.op === "get_index") stage1Trace(command.requestId, "WORKER_INDEX_RESPONSE");
+      scope.postMessage({ requestId: command.requestId, ok: true, result });
+    },
     error => scope.postMessage({
       requestId: command.requestId,
       ok: false,

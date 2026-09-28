@@ -309,4 +309,23 @@ describe("Web stale playback route recovery", () => {
       ["beat-y", 2000],
     ]);
   });
+
+  it("does not publish an older same-beat source after a newer click is ready", async () => {
+    await seedAuthoritativeRoute(1500);
+    let resolveFirst!: (value: { url: string; completed: Promise<void> }) => void;
+    const first = new Promise<{ url: string; completed: Promise<void> }>(resolve => { resolveFirst = resolve; });
+    harness.prepare
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ url: "blob:current", completed: Promise.resolve() });
+
+    const { webAdapter } = await import("../../src/platform/webAdapter");
+    const older = webAdapter.media.preparePlayback(beat(1500));
+    await vi.waitFor(() => expect(harness.prepare).toHaveBeenCalledOnce());
+    const current = await webAdapter.media.preparePlayback(beat(1500));
+    resolveFirst({ url: "blob:late", completed: Promise.resolve() });
+    const olderResult = await older;
+
+    expect(current.url).toBe("blob:current");
+    expect(olderResult.url).toMatch(/^beatgaler-superseded:\d+$/);
+  });
 });

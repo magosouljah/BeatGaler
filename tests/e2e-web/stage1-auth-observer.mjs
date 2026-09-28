@@ -9,13 +9,41 @@ export function authPreload(emit) {
   const diagnosticLogs = [];
   window.__stage1DiagnosticLogs = diagnosticLogs;
 
+  const stage1TraceContext = () => {
+    try {
+      const correlationId = String(
+        localStorage.getItem("beatgaler:stage1-trace:correlation") ||
+        localStorage.getItem("beatgaler:stage1-focused-final-reload:correlation") ||
+        "",
+      ).trim();
+      const accountLabel = String(
+        localStorage.getItem("beatgaler:stage1-trace:account") ||
+        localStorage.getItem("beatgaler:stage1-focused-final-reload:account") ||
+        "",
+      ).trim();
+      if (!correlationId || !accountLabel) return null;
+      const task2PassivePingTrace = localStorage.getItem("beatgaler:stage1-trace:task2-passive-ping") === "1";
+      const context = {
+        correlation_id: correlationId,
+        account_label: accountLabel,
+        ...(task2PassivePingTrace ? { task2_passive_ping_trace: true } : {}),
+      };
+      window.__stage1TraceContext = context;
+      return context;
+    } catch {
+      return null;
+    }
+  };
+
+  stage1TraceContext();
+
   const diagnosticText = value => {
     if (value instanceof Error) return `${value.name}: ${value.message}`;
     if (typeof value === "string") return value;
     try { return JSON.stringify(value); } catch { return String(value); }
   };
   const shouldCaptureDiagnostic = text =>
-    /\[web\/library\]|Telegram vault startup check failed|Telegram startup connectivity check failed|\[library-refresh\]|Reconnect attempt|\[library-tx\]|TRANSPORT_GET_INDEX|WORKER_(?:INITIALIZE|REQUEST|RESPONSE|INDEX)|CONTROLLER_SESSION|CONTROLLER_BACKGROUND_VERIFY|DIRECT_BACKGROUND_GET_(?:ME|CHAT)|INDEX_(?:BEGIN|RESUMED|DONE|PREEMPTED)/i.test(text);
+    /\[web\/library\]|Telegram vault startup check failed|Telegram startup connectivity check failed|\[library-refresh\]|Reconnect attempt|\[library-tx\]|TRANSPORT_GET_INDEX|WORKER_(?:INITIALIZE|REQUEST|RESPONSE|INDEX)|CONTROLLER_SESSION|CONTROLLER_BACKGROUND_VERIFY|DIRECT_BACKGROUND_GET_(?:ME|CHAT)|INDEX_(?:BEGIN|RESUMED|DONE|PREEMPTED)|AUTH_RESTORE|APP_ENTRY/i.test(text);
 
   for (const level of ["info", "warn", "error"]) {
     console[level] = (...args) => {
@@ -30,6 +58,13 @@ export function authPreload(emit) {
               .slice(0, 1600),
           });
           if (diagnosticLogs.length > 100) diagnosticLogs.shift();
+        }
+        if (text.startsWith("[play-trace]")) {
+          const parsed = JSON.parse(text.slice("[play-trace]".length).trim());
+          const context = stage1TraceContext();
+          if (context && parsed && typeof parsed.stage === "string") {
+            publish({ kind: "play-trace", timestamp_wall_clock: new Date().toISOString(), ...context, trace: parsed });
+          }
         }
       } catch {}
       return originalConsole[level](...args);
@@ -46,6 +81,39 @@ export function authPreload(emit) {
       // Observation must not affect auth.
     }
   };
+
+  const publishDocumentMilestone = event => {
+    const traceContext = stage1TraceContext();
+    publish({
+      kind: "document-milestone",
+      event,
+      document_id: documentId,
+      timestamp_wall_clock: new Date().toISOString(),
+      monotonic_ms: Math.round(performance.now() * 10) / 10,
+      ...(traceContext || {}),
+    });
+  };
+
+  publishDocumentMilestone("document_start");
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    document.addEventListener("DOMContentLoaded", () => publishDocumentMilestone("dom_content_loaded"), { once: true });
+  }
+  if (typeof window.addEventListener === "function") window.addEventListener("load", () => {
+    publishDocumentMilestone("window_load");
+    const entry = performance.getEntriesByType("navigation").at(-1);
+    if (!entry) return;
+    const traceContext = stage1TraceContext();
+    publish({
+      kind: "navigation-timing",
+      document_id: documentId,
+      timestamp_wall_clock: new Date().toISOString(),
+      ...(traceContext || {}),
+      navigation: Object.fromEntries([
+        "fetchStart", "connectStart", "connectEnd", "requestStart", "responseStart", "responseEnd",
+        "domInteractive", "domContentLoadedEventStart", "domContentLoadedEventEnd", "loadEventStart", "loadEventEnd",
+      ].map(key => [key, entry[key]])),
+    });
+  }, { once: true });
 
   const requests = new Map();
 
@@ -111,8 +179,10 @@ export function authPreload(emit) {
           "/beatgaler-api/auth/login",
           "/beatgaler-api/auth/logout",
           "/beatgaler-api/transport/session/start",
+          "/beatgaler-api/transport/session/activate",
           "/beatgaler-api/transport/session/stop",
           "/beatgaler-api/transport/operation/begin",
+          "/beatgaler-api/transport/capability/authorize",
           "/beatgaler-api/transport/operation/renew",
           "/beatgaler-api/transport/operation/end",
         ].includes(url.pathname)
@@ -130,6 +200,7 @@ export function authPreload(emit) {
     const start = performance.now();
 
     let operationRequest = null;
+    let transportStage = null;
     if (
       route.endsWith("/transport/operation/begin") ||
       route.endsWith("/transport/operation/end")
@@ -155,6 +226,18 @@ export function authPreload(emit) {
       }
     }
 
+    if (route?.endsWith("/transport/session/start")) {
+      try {
+        const rawBody = args[1]?.body;
+        const payload = typeof rawBody === "string" ? JSON.parse(rawBody) : null;
+        transportStage = payload?.tempAuthMetadata && typeof payload.tempAuthMetadata === "object"
+          ? "bind"
+          : "reserve";
+      } catch {
+        // Observation must not affect the real request.
+      }
+    }
+
     requests.set(id, {
       id,
       url: requestUrl,
@@ -162,6 +245,13 @@ export function authPreload(emit) {
     });
 
     const started_at_ms = Date.now();
+    const monotonic_started_ms = Math.round(performance.now() * 10) / 10;
+    const traceContext = stage1TraceContext();
+    if (traceContext) {
+      const headers = new Headers(args[1]?.headers || args[0]?.headers);
+      headers.set("X-Stage1-Critical-Path", traceContext.correlation_id);
+      args[1] = { ...(args[1] || {}), headers };
+    }
     let abort_at_ms = null;
 
     if (route.endsWith("/auth/health")) {
@@ -181,10 +271,15 @@ export function authPreload(emit) {
       publish({
         ...value,
         started_at_ms,
+        monotonic_started_ms,
+        monotonic_observed_ms: Math.round(performance.now() * 10) / 10,
+        time_origin_ms: performance.timeOrigin,
         abort_at_ms,
         observed_at_ms: Date.now(),
         document_id: documentId,
+        ...(traceContext || {}),
         ...(operationRequest ? { operation_request: operationRequest } : {}),
+        ...(transportStage ? { transport_stage: transportStage } : {}),
       });
 
     send({
@@ -200,6 +295,60 @@ export function authPreload(emit) {
 
       let transport = null;
       let operationResponse = null;
+      let startupTrace = null;
+
+      if (route.endsWith("/transport/session/start")) {
+        try {
+          const rawTrace = response.headers.get("X-BeatGaler-Startup-Trace");
+          if (rawTrace && rawTrace.length <= 12_000) {
+            const parsed = JSON.parse(rawTrace);
+            startupTrace = {
+              request_id:
+                typeof parsed?.request_id === "string"
+                  ? parsed.request_id
+                  : null,
+              outcome:
+                parsed?.outcome === "done" || parsed?.outcome === "error"
+                  ? parsed.outcome
+                  : null,
+              elapsed_ms:
+                Number.isFinite(Number(parsed?.elapsed_ms))
+                  ? Number(parsed.elapsed_ms)
+                  : null,
+              dropped_events:
+                Number.isFinite(Number(parsed?.dropped_events))
+                  ? Number(parsed.dropped_events)
+                  : null,
+              events: Array.isArray(parsed?.events)
+                ? parsed.events.slice(0, 32).map(event => ({
+                    stage:
+                      typeof event?.stage === "string"
+                        ? event.stage
+                        : null,
+                    t_ms:
+                      Number.isFinite(Number(event?.t_ms))
+                        ? Number(event.t_ms)
+                        : null,
+                    elapsed_ms:
+                      Number.isFinite(Number(event?.elapsed_ms))
+                        ? Number(event.elapsed_ms)
+                        : null,
+                    server_lease:
+                      typeof event?.server_lease === "string"
+                        ? event.server_lease
+                        : null,
+                    lease_state:
+                      typeof event?.lease_state === "string"
+                        ? event.lease_state
+                        : null,
+                  }))
+                : [],
+            };
+          }
+        } catch {
+          // Observation must not affect the real response.
+        }
+      }
 
       if (
         route.endsWith("/transport/operation/begin") ||
@@ -257,6 +406,7 @@ export function authPreload(emit) {
         state: "response",
         duration_ms: Math.round(performance.now() - start),
         ...(transport ? { transport } : {}),
+        ...(startupTrace ? { startup_trace: startupTrace } : {}),
         ...(operationResponse ? { operation_response: operationResponse } : {}),
       });
 
@@ -280,11 +430,36 @@ export function authPreload(emit) {
 export async function observeAuth(client) {
   let phase = "initial-navigation";
   const records = new Map();
+  const documentMilestones = [];
+  const navigationTimings = [];
+  const playTraces = [];
 
   // No late execute() fallback: without BiDi, fail before navigating unobserved.
   const script = await client.addInitScript(authPreload);
 
   script.on("data", data => {
+    if (data.kind === "document-milestone") {
+      documentMilestones.push({
+        event: data.event,
+        document_id: data.document_id,
+        timestamp_wall_clock: data.timestamp_wall_clock,
+        monotonic_ms: data.monotonic_ms,
+        ...(data.correlation_id ? { correlation_id: data.correlation_id } : {}),
+        ...(data.account_label ? { account_label: data.account_label } : {}),
+      });
+      if (documentMilestones.length > 80) documentMilestones.shift();
+      return;
+    }
+    if (data.kind === "navigation-timing") {
+      navigationTimings.push({ ...data });
+      if (navigationTimings.length > 20) navigationTimings.shift();
+      return;
+    }
+    if (data.kind === "play-trace") {
+      playTraces.push({ ...data });
+      if (playTraces.length > 400) playTraces.shift();
+      return;
+    }
     const previous = records.get(data.id);
 
     if (data.resource_timing) {
@@ -308,9 +483,16 @@ export async function observeAuth(client) {
           ? { resource_timing: previous.entry.resource_timing }
           : {}),
         ...(data.transport ? { transport: data.transport } : {}),
+        ...(data.startup_trace ? { startup_trace: data.startup_trace } : {}),
         ...(data.document_id ? { document_id: data.document_id } : {}),
+        ...(data.correlation_id ? { correlation_id: data.correlation_id } : {}),
+        ...(data.account_label ? { account_label: data.account_label } : {}),
+        ...(Number.isFinite(Number(data.monotonic_started_ms)) ? { monotonic_started_ms: data.monotonic_started_ms } : {}),
+        ...(Number.isFinite(Number(data.monotonic_observed_ms)) ? { monotonic_observed_ms: data.monotonic_observed_ms } : {}),
+        ...(Number.isFinite(Number(data.time_origin_ms)) ? { time_origin_ms: data.time_origin_ms } : {}),
         ...(data.operation_request ? { operation_request: data.operation_request } : {}),
         ...(data.operation_response ? { operation_response: data.operation_response } : {}),
+        ...(data.transport_stage ? { transport_stage: data.transport_stage } : {}),
       },
     });
   });
@@ -328,6 +510,30 @@ export async function observeAuth(client) {
             ? Date.now() - startedAt
             : entry.duration_ms,
       }));
+    },
+
+    documentSnapshot() {
+      return documentMilestones.map(entry => ({ ...entry }));
+    },
+
+    navigationSnapshot() {
+      return navigationTimings.map(entry => ({ ...entry }));
+    },
+
+    playTraceSnapshot() {
+      return playTraces.map(entry => ({ ...entry }));
+    },
+
+    async diagnosticSnapshot() {
+      try {
+        return await client.execute(() =>
+          Array.isArray(window.__stage1DiagnosticLogs)
+            ? window.__stage1DiagnosticLogs.slice(-100)
+            : [],
+        );
+      } catch {
+        return [];
+      }
     },
 
     async remove() {
