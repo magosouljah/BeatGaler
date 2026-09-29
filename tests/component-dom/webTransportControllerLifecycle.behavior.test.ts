@@ -83,6 +83,31 @@ describe("WebTransportController lifecycle behavior", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps session-only startup available while vault operations wait for the peer", async () => {
+    const { runtime, api, controller } = harness();
+    const identity = deferred<void>();
+    const peer = deferred<void>();
+    vi.mocked(runtime.verifyIdentity).mockReturnValue(identity.promise);
+    vi.mocked(runtime.verifyReady).mockReturnValue(peer.promise);
+
+    await expect(controller.connect()).resolves.toMatchObject({ session_id: "session-1" });
+    let vaultReady = false;
+    const pending = controller.waitForVaultPeerReady().then(() => { vaultReady = true; });
+    await Promise.resolve();
+    expect(vaultReady).toBe(false);
+    expect(api.begin).not.toHaveBeenCalled();
+
+    identity.resolve();
+    await Promise.resolve();
+    expect(vaultReady).toBe(false);
+    expect(runtime.shutdown).not.toHaveBeenCalled();
+    peer.resolve();
+    await pending;
+    expect(vaultReady).toBe(true);
+    expect(api.reserve).toHaveBeenCalledOnce();
+    await controller.disconnect();
+  });
+
   it("resolves playback connect while getMe/getChat remain pending and blocks writes until both finish", async () => {
     const { runtime, api, controller } = harness();
     const identity = deferred<void>();

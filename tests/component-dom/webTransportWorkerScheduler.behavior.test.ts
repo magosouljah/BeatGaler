@@ -235,6 +235,8 @@ beforeAll(async () => {
       temp_primary_dcs: { main: { id: 2 } },
     },
   });
+  expect(await dispatchAndWait({ requestId: "scheduler-peer-ready", op: "verify" }))
+    .toMatchObject({ ok: true });
 });
 
 beforeEach(async () => {

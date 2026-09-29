@@ -13,10 +13,10 @@ The session wrapper resolves PostgreSQL ownership and prepares/reuses a lease fo
 ## Membership lifecycle
 
 - `pending`: assignment exists but provisioning has not completed. MASTER invites/promotes that same bot and verifies participant/admin state before marking `ready`.
-- `ready`: startup/reentry uses the assigned bot and locally activates its lease without MASTER lookup, InviteToChannel, EditAdmin or GetParticipant.
+- `ready`: startup/reentry first requires the assigned bot itself to observe the exact vault through Bot API `getChat`. A positive proof activates locally without MASTER lookup, InviteToChannel, EditAdmin or GetParticipant. An authoritative `chat not found` result repairs that same bot under the vault lock; transient probe failures fail closed and do not change membership state.
 - `repair`: explicit repair provisions the same assigned bot and returns to `ready` only after successful verification.
 
-Provisioning/repair holds a PostgreSQL session advisory lock per vault, not an open SQL transaction around Telegram network calls. Concurrent calls coalesce. USER_ALREADY_PARTICIPANT allows promotion to continue; other failures are not silently swallowed.
+Provisioning/repair holds a PostgreSQL session advisory lock per vault, not an open SQL transaction around Telegram network calls. Concurrent calls coalesce. USER_ALREADY_PARTICIPANT allows promotion to continue; other failures are not silently swallowed. After MASTER confirms the participant, the same 15-second membership budget also requires the bot-visible `getChat` condition before `ready` is published.
 
 Repair is authenticated `POST /transport/session/activate` with `repairMembership: true`. It never reassigns or internally retries. A failed explicit attempt, including FLOOD_WAIT/network failure, keeps `repair` and the same bot. Ordinary transient errors do not prove lost membership or justify automatic repair/reassignment.
 

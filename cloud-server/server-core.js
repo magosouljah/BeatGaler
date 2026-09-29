@@ -1932,10 +1932,16 @@ app.post("/transport/session/start", async (req, res) => {
   const { beatgalerUserId, account } = auth;
   const startupTrace = createDirectStartupTrace();
   try {
+    const vaultChatId = storageChatId(account);
+    startupTrace.mark("SESSION_USER_VAULT", {
+      user_id: account?.beatgalerAccountId || null,
+      vault_chat_id: vaultChatId,
+      channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
+    });
     const session = await criticalPathTrace.step(req, "direct_start_session", () => directTransport.startSession({
       startupTrace,
       installationId: beatgalerUserId,
-      chatId: storageChatId(account),
+      chatId: vaultChatId,
     }));
     // PostgreSQL is only a pointer cache. A missing value intentionally leaves
     // recovery to the authoritative Telegram pin/history path in the Worker.
@@ -1947,6 +1953,7 @@ app.post("/transport/session/start", async (req, res) => {
     criticalPathTrace.write(req, "cloud_handler_finished");
     res.json(wrapWebTransportSession({
       ...session,
+      user_id: account?.beatgalerAccountId || null,
       index_pointer: indexPointer?.message_id
         ? { message_id: indexPointer.message_id, revision: indexPointer.revision }
         : null,
@@ -1962,9 +1969,15 @@ app.post("/transport/session/activate", async (req, res) => {
   criticalPathTrace.write(req, "cloud_handler_start");
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
-  const { beatgalerUserId } = auth;
+  const { beatgalerUserId, account } = auth;
   const startupTrace = createDirectStartupTrace();
   try {
+    const vaultChatId = storageChatId(account);
+    startupTrace.mark("SESSION_USER_VAULT", {
+      user_id: account?.beatgalerAccountId || null,
+      vault_chat_id: vaultChatId,
+      channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
+    });
     const activationMethod = req.body?.repairMembership === true ? "repairMembership" : "activateSession";
     if (typeof directTransport[activationMethod] !== "function") {
       throw new Error("Requested Direct membership repair is unavailable.");

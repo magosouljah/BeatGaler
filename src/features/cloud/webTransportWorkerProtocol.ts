@@ -1,4 +1,4 @@
-import type { WebTransportSession } from "./webTransportSession";
+import type { WebTransportMembershipProof, WebTransportSession } from "./webTransportSession";
 import type { WebVaultPeerRef } from "./webVaultPeerCache";
 
 export interface WebTransportUploadInput {
@@ -105,7 +105,10 @@ export type WebTransportWorkerCommand = (
       startupMessageIds: number[];
       session: Pick<WebTransportSession,
         | "chat_id"
+        | "user_id"
+        | "transport_id"
         | "transport_user_id"
+        | "lease_state"
         | "temp_auth_key"
         | "temp_session_id"
         | "temp_session_state"
@@ -118,7 +121,7 @@ export type WebTransportWorkerCommand = (
       };
     }
   | { requestId: string; op: "verify_identity" }
-  | { requestId: string; op: "verify" }
+  | { requestId: string; op: "verify"; membership?: WebTransportMembershipProof | null }
   | { requestId: string; op: "get_index" }
   | { requestId: string; op: "cancel_index"; targetRequestId: string }
   | { requestId: string; op: "replace_index"; input: WebTransportReplaceIndexInput }

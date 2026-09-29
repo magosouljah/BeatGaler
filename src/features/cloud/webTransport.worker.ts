@@ -997,8 +997,10 @@ async function observeMtprotoRpc<T>(
 let client: TelegramClient | null = null;
 let chatId = 0;
 let expectedBotId = "";
+let authenticatedBotId = "";
 let vaultVerified = false;
 let vaultPeerHint: WebVaultPeerRef | null = null;
+let startupMediaMessageIds: number[] = [];
 let transportStorage: MemoryStorage | null = null;
 let transportStorageBotId = "";
 let knownIndexPointer: { messageId: number | null; revision: number | null } = { messageId: null, revision: null };
@@ -1201,7 +1203,9 @@ async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
   client = null;
   chatId = 0;
   expectedBotId = "";
+  authenticatedBotId = "";
   vaultVerified = false;
+  startupMediaMessageIds = [];
   knownIndexPointer = { messageId: null, revision: null };
   activeMtprotoRpc = null;
   activeClientInstanceId = null;
@@ -1357,7 +1361,10 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   await closeClient("initialize_replacement", command.requestId);
   const {
     chat_id,
+    user_id,
+    transport_id,
     expected_bot_id,
+    lease_state,
     temp_api_id,
     temp_auth_key,
     temp_session_id,
@@ -1448,31 +1455,23 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     vaultPeerHint = command.session.vault_peer?.channelId === -(numericChatId + 1_000_000_000_000)
       ? command.session.vault_peer : null;
     expectedBotId = String(expected_bot_id);
+    authenticatedBotId = "";
     vaultVerified = false;
+    startupMediaMessageIds = startupMessageIds;
     knownIndexPointer = {
       messageId: Number.isSafeInteger(Number(index_pointer?.message_id)) && Number(index_pointer?.message_id) > 0 ? Number(index_pointer?.message_id) : null,
       revision: Number.isSafeInteger(Number(index_pointer?.revision)) && Number(index_pointer?.revision) > 0 ? Number(index_pointer?.revision) : null,
     };
-    stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_READY", mtprotoConnectionSnapshot(next));
+    stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_READY", {
+      user_id: user_id || null,
+      vault_chat_id: String(chat_id),
+      channel_id: String(vaultChannelId()),
+      transport_id: transport_id || null,
+      expected_bot_id: String(expected_bot_id),
+      lease_state: lease_state || null,
+      ...mtprotoConnectionSnapshot(next),
+    });
 
-    if (startupMessageIds.length > 0) {
-      try {
-        const mediaResult = await resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false);
-        for (const [messageId, value] of mediaResult.resolved) {
-          touchPlaybackMedia(messageId, { media: value.media, totalBytes: value.totalBytes, mimeType: value.sourceMime });
-        }
-        playTrace("WORKER_STARTUP_MEDIA_BATCH_READY", {
-          requested: startupMessageIds.length,
-          resolved: mediaResult.resolved.size,
-          missing: mediaResult.missing.size,
-        });
-      } catch (error) {
-        playTrace("WORKER_STARTUP_MEDIA_BATCH_DEFERRED", {
-          requested: startupMessageIds.length,
-          error_name: error instanceof Error ? error.name : "unknown",
-        });
-      }
-    }
   } catch (error) {
     detachPassivePingDiagnostics?.();
     detachSessionDiagnostics?.();
@@ -1507,14 +1506,46 @@ function requireConnected(): TelegramClient {
 
 function requireReady(): TelegramClient {
   const active = requireConnected();
-  if (!vaultVerified) throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud Web transport is not ready.");
+  if (!vaultVerified) throw new WorkerTransportError("PEER_NOT_RESOLVED", "Galer Cloud vault peer is not ready.");
   return active;
 }
 
-async function verifyIdentity(): Promise<void> {
+async function warmStartupPlaybackMedia(active: TelegramClient, ids: readonly number[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    // Foreground playback keeps priority over this speculative vector.
+    await waitUntilIndexPriorityAllowed();
+    if (client !== active || !vaultVerified) return;
+    const mediaResult = await resolvePlaybackMediaBatch(active, chatId, ids, false);
+    if (client !== active || !vaultVerified) return;
+    for (const [messageId, value] of mediaResult.resolved) {
+      touchPlaybackMedia(messageId, { media: value.media, totalBytes: value.totalBytes, mimeType: value.sourceMime });
+    }
+    playTrace("WORKER_STARTUP_MEDIA_BATCH_READY", {
+      requested: ids.length,
+      resolved: mediaResult.resolved.size,
+      missing: mediaResult.missing.size,
+    });
+  } catch (error) {
+    playTrace("WORKER_STARTUP_MEDIA_BATCH_DEFERRED", {
+      requested: ids.length,
+      error_name: error instanceof Error ? error.name : "unknown",
+    });
+  }
+}
+
+async function verifyIdentity(requestId: string): Promise<void> {
   const active = requireConnected();
   try {
     const self = await active.getMe();
+    authenticatedBotId = String(self?.id || "");
+    stage1Trace(requestId, "WORKER_GET_ME_IDENTITY", {
+      expected_bot_id: expectedBotId,
+      actual_bot_id: authenticatedBotId || null,
+      vault_chat_id: String(chatId),
+      channel_id: String(vaultChannelId()),
+      is_bot: Boolean(self?.isBot),
+    });
     if (!self?.isBot || String(self.id) !== expectedBotId) {
       throw new WorkerTransportError("SESSION_INVALID", "Temporary authorization resolved to the wrong transport identity.");
     }
@@ -1525,14 +1556,74 @@ async function verifyIdentity(): Promise<void> {
   }
 }
 
-async function verifyReady(requestId: string): Promise<WebVaultPeerRef> {
+function vaultChannelId(): number {
+  return -(chatId + 1_000_000_000_000);
+}
+
+async function acquireVaultPeerForBot(
+  active: TelegramClient,
+  requestId: string,
+  attempt: number,
+  membership: import("./webTransportSession").WebTransportMembershipProof | null,
+): Promise<WebVaultPeerRef> {
+  const channelId = vaultChannelId();
+  const diagnostic = {
+    attempt,
+    vault_chat_id: String(chatId),
+    channel_id: channelId,
+    expected_bot_id: expectedBotId,
+    actual_bot_id: authenticatedBotId || null,
+    membership_state: membership?.state || null,
+    membership_source: membership?.source || null,
+  };
+  stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_ZERO_HASH_BEGIN", diagnostic);
+  // Telegram explicitly allows bots to use a zero access hash when they only
+  // know a channel ID.  Calling the raw method avoids getChat's circular local
+  // cache lookup, and Telegram's response seeds mtcute's peer storage.
+  const response = await observeMtprotoRpc(
+    active,
+    requestId,
+    "WORKER_VERIFY_GET_CHAT",
+    ["channels.getChannels"],
+    () => active.call({
+      _: "channels.getChannels",
+      id: [{ _: "inputChannel", channelId, accessHash: new Long(0, 0) }],
+    }),
+  );
+  const raw = response.chats.find(candidate => candidate._ === "channel" && Number(candidate.id) === channelId);
+  if (!raw || raw._ !== "channel" || !raw.accessHash) {
+    throw new WorkerTransportError("PEER_NOT_RESOLVED", "Telegram did not return a usable vault peer.");
+  }
+  const stored = await active.resolvePeer(chatId);
+  if (stored._ !== "inputPeerChannel" || !stored.accessHash || stored.channelId !== channelId) {
+    throw new WorkerTransportError("PEER_NOT_RESOLVED", "Telegram did not persist the acquired vault peer.");
+  }
+  const resolved: WebVaultPeerRef = {
+    channelId,
+    accessHash: { low: stored.accessHash.low, high: stored.accessHash.high },
+  };
+  stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_PEER_STORED", diagnostic);
+  stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_RESOLVE_PEER_READY", diagnostic);
+  stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_ZERO_HASH_READY", diagnostic);
+  return resolved;
+}
+
+async function verifyReady(
+  requestId: string,
+  membership: import("./webTransportSession").WebTransportMembershipProof | null = null,
+): Promise<WebVaultPeerRef> {
   const active = requireConnected();
   const started = Date.now();
   const deadline = started + 25_000;
   try {
     stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_BEGIN", { cached_hint: Boolean(vaultPeerHint) });
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_BEGIN");
-    let verifiedChat = false;
+    let resolved: WebVaultPeerRef | null = null;
+    // A real mtcute client always exposes call(). With no persisted hint, use
+    // Telegram's bot zero-hash rule immediately instead of depending on the
+    // timing or contents of a membership update. Minimal test doubles without
+    // call() retain the cached getChat path.
+    let forceZeroHashDiscovery = !vaultPeerHint && typeof active.call === "function";
     if (vaultPeerHint) {
       try {
         const hinted = await observeMtprotoRpc(active, requestId, "WORKER_VERIFY_GET_CHAT",
@@ -1542,50 +1633,74 @@ async function verifyReady(requestId: string): Promise<WebVaultPeerRef> {
             accessHash: new Long(vaultPeerHint!.accessHash.low, vaultPeerHint!.accessHash.high),
           }));
         if (Number(hinted.id) !== chatId) throw new WorkerTransportError("SESSION_INVALID", "Cached vault peer belongs to another chat.");
-        verifiedChat = true;
+        resolved = vaultPeerHint;
       } catch (error) {
         if (error instanceof WorkerTransportError) throw error;
         // A stale access hash is a peer bootstrap miss. Reacquire from the
         // membership update instead of treating it as a dead MTProto session.
         if (!(error instanceof MtPeerNotFoundError) && !/CHANNEL_INVALID|CHANNEL_PRIVATE|PEER_ID_INVALID/i.test(String(error))) throw error;
         vaultPeerHint = null;
+        forceZeroHashDiscovery = true;
       }
     }
-    while (!verifiedChat) {
+    let attempt = 0;
+    while (!resolved) {
+      attempt += 1;
       try {
-        const chat = await observeMtprotoRpc(
-          active, requestId, "WORKER_VERIFY_GET_CHAT",
-          ["channels.getChannels", "messages.getChats"],
-          () => active.getChat(chatId),
-        );
-        if (Number(chat.id) !== chatId) throw new WorkerTransportError("SESSION_INVALID", "Vault verification resolved to another chat.");
-        break;
+        if (forceZeroHashDiscovery) {
+          resolved = await acquireVaultPeerForBot(active, requestId, attempt, membership);
+          continue;
+        }
+        const chat = await observeMtprotoRpc(active, requestId, "WORKER_VERIFY_GET_CHAT",
+          ["channels.getChannels", "messages.getChats"], () => active.getChat(chatId));
+        if (Number(chat.id) !== chatId) {
+          throw new WorkerTransportError("SESSION_INVALID", "Vault verification resolved to another chat.");
+        }
+        const peer = await active.resolvePeer(chatId);
+        if (peer._ !== "inputPeerChannel" || !peer.accessHash || peer.channelId !== vaultChannelId()) {
+          throw new WorkerTransportError("PEER_NOT_RESOLVED", "Vault peer has no usable channel access hash.");
+        }
+        resolved = {
+          channelId: peer.channelId,
+          accessHash: { low: peer.accessHash.low, high: peer.accessHash.high },
+        };
       } catch (error) {
-        if (!(error instanceof MtPeerNotFoundError)) throw error;
-        // Do not hammer channels.getChannels with an unknown access hash.
-        // mtcute's update loop will populate this storage when the bot receives
-        // its vault membership update after Cloud activation.
-        while (Date.now() < deadline && !await active.storage.peers.getById(chatId)) {
-          await new Promise(resolve => setTimeout(resolve, Math.min(250, deadline - Date.now())));
-        }
+        stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_ZERO_HASH_ERROR", {
+          attempt,
+          vault_chat_id: String(chatId),
+          channel_id: vaultChannelId(),
+          expected_bot_id: expectedBotId,
+          actual_bot_id: authenticatedBotId || null,
+          membership_state: membership?.state || null,
+          membership_source: membership?.source || null,
+          error_name: error instanceof Error ? error.name : "unknown",
+          error_message: diagnosticErrorMessage(error),
+        });
+        const retryable = error instanceof MtPeerNotFoundError ||
+          (error instanceof WorkerTransportError && error.code === "PEER_NOT_RESOLVED") ||
+          /CHANNEL_INVALID|CHANNEL_PRIVATE|PEER_ID_INVALID/i.test(String(error));
+        if (!retryable) throw error;
+        // A cached peer can itself be stale. Do not spend the whole retry
+        // window replaying it; the bot zero-hash path is authoritative here.
+        const switchingToZeroHash = !forceZeroHashDiscovery;
+        forceZeroHashDiscovery = true;
+        if (switchingToZeroHash) continue;
         if (Date.now() >= deadline) {
-          stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_UNRESOLVED", { elapsed_ms: Date.now() - started });
-          throw new WorkerTransportError("PEER_NOT_RESOLVED", String(error.message));
+          stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_UNRESOLVED", { elapsed_ms: Date.now() - started, attempt });
+          throw new WorkerTransportError("PEER_NOT_RESOLVED", error instanceof Error ? error.message : String(error));
         }
+        const delayMs = Math.min(1_500, 200 * (2 ** Math.min(attempt - 1, 3)), deadline - Date.now());
+        stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_RETRY", { attempt, delay_ms: delayMs });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_LOCAL_DONE");
-    const peer = await active.resolvePeer(chatId);
-    if (peer._ !== "inputPeerChannel" || !peer.accessHash || peer.channelId !== -(chatId + 1_000_000_000_000)) {
-      throw new WorkerTransportError("PEER_NOT_RESOLVED", "Vault peer has no usable channel access hash.");
-    }
-    const resolved: WebVaultPeerRef = {
-      channelId: peer.channelId,
-      accessHash: { low: peer.accessHash.low, high: peer.accessHash.high },
-    };
     vaultPeerHint = resolved;
     vaultVerified = true;
     stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_READY", { elapsed_ms: Date.now() - started });
+    const startupIds = startupMediaMessageIds;
+    startupMediaMessageIds = [];
+    void warmStartupPlaybackMedia(active, startupIds);
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_END");
     playTrace("DIRECT_BACKGROUND_GET_CHAT_OK");
     return resolved;
@@ -1663,7 +1778,7 @@ function assertIndexNotCancelled(requestId: string | null): void {
 }
 
 async function getLibraryIndex(requestId: string | null = null, allowMissing = false): Promise<WebTransportLibraryIndexResult> {
-  const active = requireConnected();
+  const active = requireReady();
   const started = Date.now();
   // Startup warming is speculative. A library read is the authoritative
   // boundary for an import/edit, so it must never wait behind concurrent
@@ -1955,7 +2070,7 @@ function playbackChunkLimit(desiredBytes: number): number {
 
 async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
   const started = Date.now();
-  const active = requireConnected();
+  const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
   const resolved = await resolvePlaybackMedia(active, messageId);
@@ -2188,7 +2303,7 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
 
 async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatchInput): Promise<WebTransportPrefetchBatchResult> {
   const started = Date.now();
-  const active = requireConnected();
+  const active = requireReady();
   const deduped = new Map<number, WebTransportPrefetchInput>();
   for (const candidate of Array.isArray(input.inputs) ? input.inputs : []) {
     const messageId = Number(candidate?.messageId || 0);
@@ -2323,7 +2438,7 @@ function playbackRelease(messageId: number): { released: boolean } {
 
 async function stream(requestId: string, input: WebTransportStreamInput): Promise<WebTransportStreamResult> {
   const started = Date.now();
-  const active = requireConnected();
+  const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
   const resolved = await resolvePlaybackMedia(active, messageId);
@@ -2418,8 +2533,8 @@ async function upload(requestId: string, input: Extract<WebTransportWorkerComman
 async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
   switch (command.op) {
     case "initialize": await initialize(command); return { ready: true };
-    case "verify_identity": await verifyIdentity(); return { verified: true };
-    case "verify": return verifyReady(command.requestId);
+    case "verify_identity": await verifyIdentity(command.requestId); return { verified: true };
+    case "verify": return verifyReady(command.requestId, command.membership || null);
     case "get_index": return getLibraryIndex(command.requestId);
     case "cancel_index": return cancelIndex(command.targetRequestId);
     case "replace_index": return replaceLibraryIndex(command.input);

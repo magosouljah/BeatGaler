@@ -131,7 +131,7 @@ afterAll(() => {
 });
 
 describe("Worker startup metadata vector", () => {
-  it("resolves fourteen startup messages once and reuses both positive and negative results during warm", async () => {
+  it("waits for the vault peer before resolving startup messages, then reuses the vector during warm", async () => {
     const ids = Array.from({ length: 14 }, (_, index) => 501 + index);
     const missingId = ids.at(-1)!;
     harness.missingIds.add(missingId);
@@ -140,6 +140,15 @@ describe("Worker startup metadata vector", () => {
 
     const initialized = await dispatchAndWait(boundSessionCommand("vector-init", ids));
     expect(initialized.ok).toBe(true);
+    expect(harness.getMessages).not.toHaveBeenCalled();
+
+    const tooEarly = await dispatchAndWait({ requestId: "vector-early", op: "prefetch", input: { messageId: ids[0], mimeType: "audio/mpeg" } });
+    expect(tooEarly).toMatchObject({ ok: false, code: "PEER_NOT_RESOLVED" });
+    expect(harness.getMessages).not.toHaveBeenCalled();
+
+    const verified = await dispatchAndWait({ requestId: "vector-verify", op: "verify" });
+    expect(verified.ok).toBe(true);
+    await vi.waitFor(() => expect(harness.getMessages).toHaveBeenCalledTimes(1));
     expect(harness.getMessages).toHaveBeenCalledTimes(1);
     expect(harness.getMessages).toHaveBeenCalledWith(-1001234567890, ids);
 

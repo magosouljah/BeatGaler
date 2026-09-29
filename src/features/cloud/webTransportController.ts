@@ -9,6 +9,8 @@ import {
   reserveWebTransportSession,
   stopWebTransportSession,
   type WebTransportCapabilityScope,
+  type WebTransportActivationResult,
+  type WebTransportMembershipProof,
   type WebTransportSession,
   type WebTransportSessionPublic,
 } from "./webTransportSession";
@@ -18,7 +20,7 @@ export interface WebTransportRuntime {
   initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void>;
   replaceCredentials(session: WebTransportSession): Promise<void>;
   verifyIdentity(session: WebTransportSession): Promise<void>;
-  verifyReady(session: WebTransportSession): Promise<void>;
+  verifyReady(session: WebTransportSession, membership?: WebTransportMembershipProof | null): Promise<void>;
   /** Irrevocably terminates the Worker without waiting for graceful cleanup. */
   abortImmediately?(): void;
   shutdown(): Promise<void>;
@@ -27,7 +29,7 @@ export interface WebTransportRuntime {
 export interface WebTransportControlApi {
   reserve(): Promise<WebTransportSessionPublic>;
   bind(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession>;
-  activate(session: WebTransportSessionPublic): Promise<void>;
+  activate(session: WebTransportSessionPublic): Promise<WebTransportActivationResult | void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
   authorize(session: WebTransportSession, operationId: string, kind: string, scope: WebTransportCapabilityScope): Promise<void>;
   begin(session: WebTransportSession, kind: string, scope: WebTransportCapabilityScope): Promise<{
@@ -177,17 +179,25 @@ export class WebTransportController {
       // Telegram supplies the private vault peer in the membership update.
       // Start mtcute's update listener before Cloud invites/promotes this bot.
       const activateStarted = Date.now();
-      await observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!));
+      const activation = await observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!));
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
-      playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
+      playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", {
+        elapsed_ms: Date.now() - activateStarted,
+        user_id: session.user_id || null,
+        vault_chat_id: session.chat_id,
+        transport_id: session.transport_id,
+        expected_bot_id: session.temp_auth.expected_bot_id,
+        lease_state: session.lease_state || null,
+        membership_state: activation?.membership?.state || null,
+        membership_source: activation?.membership?.source || null,
+      });
       playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
 
-      // MTProto + startup-media setup is the playback readiness boundary.
-      // Identity/vault verification is intentionally background work so it does
-      // not extend OPEN->AUDIO or CLICK PLAY->AUDIO.
+      // MTProto activation makes session-only commands available. Vault reads
+      // must wait for background identity and peer verification separately.
       this.session = session;
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
-      this.startBackgroundVerification(session, lifecycleGeneration);
+      this.startBackgroundVerification(session, lifecycleGeneration, activation?.membership || null);
       playTrace("CONTROLLER_SESSION_DATA_PLANE_READY", { total_ms: Date.now() - started });
       return session;
     } catch (error) {
@@ -197,12 +207,18 @@ export class WebTransportController {
     }
   }
 
-  private startBackgroundVerification(session: WebTransportSession, lifecycleGeneration = this.lifecycleGeneration): void {
+  private startBackgroundVerification(
+    session: WebTransportSession,
+    lifecycleGeneration = this.lifecycleGeneration,
+    membership: WebTransportMembershipProof | null = null,
+  ): void {
     const verification = (async () => {
       try {
         await verifyIdentityAndVault(
           observePlayStep("DIRECT_BACKGROUND_GET_ME", () => this.runtime.verifyIdentity(session)),
-          observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => this.runtime.verifyReady(session)),
+          observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => membership
+            ? this.runtime.verifyReady(session, membership)
+            : this.runtime.verifyReady(session)),
         );
         this.peerResolutionFailed = false;
         if (this.session === session && this.isCurrentLifecycle(lifecycleGeneration)) playTrace("CONTROLLER_BACKGROUND_VERIFY_READY");
@@ -233,6 +249,18 @@ export class WebTransportController {
     const verification = this.verificationPromise;
     if (verification) await verification;
     if (!this.session) throw new Error("Galer Cloud Web transport verification failed.");
+  }
+
+  /** Vault RPCs share this boundary; session-only focus/identity can proceed. */
+  async waitForVaultPeerReady(): Promise<void> {
+    while (!this.closed) {
+      const session = await this.connect();
+      await this.waitUntilVerified();
+      if (this.session !== session || this.refreshPromise) continue;
+      playTrace("CONTROLLER_VAULT_PEER_READY");
+      return;
+    }
+    throw new Error("Galer Cloud Web transport is closed.");
   }
 
   private async failClosedSession(session: WebTransportSession, runtimeAlreadyFenced = false): Promise<void> {

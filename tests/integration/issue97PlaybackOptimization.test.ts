@@ -131,7 +131,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(client).toContain("startupMessageIds: sessionStartupMessageIds");
     expect(worker).toContain("command.startupMessageIds");
     expect(worker).toContain("return await active.getMessages(targetChatId, messageIds);");
-    expect(worker).toContain("resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)");
+    expect(worker).toContain("void warmStartupPlaybackMedia(active, startupIds)");
+    expect(worker).not.toContain("resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)");
     expect(worker).not.toContain("startupRouteMessageIds(startup_routes)");
   });
 

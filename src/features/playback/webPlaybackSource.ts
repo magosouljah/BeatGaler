@@ -99,7 +99,7 @@ function bufferedAheadSeconds(sourceBuffer: SourceBuffer | null, currentTime: nu
 function warmPriorityRank(priority: BeatCardWarmPriority): number { return priority === "visible" ? 2 : priority === "nearby" ? 1 : 0; }
 function errorCode(error: unknown, fallback: WebTransportErrorCode = "TRANSFER_FAILED"): WebTransportErrorCode {
   const code = String((error as { code?: unknown } | null)?.code || "");
-  return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE" || code === "TRANSFER_FAILED" || code === "SESSION_INVALID" || code === "CANCELLED" ? code : fallback;
+  return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE" || code === "TRANSFER_FAILED" || code === "SESSION_INVALID" || code === "PEER_NOT_RESOLVED" || code === "CANCELLED" ? code : fallback;
 }
 function playbackPrefetchError(error: unknown, fallback: WebTransportErrorCode = "TRANSFER_FAILED"): WebPlaybackPrefetchError { return error instanceof WebPlaybackPrefetchError ? error : new WebPlaybackPrefetchError(error instanceof Error ? error.message : String(error), errorCode(error, fallback)); }
 function shouldCooldownPrefetch(code: WebTransportErrorCode): boolean { return code === "TRANSFER_FAILED" || code === "SESSION_INVALID"; }
@@ -218,7 +218,16 @@ export class WebPlaybackSourceManager {
         await existingWarm; return;
       }
       const active = Boolean(job?.inFlight && this.activePrefetchBatch?.jobs.includes(job)); playTrace(active ? "PLAY_WARM_ADOPTED" : "PLAY_WARM_PROMOTED", { beat_id: beatId, message_id: messageId }); await this.activePrefetchBatch?.handle?.promoteMessage?.(messageId); await existingWarm;
-    } catch (error) { if (this.transport.releasePlaybackFocus) await this.transport.releasePlaybackFocus(messageId).catch(() => {}); throw error; }
+    } catch (error) {
+      // INDEX can cancel a speculative warm batch while the focused Play is
+      // adopting it. The foreground stream still owns the playback intent.
+      if (errorCode(error) === "CANCELLED") {
+        playTrace("PLAY_WARM_CANCELLED_STREAM_FALLBACK", { beat_id: beatId, message_id: messageId });
+        return;
+      }
+      if (this.transport.releasePlaybackFocus) await this.transport.releasePlaybackFocus(messageId).catch(() => {});
+      throw error;
+    }
   }
 
   async prepare(beatId: string, messageId: number, mimeType = "audio/mpeg", intentId?: number): Promise<PreparedWebPlayback> {

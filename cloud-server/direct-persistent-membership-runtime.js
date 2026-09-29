@@ -79,9 +79,9 @@ function finalizeReadyLease({ directTransport, pool, lease }) {
   });
 }
 
-function readyResult(finalized) {
+function readyResult(finalized, membership = null) {
   if (!finalized) throw new Error('Direct transport session disappeared before activation completed.');
-  return { ok: true, activated: true, status: finalized.status || 'ACTIVE' };
+  return { ok: true, activated: true, status: finalized.status || 'ACTIVE', ...(membership ? { membership } : {}) };
 }
 
 function membershipUpdatedAtMs(assignment) {
@@ -92,6 +92,9 @@ function membershipUpdatedAtMs(assignment) {
 function installPersistentDirectMembershipActivation({ directTransport, persistentAssignments } = {}) {
   if (!directTransport || typeof directTransport.activateSession !== 'function') {
     throw new Error('Direct transport activateSession() is required.');
+  }
+  if (typeof directTransport.probeSessionMembership !== 'function') {
+    throw new Error('Direct transport probeSessionMembership() is required.');
   }
   for (const method of ['getAssignment', 'withMembershipLock', 'markMembershipReady', 'markMembershipRepairNeeded']) {
     if (typeof persistentAssignments?.[method] !== 'function') {
@@ -122,18 +125,25 @@ function installPersistentDirectMembershipActivation({ directTransport, persiste
     const initial = await persistentAssignments.getAssignment(chatId);
     const assignedBotId = assertAssignmentMatches(initial, checked.lease);
 
-    // READY is the normal warm path. PostgreSQL membership is authoritative,
-    // so activation becomes a local lease transition only: no MASTER lookup,
-    // getEntity, InviteToChannel, EditAdmin or GetParticipant.
+    // READY is a durable assignment hint, not proof of current Telegram
+    // membership. The assigned bot must observe this exact vault before the
+    // lease can become ACTIVE. A positive probe stays MASTER-free.
     if (String(initial.membershipState) === 'ready') {
-      return readyResult(finalizeReadyLease({
-        directTransport,
-        pool: checked.pool,
-        lease: checked.lease,
-      }));
+      try {
+        const membership = await directTransport.probeSessionMembership(args);
+        return readyResult(finalizeReadyLease({
+          directTransport,
+          pool: checked.pool,
+          lease: checked.lease,
+        }), membership);
+      } catch (error) {
+        // Only an authoritative same-bot "not visible" result may convert a
+        // stale READY marker into repair. Network/probe failures fail closed.
+        if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT') throw error;
+      }
     }
 
-    if (!['pending', 'repair'].includes(String(initial.membershipState))) {
+    if (!['pending', 'repair', 'ready'].includes(String(initial.membershipState))) {
       throw codedError(
         `Unsupported Direct membership state ${initial.membershipState}.`,
         'TRANSPORT_MEMBERSHIP_STATE_INVALID',
@@ -148,11 +158,18 @@ function installPersistentDirectMembershipActivation({ directTransport, persiste
       assertAssignmentMatches(reread, checked.lease);
 
       if (String(reread.membershipState) === 'ready') {
-        return readyResult(finalizeReadyLease({
-          directTransport,
-          pool: checked.pool,
-          lease: checked.lease,
-        }));
+        try {
+          const membership = await directTransport.probeSessionMembership(args);
+          return readyResult(finalizeReadyLease({
+            directTransport,
+            pool: checked.pool,
+            lease: checked.lease,
+          }), membership);
+        } catch (error) {
+          if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT') throw error;
+          await persistentAssignments.markMembershipRepairNeeded(chatId, assignedBotId);
+          return provisionCurrentLease({ args, checked, assignedBotId });
+        }
       }
       if (!['pending', 'repair'].includes(String(reread.membershipState))) {
         throw codedError(

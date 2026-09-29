@@ -674,6 +674,77 @@ async function inviteAndPromote(master, vault, botEntity) {
   }));
 }
 
+function botMembershipError(error) {
+  const message = String(error?.errorMessage || error?.message || error || '');
+  const status = Number(error?.http_status || error?.api_error_code || 0) || null;
+  return {
+    message,
+    status,
+    absent: /chat not found|bot was kicked|bot is not a member|forbidden|USER_NOT_PARTICIPANT|CHANNEL_PRIVATE/i.test(message),
+  };
+}
+
+function membershipAbsentError(error, runtime) {
+  const detail = botMembershipError(error);
+  if (!detail.absent) return error;
+  const failure = new Error(`Transport bot ${runtime.bot.id} cannot observe vault ${runtime.chatId}.`);
+  failure.code = 'TRANSPORT_BOT_MEMBERSHIP_ABSENT';
+  failure.telegram_error = detail.message;
+  failure.http_status = detail.status;
+  return failure;
+}
+
+async function probeRuntimeVaultMembership(runtime, startupTrace = noDirectStartupTrace) {
+  startupTrace.mark('BOT_MEMBERSHIP_PROBE', {
+    membership_state: 'probing',
+    vault_chat_id: String(runtime.chatId),
+    channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
+    transport_id: runtime.bot.id,
+    expected_bot_id: runtime.bot.telegram_user_id || null,
+  });
+  try {
+    const chat = await startupTrace.step('BOT_MEMBERSHIP_GET_CHAT', () => managerBotApiCall(runtime.token, 'getChat', {
+      chat_id: String(runtime.chatId),
+    }));
+    const observedChatId = String(chat?.id || '');
+    if (observedChatId !== String(runtime.chatId)) {
+      const mismatch = new Error(`Transport bot observed vault ${observedChatId || '<none>'}, expected ${runtime.chatId}.`);
+      mismatch.code = 'TRANSPORT_BOT_VAULT_MISMATCH';
+      throw mismatch;
+    }
+    const proof = {
+      state: 'bot_visible',
+      source: 'bot_api_getChat',
+      vault_chat_id: String(runtime.chatId),
+      channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
+      transport_id: runtime.bot.id,
+      expected_bot_id: runtime.bot.telegram_user_id || null,
+    };
+    startupTrace.mark('BOT_MEMBERSHIP_VISIBLE', {
+      membership_state: proof.state,
+      membership_source: proof.source,
+      vault_chat_id: proof.vault_chat_id,
+      channel_id: proof.channel_id,
+      transport_id: proof.transport_id,
+      expected_bot_id: proof.expected_bot_id,
+    });
+    return proof;
+  } catch (error) {
+    const failure = membershipAbsentError(error, runtime);
+    const detail = botMembershipError(error);
+    startupTrace.mark('BOT_MEMBERSHIP_NOT_VISIBLE', {
+      membership_state: detail.absent ? 'absent' : 'probe_failed',
+      membership_source: 'bot_api_getChat',
+      vault_chat_id: String(runtime.chatId),
+      channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
+      transport_id: runtime.bot.id,
+      expected_bot_id: runtime.bot.telegram_user_id || null,
+      probe_error_code: detail.status,
+    });
+    throw failure;
+  }
+}
+
 async function cleanupLegacyVisibleHandshakes(master, vault) {
   // One-time migration cleanup for protocol messages created by V4/V4.1.
   // Current Direct transport NEVER posts a handshake message.
@@ -852,7 +923,7 @@ async function runtimeForLease(
   return runtime;
 }
 
-function sessionPublic(runtime) {
+function sessionPublic(runtime, leaseState = null) {
   return {
     ok: true,
     mode: 'telegram-direct-botapi-local',
@@ -873,6 +944,7 @@ function sessionPublic(runtime) {
     heartbeat_timeout_ms: HEARTBEAT_TIMEOUT_MS,
     token_rotation_enabled: TOKEN_ROTATION_ENABLED,
     started_at: runtime.startedAt,
+    lease_state: leaseState || null,
   };
 }
 
@@ -908,7 +980,7 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
           state.leases[existing.session_id].last_heartbeat_at = nowIso();
         }
       });
-      return sessionPublic(runtime);
+      return sessionPublic(runtime, existing.status);
     }
   }
 
@@ -941,8 +1013,9 @@ async function activateSession({ installationId, sessionId, generation, startupT
     // bot back as a real participant of this exact vault. Telegram may still
     // need a short propagation window before Bot API getChat sees membership,
     // so Desktop has a second same-bot retry barrier after this confirmation.
-    letConfirmed: {
+    {
       const started = Date.now();
+      const deadline = started + 15_000;
       let attempt = 0;
       while (true) {
         attempt += 1;
@@ -954,15 +1027,32 @@ async function activateSession({ installationId, sessionId, generation, startupT
           if (participant?.participant) {
             startupTrace.mark("ACTIVATE_MEMBERSHIP", { membership_confirmed: true, attempt });
             diag('SESSION_MEMBERSHIP_CONFIRMED', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started });
-            break letConfirmed;
+            break;
           }
         } catch (error) {
           const message = String(error?.errorMessage || error?.message || error);
-          if (!/USER_NOT_PARTICIPANT|PARTICIPANT_ID_INVALID|CHANNEL_PRIVATE/i.test(message) || Date.now() - started >= 15_000) throw error;
+          if (!/USER_NOT_PARTICIPANT|PARTICIPANT_ID_INVALID|CHANNEL_PRIVATE/i.test(message) || Date.now() >= deadline) throw error;
           diag('SESSION_MEMBERSHIP_WAIT', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started, error: message });
         }
-        if (Date.now() - started >= 15_000) throw new Error('MASTER could not confirm transport bot membership in the vault within 15 seconds.');
+        if (Date.now() >= deadline) throw new Error('MASTER could not confirm transport bot membership in the vault within 15 seconds.');
         await new Promise(resolve => setTimeout(resolve, Math.min(1500, 250 * attempt)));
+      }
+
+      // MASTER membership is not yet a readiness proof for the bot's own
+      // authorization. Do not release /activate until the assigned bot can
+      // observe this exact vault through Telegram itself.
+      let botAttempt = 0;
+      while (true) {
+        botAttempt += 1;
+        try {
+          await probeRuntimeVaultMembership(runtime, startupTrace);
+          startupTrace.mark('ACTIVATE_BOT_MEMBERSHIP', { membership_confirmed: true, attempt: botAttempt });
+          break;
+        } catch (error) {
+          if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT' || Date.now() >= deadline) throw error;
+          startupTrace.mark('ACTIVATE_BOT_MEMBERSHIP_WAIT', { membership_confirmed: false, attempt: botAttempt });
+          await new Promise(resolve => setTimeout(resolve, Math.min(1500, 250 * botAttempt)));
+        }
       }
     }
 
@@ -971,10 +1061,34 @@ async function activateSession({ installationId, sessionId, generation, startupT
     const finalized = finalizeLease(checked.lease.session_id);
     console.log(`[direct] SESSION_READY installation=${String(installationId).slice(0, 8)}… transport=${runtime.bot.id} master=${runtime.masterId}`);
     diag('SESSION_READY', { installation: String(installationId).slice(0, 8), session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, master: runtime.masterId });
-    return { ok: true, activated: true, status: finalized?.status || 'ACTIVE' };
+    return {
+      ok: true,
+      activated: true,
+      status: finalized?.status || 'ACTIVE',
+      membership: {
+        state: 'bot_visible',
+        source: 'bot_api_getChat',
+        vault_chat_id: String(checked.lease.chat_id),
+        channel_id: String(checked.lease.chat_id).startsWith('-100') ? String(checked.lease.chat_id).slice(4) : null,
+        transport_id: runtime.bot.id,
+        expected_bot_id: runtime.bot.telegram_user_id || null,
+      },
+    };
   } finally {
     try { await startupTrace.step("ACTIVATE_DISCONNECT", () => masterInfo.client.disconnect()); } catch (_) {}
   }
+}
+
+async function probeSessionMembership({ installationId, sessionId, generation, startupTrace = noDirectStartupTrace }) {
+  const checked = getLeaseChecked({ installationId, sessionId, generation });
+  if (!checked) throw new Error('Direct transport session is not active.');
+  startupTrace.mark('BOT_MEMBERSHIP_LEASE', {
+    lease_state: checked.lease.status,
+    vault_chat_id: String(checked.lease.chat_id),
+    transport_id: String(checked.lease.bot_id),
+  });
+  const runtime = await startupTrace.step('BOT_MEMBERSHIP_RUNTIME', () => runtimeForLease(checked.lease, { startupTrace }));
+  return probeRuntimeVaultMembership(runtime, startupTrace);
 }
 
 async function heartbeat({ installationId, sessionId, generation, credentialVersion }) {
@@ -1609,6 +1723,7 @@ module.exports = {
   enabled,
   startSession,
   activateSession,
+  probeSessionMembership,
   heartbeat,
   beginOperation,
   renewOperation,
@@ -1635,6 +1750,8 @@ module.exports = {
     leasesForBot,
     activeOpsForBot,
     inviteAndPromote,
+    botMembershipError,
+    probeRuntimeVaultMembership,
     resolveManagedToken,
     transientManagedTokenFetchError,
     setManagerBotFetch(fn) {

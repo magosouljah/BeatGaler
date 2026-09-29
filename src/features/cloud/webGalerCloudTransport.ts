@@ -323,7 +323,7 @@ export class WebGalerCloudTransport {
   async prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
     const started = Date.now();
     playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId });
-    await this.controller.connect();
+    await this.controller.waitForVaultPeerReady();
     const result = await this.worker.prefetch(input);
     playTrace("TRANSPORT_PREFETCH_READY", {
       message_id: input.messageId,
@@ -351,7 +351,7 @@ export class WebGalerCloudTransport {
       inputs.map(input => Number(input.messageId)).filter(id => Number.isInteger(id) && id > 0),
     ));
     playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length, lanes: this.playbackDataLanes });
-    await this.controller.connect();
+    await this.controller.waitForVaultPeerReady();
     const workerBatch = this.worker.prefetchBatch({
       inputs,
       maxConcurrency: this.playbackDataLanes,
@@ -376,7 +376,7 @@ export class WebGalerCloudTransport {
     const background = purpose !== "playback";
     playTrace("TRANSPORT_STREAM_ENTER", { purpose });
     const connectStarted = Date.now();
-    await this.controller.connect();
+    await this.controller.waitForVaultPeerReady();
     playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted, purpose });
 
     let lease: Awaited<ReturnType<WebTransportController["beginOperation"]>> | null = null;

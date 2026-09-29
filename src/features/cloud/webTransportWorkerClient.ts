@@ -410,7 +410,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       startupMessageIds: sessionStartupMessageIds,
       session: {
         chat_id: session.chat_id,
+        user_id: session.user_id,
+        transport_id: session.transport_id,
         transport_user_id: session.transport_user_id,
+        lease_state: session.lease_state,
         expected_bot_id: session.temp_auth.expected_bot_id,
         temp_api_id: session.temp_auth.api_id,
         temp_auth_key: session.temp_auth_key,
@@ -445,10 +448,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     await this.request({ op: "verify_identity" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
-  async verifyReady(): Promise<void> {
+  async verifyReady(_session?: WebTransportSession, membership = null as import("./webTransportSession").WebTransportMembershipProof | null): Promise<void> {
     const scope = this.peerCacheScope;
     try {
-      const peer = await this.request<WebVaultPeerRef>({ op: "verify" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+      const peer = await this.request<WebVaultPeerRef>({ op: "verify", membership }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
       if (scope && peer) writeWebVaultPeer(scope.botId, scope.chatId, peer);
     } catch (error) {
       if (error instanceof WebTransportWorkerError && error.code === "PEER_NOT_RESOLVED" && scope) {

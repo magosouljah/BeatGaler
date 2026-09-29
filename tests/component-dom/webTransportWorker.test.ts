@@ -90,6 +90,17 @@ const transport = vi.hoisted(() => {
       }
       return { id: -1001234567890 };
     });
+    call = vi.fn(async (request: any) => {
+      if (request?._ !== "channels.getChannels" || request.id?.[0]?.channelId !== 1234567890 ||
+          request.id?.[0]?.accessHash?.low !== 0 || request.id?.[0]?.accessHash?.high !== 0) {
+        throw new Error(`Unexpected raw RPC: ${request?._}`);
+      }
+      peerAvailable = true;
+      return {
+        _: "messages.chats",
+        chats: [{ _: "channel", id: 1234567890, accessHash: new FakeLong(42, 0) }],
+      };
+    });
     resolvePeer = vi.fn(async () => {
       if (!peerAvailable) throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
       return { _: "inputPeerChannel", channelId: 1234567890, accessHash: new FakeLong(42, 0) };
@@ -465,9 +476,10 @@ describe("Galer Cloud single-file Web Worker", () => {
     expect(rejected.find(message => message.ok === false)?.error).toContain("1.9 GB");
   });
 
-  it("learns an uncached vault peer before the first pointer INDEX and restores it for a new client", async () => {
+  it("acquires an uncached vault peer with the bot zero-hash RPC before the first pointer INDEX and restores it for a new client", async () => {
     const session = {
-      chat_id: "-1001234567890", transport_user_id: "4242", expected_bot_id: "4242",
+      user_id: "usr-peer-test", chat_id: "-1001234567890", transport_id: "Bot01",
+      transport_user_id: "4242", expected_bot_id: "4242", lease_state: "ASSIGNING" as const,
       temp_api_id: 12345, temp_auth_key: new Uint8Array(256).fill(7),
       temp_session_id: { low: 123456, high: 789, unsigned: false },
       temp_session_state: {
@@ -486,12 +498,32 @@ describe("Galer Cloud single-file Web Worker", () => {
     const firstClient = transport.getLastClient();
     firstClient.getMessages.mockClear();
     firstClient.getFullChat.mockClear();
-    const verification = send({ requestId: "peer-verify-fresh", op: "verify" }, 1500);
-    await new Promise(resolve => setTimeout(resolve, 20));
+    const traceContext = { correlation_id: "peer-proof", account_label: "01" };
+    const identity = await send({ requestId: "peer-identity-fresh", op: "verify_identity", stage1TraceContext: traceContext });
+    expect(identity.find(message => message.event === "stage1-trace" && message.trace?.stage === "WORKER_GET_ME_IDENTITY")?.trace?.detail)
+      .toMatchObject({ expected_bot_id: "4242", actual_bot_id: "4242", vault_chat_id: "-1001234567890", channel_id: "1234567890" });
+    const membership = {
+      state: "bot_visible" as const,
+      source: "bot_api_getChat" as const,
+      vault_chat_id: "-1001234567890",
+      channel_id: "1234567890",
+      transport_id: "Bot01",
+      expected_bot_id: "4242",
+    };
+    const verification = send({ requestId: "peer-verify-fresh", op: "verify", membership, stage1TraceContext: traceContext }, 1500);
     expect(firstClient.getMessages).not.toHaveBeenCalled();
-    transport.setPeerAvailable(true); // Telegram delivers the membership update.
     const verified = (await verification).find(message => message.ok === true);
     expect(verified.result).toEqual({ channelId: 1234567890, accessHash: { low: 42, high: 0 } });
+    expect(firstClient.call).toHaveBeenCalledWith({
+      _: "channels.getChannels",
+      id: [expect.objectContaining({ _: "inputChannel", channelId: 1234567890, accessHash: expect.objectContaining({ low: 0, high: 0 }) })],
+    });
+    expect(firstClient.getChat).not.toHaveBeenCalled();
+    const verificationMessages = await verification;
+    expect(verificationMessages.find(message => message.event === "stage1-trace" && message.trace?.stage === "WORKER_PEER_BOOTSTRAP_ZERO_HASH_BEGIN")?.trace?.detail)
+      .toMatchObject({ attempt: 1, vault_chat_id: "-1001234567890", channel_id: 1234567890, expected_bot_id: "4242", actual_bot_id: "4242", membership_state: "bot_visible" });
+    expect(verificationMessages.some(message => message.event === "stage1-trace" && message.trace?.stage === "WORKER_PEER_BOOTSTRAP_PEER_STORED")).toBe(true);
+    expect(verificationMessages.some(message => message.event === "stage1-trace" && message.trace?.stage === "WORKER_PEER_BOOTSTRAP_RESOLVE_PEER_READY")).toBe(true);
     const firstIndex = await send({ requestId: "peer-index-fresh", op: "get_index" });
     expect(firstIndex.find(message => message.ok === true)?.result.messageId).toBe(501);
     expect(firstClient.getMessages).toHaveBeenCalledWith(-1001234567890, [501]);

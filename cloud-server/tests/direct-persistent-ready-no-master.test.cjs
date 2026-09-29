@@ -112,6 +112,16 @@ Module._load = function(request, parent, isMain) {
     directTransport: direct,
     persistentAssignments,
   });
+  let botMembershipProbeCalls = 0;
+  direct.__test.setManagerBotFetch(async (_url, options) => {
+    botMembershipProbeCalls += 1;
+    const body = JSON.parse(String(options?.body || '{}'));
+    assert.equal(String(body.chat_id), assignment.chatId);
+    return {
+      ok: true,
+      async json() { return { ok: true, result: { id: Number(assignment.chatId), type: 'supergroup' } }; },
+    };
+  });
 
   const session = await direct.startSession({
     installationId: 'ready-installation',
@@ -130,6 +140,7 @@ Module._load = function(request, parent, isMain) {
   });
   assert.equal(activated.ok, true);
   assert.equal(activated.status, 'ACTIVE');
+  assert.equal(activated.membership.state, 'bot_visible');
   assert.equal(telegramClientConstructions, 0, 'READY activation must stay MASTER-free');
 
   const stopped = await direct.stopSession({
@@ -155,16 +166,18 @@ Module._load = function(request, parent, isMain) {
   });
   assert.equal(reactivated.ok, true);
   assert.equal(reactivated.status, 'ACTIVE');
+  assert.equal(reactivated.membership.state, 'bot_visible');
   assert.equal(membershipLockCalls, 0, 'READY reentry must not reprovision persistent membership');
   assert.equal(repairStateCalls, 0, 'READY reentry must not silently enter repair');
   assert.equal(telegramClientConstructions, 0, 'READY reentry must remain MASTER-free');
+  assert.equal(botMembershipProbeCalls, 2, 'every READY activation must be proven visible by the assigned bot');
 
   const state = direct.__test.stateSnapshot([{ id: 'Bot01' }]);
   assert.equal(state.leases[session.session_id], undefined, 'closed session lease must be gone');
   assert.equal(state.leases[reentered.session_id].bot_id, 'Bot01');
   assert.equal(state.leases[reentered.session_id].status, 'ACTIVE');
 
-  console.log('PASS Direct READY startup/reentry: persisted resolver + assignment + membership survive session close with MASTER unavailable');
+  console.log('PASS Direct READY startup/reentry: assigned bot proves vault visibility while MASTER remains unopened');
 })().catch(error => {
   console.error(error?.stack || error);
   process.exitCode = 1;

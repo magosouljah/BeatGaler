@@ -42,6 +42,7 @@ export interface WebTransportSessionPublic {
   ok?: boolean;
   mode: "galer-direct-temp-mtproto";
   session_id: string;
+  user_id?: string | null;
   transport_id: string;
   transport_user_id: string | null;
   transport_username: string | null;
@@ -52,10 +53,26 @@ export interface WebTransportSessionPublic {
   heartbeat_interval_ms: number;
   heartbeat_timeout_ms: number;
   token_rotation_enabled: boolean;
+  lease_state?: "ASSIGNING" | "ACTIVE" | "STOPPING" | null;
   temp_auth_required: boolean;
   temp_auth: WebTransportTempAuthPublic;
   /** Non-authoritative PostgreSQL shortcut; Telegram INDEX remains authoritative. */
   index_pointer: { message_id: number; revision: number | null } | null;
+}
+
+export interface WebTransportMembershipProof {
+  state: "bot_visible";
+  source: "bot_api_getChat";
+  vault_chat_id: string;
+  channel_id: string | null;
+  transport_id: string;
+  expected_bot_id: string | null;
+}
+
+export interface WebTransportActivationResult {
+  activated: true;
+  status?: string;
+  membership?: WebTransportMembershipProof | null;
 }
 
 export interface WebTransportSession extends WebTransportSessionPublic {
@@ -357,9 +374,10 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-export async function activateWebTransportSession(session: WebTransportSessionPublic): Promise<void> {
-  const response = await transportRequest<{ activated?: boolean }>("/transport/session/activate", sessionIdentity(session));
+export async function activateWebTransportSession(session: WebTransportSessionPublic): Promise<WebTransportActivationResult> {
+  const response = await transportRequest<Partial<WebTransportActivationResult>>("/transport/session/activate", sessionIdentity(session));
   if (response.activated !== true) throw new Error("Galer Cloud could not activate this Web storage session.");
+  return response as WebTransportActivationResult;
 }
 
 export async function heartbeatWebTransportSession(session: WebTransportSession): Promise<{

@@ -37,3 +37,31 @@ ABANDON: G4 Residual health failure remains; no blind reruns to manufacture thre
   EVIDENCE: Present; overall PASS, task_6.classification COMPROBADO; sensitive-term scan returned no matches.
 - [x] Final report and source changes rechecked against all gates and no unrelated work altered.
   EVIDENCE: node --check, git diff --check, and 8 focused observer/download tests pass; user-existing modified diagnostics and application files remain preserved and unedited by Task 6.
+
+# Gates: Phase 2 real vault peer acquisition — patiodjuegos
+
+Scope: Prove and fix the exact `CHANNEL_INVALID` cause for the existing patiodjuegos vault, then validate peer, index, playback, reload, and playback without changing watchdog, ping, or budgets.
+
+- [x] P2G1: A correlated, secret-free trace proves the complete user → vault → lease bot → effective membership → Worker bot identity → channel conversion → zero-hash RPC chain.
+  EVIDENCE: patiodjuegos user usr_29bf2dbc97184b1e044c259e → vault -1003994624009 → Bot01/8618989421 → channel 3994624009. Pre-fix MASTER GetParticipant returned USER_NOT_PARTICIPANT; repaired run returned ChannelParticipantAdmin. Worker getMe actual=expected=8618989421, zero-hash attempt 1 stored/resolved the peer and reached READY in 160 ms.
+
+- [x] P2G2: The demonstrated cause of `CHANNEL_INVALID` is corrected with a deterministic readiness/identity/ID invariant rather than sleeps, blind retries, membership updates, or `getFullChat` in the hot path.
+  EVIDENCE: PostgreSQL had stale ready since 2026-09-16 while Telegram said USER_NOT_PARTICIPANT. READY activation now requires same-bot Bot API getChat proof; authoritative absence performs same-bot READY→REPAIR→provision→bot-visible READY under the existing vault lock and 15 s membership budget. Transient probes fail closed without repair.
+
+- [x] P2G3: Focused regression tests cover the failing real-account property and the successful E2E property.
+  CHECK: npm test -- --runInBand tests/component-dom/webTransportWorker.test.ts
+  EXPECT: /pass|passed/i
+  EVIDENCE: direct persistent membership, READY-no-MASTER, provisioning primitive, startup trace (3/3), focused Worker zero-hash test, and focused Controller singleflight all PASS. Full Worker suite retains the pre-existing missing-pinned-index failure also reproduced in its baseline copy.
+
+- [x] P2G4: Type checking and diff hygiene pass without changes to ping, watchdog, or budgets.
+  CHECK: npm run typecheck
+  EXPECT: /exit code 0|Done|success/i
+  EVIDENCE: npm run test:typecheck, node --check for all changed Cloud JS, and git diff --check PASS. Ping, watchdog, heartbeat defaults, Worker 25 s peer deadline, and the existing 15 s Cloud membership budget were not increased or relaxed.
+
+- [x] P2G5: A clean-browser real run for patiodjuegos proves new Worker → PEER_READY → authoritative INDEX → real beats → Play → Ctrl+R → library → Play, with no forbidden user-visible or peer errors.
+  EVIDENCE: isolated Chrome profile PASS in 55.5 s. cached_hint=false; peer 160 ms; pointer 235 read with channels.getMessages and found=true; library materialized; cold Play 1967 ms; Reload library 16419 ms; post-Reload Play 997 ms. CHANNEL_INVALID, local-cache peer error, Poor connection, and Beat unavailable absent. Report: tmp/stage1-task4-single-reload-attribution.json.
+
+- [x] P2G6: Final repository state is reported; no commit/push/destructive checkout occurred and the protected diagnostic file was not edited by this work.
+  CHECK: git status -sb
+  EXPECT: stage1/real-multi-account-e2e
+  EVIDENCE: branch stage1/real-multi-account-e2e remains at HEAD db4b5bf5d6bd4986475190804e18a52ac74fd311, ahead 1, with no commit/push/reset/checkout. The protected diagnostic was never opened or patched; the live Cloud process continued its pre-existing runtime append behavior during the authorized real run.
