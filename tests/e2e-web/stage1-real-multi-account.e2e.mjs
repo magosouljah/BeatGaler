@@ -5625,7 +5625,8 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
                 if (phase2Task0Mode || phase2Task1Mode) coldStartedAtByLabel[account.label] = Date.now();
                 const options = {
                   ...(startupSubmitBarrier ? { startupSubmitBarrier } : {}),
-                  ...(phase2Task1Mode ? { phase2Task1Trace: phase2Task1ColdTrace[account.label] } : {}),
+                  ...(phase2Task1Mode || singleReloadAttributionTrace
+                    ? { phase2Task1Trace: phase2Task1ColdTrace[account.label] } : {}),
                 };
                 return loginThroughUi(
                   clients[index],
@@ -5702,6 +5703,20 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           const account = accounts[0];
           const client = clients[0];
           const observer = authObservers.get(account.label);
+          const coldTraces = phase2Task1Traces(account.label, phase2Task1ColdTrace[account.label].correlation_id);
+          const coldStage = stage => coldTraces.find(trace => trace.stage === stage);
+          assert.equal(coldStage("WORKER_PEER_BOOTSTRAP_BEGIN")?.cached_hint, false,
+            "Cold Web Worker must start without a saved vault peer.");
+          assert.ok(coldStage("WORKER_PEER_BOOTSTRAP_READY"),
+            "Cold Web Worker must acquire the vault peer.");
+          assert.equal(coldStage("WORKER_INDEX_POINTER_GET_MESSAGES_END")?.found, true,
+            "Cold Web Worker must read the pinned INDEX through getMessages.");
+          assert.ok(coldStage("WEB_LIBRARY_INDEX_PROCESS_DONE"),
+            "Cold Web Worker must produce the authoritative library.");
+          assert.ok(!coldStage("WORKER_INDEX_GET_FULL_CHAT_BEGIN"),
+            "Cold Web Worker must keep getFullChat out of the INDEX path.");
+          assert.ok(!coldStage("SOURCE_SESSION_INVALIDATED"),
+            "Peer bootstrap must preserve the source session.");
           const correlationId = `cp-${randomUUID().slice(0, 12)}`;
           const trace = { account_label: account.label, correlation_id: correlationId, events: [] };
           observer?.setPhase("single-reload-critical-path");
@@ -5754,6 +5769,11 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             },
           };
           report.single_reload_attribution = attribution;
+          report.peer_bootstrap_cold = {
+            correlation_id: phase2Task1ColdTrace[account.label].correlation_id,
+            library_beat_count: librariesBefore[0].beat_count,
+            stages: coldTraces.filter(trace => /PEER_BOOTSTRAP|INDEX_POINTER_GET_MESSAGES|WEB_LIBRARY_INDEX_PROCESS_DONE|SOURCE_SESSION_INVALIDATED/.test(trace.stage)),
+          };
           report.overall = "PASS";
           report.severity = null;
           await writeReport();

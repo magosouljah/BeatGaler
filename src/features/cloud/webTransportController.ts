@@ -80,15 +80,15 @@ interface OperationLivenessTimers {
   timeoutMs: number;
 }
 
-type StartupBranchResult = { ok: true } | { ok: false; error: unknown };
+function isPeerResolutionFailure(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "PEER_NOT_RESOLVED");
+}
 
-async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchResult> {
-  try {
-    await work;
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error };
-  }
+async function verifyIdentityAndVault(identity: Promise<void>, vault: Promise<void>): Promise<void> {
+  const [identityResult, vaultResult] = await Promise.allSettled([identity, vault]);
+  // A peer cache miss must never mask a simultaneous invalid auth/session.
+  if (identityResult.status === "rejected") throw identityResult.reason;
+  if (vaultResult.status === "rejected") throw vaultResult.reason;
 }
 
 function normalizeStartupMessageIds(values: readonly number[]): number[] {
@@ -110,6 +110,7 @@ export class WebTransportController {
   private connectPromise: Promise<WebTransportSession> | null = null;
   private refreshPromise: Promise<void> | null = null;
   private verificationPromise: Promise<void> | null = null;
+  private peerResolutionFailed = false;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private operationLivenessTimers = new Map<string, OperationLivenessTimers>();
   private closed = false;
@@ -151,7 +152,6 @@ export class WebTransportController {
   private async openSession(lifecycleGeneration: number): Promise<WebTransportSession> {
     const started = Date.now();
     let bootstrap: WebTransportSessionPublic | null = null;
-    let activationResultPromise: Promise<StartupBranchResult> | null = null;
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupMessageIds.length });
     try {
@@ -160,14 +160,6 @@ export class WebTransportController {
       bootstrap = await this.api.reserve();
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
 
-      const activateStarted = Date.now();
-      activationResultPromise = settleStartupBranch(
-        observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
-      ).then(result => {
-        if (result.ok) playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
-        return result;
-      });
-
       const session = await observePlayStep("DIRECT_PREPARE", () => this.api.bind(bootstrap!));
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_PREPARE_DONE", {
@@ -175,17 +167,20 @@ export class WebTransportController {
         startup_message_count: this.startupMessageIds.length,
       });
 
-      const activationResult = await activationResultPromise;
-      if (!activationResult.ok) throw activationResult.error;
-      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
-      playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
-
       const initializeStarted = Date.now();
       await observePlayStep("DIRECT_INITIALIZE", async () => {
         await this.runtime.initialize(session, this.startupMessageIds);
       });
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
+
+      // Telegram supplies the private vault peer in the membership update.
+      // Start mtcute's update listener before Cloud invites/promotes this bot.
+      const activateStarted = Date.now();
+      await observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!));
+      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
+      playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
+      playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
 
       // MTProto + startup-media setup is the playback readiness boundary.
       // Identity/vault verification is intentionally background work so it does
@@ -196,7 +191,6 @@ export class WebTransportController {
       playTrace("CONTROLLER_SESSION_DATA_PLANE_READY", { total_ms: Date.now() - started });
       return session;
     } catch (error) {
-      if (activationResultPromise) await activationResultPromise;
       await this.runtime.shutdown().catch(() => {});
       if (bootstrap) await this.api.stop(bootstrap).catch(() => {});
       throw error;
@@ -206,16 +200,22 @@ export class WebTransportController {
   private startBackgroundVerification(session: WebTransportSession, lifecycleGeneration = this.lifecycleGeneration): void {
     const verification = (async () => {
       try {
-        await Promise.all([
+        await verifyIdentityAndVault(
           observePlayStep("DIRECT_BACKGROUND_GET_ME", () => this.runtime.verifyIdentity(session)),
           observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => this.runtime.verifyReady(session)),
-        ]);
+        );
+        this.peerResolutionFailed = false;
         if (this.session === session && this.isCurrentLifecycle(lifecycleGeneration)) playTrace("CONTROLLER_BACKGROUND_VERIFY_READY");
       } catch (error) {
         playTrace("CONTROLLER_BACKGROUND_VERIFY_FAILED", {
           error_name: error instanceof Error ? error.name : "unknown",
         });
-        await this.failClosedSession(session);
+        if (isPeerResolutionFailure(error)) {
+          this.peerResolutionFailed = true;
+          playTrace("CONTROLLER_PEER_RESOLUTION_DEFERRED");
+        } else {
+          await this.failClosedSession(session);
+        }
         throw error;
       }
     })();
@@ -227,6 +227,9 @@ export class WebTransportController {
   }
 
   private async waitUntilVerified(): Promise<void> {
+    if (this.peerResolutionFailed && !this.verificationPromise && this.session) {
+      this.startBackgroundVerification(this.session);
+    }
     const verification = this.verificationPromise;
     if (verification) await verification;
     if (!this.session) throw new Error("Galer Cloud Web transport verification failed.");
@@ -239,6 +242,7 @@ export class WebTransportController {
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
+    this.peerResolutionFailed = false;
     if (!runtimeAlreadyFenced) await this.runtime.shutdown().catch(() => {});
     await this.api.stop(session).catch(() => {});
   }
@@ -273,10 +277,10 @@ export class WebTransportController {
       playTrace("CONTROLLER_CREDENTIAL_REFRESH_BEGIN");
       try {
         await this.runtime.replaceCredentials(session);
-        await Promise.all([
+        await verifyIdentityAndVault(
           this.runtime.verifyIdentity(session),
           this.runtime.verifyReady(session),
-        ]);
+        );
         if (!this.isCurrentLifecycle(lifecycleGeneration)) {
           throw new Error("Galer Cloud Web transport refresh was superseded.");
         }
@@ -286,11 +290,17 @@ export class WebTransportController {
         playTrace("CONTROLLER_CREDENTIAL_REFRESH_FAILED", {
           error_name: error instanceof Error ? error.name : "unknown",
         });
+        if (isPeerResolutionFailure(error) && this.isCurrentLifecycle(lifecycleGeneration)) {
+          this.session = session;
+          this.peerResolutionFailed = true;
+          throw error;
+        }
         if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = null;
         if (this.isCurrentLifecycle(lifecycleGeneration)) this.lifecycleGeneration += 1;
         this.stopAllOperationLiveness();
         this.session = null;
+        this.peerResolutionFailed = false;
         await this.runtime.shutdown().catch(() => {});
         throw error;
       }
@@ -307,6 +317,7 @@ export class WebTransportController {
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
+    this.peerResolutionFailed = false;
     const verification = this.verificationPromise;
     this.verificationPromise = null;
     if (verification) await verification.catch(() => {});

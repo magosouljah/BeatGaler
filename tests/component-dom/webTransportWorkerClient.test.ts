@@ -25,11 +25,40 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     FakeWorker.instances = [];
     vi.useFakeTimers();
     vi.stubGlobal("Worker", FakeWorker);
+    const items = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => { items.set(key, value); },
+      removeItem: (key: string) => { items.delete(key); },
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("passes a verified vault peer to a replacement Worker without repeating discovery", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const session = { chat_id: "-1001234567890", transport_user_id: "4242", temp_auth: { expected_bot_id: "4242", api_id: 1 } } as any;
+    const initial = client.initialize(session, []);
+    const firstWorker = FakeWorker.instances[0];
+    expect(firstWorker.postMessage.mock.calls.at(-1)?.[0].session.vault_peer).toBeNull();
+    firstWorker.respond();
+    await initial;
+
+    const verification = client.verifyReady();
+    const peer = { channelId: 1234567890, accessHash: { low: 42, high: 7 } };
+    firstWorker.respond(peer);
+    await verification;
+    firstWorker.onerror?.({} as ErrorEvent);
+
+    const replacement = client.initialize(session, []);
+    const secondWorker = FakeWorker.instances[1];
+    expect(secondWorker.postMessage.mock.calls.at(-1)?.[0].session.vault_peer).toEqual(peer);
+    secondWorker.respond();
+    await replacement;
+    expect(firstWorker.terminate).toHaveBeenCalledOnce();
   });
 
   it("keeps an INDEX request alive beyond the bootstrap timeout without terminating the Worker", async () => {

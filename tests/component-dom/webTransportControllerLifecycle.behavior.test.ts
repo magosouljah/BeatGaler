@@ -134,6 +134,39 @@ describe("WebTransportController lifecycle behavior", () => {
     expect(api.authorize).not.toHaveBeenCalled();
   });
 
+  it("keeps a healthy session and Worker when only the vault peer is unresolved, then retries verification", async () => {
+    const { runtime, api, controller } = harness();
+    const peerMiss = Object.assign(new Error("Peer is not found in local cache"), { code: "PEER_NOT_RESOLVED" });
+    vi.mocked(runtime.verifyReady).mockRejectedValueOnce(peerMiss).mockRejectedValueOnce(peerMiss).mockResolvedValue(undefined);
+
+    const connected = await controller.connect();
+    await expect(controller.beginOperation("get_index", { objectType: "index", objectIds: ["pinned"] }))
+      .rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    expect(runtime.shutdown).not.toHaveBeenCalled();
+    expect(api.stop).not.toHaveBeenCalled();
+    expect(api.begin).not.toHaveBeenCalled();
+
+    const lease = await controller.beginOperation("get_index", { objectType: "index", objectIds: ["pinned"] });
+    expect(lease.operationId).toBe("op-1");
+    expect(vi.mocked(runtime.verifyReady)).toHaveBeenCalledTimes(3);
+    expect(api.reserve).toHaveBeenCalledOnce();
+    expect(await controller.connect()).toBe(connected);
+    await controller.endOperation(lease);
+    await controller.disconnect();
+  });
+
+  it("fails closed when invalid identity accompanies a peer cache miss", async () => {
+    const { runtime, api, controller } = harness();
+    const peerMiss = Object.assign(new Error("Peer is not found in local cache"), { code: "PEER_NOT_RESOLVED" });
+    vi.mocked(runtime.verifyIdentity).mockRejectedValue(new Error("AUTH_KEY_UNREGISTERED"));
+    vi.mocked(runtime.verifyReady).mockRejectedValue(peerMiss);
+
+    await controller.connect();
+    await vi.waitFor(() => expect(runtime.shutdown).toHaveBeenCalledOnce());
+    expect(api.stop).toHaveBeenCalledWith(expect.objectContaining({ session_id: "session-1" }));
+    expect(api.begin).not.toHaveBeenCalled();
+  });
+
   it("does not publish a late session when logout wins during reserve", async () => {
     const { runtime, api, controller } = harness();
     const reservation = deferred<WebTransportSessionPublic>();

@@ -2,6 +2,7 @@ import { playTrace, playTraceSpan } from "../playback/playTrace";
 import { isPlaybackMessageRouteSuspect, markPlaybackMessageRouteSuspect } from "../playback/webPlaybackRoutingSuspect";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
+import { clearWebVaultPeer, readWebVaultPeer, writeWebVaultPeer, type WebVaultPeerRef } from "./webVaultPeerCache";
 import type {
   WebTransportDownloadInput,
   WebTransportDownloadResult,
@@ -119,6 +120,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private credentialRefreshPromise: Promise<void> | null = null;
   private playbackCritical = false;
   private dataPlaneInitialized = false;
+  private peerCacheScope: { botId: string; chatId: string } | null = null;
   private activeBackgroundStreamRequests = new Set<string>();
   private preemptedBackgroundStreamRequests = new Set<string>();
   private backgroundResumeWaiters = new Set<() => void>();
@@ -402,6 +404,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       startupMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
     )).slice(0, 14);
     this.sessionStartupMessageIds = sessionStartupMessageIds;
+    this.peerCacheScope = { botId: session.temp_auth.expected_bot_id, chatId: session.chat_id };
     await this.request({
       op: "initialize",
       startupMessageIds: sessionStartupMessageIds,
@@ -415,6 +418,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
         index_pointer: session.index_pointer,
+        vault_peer: readWebVaultPeer(session.temp_auth.expected_bot_id, session.chat_id),
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
 
@@ -442,7 +446,16 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   async verifyReady(): Promise<void> {
-    await this.request({ op: "verify" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+    const scope = this.peerCacheScope;
+    try {
+      const peer = await this.request<WebVaultPeerRef>({ op: "verify" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+      if (scope && peer) writeWebVaultPeer(scope.botId, scope.chatId, peer);
+    } catch (error) {
+      if (error instanceof WebTransportWorkerError && error.code === "PEER_NOT_RESOLVED" && scope) {
+        clearWebVaultPeer(scope.botId, scope.chatId);
+      }
+      throw error;
+    }
   }
 
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {

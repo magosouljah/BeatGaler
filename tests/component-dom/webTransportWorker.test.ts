@@ -8,11 +8,14 @@ const transport = vi.hoisted(() => {
   const projectMedia = { type: "document", mimeType: "application/zip", fileSize: 5 };
   let pinnedId = 501;
   let missingPinnedReads = 0;
+  let peerAvailable = true;
   let clientOptions: any = null;
+  let lastClient: any = null;
   const importSession = vi.fn(async () => undefined);
   class FakeLong {
     constructor(public low: number, public high: number, public unsigned = false) {}
   }
+  class MtPeerNotFoundError extends Error {}
   const boundSession: any = {
     initConnectionCalled: false,
     _sessionId: new FakeLong(1, 2, false),
@@ -71,12 +74,26 @@ const transport = vi.hoisted(() => {
   const pinMessage = vi.fn(async ({ message }: { message: number }) => { pinnedId = message; });
   const deleteMessagesById = vi.fn(async () => undefined);
   class TelegramClient {
-    constructor(options: unknown) { clientOptions = options; }
+    constructor(options: any) { clientOptions = options; this.storage = options.storage; lastClient = this; }
+    storage: any;
+    onConnectionState = { add: vi.fn(), remove: vi.fn() };
+    onError = { add: vi.fn(), remove: vi.fn() };
     importSession = importSession;
     connect = connect;
+    startUpdatesLoop = vi.fn(async () => undefined);
     mt = { network };
     getMe = vi.fn(async () => ({ id: 4242, isBot: true }));
-    getChat = vi.fn(async () => ({ id: -1001234567890 }));
+    getChat = vi.fn(async (peer: any) => {
+      if (!peerAvailable) {
+        if (peer?._ === "inputPeerChannel" && peer.accessHash?.low === 42) peerAvailable = true;
+        else throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
+      }
+      return { id: -1001234567890 };
+    });
+    resolvePeer = vi.fn(async () => {
+      if (!peerAvailable) throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
+      return { _: "inputPeerChannel", channelId: 1234567890, accessHash: new FakeLong(42, 0) };
+    });
     getFullChat = vi.fn(async () => {
       if (missingPinnedReads > 0) {
         missingPinnedReads -= 1;
@@ -84,7 +101,9 @@ const transport = vi.hoisted(() => {
       }
       return { pinnedMsgId: pinnedId };
     });
-    getMessages = vi.fn(async (_vault: unknown, ids: number[]) => ids.map(id => id === 501
+    getMessages = vi.fn(async (_vault: unknown, ids: number[]) => {
+      if (!peerAvailable) throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
+      return ids.map(id => id === 501
       ? { id, text: "BEATGALER_LIBRARY_INDEX_V1", media: indexMedia }
       : id === 601
         ? { id, text: "", media: artworkMedia }
@@ -92,7 +111,8 @@ const transport = vi.hoisted(() => {
           ? { id, text: "", media: audioMedia }
           : id === 702
             ? { id, text: "", media: projectMedia }
-        : null));
+        : null);
+    });
     downloadAsBuffer = vi.fn(async (media: unknown) => media === indexMedia
       ? new TextEncoder().encode(JSON.stringify({
           schema: "beatgaler.telegram.library",
@@ -111,6 +131,7 @@ const transport = vi.hoisted(() => {
     destroy = vi.fn(async () => {});
   }
   return {
+    FakeLong,
     importSession,
     connect,
     boundSession,
@@ -121,6 +142,9 @@ const transport = vi.hoisted(() => {
     deleteMessagesById,
     resetPinned: () => { pinnedId = 501; missingPinnedReads = 0; },
     delayPinnedReads: (count: number) => { missingPinnedReads = Math.max(0, count); },
+    setPeerAvailable: (value: boolean) => { peerAvailable = value; },
+    isPeerAvailable: () => peerAvailable,
+    MtPeerNotFoundError,
     TelegramClient,
     SessionConnection,
     getConnectSnapshot: () => connectSnapshot,
@@ -128,14 +152,17 @@ const transport = vi.hoisted(() => {
       constructor(public readonly options: unknown) {}
     },
     getClientOptions: () => clientOptions,
+    getLastClient: () => lastClient,
   };
 });
 
 vi.mock("@mtcute/web", () => ({
   TelegramClient: transport.TelegramClient,
+  Long: transport.FakeLong,
+  MtPeerNotFoundError: transport.MtPeerNotFoundError,
   SessionConnection: transport.SessionConnection,
   WebCryptoProvider: transport.WebCryptoProvider,
-  MemoryStorage: class {},
+  MemoryStorage: class { peers = { getById: async () => transport.isPeerAvailable() ? { _: "inputPeerChannel" } : null }; },
   InputMedia: {
     document: (file: File, options: unknown) => ({ type: "document", file, ...options as object }),
   },
@@ -436,5 +463,48 @@ describe("Galer Cloud single-file Web Worker", () => {
 
     expect(transport.sendMedia).not.toHaveBeenCalled();
     expect(rejected.find(message => message.ok === false)?.error).toContain("1.9 GB");
+  });
+
+  it("learns an uncached vault peer before the first pointer INDEX and restores it for a new client", async () => {
+    const session = {
+      chat_id: "-1001234567890", transport_user_id: "4242", expected_bot_id: "4242",
+      temp_api_id: 12345, temp_auth_key: new Uint8Array(256).fill(7),
+      temp_session_id: { low: 123456, high: 789, unsigned: false },
+      temp_session_state: {
+        seqNo: 2, lastMessageId: { low: 333, high: 444, unsigned: false }, timeOffset: 5,
+        serverSalt: { low: 55, high: 66, unsigned: false }, queuedAcks: [],
+        bindMsgId: { low: 111, high: 222, unsigned: false },
+        lastSessionCreatedUid: { low: 0, high: 0, unsigned: false },
+      },
+      temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
+      index_pointer: { message_id: 501, revision: 1 },
+    };
+    await send({ requestId: "peer-shutdown-old", op: "shutdown" });
+    transport.setPeerAvailable(false);
+    expect(await send({ requestId: "peer-init-fresh", op: "initialize", startupMessageIds: [], session }))
+      .toContainEqual(expect.objectContaining({ requestId: "peer-init-fresh", ok: true }));
+    const firstClient = transport.getLastClient();
+    firstClient.getMessages.mockClear();
+    firstClient.getFullChat.mockClear();
+    const verification = send({ requestId: "peer-verify-fresh", op: "verify" }, 1500);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(firstClient.getMessages).not.toHaveBeenCalled();
+    transport.setPeerAvailable(true); // Telegram delivers the membership update.
+    const verified = (await verification).find(message => message.ok === true);
+    expect(verified.result).toEqual({ channelId: 1234567890, accessHash: { low: 42, high: 0 } });
+    const firstIndex = await send({ requestId: "peer-index-fresh", op: "get_index" });
+    expect(firstIndex.find(message => message.ok === true)?.result.messageId).toBe(501);
+    expect(firstClient.getMessages).toHaveBeenCalledWith(-1001234567890, [501]);
+    expect(firstClient.getFullChat).not.toHaveBeenCalled();
+
+    await send({ requestId: "peer-shutdown-fresh", op: "shutdown" });
+    transport.setPeerAvailable(false); // A replacement Worker has no local peer cache.
+    await send({ requestId: "peer-init-replacement", op: "initialize", startupMessageIds: [], session: { ...session, vault_peer: verified.result } });
+    const replacement = transport.getLastClient();
+    const restored = await send({ requestId: "peer-verify-replacement", op: "verify" });
+    expect(restored.find(message => message.ok === true)?.result).toEqual(verified.result);
+    expect(replacement.getChat).toHaveBeenCalledWith(expect.objectContaining({ _: "inputPeerChannel", channelId: 1234567890 }));
+    expect((await send({ requestId: "peer-index-replacement", op: "get_index" })).find(message => message.ok === true)?.result.messageId).toBe(501);
+    expect(replacement.getFullChat).not.toHaveBeenCalled();
   });
 });

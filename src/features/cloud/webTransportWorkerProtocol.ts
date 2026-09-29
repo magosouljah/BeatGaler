@@ -1,4 +1,5 @@
 import type { WebTransportSession } from "./webTransportSession";
+import type { WebVaultPeerRef } from "./webVaultPeerCache";
 
 export interface WebTransportUploadInput {
   file: File;
@@ -22,6 +23,7 @@ export type WebTransportErrorCode =
   | "MEDIA_UNAVAILABLE"
   | "TRANSFER_FAILED"
   | "SESSION_INVALID"
+  | "PEER_NOT_RESOLVED"
   | "CANCELLED";
 
 export interface WebTransportStoredFile {
@@ -112,6 +114,7 @@ export type WebTransportWorkerCommand = (
       > & {
         expected_bot_id: string;
         temp_api_id: number;
+        vault_peer?: WebVaultPeerRef | null;
       };
     }
   | { requestId: string; op: "verify_identity" }

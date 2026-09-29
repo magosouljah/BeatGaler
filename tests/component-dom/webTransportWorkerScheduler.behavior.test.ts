@@ -110,11 +110,15 @@ const harness = vi.hoisted(() => {
   }));
 
   class TelegramClient {
+    onConnectionState = { add: vi.fn(), remove: vi.fn() };
+    onError = { add: vi.fn(), remove: vi.fn() };
     importSession = vi.fn(async () => undefined);
     connect = vi.fn(async () => { connection.connect(); });
+    startUpdatesLoop = vi.fn(async () => undefined);
     destroy = vi.fn(async () => undefined);
     getMe = vi.fn(async () => ({ id: 4242, isBot: true }));
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
+    resolvePeer = vi.fn(async () => ({ _: "inputPeerChannel", channelId: 1234567890, accessHash: new FakeLong(42, 0) }));
     getMessages = getMessages;
     getFullChat = getFullChat;
     downloadChunk = downloadChunk;
@@ -162,6 +166,7 @@ const harness = vi.hoisted(() => {
 
 vi.mock("@mtcute/web", () => ({
   TelegramClient: harness.TelegramClient,
+  Long: harness.FakeLong,
   SessionConnection: harness.SessionConnection,
   WebCryptoProvider: harness.WebCryptoProvider,
   MemoryStorage: class {},

@@ -1,7 +1,8 @@
-import { InputMedia, MemoryStorage, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
+import { InputMedia, Long, MemoryStorage, MtPeerNotFoundError, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
 import { playTrace, playTraceSpan } from "../playback/playTrace";
+import type { WebVaultPeerRef } from "./webVaultPeerCache";
 import {
   STARTUP_PREFIX_BYTES,
   WEB_DIRECT_MAX_FILE_BYTES,
@@ -997,6 +998,9 @@ let client: TelegramClient | null = null;
 let chatId = 0;
 let expectedBotId = "";
 let vaultVerified = false;
+let vaultPeerHint: WebVaultPeerRef | null = null;
+let transportStorage: MemoryStorage | null = null;
+let transportStorageBotId = "";
 let knownIndexPointer: { messageId: number | null; revision: number | null } = { messageId: null, revision: null };
 const activeStreams = new Map<string, { controller: AbortController; acknowledge: (() => void) | null }>();
 const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
@@ -1380,12 +1384,18 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   const ingressTrace = passivePingTrace
     ? installTask2PassiveIngressTrace(command.requestId, activeClientInstanceId)
     : null;
+  // Keep mtcute's learned peer across temporary-auth replacements in this Worker.
+  // A new Worker receives the verified peer hint from the renderer cache.
+  if (!transportStorage || transportStorageBotId !== String(expected_bot_id)) {
+    transportStorage = new MemoryStorage();
+    transportStorageBotId = String(expected_bot_id);
+  }
   const next = new TelegramClient({
     apiId: temp_api_id,
     apiHash: "",
-    storage: new MemoryStorage(),
+    storage: transportStorage,
     crypto: new WebCryptoProvider({ wasmInput: mtcuteWasmUrl }),
-    disableUpdates: true,
+    disableUpdates: false,
   });
   stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_CREATED", {
     worker_instance_id: workerInstanceId,
@@ -1412,6 +1422,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     try {
       stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_BEGIN", mtprotoConnectionSnapshot(next));
       await next.connect();
+      await next.startUpdatesLoop();
       detachSessionDiagnostics = observeMtprotoSessionReset(next, command.requestId, passivePingTrace);
       if (passivePingTrace) detachPassivePingDiagnostics = observeMtprotoPassivePing(next, command.requestId, ingressTrace);
       endConnectTrace();
@@ -1434,6 +1445,8 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     detachMtprotoPassivePingDiagnostics = detachPassivePingDiagnostics;
     detachMtprotoPassiveIngressDiagnostics = ingressTrace?.detach || null;
     chatId = numericChatId;
+    vaultPeerHint = command.session.vault_peer?.channelId === -(numericChatId + 1_000_000_000_000)
+      ? command.session.vault_peer : null;
     expectedBotId = String(expected_bot_id);
     vaultVerified = false;
     knownIndexPointer = {
@@ -1469,6 +1482,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     if (client === next) {
       client = null;
       chatId = 0;
+      vaultPeerHint = null;
       expectedBotId = "";
     }
     stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_INIT_FAILED", {
@@ -1511,21 +1525,70 @@ async function verifyIdentity(): Promise<void> {
   }
 }
 
-async function verifyReady(requestId: string): Promise<void> {
+async function verifyReady(requestId: string): Promise<WebVaultPeerRef> {
   const active = requireConnected();
+  const started = Date.now();
+  const deadline = started + 25_000;
   try {
+    stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_BEGIN", { cached_hint: Boolean(vaultPeerHint) });
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_BEGIN");
-    await observeMtprotoRpc(
-      active,
-      requestId,
-      "WORKER_VERIFY_GET_CHAT",
-      ["channels.getChannels", "messages.getChats"],
-      () => active.getChat(chatId),
-    );
+    let verifiedChat = false;
+    if (vaultPeerHint) {
+      try {
+        const hinted = await observeMtprotoRpc(active, requestId, "WORKER_VERIFY_GET_CHAT",
+          ["channels.getChannels", "messages.getChats"], () => active.getChat({
+            _: "inputPeerChannel",
+            channelId: vaultPeerHint!.channelId,
+            accessHash: new Long(vaultPeerHint!.accessHash.low, vaultPeerHint!.accessHash.high),
+          }));
+        if (Number(hinted.id) !== chatId) throw new WorkerTransportError("SESSION_INVALID", "Cached vault peer belongs to another chat.");
+        verifiedChat = true;
+      } catch (error) {
+        if (error instanceof WorkerTransportError) throw error;
+        // A stale access hash is a peer bootstrap miss. Reacquire from the
+        // membership update instead of treating it as a dead MTProto session.
+        if (!(error instanceof MtPeerNotFoundError) && !/CHANNEL_INVALID|CHANNEL_PRIVATE|PEER_ID_INVALID/i.test(String(error))) throw error;
+        vaultPeerHint = null;
+      }
+    }
+    while (!verifiedChat) {
+      try {
+        const chat = await observeMtprotoRpc(
+          active, requestId, "WORKER_VERIFY_GET_CHAT",
+          ["channels.getChannels", "messages.getChats"],
+          () => active.getChat(chatId),
+        );
+        if (Number(chat.id) !== chatId) throw new WorkerTransportError("SESSION_INVALID", "Vault verification resolved to another chat.");
+        break;
+      } catch (error) {
+        if (!(error instanceof MtPeerNotFoundError)) throw error;
+        // Do not hammer channels.getChannels with an unknown access hash.
+        // mtcute's update loop will populate this storage when the bot receives
+        // its vault membership update after Cloud activation.
+        while (Date.now() < deadline && !await active.storage.peers.getById(chatId)) {
+          await new Promise(resolve => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+        }
+        if (Date.now() >= deadline) {
+          stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_UNRESOLVED", { elapsed_ms: Date.now() - started });
+          throw new WorkerTransportError("PEER_NOT_RESOLVED", String(error.message));
+        }
+      }
+    }
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_LOCAL_DONE");
+    const peer = await active.resolvePeer(chatId);
+    if (peer._ !== "inputPeerChannel" || !peer.accessHash || peer.channelId !== -(chatId + 1_000_000_000_000)) {
+      throw new WorkerTransportError("PEER_NOT_RESOLVED", "Vault peer has no usable channel access hash.");
+    }
+    const resolved: WebVaultPeerRef = {
+      channelId: peer.channelId,
+      accessHash: { low: peer.accessHash.low, high: peer.accessHash.high },
+    };
+    vaultPeerHint = resolved;
     vaultVerified = true;
+    stage1Trace(requestId, "WORKER_PEER_BOOTSTRAP_READY", { elapsed_ms: Date.now() - started });
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_END");
     playTrace("DIRECT_BACKGROUND_GET_CHAT_OK");
+    return resolved;
   } catch (error) {
     stage1Trace(requestId, "WORKER_VERIFY_GET_CHAT_ERROR", {
       error_name: error instanceof Error ? error.name : "unknown",
@@ -2356,7 +2419,7 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
   switch (command.op) {
     case "initialize": await initialize(command); return { ready: true };
     case "verify_identity": await verifyIdentity(); return { verified: true };
-    case "verify": await verifyReady(command.requestId); return { verified: true };
+    case "verify": return verifyReady(command.requestId);
     case "get_index": return getLibraryIndex(command.requestId);
     case "cancel_index": return cancelIndex(command.targetRequestId);
     case "replace_index": return replaceLibraryIndex(command.input);
