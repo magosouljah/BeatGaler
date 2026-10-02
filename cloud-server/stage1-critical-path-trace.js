@@ -3,6 +3,7 @@
 const fs = require("fs");
 
 const RELEVANT_ROUTES = new Set([
+  "/auth/login",
   "/auth/session",
   "/transport/session/start",
   "/transport/session/activate",

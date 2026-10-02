@@ -164,3 +164,30 @@ test('managed token diagnostics never serialize manager or managed token secrets
   assert.doesNotMatch(log, new RegExp(returnedSecret));
   assert.doesNotMatch(log, /https:\/\/api\.telegram\.org\/bot/);
 });
+
+test('a fetched managed token serves concurrent and later sessions until credential version changes', async () => {
+  resetHarness();
+  let calls = 0;
+  direct.__test.setManagerBotFetch(async () => {
+    calls += 1;
+    return ok(calls === 1 ? returnedSecret : `${returnedSecret}-rotated`);
+  });
+
+  const first = await Promise.all([
+    direct.__test.tokenForCredentialVersion(bot, 77),
+    direct.__test.tokenForCredentialVersion(bot, 77),
+  ]);
+  assert.deepEqual(first, [returnedSecret, returnedSecret]);
+  assert.equal(calls, 1);
+
+  direct.__test.setManagerBotFetch(async () => { throw transientFetchError(); });
+  assert.equal(await direct.__test.tokenForCredentialVersion(bot, 77), returnedSecret);
+  assert.equal(calls, 1);
+
+  direct.__test.setManagerBotFetch(async () => {
+    calls += 1;
+    return ok(`${returnedSecret}-rotated`);
+  });
+  assert.equal(await direct.__test.tokenForCredentialVersion(bot, 78), `${returnedSecret}-rotated`);
+  assert.equal(calls, 2);
+});

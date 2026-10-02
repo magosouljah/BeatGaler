@@ -1,5 +1,8 @@
 import { InputMedia, Long, MemoryStorage, MtPeerNotFoundError, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
+import { Task2PacketLedger, task2DecryptWarningReason, task2Fingerprint, type Task2PacketIdentity } from "./task2PacketLedger";
+import { armMtcuteIndexLivenessGuard } from "./mtcuteIndexLivenessGuard";
+import { installMtcutePingSocketRecovery } from "./mtcutePingSocketRecovery";
 import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
 import { playTrace, playTraceSpan } from "../playback/playTrace";
 import type { WebVaultPeerRef } from "./webVaultPeerCache";
@@ -125,6 +128,7 @@ let stage1TraceContext: { correlation_id: string; account_label: string; task2_p
 let detachMtprotoDiagnostics: (() => void) | null = null;
 let detachMtprotoSessionDiagnostics: (() => void) | null = null;
 let detachMtprotoPassivePingDiagnostics: (() => void) | null = null;
+let detachMtprotoPingSocketRecovery: (() => void) | null = null;
 let detachMtprotoPassiveIngressDiagnostics: (() => void) | null = null;
 // Diagnostic identities deliberately live only in the Worker. They do not
 // affect a Direct lease, temporary authorization, retry policy, or reconnect.
@@ -182,6 +186,9 @@ type Task2IngressTrace = {
   clearPingSend(): void;
   bindConnection(connectionId: string): void;
   latestSocketId(): string | null;
+  bindOutgoingLedger(ledger: Task2PacketLedger): void;
+  bindSessionReader(reader: () => string | null): void;
+  claimFramedBytes(length: number): { web_socket_frame_ids: string[]; input_byte_correlation: string };
   detach(): void;
 };
 
@@ -191,7 +198,7 @@ type Task2IngressTrace = {
  * installed before TelegramClient creates WebSocketTransport, which captures
  * the current WebSocket constructor during client construction.
  */
-function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: string): Task2IngressTrace | null {
+export function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: string): Task2IngressTrace | null {
   const NativeWebSocket = globalThis.WebSocket;
   if (typeof NativeWebSocket !== "function") return null;
 
@@ -199,6 +206,14 @@ function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: st
   let currentPingMsgIds: string[] = [];
   let latestSocketId: string | null = null;
   let connectionId: string | null = null;
+  let outgoingLedger: Task2PacketLedger | null = null;
+  let sessionReader: (() => string | null) | null = null;
+  const socketFrames = new Map<string, {
+    received: number;
+    consumed: number;
+    serial: number;
+    frames: Array<{ id: string; start: number; end: number }>;
+  }>();
   let enabled = true;
   const sockets = new Set<WebSocket>();
   const trace = (stage: string, detail: Record<string, unknown> = {}) => {
@@ -207,6 +222,7 @@ function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: st
       stage1Trace(requestId, stage, {
         client_instance_id: clientInstanceId,
         connection_id: connectionId,
+        session_id: sessionReader?.() || null,
         ...detail,
       });
     } catch {
@@ -228,14 +244,30 @@ function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: st
         else super(url, protocols);
         const socket = this as WebSocket;
         const webSocketId = `${clientInstanceId}:ws-${++socketSerial}`;
+        let sendSeq = 0;
+        socketFrames.set(webSocketId, { received: 0, consumed: 0, serial: 0, frames: [] });
         latestSocketId = webSocketId;
         sockets.add(socket);
         trace("TASK2_INPUT_WEBSOCKET_CREATED", { web_socket_id: webSocketId });
 
         socket.addEventListener("message", event => {
+          const incomingBytes = event.data instanceof ArrayBuffer
+            ? new Uint8Array(event.data)
+            : ArrayBuffer.isView(event.data)
+              ? new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength)
+              : null;
+          const stream = socketFrames.get(webSocketId);
+          const webSocketFrameId = stream ? `${webSocketId}:frame-${++stream.serial}` : null;
+          if (stream && webSocketFrameId && incomingBytes) {
+            stream.frames.push({ id: webSocketFrameId, start: stream.received,
+              end: stream.received + incomingBytes.byteLength });
+            stream.received += incomingBytes.byteLength;
+          }
           trace("TASK2_INPUT_WEBSOCKET_MESSAGE", {
             web_socket_id: webSocketId,
+            web_socket_frame_id: webSocketFrameId,
             incoming_frame_bytes: sizeOf(event.data),
+            incoming_frame_fingerprint: incomingBytes ? task2Fingerprint(incomingBytes) : null,
             incoming_data_kind: event.data instanceof ArrayBuffer
               ? "arraybuffer"
               : event.data instanceof Blob
@@ -257,32 +289,54 @@ function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: st
 
         const nativeSend = socket.send.bind(socket);
         (socket as any).send = (data: unknown) => {
+          const currentSendSeq = ++sendSeq;
           const bufferedBefore = Number.isFinite(Number(socket.bufferedAmount))
             ? Number(socket.bufferedAmount)
             : null;
-          const pingMsgIds = [...currentPingMsgIds];
+          const legacyPingMsgIds = [...currentPingMsgIds];
+          const bytes = data instanceof ArrayBuffer
+            ? new Uint8Array(data)
+            : ArrayBuffer.isView(data)
+              ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+              : null;
+          const correlation = bytes && outgoingLedger ? outgoingLedger.matchSocketSend(bytes) : null;
+          const pingMsgIds = correlation?.matched
+            ? correlation.packets.flatMap(packet => packet.ping_msg_ids)
+            : legacyPingMsgIds;
           trace("TASK2_INPUT_WEBSOCKET_SEND", {
             web_socket_id: webSocketId,
+            send_seq: currentSendSeq,
             packet_bytes: sizeOf(data),
             buffered_amount_before: bufferedBefore,
             ping_msg_ids: pingMsgIds,
+            encoded_fingerprint: correlation?.fingerprint || null,
+            byte_correlation: correlation?.matched === true ? "exact" : "unmatched",
+            packet_ids: correlation?.packet_ids || [],
+            outgoing_packets: correlation?.packets || [],
           });
           try {
             const result = nativeSend(data as any);
             trace("TASK2_INPUT_WEBSOCKET_SEND_RETURNED", {
               web_socket_id: webSocketId,
+              send_seq: currentSendSeq,
               packet_bytes: sizeOf(data),
               buffered_amount_after: Number.isFinite(Number(socket.bufferedAmount))
                 ? Number(socket.bufferedAmount)
                 : null,
               ping_msg_ids: pingMsgIds,
+              encoded_fingerprint: correlation?.fingerprint || null,
+              byte_correlation: correlation?.matched === true ? "exact" : "unmatched",
+              packet_ids: correlation?.packet_ids || [],
             });
             return result;
           } catch (error) {
             trace("TASK2_INPUT_WEBSOCKET_SEND_THROW", {
               web_socket_id: webSocketId,
+              send_seq: currentSendSeq,
               packet_bytes: sizeOf(data),
               ping_msg_ids: pingMsgIds,
+              encoded_fingerprint: correlation?.fingerprint || null,
+              packet_ids: correlation?.packet_ids || [],
               error_name: error instanceof Error ? error.name : "Error",
             });
             throw error;
@@ -301,12 +355,28 @@ function installTask2PassiveIngressTrace(requestId: string, clientInstanceId: st
     clearPingSend() { currentPingMsgIds = []; },
     bindConnection(nextConnectionId) { connectionId = nextConnectionId; },
     latestSocketId: () => latestSocketId,
+    bindOutgoingLedger(ledger) { outgoingLedger = ledger; },
+    bindSessionReader(reader) { sessionReader = reader; },
+    claimFramedBytes(length) {
+      const stream = latestSocketId ? socketFrames.get(latestSocketId) : null;
+      if (!stream || !Number.isSafeInteger(length) || length <= 0) {
+        return { web_socket_frame_ids: [], input_byte_correlation: "unmatched" };
+      }
+      const start = stream.consumed;
+      const end = start + length;
+      const ids = stream.frames.filter(frame => frame.start < end && frame.end > start).map(frame => frame.id);
+      stream.consumed = end;
+      stream.frames = stream.frames.filter(frame => frame.end > end);
+      return { web_socket_frame_ids: ids,
+        input_byte_correlation: ids.length > 0 && end <= stream.received ? "stream_exact" : "unmatched" };
+    },
     detach() {
       enabled = false;
       if (globalThis.WebSocket !== NativeWebSocket) {
         globalThis.WebSocket = NativeWebSocket;
       }
       sockets.clear();
+      socketFrames.clear();
     },
   };
 }
@@ -324,6 +394,7 @@ function pingTraceSnapshot(active: TelegramClient, connection = primarySessionCo
   return {
     connection_id: connection ? `${activeClientInstanceId || "unknown-client"}:dc-${activePrimaryDcId}:primary-0:uid-${String(connection._uid ?? "unknown")}` : null,
     connection_uid: connection?._uid ?? null,
+    session_id: session?._sessionId ? String(session._sessionId) : null,
     last_ping_pending: pending,
     last_ping_msg_id: pending ? String(lastPingMsgId) : null,
     last_ping_time_monotonic_ms: finite(session?.lastPingTime),
@@ -336,7 +407,7 @@ function pingTraceSnapshot(active: TelegramClient, connection = primarySessionCo
  * SessionConnection state around methods mtcute invokes itself. They do not
  * schedule work, wait, send RPCs, or alter the connection outcome.
  */
-function observeMtprotoPassivePing(
+export function observeMtprotoPassivePing(
   active: TelegramClient,
   requestId: string,
   ingressTrace: Task2IngressTrace | null = null,
@@ -366,14 +437,25 @@ function observeMtprotoPassivePing(
     containerId: string | null;
     containerKey: unknown;
   }>();
+  const packetLedger = new Task2PacketLedger();
+  ingressTrace?.bindOutgoingLedger(packetLedger);
+  ingressTrace?.bindSessionReader(() => session?._sessionId ? String(session._sessionId) : null);
+  const packetIdentities = new WeakMap<object, Task2PacketIdentity>();
+  const innerPackets: Array<{ bytes: Uint8Array; identity: Task2PacketIdentity }> = [];
+  const rpcRecords = new Map<string, { logicalId: number; method: string }>();
+  const rpcLogicalIds = new WeakMap<object, number>();
+  let nextRpcLogicalId = 0;
+  let nextPacketId = 0;
+  let nextEncodedSeq = 0;
   let flushPingIds: string[] | null = null;
+  let flushRpcMsgIds: string[] | null = null;
   let resetOrigin: string | null = null;
-  let flushing = false;
+  let ackOrigin: string | null = null;
   const trace = (stage: string, detail: Record<string, unknown> = {}) => stage1Trace(requestId, stage, {
-    ...detail,
-    web_socket_id: ingressTrace?.latestSocketId() || null,
     ...pingTraceSnapshot(active, connection),
     ...mtprotoConnectionSnapshot(active),
+    web_socket_id: ingressTrace?.latestSocketId() || null,
+    ...detail,
   });
   const observedConnectionId = String(pingTraceSnapshot(active, connection).connection_id || "");
   if (observedConnectionId) ingressTrace?.bindConnection(observedConnectionId);
@@ -398,7 +480,6 @@ function observeMtprotoPassivePing(
       .map(([pingMsgId]) => pingMsgId);
   };
 
-  const originalFlush = connection._flush;
   const originalDoFlush = connection._doFlush;
   const originalWriteMessage = session.writeMessage;
   const originalPendingSet = session.pendingMessages?.set;
@@ -415,7 +496,64 @@ function observeMtprotoPassivePing(
   const originalHandleMessage = connection._handleMessage;
   const originalHandleError = connection.handleError;
   const originalCodecDecode = connection._codec?.decode;
-  const onUsable = () => trace("TASK2_PING_SOCKET_CONNECTED");
+  const originalCodecEncode = connection._codec?.encode;
+  const originalInnerEncode = connection._codec?._inner?.encode;
+  const originalRpcResult = connection._onRpcResult;
+  const originalRegisterOutgoing = connection._registerOutgoingMsgId;
+  const frameIds = new WeakMap<object, number>();
+  let nextFrameId = 0;
+  let activeFrameId: number | null = null;
+  const encryptorRestores: Array<() => void> = [];
+  const observedEncryptors = new WeakSet<object>();
+  const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
+    left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+  const bindEncryptor = () => {
+    const encryptor = connection._codec?._encryptor;
+    if (!encryptor || observedEncryptors.has(encryptor) || typeof encryptor.process !== "function") return;
+    const originalProcess = encryptor.process;
+    const observedProcess = function (this: unknown, plain: Uint8Array, ...args: unknown[]) {
+      const cipher = originalProcess.call(this, plain, ...args);
+      const index = innerPackets.findIndex(packet => sameBytes(packet.bytes, plain));
+      if (index >= 0 && ArrayBuffer.isView(cipher)) {
+        const [packet] = innerPackets.splice(index, 1);
+        const record = packetLedger.recordEncoded({ ...packet.identity, encode_seq: ++nextEncodedSeq },
+          new Uint8Array(cipher.buffer, cipher.byteOffset, cipher.byteLength));
+        trace("TASK2_OUTPUT_PACKET_ENCODED", record);
+        if (packet.identity.ping_msg_ids.length || packet.identity.rpc_msg_ids.length) {
+          trace("TASK2_PING_PACKET_ENCODED", record);
+        }
+      }
+      return cipher;
+    };
+    try {
+      encryptor.process = observedProcess;
+    } catch (error) {
+      trace("TASK2_PING_ENCRYPTOR_HOOK_FAILED", {
+        error_name: error instanceof Error ? error.name : "Error",
+      });
+      return;
+    }
+    observedEncryptors.add(encryptor);
+    encryptorRestores.push(() => { if (encryptor.process === observedProcess) encryptor.process = originalProcess; });
+  };
+  bindEncryptor();
+  trace("TASK2_PING_OBSERVER_CAPABILITY", {
+    websocket_observer: Boolean(ingressTrace),
+    inner_encode_hook: typeof originalInnerEncode === "function",
+    encryptor_process_hook: Boolean(connection._codec?._encryptor &&
+      observedEncryptors.has(connection._codec._encryptor)),
+    decrypt_hook: typeof originalDecryptMessage === "function",
+    rpc_result_hook: typeof originalRpcResult === "function",
+  });
+  const onUsable = () => {
+    const unmatchedPacketIds = packetLedger.clear();
+    innerPackets.length = 0;
+    if (unmatchedPacketIds.length) trace("TASK2_PING_UNMATCHED_PACKETS_AT_CONNECT", {
+      packet_ids: unmatchedPacketIds,
+    });
+    bindEncryptor();
+    trace("TASK2_PING_SOCKET_CONNECTED");
+  };
   if (typeof connection.onUsable?.add === "function") connection.onUsable.add(onUsable);
 
   if (typeof originalWriteMessage === "function") {
@@ -461,6 +599,23 @@ function observeMtprotoPassivePing(
           });
         }
       }
+      if (value?._ === "rpc" && value.rpc?.method === "channels.getMessages") {
+        const rpcMsgId = messageId(key);
+        if (rpcMsgId) {
+          let logicalId = rpcLogicalIds.get(value.rpc);
+          if (!logicalId) {
+            logicalId = ++nextRpcLogicalId;
+            rpcLogicalIds.set(value.rpc, logicalId);
+          }
+          rpcRecords.set(rpcMsgId, { logicalId, method: value.rpc.method });
+          flushRpcMsgIds?.push(rpcMsgId);
+          trace("TASK2_PING_RPC_PENDING_SET", {
+            rpc_msg_id: rpcMsgId,
+            rpc_logical_id: logicalId,
+            rpc_method: value.rpc.method,
+          });
+        }
+      }
       if (value?._ === "container") {
         for (const pingMsgId of value.msgIds || []) {
           const keyId = messageId(pingMsgId);
@@ -474,21 +629,23 @@ function observeMtprotoPassivePing(
       return result;
     };
   }
-  if (typeof originalFlush === "function") {
-    connection._flush = function (this: unknown, ...args: unknown[]) {
-      flushing = true;
-      try {
-        return originalFlush.apply(this, args);
-      } finally {
-        flushing = false;
+  if (typeof originalRegisterOutgoing === "function") {
+    connection._registerOutgoingMsgId = function (this: unknown, outgoingMsgId: unknown, ...args: unknown[]) {
+      const pending = session.pendingMessages?.get?.(outgoingMsgId);
+      if (pending?._ === "rpc" && pending.rpc?.method === "channels.getMessages") {
+        const rpcMsgId = messageId(outgoingMsgId);
+        if (rpcMsgId) flushRpcMsgIds?.push(rpcMsgId);
       }
+      return originalRegisterOutgoing.call(this, outgoingMsgId, ...args);
     };
   }
   if (typeof originalDoFlush === "function") {
     connection._doFlush = function (this: unknown, ...args: unknown[]) {
       const before = pingTraceSnapshot(active, connection);
       const parent = flushPingIds;
+      const parentRpc = flushRpcMsgIds;
       flushPingIds = [];
+      flushRpcMsgIds = [];
       try {
         const result = originalDoFlush.apply(this, args);
         const after = pingTraceSnapshot(active, connection);
@@ -501,12 +658,32 @@ function observeMtprotoPassivePing(
         return result;
       } finally {
         flushPingIds = parent;
+        flushRpcMsgIds = parentRpc;
       }
     };
   }
   if (typeof originalSend === "function") {
     connection.send = function (this: unknown, data: unknown, ...args: unknown[]) {
       const ids = [...(flushPingIds || [])];
+      const rpcMsgIds = [...new Set(flushRpcMsgIds || [])];
+      const containerMsgIds = [...new Set([...ids, ...rpcMsgIds]
+        .map(id => {
+          const record = pingRecords.get(id);
+          const pending = record ? session.pendingMessages?.get?.(record.pendingKey) :
+            [...session.pendingMessages.keys()].find((key: unknown) => messageId(key) === id);
+          return record
+            ? messageId(pending?.containerId) || record.containerId
+            : messageId((session.pendingMessages?.get?.(pending) as any)?.rpc?.containerId);
+        })
+        .filter((id): id is string => Boolean(id)))];
+      const packet: Task2PacketIdentity = {
+        packet_id: ++nextPacketId,
+        ping_msg_ids: ids,
+        rpc_msg_ids: rpcMsgIds,
+        container_msg_ids: containerMsgIds,
+        session_id: session?._sessionId ? String(session._sessionId) : null,
+      };
+      if (data && typeof data === "object") packetIdentities.set(data as object, packet);
       const persistentWriterPresentAtCall = Boolean(connection._writer);
       if (ids.length) {
         tracePingRecords(ids, {
@@ -517,6 +694,9 @@ function observeMtprotoPassivePing(
         });
         trace("TASK2_PING_SEND_CALLED", {
           ping_msg_ids: ids,
+          rpc_msg_ids: rpcMsgIds,
+          packet_id: packet.packet_id,
+          container_msg_ids: containerMsgIds,
           encrypted_byte_length: ArrayBuffer.isView(data) ? data.byteLength : null,
           persistent_writer_present: persistentWriterPresentAtCall,
           queued_before_send: Number(connection._sendOnceConnected?.length || 0),
@@ -533,16 +713,44 @@ function observeMtprotoPassivePing(
         void (result as Promise<unknown>).then(
           () => trace("TASK2_PING_SEND_RESOLVED", {
             ping_msg_ids: ids,
+            rpc_msg_ids: rpcMsgIds,
+            packet_id: packet.packet_id,
             persistent_writer_present_at_call: persistentWriterPresentAtCall,
             semantics: "PersistentConnection.send resolved",
           }),
           error => trace("TASK2_PING_SEND_REJECTED", {
             ping_msg_ids: ids,
+            rpc_msg_ids: rpcMsgIds,
+            packet_id: packet.packet_id,
             error_name: error instanceof Error ? error.name : String(error || "Error"),
           }),
         );
       }
       return result;
+    };
+  }
+  if (typeof originalInnerEncode === "function") {
+    connection._codec._inner.encode = function (this: unknown, data: Uint8Array, into: any, ...args: unknown[]) {
+      const result = originalInnerEncode.call(this, data, into, ...args);
+      const identity = packetIdentities.get(data) || {
+        packet_id: ++nextPacketId,
+        ping_msg_ids: [],
+        rpc_msg_ids: [],
+        container_msg_ids: [],
+        session_id: session?._sessionId ? String(session._sessionId) : null,
+      };
+      // IntermediatePacketCodec.encode is synchronous in the pinned mtcute 0.31.0.
+      // The obfuscation layer awaits it, then passes precisely these bytes to CTR.
+      innerPackets.push({ bytes: new Uint8Array(into.result()).slice(), identity });
+      return result;
+    };
+  }
+  if (typeof originalCodecEncode === "function") {
+    connection._codec.encode = function (this: unknown, ...args: unknown[]) {
+      // A reconnect resets the CTR object. Queued writes can flush before
+      // onUsable fires, so bind its replacement at the encoding boundary.
+      bindEncryptor();
+      return originalCodecEncode.apply(this, args);
     };
   }
   if (typeof originalCodecDecode === "function") {
@@ -554,7 +762,18 @@ function observeMtprotoPassivePing(
       try {
         const frame = await originalCodecDecode.call(this, buffer, eof, ...args);
         if (frame !== null && frame !== undefined) {
+          const frameId = ++nextFrameId;
+          if (typeof frame === "object") frameIds.set(frame, frameId);
+          // IntermediatePacketCodec contributes one four-byte length field to
+          // each MTProto frame. AES-CTR obfuscation preserves byte count.
+          const inputLink = ArrayBuffer.isView(frame)
+            ? ingressTrace?.claimFramedBytes(frame.byteLength + 4) : null;
           trace("TASK2_INPUT_FRAMED_READER_FRAME", {
+            frame_id: frameId,
+            web_socket_frame_ids: inputLink?.web_socket_frame_ids || [],
+            input_byte_correlation: inputLink?.input_byte_correlation || "unmatched",
+            frame_fingerprint: ArrayBuffer.isView(frame)
+              ? task2Fingerprint(new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength)) : null,
             framed_frame_bytes: ArrayBuffer.isView(frame) ? frame.byteLength : null,
           });
         }
@@ -570,41 +789,75 @@ function observeMtprotoPassivePing(
   }
   if (typeof originalOnMessage === "function") {
     connection.onMessage = function (this: unknown, data: unknown, ...args: unknown[]) {
+      const priorFrameId = activeFrameId;
+      activeFrameId = data && typeof data === "object" ? frameIds.get(data) || null : null;
       trace("TASK2_INPUT_SESSION_ON_MESSAGE_ENTER", {
+        frame_id: activeFrameId,
         framed_frame_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
       });
       try {
         const result = originalOnMessage.call(this, data, ...args);
         trace("TASK2_INPUT_SESSION_ON_MESSAGE_EXIT", {
+          frame_id: activeFrameId,
           framed_frame_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
         });
         return result;
       } catch (error) {
         trace("TASK2_INPUT_SESSION_ON_MESSAGE_THROW", {
+          frame_id: activeFrameId,
           error_name: error instanceof Error ? error.name : "Error",
           error_message: diagnosticErrorMessage(error),
         });
         throw error;
+      } finally {
+        activeFrameId = priorFrameId;
       }
     };
   }
   if (typeof originalDecryptMessage === "function") {
-    session.decryptMessage = function (this: unknown, data: unknown, ...args: unknown[]) {
+    session.decryptMessage = function (this: unknown, data: unknown, callback: (...args: unknown[]) => unknown, ...args: unknown[]) {
+      let callbackInvoked = false;
+      let rejectionReason: string | null = null;
+      const logs = [session.log, session._authKey?.log, session._authKeyTemp?.log, session._authKeyTempSecondary?.log]
+        .filter((value: any, index: number, all: any[]) => value && all.indexOf(value) === index);
+      const restoreWarnings: Array<() => void> = [];
+      for (const log of logs) {
+        const originalWarn = log.warn;
+        if (typeof originalWarn !== "function") continue;
+        const observedWarn = function (this: unknown, format: unknown, ...warnArgs: unknown[]) {
+          rejectionReason ||= task2DecryptWarningReason(String(format));
+          return originalWarn.apply(this, [format, ...warnArgs]);
+        };
+        log.warn = observedWarn;
+        restoreWarnings.push(() => { if (log.warn === observedWarn) log.warn = originalWarn; });
+      }
       trace("TASK2_INPUT_MTPROTO_DECRYPT_BEGIN", {
+        frame_id: activeFrameId,
         encrypted_message_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
       });
       try {
-        const result = originalDecryptMessage.call(this, data, ...args);
-        trace("TASK2_INPUT_MTPROTO_DECRYPT_OK", {
+        const result = originalDecryptMessage.call(this, data, (...messageArgs: unknown[]) => {
+          callbackInvoked = true;
+          trace("TASK2_INPUT_MTPROTO_VALID_CALLBACK", { frame_id: activeFrameId });
+          return callback(...messageArgs);
+        }, ...args);
+        trace("TASK2_INPUT_MTPROTO_DECRYPT_RESULT", {
+          frame_id: activeFrameId,
+          callback_invoked: callbackInvoked,
+          validation_outcome: callbackInvoked ? "accepted" : "discarded",
+          validation_reason: callbackInvoked ? null : rejectionReason || "no_callback_unclassified",
           encrypted_message_bytes: ArrayBuffer.isView(data) ? data.byteLength : null,
         });
         return result;
       } catch (error) {
         trace("TASK2_INPUT_MTPROTO_DECRYPT_ERROR", {
+          frame_id: activeFrameId,
           error_name: error instanceof Error ? error.name : "Error",
           error_message: diagnosticErrorMessage(error),
         });
         throw error;
+      } finally {
+        restoreWarnings.forEach(restore => restore());
       }
     };
   }
@@ -647,12 +900,31 @@ function observeMtprotoPassivePing(
   }
   if (typeof originalHandleMessage === "function") {
     connection._handleMessage = function (this: unknown, incomingMsgId: unknown, message: any, ...args: unknown[]) {
+      const stateRequest = message?._ === "mt_msgs_state_info"
+        ? session.pendingMessages?.get?.(message.reqMsgId) : null;
+      const stateRequestedIds = stateRequest?._ === "state"
+        ? stateRequest.msgIds : message?._ === "mt_msgs_state_info"
+          ? session.recentStateRequests?.get?.(message.reqMsgId) : null;
       trace("TASK2_INPUT_MT_MESSAGE_DECODED", {
+        frame_id: activeFrameId,
         incoming_msg_id: messageId(incomingMsgId),
         mt_message_type: typeof message?._ === "string" ? message._ : "unknown",
         mt_is_pong: message?._ === "mt_pong",
+        ack_msg_ids: message?._ === "mt_msgs_ack" && Array.isArray(message.msgIds)
+          ? message.msgIds.map(messageId).filter(Boolean) : null,
+        state_request_msg_id: messageId(message?.reqMsgId),
+        state_requested_msg_ids: Array.isArray(stateRequestedIds)
+          ? stateRequestedIds.map(messageId).filter(Boolean) : null,
+        state_info_codes: message?._ === "mt_msgs_state_info" && ArrayBuffer.isView(message.info)
+          ? Array.from(new Uint8Array(message.info.buffer, message.info.byteOffset, message.info.byteLength)) : null,
       });
-      return originalHandleMessage.call(this, incomingMsgId, message, ...args);
+      const priorAckOrigin = ackOrigin;
+      if (message?._ === "mt_msgs_ack") ackOrigin = "server_mt_msgs_ack";
+      try {
+        return originalHandleMessage.call(this, incomingMsgId, message, ...args);
+      } finally {
+        ackOrigin = priorAckOrigin;
+      }
     };
   }
   if (typeof originalHandleError === "function") {
@@ -671,9 +943,61 @@ function observeMtprotoPassivePing(
         trace("TASK2_PING_ACK_OBSERVED", {
           ack_msg_id: messageId(ackMsgId),
           related_ping_msg_ids: relatedPingMsgIds,
+          ack_origin: ackOrigin || "internal",
+        });
+      }
+      const ackId = messageId(ackMsgId);
+      const acked = session.pendingMessages?.get?.(ackMsgId);
+      const rpcMsgIds = acked?._ === "container"
+        ? (acked.msgIds || []).map(messageId).filter((id: string | null): id is string => Boolean(id))
+        : ackId ? [ackId] : [];
+      for (const rpcMsgId of rpcMsgIds) {
+        const rpcRecord = rpcRecords.get(rpcMsgId);
+        if (rpcRecord) trace("TASK2_PING_RPC_ACK_OBSERVED", {
+          rpc_msg_id: rpcMsgId,
+          rpc_logical_id: rpcRecord.logicalId,
+          ack_msg_id: ackId,
+          ack_origin: ackOrigin || "internal",
         });
       }
       return originalAck.call(this, ackMsgId, ...args);
+    };
+  }
+  if (typeof originalRpcResult === "function") {
+    connection._onRpcResult = function (this: unknown, incomingMsgId: unknown, reader: any, ...args: unknown[]) {
+      const reqMsgId = reader?.dataView && Number.isInteger(reader.pos) && reader.pos + 8 <= reader.dataView.byteLength
+        ? String(reader.dataView.getBigInt64(reader.pos, true)) : null;
+      trace("TASK2_INPUT_RPC_RESULT_OBSERVED", {
+        frame_id: activeFrameId,
+        incoming_msg_id: messageId(incomingMsgId),
+        rpc_msg_id: reqMsgId,
+        rpc_method: reqMsgId
+          ? [...session.pendingMessages.entries()].find(([key]: [unknown, unknown]) => messageId(key) === reqMsgId)?.[1]?.rpc?.method || null
+          : null,
+      });
+      const record = reqMsgId ? rpcRecords.get(reqMsgId) : null;
+      if (record) trace("TASK2_PING_RPC_RESULT_ENTER", {
+        frame_id: activeFrameId,
+        rpc_msg_id: reqMsgId,
+        rpc_logical_id: record.logicalId,
+        incoming_msg_id: messageId(incomingMsgId),
+      });
+      const priorAckOrigin = ackOrigin;
+      ackOrigin = "rpc_result";
+      let result: unknown;
+      try {
+        result = originalRpcResult.call(this, incomingMsgId, reader, ...args);
+      } finally {
+        ackOrigin = priorAckOrigin;
+      }
+      if (record) trace("TASK2_PING_RPC_RESULT_HANDLED", {
+        frame_id: activeFrameId,
+        rpc_msg_id: reqMsgId,
+        rpc_logical_id: record.logicalId,
+        pending_after_result: [...session.pendingMessages.keys()]
+          .some((key: unknown) => messageId(key) === reqMsgId),
+      });
+      return result;
     };
   }
   if (typeof originalPong === "function") {
@@ -685,15 +1009,19 @@ function observeMtprotoPassivePing(
       const expectedPingId = messageId(info?.pingId);
       const lookup = !info ? "unknown" : info._ === "ping" ? "ping" : String(info._);
       trace("TASK2_PING_PONG_OBSERVED", {
+        frame_id: activeFrameId,
         pong_msg_id: pongMsgId,
         pong_ping_id: pongPingId,
         pending_lookup: lookup,
         expected_ping_id: expectedPingId,
         ping_id_matches: info?._ === "ping" ? expectedPingId === pongPingId : null,
         current_last_ping_matches: pongMsgId !== null && pongMsgId === messageId(session.lastPingMsgId),
+        last_ping_msg_id_before: before.last_ping_msg_id,
       });
       const priorOrigin = resetOrigin;
+      const priorAckOrigin = ackOrigin;
       resetOrigin = "on_pong";
+      ackOrigin = "pong";
       try {
         const result = originalPong.call(this, pong, ...args);
         const after = pingTraceSnapshot(active, connection);
@@ -706,9 +1034,11 @@ function observeMtprotoPassivePing(
           });
         }
         trace("TASK2_PING_PONG_HANDLED", {
+          frame_id: activeFrameId,
           pong_msg_id: pongMsgId,
           pong_ping_id: pongPingId,
           pending_lookup: lookup,
+          last_ping_msg_id_after: after.last_ping_msg_id,
           outcome: lookup === "unknown"
             ? "unknown"
             : lookup !== "ping"
@@ -720,6 +1050,7 @@ function observeMtprotoPassivePing(
         return result;
       } finally {
         resetOrigin = priorOrigin;
+        ackOrigin = priorAckOrigin;
       }
     };
   }
@@ -735,10 +1066,24 @@ function observeMtprotoPassivePing(
           related_ping_msg_ids: relatedPingMsgIds,
         });
       }
+      const rpcMsgId = messageId(failedMsgId);
+      const rpcRecord = rpcMsgId ? rpcRecords.get(rpcMsgId) : null;
+      if (rpcRecord) trace("TASK2_PING_RPC_MESSAGE_FAILED", {
+        rpc_msg_id: rpcMsgId,
+        rpc_logical_id: rpcRecord.logicalId,
+        failure_reason: String(reason || ""),
+      });
       const priorOrigin = resetOrigin;
       resetOrigin = "on_message_failed:" + String(reason || "");
       try {
-        return originalFailed.call(this, failedMsgId, reason, ...args);
+        const result = originalFailed.call(this, failedMsgId, reason, ...args);
+        if (rpcRecord && info?.rpc) trace("TASK2_PING_RPC_REENQUEUE_STATE", {
+          rpc_msg_id: rpcMsgId,
+          rpc_logical_id: rpcRecord.logicalId,
+          rpc_msg_id_after: messageId(info.rpc.msgId),
+          queued_after_failure: [...session.queuedRpc].includes(info.rpc),
+        });
+        return result;
       } finally {
         resetOrigin = priorOrigin;
       }
@@ -775,7 +1120,7 @@ function observeMtprotoPassivePing(
         ? Boolean(connection._isActive())
         : null;
       const inferredOrigin = resetOrigin ||
-        (flushing && activeBefore === false && activeNow === true
+        (activeBefore === false && activeNow === true
           ? "inactive_to_active"
           : "other");
       trace("TASK2_PING_RESET_LAST_PING", {
@@ -792,10 +1137,11 @@ function observeMtprotoPassivePing(
   }
 
   return () => {
-    if (connection._flush !== originalFlush) connection._flush = originalFlush;
     if (connection._doFlush !== originalDoFlush) connection._doFlush = originalDoFlush;
     if (connection.send !== originalSend) connection.send = originalSend;
+    if (connection._registerOutgoingMsgId !== originalRegisterOutgoing) connection._registerOutgoingMsgId = originalRegisterOutgoing;
     if (connection._onPong !== originalPong) connection._onPong = originalPong;
+    if (connection._onRpcResult !== originalRpcResult) connection._onRpcResult = originalRpcResult;
     if (connection._onMessageAcked !== originalAck) connection._onMessageAcked = originalAck;
     if (connection._onMessageFailed !== originalFailed) connection._onMessageFailed = originalFailed;
     if (connection._resetSession !== originalResetSession) connection._resetSession = originalResetSession;
@@ -805,6 +1151,9 @@ function observeMtprotoPassivePing(
     if (connection._handleMessage !== originalHandleMessage) connection._handleMessage = originalHandleMessage;
     if (connection.handleError !== originalHandleError) connection.handleError = originalHandleError;
     if (connection._codec?.decode !== originalCodecDecode) connection._codec.decode = originalCodecDecode;
+    if (connection._codec?.encode !== originalCodecEncode) connection._codec.encode = originalCodecEncode;
+    if (connection._codec?._inner?.encode !== originalInnerEncode) connection._codec._inner.encode = originalInnerEncode;
+    encryptorRestores.forEach(restore => restore());
     if (session.writeMessage !== originalWriteMessage) session.writeMessage = originalWriteMessage;
     if (session.pendingMessages?.set !== originalPendingSet) session.pendingMessages.set = originalPendingSet;
     if (session.resetLastPing !== originalResetLastPing) session.resetLastPing = originalResetLastPing;
@@ -1158,6 +1507,8 @@ function assertBoundTempPrimarySession(next: TelegramClient, sessionId: BoundTem
 }
 
 async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
+  detachMtprotoPingSocketRecovery?.();
+  detachMtprotoPingSocketRecovery = null;
   detachMtprotoPassiveIngressDiagnostics?.();
   detachMtprotoPassiveIngressDiagnostics = null;
   detachMtprotoPassivePingDiagnostics?.();
@@ -1418,6 +1769,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   const detachDiagnostics = observeMtprotoConnection(next, command.requestId, passivePingTrace);
   let detachSessionDiagnostics: (() => void) | null = null;
   let detachPassivePingDiagnostics: (() => void) | null = null;
+  let detachPingSocketRecovery: (() => void) | null = null;
   try {
     await next.importSession({
       primaryDcs: temp_primary_dcs as any,
@@ -1432,6 +1784,13 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       await next.startUpdatesLoop();
       detachSessionDiagnostics = observeMtprotoSessionReset(next, command.requestId, passivePingTrace);
       if (passivePingTrace) detachPassivePingDiagnostics = observeMtprotoPassivePing(next, command.requestId, ingressTrace);
+      detachPingSocketRecovery = installMtcutePingSocketRecovery(primarySessionConnection(next), detail => {
+        stage1Trace(command.requestId, "WORKER_MTPROTO_PING_SOCKET_RECOVERY", {
+          ping_msg_id: detail.pingMsgId,
+          elapsed_ms: detail.elapsedMs,
+          ...mtprotoConnectionSnapshot(next),
+        });
+      });
       endConnectTrace();
       stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_END", mtprotoConnectionSnapshot(next));
       playTrace("DIRECT_MTPROTO_READY", { elapsed_ms: Date.now() - started });
@@ -1445,11 +1804,11 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
       restoreConnect();
     }
     assertBoundTempPrimarySession(next, temp_session_id, primaryDcId);
-
     client = next;
     detachMtprotoDiagnostics = detachDiagnostics;
     detachMtprotoSessionDiagnostics = detachSessionDiagnostics;
     detachMtprotoPassivePingDiagnostics = detachPassivePingDiagnostics;
+    detachMtprotoPingSocketRecovery = detachPingSocketRecovery;
     detachMtprotoPassiveIngressDiagnostics = ingressTrace?.detach || null;
     chatId = numericChatId;
     vaultPeerHint = command.session.vault_peer?.channelId === -(numericChatId + 1_000_000_000_000)
@@ -1473,6 +1832,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     });
 
   } catch (error) {
+    detachPingSocketRecovery?.();
     detachPassivePingDiagnostics?.();
     detachSessionDiagnostics?.();
     detachDiagnostics();
@@ -1817,6 +2177,19 @@ async function getLibraryIndex(requestId: string | null = null, allowMissing = f
             }
           }
           let message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number] | undefined;
+          const disarmIndexLiveness = armMtcuteIndexLivenessGuard(
+            primarySessionConnection(active),
+            () => requestId === null || activeIndexRequestId === requestId,
+            detail => {
+              if (requestId) stage1Trace(requestId, "TASK2_PING_INDEX_LIVENESS_RECOVERY", {
+                rpc_msg_id: detail.rpcMsgId,
+                ping_msg_id: detail.pingMsgId,
+                delay_ms: detail.delayMs,
+                ...mtprotoConnectionSnapshot(active),
+              });
+              playTrace("INDEX_LIVENESS_RECOVERY", { delay_ms: detail.delayMs });
+            },
+          );
           try {
             const messages = requestId
               ? await observeMtprotoRpc(
@@ -1829,6 +2202,7 @@ async function getLibraryIndex(requestId: string | null = null, allowMissing = f
               : await active.getMessages(chatId, [messageId]);
             [message] = messages;
           } finally {
+            disarmIndexLiveness();
             if (requestId) {
               stage1Trace(requestId, "WORKER_INDEX_POINTER_GET_MESSAGES_END", {
                 message_id: messageId,

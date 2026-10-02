@@ -297,7 +297,7 @@ export function authPreload(emit) {
       let operationResponse = null;
       let startupTrace = null;
 
-      if (route.endsWith("/transport/session/start")) {
+      if (route.endsWith("/transport/session/start") || route.endsWith("/transport/session/activate")) {
         try {
           const rawTrace = response.headers.get("X-BeatGaler-Startup-Trace");
           if (rawTrace && rawTrace.length <= 12_000) {
@@ -340,6 +340,14 @@ export function authPreload(emit) {
                     lease_state:
                       typeof event?.lease_state === "string"
                         ? event.lease_state
+                        : null,
+                    membership_state:
+                      typeof event?.membership_state === "string"
+                        ? event.membership_state
+                        : null,
+                    probe_error_code:
+                      typeof event?.probe_error_code === "string"
+                        ? event.probe_error_code
                         : null,
                   }))
                 : [],
@@ -457,7 +465,16 @@ export async function observeAuth(client) {
     }
     if (data.kind === "play-trace") {
       playTraces.push({ ...data });
-      if (playTraces.length > 400) playTraces.shift();
+      // Preserve every Task 2 anchor and ingress event. Bound only unrelated
+      // traces, which must never evict a protected startup marker.
+      if (data.task2_passive_ping_trace !== true) {
+        const unrelated = playTraces.reduce((count, entry) =>
+          count + Number(entry.task2_passive_ping_trace !== true), 0);
+        if (unrelated > 400) {
+          const firstUnrelated = playTraces.findIndex(entry => entry.task2_passive_ping_trace !== true);
+          playTraces.splice(firstUnrelated, 1);
+        }
+      }
       return;
     }
     const previous = records.get(data.id);

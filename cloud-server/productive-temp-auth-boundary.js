@@ -23,7 +23,6 @@ const PROD_DC_SUBDOMAINS = {
   5: "flora",
 };
 const permanentByTransport = new Map();
-let permanentAuthorizationTail = Promise.resolve();
 let mtcutePromise = null;
 
 function timeout(promise, label, ms = TIMEOUT_MS) {
@@ -34,12 +33,6 @@ function timeout(promise, label, ms = TIMEOUT_MS) {
   }).finally(() => {
     if (timer !== null) clearTimeout(timer);
   });
-}
-
-function serializePermanentAuthorization(task) {
-  const run = permanentAuthorizationTail.then(task, task);
-  permanentAuthorizationTail = run.then(() => undefined, () => undefined);
-  return run;
 }
 
 function productionDc(dcId) {
@@ -142,7 +135,10 @@ async function loadMtcuteInternals() {
       wasmBytes,
       apiLayer: apiSchema.l,
     };
-  })();
+  })().catch(error => {
+    mtcutePromise = null;
+    throw error;
+  });
   return mtcutePromise;
 }
 
@@ -226,7 +222,9 @@ async function authorizePermanent(session) {
   const cached = permanentByTransport.get(cacheKey);
   if (cached) return cached;
 
-  const promise = serializePermanentAuthorization(async () => {
+  // The cache key already coalesces calls for one bot. Different bots have
+  // independent auth keys and must not queue behind each other's handshake.
+  const promise = (async () => {
     assert.ok(globalThis.WebSocket, "Node runtime must provide WebSocket for productive temporary auth.");
     const m = await timeout(loadMtcuteInternals(), "mtcute internals load");
     const crypto = await timeout(makeCrypto(m), "temporary auth crypto initialization");
@@ -275,7 +273,7 @@ async function authorizePermanent(session) {
     const expected = session.transport_user_id == null ? "" : String(session.transport_user_id);
     if (expected && expected !== authorizedBotId) throw new Error("Controlled temporary-auth binder resolved the wrong transport bot identity.");
     return { m, crypto, connection, permanentKeyBytes, dcId, apiId, authorizedBotId };
-  });
+  })();
   permanentByTransport.set(cacheKey, promise);
   try {
     return await promise;
@@ -402,6 +400,11 @@ function installProductiveTempAuthBoundary(express) {
   const application = express?.application;
   if (!application || application.__beatgalerTempAuthBoundaryInstalled) return;
   application.__beatgalerTempAuthBoundaryInstalled = true;
+  // Load the pinned mtcute bundle while Cloud starts, before simultaneous
+  // browser sessions enter the productive authorization boundary.
+  void loadMtcuteInternals().catch(error => {
+    console.error('[direct-temp-auth] mtcute prewarm failed:', error?.message || error);
+  });
   const originalPost = application.post;
   application.post = function patchedPost(route, ...handlers) {
     if (!TARGET_ROUTES.has(route)) return originalPost.call(this, route, ...handlers);

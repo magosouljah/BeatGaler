@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import JSZip from "jszip";
 import { observeAuth } from "./stage1-auth-observer.mjs";
 import { validateAuthHealth } from "./stage1-health-validation.mjs";
+import { assessPhase2Task1Markers, persistPhase2Task1Samples } from "./phase2-task1-attribution.mjs";
 import { sha256Hex, stripMp3ContainerTags } from "./stage1-download-integrity.mjs";
 import {
   effectiveStage1SoakMinutes,
@@ -41,7 +42,12 @@ const task6Mode = process.env.STAGE1_TASK6_FINAL_VERIFICATION === "1";
 const phase2Task0Mode = process.env.PHASE2_TASK0_MEASUREMENT === "1";
 const phase2Task1Mode = process.env.PHASE2_TASK1_ATTRIBUTION === "1";
 const phase2Task2Mode = process.env.PHASE2_TASK2_POINTER_ATTRIBUTION === "1";
-const phase2Task2PassivePingTrace = phase2Task2Mode && process.env.PHASE2_TASK2_PASSIVE_PING_TRACE === "1";
+const phase2Task2InfraMode = process.env.PHASE2_TASK2_INFRA_READINESS === "1";
+const phase2Task2ContinueAfterPlaybackFailure = phase2Task2Mode &&
+  process.env.PHASE2_TASK2_CONTINUE_AFTER_PLAYBACK_FAILURE === "1";
+const phase2PeerPlayRace = process.env.PHASE2_PEER_PLAY_RACE === "1";
+const phase2Task2PassivePingTrace = (phase2Task2Mode || singleReloadAttributionTrace) &&
+  process.env.PHASE2_TASK2_PASSIVE_PING_TRACE === "1";
 // The focused trace deliberately reuses the existing five-account diagnostic
 // soak pre-state. Its measurement still starts only at the original final
 // refresh() calls below; it never restores a profile from an earlier run.
@@ -92,7 +98,9 @@ const accounts = Array.from({ length: accountCount }, (_, index) => {
 const report = {
   version: 9,
   stage: "Etapa 1 — uso real entre cuentas independientes",
-  workload_mode: phase2Task2Mode
+  workload_mode: phase2Task2InfraMode
+  ? "phase2-task2-five-account-infrastructure-readiness"
+  : phase2Task2Mode
   ? "phase2-task2-postgres-index-pointer-attribution"
   : phase2Task1Mode
   ? "phase2-task1-library-latency-attribution"
@@ -129,6 +137,7 @@ const report = {
     single_reload_attribution_trace: singleReloadAttributionTrace,
     phase2_task1_attribution: phase2Task1Mode,
     phase2_task2_pointer_attribution: phase2Task2Mode,
+    phase2_task2_infra_readiness: phase2Task2InfraMode,
     phase2_task2_passive_ping_trace: phase2Task2PassivePingTrace,
     requested_account_count: accountCount,
   },
@@ -242,11 +251,13 @@ if (phase2Task1Mode) {
     "multi_account_auth_isolation",
     "multi_account_direct_identity",
     "phase2_task1_attribution",
+    ...(phase2Task2Mode ? ["phase2_task2_playback_cold", "phase2_task2_playback_reload", "phase2_task2_ping_stability"] : []),
   ].map(name => ({ name, status: "NOT_TESTED", severity: null }));
   report.phase2_task1 = {
     mode: "five-account-cold-open-and-one-hot-reload",
     samples: { apertura_fria: [], reload_caliente: [] },
   };
+  if (phase2Task2Mode) report.phase2_task2 = { playback_cold: null, playback_reload: null, ping_stability: null };
 }
 
 if (task4Mode) {
@@ -998,10 +1009,23 @@ async function waitForAuthoritativeLibrary(
     }).catch(() => ({ unavailable: true }));
 
     report.accounts[label] ||= {};
+    const observedTraces = authObservers.get(label)?.playTraceSnapshot() || [];
+    const operationCorrelationId = observedTraces.map(entry => entry?.trace?.correlation_id)
+      .filter(id => typeof id === "string" && id.startsWith("task1-"))
+      .at(-1) || null;
     report.accounts[label].library_authority_failure = {
       snapshot: latest,
       diagnostic,
       required_get_index: requiredGetIndex,
+      operation_correlation_id: operationCorrelationId,
+      operation_trace: operationCorrelationId
+        ? observedTraces.filter(entry => entry?.trace?.correlation_id === operationCorrelationId)
+          .map(entry => entry.trace)
+        : [],
+      operation_http: operationCorrelationId
+        ? (authObservers.get(label)?.snapshot() || []).filter(entry =>
+          entry?.correlation_id === operationCorrelationId)
+        : [],
     };
 
     const detail = latest
@@ -1058,7 +1082,8 @@ function phase2Task1Traces(label, correlationId) {
 }
 
 function phase2Task1TraceTime(trace) {
-  const workerTime = Number(trace?.worker_at_ms);
+  if (!trace) return null;
+  const workerTime = trace.worker_at_ms === null || trace.worker_at_ms === undefined ? NaN : Number(trace.worker_at_ms);
   return Number.isFinite(workerTime) ? workerTime : Number(trace?.ts_ms);
 }
 
@@ -1072,11 +1097,21 @@ function phase2Task1TraceEvent(trace, startedAtMs) {
     "client_is_connected", "core_connected_flag", "primary_dc_id", "primary_pool_is_connected",
     "primary_connection_count", "primary_connected_count", "rpc_context", "message_id",
     "found", "elapsed_ms", "reason", "connection_id", "connection_uid",
-    "last_ping_pending", "last_ping_msg_id", "last_ping_time_monotonic_ms",
+    "last_ping_pending", "last_ping_msg_id", "last_ping_time_monotonic_ms", "session_id",
     "last_ping_rtt_ms", "ping_msg_id", "ping_sent_at_monotonic_ms",
     "ping_id", "container_id", "serialized_byte_length", "encrypted_byte_length",
+    "packet_id", "packet_ids", "encode_seq", "send_seq", "rpc_msg_id", "rpc_msg_ids", "rpc_logical_id",
+    "rpc_msg_id_after", "container_msg_ids", "encoded_bytes", "encoded_fingerprint",
+    "byte_correlation", "outgoing_packets", "queued_after_failure", "pending_after_result",
+    "frame_id", "frame_fingerprint", "web_socket_frame_id", "web_socket_frame_ids",
+    "input_byte_correlation", "incoming_frame_fingerprint", "callback_invoked",
+    "validation_outcome", "validation_reason", "last_ping_msg_id_before", "last_ping_msg_id_after",
+    "websocket_observer", "inner_encode_hook", "encryptor_process_hook", "decrypt_hook",
+    "rpc_result_hook", "validation", "root_msg_id",
+    "seq_no", "root_seq_no", "body_bytes", "salt", "local_salt", "body_constructor",
+    "inner_messages", "matched", "requested_session_id",
     "persistent_writer_present", "persistent_writer_present_at_call", "queued_before_send",
-    "ping_msg_ids", "related_ping_msg_ids", "ack_msg_id", "pong_msg_id", "pong_ping_id",
+    "ping_msg_ids", "related_ping_msg_ids", "ack_msg_id", "ack_origin", "pong_msg_id", "pong_ping_id",
     "pending_lookup", "expected_ping_id", "ping_id_matches", "current_last_ping_matches",
     "outcome", "failed_msg_id", "failure_reason", "reset_origin", "reset_with_time",
     "previous_last_ping_msg_id", "previous_last_ping_time_monotonic_ms",
@@ -1087,6 +1122,7 @@ function phase2Task1TraceEvent(trace, startedAtMs) {
     "framed_buffer_available", "framed_eof", "framed_frame_bytes",
     "encrypted_message_bytes", "incoming_msg_id", "incoming_seq_no", "object_id_hex",
     "raw_kind", "container_message_count", "mt_message_type", "mt_is_pong",
+    "state_request_msg_id", "state_requested_msg_ids", "state_info_codes", "ack_msg_ids",
   ]) {
     if (trace?.[key] !== undefined && trace?.[key] !== null) detail[key] = trace[key];
   }
@@ -1101,6 +1137,7 @@ function phase2Task1TraceEvent(trace, startedAtMs) {
 }
 
 function phase2Task1TraceAfter(traces, stage, afterMs = -Infinity) {
+  if (afterMs === null) return null;
   return traces
     .filter(trace => trace?.stage === stage && phase2Task1TraceTime(trace) >= afterMs)
     .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))[0] || null;
@@ -1110,40 +1147,41 @@ function phase2Task1Attribution({ account, condition, startedAtMs, readyAtMs, co
   const authRoute = condition === "apertura_fria" ? "/beatgaler-api/auth/login" : "/beatgaler-api/auth/session";
   const auth = phase2Task1Http(account.label, correlationId, authRoute).at(-1) || null;
   const control = phase2Task1Http(account.label, correlationId, "/beatgaler-api/transport/session/start");
-  const activation = phase2Task1Http(account.label, correlationId, "/beatgaler-api/transport/session/activate").at(-1) || null;
   const controlBegin = control[0] || null;
-  const controlReadyCandidates = [...control, activation].filter(Boolean);
-  const controlReady = controlReadyCandidates.sort((left, right) => Number(right.observed_at_ms) - Number(left.observed_at_ms))[0] || null;
-  const direct = phase2Task1Trace(account.label, correlationId, "CONTROLLER_SESSION_DATA_PLANE_READY", Number(controlReady?.observed_at_ms || startedAtMs));
   const traces = phase2Task1Traces(account.label, correlationId);
-  const directAtMs = phase2Task1TraceTime(direct);
-  const mtprotoConnectBegin = phase2Task1TraceAfter(traces, "WORKER_MTPROTO_CONNECT_BEGIN", Number(controlReady?.observed_at_ms || startedAtMs));
-  const mtprotoClientReady = phase2Task1TraceAfter(traces, "WORKER_MTPROTO_CLIENT_READY", phase2Task1TraceTime(mtprotoConnectBegin));
+  const bootstrapDone = phase2Task1TraceAfter(traces, "SESSION_START_BOOTSTRAP_DONE", startedAtMs);
+  const bindDone = phase2Task1TraceAfter(traces, "SESSION_START_BIND_DONE", startedAtMs);
+  const activateDone = phase2Task1TraceAfter(traces, "SESSION_ACTIVATE_HTTP_DONE", startedAtMs);
+  const controlReady = phase2Task1TraceAfter(traces, "CONTROLLER_SESSION_MEDIA_GATE_OPEN", startedAtMs);
+  const gateAtMs = phase2Task1TraceTime(controlReady);
+  const direct = phase2Task1TraceAfter(traces, "CONTROLLER_SESSION_DATA_PLANE_READY", gateAtMs);
+  // The Worker can preconnect while Cloud completes bind/activate. Its first
+  // connection belongs to this operation even when it precedes the media gate.
+  const mtprotoConnectBegin = phase2Task1TraceAfter(traces, "WORKER_MTPROTO_CONNECT_BEGIN", startedAtMs);
+  const mtprotoClientReady = phase2Task1TraceAfter(traces, "WORKER_MTPROTO_CLIENT_READY", startedAtMs);
   // The controller starts getChat background verification after Direct is ready;
   // beginOperation waits for it before dispatching get_index. This order is
   // deliberately reported as observed rather than reshaped into a desired one.
-  const getChatBegin = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_BEGIN", directAtMs);
-  const getChatRpcSent = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_RPC_SENT", phase2Task1TraceTime(getChatBegin));
-  const getChatRpcResponse = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_RPC_RESPONSE_RECEIVED", phase2Task1TraceTime(getChatRpcSent));
-  const getChatLocalDone = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_LOCAL_DONE", phase2Task1TraceTime(getChatRpcResponse));
-  const getChatEnd = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_END", phase2Task1TraceTime(getChatLocalDone));
-  const getIndexBegin = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_BEGIN", Number(direct?.ts_ms || startedAtMs));
-  const pointerLookupBegin = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_LOOKUP_BEGIN", phase2Task1TraceTime(getIndexBegin));
-  const pointerGetMessagesBegin = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_BEGIN", phase2Task1TraceTime(pointerLookupBegin));
-  const pointerGetMessagesInvoked = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_INVOKED", phase2Task1TraceTime(pointerGetMessagesBegin));
-  const pointerGetMessagesSent = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_SENT", phase2Task1TraceTime(pointerGetMessagesInvoked));
-  const pointerGetMessagesResponse = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_RESPONSE_RECEIVED", phase2Task1TraceTime(pointerGetMessagesSent));
-  const pointerGetMessagesEnd = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_GET_MESSAGES_END", phase2Task1TraceTime(pointerGetMessagesResponse));
-  const pointerLookupEnd = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_POINTER_LOOKUP_DONE", phase2Task1TraceTime(pointerGetMessagesEnd));
-  const getIndexEnd = phase2Task1Trace(account.label, correlationId, "WORKER_INDEX_DONE", Number(getIndexBegin?.ts_ms || startedAtMs));
-  const getIndexBeginAtMs = phase2Task1TraceTime(getIndexBegin);
-  const fullChatBegin = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_BEGIN", getIndexBeginAtMs);
-  const fullChatRpcSent = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_RPC_SENT", phase2Task1TraceTime(fullChatBegin));
-  const fullChatRpcResponse = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_RPC_RESPONSE_RECEIVED", phase2Task1TraceTime(fullChatRpcSent));
-  const fullChatLocalDone = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_LOCAL_DONE", phase2Task1TraceTime(fullChatRpcResponse));
-  const fullChatEnd = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_END", phase2Task1TraceTime(fullChatLocalDone));
-  const processBegin = phase2Task1Trace(account.label, correlationId, "WEB_LIBRARY_INDEX_PROCESS_BEGIN", Number(getIndexEnd?.ts_ms || startedAtMs));
-  const processEnd = phase2Task1Trace(account.label, correlationId, "WEB_LIBRARY_INDEX_PROCESS_DONE", Number(processBegin?.ts_ms || startedAtMs));
+  const getChatBegin = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_BEGIN", startedAtMs);
+  const getChatRpcSent = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_RPC_SENT", startedAtMs);
+  const getChatRpcResponse = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_RPC_RESPONSE_RECEIVED", startedAtMs);
+  const getChatLocalDone = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_LOCAL_DONE", startedAtMs);
+  const getChatEnd = phase2Task1TraceAfter(traces, "WORKER_VERIFY_GET_CHAT_END", startedAtMs);
+  const getIndexBegin = phase2Task1TraceAfter(traces, "WORKER_INDEX_BEGIN", startedAtMs);
+  const pointerLookupBegin = phase2Task1TraceAfter(traces, "WORKER_INDEX_POINTER_LOOKUP_BEGIN", startedAtMs);
+  const pointerGetMessagesBegin = phase2Task1TraceAfter(traces, "WORKER_INDEX_POINTER_GET_MESSAGES_BEGIN", startedAtMs);
+  const pointerGetMessagesSent = phase2Task1TraceAfter(traces, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_SENT", startedAtMs);
+  const pointerGetMessagesResponse = phase2Task1TraceAfter(traces, "WORKER_INDEX_POINTER_GET_MESSAGES_RPC_RESPONSE_RECEIVED", startedAtMs);
+  const pointerGetMessagesEnd = phase2Task1TraceAfter(traces, "WORKER_INDEX_POINTER_GET_MESSAGES_END", startedAtMs);
+  const pointerLookupEnd = phase2Task1TraceAfter(traces, "WORKER_INDEX_POINTER_LOOKUP_DONE", startedAtMs);
+  const getIndexEnd = phase2Task1TraceAfter(traces, "WORKER_INDEX_DONE", startedAtMs);
+  const fullChatBegin = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_BEGIN", startedAtMs);
+  const fullChatRpcSent = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_RPC_SENT", startedAtMs);
+  const fullChatRpcResponse = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_RPC_RESPONSE_RECEIVED", startedAtMs);
+  const fullChatLocalDone = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_LOCAL_DONE", startedAtMs);
+  const fullChatEnd = phase2Task1TraceAfter(traces, "WORKER_INDEX_GET_FULL_CHAT_END", startedAtMs);
+  const processBegin = phase2Task1TraceAfter(traces, "WEB_LIBRARY_INDEX_PROCESS_BEGIN", startedAtMs);
+  const processEnd = phase2Task1TraceAfter(traces, "WEB_LIBRARY_INDEX_PROCESS_DONE", startedAtMs);
   const workerIndexEvents = traces
     .filter(trace => /^WORKER_INDEX_(?:DISPATCH_RECEIVED|PRIORITY_WAIT_BEGIN|PRIORITY_WAIT_DONE|POINTER_LOOKUP_(?:BEGIN|DONE)|POINTER_GET_MESSAGES_(?:BEGIN|RPC_INVOKED|RPC_SENT|RPC_RESPONSE_RECEIVED|RPC_ERROR|RPC_NOT_OBSERVED|END)|POINTER_INVALID|GET_FULL_CHAT_(?:BEGIN|RPC_INVOKED|RPC_SENT|RPC_RESPONSE_RECEIVED|RPC_ERROR|RPC_NOT_OBSERVED|LOCAL_DONE|END)|PINNED_LOOKUP_BEGIN|PINNED_LOOKUP_DONE|DOWNLOAD_BEGIN|DOWNLOAD_DONE|ATTEMPT_FAILED|RETRY_BACKOFF_BEGIN|RETRY_BACKOFF_END|RETRY_EXHAUSTED|RESPONSE)$/.test(trace.stage))
     .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
@@ -1164,12 +1202,23 @@ function phase2Task1Attribution({ account, condition, startedAtMs, readyAtMs, co
     .filter(trace => /^TASK2_PING_/.test(trace.stage))
     .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
     .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
+  const task2InputTimeline = traces
+    .filter(trace => /^TASK2_INPUT_/.test(trace.stage))
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
+    .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
+  const task2OutputTimeline = traces
+    .filter(trace => /^TASK2_OUTPUT_/.test(trace.stage))
+    .sort((left, right) => phase2Task1TraceTime(left) - phase2Task1TraceTime(right))
+    .map(trace => phase2Task1TraceEvent(trace, startedAtMs));
 
   const points = [
     ["inicio_reload", startedAtMs, "harness"],
     ["auth_session", auth?.observed_at_ms, authRoute],
     ["cloud_control_begin", controlBegin?.started_at_ms, "/transport/session/start"],
-    ["cloud_control_end", controlReady?.observed_at_ms, "session/start + session/activate"],
+    ["session_start_bootstrap_done", phase2Task1TraceTime(bootstrapDone), "SESSION_START_BOOTSTRAP_DONE"],
+    ["session_start_bind_done", phase2Task1TraceTime(bindDone), "SESSION_START_BIND_DONE"],
+    ["session_activate_http_done", phase2Task1TraceTime(activateDone), "SESSION_ACTIVATE_HTTP_DONE"],
+    ["cloud_control_end", gateAtMs, "CONTROLLER_SESSION_MEDIA_GATE_OPEN"],
     ["mtproto_connect_begin", phase2Task1TraceTime(mtprotoConnectBegin), "WORKER_MTPROTO_CONNECT_BEGIN"],
     ["cliente_mtproto_listo", phase2Task1TraceTime(mtprotoClientReady), "WORKER_MTPROTO_CLIENT_READY"],
     ["direct_disponible", direct?.ts_ms, "CONTROLLER_SESSION_DATA_PLANE_READY"],
@@ -1196,24 +1245,21 @@ function phase2Task1Attribution({ account, condition, startedAtMs, readyAtMs, co
     ["biblioteca_autoritativa_utilizable", readyAtMs, "DOM authoritative library"],
   ].map(([event, absolute_ms, source]) => ({
     event,
-    absolute_ms: Number.isFinite(Number(absolute_ms)) ? Number(absolute_ms) : null,
-    relative_ms: Number.isFinite(Number(absolute_ms)) ? Number(absolute_ms) - startedAtMs : null,
+    absolute_ms: absolute_ms !== null && absolute_ms !== undefined && Number.isFinite(Number(absolute_ms)) ? Number(absolute_ms) : null,
+    relative_ms: absolute_ms !== null && absolute_ms !== undefined && Number.isFinite(Number(absolute_ms)) ? Number(absolute_ms) - startedAtMs : null,
     source,
   }));
 
   // Task 2 proves the fast pointer path by requiring that this optional
   // recovery span is absent from hot reloads. The remaining markers still
   // establish Direct, get_index, Web processing and usable library order.
-  const requiredPoints = phase2Task2Mode
-    ? points.filter(point => !point.event.startsWith("get_full_chat_"))
-    : points;
-  const missing = requiredPoints.filter(point => point.absolute_ms === null).map(point => point.event);
-  const chronologicalPoints = phase2Task2Mode
-    ? points.filter(point => !point.event.startsWith("get_chat_") && !point.event.startsWith("get_full_chat_"))
-    : points;
-  const ordered = chronologicalPoints.every((point, index) =>
-    index === 0 || point.absolute_ms === null || chronologicalPoints[index - 1].absolute_ms === null || point.absolute_ms >= chronologicalPoints[index - 1].absolute_ms,
-  );
+  const earlyGatedEvents = gateAtMs === null ? [] : [
+    "CONTROLLER_SESSION_DATA_PLANE_READY",
+  ].filter(stage => {
+    const first = phase2Task1TraceAfter(traces, stage, startedAtMs);
+    return first && phase2Task1TraceTime(first) < gateAtMs;
+  });
+  const assessment = assessPhase2Task1Markers(points, { task2: phase2Task2Mode, earlyGatedEvents });
   const span = (from, to) => {
     const start = points.find(point => point.event === from)?.absolute_ms;
     const end = points.find(point => point.event === to)?.absolute_ms;
@@ -1262,6 +1308,8 @@ function phase2Task1Attribution({ account, condition, startedAtMs, readyAtMs, co
     })),
     pointer_get_messages_timeline: pointerGetMessagesTimeline,
     ...(phase2Task2PassivePingTrace ? { task2_passive_ping_timeline: task2PassivePingTimeline } : {}),
+    ...(phase2Task2PassivePingTrace ? { task2_input_timeline: task2InputTimeline } : {}),
+    ...(phase2Task2PassivePingTrace ? { task2_output_timeline: task2OutputTimeline } : {}),
     worker_index_events: workerIndexEvents,
     mtproto_timeline: mtprotoTimeline,
     retries_y_reconexiones: {
@@ -1273,9 +1321,7 @@ function phase2Task1Attribution({ account, condition, startedAtMs, readyAtMs, co
       mtproto_client_errors: mtprotoTimeline.filter(event => event.stage === "WORKER_MTPROTO_CLIENT_ERROR"),
       note: "El cliente no expone cada reintento interno de un RPC. La cronología registra reintentos explícitos del flujo get_index, errores del cliente y transiciones MTProto observables.",
     },
-    complete: missing.length === 0 && ordered,
-    missing_markers: missing,
-    chronological: ordered,
+    ...assessment,
     get_full_chat_required: !phase2Task2Mode,
     get_full_chat_observed: Number.isFinite(phase2Task1TraceTime(fullChatBegin)),
   };
@@ -2550,7 +2596,13 @@ async function installStage1RuntimeTraceCapture(client) {
     console.info = (...args) => {
       try {
         const line = args.map(value => typeof value === "string" ? value : JSON.stringify(value)).join(" ");
-        if (line.includes("[play-trace]")) append(window.__beatgalerStage1PlayTraceLines, { at: Date.now(), line }, 400);
+        if (line.includes("[play-trace]")) {
+          const at = Date.now();
+          append(window.__beatgalerStage1PlayTraceLines, { at, line }, 400);
+          const probe = window.__beatgalerStage1PlaybackProbe;
+          if (probe?.beatId && line.includes('"stage":"CARD_PLAY_ACCEPTED"') &&
+              line.includes(`"beat_id":"${probe.beatId}"`)) probe.clickAcceptedAt = at;
+        }
       } catch {}
       return originalInfo(...args);
     };
@@ -2670,6 +2722,7 @@ async function playbackProbeSnapshot(client) {
     });
     return {
       beat_id: probe?.beatId || null,
+      click_accepted_at: probe?.clickAcceptedAt || null,
       event_count: events.length,
       max_current_time: events.reduce((max, event) => Math.max(max, Number(event.current_time) || 0), 0),
       playing_seen: playingEvents.length > 0,
@@ -2690,26 +2743,48 @@ async function playbackProbeSnapshot(client) {
   });
 }
 
-async function waitForPlaybackProgress(client, account, baselineEventCount = 0) {
+async function waitForPlaybackProgress(client, account, triggerStartedAt) {
   let latest = null;
   let firstPlayingAt = null;
+  const provenProgressAt = snapshot => {
+    const acceptedAt = Number(snapshot?.click_accepted_at || 0);
+    if (acceptedAt <= 0) return null;
+    const event = (snapshot?.recent_events || []).find(item =>
+      Number(item.at) >= Math.max(acceptedAt, triggerStartedAt) && item.playing &&
+      Number(item.current_time) >= PLAYBACK_MIN_PROGRESS_SECONDS);
+    return event ? Number(event.at || 0) || null : null;
+  };
   try {
     await client.waitUntil(async () => {
       latest = await playbackProbeSnapshot(client);
-      const events = latest?.recent_events || [];
-      const eventsBeforeWindow = Math.max(0, Number(latest?.event_count || 0) - events.length);
-      const firstNewPlaying = events
-        .slice(Math.max(0, baselineEventCount - eventsBeforeWindow))
-        .find(event => event.playing && Number(event.current_time) >= PLAYBACK_MIN_PROGRESS_SECONDS);
-      if (firstNewPlaying) firstPlayingAt = Number(firstNewPlaying.at || 0) || null;
-      return Boolean(firstNewPlaying);
+      firstPlayingAt = provenProgressAt(latest);
+      return Boolean(firstPlayingAt);
     }, { timeout: 30_000, interval: 100, timeoutMsg: `Account ${account.label} did not prove real playback progress.` });
     return { ...latest, first_playing_at: firstPlayingAt };
   } catch (error) {
     latest = await playbackProbeSnapshot(client).catch(() => latest);
+    // WebDriver can deliver the final snapshot after its polling deadline. Use
+    // the same click-bound proof before classifying that deadline as a failure.
+    firstPlayingAt = provenProgressAt(latest);
+    if (firstPlayingAt) return { ...latest, first_playing_at: firstPlayingAt };
+    const compactPlayTrace = (latest?.play_trace || []).map(entry => {
+      try {
+        const parsed = JSON.parse(String(entry.line || "").replace(/^\[play-trace\]\s*/, ""));
+        return {
+          at: entry.at,
+          stage: parsed.stage || null,
+          beat_id: parsed.beat_id || null,
+          elapsed_ms: parsed.elapsed_ms ?? null,
+          error_code: parsed.error_code || null,
+          reason: parsed.reason || null,
+        };
+      } catch { return { at: entry.at, stage: "unparsed" }; }
+    }).slice(-50);
     const diagnostic = {
       account_label: account.label,
+      trigger_started_at: triggerStartedAt,
       ...(latest || {}),
+      play_trace: compactPlayTrace,
     };
     const wrapped = new Error(
       `Account ${account.label} did not prove real playback progress. diagnostic=${JSON.stringify(diagnostic).slice(0, 6000)}`
@@ -2717,6 +2792,169 @@ async function waitForPlaybackProgress(client, account, baselineEventCount = 0) 
     wrapped.stage1PlaybackDiagnostic = diagnostic;
     wrapped.cause = error;
     throw wrapped;
+  }
+}
+
+// Observe cached cards from document start, without delaying the real WebDriver
+// click or waiting for Direct/session startup to finish.
+function peerPlayRacePreload() {
+  const beatId = localStorage.getItem("beatgaler:phase2-peer-play-race:beat");
+  if (!beatId) return;
+  const state = { library_visible_at: null, interactive_at: null, max_current_time: 0, first_playing_at: null,
+    session_start_held_at: null, session_start_released_at: null };
+  window.__phase2PeerPlayRace = state;
+  const nativeFetch = window.fetch;
+  let releaseStart;
+  const startGate = new Promise(resolve => { releaseStart = resolve; });
+  state.releaseSessionStart = () => {
+    if (state.session_start_released_at) return;
+    state.session_start_released_at = Date.now();
+    releaseStart();
+  };
+  window.fetch = function (...args) {
+    let pathname = "";
+    try {
+      pathname = new URL(typeof args[0] === "string" ? args[0] : args[0]?.url, location.href).pathname;
+    } catch {}
+    if (pathname === "/beatgaler-api/transport/session/start" && !state.session_start_released_at) {
+      if (!state.session_start_held_at) state.session_start_held_at = Date.now();
+      return startGate.then(() => nativeFetch.apply(this, args));
+    }
+    return nativeFetch.apply(this, args);
+  };
+  window.addEventListener("beatgaler:web-playback-state", event => {
+    const detail = event?.detail || {};
+    if (String(detail.beatId || "") !== beatId) return;
+    const position = Math.max(0, Number(detail.currentTime) || 0);
+    state.max_current_time = Math.max(state.max_current_time, position);
+    if (detail.playing && position >= 0.5 && !state.first_playing_at) state.first_playing_at = Date.now();
+  });
+  const inspect = () => {
+    const card = Array.from(document.querySelectorAll("[data-beat-artwork-id]"))
+      .find(node => node.getAttribute("data-beat-artwork-id") === beatId);
+    if (!card) return;
+    if (!state.library_visible_at) state.library_visible_at = Date.now();
+    if (card.getAttribute("aria-disabled") !== "true" && !state.interactive_at) state.interactive_at = Date.now();
+  };
+  const observe = () => {
+    const observer = new MutationObserver(inspect);
+    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-disabled"] });
+    inspect();
+  };
+  if (document.documentElement) observe();
+  else document.addEventListener("DOMContentLoaded", observe, { once: true });
+}
+
+async function runPhase2PeerPlayRace(client, account, beat) {
+  const correlationId = `peer-play-${randomUUID().slice(0, 12)}`;
+  await client.waitUntil(() => client.execute(beatId => {
+    try {
+      return JSON.parse(localStorage.getItem("beatvault:library:v1") || "[]")
+        .some(item => item.id === beatId);
+    } catch { return false; }
+  }, beat.beat_id), {
+    timeout: 10_000, interval: 100,
+    timeoutMsg: "The authoritative fixture was not yet saved to the instant-paint presentation cache.",
+  });
+  await setPhase2Task1TraceContext(client, { account_label: account.label, correlation_id: correlationId });
+  await client.execute(beatId => {
+    localStorage.setItem("beatgaler:phase2-peer-play-race:beat", beatId);
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("beatgaler:web-vault-peer:v1:")) localStorage.removeItem(key);
+    }
+  }, beat.beat_id);
+  const preload = await client.addInitScript(peerPlayRacePreload);
+  try {
+    const refreshStartedAt = Date.now();
+    await client.refresh();
+    const artwork = await client.$(`[data-beat-artwork-id="${beat.beat_id}"]`);
+    try {
+      await artwork.waitForDisplayed({ timeout: 30_000, interval: 50 });
+    } catch (error) {
+      const diagnostic = await client.execute(() => ({
+        race: window.__phase2PeerPlayRace || null,
+        page_text: String(document.body?.innerText || "").slice(0, 1800),
+        cached_ids: (() => { try { return JSON.parse(localStorage.getItem("beatvault:library:v1") || "[]").map(item => item.id); } catch { return []; } })(),
+      })).catch(() => null);
+      throw new Error(`Cached card did not render while session start was held: ${JSON.stringify(diagnostic)}`, { cause: error });
+    }
+    await client.waitUntil(async () => (await artwork.getAttribute("aria-disabled")) !== "true", {
+      timeout: 30_000, interval: 50,
+      timeoutMsg: "Cached playback card did not become interactive during warm startup.",
+    });
+    await client.waitUntil(() => client.execute(() => Boolean(window.__phase2PeerPlayRace?.session_start_held_at)), {
+      timeout: 10_000, interval: 50,
+      timeoutMsg: "Direct session start was not intercepted before the immediate Play click.",
+    });
+    const clickedAt = Date.now();
+    await artwork.click();
+    const gate = await client.execute(() => {
+      const state = window.__phase2PeerPlayRace;
+      state?.releaseSessionStart?.();
+      return { held_at: state?.session_start_held_at || null, released_at: state?.session_start_released_at || null };
+    });
+    try {
+      await client.waitUntil(async () => {
+        const state = await client.execute(() => window.__phase2PeerPlayRace || null);
+        return Number(state?.max_current_time || 0) >= PLAYBACK_MIN_PROGRESS_SECONDS && Boolean(state?.first_playing_at);
+      }, { timeout: 30_000, interval: 100, timeoutMsg: "Immediate cached-library Play did not reach real audio progress." });
+    } catch (error) {
+      const browserState = await client.execute(() => ({
+        race: window.__phase2PeerPlayRace || null,
+        page_text: String(document.body?.innerText || "").slice(0, 1800),
+        logs: Array.isArray(window.__stage1DiagnosticLogs) ? window.__stage1DiagnosticLogs.slice(-40) : [],
+        audio: Array.from(document.querySelectorAll("audio")).map(node => ({ paused: node.paused, current_time: node.currentTime, ready_state: node.readyState, error: node.error?.message || null })),
+      })).catch(() => null);
+      const traces = phase2Task1Traces(account.label, correlationId).slice(-100);
+      throw new Error(`Immediate Play diagnostic=${JSON.stringify({ clickedAt, browserState, traces }).slice(0, 16000)}`, { cause: error });
+    }
+    const playback = await client.execute(() => window.__phase2PeerPlayRace);
+    const library = await waitForAuthoritativeLibrary(client, account.label, {
+      requiredGetIndex: { startedAtMs: refreshStartedAt },
+    });
+    await client.waitUntil(() => Boolean(phase2Task1Trace(account.label, correlationId, "WORKER_PEER_BOOTSTRAP_READY")), {
+      timeout: 10_000, interval: 100, timeoutMsg: "Peer bootstrap trace did not arrive.",
+    });
+    const traces = phase2Task1Traces(account.label, correlationId);
+    const first = stage => traces.find(trace => trace.stage === stage);
+    const prepare = first("CONTROLLER_SESSION_PREPARE_DONE");
+    const peer = first("WORKER_PEER_BOOTSTRAP_READY");
+    const media = traces.filter(trace => [
+      "WORKER_PLAYBACK_MEDIA_BATCH_RPC", "WORKER_PREFETCH_LANE_TAKE",
+      "WORKER_PREFETCH_READY", "TRANSPORT_STREAM_WORKER_STARTED",
+    ].includes(trace.stage));
+    const vaultGate = traces.filter(trace => trace.stage === "CONTROLLER_VAULT_PEER_READY");
+    assert.ok(playback.library_visible_at && playback.library_visible_at < Number(prepare?.ts_ms),
+      "Cached library must appear before Direct session preparation finishes.");
+    assert.ok(clickedAt < Number(prepare?.ts_ms),
+      "Play must be clicked before Direct session preparation finishes.");
+    assert.ok(gate.held_at && gate.held_at <= clickedAt && gate.released_at >= clickedAt,
+      "The E2E must hold only session start until the immediate Play click.");
+    assert.equal(first("WORKER_PEER_BOOTSTRAP_BEGIN")?.cached_hint, false,
+      "Reload must use a fresh Worker without a cached vault peer hint.");
+    assert.ok(peer && vaultGate.length > 0 && vaultGate.every(trace =>
+      Number(peer.ts_ms) <= Number(trace.ts_ms) && Number(trace.ts_ms) <= Number(playback.first_playing_at)),
+    "Playback must cross the vault peer gate after bootstrap and before audio progress.");
+    assert.ok(media.every(trace => Number(peer.ts_ms) <= Number(trace.ts_ms)),
+      `Every observed Worker media RPC must follow peer readiness. media=${JSON.stringify(media.map(trace => ({ stage: trace.stage, ts_ms: trace.ts_ms })))}`);
+    assert.ok(first("WORKER_INDEX_POINTER_GET_MESSAGES_END")?.found,
+      "INDEX must still load through getMessages after immediate Play.");
+    assert.ok(!first("WORKER_INDEX_GET_FULL_CHAT_BEGIN"), "getFullChat must stay out of the INDEX hot path.");
+    assert.ok(!first("SOURCE_SESSION_INVALIDATED"), "A pending peer must not invalidate a healthy session.");
+    assert.ok(!traces.some(trace => /Peer .* is not found in local cache|TRANSFER_FAILED/.test(JSON.stringify(trace))),
+      "Immediate Play must not emit a peer-cache or transfer failure.");
+    const pageText = await client.execute(() => document.body.innerText);
+    assert.ok(!pageText.includes("Poor connection"), "Immediate Play must not end in Poor connection.");
+    return { correlation_id: correlationId, refresh_started_at_ms: refreshStartedAt,
+      library_visible_at_ms: playback.library_visible_at, clicked_at_ms: clickedAt,
+      peer_ready_at_ms: peer.ts_ms, first_playing_at_ms: playback.first_playing_at,
+      click_to_audio_ms: playback.first_playing_at - clickedAt,
+      library_beat_count: library.beat_count,
+      stages: traces.filter(trace => /PEER_BOOTSTRAP|VAULT_PEER_READY|PLAYBACK_MEDIA_BATCH_RPC|PREFETCH_LANE_TAKE|STREAM_WORKER_STARTED|INDEX_POINTER_GET_MESSAGES|SESSION_PREPARE_DONE/.test(trace.stage)),
+    };
+  } finally {
+    await client.execute(() => window.__phase2PeerPlayRace?.releaseSessionStart?.()).catch(() => {});
+    await preload.remove();
   }
 }
 
@@ -2741,14 +2979,11 @@ async function runConcurrentPlayback(clients, playbackBeats) {
     return artwork;
   }));
 
-  // Capture a baseline immediately before the click.  A state event from the
-  // preceding player must never establish playback for this iteration.
-  const baselines = await Promise.all(clients.map(client => playbackProbeSnapshot(client)));
   const triggerStartedAt = Date.now();
   await Promise.all(artworks.map(artwork => artwork.click()));
 
   const snapshots = await Promise.all(clients.map((client, index) =>
-    waitForPlaybackProgress(client, accounts[index], Number(baselines[index]?.event_count || 0)),
+    waitForPlaybackProgress(client, accounts[index], triggerStartedAt),
   ));
   const starts = snapshots.map(snapshot => Number(snapshot.first_playing_at || 0));
   const startSpreadMs = Math.max(...starts) - Math.min(...starts);
@@ -2841,10 +3076,9 @@ async function runPhase2Task0Conditions({ clients, before }) {
         interval: 250,
         timeoutMsg: `Account ${account.label} playback did not become interactive after authoritative Reload.`,
       });
-      const baseline = await playbackProbeSnapshot(client);
       const clickedAt = Date.now();
       await artwork.click();
-      const playback = await waitForPlaybackProgress(client, account, Number(baseline?.event_count || 0));
+      const playback = await waitForPlaybackProgress(client, account, clickedAt);
       assert.ok(Number(playback.first_playing_at) >= clickedAt,
         `Account ${account.label} playback timestamp did not follow its Play click.`);
       return {
@@ -4267,8 +4501,9 @@ async function runSingleIsolationPlayback(client, account, beat) {
       timeoutMsg: "Account " + account.label + " same-profile playback never became interactive.",
     },
   );
+  const clickedAt = Date.now();
   await artwork.click();
-  return waitForPlaybackProgress(client, account);
+  return waitForPlaybackProgress(client, account, clickedAt);
 }
 
 async function runFocusedOffensiveIsolation(
@@ -5455,6 +5690,10 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         );
       }
 
+      if (phase2PeerPlayRace && accountCount !== 1) {
+        throw taggedError("PHASE2_PEER_PLAY_RACE requires --accounts 1.", "PHASE2_PEER_PLAY_RACE_ACCOUNT_COUNT", "P1");
+      }
+
       if (focusedIsolation && accountCount !== 2) {
         throw taggedError(
           "STAGE1_FOCUSED_ISOLATION requires --accounts 2.",
@@ -5529,6 +5768,13 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         focusedDownloadIntegrity || focusedIsolation || mixedWorkload || task5Mode ||
         task6Mode || singleReloadAttributionTrace)) {
         throw taggedError("Phase 2 Task 1 requires five accounts and no Stage 1 workload mode.", "PHASE2_TASK1_MODE_CONFLICT", "P1");
+      }
+
+      if (phase2Task2InfraMode && (accountCount !== 5 || phase2Task0Mode || phase2Task1Mode ||
+        phase2Task2Mode || focusedStartup || focusedLifecycle || focusedDownloadIntegrity ||
+        focusedIsolation || mixedWorkload || task5Mode || task6Mode || singleReloadAttributionTrace)) {
+        throw taggedError("Task 2 infrastructure readiness requires five accounts and no other workload mode.",
+          "PHASE2_TASK2_INFRA_MODE_CONFLICT", "P1");
       }
 
       if (
@@ -5622,10 +5868,10 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             })()
           : await Promise.allSettled(
               accounts.map((account, index) => {
-                if (phase2Task0Mode || phase2Task1Mode) coldStartedAtByLabel[account.label] = Date.now();
+                if (phase2Task0Mode || phase2Task1Mode || phase2Task2InfraMode) coldStartedAtByLabel[account.label] = Date.now();
                 const options = {
                   ...(startupSubmitBarrier ? { startupSubmitBarrier } : {}),
-                  ...(phase2Task1Mode || singleReloadAttributionTrace
+                  ...(phase2Task1Mode || phase2Task2InfraMode || singleReloadAttributionTrace
                     ? { phase2Task1Trace: phase2Task1ColdTrace[account.label] } : {}),
                 };
                 return loginThroughUi(
@@ -5651,6 +5897,55 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
         }
 
         const loginTimes = loginResults.map(result => result.value);
+
+        if (phase2Task2InfraMode) {
+          const connected = await Promise.all(accounts.map(async (account, index) => {
+            const correlationId = phase2Task1ColdTrace[account.label].correlation_id;
+            await clients[index].waitUntil(() => Boolean(phase2Task1Traces(account.label, correlationId)
+              .find(trace => trace.stage === "WORKER_MTPROTO_CONNECTION_STATE" && trace.state === "connected")), {
+              timeout: 120_000,
+              interval: 250,
+              timeoutMsg: `Account ${account.label} did not reach a connected MTProto client.`,
+            });
+            const event = phase2Task1Traces(account.label, correlationId)
+              .find(trace => trace.stage === "WORKER_MTPROTO_CONNECTION_STATE" && trace.state === "connected");
+            const observer = authObservers.get(account.label);
+            const requests = observer?.snapshot() || [];
+            validateAuthHealth(requests, account.label);
+            for (const route of ["/beatgaler-api/auth/login", "/beatgaler-api/transport/session/start"]) {
+              assert.ok(requests.some(entry => entry.route === route && entry.state === "response" &&
+                Number(entry.status) >= 200 && Number(entry.status) < 300),
+              `Account ${account.label} needs a successful ${route} before MTProto readiness.`);
+            }
+            const preMtprotoFailure = requests.find(entry => entry.state === "response" && Number(entry.status) >= 500 &&
+              Number(entry.started_at_ms) <= Number(event.ts_ms));
+            assert.equal(preMtprotoFailure, undefined,
+              `Account ${account.label} received HTTP ${preMtprotoFailure?.status} before MTProto readiness.`);
+            return { account_label: account.label, login_ms: loginTimes[index],
+              login_to_mtproto_ms: Number(event.ts_ms) - coldStartedAtByLabel[account.label],
+              connected_at_ms: Number(event.ts_ms), correlation_id: correlationId };
+          }));
+          const snapshots = await Promise.all(accounts.map((account, index) =>
+            waitForRuntimeSnapshot(clients[index], account.label)));
+          snapshots.forEach((snapshot, index) => validateSingleAccount(accounts[index].label, snapshot));
+          validateCrossAccountIsolation(snapshots);
+          const cloudUrl = String(process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000").replace(/\/$/, "");
+          const readyResponse = await fetch(`${cloudUrl}/readyz`, { signal: AbortSignal.timeout(3_000) });
+          const readyBody = await readyResponse.json();
+          assert.equal(readyResponse.status, 200, "Cloud /readyz must return HTTP 200 after five MTProto connections.");
+          assert.equal(readyBody?.ok, true, "Cloud /readyz must report ready after five MTProto connections.");
+          assert.equal(readyBody?.dependencies?.postgres, "ready", "PostgreSQL must remain ready after five MTProto connections.");
+          report.phase2_task2_infra = { connected, postgres_ready: true,
+            elapsed_ms: Date.now() - authoritativeStartupStartedAt };
+          markScenario("auth_health_stability", "PASS", null, "Five accounts logged in without observed auth health failure.");
+          markScenario("multi_account_auth_isolation", "PASS", null, "Five authenticated users and browsers remained isolated.");
+          markScenario("multi_account_direct_identity", "PASS", null, "Five Direct sessions reached connected MTProto clients.");
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          console.log(`[phase2-task2-infra] PASS 5/5 MTProto connected; report=${REPORT_FILE}`);
+          return;
+        }
 
         for (const observer of authObservers.values()) {
           observer.setPhase("authoritative-startup");
@@ -5720,6 +6015,13 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
           const correlationId = `cp-${randomUUID().slice(0, 12)}`;
           const trace = { account_label: account.label, correlation_id: correlationId, events: [] };
           observer?.setPhase("single-reload-critical-path");
+          if (phase2Task2PassivePingTrace) {
+            await setPhase2Task1TraceContext(client, {
+              correlation_id: correlationId,
+              account_label: account.label,
+              task2_passive_ping_trace: true,
+            });
+          }
           await client.execute(input => {
             localStorage.setItem("beatgaler:stage1-focused-final-reload:correlation", input.correlation_id);
             localStorage.setItem("beatgaler:stage1-focused-final-reload:account", input.account_label);
@@ -5847,6 +6149,27 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             readyAtMs: phase2Task1ColdReadyAtByLabel[account.label],
             correlationId: phase2Task1ColdTrace[account.label].correlation_id,
           }));
+          const playbackBeats = phase2Task2Mode
+            ? await Promise.all(accounts.map(async (account, index) => {
+                const beat = await playbackBeatSnapshot(clients[index], playbackBeatName(account));
+                assert.ok(beat?.beat_id && beat.cloud_committed && !beat.playback_disabled,
+                  `Account ${account.label} needs its own committed playable beat for Task 2.`);
+                return beat;
+              }))
+            : null;
+          if (playbackBeats) {
+            try {
+              report.phase2_task2.playback_cold = await runConcurrentPlayback(clients, playbackBeats);
+              markScenario("phase2_task2_playback_cold", "PASS", null,
+                "Five real beats produced HTMLAudioElement playback progress after cold startup.");
+            } catch (error) {
+              if (!phase2Task2ContinueAfterPlaybackFailure) throw error;
+              report.phase2_task2.playback_cold_error = String(error?.message || error).slice(0, 500);
+              report.phase2_task2.playback_cold_diagnostic = error?.stage1PlaybackDiagnostic || null;
+              markScenario("phase2_task2_playback_cold", "FAIL", "PLAYBACK_PROGRESS_MISSING",
+                "Diagnostic continuation retained this failure before Reload.");
+            }
+          }
 
           const reloadTrace = Object.fromEntries(accounts.map(account => [
             account.label,
@@ -5876,19 +6199,90 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             condition: "reload_caliente",
             correlationId: reloadTrace[sample.account.label].correlation_id,
           }));
-          const incomplete = [...cold, ...reload].filter(sample => !sample.complete);
-          if (incomplete.length) {
-            throw taggedError(
-              `Task 1 attribution lacks ordered markers: ${incomplete.map(sample => `${sample.condition}/${sample.account_label}=${sample.missing_markers.join(",") || "out-of-order"}`).join("; ")}`,
-              "PHASE2_TASK1_INCOMPLETE_ATTRIBUTION",
-              "P1",
-            );
+          persistPhase2Task1Samples(report, cold, reload);
+          if (phase2Task2Mode) {
+            const after = await Promise.all(clients.map((accountClient, index) =>
+              waitForRuntimeSnapshot(accountClient, accounts[index].label)));
+            after.forEach((snapshot, index) => {
+              validateSingleAccount(accounts[index].label, snapshot);
+              validatePersistentReload(before[index], snapshot, accounts[index].label);
+            });
+            validateCrossAccountIsolation(after);
+            const playableAfterReload = await Promise.all(accounts.map(async (account, index) => {
+              const beat = await playbackBeatSnapshot(clients[index], playbackBeatName(account));
+              assert.equal(beat?.beat_id, playbackBeats[index].beat_id,
+                `Account ${account.label} lost its playable beat across Reload.`);
+              assert.ok(beat.cloud_committed && !beat.playback_disabled,
+                `Account ${account.label} beat is unavailable after Reload.`);
+              return beat;
+            }));
+            try {
+              report.phase2_task2.playback_reload = await runConcurrentPlayback(clients, playableAfterReload);
+            } catch (error) {
+              if (!phase2Task2ContinueAfterPlaybackFailure) throw error;
+              report.phase2_task2.playback_reload_error = String(error?.message || error).slice(0, 500);
+              markScenario("phase2_task2_playback_reload", "FAIL", "PLAYBACK_PROGRESS_MISSING",
+                "Diagnostic continuation retained this failure after Reload.");
+            }
+            const finalLibraries = await Promise.all(clients.map(libraryAuthoritySnapshot));
+            try {
+              finalLibraries.forEach((library, index) => {
+                assert.ok(library.present && library.aria_busy === "false" && library.beat_count > 0 &&
+                  !library.poor_connection && !library.offline && !library.load_error,
+                `Account ${accounts[index].label} library degraded after real Reload playback.`);
+              });
+            } catch (error) {
+              if (!phase2Task2ContinueAfterPlaybackFailure) throw error;
+              report.phase2_task2.reload_library_error = String(error?.message || error).slice(0, 500);
+            }
+            if (report.phase2_task2.playback_reload) markScenario("phase2_task2_playback_reload", "PASS", null,
+              "Five isolated real beats produced playback progress after authoritative Reload.");
+
+            const pingByAccount = accounts.map(account => {
+              const allTraces = [phase2Task1ColdTrace[account.label], reloadTrace[account.label]]
+                .flatMap(context => phase2Task1Traces(account.label, context.correlation_id));
+              const resetStage = phase2Task2PassivePingTrace
+                ? "TASK2_PING_RESET_SESSION" : "WORKER_MTPROTO_SESSION_RESET";
+              return {
+                account_label: account.label,
+                ping_timeouts: allTraces.filter(trace =>
+                  trace.stage === resetStage && trace.reason === "ping timeout").length,
+                index_liveness_recoveries: allTraces.filter(trace =>
+                  trace.stage === "TASK2_PING_INDEX_LIVENESS_RECOVERY").length,
+                events: allTraces.filter(trace => [
+                  "TASK2_PING_INDEX_LIVENESS_RECOVERY",
+                  resetStage, "TASK2_INPUT_MT_MESSAGE_DECODED",
+                ].includes(trace.stage) && (trace.stage !== "TASK2_INPUT_MT_MESSAGE_DECODED" ||
+                  trace.mt_message_type === "mt_msgs_state_info")).map(trace => ({
+                  stage: trace.stage,
+                  ts_ms: trace.ts_ms,
+                  correlation_id: trace.correlation_id,
+                  reason: trace.reason || null,
+                  ping_msg_id: trace.ping_msg_id || trace.last_ping_msg_id || null,
+                  rpc_msg_id: trace.rpc_msg_id || null,
+                  state_requested_msg_ids: trace.state_requested_msg_ids || null,
+                  state_info_codes: trace.state_info_codes || null,
+                })),
+              };
+            });
+            report.phase2_task2.ping_stability = pingByAccount;
+            const timedOut = pingByAccount.filter(row => row.ping_timeouts > 0);
+            if (timedOut.length) {
+              throw taggedError(`Task 2 still reset for ping timeout: ${timedOut.map(row =>
+                `${row.account_label}=${row.ping_timeouts}`).join(", ")}.`, "PHASE2_TASK2_PING_TIMEOUT", "P1");
+            }
+            markScenario("phase2_task2_ping_stability", "PASS", null,
+              `No ping timeout reset across cold startup, hot Reload, and playback; INDEX liveness recoveries: ${pingByAccount.map(row => `${row.account_label}=${row.index_liveness_recoveries}`).join(", ")}.`);
           }
-          report.phase2_task1.samples.apertura_fria = cold;
-          report.phase2_task1.samples.reload_caliente = reload;
           report.phase2_task1.completed_conditions = ["apertura_fria", "reload_caliente"];
           markScenario("phase2_task1_attribution", "PASS", null,
             "Five cold opens and five hot Reloads have ordered auth, control, Direct, get_index, Web INDEX, and usable-library timestamps.");
+          if (phase2Task2ContinueAfterPlaybackFailure &&
+            (report.phase2_task2.playback_cold_error || report.phase2_task2.playback_reload_error ||
+              report.phase2_task2.reload_library_error)) {
+            throw taggedError("Task 2 diagnostic completed with playback or library failure.",
+              "PHASE2_TASK2_DIAGNOSTIC_PLAYBACK_FAILURE", "P1");
+          }
           report.overall = "PASS";
           report.severity = null;
           await writeReport();
@@ -6227,6 +6621,17 @@ describe("BeatGaler Stage 1 real multi-account Web E2E", () => {
             ? "1 productive MASTER upload committed to the authoritative library"
             : `${accountCount} productive MASTER uploads committed to isolated authoritative libraries`,
         );
+
+        if (phase2PeerPlayRace) {
+          report.phase2_peer_play_race = await runPhase2PeerPlayRace(clients[0], accounts[0], playbackFixtures[0]);
+          markScenario("phase2_peer_play_race", "PASS", null,
+            "Cached library Play preceded Direct startup, waited for the peer, then reached audio and authoritative INDEX.");
+          report.overall = "PASS";
+          report.severity = null;
+          await writeReport();
+          console.log(`[phase2-peer-play] PASS click_to_audio_ms=${report.phase2_peer_play_race.click_to_audio_ms}; report=${REPORT_FILE}`);
+          return;
+        }
 
         if (focusedIsolation) {
           const isolation = await runFocusedOffensiveIsolation(

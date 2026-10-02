@@ -91,7 +91,7 @@ export default defineConfig(async ({ command, mode }) => ({
     strictPort: true,
     proxy: {
       "/beatgaler-api": {
-        target: "http://127.0.0.1:4000",
+        target: process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000",
         changeOrigin: true,
         configure: stage1ProxyTiming,
         rewrite: requestPath => requestPath.replace(/^\/beatgaler-api/, ""),
@@ -113,7 +113,7 @@ export default defineConfig(async ({ command, mode }) => ({
   preview: {
     proxy: {
       "/beatgaler-api": {
-        target: "http://127.0.0.1:4000",
+        target: process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000",
         changeOrigin: true,
         configure: stage1ProxyTiming,
         rewrite: requestPath => requestPath.replace(/^\/beatgaler-api/, ""),

@@ -88,6 +88,11 @@ function fakeEnvironment() {
         error.code = 'ECONNRESET';
         throw error;
       }
+      if (lease.chat_id === 'vault-probe-definitive') {
+        const error = new Error('Bot API rejected the credential');
+        error.http_status = 401;
+        throw error;
+      }
       return {
         state: 'bot_visible',
         source: 'bot_api_getChat',
@@ -211,16 +216,22 @@ async function main() {
   assert.equal(calls.repair.filter(([chat]) => chat === 'vault-stale-ready').length, 1);
   assert.equal(calls.telegramProvision.filter(chat => chat === 'vault-stale-ready').length, 1);
 
-  // A transport failure is not evidence of lost membership and must not
-  // mutate READY or invoke Telegram provisioning.
+  // A Bot API transport failure defers the proof to the Worker's MTProto
+  // identity and vault check, without mutating READY or provisioning.
   addReadyLease({ state, assignments, chatId: 'vault-probe-transient', sessionId: 'probe_transient_session', installationId: 'probe-transient-install', generation: 19 });
-  await assert.rejects(
-    () => direct.activateSession({ installationId: 'probe-transient-install', sessionId: 'probe_transient_session', generation: 19 }),
-    error => error?.code === 'ECONNRESET',
-  );
+  const transient = await direct.activateSession({ installationId: 'probe-transient-install', sessionId: 'probe_transient_session', generation: 19 });
+  assert.equal(transient.status, 'ACTIVE');
+  assert.equal(transient.membership, undefined);
   assert.equal(assignments.get('vault-probe-transient').membershipState, 'ready');
   assert.equal(calls.repair.some(([chat]) => chat === 'vault-probe-transient'), false);
   assert.equal(calls.telegramProvision.some(chat => chat === 'vault-probe-transient'), false);
+
+  addReadyLease({ state, assignments, chatId: 'vault-probe-definitive', sessionId: 'probe_definitive_session', installationId: 'probe-definitive-install', generation: 20 });
+  await assert.rejects(
+    () => direct.activateSession({ installationId: 'probe-definitive-install', sessionId: 'probe_definitive_session', generation: 20 }),
+    error => error?.http_status === 401,
+  );
+  assert.equal(state.leases.probe_definitive_session.status, 'ASSIGNING');
 
   assignments.set('vault-pending', {
     chatId: 'vault-pending',
@@ -372,7 +383,7 @@ async function main() {
   assert.match(routeSource, /repairMembership === true \? "repairMembership" : "activateSession"/);
   assert.match(routeSource, /directTransport\[activationMethod\]/);
 
-  console.log('PASS Direct persistent membership: bot-visible READY, automatic same-bot stale repair, authenticated explicit repair, concurrent coalescing, FLOOD_WAIT/transient/missing-vault fail-closed');
+  console.log('PASS Direct persistent membership: bot-visible READY, Worker fallback on transient Bot API failure, definitive failures closed, same-bot repair and concurrent coalescing');
 }
 
 main().catch(error => {

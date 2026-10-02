@@ -40,6 +40,8 @@ const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
 // Runtime-only material. Tokens never go to the JSON state file.
 const runtimeSessions = new Map(); // session_id -> hydrated session + current token
+const managedTokenCache = new Map(); // bot_id -> { credentialVersion, token }; process memory only
+const managedTokenFetches = new Map();
 const botRotationLocks = new Map();
 const leaseCleanupLocks = new Map();
 const unconfirmedOperationSince = new Map();
@@ -643,6 +645,26 @@ async function resolveManagedToken(botConfig) {
   return String(token);
 }
 
+async function tokenForCredentialVersion(botConfig, credentialVersion) {
+  if (!botConfig.managed) return botConfig.token;
+  const botId = String(botConfig.id);
+  const version = Number(credentialVersion);
+  const cached = managedTokenCache.get(botId);
+  if (cached?.credentialVersion === version) return cached.token;
+  const key = `${botId}:${version}`;
+  let pending = managedTokenFetches.get(key);
+  if (!pending) {
+    pending = resolveManagedToken(botConfig).then(token => {
+      if (!managedTokenCache.has(botId) || managedTokenCache.get(botId).credentialVersion <= version) {
+        managedTokenCache.set(botId, { credentialVersion: version, token });
+      }
+      return token;
+    }).finally(() => managedTokenFetches.delete(key));
+    managedTokenFetches.set(key, pending);
+  }
+  return pending;
+}
+
 async function rotateManagedToken(botConfig) {
   if (!botConfig.managed) throw new Error(`${botConfig.id}: automatic token rotation requires managed=true.`);
   const managerToken = String(process.env[botConfig.manager_token_env] || '').trim();
@@ -732,6 +754,11 @@ async function probeRuntimeVaultMembership(runtime, startupTrace = noDirectStart
   } catch (error) {
     const failure = membershipAbsentError(error, runtime);
     const detail = botMembershipError(error);
+    diag('BOT_MEMBERSHIP_PROBE_FAILED', {
+      transport_id: runtime.bot.id,
+      membership_state: detail.absent ? 'absent' : 'probe_failed',
+      ...managedTokenErrorDiagnostic(error),
+    });
     startupTrace.mark('BOT_MEMBERSHIP_NOT_VISIBLE', {
       membership_state: detail.absent ? 'absent' : 'probe_failed',
       membership_source: 'bot_api_getChat',
@@ -880,9 +907,14 @@ async function runtimeForLease(
 
   let runtime = runtimeSessions.get(lease.session_id);
   if (!runtime || runtime.credentialVersion !== botState.credential_version) {
+    if (bot.managed) {
+      const cached = managedTokenCache.get(String(bot.id));
+      startupTrace.mark(cached?.credentialVersion === Number(botState.credential_version)
+        ? "START_TOKEN_CACHE_HIT" : "START_TOKEN_CACHE_MISS");
+    }
     const token = await startupTrace.step(
       "START_TOKEN",
-      () => resolveManagedToken(bot),
+      () => tokenForCredentialVersion(bot, botState.credential_version),
     );
 
     let username = bot.telegram_username || runtime?.bot?.telegram_username || null;
@@ -1164,6 +1196,7 @@ async function maybeRotatePendingBot(botId) {
         runtime.credentialVersion = version;
         runtimeSessions.set(sessionId, runtime);
       }
+      managedTokenCache.set(botId, { credentialVersion: version, token: newToken });
       console.log(`[direct] TOKEN_ROTATED transport=${botId} credential_version=${version}`);
       return { rotated: true, pending: false, credential_version: version };
     } catch (error) {
@@ -1753,6 +1786,7 @@ module.exports = {
     botMembershipError,
     probeRuntimeVaultMembership,
     resolveManagedToken,
+    tokenForCredentialVersion,
     transientManagedTokenFetchError,
     setManagerBotFetch(fn) {
       managerBotFetch = typeof fn === 'function' ? fn : (...args) => fetch(...args);

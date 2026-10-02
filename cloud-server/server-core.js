@@ -1535,13 +1535,14 @@ app.post("/auth/register", async (req, res) => {
 });
 
 app.post("/auth/login", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start");
   const identifier = String(req.body?.identifier || req.body?.username || "").trim();
   const password = String(req.body?.password || "");
   const beatgalerUserId = String(req.body?.beatgalerUserId || "");
   const normalizedIdentifier = normalizeBeatGalerUsername(identifier);
   const user = identifier.includes("@") ? findUserByEmail(identifier) : (beatGalerUsers.get(normalizedIdentifier) || findUserByEmail(identifier));
 
-  if (!user || !user.passwordHash || !(await verifyPassword(password, user))) {
+  if (!user || !user.passwordHash || !(await criticalPathTrace.step(req, "auth_password_verify", () => verifyPassword(password, user)))) {
     return res.status(401).json({ error: "Invalid username/email or password." });
   }
   if (user.mfaSecret && !verifyTotp(user.mfaSecret, req.body?.mfaCode)) {
@@ -1552,10 +1553,13 @@ app.post("/auth/login", async (req, res) => {
   }
 
   try {
-    await syncXIdentity(user).catch(() => false);
-    await ensureUserStorage(user);
+    await criticalPathTrace.step(req, "auth_sync_identity", () => syncXIdentity(user).catch(() => false));
+    await criticalPathTrace.step(req, "auth_ensure_storage", () => ensureUserStorage(user));
+    criticalPathTrace.write(req, "auth_bind_installation_begin");
     bindInstallationToBeatGalerUser(user, beatgalerUserId);
+    criticalPathTrace.write(req, "auth_bind_installation_done");
     const token = createAuthSession(user.id);
+    criticalPathTrace.write(req, "cloud_handler_finished");
     res.json(accountPublicPayload(user, token));
   } catch (error) {
     res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
@@ -1951,6 +1955,11 @@ app.post("/transport/session/start", async (req, res) => {
     }
     startupTrace.publish(res, "done");
     criticalPathTrace.write(req, "cloud_handler_finished");
+    // Direct lease state and the INDEX pointer use their own durable stores,
+    // and this route does not write the legacy JSON snapshots. Waiting for
+    // concurrent accounts' unrelated snapshot replacements can hold this
+    // response past the browser's 30 s request deadline.
+    res.locals.beatGalerDurabilityBypass = true;
     res.json(wrapWebTransportSession({
       ...session,
       user_id: account?.beatgalerAccountId || null,

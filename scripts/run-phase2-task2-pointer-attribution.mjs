@@ -14,7 +14,10 @@ const startedAt = new Date().toISOString();
 const experimentId = startedAt.replace(/[-:.]/g, "").replace("T", "-").replace("Z", "");
 const resultDir = path.join(root, "tmp", "phase2-task2", experimentId);
 let cloud = null;
+let wslKeepalive = null;
 const previousReports = new Map();
+const passivePingEnabled = process.env.PHASE2_TASK2_PASSIVE_PING_TRACE === "1";
+const infraReadiness = process.env.PHASE2_TASK2_INFRA_READINESS === "1";
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -60,7 +63,7 @@ async function startCloud() {
   await fs.access(path.join(cloudDir, ".env"));
   cloud = spawn(process.execPath, ["--env-file=.env", "server.js"], {
     cwd: cloudDir,
-    env: { ...process.env, PORT: cloudPort },
+    env: { ...process.env, PORT: cloudPort, STAGE1_CRITICAL_PATH_CLOUD_TRACE_FILE: path.join(resultDir, "cloud-critical-path.jsonl") },
     stdio: "inherit",
   });
   const deadline = Date.now() + 90_000;
@@ -70,6 +73,26 @@ async function startCloud() {
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   throw new Error("Cloud/PostgreSQL no alcanzÃ³ /readyz en 90 s.");
+}
+
+async function startLocalWslPostgres() {
+  const distro = String(process.env.PHASE2_TASK2_WSL_DISTRO || "").trim();
+  if (!distro) return;
+  if (process.platform !== "win32") throw new Error("PHASE2_TASK2_WSL_DISTRO requires Windows.");
+  wslKeepalive = spawn("wsl.exe", ["-d", distro, "-e", "sleep", "7200"], {
+    stdio: "ignore", windowsHide: true,
+  });
+  const deadline = Date.now() + 45_000;
+  while (Date.now() < deadline) {
+    if (wslKeepalive.exitCode !== null) throw new Error("WSL exited before PostgreSQL became ready.");
+    try {
+      execFileSync("wsl.exe", ["-d", distro, "-e", "pg_isready"], { stdio: "ignore", timeout: 5_000, windowsHide: true });
+      return;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error("PostgreSQL in WSL did not become ready in 45 s.");
 }
 
 function percentile(values, fraction = 0.95) {
@@ -207,7 +230,7 @@ const summary = {
   experiment_id: experimentId,
   started_at: startedAt,
   finished_at: null,
-  configuration: { accounts: 5, web_mode: "vite-preview", cloud: "managed local PostgreSQL Cloud", task0_repeated: false, task2_passive_ping_trace: true },
+  configuration: { accounts: 5, web_mode: "vite-preview", cloud: "managed local PostgreSQL Cloud", task0_repeated: false, task2_passive_ping_trace: !infraReadiness && passivePingEnabled, infra_readiness: infraReadiness },
   identity: null,
   evidence: null,
   status: "BLOCKED",
@@ -226,6 +249,7 @@ try {
     web_dist_sha256: await fingerprint(path.join(root, "dist")),
     node_version: process.version,
   };
+  await startLocalWslPostgres();
   await startCloud();
   await fs.rm(rawReport, { force: true });
   let scenarioError = null;
@@ -237,9 +261,10 @@ try {
       STAGE1_CLOUD_URL: cloudUrl,
       STAGE1_RUN_ACCOUNTS: "5",
       STAGE1_WEB_PORT: "1421",
-      PHASE2_TASK1_ATTRIBUTION: "1",
-      PHASE2_TASK2_POINTER_ATTRIBUTION: "1",
-      PHASE2_TASK2_PASSIVE_PING_TRACE: "1",
+      PHASE2_TASK1_ATTRIBUTION: infraReadiness ? "0" : "1",
+      PHASE2_TASK2_POINTER_ATTRIBUTION: infraReadiness ? "0" : "1",
+      PHASE2_TASK2_INFRA_READINESS: infraReadiness ? "1" : "0",
+      PHASE2_TASK2_PASSIVE_PING_TRACE: !infraReadiness && passivePingEnabled ? "1" : "0",
       PHASE2_TASK0_MEASUREMENT: "0",
       STAGE1_FOCUSED_STARTUP: "0",
       STAGE1_FOCUSED_LIFECYCLE: "0",
@@ -260,8 +285,19 @@ try {
   if (!reportText) throw new Error(scenarioError || "El E2E no escribiÃ³ su reporte crudo.");
   const report = JSON.parse(reportText);
   await fs.writeFile(path.join(resultDir, "attribution-raw.json"), reportText);
+  if (infraReadiness) {
+    const connected = report?.phase2_task2_infra?.connected;
+    const valid = !scenarioError && report?.overall === "PASS" &&
+      Array.isArray(connected) && connected.length === 5 &&
+      new Set(connected.map(row => row.account_label)).size === 5 &&
+      connected.every(row => Number.isFinite(row.connected_at_ms) && Number.isFinite(row.login_to_mtproto_ms)) &&
+      report.phase2_task2_infra.postgres_ready === true;
+    summary.evidence = report.phase2_task2_infra || null;
+    summary.status = valid ? "INFRA_READY" : "INSUFFICIENT_EVIDENCE";
+    summary.reason = valid ? null : scenarioError || report?.failure?.message || "Five accounts did not reach MTProto with PostgreSQL ready.";
+  } else {
   summary.evidence = summarize(report);
-  const passivePingComplete = ["apertura_fria", "reload_caliente"].every(condition =>
+  const passivePingComplete = !passivePingEnabled || ["apertura_fria", "reload_caliente"].every(condition =>
     summary.evidence[condition]?.passive_ping_by_account?.every(item =>
       item.events.some(event => event.stage === "TASK2_PING_GET_MESSAGES_BEGIN") &&
       item.events.some(event => event.stage === "TASK2_PING_GET_MESSAGES_END"),
@@ -276,10 +312,12 @@ try {
     : scenarioError || (!passivePingComplete
       ? "La traza pasiva de ping no llegó completa para las diez operaciones getMessages."
       : "La corrida no produjo diez líneas de tiempo completas y ordenadas.");
+  }
 } catch (error) {
   summary.reason = error instanceof Error ? error.message : String(error);
 } finally {
   if (cloud && cloud.exitCode === null) cloud.kill("SIGTERM");
+  if (wslKeepalive && wslKeepalive.exitCode === null) wslKeepalive.kill("SIGTERM");
   for (const [file, content] of previousReports) {
     if (content) await fs.writeFile(file, content);
     else await fs.rm(file, { force: true });
@@ -290,4 +328,4 @@ try {
   console.log(`[phase2-task2] ${summary.status} ${path.join(resultDir, "summary.json")}`);
 }
 
-process.exitCode = summary.status === "ATTRIBUTION_COMPLETE" ? 0 : 1;
+process.exitCode = ["ATTRIBUTION_COMPLETE", "INFRA_READY"].includes(summary.status) ? 0 : 1;

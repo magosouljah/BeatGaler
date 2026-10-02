@@ -89,6 +89,20 @@ function membershipUpdatedAtMs(assignment) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function transientProbeFailure(error) {
+  if (!error || error.code === 'TRANSPORT_BOT_MEMBERSHIP_ABSENT') return false;
+  const status = Number(error.http_status || error.api_error_code || 0);
+  if (status === 429 || status >= 500) return true;
+  const cause = error.cause || {};
+  const codes = [error.code, error.errno, cause.code, cause.errno].map(value => String(value || '').toUpperCase());
+  if (['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN',
+    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']
+    .some(code => codes.includes(code))) return true;
+  if (['TimeoutError', 'AbortError'].includes(error.name)) return true;
+  return error.name === 'TypeError' && /fetch failed|socket hang up|network error/i
+    .test(`${error.message || ''} ${cause.message || ''}`);
+}
+
 function installPersistentDirectMembershipActivation({ directTransport, persistentAssignments } = {}) {
   if (!directTransport || typeof directTransport.activateSession !== 'function') {
     throw new Error('Direct transport activateSession() is required.');
@@ -137,6 +151,16 @@ function installPersistentDirectMembershipActivation({ directTransport, persiste
           lease: checked.lease,
         }), membership);
       } catch (error) {
+        // A Bot API transport outage says nothing about membership. The Web
+        // Worker still verifies the assigned bot and exact vault over MTProto
+        // before any vault read or media operation can start.
+        if (transientProbeFailure(error)) {
+          return readyResult(finalizeReadyLease({
+            directTransport,
+            pool: checked.pool,
+            lease: checked.lease,
+          }));
+        }
         // Only an authoritative same-bot "not visible" result may convert a
         // stale READY marker into repair. Network/probe failures fail closed.
         if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT') throw error;
@@ -166,6 +190,13 @@ function installPersistentDirectMembershipActivation({ directTransport, persiste
             lease: checked.lease,
           }), membership);
         } catch (error) {
+          if (transientProbeFailure(error)) {
+            return readyResult(finalizeReadyLease({
+              directTransport,
+              pool: checked.pool,
+              lease: checked.lease,
+            }));
+          }
           if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT') throw error;
           await persistentAssignments.markMembershipRepairNeeded(chatId, assignedBotId);
           return provisionCurrentLease({ args, checked, assignedBotId });
@@ -251,4 +282,5 @@ module.exports = {
   assertAssignmentMatches,
   finalizeReadyLease,
   membershipUpdatedAtMs,
+  transientProbeFailure,
 };
