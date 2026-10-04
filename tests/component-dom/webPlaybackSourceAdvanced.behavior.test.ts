@@ -139,10 +139,10 @@ describe("WebPlaybackSourceManager advanced scheduling behavior", () => {
     expect(prepared.url).toBe("blob:active-warm");
     expect(warm.prefetchFiles).toHaveBeenCalledTimes(1);
     expect(streamFile).toHaveBeenCalledWith(
-      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" },
+      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback", traceIntentId: 1 },
       expect.any(Function),
     );
-    expect(focusPlayback).toHaveBeenCalledWith(77);
+    expect(focusPlayback).toHaveBeenCalledWith(77, 1);
   });
 
   it("promotes a target queued only in SourceManager without waiting for the active warm batch", async () => {
@@ -178,11 +178,11 @@ describe("WebPlaybackSourceManager advanced scheduling behavior", () => {
     await expect(queuedWarm).resolves.toBeUndefined();
     expect(prepared.url).toBe("blob:local-queued");
     expect(prefetchFile).toHaveBeenCalledTimes(1);
-    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 102, mimeType: "audio/mpeg", offsetBytes: 0 });
+    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 102, mimeType: "audio/mpeg", offsetBytes: 0, traceIntentId: 1 });
     expect(warm.prefetchFiles).toHaveBeenCalledTimes(1);
-    expect(focusPlayback).toHaveBeenCalledWith(102);
+    expect(focusPlayback).toHaveBeenCalledWith(102, 1);
     expect(streamFile).toHaveBeenCalledWith(
-      { messageId: 102, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" },
+      { messageId: 102, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback", traceIntentId: 1 },
       expect.any(Function),
     );
 
@@ -254,7 +254,7 @@ describe("WebPlaybackSourceManager advanced scheduling behavior", () => {
 
     await manager.prepare("beat-aligned", 89);
     expect(streamFile).toHaveBeenCalledWith(
-      { messageId: 89, mimeType: "audio/mpeg", offsetBytes: 32768, purpose: "playback" },
+      { messageId: 89, mimeType: "audio/mpeg", offsetBytes: 32768, purpose: "playback", traceIntentId: undefined },
       expect.any(Function),
     );
   });

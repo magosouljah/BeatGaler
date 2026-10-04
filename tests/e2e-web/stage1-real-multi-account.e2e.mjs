@@ -2332,6 +2332,29 @@ async function resetPlaybackForSoak(client) {
     for (const audio of document.querySelectorAll("audio")) {
       try { audio.pause(); } catch {}
       try { audio.currentTime = 0; } catch {}
+      // Keep the Player's React progress in lockstep with the native media
+      // reset.  Directly setting currentTime does not traverse Player.onSeek,
+      // so it can leave the next Play governed by its stale near-end progress.
+      try { audio.dispatchEvent(new Event("timeupdate")); } catch {}
+    }
+
+    const visible = node => Boolean(node && node.getClientRects().length);
+    const previous = Array.from(document.querySelectorAll('button[title="Previous"]')).find(visible);
+    let root = previous?.parentElement;
+    while (root && getComputedStyle(root).position !== "fixed") root = root.parentElement;
+    const scrubber = root?.children?.[1]?.children?.[1];
+    if (scrubber instanceof HTMLElement) {
+      const rect = scrubber.getBoundingClientRect();
+      if (rect.width > 0) {
+        const clientX = rect.left;
+        const clientY = rect.top + rect.height / 2;
+        scrubber.dispatchEvent(new MouseEvent("mousedown", {
+          bubbles: true, cancelable: true, clientX, clientY, button: 0, buttons: 1,
+        }));
+        window.dispatchEvent(new MouseEvent("mouseup", {
+          bubbles: true, cancelable: true, clientX, clientY, button: 0, buttons: 0,
+        }));
+      }
     }
   });
 
@@ -2976,6 +2999,8 @@ async function runConcurrentPlayback(clients, playbackBeats) {
       interval: 250,
       timeoutMsg: `Account ${accounts[index].label} playback never became interactive.`,
     });
+    await artwork.scrollIntoView({ block: "center", inline: "center" });
+    await artwork.waitForClickable({ timeout: 30_000, interval: 100 });
     return artwork;
   }));
 
@@ -3081,6 +3106,11 @@ async function runPhase2Task0Conditions({ clients, before }) {
       const playback = await waitForPlaybackProgress(client, account, clickedAt);
       assert.ok(Number(playback.first_playing_at) >= clickedAt,
         `Account ${account.label} playback timestamp did not follow its Play click.`);
+      const browserTrace = process.env.PLAYBACK_GET_FILE_CAPTURE === "1"
+        ? (await client.getLogs("browser").catch(() => []))
+          .filter(entry => /\[play-trace\].*"stage":"(?:WORKER_GET_FILE_|WORKER_PREFIX_|WORKER_MEDIA_|WORKER_PLAYBACK_|WORKER_PREFETCH_|WORKER_WARM_|WORKER_DATA_LANE_|WORKER_STREAM_|WARM_|PLAY_WARM_)/.test(String(entry.message || "")))
+          .map(entry => ({ at: entry.timestamp, line: String(entry.message || "") }))
+        : undefined;
       return {
         account_label: account.label,
         round,
@@ -3089,6 +3119,7 @@ async function runPhase2Task0Conditions({ clients, before }) {
         first_playing_at_ms: playback.first_playing_at,
         progress_seconds: playback.max_current_time,
         beat_id: beat.beat_id,
+        ...(browserTrace ? { worker_path_trace: browserTrace, main_play_trace: playback.play_trace } : {}),
       };
     }));
     samples.play_tras_biblioteca_autoritativa.push(...played);

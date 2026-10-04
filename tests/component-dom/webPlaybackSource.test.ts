@@ -120,7 +120,7 @@ describe("Web MASTER playback source", () => {
     await expect(warm).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(playing).resolves.toMatchObject({ url: "blob:foreground-after-warm" });
     await vi.waitFor(() => expect(streamFile).toHaveBeenCalledOnce());
-    expect(focusPlayback).toHaveBeenCalledWith(501);
+    expect(focusPlayback).toHaveBeenCalledWith(501, 1);
     expect(releasePlaybackFocus).not.toHaveBeenCalled();
   });
   it("replays completed MSE audio from retained bytes with a fresh Blob URL", async () => {
@@ -281,7 +281,7 @@ describe("Web MASTER playback source", () => {
     expect(prepared.url).toBe("blob:cloud-master");
     expect(cancelMessage).not.toHaveBeenCalled();
     expect(streamFile).toHaveBeenCalledWith(
-      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" },
+      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback", traceIntentId: undefined },
       expect.any(Function),
     );
 
@@ -318,8 +318,8 @@ describe("Web MASTER playback source", () => {
     const prepared = await manager.prepare("beat-b", 2, "audio/mpeg", 1);
     expect(prepared.url).toBe("blob:promoted");
     await expect(warmB).resolves.toBeUndefined();
-    expect(focusPlayback).toHaveBeenCalledWith(2);
-    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 2, mimeType: "audio/mpeg", offsetBytes: 0 });
+    expect(focusPlayback).toHaveBeenCalledWith(2, 1);
+    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 2, mimeType: "audio/mpeg", offsetBytes: 0, traceIntentId: 1 });
 
     finishBatch(successfulBatch([{ messageId: 1 }]));
     await warmA;

@@ -76,7 +76,7 @@ export class WebStartupPlaybackCoordinator {
     const coordinatedTransport: WebPlaybackTransport = {
       prefetchFile: input => this.transport.prefetchFile(input),
       prefetchFiles: (inputs, onChunk, onTerminal) => this.transport.prefetchFiles(inputs, onChunk, onTerminal),
-      focusPlayback: messageId => this.beginPlayback(messageId),
+      focusPlayback: (messageId, traceIntentId) => this.beginPlayback(messageId, traceIntentId),
       markPlaybackStable: messageId => this.markPlaybackStable(messageId),
       releasePlaybackFocus: messageId => this.endPlayback(messageId),
       streamFile: (input, onChunk) => this.transport.streamFile(input, onChunk),
@@ -160,16 +160,16 @@ export class WebStartupPlaybackCoordinator {
     await this.transport.focusPlayback(current);
   }
 
-  async beginPlayback(messageId: number): Promise<void> {
+  async beginPlayback(messageId: number, traceIntentId?: number): Promise<void> {
     this.currentPlaybackMessageId = messageId;
-    playTrace("PLAY_FOCUS_BEGIN", { message_id: messageId });
+    playTrace("PLAY_FOCUS_BEGIN", { message_id: messageId, intent_id: traceIntentId ?? null });
     const startup = this.start();
     void startup.catch(error => playTrace("PLAY_DIRECT_START_DEFERRED", {
       message_id: messageId,
       error_name: error instanceof Error ? error.name : "unknown",
     }));
     try {
-      await this.transport.focusPlayback(messageId);
+      await this.transport.focusPlayback(messageId, traceIntentId);
     } catch (error) {
       if (this.currentPlaybackMessageId === messageId) this.currentPlaybackMessageId = null;
       throw error;

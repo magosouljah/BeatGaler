@@ -130,7 +130,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(client).toContain("startupMessageIds: sessionStartupMessageIds");
     expect(worker).toContain("command.startupMessageIds");
-    expect(worker).toContain("return await active.getMessages(targetChatId, messageIds);");
+    expect(worker).toContain("await active.getMessages(targetChatId, messageIds)");
     expect(worker).toContain("void warmStartupPlaybackMedia(active, startupIds)");
     expect(worker).not.toContain("resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)");
     expect(worker).not.toContain("startupRouteMessageIds(startup_routes)");
@@ -195,7 +195,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(playback).toContain("prefetched.totalBytes <= prefetched.prefix.byteLength || prefetched.prefix.byteLength % 4096 === 0");
     expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
-    expect(playback).toContain('this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback" }, chunk => {');
+    expect(playback).toContain('this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback", traceIntentId: intentId }, chunk => {');
   });
 
   it("uses PLAY_CRITICAL zero-warm and PLAY_STABLE six-warm scheduling", () => {

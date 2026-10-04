@@ -160,10 +160,10 @@ export class WebGalerCloudTransport {
     playTrace("DIRECT_MTPROTO_READY");
   }
 
-  async focusPlayback(messageId: number): Promise<void> {
+  async focusPlayback(messageId: number, traceIntentId?: number): Promise<void> {
     this.setPlaybackCritical(true);
     try {
-      await this.worker.focusPlayback(messageId);
+      await this.worker.focusPlayback(messageId, traceIntentId);
     } catch (error) {
       this.setPlaybackCritical(false);
       throw error;
@@ -322,11 +322,13 @@ export class WebGalerCloudTransport {
 
   async prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
     const started = Date.now();
-    playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId });
+    playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId, intent_id: input.traceIntentId ?? null });
     await this.controller.waitForVaultPeerReady();
+    playTrace("TRANSPORT_PREFETCH_PEER_READY", { message_id: input.messageId, intent_id: input.traceIntentId ?? null, wait_ms: Date.now() - started });
     const result = await this.worker.prefetch(input);
     playTrace("TRANSPORT_PREFETCH_READY", {
       message_id: input.messageId,
+      intent_id: input.traceIntentId ?? null,
       bytes: result.prefix.byteLength,
       total_ms: Date.now() - started,
     });
@@ -352,6 +354,7 @@ export class WebGalerCloudTransport {
     ));
     playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length, lanes: this.playbackDataLanes });
     await this.controller.waitForVaultPeerReady();
+    playTrace("TRANSPORT_PREFETCH_BATCH_PEER_READY", { count: ids.length, wait_ms: Date.now() - started, message_ids: ids });
     const workerBatch = this.worker.prefetchBatch({
       inputs,
       maxConcurrency: this.playbackDataLanes,
@@ -374,10 +377,10 @@ export class WebGalerCloudTransport {
     const started = Date.now();
     const purpose = input.purpose || "playback";
     const background = purpose !== "playback";
-    playTrace("TRANSPORT_STREAM_ENTER", { purpose });
+    playTrace("TRANSPORT_STREAM_ENTER", { purpose, message_id: input.messageId, intent_id: input.traceIntentId ?? null });
     const connectStarted = Date.now();
     await this.controller.waitForVaultPeerReady();
-    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted, purpose });
+    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted, purpose, message_id: input.messageId, intent_id: input.traceIntentId ?? null });
 
     let lease: Awaited<ReturnType<WebTransportController["beginOperation"]>> | null = null;
     if (purpose === "export") {

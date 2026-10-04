@@ -252,6 +252,74 @@ afterAll(() => {
 });
 
 describe("Worker playback scheduler with pending Telegram transfers", () => {
+  it("traces a focused cache miss through media RPC, lane, first bytes and worker response", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await dispatchAndWait({ requestId: "trace-focus-777", op: "playback_focus", messageId: 777, traceIntentId: 42 });
+      dispatch({ requestId: "trace-prefix-777", op: "prefetch", input: { messageId: 777, mimeType: "audio/mpeg", offsetBytes: 0, traceIntentId: 42 } });
+      await vi.waitFor(() => expect(harness.transfersFor(777)).toHaveLength(1));
+      harness.transfersFor(777)[0].resolve();
+      await vi.waitFor(() => expect(posted.some(message => message.requestId === "trace-prefix-777" && message.ok === true)).toBe(true));
+
+      const rows = info.mock.calls
+        .map(([value]) => String(value))
+        .filter(value => value.startsWith("[play-trace] "))
+        .map(value => JSON.parse(value.slice("[play-trace] ".length)))
+        .filter(row => row.request_id === "trace-prefix-777");
+      const stages = rows.map(row => row.stage);
+      const expected = [
+        "WORKER_PLAYBACK_REQUEST_RECEIVED",
+        "WORKER_PREFETCH_ENTER",
+        "WORKER_PLAYBACK_MEDIA_CACHE_MISS",
+        "WORKER_MEDIA_GET_MESSAGES_BEGIN",
+        "WORKER_MEDIA_GET_MESSAGES_DONE",
+        "WORKER_MEDIA_RESOLVE_DONE",
+        "WORKER_DATA_LANE_ACQUIRED",
+        "WORKER_PREFIX_DOWNLOAD_BEGIN",
+        "WORKER_PREFIX_DOWNLOAD_DONE",
+        "WORKER_DATA_LANE_RELEASED",
+        "WORKER_PREFIX_RESPONSE_POST_BEGIN",
+      ];
+      for (const stage of expected) expect(stages).toContain(stage);
+      expect(expected.map(stage => stages.indexOf(stage))).toEqual([...expected.map(stage => stages.indexOf(stage))].sort((a, b) => a - b));
+      for (const row of rows) {
+        expect(row.message_id).toBe(777);
+        expect(row.intent_id).toBe(42);
+        expect(Number.isFinite(row.ts_ms)).toBe(true);
+      }
+      expect(rows.find(row => row.stage === "WORKER_MEDIA_GET_MESSAGES_DONE")?.elapsed_ms).toBeGreaterThanOrEqual(0);
+      expect(rows.find(row => row.stage === "WORKER_PREFIX_DOWNLOAD_DONE")?.bytes).toBe(65_536);
+    } finally {
+      info.mockRestore();
+      await dispatchAndWait({ requestId: "trace-release-777", op: "playback_release", messageId: 777 });
+    }
+  });
+
+  it("attaches the clicked intent to an already active warm before its first bytes arrive", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      dispatch({ requestId: "trace-warm-778", op: "prefetch_batch", input: { inputs: [{ messageId: 778, mimeType: "audio/mpeg" }], maxConcurrency: 7 } });
+      await vi.waitFor(() => expect(harness.transfersFor(778)).toHaveLength(1));
+      await dispatchAndWait({ requestId: "trace-focus-778", op: "playback_focus", messageId: 778, traceIntentId: 43 });
+      harness.transfersFor(778)[0].resolve();
+      await vi.waitFor(() => expect(terminal(778, "READY")).toHaveLength(1));
+
+      const rows = info.mock.calls
+        .map(([value]) => String(value))
+        .filter(value => value.startsWith("[play-trace] "))
+        .map(value => JSON.parse(value.slice("[play-trace] ".length)))
+        .filter(row => row.request_id === "trace-warm-778" && row.message_id === 778);
+      expect(rows.find(row => row.stage === "WORKER_WARM_QUEUE_ENTER")).toMatchObject({ intent_id: null });
+      expect(rows.find(row => row.stage === "WORKER_PREFIX_DOWNLOAD_BEGIN")).toMatchObject({ intent_id: null });
+      expect(rows.find(row => row.stage === "WORKER_PREFIX_DOWNLOAD_DONE")).toMatchObject({ intent_id: 43, bytes: 65_536 });
+      expect(rows.find(row => row.stage === "WORKER_PREFIX_POST_BEGIN")).toMatchObject({ intent_id: 43, bytes: 65_536 });
+      expect(rows.find(row => row.stage === "WARM_PREFIX_READY")).toMatchObject({ intent_id: 43 });
+    } finally {
+      info.mockRestore();
+      await dispatchAndWait({ requestId: "trace-release-778", op: "playback_release", messageId: 778 });
+    }
+  });
+
   it("enforces 7 idle lanes, aborts unrelated warm for queued Play, keeps 0 unrelated critical lanes and resumes exactly 6 when stable", async () => {
     const ids = Array.from({ length: 14 }, (_, index) => index + 1);
     dispatch({

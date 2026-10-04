@@ -88,6 +88,7 @@ function chromeCapability(label) {
   return {
     browserName: "chrome",
     "goog:chromeOptions": { args },
+    ...(process.env.PLAYBACK_GET_FILE_CAPTURE === "1" ? { "goog:loggingPrefs": { browser: "ALL" } } : {}),
   };
 }
 

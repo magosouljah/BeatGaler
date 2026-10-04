@@ -106,9 +106,9 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
 
   it("reapplies the latest focus after initialize before reporting readiness", async () => {
     const client = new WebTransportWorkerClient(1000);
-    const focus = client.focusPlayback(77);
+    const focus = client.focusPlayback(77, 42);
     const worker = FakeWorker.instances[0];
-    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ op: "playback_focus", messageId: 77 }));
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ op: "playback_focus", messageId: 77, traceIntentId: 42 }));
     worker.respond();
     await focus;
 
@@ -128,6 +128,7 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
       op: "playback_focus",
       messageId: 77,
+      traceIntentId: 42,
     }));
     let settled = false;
     void initialize.then(() => { settled = true; });
@@ -136,6 +137,33 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
 
     worker.respond();
     await expect(initialize).resolves.toBeUndefined();
+  });
+
+  it("correlates a foreground prefix request with its main-thread delivery", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const client = new WebTransportWorkerClient(1000);
+      const request = client.prefetch({ messageId: 777, mimeType: "audio/mpeg", offsetBytes: 0, traceIntentId: 42 });
+      const worker = FakeWorker.instances[0];
+      const command = worker.postMessage.mock.calls[0][0];
+      expect(command).toMatchObject({ op: "prefetch", input: { messageId: 777, traceIntentId: 42 } });
+      worker.respond({ messageId: 777, totalBytes: 200_000, mimeType: "audio/mpeg", prefix: new ArrayBuffer(65_536), playableSeconds: 0, targetMet: true });
+      await request;
+
+      const rows = info.mock.calls
+        .map(([value]) => String(value))
+        .filter(value => value.startsWith("[play-trace] "))
+        .map(value => JSON.parse(value.slice("[play-trace] ".length)))
+        .filter(row => row.request_id === command.requestId);
+      expect(rows.map(row => row.stage)).toEqual(expect.arrayContaining(["WORKER_PLAYBACK_REQUEST_POSTED", "WORKER_PREFIX_RESPONSE_RECEIVED_MAIN"]));
+      for (const row of rows) {
+        expect(row.message_id).toBe(777);
+        expect(row.intent_id).toBe(42);
+        expect(Number.isFinite(row.ts_ms)).toBe(true);
+      }
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("routes warm-prefix progress and cancels one batch member without cancelling the batch", async () => {

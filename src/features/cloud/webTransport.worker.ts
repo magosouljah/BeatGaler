@@ -3,6 +3,7 @@ import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import { Task2PacketLedger, task2DecryptWarningReason, task2Fingerprint, type Task2PacketIdentity } from "./task2PacketLedger";
 import { armMtcuteIndexLivenessGuard } from "./mtcuteIndexLivenessGuard";
 import { installMtcutePingSocketRecovery } from "./mtcutePingSocketRecovery";
+import { installPlaybackGetFileTrace } from "./playbackGetFileTrace";
 import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
 import { playTrace, playTraceSpan } from "../playback/playTrace";
 import type { WebVaultPeerRef } from "./webVaultPeerCache";
@@ -130,6 +131,7 @@ let detachMtprotoSessionDiagnostics: (() => void) | null = null;
 let detachMtprotoPassivePingDiagnostics: (() => void) | null = null;
 let detachMtprotoPingSocketRecovery: (() => void) | null = null;
 let detachMtprotoPassiveIngressDiagnostics: (() => void) | null = null;
+let playbackGetFileTrace: ReturnType<typeof installPlaybackGetFileTrace> | null = null;
 // Diagnostic identities deliberately live only in the Worker. They do not
 // affect a Direct lease, temporary authorization, retry policy, or reconnect.
 const workerInstanceId = typeof crypto.randomUUID === "function"
@@ -1369,6 +1371,7 @@ const foregroundLaneWaiters: Array<() => void> = [];
 const warmLaneWaiters: Array<() => void> = [];
 let playbackSchedulerState: PlaybackSchedulerState = "IDLE";
 let playbackMessageId: number | null = null;
+let playbackIntentId: number | null = null;
 let activeIndexAbortController: AbortController | null = null;
 let activeIndexRequestId: string | null = null;
 let activeIndexAbortReason: IndexAbortReason | null = null;
@@ -1399,17 +1402,43 @@ function wakeNextDataLane(): void {
   next?.();
 }
 
-async function withDataLane<T>(operation: () => Promise<T>, priority: DataLanePriority = "foreground"): Promise<T> {
+type PlaybackFetchTrace = { requestId?: string; messageId?: number; traceIntentId?: number; source: "foreground_prefetch" | "warm_batch" | "stream" | "startup_media" };
+
+function playbackTraceFields(trace: PlaybackFetchTrace): Record<string, unknown> {
+  return {
+    request_id: trace.requestId ?? null,
+    message_id: trace.messageId ?? null,
+    intent_id: trace.traceIntentId ?? (trace.messageId === playbackMessageId ? playbackIntentId : null),
+    source: trace.source,
+  };
+}
+
+function playbackConnectionSnapshot(active: TelegramClient): Record<string, unknown> {
+  try { return mtprotoConnectionSnapshot(active); }
+  catch { return { snapshot_unavailable: true }; }
+}
+
+function focusedBatchTraceFields(messageIds: readonly number[]): Record<string, unknown> {
+  const focused = playbackMessageId !== null && messageIds.includes(playbackMessageId);
+  return { focused_message_id: focused ? playbackMessageId : null, focused_intent_id: focused ? playbackIntentId : null };
+}
+
+async function withDataLane<T>(operation: () => Promise<T>, priority: DataLanePriority = "foreground", trace?: PlaybackFetchTrace): Promise<T> {
+  const started = performance.now();
   if (activeDataLanes >= dataLaneLimit) {
+    if (trace) playTrace("WORKER_DATA_LANE_WAIT_BEGIN", { ...playbackTraceFields(trace), priority, active_lanes: activeDataLanes, lane_limit: dataLaneLimit });
     await new Promise<void>(resolve => {
       (priority === "foreground" ? foregroundLaneWaiters : warmLaneWaiters).push(resolve);
     });
   }
   activeDataLanes += 1;
+  const acquiredAt = performance.now();
+  if (trace) playTrace("WORKER_DATA_LANE_ACQUIRED", { ...playbackTraceFields(trace), priority, wait_ms: Math.round((performance.now() - started) * 10) / 10, active_lanes: activeDataLanes, lane_limit: dataLaneLimit });
   try {
     return await operation();
   } finally {
     activeDataLanes -= 1;
+    if (trace) playTrace("WORKER_DATA_LANE_RELEASED", { ...playbackTraceFields(trace), priority, held_ms: Math.round((performance.now() - acquiredAt) * 10) / 10, active_lanes: activeDataLanes });
     wakeNextDataLane();
   }
 }
@@ -1507,6 +1536,8 @@ function assertBoundTempPrimarySession(next: TelegramClient, sessionId: BoundTem
 }
 
 async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
+  playbackGetFileTrace?.detach();
+  playbackGetFileTrace = null;
   detachMtprotoPingSocketRecovery?.();
   detachMtprotoPingSocketRecovery = null;
   detachMtprotoPassiveIngressDiagnostics?.();
@@ -1548,6 +1579,7 @@ async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
   dataLaneLimit = WEB_PLAYBACK_DATA_LANES;
   playbackSchedulerState = "IDLE";
   playbackMessageId = null;
+  playbackIntentId = null;
   notifyScheduler();
   const current = client;
   const closingClientInstanceId = activeClientInstanceId;
@@ -1617,12 +1649,22 @@ async function getMessagesBatchWithRetry(
   active: TelegramClient,
   targetChatId: number,
   messageIds: number[],
+  trace?: PlaybackFetchTrace,
 ): Promise<Awaited<ReturnType<TelegramClient["getMessages"]>>> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       playTrace("WORKER_PLAYBACK_MEDIA_BATCH_RPC", { count: messageIds.length, attempt });
-      return await active.getMessages(targetChatId, messageIds);
+      const started = performance.now();
+      playTrace("WORKER_MEDIA_GET_MESSAGES_BEGIN", { ...(trace ? playbackTraceFields(trace) : {}), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, attempt, connection: playbackConnectionSnapshot(active) });
+      try {
+        const messages = await active.getMessages(targetChatId, messageIds);
+        playTrace("WORKER_MEDIA_GET_MESSAGES_DONE", { ...(trace ? playbackTraceFields(trace) : {}), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, attempt, elapsed_ms: Math.round((performance.now() - started) * 10) / 10, returned: messages.length, connection: playbackConnectionSnapshot(active) });
+        return messages;
+      } catch (error) {
+        playTrace("WORKER_MEDIA_GET_MESSAGES_ERROR", { ...(trace ? playbackTraceFields(trace) : {}), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, attempt, elapsed_ms: Math.round((performance.now() - started) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
+        throw error;
+      }
     } catch (error) {
       lastError = error;
       playTrace("WORKER_PLAYBACK_MEDIA_BATCH_RETRY", { count: messageIds.length, attempt, error_name: error instanceof Error ? error.name : "unknown" });
@@ -1638,7 +1680,9 @@ async function resolvePlaybackMediaBatch(
   targetChatId: number,
   rawMessageIds: readonly number[],
   publishCache = true,
+  trace?: PlaybackFetchTrace,
 ): Promise<PlaybackMediaBatchResolution> {
+  const resolveStarted = performance.now();
   const messageIds = Array.from(new Set(rawMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0)));
   const resolved = new Map<number, ResolvedPlaybackMedia>();
   const missing = new Map<number, Error>();
@@ -1657,9 +1701,14 @@ async function resolvePlaybackMediaBatch(
       continue;
     }
     misses.push(messageId);
+    if (trace?.source === "warm_batch") playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { ...playbackTraceFields({ ...trace, messageId }), message_id: messageId });
   }
-  if (misses.length === 0) return { resolved, missing };
-  const messages = await getMessagesBatchWithRetry(active, targetChatId, misses);
+  if (trace) playTrace("WORKER_MEDIA_RESOLVE_CACHE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, hits: resolved.size, negative_hits: missing.size, misses: misses.length });
+  if (misses.length === 0) {
+    if (trace) playTrace("WORKER_MEDIA_RESOLVE_DONE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, resolved: resolved.size, missing: missing.size, elapsed_ms: Math.round((performance.now() - resolveStarted) * 10) / 10 });
+    return { resolved, missing };
+  }
+  const messages = await getMessagesBatchWithRetry(active, targetChatId, misses, trace);
   const byId = new Map<number, Awaited<ReturnType<TelegramClient["getMessages"]>>[number]>();
   for (const message of messages) {
     const id = Number(message?.id || 0);
@@ -1686,16 +1735,17 @@ async function resolvePlaybackMediaBatch(
       playbackMediaMissingCache.set(messageId, failure);
     }
   }
+  if (trace) playTrace("WORKER_MEDIA_RESOLVE_DONE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, resolved: resolved.size, missing: missing.size, elapsed_ms: Math.round((performance.now() - resolveStarted) * 10) / 10 });
   return { resolved, missing };
 }
 
-async function resolvePlaybackMedia(active: TelegramClient, messageId: number): Promise<ResolvedPlaybackMedia> {
+async function resolvePlaybackMedia(active: TelegramClient, messageId: number, trace?: PlaybackFetchTrace): Promise<ResolvedPlaybackMedia> {
   const cached = cachedPlaybackMedia(messageId);
-  if (cached) return cached;
+  if (cached) { if (trace) playTrace("WORKER_MEDIA_RESOLVE_CACHE", { ...playbackTraceFields(trace), hits: 1, misses: 0 }); return cached; }
   const negative = cachedMissingPlaybackMedia(messageId);
   if (negative) throw negative;
-  playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId });
-  const batch = await resolvePlaybackMediaBatch(active, chatId, [messageId]);
+  playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId, ...(trace ? playbackTraceFields(trace) : {}) });
+  const batch = await resolvePlaybackMediaBatch(active, chatId, [messageId], true, trace);
   const resolved = batch.resolved.get(messageId);
   if (resolved) return resolved;
   throw batch.missing.get(messageId) || new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
@@ -1770,6 +1820,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
   let detachSessionDiagnostics: (() => void) | null = null;
   let detachPassivePingDiagnostics: (() => void) | null = null;
   let detachPingSocketRecovery: (() => void) | null = null;
+  let nextPlaybackGetFileTrace: ReturnType<typeof installPlaybackGetFileTrace> | null = null;
   try {
     await next.importSession({
       primaryDcs: temp_primary_dcs as any,
@@ -1791,6 +1842,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
           ...mtprotoConnectionSnapshot(next),
         });
       });
+      nextPlaybackGetFileTrace = installPlaybackGetFileTrace(next);
       endConnectTrace();
       stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_END", mtprotoConnectionSnapshot(next));
       playTrace("DIRECT_MTPROTO_READY", { elapsed_ms: Date.now() - started });
@@ -1809,6 +1861,7 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     detachMtprotoSessionDiagnostics = detachSessionDiagnostics;
     detachMtprotoPassivePingDiagnostics = detachPassivePingDiagnostics;
     detachMtprotoPingSocketRecovery = detachPingSocketRecovery;
+    playbackGetFileTrace = nextPlaybackGetFileTrace;
     detachMtprotoPassiveIngressDiagnostics = ingressTrace?.detach || null;
     chatId = numericChatId;
     vaultPeerHint = command.session.vault_peer?.channelId === -(numericChatId + 1_000_000_000_000)
@@ -1832,6 +1885,8 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     });
 
   } catch (error) {
+    nextPlaybackGetFileTrace?.detach();
+    if (playbackGetFileTrace === nextPlaybackGetFileTrace) playbackGetFileTrace = null;
     detachPingSocketRecovery?.();
     detachPassivePingDiagnostics?.();
     detachSessionDiagnostics?.();
@@ -2442,23 +2497,40 @@ function playbackChunkLimit(desiredBytes: number): number {
   return Math.ceil(desired / 4096) * 4096;
 }
 
-async function prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
+async function prefetch(requestId: string, input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
   const started = Date.now();
   const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
-  const resolved = await resolvePlaybackMedia(active, messageId);
+  const trace: PlaybackFetchTrace = { requestId, messageId, traceIntentId: input.traceIntentId, source: "foreground_prefetch" };
+  playTrace("WORKER_PREFETCH_ENTER", playbackTraceFields(trace));
+  const resolved = await resolvePlaybackMedia(active, messageId, trace);
+  playTrace("WORKER_MEDIA_RESOLVE_READY", { ...playbackTraceFields(trace), media_cache_hit: resolved.cacheHit, elapsed_ms: Date.now() - started });
   const offsetBytes = Math.max(0, Math.floor(Number(input.offsetBytes) || 0));
   if (offsetBytes % 4096 !== 0) throw new WorkerTransportError("TRANSFER_FAILED", "Galer Cloud playback offset must be aligned to 4 KiB.");
   const remaining = resolved.totalBytes > 0 ? Math.max(0, resolved.totalBytes - offsetBytes) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
   const desired = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
   const limit = playbackChunkLimit(desired);
-  const bytes = await withDataLane(() => active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit }), "foreground");
+  const diagnosticSignal = new AbortController().signal;
+  const bytes = await withDataLane(async () => {
+    const downloadStarted = performance.now();
+    playTrace("WORKER_PREFIX_DOWNLOAD_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, limit_bytes: limit, connection: playbackConnectionSnapshot(active) });
+    try {
+      const result = await (playbackGetFileTrace?.run(diagnosticSignal, () => playbackTraceFields(trace),
+        () => active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit, abortSignal: diagnosticSignal }))
+        ?? active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit }));
+      playTrace("WORKER_PREFIX_DOWNLOAD_DONE", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: result.byteLength, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
+      return result;
+    } catch (error) {
+      playTrace("WORKER_PREFIX_DOWNLOAD_ERROR", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
+      throw error;
+    }
+  }, "foreground", trace);
   if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
   const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
   const measurement = offsetBytes === 0 ? measureMp3PlayablePrefix(prefix) : null;
-  playTrace("WORKER_PREFETCH_READY", { message_id: messageId, bytes: prefix.byteLength, elapsed_ms: Date.now() - started, media_cache_hit: resolved.cacheHit });
+  playTrace("WORKER_PREFETCH_READY", { ...playbackTraceFields(trace), bytes: prefix.byteLength, elapsed_ms: Date.now() - started, media_cache_hit: resolved.cacheHit, playable_seconds: measurement?.playableSeconds ?? null });
   return { messageId, totalBytes: resolved.totalBytes || offsetBytes + prefix.byteLength, mimeType, prefix, playableSeconds: measurement?.playableSeconds || 0, targetMet: true };
 }
 
@@ -2506,7 +2578,7 @@ function postPrefetchTerminal(
     ...(error ? { error } : {}),
   };
   scope.postMessage({ requestId, event: "prefetch-terminal", terminal });
-  playTrace("WORKER_PREFETCH_TERMINAL", { message_id: state.messageId, status, code: code || null });
+  playTrace("WORKER_PREFETCH_TERMINAL", { ...playbackTraceFields({ requestId, messageId: state.messageId, source: "warm_batch" }), status, code: code || null });
 }
 
 async function resolveBatchStates(requestId: string, active: TelegramClient, states: BatchPrefetchState[]): Promise<void> {
@@ -2533,7 +2605,7 @@ async function resolveBatchStates(requestId: string, active: TelegramClient, sta
   if (valid.length === 0) return;
   let batch: PlaybackMediaBatchResolution;
   try {
-    batch = await resolvePlaybackMediaBatch(active, chatId, valid.map(state => state.messageId));
+    batch = await resolvePlaybackMediaBatch(active, chatId, valid.map(state => state.messageId), true, { requestId, source: "warm_batch" });
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     for (const state of valid) {
@@ -2558,6 +2630,7 @@ async function resolveBatchStates(requestId: string, active: TelegramClient, sta
     state.media = resolved.media;
     state.totalBytes = resolved.totalBytes;
     state.mimeType = downloadMime(state.requestedMimeType || resolved.sourceMime);
+    playTrace("WORKER_WARM_MEDIA_READY", { ...playbackTraceFields({ requestId, messageId: state.messageId, source: "warm_batch" }), media_cache_hit: resolved.cacheHit, total_bytes: state.totalBytes });
     if (state.totalBytes > 0 && state.offsetBytes >= state.totalBytes) {
       state.done = true;
       state.targetMet = true;
@@ -2601,6 +2674,7 @@ function batchTerminal(control: PrefetchBatchControl): boolean {
 
 async function downloadStartupPrefix(requestId: string, state: BatchPrefetchState, control: PrefetchBatchControl): Promise<void> {
   if (state.done || state.error || state.cancelled || !state.media) return;
+  const trace: PlaybackFetchTrace = { requestId, messageId: state.messageId, source: "warm_batch" };
   const absoluteOffset = state.offsetBytes;
   const remainingFile = state.totalBytes > 0 ? Math.max(0, state.totalBytes - absoluteOffset) : STARTUP_PREFIX_BYTES;
   const desired = Math.min(STARTUP_PREFIX_BYTES, remainingFile || STARTUP_PREFIX_BYTES);
@@ -2620,12 +2694,20 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
   const promoted = playbackSchedulerState === "PLAY_CRITICAL" && playbackMessageId === state.messageId;
   try {
     const active = requireConnected();
-    const bytes = await withDataLane(() => active.downloadChunk({
-      location: state.media!,
-      offset: absoluteOffset,
-      limit,
-      abortSignal: controller.signal,
-    }), promoted ? "foreground" : "warm");
+    const bytes = await withDataLane(async () => {
+      const downloadStarted = performance.now();
+      playTrace("WORKER_PREFIX_DOWNLOAD_BEGIN", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, limit_bytes: limit, promoted, connection: playbackConnectionSnapshot(active) });
+      try {
+        const result = await (playbackGetFileTrace?.run(controller.signal, () => playbackTraceFields(trace),
+          () => active.downloadChunk({ location: state.media!, offset: absoluteOffset, limit, abortSignal: controller.signal }))
+          ?? active.downloadChunk({ location: state.media!, offset: absoluteOffset, limit, abortSignal: controller.signal }));
+        playTrace("WORKER_PREFIX_DOWNLOAD_DONE", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, bytes: result.byteLength, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
+        return result;
+      } catch (error) {
+        playTrace("WORKER_PREFIX_DOWNLOAD_ERROR", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, aborted: controller.signal.aborted, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
+        throw error;
+      }
+    }, promoted ? "foreground" : "warm", trace);
     if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
     const stored = bytes.slice();
     state.chunks = [stored];
@@ -2635,6 +2717,7 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
     state.warmState = "ready";
     const downloadedAbsolute = absoluteOffset + stored.byteLength;
     const transferable = stored.buffer.slice(stored.byteOffset, stored.byteOffset + stored.byteLength) as ArrayBuffer;
+    playTrace("WORKER_PREFIX_POST_BEGIN", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, bytes: transferable.byteLength });
     scope.postMessage({ requestId, event: "prefetch-chunk", progress: {
       messageId: state.messageId,
       totalBytes: state.totalBytes || downloadedAbsolute,
@@ -2646,7 +2729,7 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
       targetMet: true,
     } }, [transferable]);
     postPrefetchTerminal(requestId, state, "READY");
-    playTrace("WARM_PREFIX_READY", { message_id: state.messageId, bytes: stored.byteLength, offset_bytes: absoluteOffset });
+    playTrace("WARM_PREFIX_READY", { ...playbackTraceFields(trace), bytes: stored.byteLength, offset_bytes: absoluteOffset });
   } catch (error) {
     const cancelled = control.cancelAll || control.cancelledMessageIds.has(state.messageId) || state.cancelled;
     if (controller.signal.aborted && !cancelled) {
@@ -2655,7 +2738,7 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
       state.error = null;
       state.errorCode = null;
       if (!control.pendingWarm.includes(state)) control.pendingWarm.push(state);
-      playTrace("WORKER_WARM_PREEMPTED", { message_id: state.messageId });
+      playTrace("WORKER_WARM_PREEMPTED", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset });
     } else if (cancelled && isAbortError(error)) {
       state.cancelled = true;
       state.done = true;
@@ -2694,10 +2777,11 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
     maxConcurrency,
   };
   activePrefetchBatches.set(requestId, control);
-  playTrace("WARM_BATCH_BEGIN", { count: states.length, prefix_bytes: STARTUP_PREFIX_BYTES, lanes: maxConcurrency });
+  playTrace("WARM_BATCH_BEGIN", { request_id: requestId, count: states.length, prefix_bytes: STARTUP_PREFIX_BYTES, lanes: maxConcurrency });
   try {
     await resolveBatchStates(requestId, active, states);
     control.pendingWarm = states.filter(state => !state.done && !state.error && !state.cancelled);
+    for (const state of control.pendingWarm) playTrace("WORKER_WARM_QUEUE_ENTER", { ...playbackTraceFields({ requestId, messageId: state.messageId, source: "warm_batch" }), scheduler: playbackSchedulerState });
     if (playbackMessageId) moveFocusedTargetToFront(control, playbackMessageId);
     notifyScheduler();
 
@@ -2711,7 +2795,7 @@ async function prefetchBatch(requestId: string, input: WebTransportPrefetchBatch
           await waitForSchedulerChange(epoch);
           continue;
         }
-        playTrace("WORKER_PREFETCH_LANE_TAKE", { lane, message_id: state.messageId, scheduler: playbackSchedulerState });
+        playTrace("WORKER_PREFETCH_LANE_TAKE", { ...playbackTraceFields({ requestId, messageId: state.messageId, source: "warm_batch" }), lane, scheduler: playbackSchedulerState });
         await downloadStartupPrefix(requestId, state, control);
         await schedulerYield();
       }
@@ -2773,11 +2857,13 @@ function cancelPrefetchBatch(targetRequestId: string, messageId?: number): { can
   return { cancelled: true };
 }
 
-function playbackFocus(messageId: number): { focused: boolean } {
+function playbackFocus(messageId: number, traceIntentId?: number): { focused: boolean } {
   const id = Number(messageId || 0);
   if (!Number.isSafeInteger(id) || id <= 0) return { focused: false };
+  playbackIntentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : (playbackMessageId === id ? playbackIntentId : null);
   playbackSchedulerState = "PLAY_CRITICAL";
   playbackMessageId = id;
+  playTrace("WORKER_PLAYBACK_FOCUS", { message_id: id, intent_id: playbackIntentId });
   preemptActiveIndex("play");
   let aborted = 0;
   for (const [activeId, controller] of activeWarmTransfers) {
@@ -2804,6 +2890,7 @@ function playbackRelease(messageId: number): { released: boolean } {
   const id = Number(messageId || 0);
   if (playbackMessageId !== id) return { released: false };
   playbackMessageId = null;
+  playbackIntentId = null;
   playbackSchedulerState = "IDLE";
   playTrace("WARM_RESUME", { lanes: dataLaneLimit });
   notifyScheduler();
@@ -2815,7 +2902,10 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
   const active = requireReady();
   const messageId = Number(input.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
-  const resolved = await resolvePlaybackMedia(active, messageId);
+  const trace: PlaybackFetchTrace = { requestId, messageId, traceIntentId: input.traceIntentId, source: "stream" };
+  playTrace("WORKER_STREAM_ENTER", { ...playbackTraceFields(trace), offset_bytes: input.offsetBytes ?? 0 });
+  const resolved = await resolvePlaybackMedia(active, messageId, trace);
+  playTrace("WORKER_MEDIA_RESOLVE_READY", { ...playbackTraceFields(trace), media_cache_hit: resolved.cacheHit, elapsed_ms: Date.now() - started });
   const media = resolved.media;
   const totalBytes = resolved.totalBytes;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
@@ -2834,20 +2924,32 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
     partSize: WEB_PLAYBACK_FIRST_CHUNK_KB,
     offset: offsetBytes,
   })[Symbol.asyncIterator]();
-  playTrace("PLAY_STREAM_BEGIN", { message_id: messageId, offset_bytes: offsetBytes });
+  playTrace("PLAY_STREAM_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes });
   try {
     while (true) {
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
-      const next = await withDataLane(() => iterator.next(), "foreground");
+      const next = await withDataLane(async () => {
+        if (!firstChunkLogged) playTrace("WORKER_STREAM_FIRST_READ_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, connection: playbackConnectionSnapshot(active) });
+        const readStarted = performance.now();
+        try {
+          const value = await iterator.next();
+          if (!firstChunkLogged) playTrace("WORKER_STREAM_FIRST_READ_DONE", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: value.done ? 0 : value.value.byteLength, elapsed_ms: Math.round((performance.now() - readStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
+          return value;
+        } catch (error) {
+          if (!firstChunkLogged) playTrace("WORKER_STREAM_FIRST_READ_ERROR", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, elapsed_ms: Math.round((performance.now() - readStarted) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
+          throw error;
+        }
+      }, "foreground", firstChunkLogged ? undefined : trace);
       if (next.done) break;
       const chunk = next.value;
       downloadedBytes += chunk.byteLength;
       transferredBytes += chunk.byteLength;
       if (!firstChunkLogged) {
         firstChunkLogged = true;
-        playTrace("PLAY_STREAM_FIRST_CHUNK", { elapsed_ms: Date.now() - started, bytes: chunk.byteLength, offset_bytes: offsetBytes });
+        playTrace("PLAY_STREAM_FIRST_CHUNK", { ...playbackTraceFields(trace), elapsed_ms: Date.now() - started, bytes: chunk.byteLength, offset_bytes: offsetBytes });
       }
       const transferable = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+      if (firstChunkLogged && transferredBytes === chunk.byteLength) playTrace("WORKER_STREAM_FIRST_POST_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: transferable.byteLength });
       scope.postMessage({ requestId, event: "download-chunk", chunk: transferable, downloadedBytes, totalBytes: totalBytes || downloadedBytes }, [transferable]);
       await new Promise<void>(resolve => { state.acknowledge = resolve; });
       state.acknowledge = null;
@@ -2914,10 +3016,10 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "replace_index": return replaceLibraryIndex(command.input);
     case "delete_messages": return deleteMessages(command.input);
     case "download": return download(command.input);
-    case "prefetch": return prefetch(command.input);
+    case "prefetch": return prefetch(command.requestId, command.input);
     case "prefetch_batch": return prefetchBatch(command.requestId, command.input);
     case "prefetch_batch_cancel": return cancelPrefetchBatch(command.targetRequestId, command.messageId);
-    case "playback_focus": return playbackFocus(command.messageId);
+    case "playback_focus": return playbackFocus(command.messageId, command.traceIntentId);
     case "playback_stable": return playbackStable(command.messageId);
     case "playback_release": return playbackRelease(command.messageId);
     case "stream": return stream(command.requestId, command.input);
@@ -2931,6 +3033,9 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
 scope.onmessage = event => {
   const command = event.data;
   stage1TraceContext = command.stage1TraceContext || null;
+  if (command.op === "prefetch" || command.op === "prefetch_batch" || command.op === "stream" || command.op === "playback_focus") {
+    playTrace("WORKER_PLAYBACK_REQUEST_RECEIVED", { request_id: command.requestId, operation: command.op, message_id: command.op === "playback_focus" ? command.messageId : command.op === "prefetch_batch" ? null : command.input.messageId, intent_id: command.op === "playback_focus" ? command.traceIntentId ?? null : command.op === "prefetch_batch" ? null : command.input.traceIntentId ?? null, message_ids: command.op === "prefetch_batch" ? command.input.inputs.map(input => input.messageId) : undefined });
+  }
   if (command.op === "get_index") stage1Trace(command.requestId, "WORKER_INDEX_DISPATCH_RECEIVED");
   if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
     playTrace("WORKER_REQUEST_RECEIVED", { request_id: command.requestId, operation: command.op });
@@ -2938,6 +3043,10 @@ scope.onmessage = event => {
   void handle(command).then(
     result => {
       if (command.op === "get_index") stage1Trace(command.requestId, "WORKER_INDEX_RESPONSE");
+      if (command.op === "prefetch") {
+        const prefix = result as WebTransportPrefetchResult;
+        playTrace("WORKER_PREFIX_RESPONSE_POST_BEGIN", { request_id: command.requestId, message_id: command.input.messageId, intent_id: command.input.traceIntentId ?? null, bytes: prefix.prefix.byteLength });
+      }
       scope.postMessage({ requestId: command.requestId, ok: true, result });
     },
     error => scope.postMessage({
