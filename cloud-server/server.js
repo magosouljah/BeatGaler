@@ -17,6 +17,7 @@ const { installAuthAbuseControls } = require("./auth-abuse-controls");
 const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
+const accessGrants = require("./access-grant-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -44,6 +45,7 @@ async function start() {
   vaultIndexPointers.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
+  accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
@@ -55,6 +57,7 @@ async function start() {
     env: d8LifecycleEnv(process.env),
     emailNotifier: createSesEmailNotifier({ env: process.env }),
     getCapabilityStore: () => directCapabilities?.store || null,
+    onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
   installLifecyclePasswordAuthority(accountLifecycle);
   applyD8RoResolutions(express, accountLifecycle, { env: process.env });

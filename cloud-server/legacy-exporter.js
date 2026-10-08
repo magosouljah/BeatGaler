@@ -67,8 +67,10 @@ async function exportLegacyAccounts(client, { decryptSecretFromStorage } = {}) {
 
   const users = usersResult.rows.map(row => {
     const entitlements = entitlementsByUser.get(row.id) || [];
-    const base = entitlements.find(item => item.source === 'base_plan') || null;
-    const grants = entitlements.filter(item => item !== base).map(item => ({
+    const base = entitlements.find(item => item.source === 'base_plan' && !item.revoked_at) || null;
+    // Legacy plans.js does not understand revokedAt. Excluding revoked rows
+    // prevents an explicit JSON rollback from reactivating a revoked grant.
+    const grants = entitlements.filter(item => item !== base && !item.revoked_at).map(item => ({
       id: item.id,
       planId: item.plan_id,
       source: item.source,

@@ -24,6 +24,7 @@ assert.equal(rows.mfa.length, 1);
 assert.equal(rows.mfa[0].plaintext_secret, 'TOTPSECRET');
 assert(!JSON.stringify(rows).includes('MUST_NOT_MIGRATE'));
 assert.equal(rows.entitlements.length, 2);
+assert.equal(buildLegacyRows(auth, { includeEntitlements: false }).entitlements.length, 0);
 assert.equal(rows.vaults.length, 1);
 
 const calls = [];
@@ -45,6 +46,7 @@ const seal = (plaintext, { aad }) => encryptSecretForStorage(plaintext, { key, k
   assert.equal(calls.at(-1).sql, 'COMMIT');
   assert(calls.some(call => call.sql.includes('ON CONFLICT(id) DO UPDATE')));
   assert(calls.some(call => call.sql.includes('ON CONFLICT(provider,provider_subject)')));
+  assert(calls.filter(call => call.sql.includes('INSERT INTO entitlements')).every(call => call.sql.includes('ON CONFLICT(id) DO NOTHING')));
 
   const providerCall = calls.find(call => call.sql.includes('INSERT INTO provider_identities'));
   assert(Buffer.isBuffer(providerCall.params[4]));
@@ -64,6 +66,15 @@ const seal = (plaintext, { aad }) => encryptSecretForStorage(plaintext, { key, k
   };
   await assert.rejects(() => importLegacyControlPlane(bad, auth, { encryptSecretForStorage: seal }), /db down/);
   assert.equal(badCalls.at(-1), 'ROLLBACK');
+
+  const readyCalls = [];
+  const ready = { async query(sql) {
+    readyCalls.push(String(sql));
+    return String(sql).includes('SELECT state FROM control_plane_cutovers') ? { rows: [{ state: 'READY' }] } : { rows: [] };
+  } };
+  await assert.rejects(() => importLegacyControlPlane(ready, auth, { encryptSecretForStorage: seal }), /refused after PostgreSQL cutover/);
+  assert.equal(readyCalls.at(-1), 'ROLLBACK');
+  assert.equal(readyCalls.some(sql => sql.includes('INSERT INTO entitlements')), false);
 
   assert.throws(() => buildLegacyRows({ users: [{ id: 'x', passwordHash: 'hash' }], sessions: {} }), /missing passwordSalt/);
   console.log('PASS legacy import executor: auth compatibility, encrypted secrets, idempotent SQL, rollback');

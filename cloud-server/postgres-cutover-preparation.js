@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseLegacyJson, snapshotManifest, planLegacyImport } = require('./legacy-import-plan');
+const { replaceLegacyEntitlementsForCutover } = require('./access-grant-store');
 const {
   CUTOVER_ID,
   replaceAuthSnapshot,
@@ -63,6 +64,7 @@ async function stagePostgresCutover(pool, { authRaw, persistentRaw, cryptoConfig
   await assertNoActiveReadyCutover(pool);
 
   await replaceAuthSnapshot(pool, validated.auth, cryptoConfig);
+  await replaceLegacyEntitlementsForCutover(pool, validated.auth);
   await replacePersistentSnapshot(pool, validated.persistent);
   const roundTripPlan = await validateRoundTrip(pool, { plan: validated.plan, cryptoConfig });
 
@@ -96,6 +98,7 @@ async function commitStagedPostgresCutover(pool, {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('beatgaler:legacy-entitlement-cutover'))");
     const staged = await client.query(
       'SELECT snapshot_sha256,plan_sha256,external_bundle_sha256 FROM control_plane_cutover_stages WHERE id=$1 FOR UPDATE',
       [CUTOVER_ID],

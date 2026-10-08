@@ -31,6 +31,7 @@ const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
+const accessGrants = require("./access-grant-runtime");
 const { hashPassword, verifyPassword } = require("./password-kdf");
 const { createUserStorageLifecycle } = require("./user-storage-lifecycle");
 
@@ -685,6 +686,19 @@ const linkedAccounts = new Map();
 const beatGalerUsers = new Map();       // normalized username -> user record
 const beatGalerUsersById = new Map();   // account id -> same record
 const authSessions = new Map();         // sha256(session token) -> session record
+accessGrants.setLegacyProjectionUpdater((userId, grant) => {
+  const user = beatGalerUsersById.get(userId);
+  if (!user) return;
+  const state = ensurePlanState(user);
+  if (state.grants.some(item => item.id === grant.id)) return;
+  state.grants.push({
+    id: grant.id,
+    planId: grant.plan_id,
+    source: grant.source,
+    startsAt: new Date(grant.starts_at).getTime(),
+    expiresAt: new Date(grant.expires_at).getTime(),
+  });
+});
 
 // telegram_file_id -> { beatgalerUserId, telegramMessageId, filename, createdAt }
 // Esto evita que un usuario descargue un file_id que no le pertenece.
@@ -1461,7 +1475,7 @@ app.get("/plans/me", (req, res) => {
 // Development-only simulated checkout. It deliberately changes the plan on the
 // server so Desktop/Web never learn to trust a client-side plan flag.
 app.post("/plans/dev-switch", (req, res) => {
-  if (process.env.BEATGALER_DEV_PLAN_SWITCH !== "1") {
+  if (process.env.BEATGALER_DEV_PLAN_SWITCH !== "1" || accessGrants.usesPostgresAccess()) {
     return res.status(404).json({ error: "Not available." });
   }
   const token = bearerToken(req);
@@ -1517,7 +1531,9 @@ app.post("/auth/register", async (req, res) => {
     storageCreatedAt: null,
     providers: {},
   };
-  ensurePlanState(user, { newAccount: true });
+  // PostgreSQL Access issues welcome only after verified email activation.
+  // The JSON legacy mode retains its existing development behavior.
+  ensurePlanState(user, { newAccount: !accessGrants.usesPostgresAccess() });
 
   beatGalerUsers.set(username, user);
   beatGalerUsersById.set(user.id, user);
@@ -1732,7 +1748,7 @@ app.get("/auth/oauth/:provider/callback", async (req, res) => {
           storageCreatedAt: null,
           providers: {},
         };
-        ensurePlanState(user, { newAccount: true });
+        ensurePlanState(user, { newAccount: !accessGrants.usesPostgresAccess() });
         beatGalerUsers.set(username, user);
         beatGalerUsersById.set(user.id, user);
       }
@@ -1750,6 +1766,9 @@ app.get("/auth/oauth/:provider/callback", async (req, res) => {
     if (provider === "x" && identity.username) setUserUsername(user, identity.username, "x");
     saveAuthData();
     await ensureUserStorage(user);
+    // A verified OAuth identity activates Access. The unique welcome grant is
+    // durable and idempotent across OAuth reconnects and retries.
+    await accessGrants.issueWelcomeAfterActivation(user.id);
     bindInstallationToBeatGalerUser(user, flow.beatgalerUserId);
     const token = flow.linkUserId ? null : createAuthSession(user.id);
     completedOAuthFlows.set(flow.flowId, { ok: true, userId: user.id, token, expiresAt: Date.now() + OAUTH_FLOW_TTL_MS });

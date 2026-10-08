@@ -155,6 +155,7 @@ function createAccountLifecycleRuntime({
   randomBytes = size => crypto.randomBytes(size),
   emailNotifier = null,
   getCapabilityStore = () => null,
+  onEmailVerified = null,
 } = {}) {
   const stateFile = path.join(dataDir, STATE_FILE_NAME);
   const accountsFile = path.join(dataDir, ACCOUNTS_FILE_NAME);
@@ -498,14 +499,27 @@ function createAccountLifecycleRuntime({
     });
   }
 
-  function confirmEmailVerification(req, res) {
-    const record = consumeToken(String(req?.body?.token || ''), 'email_verification');
+  async function confirmEmailVerification(req, res) {
+    const rawToken = String(req?.body?.token || '');
+    const record = consumeToken(rawToken, 'email_verification');
     if (!record) return res.status(400).json({ error: 'Verification link is invalid or expired.', code: 'EMAIL_VERIFICATION_INVALID' });
     const user = userById(record.user_id);
     if (!user || sha256(normalizeEmail(user.email)) !== record.email_hash || deletedUserIds.has(String(user.id))) {
       return res.status(400).json({ error: 'Verification link is invalid or expired.', code: 'EMAIL_VERIFICATION_INVALID' });
     }
     persisted.email_verified[String(user.id)] = { email_hash: record.email_hash, verified_at: new Date(now()).toISOString() };
+    saveState();
+    try {
+      if (typeof onEmailVerified === 'function') await onEmailVerified(String(user.id));
+    } catch {
+      // The token remains usable if Access could not durably issue welcome.
+      // A retry is safe because Access enforces one welcome per user.
+      const retry = { ...record };
+      delete retry.consumed_at;
+      persisted.tokens[sha256(rawToken)] = retry;
+      saveState();
+      return res.status(503).json({ error: 'Account verification could not be completed. Retry.', code: 'EMAIL_VERIFICATION_RETRY' });
+    }
     addNotification(String(user.id), 'email_verified');
     saveState();
     return res.json({ ok: true, verified: true });
@@ -804,7 +818,7 @@ function installAccountLifecycle(express, options = {}) {
     app.__beatgalerAccountLifecycleRoutesInstalling = true;
     try {
       app.post('/auth/email/verification/request', (req, res) => { void runtime._test.requestEmailVerification(req, res); });
-      app.post('/auth/email/verification/confirm', runtime._test.confirmEmailVerification);
+      app.post('/auth/email/verification/confirm', (req, res, next) => { void runtime._test.confirmEmailVerification(req, res).catch(next); });
       app.post('/auth/password/reset/request', (req, res) => { void runtime._test.requestPasswordReset(req, res); });
       app.post('/auth/password/reset/complete', (req, res) => { void runtime._test.completePasswordReset(req, res); });
       app.post('/auth/reauth', (req, res) => { void runtime._test.reauthenticate(req, res); });

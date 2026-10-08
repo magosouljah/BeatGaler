@@ -148,18 +148,18 @@ async function main() {
     const emailToken = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
     assert.equal(JSON.stringify(runtime._test.stateSnapshot()).includes(emailToken), false);
     const verifiedRes = makeRes();
-    runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), verifiedRes);
+    await runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), verifiedRes);
     assert.equal(verifiedRes.statusCode, 200);
     assert.equal(verifiedRes.body.verified, true);
     const again = makeRes();
-    runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), again);
+    await runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), again);
     assert.equal(again.statusCode, 400);
     assert.equal(runtime._test.publicStatusForUser(user).email_verified, true);
 
     const expired = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
     clock += 11 * 60 * 1000;
     const expiredRes = makeRes();
-    runtime._test.confirmEmailVerification(req({ body: { token: expired }, pathName: '/auth/email/verification/confirm' }), expiredRes);
+    await runtime._test.confirmEmailVerification(req({ body: { token: expired }, pathName: '/auth/email/verification/confirm' }), expiredRes);
     assert.equal(expiredRes.statusCode, 400);
     clock -= 11 * 60 * 1000;
   }

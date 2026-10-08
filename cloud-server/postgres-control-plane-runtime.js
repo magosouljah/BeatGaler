@@ -115,8 +115,10 @@ async function loadAuthSnapshot(pool, cryptoConfig) {
 
   const users = usersResult.rows.map(row => {
     const entitlements = entitlementsByUser.get(row.id) || [];
-    const base = entitlements.find(item => item.source === 'base_plan') || null;
-    const grants = entitlements.filter(item => item !== base).map(item => ({
+    const base = entitlements.find(item => item.source === 'base_plan' && !item.revoked_at) || null;
+    // This is a read-only compatibility projection for plans.js until STEP 2.
+    // Revoked Access grants must never be revived by the legacy plan reader.
+    const grants = entitlements.filter(item => item !== base && !item.revoked_at).map(item => ({
       id: item.id,
       planId: item.plan_id,
       source: item.source,
@@ -154,7 +156,7 @@ async function loadAuthSnapshot(pool, cryptoConfig) {
 }
 
 async function replaceAuthSnapshot(pool, authData, cryptoConfig) {
-  const rows = buildLegacyRows(authData);
+  const rows = buildLegacyRows(authData, { includeEntitlements: false });
   const encrypt = encryptionCallbacks(cryptoConfig).encrypt;
   const originalUsers = new Map((authData.users || []).map(user => [String(user.id), user]));
   const client = await pool.connect();
@@ -202,12 +204,6 @@ async function replaceAuthSnapshot(pool, authData, cryptoConfig) {
       [row.id,row.user_id,row.factor_type,encrypted.ciphertext,encrypted.nonce,encrypted.keyVersion,row.enabled]);
     }
 
-    await client.query('DELETE FROM entitlements');
-    for (const row of rows.entitlements) {
-      await client.query('INSERT INTO entitlements(id,user_id,plan_id,source,starts_at,expires_at) VALUES($1,$2,$3,$4,$5,$6)',
-        [row.id,row.user_id,row.plan_id,row.source,row.starts_at,row.expires_at]);
-    }
-
     for (const row of rows.vaults) {
       await client.query(`INSERT INTO vaults(id,user_id,telegram_chat_id,title,created_at,updated_at) VALUES($1,$2,$3,$4,$5,now())
         ON CONFLICT(user_id) DO UPDATE SET telegram_chat_id=EXCLUDED.telegram_chat_id,title=EXCLUDED.title,updated_at=now()`,
@@ -215,7 +211,9 @@ async function replaceAuthSnapshot(pool, authData, cryptoConfig) {
     }
 
     await client.query('COMMIT');
-    return Object.fromEntries(Object.entries(rows).map(([key, value]) => [key, value.length]));
+    return Object.fromEntries(Object.entries(rows)
+      .filter(([key]) => key !== 'entitlements')
+      .map(([key, value]) => [key, value.length]));
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

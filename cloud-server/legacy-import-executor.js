@@ -25,7 +25,7 @@ function assertStorageEnvelope(value, label) {
   return value;
 }
 
-function buildLegacyRows(authData) {
+function buildLegacyRows(authData, { includeEntitlements = true } = {}) {
   const users = [];
   const sessions = [];
   const providers = [];
@@ -73,24 +73,26 @@ function buildLegacyRows(authData) {
     }
     // pendingMfaSecret is intentionally not migrated: incomplete enrollment restarts after cutover.
 
-    const planState = user.planState || {};
-    entitlements.push({
-      id: deterministicId('ent', userId, 'base_plan'),
-      user_id: userId,
-      plan_id: planState.basePlanId || 'free',
-      source: 'base_plan',
-      starts_at: msToDate(user.createdAt) || new Date(0),
-      expires_at: null,
-    });
-    for (const grant of Array.isArray(planState.grants) ? planState.grants : []) {
+    if (includeEntitlements) {
+      const planState = user.planState || {};
       entitlements.push({
-        id: String(grant.id || deterministicId('ent', userId, grant.source, grant.planId, grant.startsAt, grant.expiresAt)),
+        id: deterministicId('ent', userId, 'base_plan'),
         user_id: userId,
-        plan_id: grant.planId,
-        source: grant.source || 'legacy_grant',
-        starts_at: msToDate(grant.startsAt) || new Date(0),
-        expires_at: msToDate(grant.expiresAt),
+        plan_id: planState.basePlanId || 'free',
+        source: 'base_plan',
+        starts_at: msToDate(user.createdAt) || new Date(0),
+        expires_at: null,
       });
+      for (const grant of Array.isArray(planState.grants) ? planState.grants : []) {
+        entitlements.push({
+          id: String(grant.id || deterministicId('ent', userId, grant.source, grant.planId, grant.startsAt, grant.expiresAt)),
+          user_id: userId,
+          plan_id: grant.planId,
+          source: grant.source || 'legacy_grant',
+          starts_at: msToDate(grant.startsAt) || new Date(0),
+          expires_at: msToDate(grant.expiresAt),
+        });
+      }
     }
 
     if (user.storageChatId != null) {
@@ -122,6 +124,8 @@ async function importLegacyControlPlane(client, authData, { encryptSecretForStor
   const rows = buildLegacyRows(authData);
   await client.query('BEGIN');
   try {
+    const cutover = await client.query("SELECT state FROM control_plane_cutovers WHERE id='legacy-json-v1' FOR UPDATE");
+    if (cutover.rows[0]?.state === 'READY') throw new Error('Legacy entitlement import is refused after PostgreSQL cutover.');
     for (const row of rows.users) {
       await client.query(`INSERT INTO users(id, username, username_source, email, password_hash, password_hash_algorithm, password_salt, created_at, updated_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8)
@@ -162,7 +166,7 @@ async function importLegacyControlPlane(client, authData, { encryptSecretForStor
 
     for (const row of rows.entitlements) {
       await client.query(`INSERT INTO entitlements(id,user_id,plan_id,source,starts_at,expires_at) VALUES($1,$2,$3,$4,$5,$6)
-        ON CONFLICT(id) DO UPDATE SET plan_id=EXCLUDED.plan_id, source=EXCLUDED.source, starts_at=EXCLUDED.starts_at, expires_at=EXCLUDED.expires_at`,
+        ON CONFLICT(id) DO NOTHING`,
       [row.id,row.user_id,row.plan_id,row.source,row.starts_at,row.expires_at]);
     }
 

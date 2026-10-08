@@ -26,6 +26,7 @@ const {
   loadAuthSnapshot,
   loadPersistentSnapshot,
 } = require('../postgres-control-plane-runtime.js');
+const { replaceLegacyEntitlementsForCutover } = require('../access-grant-store.js');
 
 function databaseUrl(base, database) {
   const url = new URL(base);
@@ -191,6 +192,7 @@ function raw(value) {
     assert.equal(committed.snapshotSha256, finalStage.snapshot.manifest_sha256);
     await assertCutoverReady(pool, finalStage.snapshot.manifest_sha256);
     await assert.rejects(() => assertCutoverReady(pool, 'f'.repeat(64)), /does not match/);
+    await assert.rejects(() => replaceLegacyEntitlementsForCutover(pool, finalAuth), /refused after PostgreSQL cutover/);
     const stageCountAfterCommit = await pool.query('SELECT count(*)::int n FROM control_plane_cutover_stages');
     assert.equal(stageCountAfterCommit.rows[0].n, 0);
 
@@ -231,7 +233,8 @@ function raw(value) {
     assert.equal(persistedAuth.users[0].email, 'after@example.com');
     assert.deepEqual(persistedAuth.users[0].providers || {}, {});
     assert.equal(persistedAuth.users[0].mfaSecret, undefined);
-    assert.equal(persistedAuth.users[0].planState.basePlanId, 'highest_paid');
+    assert.equal(persistedAuth.users[0].planState.basePlanId, 'paid_entry');
+    assert.deepEqual(persistedAuth.users[0].planState.grants.map(grant => grant.id), ['grant-cutover']);
     assert.equal(persistedAuth.sessions[sessionA], undefined);
     assert.equal(persistedAuth.sessions[sessionB].userId, 'usr_cutover_1');
     assert.equal(persistedState.pendingTopicDeletes['installation-cutover:beat-old'], undefined);
@@ -299,6 +302,7 @@ function raw(value) {
     console.log('PASS PostgreSQL staged cutover + final delta + rollback integration');
   } finally {
     if (pool) await pool.end().catch(() => {});
+    await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`).catch(() => {});
     await admin.end().catch(() => {});
     fs.rmSync(bundleRoot, { recursive: true, force: true });
   }
