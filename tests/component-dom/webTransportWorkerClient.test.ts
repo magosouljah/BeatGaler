@@ -139,6 +139,31 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     await expect(initialize).resolves.toBeUndefined();
   });
 
+  it("does not let a rejected older focus clear the newer same-message intent", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const older = client.focusPlayback(77, 41);
+    const worker = FakeWorker.instances[0];
+    const olderCommand = worker.postMessage.mock.calls.at(-1)?.[0];
+    const current = client.focusPlayback(77, 42);
+    const currentCommand = worker.postMessage.mock.calls.at(-1)?.[0];
+
+    worker.onmessage?.({ data: { requestId: olderCommand.requestId, ok: false, error: "old focus failed" } } as MessageEvent);
+    await expect(older).rejects.toThrow("old focus failed");
+    expect((client as any).playbackCritical).toBe(true);
+    expect((client as any).desiredPlaybackIntentId).toBe(42);
+
+    worker.onmessage?.({ data: { requestId: currentCommand.requestId, ok: true } } as MessageEvent);
+    await expect(current).resolves.toBeUndefined();
+    const stable = client.markPlaybackStable(77, 42);
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+      op: "playback_stable",
+      messageId: 77,
+      traceIntentId: 42,
+    });
+    worker.respond();
+    await expect(stable).resolves.toBeUndefined();
+  });
+
   it("correlates a foreground prefix request with its main-thread delivery", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {

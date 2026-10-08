@@ -133,8 +133,8 @@ export type WebTransportWorkerCommand = (
   | { requestId: string; op: "prefetch_batch"; input: WebTransportPrefetchBatchInput }
   | { requestId: string; op: "prefetch_batch_cancel"; targetRequestId: string; messageId?: number }
   | { requestId: string; op: "playback_focus"; messageId: number; traceIntentId?: number }
-  | { requestId: string; op: "playback_stable"; messageId: number }
-  | { requestId: string; op: "playback_release"; messageId: number }
+  | { requestId: string; op: "playback_stable"; messageId: number; traceIntentId?: number }
+  | { requestId: string; op: "playback_release"; messageId: number; traceIntentId?: number }
   | { requestId: string; op: "stream"; input: WebTransportStreamInput }
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }

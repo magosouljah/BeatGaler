@@ -356,21 +356,21 @@ describe("Web MASTER playback source", () => {
     await prepared.completed;
 
     expect(markPlaybackStable).not.toHaveBeenCalled();
-    expect(focusPlayback).toHaveBeenCalledWith(51);
+    expect(focusPlayback).toHaveBeenCalledWith(51, 1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
-    expect(markPlaybackStable).toHaveBeenCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenCalledWith(51, 1);
     expect(markPlaybackStable).toHaveBeenCalledTimes(1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: false, waiting: false });
-    expect(releasePlaybackFocus).toHaveBeenCalledWith(51);
+    expect(releasePlaybackFocus).toHaveBeenCalledWith(51, 1);
     expect(markPlaybackStable).toHaveBeenCalledTimes(1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
     expect(focusPlayback).toHaveBeenCalledTimes(3);
-    expect(focusPlayback).toHaveBeenLastCalledWith(51);
+    expect(focusPlayback).toHaveBeenLastCalledWith(51, 1);
     expect(markPlaybackStable).toHaveBeenCalledTimes(2);
-    expect(markPlaybackStable).toHaveBeenLastCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenLastCalledWith(51, 1);
   });
 
   it("stops retaining replay bytes at a zero cache budget without interrupting the active MSE stream", async () => {

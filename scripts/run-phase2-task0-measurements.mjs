@@ -100,6 +100,16 @@ async function postgresReadyCloud() {
   }
 }
 
+async function waitForCloudBeforeRun(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cloud?.exitCode !== null) return false;
+    if (await healthyCloud() && (await postgresReadyCloud()).ok) return true;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
 async function startCloud() {
   if (await healthyCloud()) throw new Error("Ya existe Cloud en :4000. Deténgalo: el protocolo debe arrancar Cloud desde este checkout.");
   await fs.access(cloudEnvFile).catch(() => { throw new Error("Falta cloud-server/.env para arrancar el Cloud PostgreSQL de Stage 1."); });
@@ -176,7 +186,7 @@ try {
     head: git("rev-parse", "HEAD"),
     source_sha256: await sourceFingerprint(),
     web_dist_sha256: null,
-    cloud_origin: "managed child process: node --env-file=.env cloud-server/server.js from this checkout",
+    cloud_origin: "managed child process: node --env-file=.env server.js with cwd=cloud-server from this checkout",
     node_version: process.version,
   };
   summary.identity = identity;
@@ -196,7 +206,7 @@ try {
     summary.status = "POSTGRES_DIRECT_VERIFIED";
   } else {
   for (let ordinal = 1; ordinal <= runCount; ordinal += 1) {
-    if (cloud.exitCode !== null || !(await healthyCloud()) || !(await postgresReadyCloud()).ok) throw new Error("Cloud/PostgreSQL no está disponible antes de la corrida.");
+    if (!(await waitForCloudBeforeRun())) throw new Error("Cloud/PostgreSQL no está disponible antes de la corrida.");
     if (git("rev-parse", "HEAD") !== identity.head || await sourceFingerprint() !== identity.source_sha256 || await directoryFingerprint(path.join(root, "dist")) !== identity.web_dist_sha256) {
       throw new Error("El código fuente o el build Web cambió entre corridas.");
     }

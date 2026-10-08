@@ -29,6 +29,7 @@ import type {
 } from "./webTransportWorkerProtocol";
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
+const WEB_TRANSPORT_INDEX_ACTIVE_TIMEOUT_MS = 90_000;
 const WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000;
 export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
 const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
@@ -485,7 +486,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       undefined,
       undefined,
       requestId,
-      this.bootstrapRequestTimeoutMs,
+      null,
+      undefined,
+      undefined,
+      WEB_TRANSPORT_INDEX_ACTIVE_TIMEOUT_MS,
     ).then(
       result => {
         finish();
@@ -571,10 +575,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     if (!Number.isSafeInteger(id) || id <= 0) return Promise.resolve();
     this.desiredPlaybackIntentId = traceIntentId ?? (this.desiredPlaybackMessageId === id ? this.desiredPlaybackIntentId : null);
     this.desiredPlaybackMessageId = id;
+    const requestedIntentId = this.desiredPlaybackIntentId;
     this.playbackCritical = true;
     this.preemptBackgroundStreams();
     return this.request<void>({ op: "playback_focus", messageId: id, traceIntentId }).catch(error => {
-      if (this.desiredPlaybackMessageId === id) {
+      if (this.desiredPlaybackMessageId === id && this.desiredPlaybackIntentId === requestedIntentId) {
         this.playbackCritical = false;
         this.releaseBackgroundResumeWaiters();
       }
@@ -582,21 +587,25 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     });
   }
 
-  markPlaybackStable(messageId: number): Promise<void> {
+  markPlaybackStable(messageId: number, traceIntentId?: number): Promise<void> {
     const id = Number(messageId || 0);
     if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
-    return this.request<void>({ op: "playback_stable", messageId: id }).then(() => {
-      if (this.desiredPlaybackMessageId === id) {
+    if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && this.desiredPlaybackIntentId !== Number(traceIntentId)) return Promise.resolve();
+    return this.request<void>({ op: "playback_stable", messageId: id, traceIntentId }).then(() => {
+      if (this.desiredPlaybackMessageId === id && (!traceIntentId || this.desiredPlaybackIntentId === traceIntentId)) {
         this.playbackCritical = false;
         this.releaseBackgroundResumeWaiters();
       }
     });
   }
 
-  releasePlaybackFocus(messageId: number): Promise<void> {
+  releasePlaybackFocus(messageId: number, traceIntentId?: number): Promise<void> {
     const id = Number(messageId || 0);
-    if (this.desiredPlaybackMessageId === id) { this.desiredPlaybackMessageId = null; this.desiredPlaybackIntentId = null; }
-    return this.request<void>({ op: "playback_release", messageId: id }).finally(() => {
+    if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
+    if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && this.desiredPlaybackIntentId !== Number(traceIntentId)) return Promise.resolve();
+    this.desiredPlaybackMessageId = null;
+    this.desiredPlaybackIntentId = null;
+    return this.request<void>({ op: "playback_release", messageId: id, traceIntentId }).finally(() => {
       if (this.desiredPlaybackMessageId === null) {
         this.playbackCritical = false;
         this.releaseBackgroundResumeWaiters();

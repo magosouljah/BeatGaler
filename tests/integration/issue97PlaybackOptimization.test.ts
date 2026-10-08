@@ -207,11 +207,11 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain('playbackSchedulerState === "PLAY_STABLE" ? 6 : dataLaneLimit');
     expect(playback).toContain("PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS = 2");
     expect(playback).toContain("bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime)");
-    expect(playback).toContain("this.transport.markPlaybackStable(entry.messageId)");
+    expect(playback).toContain("this.transport.markPlaybackStable(entry.messageId, entry.traceIntentId)");
     expect(playback).toContain("entry.playbackWaiting = Boolean(state.waiting)");
     expect(playback).toContain("const isActive = entry.playbackPlaying || entry.playbackWaiting");
     expect(playback).toContain('reason: entry.playbackWaiting ? "waiting" : "resume"');
-    expect(playback).toContain("this.transport.focusPlayback(entry.messageId)");
+    expect(playback).toContain("this.transport.focusPlayback(entry.messageId, entry.traceIntentId)");
   });
 
   it("keeps INDEX above WARM but below Play and makes the INDEX byte download abortable", () => {
@@ -235,7 +235,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     const initialize = controller.indexOf("await this.runtime.initialize(session, this.startupMessageIds)");
     const publish = controller.indexOf("this.session = session", initialize);
-    const background = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration)", publish);
+    const background = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration, activation?.membership || null)", publish);
     expect(initialize).toBeGreaterThanOrEqual(0);
     expect(publish).toBeGreaterThan(initialize);
     expect(background).toBeGreaterThan(publish);

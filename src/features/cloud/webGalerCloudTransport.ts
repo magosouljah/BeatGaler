@@ -116,6 +116,8 @@ export class WebGalerCloudTransport {
   private indexBarrier: () => Promise<void> = () => Promise.resolve();
   private indexReadPromise: Promise<WebTransportLibraryIndexResult> | null = null;
   private playbackCritical = false;
+  private playbackMessageId: number | null = null;
+  private playbackIntentId: number | null = null;
   private backgroundWaiters = new Set<() => void>();
 
   constructor(startupCandidates: readonly WebStartupWarmCandidate[] = []) {
@@ -161,23 +163,38 @@ export class WebGalerCloudTransport {
   }
 
   async focusPlayback(messageId: number, traceIntentId?: number): Promise<void> {
+    const intentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
+    this.playbackMessageId = messageId;
+    this.playbackIntentId = intentId;
     this.setPlaybackCritical(true);
     try {
       await this.worker.focusPlayback(messageId, traceIntentId);
     } catch (error) {
-      this.setPlaybackCritical(false);
+      if (this.playbackMessageId === messageId && this.playbackIntentId === intentId) {
+        this.playbackMessageId = null;
+        this.playbackIntentId = null;
+        this.setPlaybackCritical(false);
+      }
       throw error;
     }
   }
 
-  async markPlaybackStable(messageId: number): Promise<void> {
-    await this.worker.markPlaybackStable(messageId);
-    this.setPlaybackCritical(false);
+  async markPlaybackStable(messageId: number, traceIntentId?: number): Promise<void> {
+    const intentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
+    if (this.playbackMessageId !== messageId || this.playbackIntentId !== intentId) return;
+    await this.worker.markPlaybackStable(messageId, traceIntentId);
+    if (this.playbackMessageId === messageId && this.playbackIntentId === intentId) this.setPlaybackCritical(false);
   }
 
-  async releasePlaybackFocus(messageId: number): Promise<void> {
-    await this.worker.releasePlaybackFocus(messageId).catch(() => {});
-    this.setPlaybackCritical(false);
+  async releasePlaybackFocus(messageId: number, traceIntentId?: number): Promise<void> {
+    const intentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
+    if (this.playbackMessageId !== messageId || this.playbackIntentId !== intentId) return;
+    await this.worker.releasePlaybackFocus(messageId, traceIntentId).catch(() => {});
+    if (this.playbackMessageId === messageId && this.playbackIntentId === intentId) {
+      this.playbackMessageId = null;
+      this.playbackIntentId = null;
+      this.setPlaybackCritical(false);
+    }
   }
 
   private checkpointKey(input: { file: File; beatId: string; kind: string }): string {

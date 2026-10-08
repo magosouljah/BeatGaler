@@ -2606,7 +2606,8 @@ async function validatePlaybackFixtureIsolation(clients) {
 }
 
 async function installStage1RuntimeTraceCapture(client) {
-  await client.execute(() => {
+  const traceLimit = process.env.PLAYBACK_TEST_G_CAPTURE === "1" ? 1600 : 400;
+  await client.execute(limit => {
     if (window.__beatgalerStage1TraceCaptureInstalled) return;
     const originalInfo = console.info.bind(console);
     const originalError = console.error.bind(console);
@@ -2621,7 +2622,7 @@ async function installStage1RuntimeTraceCapture(client) {
         const line = args.map(value => typeof value === "string" ? value : JSON.stringify(value)).join(" ");
         if (line.includes("[play-trace]")) {
           const at = Date.now();
-          append(window.__beatgalerStage1PlayTraceLines, { at, line }, 400);
+          append(window.__beatgalerStage1PlayTraceLines, { at, line }, limit);
           const probe = window.__beatgalerStage1PlaybackProbe;
           if (probe?.beatId && line.includes('"stage":"CARD_PLAY_ACCEPTED"') &&
               line.includes(`"beat_id":"${probe.beatId}"`)) probe.clickAcceptedAt = at;
@@ -2646,7 +2647,7 @@ async function installStage1RuntimeTraceCapture(client) {
       }, 100);
     });
     window.__beatgalerStage1TraceCaptureInstalled = true;
-  });
+  }, traceLimit);
 }
 
 async function stage1RuntimeDiagnosticsSnapshot(client) {
@@ -2750,6 +2751,10 @@ async function playbackProbeSnapshot(client) {
       max_current_time: events.reduce((max, event) => Math.max(max, Number(event.current_time) || 0), 0),
       playing_seen: playingEvents.length > 0,
       first_playing_at: playingEvents[0]?.at || null,
+      first_audio_playing_at: playingEvents[0]?.at || null,
+      first_progress_gt_0_at: events.find(event => event.playing && event.current_time > 0)?.at || null,
+      first_progress_ge_0_1_at: events.find(event => event.playing && event.current_time >= 0.1)?.at || null,
+      first_progress_ge_0_5_at: events.find(event => event.playing && event.current_time >= 0.5)?.at || null,
       waiting_seen: events.some(event => event.waiting),
       last: events.at(-1) || null,
       recent_events: events.slice(-30),
@@ -3103,12 +3108,17 @@ async function runPhase2Task0Conditions({ clients, before }) {
       });
       const clickedAt = Date.now();
       await artwork.click();
+      const clickReturnedAt = Date.now();
       const playback = await waitForPlaybackProgress(client, account, clickedAt);
+      if (process.env.PLAYBACK_TEST_G_CAPTURE === "1") {
+        playback.play_trace = await client.execute(() => Array.isArray(window.__beatgalerStage1PlayTraceLines)
+          ? window.__beatgalerStage1PlayTraceLines.slice(-1600) : []);
+      }
       assert.ok(Number(playback.first_playing_at) >= clickedAt,
         `Account ${account.label} playback timestamp did not follow its Play click.`);
       const browserTrace = process.env.PLAYBACK_GET_FILE_CAPTURE === "1"
         ? (await client.getLogs("browser").catch(() => []))
-          .filter(entry => /\[play-trace\].*"stage":"(?:WORKER_GET_FILE_|WORKER_PREFIX_|WORKER_MEDIA_|WORKER_PLAYBACK_|WORKER_PREFETCH_|WORKER_WARM_|WORKER_DATA_LANE_|WORKER_STREAM_|WARM_|PLAY_WARM_)/.test(String(entry.message || "")))
+          .filter(entry => /\[play-trace\].*"stage":"(?:WORKER_GET_FILE_|WORKER_GET_MESSAGES_|WORKER_TRANSPORT_SOCKET_|WORKER_PREFIX_|WORKER_MEDIA_|WORKER_PLAYBACK_|WORKER_PREFETCH_|WORKER_WARM_|WORKER_DATA_LANE_|WORKER_STREAM_|WARM_|PLAY_WARM_)/.test(String(entry.message || "")))
           .map(entry => ({ at: entry.timestamp, line: String(entry.message || "") }))
         : undefined;
       return {
@@ -3116,6 +3126,13 @@ async function runPhase2Task0Conditions({ clients, before }) {
         round,
         library_ready_at_ms: reloaded[index].ready_at_ms,
         clicked_at_ms: clickedAt,
+        ...(process.env.PLAYBACK_TEST_G_CAPTURE === "1" ? {
+          webdriver_click_returned_at_ms: clickReturnedAt,
+          first_audio_playing_at_ms: playback.first_audio_playing_at,
+          first_progress_gt_0_at_ms: playback.first_progress_gt_0_at,
+          first_progress_ge_0_1_at_ms: playback.first_progress_ge_0_1_at,
+          first_progress_ge_0_5_at_ms: playback.first_progress_ge_0_5_at,
+        } : {}),
         first_playing_at_ms: playback.first_playing_at,
         progress_seconds: playback.max_current_time,
         beat_id: beat.beat_id,

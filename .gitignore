@@ -67,6 +67,14 @@ patches/*
 !patches/@fuman+io+0.0.21.patch
 .regression-build/
 
+# Local Phase 2 measurements (the reviewed summaries live in RESULTS.md)
+/tests/playback-c/traces/
+/tests/playback-d/traces/
+/tests/playback-d/analysis.json
+/tests/playback-e/traces/
+/tests/playback-e/analysis.json
+/tests/playback-g/timelines.json
+
 # Telegram Direct backend runtime/secrets
 cloud-server/masters.local.json
 cloud-server/vault-registry.json

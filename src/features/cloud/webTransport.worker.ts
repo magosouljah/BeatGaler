@@ -91,6 +91,25 @@ type PlaybackMediaBatchResolution = {
   resolved: Map<number, ResolvedPlaybackMedia>;
   missing: Map<number, Error>;
 };
+type PendingPlaybackMedia = {
+  generation: number;
+  promise: Promise<ResolvedPlaybackMedia>;
+  resolve(value: ResolvedPlaybackMedia): void;
+  reject(error: unknown): void;
+};
+type CachedPlaybackRange = { bytes: Uint8Array; lastUsedAt: number };
+type SharedPlaybackRange = {
+  key: string;
+  generation: number;
+  messageId: number;
+  offsetBytes: number;
+  limit: number;
+  priority: DataLanePriority;
+  controller: AbortController;
+  consumers: Set<string>;
+  settled: boolean;
+  promise: Promise<Uint8Array>;
+};
 
 type WarmState = "queued" | "active" | "preempted" | "ready" | "failed";
 type BatchPrefetchState = {
@@ -121,6 +140,7 @@ type PrefetchBatchControl = {
   maxConcurrency: number;
 };
 type DataLanePriority = "foreground" | "warm";
+type DataLaneWaiter = { resolve(): void; priority: DataLanePriority; messageId: number | null };
 type PlaybackSchedulerState = "IDLE" | "PLAY_CRITICAL" | "PLAY_STABLE";
 type IndexAbortReason = "play" | "warm" | "cancel";
 
@@ -1357,18 +1377,23 @@ let transportStorageBotId = "";
 let knownIndexPointer: { messageId: number | null; revision: number | null } = { messageId: null, revision: null };
 const activeStreams = new Map<string, { controller: AbortController; acknowledge: (() => void) | null }>();
 const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
-const activeWarmTransfers = new Map<number, AbortController>();
+const activeWarmTransfers = new Map<number, Set<AbortController>>();
 const playbackMediaCache = new Map<number, CachedPlaybackMedia>();
 const playbackMediaMissingCache = new Map<number, WorkerTransportError>();
+const pendingPlaybackMedia = new Map<number, PendingPlaybackMedia>();
+const pendingPlaybackRanges = new Map<string, SharedPlaybackRange>();
+const playbackRangeCache = new Map<string, CachedPlaybackRange>();
 const MAX_PLAYBACK_MEDIA_CACHE_ENTRIES = 256;
+const MAX_PLAYBACK_RANGE_CACHE_ENTRIES = 128;
 const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
 const MAX_CONFIGURABLE_DATA_LANES = 16;
 const STARTUP_MEDIA_BATCH_RETRY_DELAY_MS = 70;
 
 let activeDataLanes = 0;
 let dataLaneLimit = WEB_PLAYBACK_DATA_LANES;
-const foregroundLaneWaiters: Array<() => void> = [];
-const warmLaneWaiters: Array<() => void> = [];
+const foregroundLaneWaiters: DataLaneWaiter[] = [];
+const warmLaneWaiters: DataLaneWaiter[] = [];
+let playbackResourceGeneration = 0;
 let playbackSchedulerState: PlaybackSchedulerState = "IDLE";
 let playbackMessageId: number | null = null;
 let playbackIntentId: number | null = null;
@@ -1399,7 +1424,17 @@ function configureDataLaneLimit(value: unknown): number {
 
 function wakeNextDataLane(): void {
   const next = foregroundLaneWaiters.shift() || warmLaneWaiters.shift();
-  next?.();
+  next?.resolve();
+}
+
+function promoteDataLaneWaiters(messageId: number): void {
+  for (let index = warmLaneWaiters.length - 1; index >= 0; index -= 1) {
+    const waiter = warmLaneWaiters[index];
+    if (waiter.messageId !== messageId) continue;
+    warmLaneWaiters.splice(index, 1);
+    waiter.priority = "foreground";
+    foregroundLaneWaiters.unshift(waiter);
+  }
 }
 
 type PlaybackFetchTrace = { requestId?: string; messageId?: number; traceIntentId?: number; source: "foreground_prefetch" | "warm_batch" | "stream" | "startup_media" };
@@ -1425,11 +1460,19 @@ function focusedBatchTraceFields(messageIds: readonly number[]): Record<string, 
 
 async function withDataLane<T>(operation: () => Promise<T>, priority: DataLanePriority = "foreground", trace?: PlaybackFetchTrace): Promise<T> {
   const started = performance.now();
+  const generation = playbackResourceGeneration;
   if (activeDataLanes >= dataLaneLimit) {
     if (trace) playTrace("WORKER_DATA_LANE_WAIT_BEGIN", { ...playbackTraceFields(trace), priority, active_lanes: activeDataLanes, lane_limit: dataLaneLimit });
     await new Promise<void>(resolve => {
-      (priority === "foreground" ? foregroundLaneWaiters : warmLaneWaiters).push(resolve);
+      (priority === "foreground" ? foregroundLaneWaiters : warmLaneWaiters).push({
+        resolve,
+        priority,
+        messageId: trace?.messageId ?? null,
+      });
     });
+  }
+  if (generation !== playbackResourceGeneration) {
+    throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud playback session changed.");
   }
   activeDataLanes += 1;
   const acquiredAt = performance.now();
@@ -1437,9 +1480,11 @@ async function withDataLane<T>(operation: () => Promise<T>, priority: DataLanePr
   try {
     return await operation();
   } finally {
-    activeDataLanes -= 1;
-    if (trace) playTrace("WORKER_DATA_LANE_RELEASED", { ...playbackTraceFields(trace), priority, held_ms: Math.round((performance.now() - acquiredAt) * 10) / 10, active_lanes: activeDataLanes });
-    wakeNextDataLane();
+    if (generation === playbackResourceGeneration) {
+      activeDataLanes = Math.max(0, activeDataLanes - 1);
+      if (trace) playTrace("WORKER_DATA_LANE_RELEASED", { ...playbackTraceFields(trace), priority, held_ms: Math.round((performance.now() - acquiredAt) * 10) / 10, active_lanes: activeDataLanes });
+      wakeNextDataLane();
+    }
   }
 }
 
@@ -1536,6 +1581,13 @@ function assertBoundTempPrimarySession(next: TelegramClient, sessionId: BoundTem
 }
 
 async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
+  playbackResourceGeneration += 1;
+  const invalidated = new WorkerTransportError("SESSION_INVALID", "Galer Cloud playback session changed.");
+  for (const pending of pendingPlaybackMedia.values()) pending.reject(invalidated);
+  pendingPlaybackMedia.clear();
+  for (const range of pendingPlaybackRanges.values()) range.controller.abort();
+  pendingPlaybackRanges.clear();
+  playbackRangeCache.clear();
   playbackGetFileTrace?.detach();
   playbackGetFileTrace = null;
   detachMtprotoPingSocketRecovery?.();
@@ -1573,8 +1625,8 @@ async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
   cancelledIndexRequests.clear();
   playbackMediaCache.clear();
   playbackMediaMissingCache.clear();
-  foregroundLaneWaiters.splice(0).forEach(resolve => resolve());
-  warmLaneWaiters.splice(0).forEach(resolve => resolve());
+  foregroundLaneWaiters.splice(0).forEach(waiter => waiter.resolve());
+  warmLaneWaiters.splice(0).forEach(waiter => waiter.resolve());
   activeDataLanes = 0;
   dataLaneLimit = WEB_PLAYBACK_DATA_LANES;
   playbackSchedulerState = "IDLE";
@@ -1675,18 +1727,81 @@ async function getMessagesBatchWithRetry(
   throw lastError || new Error("Galer Cloud could not resolve playback media.");
 }
 
+function createPendingPlaybackMedia(generation: number): PendingPlaybackMedia {
+  let resolve!: (value: ResolvedPlaybackMedia) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<ResolvedPlaybackMedia>((resolveValue, rejectValue) => {
+    resolve = resolveValue;
+    reject = rejectValue;
+  });
+  // A session replacement can invalidate the entry before a joining caller
+  // observes it. Keep that rejection owned by the coordinator as well.
+  void promise.catch(() => {});
+  return { generation, promise, resolve, reject };
+}
+
+async function resolveNewPlaybackMedia(
+  active: TelegramClient,
+  targetChatId: number,
+  messageIds: number[],
+  entries: Map<number, PendingPlaybackMedia>,
+  generation: number,
+  trace?: PlaybackFetchTrace,
+): Promise<void> {
+  try {
+    const messages = await getMessagesBatchWithRetry(active, targetChatId, messageIds, trace);
+    if (generation !== playbackResourceGeneration || client !== active || chatId !== targetChatId) {
+      throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud playback session changed.");
+    }
+    const byId = new Map<number, Awaited<ReturnType<TelegramClient["getMessages"]>>[number]>();
+    for (const message of messages) {
+      const id = Number(message?.id || 0);
+      if (Number.isSafeInteger(id) && id > 0) byId.set(id, message);
+    }
+    for (const messageId of messageIds) {
+      const pending = entries.get(messageId)!;
+      const message = byId.get(messageId);
+      if (!message) {
+        const error = new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
+        playbackMediaMissingCache.set(messageId, error);
+        pending.reject(error);
+        continue;
+      }
+      try {
+        const value = resolvedMediaFromMessage(message);
+        playbackMediaMissingCache.delete(messageId);
+        touchPlaybackMedia(messageId, { media: value.media, totalBytes: value.totalBytes, mimeType: value.sourceMime });
+        pending.resolve(value);
+      } catch (error) {
+        const failure = error instanceof WorkerTransportError
+          ? error
+          : new WorkerTransportError("MEDIA_UNAVAILABLE", error instanceof Error ? error.message : String(error));
+        playbackMediaMissingCache.set(messageId, failure);
+        pending.reject(failure);
+      }
+    }
+  } catch (error) {
+    for (const pending of entries.values()) pending.reject(error);
+  } finally {
+    for (const [messageId, pending] of entries) {
+      if (pendingPlaybackMedia.get(messageId) === pending) pendingPlaybackMedia.delete(messageId);
+    }
+  }
+}
+
 async function resolvePlaybackMediaBatch(
   active: TelegramClient,
   targetChatId: number,
   rawMessageIds: readonly number[],
-  publishCache = true,
   trace?: PlaybackFetchTrace,
 ): Promise<PlaybackMediaBatchResolution> {
   const resolveStarted = performance.now();
   const messageIds = Array.from(new Set(rawMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0)));
   const resolved = new Map<number, ResolvedPlaybackMedia>();
   const missing = new Map<number, Error>();
-  const misses: number[] = [];
+  const waits = new Map<number, Promise<ResolvedPlaybackMedia>>();
+  const fresh = new Map<number, PendingPlaybackMedia>();
+  const generation = playbackResourceGeneration;
   for (const messageId of messageIds) {
     const cached = cachedPlaybackMedia(messageId);
     if (cached) {
@@ -1700,40 +1815,33 @@ async function resolvePlaybackMediaBatch(
       playTrace("WORKER_PLAYBACK_MEDIA_NEGATIVE_CACHE_HIT", { message_id: messageId, code: negative.code });
       continue;
     }
-    misses.push(messageId);
+    const existing = pendingPlaybackMedia.get(messageId);
+    if (existing?.generation === generation) {
+      waits.set(messageId, existing.promise);
+      playTrace("WORKER_PLAYBACK_MEDIA_PENDING_JOIN", { message_id: messageId, ...(trace ? playbackTraceFields({ ...trace, messageId }) : {}) });
+      continue;
+    }
+    const pending = createPendingPlaybackMedia(generation);
+    pendingPlaybackMedia.set(messageId, pending);
+    fresh.set(messageId, pending);
+    waits.set(messageId, pending.promise);
     if (trace?.source === "warm_batch") playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { ...playbackTraceFields({ ...trace, messageId }), message_id: messageId });
   }
-  if (trace) playTrace("WORKER_MEDIA_RESOLVE_CACHE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, hits: resolved.size, negative_hits: missing.size, misses: misses.length });
-  if (misses.length === 0) {
+  if (trace) playTrace("WORKER_MEDIA_RESOLVE_CACHE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, hits: resolved.size, negative_hits: missing.size, misses: waits.size, joined: waits.size - fresh.size });
+  if (waits.size === 0) {
     if (trace) playTrace("WORKER_MEDIA_RESOLVE_DONE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, resolved: resolved.size, missing: missing.size, elapsed_ms: Math.round((performance.now() - resolveStarted) * 10) / 10 });
     return { resolved, missing };
   }
-  const messages = await getMessagesBatchWithRetry(active, targetChatId, misses, trace);
-  const byId = new Map<number, Awaited<ReturnType<TelegramClient["getMessages"]>>[number]>();
-  for (const message of messages) {
-    const id = Number(message?.id || 0);
-    if (Number.isSafeInteger(id) && id > 0) byId.set(id, message);
-  }
-  for (const messageId of misses) {
-    const message = byId.get(messageId);
-    if (!message) {
-      const error = new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
-      missing.set(messageId, error);
-      playbackMediaMissingCache.set(messageId, error);
-      continue;
-    }
-    try {
-      const value = resolvedMediaFromMessage(message);
-      resolved.set(messageId, value);
-      playbackMediaMissingCache.delete(messageId);
-      if (publishCache) touchPlaybackMedia(messageId, { media: value.media, totalBytes: value.totalBytes, mimeType: value.sourceMime });
-    } catch (error) {
-      const failure = error instanceof WorkerTransportError
-        ? error
-        : new WorkerTransportError("MEDIA_UNAVAILABLE", error instanceof Error ? error.message : String(error));
-      missing.set(messageId, failure);
-      playbackMediaMissingCache.set(messageId, failure);
-    }
+  if (fresh.size > 0) void resolveNewPlaybackMedia(active, targetChatId, [...fresh.keys()], fresh, generation, trace);
+  const settled = await Promise.all([...waits].map(async ([messageId, promise]): Promise<
+    { messageId: number; value: ResolvedPlaybackMedia } | { messageId: number; error: Error }
+  > => {
+    try { return { messageId, value: await promise }; }
+    catch (error) { return { messageId, error: error instanceof Error ? error : new Error(String(error)) }; }
+  }));
+  for (const result of settled) {
+    if ("value" in result) resolved.set(result.messageId, result.value);
+    else missing.set(result.messageId, result.error);
   }
   if (trace) playTrace("WORKER_MEDIA_RESOLVE_DONE", { ...playbackTraceFields(trace), ...focusedBatchTraceFields(messageIds), message_ids: messageIds, resolved: resolved.size, missing: missing.size, elapsed_ms: Math.round((performance.now() - resolveStarted) * 10) / 10 });
   return { resolved, missing };
@@ -1745,7 +1853,7 @@ async function resolvePlaybackMedia(active: TelegramClient, messageId: number, t
   const negative = cachedMissingPlaybackMedia(messageId);
   if (negative) throw negative;
   playTrace("WORKER_PLAYBACK_MEDIA_CACHE_MISS", { message_id: messageId, ...(trace ? playbackTraceFields(trace) : {}) });
-  const batch = await resolvePlaybackMediaBatch(active, chatId, [messageId], true, trace);
+  const batch = await resolvePlaybackMediaBatch(active, chatId, [messageId], trace);
   const resolved = batch.resolved.get(messageId);
   if (resolved) return resolved;
   throw batch.missing.get(messageId) || new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
@@ -1842,7 +1950,10 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
           ...mtprotoConnectionSnapshot(next),
         });
       });
-      nextPlaybackGetFileTrace = installPlaybackGetFileTrace(next);
+      nextPlaybackGetFileTrace = installPlaybackGetFileTrace(next, {
+        focusedMessageId: import.meta.env.VITE_PLAYBACK_TEST_G_CAPTURE === "1"
+          ? () => Number(import.meta.env.VITE_PLAYBACK_TEST_G_MESSAGE_ID) || playbackMessageId : undefined,
+      });
       endConnectTrace();
       stage1Trace(command.requestId, "WORKER_MTPROTO_CONNECT_END", mtprotoConnectionSnapshot(next));
       playTrace("DIRECT_MTPROTO_READY", { elapsed_ms: Date.now() - started });
@@ -1931,7 +2042,7 @@ async function warmStartupPlaybackMedia(active: TelegramClient, ids: readonly nu
     // Foreground playback keeps priority over this speculative vector.
     await waitUntilIndexPriorityAllowed();
     if (client !== active || !vaultVerified) return;
-    const mediaResult = await resolvePlaybackMediaBatch(active, chatId, ids, false);
+    const mediaResult = await resolvePlaybackMediaBatch(active, chatId, ids, { source: "startup_media" });
     if (client !== active || !vaultVerified) return;
     for (const [messageId, value] of mediaResult.resolved) {
       touchPlaybackMedia(messageId, { media: value.media, totalBytes: value.totalBytes, mimeType: value.sourceMime });
@@ -2175,10 +2286,12 @@ function preemptWarmTransfersForIndex(): void {
     cancelPrefetchBatch(control.requestId);
   }
   let aborted = 0;
-  for (const controller of activeWarmTransfers.values()) {
-    if (!controller.signal.aborted) {
-      controller.abort();
-      aborted += 1;
+  for (const controllers of activeWarmTransfers.values()) {
+    for (const controller of controllers) {
+      if (!controller.signal.aborted) {
+        controller.abort();
+        aborted += 1;
+      }
     }
   }
   if (batches || aborted) {
@@ -2497,6 +2610,153 @@ function playbackChunkLimit(desiredBytes: number): number {
   return Math.ceil(desired / 4096) * 4096;
 }
 
+function playbackRangeKey(messageId: number, offsetBytes: number, limit: number): string {
+  return `${messageId}:${offsetBytes}:${limit}`;
+}
+
+function cachedPlaybackRange(key: string): Uint8Array | null {
+  const cached = playbackRangeCache.get(key);
+  if (!cached) return null;
+  playbackRangeCache.delete(key);
+  return cached.bytes.slice();
+}
+
+function storePlaybackRange(key: string, bytes: Uint8Array): void {
+  playbackRangeCache.delete(key);
+  playbackRangeCache.set(key, { bytes: bytes.slice(), lastUsedAt: Date.now() });
+  while (playbackRangeCache.size > MAX_PLAYBACK_RANGE_CACHE_ENTRIES) {
+    const oldest = playbackRangeCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    playbackRangeCache.delete(oldest);
+  }
+}
+
+function abortUnownedPlaybackRanges(messageId?: number): void {
+  for (const range of pendingPlaybackRanges.values()) {
+    if (messageId !== undefined && range.messageId !== messageId) continue;
+    if (range.consumers.size === 0 && playbackMessageId !== range.messageId) range.controller.abort();
+  }
+}
+
+function promotePlaybackRanges(messageId: number): void {
+  promoteDataLaneWaiters(messageId);
+  for (const range of pendingPlaybackRanges.values()) {
+    if (range.messageId !== messageId || range.priority === "foreground") continue;
+    range.priority = "foreground";
+    playTrace("WORKER_PLAYBACK_RANGE_PROMOTED", {
+      message_id: messageId,
+      offset_bytes: range.offsetBytes,
+      limit_bytes: range.limit,
+      intent_id: playbackIntentId,
+    });
+  }
+}
+
+function startSharedPlaybackRange(
+  active: TelegramClient,
+  resolved: ResolvedPlaybackMedia,
+  messageId: number,
+  offsetBytes: number,
+  limit: number,
+  priority: DataLanePriority,
+  trace: PlaybackFetchTrace,
+): SharedPlaybackRange {
+  const generation = playbackResourceGeneration;
+  const key = playbackRangeKey(messageId, offsetBytes, limit);
+  const operation: SharedPlaybackRange = {
+    key,
+    generation,
+    messageId,
+    offsetBytes,
+    limit,
+    priority,
+    controller: new AbortController(),
+    consumers: new Set<string>(),
+    settled: false,
+    promise: Promise.resolve(new Uint8Array()),
+  };
+  pendingPlaybackRanges.set(key, operation);
+  operation.promise = withDataLane(async () => {
+    const downloadStarted = performance.now();
+    playTrace("WORKER_PREFIX_DOWNLOAD_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, limit_bytes: limit, shared: true, connection: playbackConnectionSnapshot(active) });
+    try {
+      const result = await (playbackGetFileTrace?.run(operation.controller.signal, () => playbackTraceFields(trace),
+        () => active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit, abortSignal: operation.controller.signal }))
+        ?? active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit, abortSignal: operation.controller.signal }));
+      if (generation !== playbackResourceGeneration || client !== active) {
+        throw new WorkerTransportError("SESSION_INVALID", "Galer Cloud playback session changed.");
+      }
+      if (result.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback range.");
+      const stored = result.slice();
+      storePlaybackRange(key, stored);
+      playTrace("WORKER_PREFIX_DOWNLOAD_DONE", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: stored.byteLength, shared: true, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
+      return stored;
+    } catch (error) {
+      playTrace("WORKER_PREFIX_DOWNLOAD_ERROR", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, shared: true, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, aborted: operation.controller.signal.aborted, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
+      throw error;
+    }
+  }, priority, trace).finally(() => {
+    operation.settled = true;
+    if (pendingPlaybackRanges.get(key) === operation) pendingPlaybackRanges.delete(key);
+  });
+  void operation.promise.catch(() => {});
+  return operation;
+}
+
+async function consumeSharedPlaybackRange(
+  active: TelegramClient,
+  resolved: ResolvedPlaybackMedia,
+  messageId: number,
+  offsetBytes: number,
+  limit: number,
+  priority: DataLanePriority,
+  trace: PlaybackFetchTrace,
+  consumerId: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const key = playbackRangeKey(messageId, offsetBytes, limit);
+  const cached = cachedPlaybackRange(key);
+  if (cached) {
+    playTrace("WORKER_PLAYBACK_RANGE_CACHE_HIT", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, limit_bytes: limit, bytes: cached.byteLength });
+    return cached;
+  }
+  let operation = pendingPlaybackRanges.get(key);
+  if (!operation || operation.generation !== playbackResourceGeneration) {
+    operation = startSharedPlaybackRange(active, resolved, messageId, offsetBytes, limit, priority, trace);
+  } else {
+    playTrace("WORKER_PLAYBACK_RANGE_PENDING_JOIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, limit_bytes: limit, owner_count: operation.consumers.size });
+  }
+  operation.consumers.add(consumerId);
+  if (priority === "foreground" && operation.priority !== "foreground") {
+    operation.priority = "foreground";
+    promoteDataLaneWaiters(messageId);
+  }
+  if (signal?.aborted) {
+    operation.consumers.delete(consumerId);
+    abortUnownedPlaybackRanges(messageId);
+    throw new DOMException("Playback range consumer cancelled.", "AbortError");
+  }
+  return await new Promise<Uint8Array>((resolve, reject) => {
+    let finished = false;
+    const detach = () => {
+      if (finished) return;
+      finished = true;
+      signal?.removeEventListener("abort", onAbort);
+      operation!.consumers.delete(consumerId);
+      abortUnownedPlaybackRanges(messageId);
+    };
+    const onAbort = () => {
+      detach();
+      reject(new DOMException("Playback range consumer cancelled.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    operation!.promise.then(
+      bytes => { if (!finished) { detach(); resolve(bytes.slice()); } },
+      error => { if (!finished) { detach(); reject(error); } },
+    );
+  });
+}
+
 async function prefetch(requestId: string, input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
   const started = Date.now();
   const active = requireReady();
@@ -2511,21 +2771,7 @@ async function prefetch(requestId: string, input: WebTransportPrefetchInput): Pr
   const remaining = resolved.totalBytes > 0 ? Math.max(0, resolved.totalBytes - offsetBytes) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
   const desired = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, remaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
   const limit = playbackChunkLimit(desired);
-  const diagnosticSignal = new AbortController().signal;
-  const bytes = await withDataLane(async () => {
-    const downloadStarted = performance.now();
-    playTrace("WORKER_PREFIX_DOWNLOAD_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, limit_bytes: limit, connection: playbackConnectionSnapshot(active) });
-    try {
-      const result = await (playbackGetFileTrace?.run(diagnosticSignal, () => playbackTraceFields(trace),
-        () => active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit, abortSignal: diagnosticSignal }))
-        ?? active.downloadChunk({ location: resolved.media, offset: offsetBytes, limit }));
-      playTrace("WORKER_PREFIX_DOWNLOAD_DONE", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: result.byteLength, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
-      return result;
-    } catch (error) {
-      playTrace("WORKER_PREFIX_DOWNLOAD_ERROR", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
-      throw error;
-    }
-  }, "foreground", trace);
+  const bytes = await consumeSharedPlaybackRange(active, resolved, messageId, offsetBytes, limit, "foreground", trace, `prefetch:${requestId}`);
   if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
   const prefix = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const mimeType = downloadMime(input.mimeType || resolved.sourceMime);
@@ -2605,7 +2851,7 @@ async function resolveBatchStates(requestId: string, active: TelegramClient, sta
   if (valid.length === 0) return;
   let batch: PlaybackMediaBatchResolution;
   try {
-    batch = await resolvePlaybackMediaBatch(active, chatId, valid.map(state => state.messageId), true, { requestId, source: "warm_batch" });
+    batch = await resolvePlaybackMediaBatch(active, chatId, valid.map(state => state.messageId), { requestId, source: "warm_batch" });
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     for (const state of valid) {
@@ -2690,24 +2936,23 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
   const controller = new AbortController();
   state.controller = controller;
   state.warmState = "active";
-  activeWarmTransfers.set(state.messageId, controller);
+  const warmControllers = activeWarmTransfers.get(state.messageId) || new Set<AbortController>();
+  warmControllers.add(controller);
+  activeWarmTransfers.set(state.messageId, warmControllers);
   const promoted = playbackSchedulerState === "PLAY_CRITICAL" && playbackMessageId === state.messageId;
   try {
     const active = requireConnected();
-    const bytes = await withDataLane(async () => {
-      const downloadStarted = performance.now();
-      playTrace("WORKER_PREFIX_DOWNLOAD_BEGIN", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, limit_bytes: limit, promoted, connection: playbackConnectionSnapshot(active) });
-      try {
-        const result = await (playbackGetFileTrace?.run(controller.signal, () => playbackTraceFields(trace),
-          () => active.downloadChunk({ location: state.media!, offset: absoluteOffset, limit, abortSignal: controller.signal }))
-          ?? active.downloadChunk({ location: state.media!, offset: absoluteOffset, limit, abortSignal: controller.signal }));
-        playTrace("WORKER_PREFIX_DOWNLOAD_DONE", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, bytes: result.byteLength, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
-        return result;
-      } catch (error) {
-        playTrace("WORKER_PREFIX_DOWNLOAD_ERROR", { ...playbackTraceFields(trace), offset_bytes: absoluteOffset, elapsed_ms: Math.round((performance.now() - downloadStarted) * 10) / 10, aborted: controller.signal.aborted, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
-        throw error;
-      }
-    }, promoted ? "foreground" : "warm", trace);
+    const bytes = await consumeSharedPlaybackRange(
+      active,
+      { media: state.media!, totalBytes: state.totalBytes, mimeType: state.mimeType, sourceMime: state.mimeType, cacheHit: true },
+      state.messageId,
+      absoluteOffset,
+      limit,
+      promoted ? "foreground" : "warm",
+      trace,
+      `warm:${requestId}:${state.messageId}`,
+      controller.signal,
+    );
     if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty playback prefix.");
     const stored = bytes.slice();
     state.chunks = [stored];
@@ -2752,7 +2997,9 @@ async function downloadStartupPrefix(requestId: string, state: BatchPrefetchStat
       postPrefetchTerminal(requestId, state, "FAILED", state.errorCode, state.error.message);
     }
   } finally {
-    if (activeWarmTransfers.get(state.messageId) === controller) activeWarmTransfers.delete(state.messageId);
+    const controllers = activeWarmTransfers.get(state.messageId);
+    controllers?.delete(controller);
+    if (controllers?.size === 0) activeWarmTransfers.delete(state.messageId);
     if (state.controller === controller) state.controller = null;
     notifyScheduler();
   }
@@ -2860,38 +3107,52 @@ function cancelPrefetchBatch(targetRequestId: string, messageId?: number): { can
 function playbackFocus(messageId: number, traceIntentId?: number): { focused: boolean } {
   const id = Number(messageId || 0);
   if (!Number.isSafeInteger(id) || id <= 0) return { focused: false };
+  const previousMessageId = playbackMessageId;
   playbackIntentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : (playbackMessageId === id ? playbackIntentId : null);
   playbackSchedulerState = "PLAY_CRITICAL";
   playbackMessageId = id;
   playTrace("WORKER_PLAYBACK_FOCUS", { message_id: id, intent_id: playbackIntentId });
   preemptActiveIndex("play");
   let aborted = 0;
-  for (const [activeId, controller] of activeWarmTransfers) {
+  for (const [activeId, controllers] of activeWarmTransfers) {
     if (activeId === id) continue;
-    controller.abort();
-    aborted += 1;
+    for (const controller of controllers) {
+      controller.abort();
+      aborted += 1;
+    }
   }
   for (const control of activePrefetchBatches.values()) moveFocusedTargetToFront(control, id);
+  promotePlaybackRanges(id);
+  if (previousMessageId !== null && previousMessageId !== id) abortUnownedPlaybackRanges(previousMessageId);
   playTrace("PLAY_WARM_PREEMPT_ALL", { message_id: id, aborted });
   notifyScheduler();
   return { focused: true };
 }
 
-function playbackStable(messageId: number): { stable: boolean } {
+function playbackStable(messageId: number, traceIntentId?: number): { stable: boolean } {
   const id = Number(messageId || 0);
   if (playbackMessageId !== id) return { stable: false };
+  if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && playbackIntentId !== Number(traceIntentId)) {
+    playTrace("WORKER_PLAYBACK_STALE_STABLE_IGNORED", { message_id: id, intent_id: traceIntentId, current_intent_id: playbackIntentId });
+    return { stable: false };
+  }
   playbackSchedulerState = "PLAY_STABLE";
   playTrace("WARM_RESUME", { lanes: 6, message_id: id });
   notifyScheduler();
   return { stable: true };
 }
 
-function playbackRelease(messageId: number): { released: boolean } {
+function playbackRelease(messageId: number, traceIntentId?: number): { released: boolean } {
   const id = Number(messageId || 0);
   if (playbackMessageId !== id) return { released: false };
+  if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && playbackIntentId !== Number(traceIntentId)) {
+    playTrace("WORKER_PLAYBACK_STALE_RELEASE_IGNORED", { message_id: id, intent_id: traceIntentId, current_intent_id: playbackIntentId });
+    return { released: false };
+  }
   playbackMessageId = null;
   playbackIntentId = null;
   playbackSchedulerState = "IDLE";
+  abortUnownedPlaybackRanges(id);
   playTrace("WARM_RESUME", { lanes: dataLaneLimit });
   notifyScheduler();
   return { released: true };
@@ -2917,39 +3178,53 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
   activeStreams.set(requestId, state);
   let downloadedBytes = offsetBytes;
   let transferredBytes = 0;
-  let firstChunkLogged = false;
-  const iterator = active.downloadAsIterable(media, {
-    abortSignal: controller.signal,
-    stallTimeout: 20_000,
-    partSize: WEB_PLAYBACK_FIRST_CHUNK_KB,
-    offset: offsetBytes,
-  })[Symbol.asyncIterator]();
+  let iterator: AsyncIterator<Uint8Array> | null = null;
   playTrace("PLAY_STREAM_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes });
   try {
+    const firstRemaining = totalBytes > 0 ? Math.max(0, totalBytes - downloadedBytes) : WEB_PLAYBACK_FIRST_CHUNK_BYTES;
+    const firstDesired = Math.min(WEB_PLAYBACK_FIRST_CHUNK_BYTES, firstRemaining || WEB_PLAYBACK_FIRST_CHUNK_BYTES);
+    if (firstDesired > 0) {
+      const limit = playbackChunkLimit(firstDesired);
+      playTrace("WORKER_STREAM_FIRST_READ_BEGIN", { ...playbackTraceFields(trace), offset_bytes: downloadedBytes, connection: playbackConnectionSnapshot(active) });
+      const readStarted = performance.now();
+      const chunk = await consumeSharedPlaybackRange(
+        active,
+        resolved,
+        messageId,
+        downloadedBytes,
+        limit,
+        "foreground",
+        trace,
+        `stream:${requestId}`,
+        controller.signal,
+      );
+      playTrace("WORKER_STREAM_FIRST_READ_DONE", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: chunk.byteLength, elapsed_ms: Math.round((performance.now() - readStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
+      downloadedBytes += chunk.byteLength;
+      transferredBytes += chunk.byteLength;
+      playTrace("PLAY_STREAM_FIRST_CHUNK", { ...playbackTraceFields(trace), elapsed_ms: Date.now() - started, bytes: chunk.byteLength, offset_bytes: offsetBytes });
+      const transferable = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+      playTrace("WORKER_STREAM_FIRST_POST_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: transferable.byteLength });
+      scope.postMessage({ requestId, event: "download-chunk", chunk: transferable, downloadedBytes, totalBytes: totalBytes || downloadedBytes }, [transferable]);
+      await new Promise<void>(resolve => { state.acknowledge = resolve; });
+      state.acknowledge = null;
+    }
+    if (totalBytes > 0 && downloadedBytes >= totalBytes) return { messageId, totalBytes, mimeType };
+    iterator = active.downloadAsIterable(media, {
+      abortSignal: controller.signal,
+      stallTimeout: 20_000,
+      partSize: WEB_PLAYBACK_FIRST_CHUNK_KB,
+      offset: downloadedBytes,
+    })[Symbol.asyncIterator]();
     while (true) {
       if (controller.signal.aborted) throw new DOMException("Playback stream cancelled.", "AbortError");
       const next = await withDataLane(async () => {
-        if (!firstChunkLogged) playTrace("WORKER_STREAM_FIRST_READ_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, connection: playbackConnectionSnapshot(active) });
-        const readStarted = performance.now();
-        try {
-          const value = await iterator.next();
-          if (!firstChunkLogged) playTrace("WORKER_STREAM_FIRST_READ_DONE", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: value.done ? 0 : value.value.byteLength, elapsed_ms: Math.round((performance.now() - readStarted) * 10) / 10, connection: playbackConnectionSnapshot(active) });
-          return value;
-        } catch (error) {
-          if (!firstChunkLogged) playTrace("WORKER_STREAM_FIRST_READ_ERROR", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, elapsed_ms: Math.round((performance.now() - readStarted) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown", connection: playbackConnectionSnapshot(active) });
-          throw error;
-        }
-      }, "foreground", firstChunkLogged ? undefined : trace);
+        return await iterator!.next();
+      }, "foreground");
       if (next.done) break;
       const chunk = next.value;
       downloadedBytes += chunk.byteLength;
       transferredBytes += chunk.byteLength;
-      if (!firstChunkLogged) {
-        firstChunkLogged = true;
-        playTrace("PLAY_STREAM_FIRST_CHUNK", { ...playbackTraceFields(trace), elapsed_ms: Date.now() - started, bytes: chunk.byteLength, offset_bytes: offsetBytes });
-      }
       const transferable = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
-      if (firstChunkLogged && transferredBytes === chunk.byteLength) playTrace("WORKER_STREAM_FIRST_POST_BEGIN", { ...playbackTraceFields(trace), offset_bytes: offsetBytes, bytes: transferable.byteLength });
       scope.postMessage({ requestId, event: "download-chunk", chunk: transferable, downloadedBytes, totalBytes: totalBytes || downloadedBytes }, [transferable]);
       await new Promise<void>(resolve => { state.acknowledge = resolve; });
       state.acknowledge = null;
@@ -2958,7 +3233,7 @@ async function stream(requestId: string, input: WebTransportStreamInput): Promis
     return { messageId, totalBytes: totalBytes || downloadedBytes, mimeType };
   } finally {
     activeStreams.delete(requestId);
-    if (typeof iterator.return === "function") await iterator.return().catch(() => {});
+    if (typeof iterator?.return === "function") await iterator.return().catch(() => {});
   }
 }
 
@@ -3020,8 +3295,8 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "prefetch_batch": return prefetchBatch(command.requestId, command.input);
     case "prefetch_batch_cancel": return cancelPrefetchBatch(command.targetRequestId, command.messageId);
     case "playback_focus": return playbackFocus(command.messageId, command.traceIntentId);
-    case "playback_stable": return playbackStable(command.messageId);
-    case "playback_release": return playbackRelease(command.messageId);
+    case "playback_stable": return playbackStable(command.messageId, command.traceIntentId);
+    case "playback_release": return playbackRelease(command.messageId, command.traceIntentId);
     case "stream": return stream(command.requestId, command.input);
     case "stream_ack": return acknowledgeStream(command.targetRequestId);
     case "cancel": return cancelStream(command.targetRequestId);

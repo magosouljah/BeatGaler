@@ -8,6 +8,7 @@ const transport = vi.hoisted(() => {
   const projectMedia = { type: "document", mimeType: "application/zip", fileSize: 5 };
   let pinnedId = 501;
   let missingPinnedReads = 0;
+  let indexMessageAvailable = true;
   let peerAvailable = true;
   let clientOptions: any = null;
   let lastClient: any = null;
@@ -114,7 +115,7 @@ const transport = vi.hoisted(() => {
     });
     getMessages = vi.fn(async (_vault: unknown, ids: number[]) => {
       if (!peerAvailable) throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
-      return ids.map(id => id === 501
+      return ids.map(id => id === 501 && indexMessageAvailable
       ? { id, text: "BEATGALER_LIBRARY_INDEX_V1", media: indexMedia }
       : id === 601
         ? { id, text: "", media: artworkMedia }
@@ -132,9 +133,10 @@ const transport = vi.hoisted(() => {
           trash: [],
         }))
       : new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
-    downloadAsIterable = vi.fn(async function* () {
-      yield new Uint8Array([1, 2]);
-      yield new Uint8Array([3, 4, 5]);
+    downloadChunk = vi.fn(async () => new Uint8Array([1, 2]));
+    iterHistory = vi.fn(async function* () {});
+    downloadAsIterable = vi.fn(async function* (_media: unknown, options: { offset?: number }) {
+      if ((options?.offset || 0) < 5) yield new Uint8Array([3, 4, 5]);
     });
     sendMedia = sendMedia;
     pinMessage = pinMessage;
@@ -151,8 +153,9 @@ const transport = vi.hoisted(() => {
     sendMedia,
     pinMessage,
     deleteMessagesById,
-    resetPinned: () => { pinnedId = 501; missingPinnedReads = 0; },
+    resetPinned: () => { pinnedId = 501; missingPinnedReads = 0; indexMessageAvailable = true; },
     delayPinnedReads: (count: number) => { missingPinnedReads = Math.max(0, count); },
+    setIndexMessageAvailable: (value: boolean) => { indexMessageAvailable = value; },
     setPeerAvailable: (value: boolean) => { peerAvailable = value; },
     isPeerAvailable: () => peerAvailable,
     MtPeerNotFoundError,
@@ -328,6 +331,7 @@ describe("Galer Cloud single-file Web Worker", () => {
 
   it("never turns a missing pinned index into an authoritative empty gallery", async () => {
     transport.delayPinnedReads(10);
+    transport.setIndexMessageAvailable(false);
     const messages = await send({ requestId: "get-index-still-missing", op: "get_index" }, 2500);
 
     expect(messages.find(message => message.ok === true)).toBeUndefined();

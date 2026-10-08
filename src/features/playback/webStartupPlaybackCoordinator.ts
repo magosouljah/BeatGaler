@@ -65,8 +65,10 @@ export class WebStartupPlaybackCoordinator {
   private warmSettled = false;
   private listeningForInvalidation = false;
   private currentPlaybackMessageId: number | null = null;
+  private currentPlaybackIntentId: number | null = null;
   private readonly onTransportInvalidated = () => {
     this.currentPlaybackMessageId = null;
+    this.currentPlaybackIntentId = null;
     playTrace("SOURCE_SESSION_INVALIDATED");
     this.sources.releaseAll();
   };
@@ -77,8 +79,8 @@ export class WebStartupPlaybackCoordinator {
       prefetchFile: input => this.transport.prefetchFile(input),
       prefetchFiles: (inputs, onChunk, onTerminal) => this.transport.prefetchFiles(inputs, onChunk, onTerminal),
       focusPlayback: (messageId, traceIntentId) => this.beginPlayback(messageId, traceIntentId),
-      markPlaybackStable: messageId => this.markPlaybackStable(messageId),
-      releasePlaybackFocus: messageId => this.endPlayback(messageId),
+      markPlaybackStable: (messageId, traceIntentId) => this.markPlaybackStable(messageId, traceIntentId),
+      releasePlaybackFocus: (messageId, traceIntentId) => this.endPlayback(messageId, traceIntentId),
       streamFile: (input, onChunk) => this.transport.streamFile(input, onChunk),
     };
     this.sources = new WebPlaybackSourceManager(coordinatedTransport);
@@ -157,11 +159,12 @@ export class WebStartupPlaybackCoordinator {
       stale_message_id: staleMessageId,
       current_message_id: current,
     });
-    await this.transport.focusPlayback(current);
+    await this.transport.focusPlayback(current, this.currentPlaybackIntentId ?? undefined);
   }
 
   async beginPlayback(messageId: number, traceIntentId?: number): Promise<void> {
     this.currentPlaybackMessageId = messageId;
+    this.currentPlaybackIntentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
     playTrace("PLAY_FOCUS_BEGIN", { message_id: messageId, intent_id: traceIntentId ?? null });
     const startup = this.start();
     void startup.catch(error => playTrace("PLAY_DIRECT_START_DEFERRED", {
@@ -171,21 +174,27 @@ export class WebStartupPlaybackCoordinator {
     try {
       await this.transport.focusPlayback(messageId, traceIntentId);
     } catch (error) {
-      if (this.currentPlaybackMessageId === messageId) this.currentPlaybackMessageId = null;
+      if (this.currentPlaybackMessageId === messageId && this.currentPlaybackIntentId === (traceIntentId ?? null)) {
+        this.currentPlaybackMessageId = null;
+        this.currentPlaybackIntentId = null;
+      }
       throw error;
     }
   }
 
-  async markPlaybackStable(messageId: number): Promise<void> {
+  async markPlaybackStable(messageId: number, traceIntentId?: number): Promise<void> {
     if (this.currentPlaybackMessageId !== messageId) return;
-    await this.transport.markPlaybackStable(messageId);
+    if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && this.currentPlaybackIntentId !== Number(traceIntentId)) return;
+    await this.transport.markPlaybackStable(messageId, traceIntentId);
     await this.restoreCurrentFocusAfter(messageId);
   }
 
-  async endPlayback(messageId: number): Promise<void> {
+  async endPlayback(messageId: number, traceIntentId?: number): Promise<void> {
     if (this.currentPlaybackMessageId !== messageId) return;
+    if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && this.currentPlaybackIntentId !== Number(traceIntentId)) return;
     this.currentPlaybackMessageId = null;
-    await this.transport.releasePlaybackFocus(messageId);
+    this.currentPlaybackIntentId = null;
+    await this.transport.releasePlaybackFocus(messageId, traceIntentId);
     await this.restoreCurrentFocusAfter(messageId);
   }
 
@@ -199,6 +208,7 @@ export class WebStartupPlaybackCoordinator {
 
   dispose(): void {
     this.currentPlaybackMessageId = null;
+    this.currentPlaybackIntentId = null;
     if (this.listeningForInvalidation && typeof window !== "undefined") {
       window.removeEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, this.onTransportInvalidated);
       this.listeningForInvalidation = false;

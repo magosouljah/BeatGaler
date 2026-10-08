@@ -1,8 +1,8 @@
 import { playTrace } from "../playback/playTrace";
 import { traceClock } from "../perf/traceClock";
 
-type TraceOperation = { fields: () => Record<string, unknown>; rpcSequence: number };
-type TraceRpc = { operation: TraceOperation; rpcSequence: number; sentCount: number };
+type TraceOperation = { fields: () => Record<string, unknown>; rpcSequence: number; kind: "file" | "messages" };
+type TraceRpc = { operation: TraceOperation; rpcSequence: number; sentCount: number; pending?: any; physicalOrdinal?: number };
 type AnyFunction = (...args: any[]) => any;
 type SocketIngress = { firstAtMs: number | null; lastAtMs: number | null; messageCount: number; frameDecodedAtMs: number; frameBytes: number };
 
@@ -16,17 +16,27 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
 }
 
+function isGetMessages(request: { _?: string }): boolean {
+  return request?._ === "channels.getMessages" || request?._ === "messages.getMessages";
+}
+
+function safeMsgId(value: unknown): string | null {
+  return typeof value === "bigint" || typeof value === "number" ? String(value) : null;
+}
+
 /**
- * Read-only probes for mtcute's upload.getFile path. The AbortSignal passed to
- * downloadChunk is also passed to core.call and SessionConnection.sendRpc, so
- * concurrent downloads can be attributed without guessing by offset or file id.
+ * Read-only probes for mtcute's upload.getFile path and opt-in getMessages batches.
+ * The AbortSignal passed to downloadChunk is also passed to core.call and
+ * SessionConnection.sendRpc, so concurrent downloads can be attributed without
+ * guessing by offset or file id. Metadata batches use the original request object.
  * No location, auth material, request body or response body is logged.
  */
-export function installPlaybackGetFileTrace(active: unknown): {
+export function installPlaybackGetFileTrace(active: unknown, options?: { focusedMessageId?: () => number | null }): {
   run<T>(signal: AbortSignal, fields: () => Record<string, unknown>, operation: () => Promise<T>): Promise<T>;
   detach(): void;
 } {
   const operations = new WeakMap<AbortSignal, TraceOperation>();
+  const messagesByRequest = new WeakMap<object, TraceOperation>();
   const rpcByPending = new WeakMap<object, TraceRpc>();
   const restores: Array<() => void> = [];
   const observedConnections = new WeakSet<object>();
@@ -36,12 +46,29 @@ export function installPlaybackGetFileTrace(active: unknown): {
   let enabled = true;
   let hookedConnections = 0;
   let activeOperations = 0;
+  let nextMessagesBatchId = 0;
+  let nextSocketOrdinal = 0;
+
+  const messagesOperation = (request: { _?: string; id?: Array<{ id?: number }> }): TraceOperation | null => {
+    if (!options?.focusedMessageId) return null;
+    const existing = messagesByRequest.get(request);
+    if (existing) return existing;
+    const ids = Array.isArray(request.id) ? request.id.map(value => Number(value?.id)).filter(Number.isSafeInteger) : [];
+    const focused = options?.focusedMessageId?.();
+    if (typeof focused !== "number" || !Number.isSafeInteger(focused) || !ids.includes(focused)) return null;
+    const batchId = ++nextMessagesBatchId;
+    const operation: TraceOperation = { kind: "messages", rpcSequence: 0,
+      fields: () => ({ batch_id: batchId, rpc_method: request._, message_ids: ids, message_id: ids.length === 1 ? ids[0] : null }) };
+    messagesByRequest.set(request, operation);
+    return operation;
+  };
 
   const emit = (stage: string, rpc: TraceRpc | TraceOperation, extra: Record<string, unknown> = {}) => {
     if (!enabled) return;
     try {
       const operation = "operation" in rpc ? rpc.operation : rpc;
-      playTrace(stage, { ...operation.fields(), rpc_seq: "operation" in rpc ? rpc.rpcSequence : null, ...extra });
+      playTrace(operation.kind === "messages" ? stage.replace(/^WORKER_GET_FILE_/, "WORKER_GET_MESSAGES_") : stage,
+        { ...operation.fields(), rpc_seq: "operation" in rpc ? rpc.rpcSequence : null, ...extra });
     } catch { /* Observation must not affect playback. */ }
   };
   const observeConnection = (connection: any) => {
@@ -66,12 +93,17 @@ export function installPlaybackGetFileTrace(active: unknown): {
     let framedBytes = 0;
     let incomingSegments: Array<{ start: number; end: number; atMs: number }> = [];
     let currentSocket: object | null = null;
+    let currentSocketId: string | null = null;
+    let physicalOrdinal = 0;
+    let previousPhysicalRpcAt = 0;
     let rawMessageCount = 0;
 
     const observeSocket = (transport: any) => {
       const socket: WebSocket | undefined = transport?.socket;
       if (!socket || currentSocket === socket) return;
       currentSocket = socket;
+      currentSocketId = `${String(connection._uid ?? "connection")}:socket-${++nextSocketOrdinal}`;
+      if (options?.focusedMessageId) playTrace("WORKER_TRANSPORT_SOCKET_OBSERVED", { connection_uid: connection._uid ?? null, socket_id: currentSocketId });
       socketReceivedBytes = 0;
       framedBytes = 0;
       incomingSegments = [];
@@ -86,7 +118,7 @@ export function installPlaybackGetFileTrace(active: unknown): {
         socketReceivedBytes += bytes.byteLength;
         incomingSegments.push({ start, end: socketReceivedBytes, atMs: receivedAtMs });
         if (activeOperations) playTrace("WORKER_GET_FILE_WEBSOCKET_MESSAGE", {
-          connection_uid: connection._uid ?? null,
+          connection_uid: connection._uid ?? null, socket_id: currentSocketId,
           message_seq: rawMessageCount,
           received_bytes: bytes.byteLength,
           received_total_bytes: socketReceivedBytes,
@@ -112,13 +144,13 @@ export function installPlaybackGetFileTrace(active: unknown): {
         const matched = index < 0 ? null : encodedPackets.splice(index, 1)[0];
         const bufferedBefore = socket.bufferedAmount;
         for (const { rpc, sendCount } of matched?.rpcs || []) emit("WORKER_GET_FILE_WEBSOCKET_SEND_CALLED", rpc, {
-          send_count: sendCount, connection_uid: connection._uid ?? null,
+          send_count: sendCount, connection_uid: connection._uid ?? null, socket_id: currentSocketId,
           buffered_amount_before: bufferedBefore, encoded_bytes: bytes?.byteLength ?? null,
         });
         try {
           const result = originalSocketSend.call(this, data);
           for (const { rpc, sendCount } of matched?.rpcs || []) emit("WORKER_GET_FILE_WEBSOCKET_SEND_RETURNED", rpc, {
-            send_count: sendCount, connection_uid: connection._uid ?? null,
+            send_count: sendCount, connection_uid: connection._uid ?? null, socket_id: currentSocketId,
             buffered_amount_after: socket.bufferedAmount,
           });
           return result;
@@ -180,20 +212,31 @@ export function installPlaybackGetFileTrace(active: unknown): {
     }
 
     connection._enqueueRpc = function (this: unknown, pending: object, ...args: unknown[]) {
-      if (enqueueContext && pending && typeof pending === "object") rpcByPending.set(pending, enqueueContext);
+      if (enqueueContext && pending && typeof pending === "object") {
+        rpcByPending.set(pending, enqueueContext);
+        enqueueContext.pending = pending;
+      }
       const result = originalEnqueue.call(this, pending, ...args);
       const rpc = pending && typeof pending === "object" ? rpcByPending.get(pending) : undefined;
       if (rpc) emit("WORKER_GET_FILE_RPC_QUEUED", rpc, {
         queued_after: Number(connection._session?.queuedRpc?.length || 0),
+        rpc_msg_id: safeMsgId((pending as { msgId?: unknown })?.msgId),
         retry: !enqueueContext,
       });
       return result;
     };
     connection.sendRpc = function (this: unknown, request: { _?: string }, timeout: unknown, signal: AbortSignal | undefined, ...args: unknown[]) {
-      const operation = signal && operations.get(signal);
-      if (!operation || request?._ !== "upload.getFile") return originalSendRpc.call(this, request, timeout, signal, ...args);
+      const operation = request?._ === "upload.getFile" ? signal && operations.get(signal)
+        : isGetMessages(request) ? messagesOperation(request) : undefined;
+      if (!operation) return originalSendRpc.call(this, request, timeout, signal, ...args);
       const rpc: TraceRpc = { operation, rpcSequence: ++operation.rpcSequence, sentCount: 0 };
-      emit("WORKER_GET_FILE_CONNECTION_RPC_BEGIN", rpc, { queued_before: Number(connection._session?.queuedRpc?.length || 0), connection_usable: Boolean(connection._usable) });
+      emit("WORKER_GET_FILE_CONNECTION_RPC_BEGIN", rpc, {
+        queued_before: Number(connection._session?.queuedRpc?.length || 0),
+        in_flight_before: Number(connection._session?.pendingMessages?.size || 0),
+        connection_usable: Boolean(connection._usable),
+        connection_uid: connection._uid ?? null,
+        dc_id: network?._primaryDc?.dcId ?? null,
+      });
       const previous = enqueueContext;
       enqueueContext = rpc;
       let result: Promise<unknown>;
@@ -243,9 +286,23 @@ export function installPlaybackGetFileTrace(active: unknown): {
         const selected = flushRpcs?.slice() || [];
         if (selected.length && data && typeof data === "object") packetRpcs.set(data, selected);
         for (const rpc of selected) {
+          const now = performance.now();
+          rpc.physicalOrdinal = ++physicalOrdinal;
+          emit("WORKER_GET_FILE_MT_PROTO_FLUSH", rpc, {
+            physical_rpc_ordinal: rpc.physicalOrdinal,
+            rpc_msg_id: safeMsgId(rpc.pending?.msgId),
+            in_flight_rpc_count: Number(connection._session?.pendingMessages?.size || 0),
+            since_previous_physical_rpc_ms: previousPhysicalRpcAt ? Math.round((now - previousPhysicalRpcAt) * 10) / 10 : null,
+            connection_uid: connection._uid ?? null,
+            socket_id: currentSocketId,
+          });
+          previousPhysicalRpcAt = now;
           rpc.sentCount += 1;
           emit("WORKER_GET_FILE_SOCKET_SEND_CALLED", rpc, {
             send_count: rpc.sentCount,
+            physical_rpc_ordinal: rpc.physicalOrdinal,
+            rpc_msg_id: safeMsgId(rpc.pending?.msgId),
+            socket_id: currentSocketId,
             writer_present: Boolean(connection._writer),
             queued_packets_before: Number(connection._sendOnceConnected?.length || 0),
           });
@@ -282,6 +339,9 @@ export function installPlaybackGetFileTrace(active: unknown): {
           const rpc = pending?.rpc && rpcByPending.get(pending.rpc);
           if (rpc) emit("WORKER_GET_FILE_RPC_RESULT_ENTER", rpc, {
             send_count: rpc.sentCount,
+            physical_rpc_ordinal: rpc.physicalOrdinal ?? null,
+            rpc_msg_id: reqId,
+            acked: pending?.acked ?? null,
             response_frame_ts_ms: frameReceivedAtMs,
             frame_decode_ms: frameReceivedAtMs === null ? null : Math.round((traceClock().ts_ms - frameReceivedAtMs) * 10) / 10,
             websocket_message_ts_ms: frameSocketIngress?.lastAtMs ?? null,
@@ -290,6 +350,7 @@ export function installPlaybackGetFileTrace(active: unknown): {
             framed_decode_ts_ms: frameSocketIngress?.frameDecodedAtMs ?? null,
             response_frame_bytes: frameSocketIngress?.frameBytes ?? null,
             connection_uid: connection._uid ?? null,
+            socket_id: currentSocketId,
             rpc_error: reader.dataView.getUint32(reader.pos + 8, true) === 558156313,
           });
         } catch { /* A diagnostic lookup must not interrupt result handling. */ }
@@ -333,24 +394,33 @@ export function installPlaybackGetFileTrace(active: unknown): {
   };
   if (typeof core?.call === "function") {
     const original: AnyFunction = core.call;
-    core.call = function (this: unknown, request: { _?: string; offset?: number; limit?: number }, params?: { abortSignal?: AbortSignal }, ...args: unknown[]) {
-      const operation = params?.abortSignal && operations.get(params.abortSignal);
-      if (!operation || request?._ !== "upload.getFile") return original.call(this, request, params, ...args);
+    core.call = function (this: unknown, request: { _?: string; offset?: number; limit?: number; id?: Array<{ id?: number }> }, params?: { abortSignal?: AbortSignal }, ...args: unknown[]) {
+      const operation = request?._ === "upload.getFile" ? params?.abortSignal && operations.get(params.abortSignal)
+        : isGetMessages(request) ? messagesOperation(request) : undefined;
+      if (!operation) return original.call(this, request, params, ...args);
+      if (operation.kind === "messages") activeOperations += 1;
       emit("WORKER_GET_FILE_CALL_ENTER", operation, { offset_bytes: request.offset, limit_bytes: request.limit });
       const started = performance.now();
-      const result = original.call(this, request, params, ...args);
+      let result: Promise<unknown>;
+      try { result = original.call(this, request, params, ...args); }
+      catch (error) {
+        emit("WORKER_GET_FILE_CALL_ERROR", operation, { elapsed_ms: Math.round((performance.now() - started) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown" });
+        if (operation.kind === "messages") activeOperations -= 1;
+        throw error;
+      }
       return Promise.resolve(result).then(
-        value => { emit("WORKER_GET_FILE_CALL_DONE", operation, { elapsed_ms: Math.round((performance.now() - started) * 10) / 10 }); return value; },
-        error => { emit("WORKER_GET_FILE_CALL_ERROR", operation, { elapsed_ms: Math.round((performance.now() - started) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown" }); throw error; },
+        value => { emit("WORKER_GET_FILE_CALL_DONE", operation, { elapsed_ms: Math.round((performance.now() - started) * 10) / 10 }); if (operation.kind === "messages") activeOperations -= 1; return value; },
+        error => { emit("WORKER_GET_FILE_CALL_ERROR", operation, { elapsed_ms: Math.round((performance.now() - started) * 10) / 10, error_name: error instanceof Error ? error.name : "unknown" }); if (operation.kind === "messages") activeOperations -= 1; throw error; },
       );
     };
     restores.push(() => { core.call = original; });
   }
   if (typeof network?._call === "function") {
     const original: AnyFunction = network._call;
-    network._call = function (this: unknown, request: { _?: string }, params?: { abortSignal?: AbortSignal; dcId?: number }, ...args: unknown[]) {
-      const operation = params?.abortSignal && operations.get(params.abortSignal);
-      if (operation && request?._ === "upload.getFile") {
+    network._call = function (this: unknown, request: { _?: string; id?: Array<{ id?: number }> }, params?: { abortSignal?: AbortSignal; dcId?: number }, ...args: unknown[]) {
+      const operation = request?._ === "upload.getFile" ? params?.abortSignal && operations.get(params.abortSignal)
+        : isGetMessages(request) ? messagesOperation(request) : undefined;
+      if (operation) {
         refreshConnections();
         emit("WORKER_GET_FILE_MIDDLEWARE_PASSED", operation, {
           target_dc_known: !params?.dcId || network._dcConnections?.has?.(params.dcId) === true,
@@ -377,9 +447,10 @@ export function installPlaybackGetFileTrace(active: unknown): {
     connection_count: [...(network?._dcConnections?.values?.() || [])].reduce((count: number, dc: any) => count + ["main", "download", "downloadSmall", "upload"].reduce((n, kind) => n + (dc?.[kind]?._connections?.length || 0), 0), 0),
     hooked_connections: hookedConnections,
   });
+  if (options?.focusedMessageId) playTrace("WORKER_GET_MESSAGES_TRACE_CAPABILITY", { focused_only: true });
   return {
     async run<T>(signal: AbortSignal, fields: () => Record<string, unknown>, operation: () => Promise<T>): Promise<T> {
-      const trace: TraceOperation = { fields, rpcSequence: 0 };
+      const trace: TraceOperation = { fields, rpcSequence: 0, kind: "file" };
       operations.set(signal, trace);
       activeOperations += 1;
       try { return await operation(); }

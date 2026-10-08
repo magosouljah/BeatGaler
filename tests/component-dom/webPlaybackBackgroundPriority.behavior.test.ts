@@ -91,6 +91,9 @@ describe("Web playback priority over secondary reads", () => {
     harness.prefetch.mockClear();
     harness.prefetchBatch.mockClear();
     harness.waitForVaultPeerReady.mockResolvedValue(undefined);
+    harness.focusPlayback.mockResolvedValue(undefined);
+    harness.markPlaybackStable.mockResolvedValue(undefined);
+    harness.releasePlaybackFocus.mockResolvedValue(undefined);
   });
 
   it("retains immediate Play and multiple warm requests until the vault peer is ready", async () => {
@@ -107,7 +110,7 @@ describe("Web playback priority over secondary reads", () => {
       { messageId: 12, mimeType: "audio/mpeg" },
     ]);
     await tick();
-    expect(harness.focusPlayback).toHaveBeenCalledWith(10);
+    expect(harness.focusPlayback).toHaveBeenCalledWith(10, undefined);
     expect(harness.streamCalls).toHaveLength(0);
     expect(harness.prefetch).not.toHaveBeenCalled();
     expect(harness.prefetchBatch).not.toHaveBeenCalled();
@@ -181,6 +184,32 @@ describe("Web playback priority over secondary reads", () => {
     await chunk;
     expect(consumer).toHaveBeenCalledTimes(1);
     expect(chunkReleased).toBe(true);
+  });
+
+  it("keeps background work paused when an older same-message focus fails", async () => {
+    let rejectOlder!: (error: Error) => void;
+    harness.focusPlayback
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOlder = reject; }))
+      .mockResolvedValueOnce(undefined);
+    const transport = new WebGalerCloudTransport();
+
+    const older = transport.focusPlayback(11, 1);
+    await transport.focusPlayback(11, 2);
+    let backgroundStarted = false;
+    const background = transport.streamFile(
+      { messageId: 22, mimeType: "image/jpeg", purpose: "other" },
+      () => {},
+    ).then(value => { backgroundStarted = true; return value; });
+
+    rejectOlder(new Error("old focus failed"));
+    await expect(older).rejects.toThrow("old focus failed");
+    await tick();
+    expect(backgroundStarted).toBe(false);
+    expect(harness.streamCalls).toHaveLength(0);
+
+    await transport.markPlaybackStable(11, 2);
+    await background;
+    expect(harness.streamCalls).toHaveLength(1);
   });
 
   it("keeps playback lease-free while export scheduling uses the download capability", async () => {

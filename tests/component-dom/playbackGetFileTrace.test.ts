@@ -81,7 +81,7 @@ describe("playback upload.getFile trace", () => {
       },
     };
     const originalCall = core.call;
-    const observer = installPlaybackGetFileTrace({ _client: core });
+    const observer = installPlaybackGetFileTrace({ _client: core }, { focusedMessageId: () => 96 });
     const first = new AbortController();
     const second = new AbortController();
     const download = (signal: AbortSignal) => core.call({ _: "upload.getFile", offset: 0, limit: 65_536 }, { abortSignal: signal });
@@ -129,6 +129,26 @@ describe("playback upload.getFile trace", () => {
           expect(own.find(row => row.stage === "WORKER_GET_FILE_RPC_RETRY")?.reason).toBe("message info state = 0");
         }
       }
+      const getMessages = core.call({ _: "channels.getMessages", id: [{ _: "inputMessageID", id: 96 }] },
+        { abortSignal: new AbortController().signal });
+      connection._doFlush();
+      await vi.waitFor(() => expect(socketSend).toHaveBeenCalledTimes(4));
+      const response = new Uint8Array(12);
+      new DataView(response.buffer).setBigInt64(0, 4n, true);
+      connection.onMessage(await connection._codec.decode(response));
+      await getMessages;
+      const messagesRows = info.mock.calls.map(([value]) => String(value))
+        .filter(value => value.startsWith("[play-trace] "))
+        .map(value => JSON.parse(value.slice("[play-trace] ".length)))
+        .filter(row => row.stage.startsWith("WORKER_GET_MESSAGES_") && row.stage !== "WORKER_GET_MESSAGES_TRACE_CAPABILITY");
+      expect(messagesRows.map(row => row.stage)).toEqual(expect.arrayContaining([
+        "WORKER_GET_MESSAGES_CALL_ENTER", "WORKER_GET_MESSAGES_CONNECTION_RPC_BEGIN",
+        "WORKER_GET_MESSAGES_RPC_QUEUED", "WORKER_GET_MESSAGES_MT_PROTO_FLUSH",
+        "WORKER_GET_MESSAGES_WEBSOCKET_SEND_CALLED", "WORKER_GET_MESSAGES_RPC_RESULT_ENTER",
+        "WORKER_GET_MESSAGES_CALL_DONE",
+      ]));
+      expect(messagesRows.every(row => row.batch_id === messagesRows[0].batch_id && row.message_id === 96)).toBe(true);
+      expect(messagesRows.find(row => row.stage === "WORKER_GET_MESSAGES_RPC_RESULT_ENTER")?.rpc_msg_id).toBe("4");
     } finally {
       observer.detach();
     }
