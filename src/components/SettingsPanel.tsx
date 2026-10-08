@@ -439,7 +439,7 @@ export default function SettingsPanel(props: Props) {
             {loadingTrash ? <div style={{ color: "#555", fontSize: 11 }}>Loading…</div> : trashItems.length === 0
               ? <div style={{ color: "#444", fontSize: 11 }}>Trash is empty</div>
               : <>
-                {trashItems.map(item => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}>
+                {trashItems.map(item => <div key={item.id} data-trash-item-id={item.id} data-trash-beat-name={item.beat_name || "Untitled beat"} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #1b1b1b" }}>
                   <span style={{ color: "#aaa", fontSize: 11 }}>{item.beat_name || "Untitled beat"}</span>
                   <button disabled={restoringIds.has(item.id)} onClick={() => restore(item)} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>{restoringIds.has(item.id) ? "Restoring…" : "Restore"}</button>
                 </div>)}

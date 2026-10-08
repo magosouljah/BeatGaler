@@ -1,7 +1,8 @@
-import { playTrace } from "../playback/playTrace";
+import { playTrace, playTraceSpan } from "../playback/playTrace";
 import { isPlaybackMessageRouteSuspect, markPlaybackMessageRouteSuspect } from "../playback/webPlaybackRoutingSuspect";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
+import { clearWebVaultPeer, readWebVaultPeer, writeWebVaultPeer, type WebVaultPeerRef } from "./webVaultPeerCache";
 import type {
   WebTransportDownloadInput,
   WebTransportDownloadResult,
@@ -28,11 +29,23 @@ import type {
 } from "./webTransportWorkerProtocol";
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
+const WEB_TRANSPORT_INDEX_ACTIVE_TIMEOUT_MS = 90_000;
 const WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000;
 export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
 const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
 const NON_RESUMABLE_PREFIX_ERROR = "Galer Cloud returned a non-resumable partial playback prefix.";
 const SUSPECT_ROUTE_ERROR = "Galer Cloud playback route is awaiting authoritative reconciliation.";
+
+function stage1TraceContext(): { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean } | null {
+  const value = (globalThis as typeof globalThis & { __stage1TraceContext?: unknown }).__stage1TraceContext;
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const correlation_id = typeof candidate.correlation_id === "string" ? candidate.correlation_id.trim() : "";
+  const account_label = typeof candidate.account_label === "string" ? candidate.account_label.trim() : "";
+  return correlation_id && account_label
+    ? { correlation_id, account_label, ...(candidate.task2_passive_ping_trace === true ? { task2_passive_ping_trace: true } : {}) }
+    : null;
+}
 
 function publishTransportInvalidated(): void {
   if (typeof window === "undefined") return;
@@ -82,6 +95,9 @@ type PendingRequest = {
   onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void;
   prefetchOffsetBytes?: number;
   prefetchMessageId?: number;
+  streamMessageId?: number;
+  traceIntentId?: number;
+  firstStreamChunkSeen?: boolean;
   invalidPrefetchMessageIds?: Set<number>;
   timeoutId: ReturnType<typeof setTimeout> | null;
   activeTimeoutMs: number | null;
@@ -104,10 +120,12 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   private pending = new Map<string, PendingRequest>();
   private sessionStartupMessageIds: number[] = [];
   private desiredPlaybackMessageId: number | null = null;
+  private desiredPlaybackIntentId: number | null = null;
   private credentialRefreshEpoch = 0;
   private credentialRefreshPromise: Promise<void> | null = null;
   private playbackCritical = false;
   private dataPlaneInitialized = false;
+  private peerCacheScope: { botId: string; chatId: string } | null = null;
   private activeBackgroundStreamRequests = new Set<string>();
   private preemptedBackgroundStreamRequests = new Set<string>();
   private backgroundResumeWaiters = new Set<() => void>();
@@ -222,12 +240,22 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   }
 
   private onMessage(message: WebTransportWorkerResponse): void {
+    if ("event" in message && message.event === "stage1-trace") {
+      playTrace(message.trace.stage, {
+        ...message.trace.detail,
+        worker_at_ms: message.trace.at_ms,
+        worker_monotonic_ms: message.trace.monotonic_ms,
+        worker_correlation_id: message.trace.correlation_id,
+      });
+      return;
+    }
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
     if ("event" in message) {
       if (message.event === "progress") {
         pending.onProgress?.(message.progress);
       } else if (message.event === "prefetch-chunk") {
+        playTrace("WORKER_PREFIX_RECEIVED_MAIN", { request_id: message.requestId, message_id: message.progress.messageId, intent_id: pending.traceIntentId ?? (this.desiredPlaybackMessageId === message.progress.messageId ? this.desiredPlaybackIntentId : null), offset_bytes: message.progress.offsetBytes, bytes: message.progress.chunk.byteLength });
         this.onPrefetchChunk(pending, message.progress);
       } else if (message.event === "prefetch-terminal") {
         if (message.terminal.status === "FAILED") {
@@ -239,6 +267,10 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       } else if (message.event === "index-state") {
         this.onIndexState(message.requestId, pending, message.state);
       } else if (message.event === "download-chunk") {
+        if (!pending.firstStreamChunkSeen) {
+          pending.firstStreamChunkSeen = true;
+          playTrace("WORKER_STREAM_FIRST_RECEIVED_MAIN", { request_id: message.requestId, message_id: pending.streamMessageId ?? null, intent_id: pending.traceIntentId ?? null, bytes: message.chunk.byteLength, downloaded_bytes: message.downloadedBytes });
+        }
         void Promise.resolve(pending.onChunk?.(message.chunk, message.downloadedBytes, message.totalBytes))
           .then(() => this.sendStreamControl("stream_ack", message.requestId))
           .catch(error => {
@@ -267,6 +299,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
     if (completed.operation === "prefetch") {
       const result = message.result as WebTransportPrefetchResult;
+      playTrace("WORKER_PREFIX_RESPONSE_RECEIVED_MAIN", { request_id: message.requestId, message_id: result.messageId, intent_id: completed.traceIntentId ?? null, bytes: result.prefix.byteLength });
       const offsetBytes = completed.prefetchOffsetBytes || 0;
       if (!isReusablePlaybackPrefixEnd(offsetBytes, result.prefix.byteLength, result.totalBytes)) {
         completed.reject(new WebTransportWorkerError(NON_RESUMABLE_PREFIX_ERROR, "TRANSFER_FAILED"));
@@ -337,6 +370,9 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         onPrefetchTerminal,
         prefetchOffsetBytes: command.op === "prefetch" ? Math.max(0, Math.floor(Number(command.input.offsetBytes) || 0)) : undefined,
         prefetchMessageId: command.op === "prefetch" ? Number(command.input.messageId) || undefined : undefined,
+        streamMessageId: command.op === "stream" ? Number(command.input.messageId) || undefined : undefined,
+        traceIntentId: command.op === "prefetch" || command.op === "stream" ? command.input.traceIntentId : command.op === "playback_focus" ? command.traceIntentId : undefined,
+        firstStreamChunkSeen: false,
         invalidPrefetchMessageIds: command.op === "prefetch_batch" ? new Set<number>() : undefined,
         timeoutId,
         activeTimeoutMs,
@@ -346,7 +382,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
           playTrace("WORKER_REQUEST_POSTED", { request_id: requestId, operation: command.op });
         }
-        worker.postMessage({ ...command, requestId } as WebTransportWorkerCommand);
+        const traceContext = stage1TraceContext();
+        if (command.op === "prefetch" || command.op === "prefetch_batch" || command.op === "stream" || command.op === "playback_focus") {
+          playTrace("WORKER_PLAYBACK_REQUEST_POSTED", { request_id: requestId, operation: command.op, message_id: command.op === "playback_focus" ? command.messageId : command.op === "prefetch_batch" ? null : command.input.messageId, intent_id: command.op === "playback_focus" ? command.traceIntentId ?? null : command.op === "prefetch_batch" ? null : command.input.traceIntentId ?? null, message_ids: command.op === "prefetch_batch" ? command.input.inputs.map(input => input.messageId) : undefined });
+        }
+        worker.postMessage({ ...command, requestId, ...(traceContext ? { stage1TraceContext: traceContext } : {}) } as WebTransportWorkerCommand);
       } catch (error) {
         const failed = this.takePending(requestId);
         failed?.reject(error instanceof Error ? error : new Error(String(error)));
@@ -381,25 +421,31 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       startupMessageIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
     )).slice(0, 14);
     this.sessionStartupMessageIds = sessionStartupMessageIds;
+    this.peerCacheScope = { botId: session.temp_auth.expected_bot_id, chatId: session.chat_id };
     await this.request({
       op: "initialize",
       startupMessageIds: sessionStartupMessageIds,
       session: {
         chat_id: session.chat_id,
+        user_id: session.user_id,
+        transport_id: session.transport_id,
         transport_user_id: session.transport_user_id,
+        lease_state: session.lease_state,
         expected_bot_id: session.temp_auth.expected_bot_id,
         temp_api_id: session.temp_auth.api_id,
         temp_auth_key: session.temp_auth_key,
         temp_session_id: session.temp_session_id,
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
+        index_pointer: session.index_pointer,
+        vault_peer: readWebVaultPeer(session.temp_auth.expected_bot_id, session.chat_id),
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
 
     const desiredPlaybackMessageId = this.desiredPlaybackMessageId;
     if (desiredPlaybackMessageId !== null) {
-      await this.request<void>({ op: "playback_focus", messageId: desiredPlaybackMessageId });
-      playTrace("WORKER_PLAYBACK_FOCUS_REAPPLIED", { message_id: desiredPlaybackMessageId });
+      await this.request<void>({ op: "playback_focus", messageId: desiredPlaybackMessageId, traceIntentId: this.desiredPlaybackIntentId ?? undefined });
+      playTrace("WORKER_PLAYBACK_FOCUS_REAPPLIED", { message_id: desiredPlaybackMessageId, intent_id: this.desiredPlaybackIntentId });
     }
     this.dataPlaneInitialized = true;
   }
@@ -419,20 +465,40 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     await this.request({ op: "verify_identity" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
   }
 
-  async verifyReady(): Promise<void> {
-    await this.request({ op: "verify" }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+  async verifyReady(_session?: WebTransportSession, membership = null as import("./webTransportSession").WebTransportMembershipProof | null): Promise<void> {
+    const scope = this.peerCacheScope;
+    try {
+      const peer = await this.request<WebVaultPeerRef>({ op: "verify", membership }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
+      if (scope && peer) writeWebVaultPeer(scope.botId, scope.chatId, peer);
+    } catch (error) {
+      if (error instanceof WebTransportWorkerError && error.code === "PEER_NOT_RESOLVED" && scope) {
+        clearWebVaultPeer(scope.botId, scope.chatId);
+      }
+      throw error;
+    }
   }
 
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+    const requestId = crypto.randomUUID();
+    const finish = playTraceSpan("WORKER_INDEX", { request_id: requestId });
     return this.request<WebTransportLibraryIndexResult>(
       { op: "get_index" },
       undefined,
       undefined,
-      undefined,
+      requestId,
       null,
       undefined,
       undefined,
-      this.bootstrapRequestTimeoutMs,
+      WEB_TRANSPORT_INDEX_ACTIVE_TIMEOUT_MS,
+    ).then(
+      result => {
+        finish();
+        return result;
+      },
+      error => {
+        finish("error");
+        throw error;
+      },
     );
   }
 
@@ -504,14 +570,16 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     };
   }
 
-  focusPlayback(messageId: number): Promise<void> {
+  focusPlayback(messageId: number, traceIntentId?: number): Promise<void> {
     const id = Number(messageId || 0);
     if (!Number.isSafeInteger(id) || id <= 0) return Promise.resolve();
+    this.desiredPlaybackIntentId = traceIntentId ?? (this.desiredPlaybackMessageId === id ? this.desiredPlaybackIntentId : null);
     this.desiredPlaybackMessageId = id;
+    const requestedIntentId = this.desiredPlaybackIntentId;
     this.playbackCritical = true;
     this.preemptBackgroundStreams();
-    return this.request<void>({ op: "playback_focus", messageId: id }).catch(error => {
-      if (this.desiredPlaybackMessageId === id) {
+    return this.request<void>({ op: "playback_focus", messageId: id, traceIntentId }).catch(error => {
+      if (this.desiredPlaybackMessageId === id && this.desiredPlaybackIntentId === requestedIntentId) {
         this.playbackCritical = false;
         this.releaseBackgroundResumeWaiters();
       }
@@ -519,21 +587,25 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     });
   }
 
-  markPlaybackStable(messageId: number): Promise<void> {
+  markPlaybackStable(messageId: number, traceIntentId?: number): Promise<void> {
     const id = Number(messageId || 0);
     if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
-    return this.request<void>({ op: "playback_stable", messageId: id }).then(() => {
-      if (this.desiredPlaybackMessageId === id) {
+    if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && this.desiredPlaybackIntentId !== Number(traceIntentId)) return Promise.resolve();
+    return this.request<void>({ op: "playback_stable", messageId: id, traceIntentId }).then(() => {
+      if (this.desiredPlaybackMessageId === id && (!traceIntentId || this.desiredPlaybackIntentId === traceIntentId)) {
         this.playbackCritical = false;
         this.releaseBackgroundResumeWaiters();
       }
     });
   }
 
-  releasePlaybackFocus(messageId: number): Promise<void> {
+  releasePlaybackFocus(messageId: number, traceIntentId?: number): Promise<void> {
     const id = Number(messageId || 0);
-    if (this.desiredPlaybackMessageId === id) this.desiredPlaybackMessageId = null;
-    return this.request<void>({ op: "playback_release", messageId: id }).finally(() => {
+    if (this.desiredPlaybackMessageId !== id) return Promise.resolve();
+    if (Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 && this.desiredPlaybackIntentId !== Number(traceIntentId)) return Promise.resolve();
+    this.desiredPlaybackMessageId = null;
+    this.desiredPlaybackIntentId = null;
+    return this.request<void>({ op: "playback_release", messageId: id, traceIntentId }).finally(() => {
       if (this.desiredPlaybackMessageId === null) {
         this.playbackCritical = false;
         this.releaseBackgroundResumeWaiters();
@@ -638,6 +710,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
   async shutdown(): Promise<void> {
     const worker = this.worker;
     this.desiredPlaybackMessageId = null;
+    this.desiredPlaybackIntentId = null;
     this.playbackCritical = false;
     this.activeBackgroundStreamRequests.clear();
     this.preemptedBackgroundStreamRequests.clear();
@@ -655,6 +728,24 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       if (this.worker === worker) this.worker = null;
     }
     this.failPending("Galer Cloud Web transport closed.");
+    this.publishTransportInvalidatedIfReady();
+  }
+
+  abortImmediately(): void {
+    const worker = this.worker;
+    // A lost operation lease is a fencing event, not normal navigation. Do
+    // not wait for a potentially stuck replace_index command to acknowledge a
+    // graceful shutdown; terminate its execution context synchronously first.
+    this.worker = null;
+    this.desiredPlaybackMessageId = null;
+    this.desiredPlaybackIntentId = null;
+    this.playbackCritical = false;
+    this.activeBackgroundStreamRequests.clear();
+    this.preemptedBackgroundStreamRequests.clear();
+    this.releaseBackgroundResumeWaiters();
+    this.sessionStartupMessageIds = [];
+    worker?.terminate();
+    this.failPending("Galer Cloud Web transport lease was lost.");
     this.publishTransportInvalidatedIfReady();
   }
 }

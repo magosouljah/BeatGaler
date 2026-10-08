@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { performance } = require('perf_hooks');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
@@ -26,17 +27,35 @@ const PROCESS_INSTANCE_ID = crypto.randomBytes(8).toString('hex');
 const HEARTBEAT_INTERVAL_MS = Math.max(30_000, Number(process.env.DIRECT_HEARTBEAT_INTERVAL_MS || 60_000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.DIRECT_HEARTBEAT_TIMEOUT_MS || 5 * 60_000));
 const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(process.env.DIRECT_TOKEN_ROTATION_ENABLED || 'false').trim().toLowerCase());
-const INDEX_OPERATION_TTL_MS = Math.max(60_000, Number(process.env.DIRECT_INDEX_OPERATION_TTL_MS || 5 * 60_000));
 const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DATA_OPERATION_TTL_MS || 4 * 60 * 60_000));
+// INDEX locks are renewable leases.  A dead tab therefore releases quickly,
+// while a deliberately paused but still-live Worker keeps renewing its lease.
+const INDEX_OPERATION_LIVENESS_TIMEOUT_MS = Math.max(5_000, Number(process.env.DIRECT_INDEX_OPERATION_LIVENESS_TIMEOUT_MS || 15_000));
+const MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS || 3)));
+const MANAGED_TOKEN_FETCH_RETRY_BASE_MS = Math.max(25, Math.min(500, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_BASE_MS || 150)));
+const MANAGED_TOKEN_FETCH_RETRY_MAX_MS = Math.max(MANAGED_TOKEN_FETCH_RETRY_BASE_MS, Math.min(1_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_MAX_MS || 500)));
+const MANAGED_TOKEN_FETCH_TIMEOUT_MS = Math.max(500, Math.min(5_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_TIMEOUT_MS || 3_000)));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
 // Runtime-only material. Tokens never go to the JSON state file.
 const runtimeSessions = new Map(); // session_id -> hydrated session + current token
+const managedTokenCache = new Map(); // bot_id -> { credentialVersion, token }; process memory only
+const managedTokenFetches = new Map();
 const botRotationLocks = new Map();
 const leaseCleanupLocks = new Map();
+const unconfirmedOperationSince = new Map();
+let monotonicNowImpl = () => performance.now();
+const busyOperationDiagnostics = new Map();
 let resolverBootstrapPromise = null;
 let maintenanceStarted = false;
+let managerBotFetch = (...args) => fetch(...args);
+let managedTokenFetchRetryPolicy = {
+  attempts: MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS,
+  baseMs: MANAGED_TOKEN_FETCH_RETRY_BASE_MS,
+  maxMs: MANAGED_TOKEN_FETCH_RETRY_MAX_MS,
+  timeoutMs: MANAGED_TOKEN_FETCH_TIMEOUT_MS,
+};
 
 function enabled() {
   const raw = String(process.env.BEATGALER_DIRECT_TRANSPORT || 'true').trim().toLowerCase();
@@ -130,6 +149,59 @@ function todayKey() { return nowIso().slice(0, 10); }
 function parseTime(value) {
   const n = Date.parse(String(value || ''));
   return Number.isFinite(n) ? n : 0;
+}
+function monotonicNow() { return monotonicNowImpl(); }
+function elapsedSinceMonotonic(value) {
+  const elapsed = monotonicNow() - Number(value || 0);
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+}
+function operationLivenessTimeout(op) {
+  return op?.kind === 'get_index' || op?.kind === 'replace_index'
+    ? INDEX_OPERATION_LIVENESS_TIMEOUT_MS
+    : DATA_OPERATION_TTL_MS;
+}
+function operationLivenessAge(op, opId) {
+  // performance.now() is process-local and monotonic.  A persisted operation
+  // from an earlier process has no comparable monotonic timestamp, so it gets
+  // a bounded re-confirmation grace period instead of trusting wall-clock age.
+  if (op?.liveness_owner_instance === PROCESS_INSTANCE_ID && Number.isFinite(Number(op?.last_liveness_monotonic_ms))) {
+    return elapsedSinceMonotonic(op.last_liveness_monotonic_ms);
+  }
+  const key = String(opId || op?.operation_id || 'unknown');
+  let firstSeen = unconfirmedOperationSince.get(key);
+  if (firstSeen === undefined) {
+    firstSeen = monotonicNow();
+    unconfirmedOperationSince.set(key, firstSeen);
+  }
+  return elapsedSinceMonotonic(firstSeen);
+}
+function operationIsStale(op, opId) {
+  return !op || operationLivenessAge(op, opId) >= operationLivenessTimeout(op);
+}
+function operationDurationMs(op) {
+  if (op?.liveness_owner_instance === PROCESS_INSTANCE_ID && Number.isFinite(Number(op?.started_monotonic_ms))) {
+    return elapsedSinceMonotonic(op.started_monotonic_ms);
+  }
+  return Math.max(0, Date.now() - parseTime(op?.started_at));
+}
+function operationDiagnosticOwner(op) {
+  if (!op) return {};
+  return {
+    owner_session_id: op.session_id || null,
+    owner_installation: op.installation_id ? `${String(op.installation_id).slice(0, 8)}…` : null,
+    owner_tab_id: op.document_tab_id || null,
+    owner_document_id: op.document_id || null,
+    owner_document_generation: op.document_generation || null,
+    owner_kind: op.kind || null,
+    owner_liveness_age_ms: Math.round(operationLivenessAge(op, op.operation_id)),
+  };
+}
+function diagBusyOperationOnce(key, fields) {
+  const now = monotonicNow();
+  const previous = busyOperationDiagnostics.get(key) || 0;
+  if (now - previous < 2_000) return;
+  busyOperationDiagnostics.set(key, now);
+  diag('OPERATION_BEGIN_WAIT', fields);
 }
 
 function loadPool() {
@@ -236,13 +308,18 @@ function normalizeState(pool) {
   }
   for (const opId of Object.keys(state.operations)) {
     const op = state.operations[opId];
-    const startedAt = parseTime(op?.started_at);
-    const isIndexOp = op?.kind === 'get_index' || op?.kind === 'replace_index';
-    const operationTtlMs = isIndexOp ? INDEX_OPERATION_TTL_MS : DATA_OPERATION_TTL_MS;
-    const stale = !startedAt || Date.now() - startedAt >= operationTtlMs;
+    const stale = operationIsStale(op, opId);
     if (!op || !state.leases[String(op.session_id || '')] || stale) {
-      if (op && stale) diag('STALE_OPERATION_REAPED', { operation_id: opId, session_id: op.session_id || null, kind: op.kind || null });
+      if (op && stale) diag('STALE_OPERATION_REAPED', {
+        operation_id: opId,
+        session_id: op.session_id || null,
+        kind: op.kind || null,
+        liveness_age_ms: Math.round(operationLivenessAge(op, opId)),
+        liveness_timeout_ms: operationLivenessTimeout(op),
+        reason: 'operation_liveness_expired',
+      });
       delete state.operations[opId];
+      unconfirmedOperationSince.delete(opId);
     }
   }
   return state;
@@ -285,11 +362,7 @@ function mutateState(pool, mutator) {
 }
 
 function stateSnapshot(pool) {
-  return withPoolLock(() => {
-    const state = normalizeState(pool);
-    writeJsonAtomic(STATE_FILE, state);
-    return state;
-  });
+  return withPoolLock(() => normalizeState(pool));
 }
 
 function leasesForBot(state, botId) {
@@ -326,7 +399,10 @@ function deleteLease(sessionId) {
     const lease = state.leases[sessionId];
     if (!lease) return null;
     for (const [opId, op] of Object.entries(state.operations)) {
-      if (op.session_id === sessionId) delete state.operations[opId];
+      if (op.session_id === sessionId) {
+        delete state.operations[opId];
+        unconfirmedOperationSince.delete(opId);
+      }
     }
     delete state.leases[sessionId];
     return { ...lease };
@@ -436,15 +512,111 @@ async function masterForVault(chatId) {
   throw lastError || new Error(`No MASTER could resolve vault ${key}.`);
 }
 
-async function managerBotApiCall(token, method, payload) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+async function managerBotApiCall(token, method, payload, options = {}) {
+  const response = await managerBotFetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.ok) throw new Error(body.description || `${method} failed (${response.status}).`);
+  if (!response.ok || !body.ok) {
+    const error = new Error(body.description || `${method} failed (${response.status}).`);
+    // API responses are deliberately non-retryable here. This retry is only
+    // a narrow guard for transient transport/fetch failures.
+    error.manager_bot_api_response = true;
+    error.http_status = Number(response.status) || null;
+    error.api_error_code = Number(body?.error_code) || null;
+    throw error;
+  }
   return body.result;
+}
+
+function boundedDiagnosticValue(value) {
+  const text = String(value || '').trim();
+  return text ? text.slice(0, 120) : null;
+}
+
+function managedTokenErrorDiagnostic(error) {
+  const cause = error?.cause;
+  return {
+    error_class: boundedDiagnosticValue(error?.name) || 'Error',
+    error_code: boundedDiagnosticValue(error?.code),
+    http_status: Number.isInteger(error?.http_status) ? error.http_status : null,
+    api_error_code: Number.isInteger(error?.api_error_code) ? error.api_error_code : null,
+    cause_class: boundedDiagnosticValue(cause?.name),
+    cause_code: boundedDiagnosticValue(cause?.code),
+    errno: boundedDiagnosticValue(error?.errno || cause?.errno),
+  };
+}
+
+function transientManagedTokenFetchError(error) {
+  if (!error || error.manager_bot_api_response === true) return false;
+  const cause = error.cause || {};
+  const codes = new Set([
+    error.code, cause.code, error.errno, cause.errno,
+  ].map(value => String(value || '').toUpperCase()));
+  if ([
+    'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN',
+    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
+  ].some(code => codes.has(code))) return true;
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return true;
+  const message = `${error?.message || ''} ${cause?.message || ''}`;
+  return error?.name === 'TypeError' && /fetch failed|socket hang up|network error/i.test(message);
+}
+
+function managedTokenRetryDelayMs(attempt) {
+  return Math.min(
+    managedTokenFetchRetryPolicy.maxMs,
+    managedTokenFetchRetryPolicy.baseMs * (2 ** Math.max(0, attempt - 1)),
+  );
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getManagedTokenWithRetry(managerToken, botConfig) {
+  let lastError = null;
+  const { attempts } = managedTokenFetchRetryPolicy;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const startedAt = performance.now();
+    try {
+      const token = await managerBotApiCall(
+        managerToken,
+        'getManagedBotToken',
+        { user_id: Number(botConfig.telegram_user_id) },
+        { signal: AbortSignal.timeout(managedTokenFetchRetryPolicy.timeoutMs) },
+      );
+      if (attempt > 1) {
+        diag('MANAGED_TOKEN_FETCH_RECOVERED', {
+          attempt,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+      }
+      return token;
+    } catch (error) {
+      lastError = error;
+      const retryable = transientManagedTokenFetchError(error);
+      const durationMs = Math.round(performance.now() - startedAt);
+      const detail = {
+        attempt,
+        attempts,
+        duration_ms: durationMs,
+        timeout_ms: managedTokenFetchRetryPolicy.timeoutMs,
+        retryable,
+        ...managedTokenErrorDiagnostic(error),
+      };
+      if (!retryable || attempt >= attempts) {
+        diag('MANAGED_TOKEN_FETCH_FAILED', detail);
+        throw error;
+      }
+      const delayMs = managedTokenRetryDelayMs(attempt);
+      diag('MANAGED_TOKEN_FETCH_RETRY', { ...detail, delay_ms: delayMs });
+      await wait(delayMs);
+    }
+  }
+  throw lastError || new Error('Managed token fetch failed.');
 }
 
 // IMPORTANT: transport tokens are NOT rotated on lease/start. They are fetched
@@ -468,9 +640,29 @@ async function resolveManagedToken(botConfig) {
   }
   const managerToken = String(process.env[botConfig.manager_token_env] || '').trim();
   if (!managerToken) throw new Error(`${botConfig.id}: missing ${botConfig.manager_token_env}.`);
-  const token = await managerBotApiCall(managerToken, 'getManagedBotToken', { user_id: Number(botConfig.telegram_user_id) });
+  const token = await getManagedTokenWithRetry(managerToken, botConfig);
   if (!token) throw new Error(`${botConfig.id}: Telegram returned no managed token.`);
   return String(token);
+}
+
+async function tokenForCredentialVersion(botConfig, credentialVersion) {
+  if (!botConfig.managed) return botConfig.token;
+  const botId = String(botConfig.id);
+  const version = Number(credentialVersion);
+  const cached = managedTokenCache.get(botId);
+  if (cached?.credentialVersion === version) return cached.token;
+  const key = `${botId}:${version}`;
+  let pending = managedTokenFetches.get(key);
+  if (!pending) {
+    pending = resolveManagedToken(botConfig).then(token => {
+      if (!managedTokenCache.has(botId) || managedTokenCache.get(botId).credentialVersion <= version) {
+        managedTokenCache.set(botId, { credentialVersion: version, token });
+      }
+      return token;
+    }).finally(() => managedTokenFetches.delete(key));
+    managedTokenFetches.set(key, pending);
+  }
+  return pending;
 }
 
 async function rotateManagedToken(botConfig) {
@@ -502,6 +694,82 @@ async function inviteAndPromote(master, vault, botEntity) {
     }),
     rank: 'BeatGaler',
   }));
+}
+
+function botMembershipError(error) {
+  const message = String(error?.errorMessage || error?.message || error || '');
+  const status = Number(error?.http_status || error?.api_error_code || 0) || null;
+  return {
+    message,
+    status,
+    absent: /chat not found|bot was kicked|bot is not a member|forbidden|USER_NOT_PARTICIPANT|CHANNEL_PRIVATE/i.test(message),
+  };
+}
+
+function membershipAbsentError(error, runtime) {
+  const detail = botMembershipError(error);
+  if (!detail.absent) return error;
+  const failure = new Error(`Transport bot ${runtime.bot.id} cannot observe vault ${runtime.chatId}.`);
+  failure.code = 'TRANSPORT_BOT_MEMBERSHIP_ABSENT';
+  failure.telegram_error = detail.message;
+  failure.http_status = detail.status;
+  return failure;
+}
+
+async function probeRuntimeVaultMembership(runtime, startupTrace = noDirectStartupTrace) {
+  startupTrace.mark('BOT_MEMBERSHIP_PROBE', {
+    membership_state: 'probing',
+    vault_chat_id: String(runtime.chatId),
+    channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
+    transport_id: runtime.bot.id,
+    expected_bot_id: runtime.bot.telegram_user_id || null,
+  });
+  try {
+    const chat = await startupTrace.step('BOT_MEMBERSHIP_GET_CHAT', () => managerBotApiCall(runtime.token, 'getChat', {
+      chat_id: String(runtime.chatId),
+    }));
+    const observedChatId = String(chat?.id || '');
+    if (observedChatId !== String(runtime.chatId)) {
+      const mismatch = new Error(`Transport bot observed vault ${observedChatId || '<none>'}, expected ${runtime.chatId}.`);
+      mismatch.code = 'TRANSPORT_BOT_VAULT_MISMATCH';
+      throw mismatch;
+    }
+    const proof = {
+      state: 'bot_visible',
+      source: 'bot_api_getChat',
+      vault_chat_id: String(runtime.chatId),
+      channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
+      transport_id: runtime.bot.id,
+      expected_bot_id: runtime.bot.telegram_user_id || null,
+    };
+    startupTrace.mark('BOT_MEMBERSHIP_VISIBLE', {
+      membership_state: proof.state,
+      membership_source: proof.source,
+      vault_chat_id: proof.vault_chat_id,
+      channel_id: proof.channel_id,
+      transport_id: proof.transport_id,
+      expected_bot_id: proof.expected_bot_id,
+    });
+    return proof;
+  } catch (error) {
+    const failure = membershipAbsentError(error, runtime);
+    const detail = botMembershipError(error);
+    diag('BOT_MEMBERSHIP_PROBE_FAILED', {
+      transport_id: runtime.bot.id,
+      membership_state: detail.absent ? 'absent' : 'probe_failed',
+      ...managedTokenErrorDiagnostic(error),
+    });
+    startupTrace.mark('BOT_MEMBERSHIP_NOT_VISIBLE', {
+      membership_state: detail.absent ? 'absent' : 'probe_failed',
+      membership_source: 'bot_api_getChat',
+      vault_chat_id: String(runtime.chatId),
+      channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
+      transport_id: runtime.bot.id,
+      expected_bot_id: runtime.bot.telegram_user_id || null,
+      probe_error_code: detail.status,
+    });
+    throw failure;
+  }
 }
 
 async function cleanupLegacyVisibleHandshakes(master, vault) {
@@ -626,25 +894,41 @@ async function ensureBotApiResolverChat() {
   }
 }
 
-async function runtimeForLease(lease, { freshMarker = false } = {}) {
-  const pool = loadPool();
+async function runtimeForLease(
+  lease,
+  { freshMarker = false, startupTrace = noDirectStartupTrace } = {},
+) {
+  const pool = await startupTrace.step("START_POOL", async () => loadPool());
   const bot = pool.find(item => item.id === lease.bot_id);
   if (!bot) throw new Error(`Unknown transport bot ${lease.bot_id}.`);
-  const state = stateSnapshot(pool);
+
+  const state = await startupTrace.step("START_STATE", async () => stateSnapshot(pool));
   const botState = state.bots[bot.id];
+
   let runtime = runtimeSessions.get(lease.session_id);
   if (!runtime || runtime.credentialVersion !== botState.credential_version) {
-    const token = await resolveManagedToken(bot);
-    // Resolve server-side identity without importing bot authorization per lease.
-    // The productive HTTP boundary strips permanent credentials and hands clients
-    // temporary MTProto authorization; normal media and INDEX bytes stay Direct.
+    if (bot.managed) {
+      const cached = managedTokenCache.get(String(bot.id));
+      startupTrace.mark(cached?.credentialVersion === Number(botState.credential_version)
+        ? "START_TOKEN_CACHE_HIT" : "START_TOKEN_CACHE_MISS");
+    }
+    const token = await startupTrace.step(
+      "START_TOKEN",
+      () => tokenForCredentialVersion(bot, botState.credential_version),
+    );
+
     let username = bot.telegram_username || runtime?.bot?.telegram_username || null;
     let userId = bot.telegram_user_id || runtime?.bot?.telegram_user_id || null;
+
     if (!username || !userId) {
-      const identity = await resolveBotIdentityViaHttp(token);
+      const identity = await startupTrace.step(
+        "START_IDENTITY",
+        () => resolveBotIdentityViaHttp(token),
+      );
       username = username || identity.telegram_username;
       userId = userId || identity.telegram_user_id;
     }
+
     runtime = {
       id: lease.session_id,
       installationId: lease.installation_id,
@@ -657,13 +941,21 @@ async function runtimeForLease(lease, { freshMarker = false } = {}) {
       masterId: null,
       resolverChatId: null,
     };
+
     runtimeSessions.set(lease.session_id, runtime);
   }
-  if (!runtime.resolverChatId) runtime.resolverChatId = await ensureBotApiResolverChat();
+
+  if (!runtime.resolverChatId) {
+    runtime.resolverChatId = await startupTrace.step(
+      "START_RESOLVER",
+      () => ensureBotApiResolverChat(),
+    );
+  }
+
   return runtime;
 }
 
-function sessionPublic(runtime) {
+function sessionPublic(runtime, leaseState = null) {
   return {
     ok: true,
     mode: 'telegram-direct-botapi-local',
@@ -684,6 +976,7 @@ function sessionPublic(runtime) {
     heartbeat_timeout_ms: HEARTBEAT_TIMEOUT_MS,
     token_rotation_enabled: TOKEN_ROTATION_ENABLED,
     started_at: runtime.startedAt,
+    lease_state: leaseState || null,
   };
 }
 
@@ -710,7 +1003,7 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
   if (existing) {
     if (!leaseExpired(existing) && existing.chat_id === vaultId && existing.status !== 'STOPPING') {
       startupTrace.mark("LEASE_SELECTED", { server_lease: "reused", lease_state: existing.status });
-      const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(existing));
+      const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(existing, { startupTrace }));
       mutateState(pool, state => {
         if (state.leases[existing.session_id]) {
           // The desktop helper will call /activate only after its raw Telegram
@@ -719,7 +1012,7 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
           state.leases[existing.session_id].last_heartbeat_at = nowIso();
         }
       });
-      return sessionPublic(runtime);
+      return sessionPublic(runtime, existing.status);
     }
   }
 
@@ -752,8 +1045,9 @@ async function activateSession({ installationId, sessionId, generation, startupT
     // bot back as a real participant of this exact vault. Telegram may still
     // need a short propagation window before Bot API getChat sees membership,
     // so Desktop has a second same-bot retry barrier after this confirmation.
-    letConfirmed: {
+    {
       const started = Date.now();
+      const deadline = started + 15_000;
       let attempt = 0;
       while (true) {
         attempt += 1;
@@ -765,15 +1059,32 @@ async function activateSession({ installationId, sessionId, generation, startupT
           if (participant?.participant) {
             startupTrace.mark("ACTIVATE_MEMBERSHIP", { membership_confirmed: true, attempt });
             diag('SESSION_MEMBERSHIP_CONFIRMED', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started });
-            break letConfirmed;
+            break;
           }
         } catch (error) {
           const message = String(error?.errorMessage || error?.message || error);
-          if (!/USER_NOT_PARTICIPANT|PARTICIPANT_ID_INVALID|CHANNEL_PRIVATE/i.test(message) || Date.now() - started >= 15_000) throw error;
+          if (!/USER_NOT_PARTICIPANT|PARTICIPANT_ID_INVALID|CHANNEL_PRIVATE/i.test(message) || Date.now() >= deadline) throw error;
           diag('SESSION_MEMBERSHIP_WAIT', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started, error: message });
         }
-        if (Date.now() - started >= 15_000) throw new Error('MASTER could not confirm transport bot membership in the vault within 15 seconds.');
+        if (Date.now() >= deadline) throw new Error('MASTER could not confirm transport bot membership in the vault within 15 seconds.');
         await new Promise(resolve => setTimeout(resolve, Math.min(1500, 250 * attempt)));
+      }
+
+      // MASTER membership is not yet a readiness proof for the bot's own
+      // authorization. Do not release /activate until the assigned bot can
+      // observe this exact vault through Telegram itself.
+      let botAttempt = 0;
+      while (true) {
+        botAttempt += 1;
+        try {
+          await probeRuntimeVaultMembership(runtime, startupTrace);
+          startupTrace.mark('ACTIVATE_BOT_MEMBERSHIP', { membership_confirmed: true, attempt: botAttempt });
+          break;
+        } catch (error) {
+          if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT' || Date.now() >= deadline) throw error;
+          startupTrace.mark('ACTIVATE_BOT_MEMBERSHIP_WAIT', { membership_confirmed: false, attempt: botAttempt });
+          await new Promise(resolve => setTimeout(resolve, Math.min(1500, 250 * botAttempt)));
+        }
       }
     }
 
@@ -782,10 +1093,34 @@ async function activateSession({ installationId, sessionId, generation, startupT
     const finalized = finalizeLease(checked.lease.session_id);
     console.log(`[direct] SESSION_READY installation=${String(installationId).slice(0, 8)}… transport=${runtime.bot.id} master=${runtime.masterId}`);
     diag('SESSION_READY', { installation: String(installationId).slice(0, 8), session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, master: runtime.masterId });
-    return { ok: true, activated: true, status: finalized?.status || 'ACTIVE' };
+    return {
+      ok: true,
+      activated: true,
+      status: finalized?.status || 'ACTIVE',
+      membership: {
+        state: 'bot_visible',
+        source: 'bot_api_getChat',
+        vault_chat_id: String(checked.lease.chat_id),
+        channel_id: String(checked.lease.chat_id).startsWith('-100') ? String(checked.lease.chat_id).slice(4) : null,
+        transport_id: runtime.bot.id,
+        expected_bot_id: runtime.bot.telegram_user_id || null,
+      },
+    };
   } finally {
     try { await startupTrace.step("ACTIVATE_DISCONNECT", () => masterInfo.client.disconnect()); } catch (_) {}
   }
+}
+
+async function probeSessionMembership({ installationId, sessionId, generation, startupTrace = noDirectStartupTrace }) {
+  const checked = getLeaseChecked({ installationId, sessionId, generation });
+  if (!checked) throw new Error('Direct transport session is not active.');
+  startupTrace.mark('BOT_MEMBERSHIP_LEASE', {
+    lease_state: checked.lease.status,
+    vault_chat_id: String(checked.lease.chat_id),
+    transport_id: String(checked.lease.bot_id),
+  });
+  const runtime = await startupTrace.step('BOT_MEMBERSHIP_RUNTIME', () => runtimeForLease(checked.lease, { startupTrace }));
+  return probeRuntimeVaultMembership(runtime, startupTrace);
 }
 
 async function heartbeat({ installationId, sessionId, generation, credentialVersion }) {
@@ -861,6 +1196,7 @@ async function maybeRotatePendingBot(botId) {
         runtime.credentialVersion = version;
         runtimeSessions.set(sessionId, runtime);
       }
+      managedTokenCache.set(botId, { credentialVersion: version, token: newToken });
       console.log(`[direct] TOKEN_ROTATED transport=${botId} credential_version=${version}`);
       return { rotated: true, pending: false, credential_version: version };
     } catch (error) {
@@ -881,10 +1217,47 @@ async function maybeRotatePendingBot(botId) {
   return promise;
 }
 
-async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind }) {
+function normalizeOperationDocumentContext(input) {
+  const tabId = String(input?.tab_id || '').trim();
+  const documentId = String(input?.document_id || '').trim();
+  const documentGeneration = Number(input?.generation || 0);
+  if (
+    !tabId ||
+    !documentId ||
+    tabId.length > 128 ||
+    documentId.length > 128 ||
+    !Number.isSafeInteger(documentGeneration) ||
+    documentGeneration <= 0
+  ) {
+    return null;
+  }
+  return {
+    tab_id: tabId,
+    document_id: documentId,
+    generation: documentGeneration,
+  };
+}
+
+async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind, documentContext }) {
+  const beginStartedAt = monotonicNow();
   const checked = getLeaseChecked({ installationId, sessionId, generation });
-  if (!checked) return { ok: false, expired: true };
+  if (!checked) {
+    diag('OPERATION_BEGIN_EXPIRED', {
+      session_id: String(sessionId || ''),
+      generation: Number(generation || 0),
+      kind: String(kind || 'data'),
+      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
+    });
+    return { ok: false, expired: true };
+  }
   const { pool, lease } = checked;
+  diag('OPERATION_BEGIN_ENTER', {
+    session_id: lease.session_id,
+    transport_id: lease.bot_id,
+    vault: lease.chat_id,
+    kind: String(kind || 'data'),
+    generation: Number(generation || 0),
+  });
   mutateState(pool, state => {
     if (state.leases[lease.session_id]) state.leases[lease.session_id].last_heartbeat_at = nowIso();
   });
@@ -896,16 +1269,32 @@ async function beginOperation({ installationId, sessionId, generation, credentia
     snapshot = stateSnapshot(pool);
     botState = snapshot.bots[lease.bot_id];
     if (botState.rotation_pending) {
+      diag('OPERATION_BEGIN_WAIT', {
+        session_id: lease.session_id,
+        transport_id: lease.bot_id,
+        vault: lease.chat_id,
+        kind: String(kind || 'data'),
+        reason: 'rotation_pending',
+        elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
+      });
       return { ok: false, wait: true, retry_after_ms: 250, reason: 'rotation_pending' };
     }
   }
 
   if (Number(credentialVersion || 0) !== Number(botState.credential_version)) {
     const runtime = await runtimeForLease(snapshot.leases[lease.session_id], { freshMarker: true });
+    diag('OPERATION_BEGIN_REFRESH_REQUIRED', {
+      session_id: lease.session_id,
+      transport_id: lease.bot_id,
+      vault: lease.chat_id,
+      kind: String(kind || 'data'),
+      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
+    });
     return { ok: false, refresh_required: true, credential_refresh: sessionPublic(runtime) };
   }
 
   const normalizedKind = String(kind || 'data');
+  const normalizedDocumentContext = normalizeOperationDocumentContext(documentContext);
   const opId = `op_${crypto.randomBytes(12).toString('hex')}`;
   const admitted = mutateState(pool, state => {
     const current = state.leases[lease.session_id];
@@ -919,6 +1308,37 @@ async function beginOperation({ installationId, sessionId, generation, credentia
     // connected to the same vault.
     const isIndexOperation = normalizedKind === 'get_index' || normalizedKind === 'replace_index';
     if (isIndexOperation) {
+      // Browser reload/navigation replaces the active Document and terminates its
+      // dedicated Worker. A later generation from the SAME tab + SAME Direct
+      // session may therefore fence and reclaim only that tab's older orphaned
+      // INDEX operation. Different tabs/devices remain serialized, and an older
+      // request arriving late can never steal a newer generation's operation.
+      if (normalizedDocumentContext) {
+        for (const [existingId, existing] of Object.entries(state.operations)) {
+          const existingIsIndex = existing?.kind === 'get_index' || existing?.kind === 'replace_index';
+          const sameVault = String(existing?.chat_id || '') === String(lease.chat_id || '');
+          const sameSession = String(existing?.session_id || '') === String(lease.session_id || '');
+          const sameTab = String(existing?.document_tab_id || '') === normalizedDocumentContext.tab_id;
+          const existingGeneration = Number(existing?.document_generation || 0);
+          const supersededDocument =
+            Number.isSafeInteger(existingGeneration) &&
+            existingGeneration > 0 &&
+            existingGeneration < normalizedDocumentContext.generation;
+
+          if (existingIsIndex && sameVault && sameSession && sameTab && supersededDocument) {
+            delete state.operations[existingId];
+            unconfirmedOperationSince.delete(existingId);
+            diag('INDEX_OPERATION_DOCUMENT_SUPERSEDED', {
+              operation_id: existingId,
+              session_id: existing.session_id,
+              vault: existing.chat_id,
+              old_document_generation: existingGeneration,
+              new_document_generation: normalizedDocumentContext.generation,
+            });
+          }
+        }
+      }
+
       const busy = Object.values(state.operations).some(op =>
         (op.kind === 'get_index' || op.kind === 'replace_index') &&
         String(op.chat_id || '') === String(lease.chat_id || '')
@@ -934,19 +1354,57 @@ async function beginOperation({ installationId, sessionId, generation, credentia
       installation_id: lease.installation_id,
       chat_id: lease.chat_id,
       kind: normalizedKind,
+      ...(normalizedDocumentContext ? {
+        document_tab_id: normalizedDocumentContext.tab_id,
+        document_id: normalizedDocumentContext.document_id,
+        document_generation: normalizedDocumentContext.generation,
+      } : {}),
       started_at: nowIso(),
+      started_monotonic_ms: monotonicNow(),
+      liveness_owner_instance: PROCESS_INSTANCE_ID,
+      last_liveness_at: nowIso(),
+      last_liveness_monotonic_ms: monotonicNow(),
     };
     return true;
   });
   if (!admitted) {
+    const blocking = Object.values(stateSnapshot(pool).operations).find(op =>
+      (op.kind === 'get_index' || op.kind === 'replace_index') &&
+      String(op.chat_id || '') === String(lease.chat_id || '')
+    );
+    diagBusyOperationOnce(`${lease.chat_id}:${normalizedKind}`, {
+      session_id: lease.session_id,
+      transport_id: lease.bot_id,
+      vault: lease.chat_id,
+      kind: normalizedKind,
+      reason: 'index_busy',
+      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
+      document_generation: normalizedDocumentContext?.generation || null,
+      ...operationDiagnosticOwner(blocking),
+    });
     return { ok: false, wait: true, retry_after_ms: 200, reason: 'index_busy' };
   }
-  return { ok: true, operation_id: opId, credential_version: botState.credential_version };
+  diag('OPERATION_BEGIN_GRANTED', {
+    operation_id: opId,
+    session_id: lease.session_id,
+    transport_id: lease.bot_id,
+    vault: lease.chat_id,
+    kind: normalizedKind,
+    elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
+    document_generation: normalizedDocumentContext?.generation || null,
+  });
+  return {
+    ok: true,
+    operation_id: opId,
+    credential_version: botState.credential_version,
+    operation_liveness_timeout_ms: operationLivenessTimeout({ kind: normalizedKind }),
+  };
 }
 
 async function endOperation({ installationId, sessionId, generation, operationId }) {
   const pool = loadPool();
   let botId = null;
+  let endedOperation = null;
   mutateState(pool, state => {
     const lease = state.leases[String(sessionId || '')];
     if (lease && lease.installation_id === String(installationId || '') && Number(lease.generation) === Number(generation)) {
@@ -956,11 +1414,47 @@ async function endOperation({ installationId, sessionId, generation, operationId
     const op = state.operations[String(operationId || '')];
     if (op && op.session_id === String(sessionId || '')) {
       botId = botId || op.bot_id;
+      endedOperation = { ...op };
       delete state.operations[String(operationId)];
+      unconfirmedOperationSince.delete(String(operationId));
     }
   });
+  if (endedOperation) {
+    diag('OPERATION_END', {
+      operation_id: String(operationId || ''),
+      session_id: endedOperation.session_id,
+      transport_id: endedOperation.bot_id,
+      vault: endedOperation.chat_id,
+      kind: endedOperation.kind,
+      duration_ms: Math.round(operationDurationMs(endedOperation)),
+      last_liveness_age_ms: Math.round(operationLivenessAge(endedOperation, operationId)),
+      document_generation: endedOperation.document_generation || null,
+    });
+  }
   if (botId) await maybeRotatePendingBot(botId);
   return { ok: true };
+}
+
+async function renewOperation({ installationId, sessionId, generation, operationId }) {
+  const pool = loadPool();
+  let renewed = false;
+  let operation = null;
+  mutateState(pool, state => {
+    const lease = state.leases[String(sessionId || '')];
+    const current = state.operations[String(operationId || '')];
+    if (!lease || !current) return;
+    if (lease.installation_id !== String(installationId || '') || Number(lease.generation) !== Number(generation)) return;
+    if (current.session_id !== lease.session_id) return;
+    lease.last_heartbeat_at = nowIso();
+    current.last_liveness_at = nowIso();
+    current.last_liveness_monotonic_ms = monotonicNow();
+    current.liveness_owner_instance = PROCESS_INSTANCE_ID;
+    unconfirmedOperationSince.delete(String(operationId));
+    operation = { ...current };
+    renewed = true;
+  });
+  if (!renewed) return { ok: false, expired: true };
+  return { ok: true, operation_id: String(operationId || ''), liveness_timeout_ms: operationLivenessTimeout(operation) };
 }
 
 async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
@@ -1240,6 +1734,10 @@ function recordIndexPointer(chatId, pointer = {}) {
   return registry.vaults[key];
 }
 
+function recordDiagnostic(event, fields = {}) {
+  diag(String(event || 'DIRECT_DIAGNOSTIC'), fields);
+}
+
 function getIndexPointer(chatId) {
   const key = String(chatId || '').trim();
   const registry = loadVaultRegistry();
@@ -1252,13 +1750,16 @@ function getIndexPointer(chatId) {
 }
 module.exports = {
   TOKEN_ROTATION_ENABLED,
+  recordDiagnostic,
   recordIndexPointer,
   getIndexPointer,
   enabled,
   startSession,
   activateSession,
+  probeSessionMembership,
   heartbeat,
   beginOperation,
+  renewOperation,
   endOperation,
   stopSession,
   decommissionVaultMembership,
@@ -1276,8 +1777,39 @@ module.exports = {
     normalizeState,
     stateSnapshot,
     mutateState,
+    setMonotonicNow(fn) {
+      monotonicNowImpl = typeof fn === 'function' ? fn : () => performance.now();
+    },
     leasesForBot,
     activeOpsForBot,
     inviteAndPromote,
+    botMembershipError,
+    probeRuntimeVaultMembership,
+    resolveManagedToken,
+    tokenForCredentialVersion,
+    transientManagedTokenFetchError,
+    setManagerBotFetch(fn) {
+      managerBotFetch = typeof fn === 'function' ? fn : (...args) => fetch(...args);
+    },
+    setManagedTokenFetchRetryPolicy(policy = {}) {
+      managedTokenFetchRetryPolicy = {
+        attempts: Math.max(1, Math.min(3, Number(policy.attempts || MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS))),
+        baseMs: Math.max(0, Math.min(500, Number(policy.baseMs ?? MANAGED_TOKEN_FETCH_RETRY_BASE_MS))),
+        maxMs: Math.max(0, Math.min(1_000, Number(policy.maxMs ?? MANAGED_TOKEN_FETCH_RETRY_MAX_MS))),
+        timeoutMs: Math.max(1, Math.min(5_000, Number(policy.timeoutMs ?? MANAGED_TOKEN_FETCH_TIMEOUT_MS))),
+      };
+      if (managedTokenFetchRetryPolicy.maxMs < managedTokenFetchRetryPolicy.baseMs) {
+        managedTokenFetchRetryPolicy.maxMs = managedTokenFetchRetryPolicy.baseMs;
+      }
+    },
+    resetManagedTokenFetchTestHooks() {
+      managerBotFetch = (...args) => fetch(...args);
+      managedTokenFetchRetryPolicy = {
+        attempts: MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS,
+        baseMs: MANAGED_TOKEN_FETCH_RETRY_BASE_MS,
+        maxMs: MANAGED_TOKEN_FETCH_RETRY_MAX_MS,
+        timeoutMs: MANAGED_TOKEN_FETCH_TIMEOUT_MS,
+      };
+    },
   },
 };

@@ -8,6 +8,7 @@ import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
 import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
+import { playTrace } from "./features/playback/playTrace";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
@@ -15,6 +16,7 @@ import "./styles/library-ux.css";
 
 (window as any).jsmediatags = browserId3Reader;
 
+playTrace("APP_ENTRY_EXECUTE");
 installStartupTrace();
 installWebCsrfFetchCoordinator();
 preconnectRememberedWebDirect();

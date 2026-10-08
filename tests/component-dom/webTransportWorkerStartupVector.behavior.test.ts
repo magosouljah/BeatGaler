@@ -36,11 +36,15 @@ const harness = vi.hoisted(() => {
   const downloadChunk = vi.fn(async () => new Uint8Array(65_536));
 
   class TelegramClient {
+    onConnectionState = { add: vi.fn(), remove: vi.fn() };
+    onError = { add: vi.fn(), remove: vi.fn() };
     importSession = vi.fn(async () => undefined);
     connect = vi.fn(async () => { connection.connect(); });
+    startUpdatesLoop = vi.fn(async () => undefined);
     destroy = vi.fn(async () => undefined);
     getMe = vi.fn(async () => ({ id: 4242, isBot: true }));
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
+    resolvePeer = vi.fn(async () => ({ _: "inputPeerChannel", channelId: 1234567890, accessHash: new FakeLong(42, 0) }));
     getMessages = getMessages;
     downloadChunk = downloadChunk;
     mt = {
@@ -68,6 +72,7 @@ const harness = vi.hoisted(() => {
 
 vi.mock("@mtcute/web", () => ({
   TelegramClient: harness.TelegramClient,
+  Long: harness.FakeLong,
   SessionConnection: harness.SessionConnection,
   WebCryptoProvider: harness.WebCryptoProvider,
   MemoryStorage: class {},
@@ -126,7 +131,7 @@ afterAll(() => {
 });
 
 describe("Worker startup metadata vector", () => {
-  it("resolves fourteen startup messages once and reuses both positive and negative results during warm", async () => {
+  it("waits for the vault peer before resolving startup messages, then reuses the vector during warm", async () => {
     const ids = Array.from({ length: 14 }, (_, index) => 501 + index);
     const missingId = ids.at(-1)!;
     harness.missingIds.add(missingId);
@@ -135,6 +140,15 @@ describe("Worker startup metadata vector", () => {
 
     const initialized = await dispatchAndWait(boundSessionCommand("vector-init", ids));
     expect(initialized.ok).toBe(true);
+    expect(harness.getMessages).not.toHaveBeenCalled();
+
+    const tooEarly = await dispatchAndWait({ requestId: "vector-early", op: "prefetch", input: { messageId: ids[0], mimeType: "audio/mpeg" } });
+    expect(tooEarly).toMatchObject({ ok: false, code: "PEER_NOT_RESOLVED" });
+    expect(harness.getMessages).not.toHaveBeenCalled();
+
+    const verified = await dispatchAndWait({ requestId: "vector-verify", op: "verify" });
+    expect(verified.ok).toBe(true);
+    await vi.waitFor(() => expect(harness.getMessages).toHaveBeenCalledTimes(1));
     expect(harness.getMessages).toHaveBeenCalledTimes(1);
     expect(harness.getMessages).toHaveBeenCalledWith(-1001234567890, ids);
 

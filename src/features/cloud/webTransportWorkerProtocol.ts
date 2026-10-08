@@ -1,4 +1,5 @@
-import type { WebTransportSession } from "./webTransportSession";
+import type { WebTransportMembershipProof, WebTransportSession } from "./webTransportSession";
+import type { WebVaultPeerRef } from "./webVaultPeerCache";
 
 export interface WebTransportUploadInput {
   file: File;
@@ -22,6 +23,7 @@ export type WebTransportErrorCode =
   | "MEDIA_UNAVAILABLE"
   | "TRANSFER_FAILED"
   | "SESSION_INVALID"
+  | "PEER_NOT_RESOLVED"
   | "CANCELLED";
 
 export interface WebTransportStoredFile {
@@ -40,14 +42,19 @@ export interface WebTransportUploadResult {
   transport: "direct-web";
 }
 export interface WebTransportProgress { uploadedBytes: number; totalBytes: number; }
-export interface WebTransportLibraryIndexResult { manifest: unknown; messageId: number | null; }
+export interface WebTransportLibraryIndexResult {
+  manifest: unknown;
+  messageId: number | null;
+  /** Returned only when Telegram recovery repaired a stale/missing Cloud pointer. */
+  pointerRepair?: { expectedMessageId: number | null; source: "pin_recovery" | "history_recovery" };
+}
 export interface WebTransportReplaceIndexInput { manifest: unknown; expectedMessageId: number | null; }
 export interface WebTransportReplaceIndexResult { messageId: number; previousMessageId: number | null; beatCount: number; }
 export interface WebTransportDeleteMessagesInput { messageIds: number[]; }
 export interface WebTransportDeleteMessagesResult { deleted: number; }
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; purpose?: "artwork" | "other"; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
-export interface WebTransportPrefetchInput { messageId: number; mimeType?: string | null; offsetBytes?: number; }
+export interface WebTransportPrefetchInput { messageId: number; mimeType?: string | null; offsetBytes?: number; /** Diagnostics only; never affects scheduling. */ traceIntentId?: number; }
 export interface WebTransportPrefetchResult {
   messageId: number;
   totalBytes: number;
@@ -88,28 +95,35 @@ export interface WebTransportStreamInput {
   mimeType?: string | null;
   offsetBytes?: number;
   purpose?: "playback" | "export" | "other";
+  /** Diagnostics only; never affects transport behavior. */
+  traceIntentId?: number;
 }
 export interface WebTransportStreamResult { messageId: number; totalBytes: number; mimeType: string; }
 
-export type WebTransportWorkerCommand =
+export type WebTransportWorkerCommand = (
   | {
       requestId: string;
       op: "initialize";
       startupMessageIds: number[];
       session: Pick<WebTransportSession,
         | "chat_id"
+        | "user_id"
+        | "transport_id"
         | "transport_user_id"
+        | "lease_state"
         | "temp_auth_key"
         | "temp_session_id"
         | "temp_session_state"
         | "temp_primary_dcs"
+        | "index_pointer"
       > & {
         expected_bot_id: string;
         temp_api_id: number;
+        vault_peer?: WebVaultPeerRef | null;
       };
     }
   | { requestId: string; op: "verify_identity" }
-  | { requestId: string; op: "verify" }
+  | { requestId: string; op: "verify"; membership?: WebTransportMembershipProof | null }
   | { requestId: string; op: "get_index" }
   | { requestId: string; op: "cancel_index"; targetRequestId: string }
   | { requestId: string; op: "replace_index"; input: WebTransportReplaceIndexInput }
@@ -118,14 +132,16 @@ export type WebTransportWorkerCommand =
   | { requestId: string; op: "prefetch"; input: WebTransportPrefetchInput }
   | { requestId: string; op: "prefetch_batch"; input: WebTransportPrefetchBatchInput }
   | { requestId: string; op: "prefetch_batch_cancel"; targetRequestId: string; messageId?: number }
-  | { requestId: string; op: "playback_focus"; messageId: number }
-  | { requestId: string; op: "playback_stable"; messageId: number }
-  | { requestId: string; op: "playback_release"; messageId: number }
+  | { requestId: string; op: "playback_focus"; messageId: number; traceIntentId?: number }
+  | { requestId: string; op: "playback_stable"; messageId: number; traceIntentId?: number }
+  | { requestId: string; op: "playback_release"; messageId: number; traceIntentId?: number }
   | { requestId: string; op: "stream"; input: WebTransportStreamInput }
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }
   | { requestId: string; op: "upload"; input: WebTransportUploadInput }
-  | { requestId: string; op: "shutdown" };
+  | { requestId: string; op: "shutdown" }) & {
+    stage1TraceContext?: { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean };
+  };
 
 export type WebTransportWorkerRequest = WebTransportWorkerCommand extends infer Command
   ? Command extends { requestId: string }
@@ -140,4 +156,5 @@ export type WebTransportWorkerResponse =
   | { requestId: string; event: "download-chunk"; chunk: ArrayBuffer; downloadedBytes: number; totalBytes: number }
   | { requestId: string; event: "prefetch-chunk"; progress: WebTransportPrefetchChunk }
   | { requestId: string; event: "prefetch-terminal"; terminal: WebTransportPrefetchTerminal }
-  | { requestId: string; event: "index-state"; state: "active" | "paused" };
+  | { requestId: string; event: "index-state"; state: "active" | "paused" }
+  | { requestId: string; event: "stage1-trace"; trace: { stage: string; at_ms: number; monotonic_ms?: number; correlation_id: string; account_label: string; detail?: Record<string, unknown> } };

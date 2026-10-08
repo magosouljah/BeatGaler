@@ -25,11 +25,40 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     FakeWorker.instances = [];
     vi.useFakeTimers();
     vi.stubGlobal("Worker", FakeWorker);
+    const items = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => { items.set(key, value); },
+      removeItem: (key: string) => { items.delete(key); },
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("passes a verified vault peer to a replacement Worker without repeating discovery", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const session = { chat_id: "-1001234567890", transport_user_id: "4242", temp_auth: { expected_bot_id: "4242", api_id: 1 } } as any;
+    const initial = client.initialize(session, []);
+    const firstWorker = FakeWorker.instances[0];
+    expect(firstWorker.postMessage.mock.calls.at(-1)?.[0].session.vault_peer).toBeNull();
+    firstWorker.respond();
+    await initial;
+
+    const verification = client.verifyReady();
+    const peer = { channelId: 1234567890, accessHash: { low: 42, high: 7 } };
+    firstWorker.respond(peer);
+    await verification;
+    firstWorker.onerror?.({} as ErrorEvent);
+
+    const replacement = client.initialize(session, []);
+    const secondWorker = FakeWorker.instances[1];
+    expect(secondWorker.postMessage.mock.calls.at(-1)?.[0].session.vault_peer).toEqual(peer);
+    secondWorker.respond();
+    await replacement;
+    expect(firstWorker.terminate).toHaveBeenCalledOnce();
   });
 
   it("keeps an INDEX request alive beyond the bootstrap timeout without terminating the Worker", async () => {
@@ -77,9 +106,9 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
 
   it("reapplies the latest focus after initialize before reporting readiness", async () => {
     const client = new WebTransportWorkerClient(1000);
-    const focus = client.focusPlayback(77);
+    const focus = client.focusPlayback(77, 42);
     const worker = FakeWorker.instances[0];
-    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ op: "playback_focus", messageId: 77 }));
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ op: "playback_focus", messageId: 77, traceIntentId: 42 }));
     worker.respond();
     await focus;
 
@@ -99,6 +128,7 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
       op: "playback_focus",
       messageId: 77,
+      traceIntentId: 42,
     }));
     let settled = false;
     void initialize.then(() => { settled = true; });
@@ -107,6 +137,58 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
 
     worker.respond();
     await expect(initialize).resolves.toBeUndefined();
+  });
+
+  it("does not let a rejected older focus clear the newer same-message intent", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const older = client.focusPlayback(77, 41);
+    const worker = FakeWorker.instances[0];
+    const olderCommand = worker.postMessage.mock.calls.at(-1)?.[0];
+    const current = client.focusPlayback(77, 42);
+    const currentCommand = worker.postMessage.mock.calls.at(-1)?.[0];
+
+    worker.onmessage?.({ data: { requestId: olderCommand.requestId, ok: false, error: "old focus failed" } } as MessageEvent);
+    await expect(older).rejects.toThrow("old focus failed");
+    expect((client as any).playbackCritical).toBe(true);
+    expect((client as any).desiredPlaybackIntentId).toBe(42);
+
+    worker.onmessage?.({ data: { requestId: currentCommand.requestId, ok: true } } as MessageEvent);
+    await expect(current).resolves.toBeUndefined();
+    const stable = client.markPlaybackStable(77, 42);
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+      op: "playback_stable",
+      messageId: 77,
+      traceIntentId: 42,
+    });
+    worker.respond();
+    await expect(stable).resolves.toBeUndefined();
+  });
+
+  it("correlates a foreground prefix request with its main-thread delivery", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const client = new WebTransportWorkerClient(1000);
+      const request = client.prefetch({ messageId: 777, mimeType: "audio/mpeg", offsetBytes: 0, traceIntentId: 42 });
+      const worker = FakeWorker.instances[0];
+      const command = worker.postMessage.mock.calls[0][0];
+      expect(command).toMatchObject({ op: "prefetch", input: { messageId: 777, traceIntentId: 42 } });
+      worker.respond({ messageId: 777, totalBytes: 200_000, mimeType: "audio/mpeg", prefix: new ArrayBuffer(65_536), playableSeconds: 0, targetMet: true });
+      await request;
+
+      const rows = info.mock.calls
+        .map(([value]) => String(value))
+        .filter(value => value.startsWith("[play-trace] "))
+        .map(value => JSON.parse(value.slice("[play-trace] ".length)))
+        .filter(row => row.request_id === command.requestId);
+      expect(rows.map(row => row.stage)).toEqual(expect.arrayContaining(["WORKER_PLAYBACK_REQUEST_POSTED", "WORKER_PREFIX_RESPONSE_RECEIVED_MAIN"]));
+      for (const row of rows) {
+        expect(row.message_id).toBe(777);
+        expect(row.intent_id).toBe(42);
+        expect(Number.isFinite(row.ts_ms)).toBe(true);
+      }
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("routes warm-prefix progress and cancels one batch member without cancelling the batch", async () => {

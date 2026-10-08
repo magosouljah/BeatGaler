@@ -42,6 +42,7 @@ export interface WebTransportSessionPublic {
   ok?: boolean;
   mode: "galer-direct-temp-mtproto";
   session_id: string;
+  user_id?: string | null;
   transport_id: string;
   transport_user_id: string | null;
   transport_username: string | null;
@@ -52,8 +53,26 @@ export interface WebTransportSessionPublic {
   heartbeat_interval_ms: number;
   heartbeat_timeout_ms: number;
   token_rotation_enabled: boolean;
+  lease_state?: "ASSIGNING" | "ACTIVE" | "STOPPING" | null;
   temp_auth_required: boolean;
   temp_auth: WebTransportTempAuthPublic;
+  /** Non-authoritative PostgreSQL shortcut; Telegram INDEX remains authoritative. */
+  index_pointer: { message_id: number; revision: number | null } | null;
+}
+
+export interface WebTransportMembershipProof {
+  state: "bot_visible";
+  source: "bot_api_getChat";
+  vault_chat_id: string;
+  channel_id: string | null;
+  transport_id: string;
+  expected_bot_id: string | null;
+}
+
+export interface WebTransportActivationResult {
+  activated: true;
+  status?: string;
+  membership?: WebTransportMembershipProof | null;
 }
 
 export interface WebTransportSession extends WebTransportSessionPublic {
@@ -89,10 +108,72 @@ export interface WebTransportOperationResponse {
   operation_id?: string;
   capability?: WebTransportCapabilityPublic;
   credential_refresh?: WebTransportSessionPublic | null;
+  operation_liveness_timeout_ms?: number;
+}
+
+export interface WebTransportOperationRenewalResponse {
+  ok?: boolean;
+  expired?: boolean;
+  liveness_timeout_ms?: number;
 }
 
 const TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS = 2;
 const WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS = 70_000;
+const WEB_TRANSPORT_TAB_ID_KEY = "beatgaler:web-transport-tab-id:v1";
+const WEB_TRANSPORT_DOCUMENT_GENERATION_KEY = "beatgaler:web-transport-document-generation:v1";
+
+export interface WebTransportDocumentContext {
+  tab_id: string;
+  document_id: string;
+  generation: number;
+}
+
+let cachedWebTransportDocumentContext: WebTransportDocumentContext | null = null;
+
+function webTransportContextId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `ctx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function getWebTransportDocumentContext(): WebTransportDocumentContext {
+  if (cachedWebTransportDocumentContext) return { ...cachedWebTransportDocumentContext };
+
+  const documentId = webTransportContextId();
+  let tabId = webTransportContextId();
+  let generation = 1;
+
+  try {
+    if (typeof window !== "undefined") {
+      const storedTabId = window.sessionStorage.getItem(WEB_TRANSPORT_TAB_ID_KEY);
+      if (storedTabId) {
+        tabId = storedTabId;
+      } else {
+        window.sessionStorage.setItem(WEB_TRANSPORT_TAB_ID_KEY, tabId);
+      }
+
+      const previousGeneration = Number(
+        window.sessionStorage.getItem(WEB_TRANSPORT_DOCUMENT_GENERATION_KEY) || 0,
+      );
+      generation =
+        Number.isSafeInteger(previousGeneration) && previousGeneration >= 0
+          ? previousGeneration + 1
+          : 1;
+      window.sessionStorage.setItem(
+        WEB_TRANSPORT_DOCUMENT_GENERATION_KEY,
+        String(generation),
+      );
+    }
+  } catch {
+    // Private browsing/storage policy failures still get a per-document context.
+  }
+
+  cachedWebTransportDocumentContext = {
+    tab_id: tabId,
+    document_id: documentId,
+    generation,
+  };
+  return { ...cachedWebTransportDocumentContext };
+}
 
 export function isTransientWebTempAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -293,9 +374,10 @@ export async function renewWebTransportSession(session: WebTransportSession): Pr
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-export async function activateWebTransportSession(session: WebTransportSessionPublic): Promise<void> {
-  const response = await transportRequest<{ activated?: boolean }>("/transport/session/activate", sessionIdentity(session));
+export async function activateWebTransportSession(session: WebTransportSessionPublic): Promise<WebTransportActivationResult> {
+  const response = await transportRequest<Partial<WebTransportActivationResult>>("/transport/session/activate", sessionIdentity(session));
   if (response.activated !== true) throw new Error("Galer Cloud could not activate this Web storage session.");
+  return response as WebTransportActivationResult;
 }
 
 export async function heartbeatWebTransportSession(session: WebTransportSession): Promise<{
@@ -323,15 +405,17 @@ export async function beginWebTransportOperation(
   waitMs: number | null;
   credentialRefresh: WebTransportSession | null;
   operationId: string | null;
+  livenessTimeoutMs: number | null;
 }> {
   const response = await transportRequest<WebTransportOperationResponse>("/transport/operation/begin", {
     ...sessionIdentity(session),
     kind,
     scope,
+    documentContext: getWebTransportDocumentContext(),
   });
   assertNoPermanentCredentials(response);
   if (response.expired === true) {
-    return { expired: true, waitMs: null, credentialRefresh: null, operationId: null };
+    return { expired: true, waitMs: null, credentialRefresh: null, operationId: null, livenessTimeoutMs: null };
   }
   if (response.refresh_required === true || response.temp_auth_required === true) {
     return {
@@ -339,6 +423,7 @@ export async function beginWebTransportOperation(
       waitMs: null,
       credentialRefresh: await renewWebTransportSession(session),
       operationId: null,
+      livenessTimeoutMs: null,
     };
   }
   const operationId = typeof response.operation_id === "string" && response.operation_id ? response.operation_id : null;
@@ -350,6 +435,7 @@ export async function beginWebTransportOperation(
     waitMs: response.wait === true ? Math.min(1000, Math.max(100, Number(response.retry_after_ms) || 250)) : null,
     credentialRefresh: null,
     operationId,
+    livenessTimeoutMs: operationId ? Math.max(5_000, Number(response.operation_liveness_timeout_ms) || 15_000) : null,
   };
 }
 
@@ -383,6 +469,24 @@ export async function endWebTransportOperation(
   });
 }
 
+export async function renewWebTransportOperation(
+  session: Pick<WebTransportSession, "session_id" | "generation">,
+  operationId: string,
+): Promise<{ expired: boolean; livenessTimeoutMs: number | null }> {
+  const response = await transportRequest<WebTransportOperationRenewalResponse>("/transport/operation/renew", {
+    sessionId: session.session_id,
+    generation: session.generation,
+    operationId,
+  });
+  assertNoPermanentCredentials(response);
+  return {
+    expired: response.expired === true || response.ok !== true,
+    livenessTimeoutMs: Number.isFinite(Number(response.liveness_timeout_ms))
+      ? Math.max(5_000, Number(response.liveness_timeout_ms))
+      : null,
+  };
+}
+
 export async function stopWebTransportSession(
   session: Pick<WebTransportSessionPublic, "session_id" | "generation">,
 ): Promise<void> {
@@ -407,6 +511,8 @@ export async function ensureWebTransportTopic(beatId: string, beatName: string):
 /** Records the authoritative INDEX pointer and the small routing delta produced by the same commit. */
 export async function commitWebTransportIndexPointer(input: {
   messageId: number;
+  expectedMessageId?: number | null;
+  pointerSource?: "publish" | "pin_recovery" | "history_recovery" | "migration";
   sourceId: string;
   beatCount: number;
   routingChanges?: Record<string, number | null>;

@@ -7,24 +7,26 @@ function source(path: string): string {
 }
 
 describe("Issue #97 INDEX priority", () => {
-  it("keeps INDEX behind startup WARM with an explicit coordinator barrier", () => {
+  it("opens INDEX after Direct connection without waiting for startup WARM", () => {
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
     expect(coordinator).toContain("waitUntilIndexAllowed");
-    expect(coordinator).toContain("await this.indexBarrierPromise");
+    expect(coordinator).toContain("await this.connect()");
+    expect(coordinator).not.toContain("await this.indexBarrierPromise");
     expect(transport).toContain("await this.indexBarrier()");
   });
 
-  it("does not start INDEX while WARM exists or Play is critical", () => {
+  it("lets INDEX run during WARM but still pauses for Play critical", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
-    expect(worker).toContain('playbackSchedulerState !== "PLAY_CRITICAL" && !hasWarmWork()');
+    expect(worker).toContain('return playbackSchedulerState !== "PLAY_CRITICAL";');
+    expect(worker).not.toContain("!hasWarmWork()");
     expect(worker).toContain("await waitUntilIndexPriorityAllowed()");
     expect(worker).toContain("if (!indexPriorityAllowed())");
   });
 
-  it("aborts the INDEX byte transfer for Play/WARM and retries later", () => {
+  it("aborts the INDEX byte transfer for Play but never for WARM", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
     expect(worker).toContain("activeIndexAbortController");
@@ -32,7 +34,7 @@ describe("Issue #97 INDEX priority", () => {
     expect(worker).toContain("controller.abort();");
     expect(worker).toContain("abortSignal: controller.signal");
     expect(worker).toContain('preemptActiveIndex("play")');
-    expect(worker).toContain('preemptActiveIndex("warm")');
+    expect(worker).not.toContain('preemptActiveIndex("warm")');
     expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN",');
     expect(worker).toContain('playTrace("INDEX_DONE"');
   });

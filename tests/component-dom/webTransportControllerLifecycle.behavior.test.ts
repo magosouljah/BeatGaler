@@ -61,6 +61,7 @@ function harness() {
     replaceCredentials: vi.fn(async () => {}),
     verifyIdentity: vi.fn(async () => {}),
     verifyReady: vi.fn(async () => {}),
+    abortImmediately: vi.fn(),
     shutdown: vi.fn(async () => {}),
   };
   const api: WebTransportControlApi = {
@@ -80,6 +81,31 @@ describe("WebTransportController lifecycle behavior", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("keeps session-only startup available while vault operations wait for the peer", async () => {
+    const { runtime, api, controller } = harness();
+    const identity = deferred<void>();
+    const peer = deferred<void>();
+    vi.mocked(runtime.verifyIdentity).mockReturnValue(identity.promise);
+    vi.mocked(runtime.verifyReady).mockReturnValue(peer.promise);
+
+    await expect(controller.connect()).resolves.toMatchObject({ session_id: "session-1" });
+    let vaultReady = false;
+    const pending = controller.waitForVaultPeerReady().then(() => { vaultReady = true; });
+    await Promise.resolve();
+    expect(vaultReady).toBe(false);
+    expect(api.begin).not.toHaveBeenCalled();
+
+    identity.resolve();
+    await Promise.resolve();
+    expect(vaultReady).toBe(false);
+    expect(runtime.shutdown).not.toHaveBeenCalled();
+    peer.resolve();
+    await pending;
+    expect(vaultReady).toBe(true);
+    expect(api.reserve).toHaveBeenCalledOnce();
+    await controller.disconnect();
   });
 
   it("resolves playback connect while getMe/getChat remain pending and blocks writes until both finish", async () => {
@@ -131,6 +157,39 @@ describe("WebTransportController lifecycle behavior", () => {
     await expect(controller.beginOperation("commit_edit", { objectType: "beat", objectIds: ["beat-1"] }))
       .rejects.toThrow();
     expect(api.authorize).not.toHaveBeenCalled();
+  });
+
+  it("keeps a healthy session and Worker when only the vault peer is unresolved, then retries verification", async () => {
+    const { runtime, api, controller } = harness();
+    const peerMiss = Object.assign(new Error("Peer is not found in local cache"), { code: "PEER_NOT_RESOLVED" });
+    vi.mocked(runtime.verifyReady).mockRejectedValueOnce(peerMiss).mockRejectedValueOnce(peerMiss).mockResolvedValue(undefined);
+
+    const connected = await controller.connect();
+    await expect(controller.beginOperation("get_index", { objectType: "index", objectIds: ["pinned"] }))
+      .rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    expect(runtime.shutdown).not.toHaveBeenCalled();
+    expect(api.stop).not.toHaveBeenCalled();
+    expect(api.begin).not.toHaveBeenCalled();
+
+    const lease = await controller.beginOperation("get_index", { objectType: "index", objectIds: ["pinned"] });
+    expect(lease.operationId).toBe("op-1");
+    expect(vi.mocked(runtime.verifyReady)).toHaveBeenCalledTimes(3);
+    expect(api.reserve).toHaveBeenCalledOnce();
+    expect(await controller.connect()).toBe(connected);
+    await controller.endOperation(lease);
+    await controller.disconnect();
+  });
+
+  it("fails closed when invalid identity accompanies a peer cache miss", async () => {
+    const { runtime, api, controller } = harness();
+    const peerMiss = Object.assign(new Error("Peer is not found in local cache"), { code: "PEER_NOT_RESOLVED" });
+    vi.mocked(runtime.verifyIdentity).mockRejectedValue(new Error("AUTH_KEY_UNREGISTERED"));
+    vi.mocked(runtime.verifyReady).mockRejectedValue(peerMiss);
+
+    await controller.connect();
+    await vi.waitFor(() => expect(runtime.shutdown).toHaveBeenCalledOnce());
+    expect(api.stop).toHaveBeenCalledWith(expect.objectContaining({ session_id: "session-1" }));
+    expect(api.begin).not.toHaveBeenCalled();
   });
 
   it("does not publish a late session when logout wins during reserve", async () => {
@@ -221,6 +280,66 @@ describe("WebTransportController lifecycle behavior", () => {
     // Expiry clears the old local generation. A later operation can only create
     // a brand-new session; it cannot authorize against the expired object.
     expect(api.authorize).not.toHaveBeenCalled();
+    await controller.disconnect();
+  });
+
+  it("renews an active operation lease and stops renewing it at disconnect", async () => {
+    vi.useFakeTimers();
+    const { api, controller } = harness();
+    api.renew = vi.fn(async () => ({ expired: false }));
+    await controller.connect();
+    await vi.advanceTimersByTimeAsync(1);
+    await controller.beginOperation("get_index", { objectType: "index", objectIds: ["pinned"] });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(api.renew).toHaveBeenCalledWith(expect.objectContaining({ session_id: "session-1" }), "op-1");
+    await controller.disconnect();
+    const renewalsAtDisconnect = vi.mocked(api.renew).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(api.renew).toHaveBeenCalledTimes(renewalsAtDisconnect);
+  });
+
+  it("fences an isolated replace_index Worker before the server can hand its lease to another installation", async () => {
+    vi.useFakeTimers();
+    const { runtime, api, controller } = harness();
+    const workerWrite = deferred<void>();
+    let workerHasWriteAuthority = true;
+    let bWasGranted = false;
+    const authorityAtGrant: boolean[] = [];
+
+    vi.mocked(runtime.abortImmediately!).mockImplementation(() => {
+      workerHasWriteAuthority = false;
+      workerWrite.reject(new Error("Worker terminated after liveness loss"));
+    });
+    api.renew = vi.fn(async () => { throw new Error("network partition"); });
+
+    // The fake Cloud refuses B until the 15s server lease ends. At that point
+    // it records whether A still has a usable Worker; this models the only
+    // dangerous handoff boundary for a pinned-index replacement.
+    setTimeout(() => {
+      authorityAtGrant.push(workerHasWriteAuthority);
+      bWasGranted = !workerHasWriteAuthority;
+    }, 15_000);
+
+    const writeA = controller.withOperation(
+      "replace_index",
+      { objectType: "index", objectIds: ["pinned"] },
+      async () => workerWrite.promise,
+    );
+    // The Worker is intentionally aborted by the watchdog before this test
+    // awaits the operation below; mark the expected rejection handled now.
+    void writeA.catch(() => {});
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(api.renew).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    expect(runtime.abortImmediately).toHaveBeenCalledOnce();
+    expect(workerHasWriteAuthority).toBe(false);
+    await expect(writeA).rejects.toThrow("Worker terminated");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(bWasGranted).toBe(true);
+    expect(authorityAtGrant).toEqual([false]);
     await controller.disconnect();
   });
 });

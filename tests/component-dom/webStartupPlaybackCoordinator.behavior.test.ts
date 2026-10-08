@@ -130,7 +130,7 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
     coordinator.dispose();
   });
 
-  it("captures fourteen local candidates once and keeps INDEX closed until every candidate reaches READY or FAILED", async () => {
+  it("captures fourteen local candidates once but opens INDEX as soon as Direct is connected", async () => {
     localStorage.setItem("beatvault:sort:v2", "manual");
     updatePlaybackRoutingCacheFromManifest({
       beats: Array.from({ length: 20 }, (_, index) => manifestBeat(index + 1)),
@@ -150,22 +150,18 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
     );
 
     const startup = coordinator.start();
-    const barrier = coordinator.waitUntilIndexAllowed();
-    let barrierSettled = false;
-    void barrier.then(() => { barrierSettled = true; });
+    let startupSettled = false;
+    void startup.then(() => { startupSettled = true; });
 
     await vi.waitFor(() => expect(source.prefetch).toHaveBeenCalledTimes(14));
-    for (let index = 1; index <= 13; index += 1) harness.prefetchDeferred.get(1000 + index)!.resolve();
-    await Promise.resolve();
-    expect(barrierSettled).toBe(false);
+    await expect(coordinator.waitUntilIndexAllowed()).resolves.toBeUndefined();
+    expect(startupSettled).toBe(false);
+    expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce();
 
-    // FAILED is a valid individual terminal for the startup barrier. It must not
-    // wait for the rest of the batch completion object or masquerade as READY.
+    for (let index = 1; index <= 13; index += 1) harness.prefetchDeferred.get(1000 + index)!.resolve();
     harness.prefetchDeferred.get(1014)!.reject(Object.assign(new Error("missing"), { code: "ROUTE_MISSING" }));
     await expect(startup).resolves.toBeUndefined();
-    await expect(barrier).resolves.toBeUndefined();
-    expect(barrierSettled).toBe(true);
-    expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce();
+    expect(startupSettled).toBe(true);
     coordinator.dispose();
   });
 

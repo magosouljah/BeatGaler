@@ -5,9 +5,12 @@ import {
   bindWebTransportSession,
   endWebTransportOperation,
   heartbeatWebTransportSession,
+  renewWebTransportOperation,
   reserveWebTransportSession,
   stopWebTransportSession,
   type WebTransportCapabilityScope,
+  type WebTransportActivationResult,
+  type WebTransportMembershipProof,
   type WebTransportSession,
   type WebTransportSessionPublic,
 } from "./webTransportSession";
@@ -17,14 +20,16 @@ export interface WebTransportRuntime {
   initialize(session: WebTransportSession, startupMessageIds: readonly number[]): Promise<void>;
   replaceCredentials(session: WebTransportSession): Promise<void>;
   verifyIdentity(session: WebTransportSession): Promise<void>;
-  verifyReady(session: WebTransportSession): Promise<void>;
+  verifyReady(session: WebTransportSession, membership?: WebTransportMembershipProof | null): Promise<void>;
+  /** Irrevocably terminates the Worker without waiting for graceful cleanup. */
+  abortImmediately?(): void;
   shutdown(): Promise<void>;
 }
 
 export interface WebTransportControlApi {
   reserve(): Promise<WebTransportSessionPublic>;
   bind(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession>;
-  activate(session: WebTransportSessionPublic): Promise<void>;
+  activate(session: WebTransportSessionPublic): Promise<WebTransportActivationResult | void>;
   heartbeat(session: WebTransportSession): Promise<{ expired: boolean; credentialRefresh: WebTransportSession | null }>;
   authorize(session: WebTransportSession, operationId: string, kind: string, scope: WebTransportCapabilityScope): Promise<void>;
   begin(session: WebTransportSession, kind: string, scope: WebTransportCapabilityScope): Promise<{
@@ -32,6 +37,11 @@ export interface WebTransportControlApi {
     waitMs: number | null;
     credentialRefresh: WebTransportSession | null;
     operationId: string | null;
+    livenessTimeoutMs?: number | null;
+  }>;
+  renew?(session: Pick<WebTransportSession, "session_id" | "generation">, operationId: string): Promise<{
+    expired: boolean;
+    livenessTimeoutMs?: number | null;
   }>;
   end(session: Pick<WebTransportSession, "session_id" | "generation">, operationId: string): Promise<void>;
   stop(session: Pick<WebTransportSessionPublic, "session_id" | "generation">): Promise<void>;
@@ -42,6 +52,7 @@ export interface WebTransportOperationLease {
   sessionId: string;
   generation: number;
   scope: WebTransportCapabilityScope;
+  livenessTimeoutMs: number;
 }
 
 export interface WebTransportStartupConfig {
@@ -55,22 +66,31 @@ const defaultApi: WebTransportControlApi = {
   authorize: authorizeWebTransportOperation,
   heartbeat: heartbeatWebTransportSession,
   begin: beginWebTransportOperation,
+  renew: renewWebTransportOperation,
   end: endWebTransportOperation,
   stop: stopWebTransportSession,
 };
 
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds));
 const MAX_STARTUP_BEATS = 14;
+const OPERATION_LIVENESS_RENEW_INTERVAL_MS = 4_000;
+const DEFAULT_OPERATION_LIVENESS_TIMEOUT_MS = 15_000;
 
-type StartupBranchResult = { ok: true } | { ok: false; error: unknown };
+interface OperationLivenessTimers {
+  renewal: ReturnType<typeof setTimeout> | null;
+  watchdog: ReturnType<typeof setTimeout> | null;
+  timeoutMs: number;
+}
 
-async function settleStartupBranch(work: Promise<void>): Promise<StartupBranchResult> {
-  try {
-    await work;
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error };
-  }
+function isPeerResolutionFailure(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "PEER_NOT_RESOLVED");
+}
+
+async function verifyIdentityAndVault(identity: Promise<void>, vault: Promise<void>): Promise<void> {
+  const [identityResult, vaultResult] = await Promise.allSettled([identity, vault]);
+  // A peer cache miss must never mask a simultaneous invalid auth/session.
+  if (identityResult.status === "rejected") throw identityResult.reason;
+  if (vaultResult.status === "rejected") throw vaultResult.reason;
 }
 
 function normalizeStartupMessageIds(values: readonly number[]): number[] {
@@ -92,7 +112,9 @@ export class WebTransportController {
   private connectPromise: Promise<WebTransportSession> | null = null;
   private refreshPromise: Promise<void> | null = null;
   private verificationPromise: Promise<void> | null = null;
+  private peerResolutionFailed = false;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private operationLivenessTimers = new Map<string, OperationLivenessTimers>();
   private closed = false;
   private lifecycleGeneration = 0;
   private readonly startupMessageIds: number[];
@@ -132,7 +154,6 @@ export class WebTransportController {
   private async openSession(lifecycleGeneration: number): Promise<WebTransportSession> {
     const started = Date.now();
     let bootstrap: WebTransportSessionPublic | null = null;
-    let activationResultPromise: Promise<StartupBranchResult> | null = null;
 
     playTrace("CONTROLLER_SESSION_PREPARE_BEGIN", { startup_beat_count: this.startupMessageIds.length });
     try {
@@ -141,25 +162,12 @@ export class WebTransportController {
       bootstrap = await this.api.reserve();
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
 
-      const activateStarted = Date.now();
-      activationResultPromise = settleStartupBranch(
-        observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!)),
-      ).then(result => {
-        if (result.ok) playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", { elapsed_ms: Date.now() - activateStarted });
-        return result;
-      });
-
       const session = await observePlayStep("DIRECT_PREPARE", () => this.api.bind(bootstrap!));
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_PREPARE_DONE", {
         elapsed_ms: Date.now() - started,
         startup_message_count: this.startupMessageIds.length,
       });
-
-      const activationResult = await activationResultPromise;
-      if (!activationResult.ok) throw activationResult.error;
-      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
-      playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
 
       const initializeStarted = Date.now();
       await observePlayStep("DIRECT_INITIALIZE", async () => {
@@ -168,35 +176,62 @@ export class WebTransportController {
       if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
       playTrace("CONTROLLER_SESSION_INITIALIZE_DONE", { elapsed_ms: Date.now() - initializeStarted });
 
-      // MTProto + startup-media setup is the playback readiness boundary.
-      // Identity/vault verification is intentionally background work so it does
-      // not extend OPEN->AUDIO or CLICK PLAY->AUDIO.
+      // Telegram supplies the private vault peer in the membership update.
+      // Start mtcute's update listener before Cloud invites/promotes this bot.
+      const activateStarted = Date.now();
+      const activation = await observePlayStep("DIRECT_ACTIVATE", () => this.api.activate(bootstrap!));
+      if (!this.isCurrentLifecycle(lifecycleGeneration)) throw new Error("Galer Cloud Web transport startup was superseded.");
+      playTrace("CONTROLLER_SESSION_ACTIVATE_DONE", {
+        elapsed_ms: Date.now() - activateStarted,
+        user_id: session.user_id || null,
+        vault_chat_id: session.chat_id,
+        transport_id: session.transport_id,
+        expected_bot_id: session.temp_auth.expected_bot_id,
+        lease_state: session.lease_state || null,
+        membership_state: activation?.membership?.state || null,
+        membership_source: activation?.membership?.source || null,
+      });
+      playTrace("CONTROLLER_SESSION_MEDIA_GATE_OPEN");
+
+      // MTProto activation makes session-only commands available. Vault reads
+      // must wait for background identity and peer verification separately.
       this.session = session;
       this.scheduleHeartbeat(session.heartbeat_interval_ms);
-      this.startBackgroundVerification(session, lifecycleGeneration);
+      this.startBackgroundVerification(session, lifecycleGeneration, activation?.membership || null);
       playTrace("CONTROLLER_SESSION_DATA_PLANE_READY", { total_ms: Date.now() - started });
       return session;
     } catch (error) {
-      if (activationResultPromise) await activationResultPromise;
       await this.runtime.shutdown().catch(() => {});
       if (bootstrap) await this.api.stop(bootstrap).catch(() => {});
       throw error;
     }
   }
 
-  private startBackgroundVerification(session: WebTransportSession, lifecycleGeneration = this.lifecycleGeneration): void {
+  private startBackgroundVerification(
+    session: WebTransportSession,
+    lifecycleGeneration = this.lifecycleGeneration,
+    membership: WebTransportMembershipProof | null = null,
+  ): void {
     const verification = (async () => {
       try {
-        await Promise.all([
+        await verifyIdentityAndVault(
           observePlayStep("DIRECT_BACKGROUND_GET_ME", () => this.runtime.verifyIdentity(session)),
-          observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => this.runtime.verifyReady(session)),
-        ]);
+          observePlayStep("DIRECT_BACKGROUND_GET_CHAT", () => membership
+            ? this.runtime.verifyReady(session, membership)
+            : this.runtime.verifyReady(session)),
+        );
+        this.peerResolutionFailed = false;
         if (this.session === session && this.isCurrentLifecycle(lifecycleGeneration)) playTrace("CONTROLLER_BACKGROUND_VERIFY_READY");
       } catch (error) {
         playTrace("CONTROLLER_BACKGROUND_VERIFY_FAILED", {
           error_name: error instanceof Error ? error.name : "unknown",
         });
-        await this.failClosedSession(session);
+        if (isPeerResolutionFailure(error)) {
+          this.peerResolutionFailed = true;
+          playTrace("CONTROLLER_PEER_RESOLUTION_DEFERRED");
+        } else {
+          await this.failClosedSession(session);
+        }
         throw error;
       }
     })();
@@ -208,18 +243,35 @@ export class WebTransportController {
   }
 
   private async waitUntilVerified(): Promise<void> {
+    if (this.peerResolutionFailed && !this.verificationPromise && this.session) {
+      this.startBackgroundVerification(this.session);
+    }
     const verification = this.verificationPromise;
     if (verification) await verification;
     if (!this.session) throw new Error("Galer Cloud Web transport verification failed.");
   }
 
-  private async failClosedSession(session: WebTransportSession): Promise<void> {
+  /** Vault RPCs share this boundary; session-only focus/identity can proceed. */
+  async waitForVaultPeerReady(): Promise<void> {
+    while (!this.closed) {
+      const session = await this.connect();
+      await this.waitUntilVerified();
+      if (this.session !== session || this.refreshPromise) continue;
+      playTrace("CONTROLLER_VAULT_PEER_READY");
+      return;
+    }
+    throw new Error("Galer Cloud Web transport is closed.");
+  }
+
+  private async failClosedSession(session: WebTransportSession, runtimeAlreadyFenced = false): Promise<void> {
     if (this.session !== session) return;
     this.lifecycleGeneration += 1;
+    this.stopAllOperationLiveness();
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
-    await this.runtime.shutdown().catch(() => {});
+    this.peerResolutionFailed = false;
+    if (!runtimeAlreadyFenced) await this.runtime.shutdown().catch(() => {});
     await this.api.stop(session).catch(() => {});
   }
 
@@ -253,10 +305,10 @@ export class WebTransportController {
       playTrace("CONTROLLER_CREDENTIAL_REFRESH_BEGIN");
       try {
         await this.runtime.replaceCredentials(session);
-        await Promise.all([
+        await verifyIdentityAndVault(
           this.runtime.verifyIdentity(session),
           this.runtime.verifyReady(session),
-        ]);
+        );
         if (!this.isCurrentLifecycle(lifecycleGeneration)) {
           throw new Error("Galer Cloud Web transport refresh was superseded.");
         }
@@ -266,10 +318,17 @@ export class WebTransportController {
         playTrace("CONTROLLER_CREDENTIAL_REFRESH_FAILED", {
           error_name: error instanceof Error ? error.name : "unknown",
         });
+        if (isPeerResolutionFailure(error) && this.isCurrentLifecycle(lifecycleGeneration)) {
+          this.session = session;
+          this.peerResolutionFailed = true;
+          throw error;
+        }
         if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = null;
         if (this.isCurrentLifecycle(lifecycleGeneration)) this.lifecycleGeneration += 1;
+        this.stopAllOperationLiveness();
         this.session = null;
+        this.peerResolutionFailed = false;
         await this.runtime.shutdown().catch(() => {});
         throw error;
       }
@@ -282,9 +341,11 @@ export class WebTransportController {
 
   private async resetLocalSession(): Promise<void> {
     this.lifecycleGeneration += 1;
+    this.stopAllOperationLiveness();
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.session = null;
+    this.peerResolutionFailed = false;
     const verification = this.verificationPromise;
     this.verificationPromise = null;
     if (verification) await verification.catch(() => {});
@@ -325,12 +386,15 @@ export class WebTransportController {
           ).catch(() => {});
           throw error;
         }
-        return {
+        const lease = {
           operationId: response.operationId,
           sessionId: session.session_id,
           generation: session.generation,
           scope,
+          livenessTimeoutMs: response.livenessTimeoutMs || DEFAULT_OPERATION_LIVENESS_TIMEOUT_MS,
         };
+        this.startOperationLiveness(lease);
+        return lease;
       }
       throw new Error("Galer Cloud returned incomplete operation information.");
     }
@@ -338,7 +402,85 @@ export class WebTransportController {
   }
 
   async endOperation(lease: WebTransportOperationLease): Promise<void> {
+    this.stopOperationLiveness(lease.operationId);
     await this.api.end({ session_id: lease.sessionId, generation: lease.generation }, lease.operationId);
+  }
+
+  private startOperationLiveness(lease: WebTransportOperationLease): void {
+    if (!this.api.renew) return;
+    const timeoutMs = Math.max(5_000, Number(lease.livenessTimeoutMs) || DEFAULT_OPERATION_LIVENESS_TIMEOUT_MS);
+    // The server will not release an INDEX lock until its full liveness TTL.
+    // Stop the local Worker well before that point so an isolated tab can never
+    // keep writing Direct while another installation is admitted after expiry.
+    const failClosedAfter = (value: number) => Math.max(1_000, Math.floor(value * 2 / 3));
+    const renewEvery = (value: number) => Math.max(1_000, Math.min(OPERATION_LIVENESS_RENEW_INTERVAL_MS, Math.floor(value / 3)));
+    const armWatchdog = () => {
+      const active = this.operationLivenessTimers.get(lease.operationId);
+      if (!active) return;
+      if (active.watchdog) clearTimeout(active.watchdog);
+      active.watchdog = setTimeout(() => {
+        if (!this.operationLivenessTimers.has(lease.operationId) || this.closed) return;
+        playTrace("CONTROLLER_OPERATION_LIVENESS_LOST_FAIL_CLOSED", { operation_id: lease.operationId });
+        this.stopOperationLiveness(lease.operationId);
+        // Worker shutdown is deliberately before the best-effort control-plane
+        // stop below. This is the local fencing boundary for Direct writes.
+        void this.failClosedOperationLiveness(lease);
+      }, failClosedAfter(active.timeoutMs));
+    };
+    const renew = async () => {
+      if (!this.operationLivenessTimers.has(lease.operationId) || this.closed) return;
+      try {
+        const result = await this.api.renew!({ session_id: lease.sessionId, generation: lease.generation }, lease.operationId);
+        if (result.expired) {
+          playTrace("CONTROLLER_OPERATION_LIVENESS_EXPIRED", { operation_id: lease.operationId });
+          this.stopOperationLiveness(lease.operationId);
+          void this.failClosedOperationLiveness(lease);
+          return;
+        }
+        const active = this.operationLivenessTimers.get(lease.operationId);
+        if (!active) return;
+        active.timeoutMs = Math.max(5_000, Number(result.livenessTimeoutMs) || active.timeoutMs);
+        armWatchdog();
+      } catch {
+        // Retry while the independently armed watchdog still proves that the
+        // server has acknowledged this operation recently.
+        playTrace("CONTROLLER_OPERATION_LIVENESS_RETRY", { operation_id: lease.operationId });
+      }
+      const active = this.operationLivenessTimers.get(lease.operationId);
+      if (active && !this.closed) {
+        active.renewal = setTimeout(() => { void renew(); }, renewEvery(active.timeoutMs));
+      }
+    };
+    this.stopOperationLiveness(lease.operationId);
+    this.operationLivenessTimers.set(lease.operationId, { renewal: null, watchdog: null, timeoutMs });
+    armWatchdog();
+    const active = this.operationLivenessTimers.get(lease.operationId);
+    if (active) active.renewal = setTimeout(() => { void renew(); }, renewEvery(active.timeoutMs));
+  }
+
+  private async failClosedOperationLiveness(lease: WebTransportOperationLease): Promise<void> {
+    const session = this.session;
+    if (!session || session.session_id !== lease.sessionId || session.generation !== lease.generation) return;
+    // Do not use the graceful shutdown path here: it can wait for an active
+    // Worker command, which would consume the entire fence margin before Cloud
+    // is allowed to reassign the INDEX lease.
+    if (this.runtime.abortImmediately) {
+      try { this.runtime.abortImmediately(); } catch {}
+      await this.failClosedSession(session, true);
+      return;
+    }
+    await this.failClosedSession(session);
+  }
+
+  private stopOperationLiveness(operationId: string): void {
+    const timers = this.operationLivenessTimers.get(operationId);
+    if (timers?.renewal) clearTimeout(timers.renewal);
+    if (timers?.watchdog) clearTimeout(timers.watchdog);
+    this.operationLivenessTimers.delete(operationId);
+  }
+
+  private stopAllOperationLiveness(): void {
+    for (const operationId of this.operationLivenessTimers.keys()) this.stopOperationLiveness(operationId);
   }
 
   async withOperation<T>(kind: string, scope: WebTransportCapabilityScope, operation: () => Promise<T>): Promise<T> {
@@ -354,6 +496,7 @@ export class WebTransportController {
     if (this.closed) return;
     this.closed = true;
     this.lifecycleGeneration += 1;
+    this.stopAllOperationLiveness();
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     const session = this.session;

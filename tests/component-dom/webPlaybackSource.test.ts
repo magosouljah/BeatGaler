@@ -87,6 +87,42 @@ afterEach(() => {
 });
 
 describe("Web MASTER playback source", () => {
+  it("preserves PEER_NOT_RESOLVED instead of turning a pending vault into a transfer failure", async () => {
+    const peerMiss = Object.assign(new Error("Vault peer unavailable"), { code: "PEER_NOT_RESOLVED" });
+    const prefetchFiles = vi.fn(async () => { throw peerMiss; });
+    const manager = new WebPlaybackSourceManager({
+      prefetchFiles,
+      streamFile: vi.fn(async () => { throw new Error("stream must not start"); }),
+    });
+    await expect(manager.prefetch("beat-peer", 501)).rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    await expect(manager.prefetch("beat-peer", 501)).rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    expect(prefetchFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the Play intent when INDEX cancels its speculative warm and starts the foreground stream", async () => {
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:foreground-after-warm"), revokeObjectURL: vi.fn() });
+    let terminal!: (value: { messageId: number; status: "FAILED"; code: "CANCELLED"; error: string }) => void;
+    const prefetchFiles = vi.fn(async (_inputs, _onChunk, onTerminal) => {
+      terminal = onTerminal!;
+      return { completed: new Promise<WebTransportPrefetchBatchResult>(() => {}), cancelMessage: vi.fn(), cancel: vi.fn() };
+    });
+    const focusPlayback = vi.fn(async () => {});
+    const releasePlaybackFocus = vi.fn(async () => {});
+    const streamFile = vi.fn(async () => ({ completed: new Promise<never>(() => {}), cancel: vi.fn() }));
+    const manager = new WebPlaybackSourceManager({ prefetchFiles, focusPlayback, releasePlaybackFocus, streamFile });
+    const warm = manager.prefetch("beat-index-race", 501);
+    void warm.catch(() => {});
+    await vi.waitFor(() => expect(prefetchFiles).toHaveBeenCalledOnce());
+    const playing = manager.prepare("beat-index-race", 501, "audio/mpeg", 1);
+    terminal({ messageId: 501, status: "FAILED", code: "CANCELLED", error: "Cancelled." });
+
+    await expect(warm).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(playing).resolves.toMatchObject({ url: "blob:foreground-after-warm" });
+    await vi.waitFor(() => expect(streamFile).toHaveBeenCalledOnce());
+    expect(focusPlayback).toHaveBeenCalledWith(501, 1);
+    expect(releasePlaybackFocus).not.toHaveBeenCalled();
+  });
   it("replays completed MSE audio from retained bytes with a fresh Blob URL", async () => {
     vi.stubGlobal("MediaSource", FakeMediaSource);
     let sessionUrl = 0;
@@ -245,7 +281,7 @@ describe("Web MASTER playback source", () => {
     expect(prepared.url).toBe("blob:cloud-master");
     expect(cancelMessage).not.toHaveBeenCalled();
     expect(streamFile).toHaveBeenCalledWith(
-      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback" },
+      { messageId: 77, mimeType: "audio/mpeg", offsetBytes: 65536, purpose: "playback", traceIntentId: undefined },
       expect.any(Function),
     );
 
@@ -282,8 +318,8 @@ describe("Web MASTER playback source", () => {
     const prepared = await manager.prepare("beat-b", 2, "audio/mpeg", 1);
     expect(prepared.url).toBe("blob:promoted");
     await expect(warmB).resolves.toBeUndefined();
-    expect(focusPlayback).toHaveBeenCalledWith(2);
-    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 2, mimeType: "audio/mpeg", offsetBytes: 0 });
+    expect(focusPlayback).toHaveBeenCalledWith(2, 1);
+    expect(prefetchFile).toHaveBeenCalledWith({ messageId: 2, mimeType: "audio/mpeg", offsetBytes: 0, traceIntentId: 1 });
 
     finishBatch(successfulBatch([{ messageId: 1 }]));
     await warmA;
@@ -320,21 +356,21 @@ describe("Web MASTER playback source", () => {
     await prepared.completed;
 
     expect(markPlaybackStable).not.toHaveBeenCalled();
-    expect(focusPlayback).toHaveBeenCalledWith(51);
+    expect(focusPlayback).toHaveBeenCalledWith(51, 1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
-    expect(markPlaybackStable).toHaveBeenCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenCalledWith(51, 1);
     expect(markPlaybackStable).toHaveBeenCalledTimes(1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: false, waiting: false });
-    expect(releasePlaybackFocus).toHaveBeenCalledWith(51);
+    expect(releasePlaybackFocus).toHaveBeenCalledWith(51, 1);
     expect(markPlaybackStable).toHaveBeenCalledTimes(1);
 
     manager.updatePlaybackState({ beatId: "beat-wait", currentTime: 0, playing: true, waiting: false });
     expect(focusPlayback).toHaveBeenCalledTimes(3);
-    expect(focusPlayback).toHaveBeenLastCalledWith(51);
+    expect(focusPlayback).toHaveBeenLastCalledWith(51, 1);
     expect(markPlaybackStable).toHaveBeenCalledTimes(2);
-    expect(markPlaybackStable).toHaveBeenLastCalledWith(51);
+    expect(markPlaybackStable).toHaveBeenLastCalledWith(51, 1);
   });
 
   it("stops retaining replay bytes at a zero cache budget without interrupting the active MSE stream", async () => {

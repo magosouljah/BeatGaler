@@ -266,6 +266,19 @@ function raw(value) {
     });
     assert.equal(jsonRollback.rollbackExportSha256, rollback.snapshot.manifest_sha256);
 
+    const bulkAuth = JSON.parse(JSON.stringify(persistedAuth));
+    bulkAuth.sessions = Object.fromEntries(Array.from({ length: 800 }, (_, index) => [
+      crypto.createHash('sha256').update(`bulk-session-${index}`).digest('hex'),
+      { userId: 'usr_cutover_1', createdAt: 7000, expiresAt: 9999999999999 },
+    ]));
+    await runtime.saveAuthSnapshot(bulkAuth);
+    await runtime.flush();
+    assert.equal(Object.keys((await loadAuthSnapshot(pool, cryptoConfig)).sessions).length, 800);
+    bulkAuth.sessions = {};
+    await runtime.saveAuthSnapshot(bulkAuth);
+    await runtime.flush();
+    assert.equal(Object.keys((await loadAuthSnapshot(pool, cryptoConfig)).sessions).length, 0);
+
     console.log(JSON.stringify({
       postgres_cutover_proven: true,
       staged_before_ready_proven: true,

@@ -172,8 +172,13 @@ async function replaceAuthSnapshot(pool, authData, cryptoConfig) {
     await client.query('DELETE FROM auth_sessions');
     for (const row of rows.sessions) {
       if (!row.expires_at) throw new Error(`Legacy session ${row.session_key_hash} has no expiresAt.`);
-      await client.query('INSERT INTO auth_sessions(session_key_hash,user_id,created_at,expires_at) VALUES($1,$2,$3,$4)',
-        [row.session_key_hash,row.user_id,row.created_at,row.expires_at]);
+    }
+    if (rows.sessions.length) {
+      await client.query(`INSERT INTO auth_sessions(session_key_hash,user_id,created_at,expires_at)
+        SELECT session_key_hash,user_id,created_at,expires_at
+        FROM jsonb_to_recordset($1::jsonb) AS sessions(
+          session_key_hash text,user_id text,created_at timestamptz,expires_at timestamptz
+        )`, [JSON.stringify(rows.sessions)]);
     }
 
     await client.query('DELETE FROM provider_identities');

@@ -39,12 +39,6 @@ describe("Web Cloud API origin policy", () => {
     window.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       requestedUrls.push(url);
-      if (url.endsWith("/auth/health")) {
-        return new Response(JSON.stringify({ ok: true, account_auth: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
       if (url.endsWith("/auth/login")) {
         return new Response(JSON.stringify({
           ok: true,
@@ -71,8 +65,7 @@ describe("Web Cloud API origin policy", () => {
 
     expect(user.id).toBe("user-1");
     expect(window.localStorage.getItem(API_KEY)).toBe(expectedBase);
-    expect(requestedUrls).toContain(`${expectedBase}/auth/health`);
-    expect(requestedUrls).toContain(`${expectedBase}/auth/login`);
+    expect(requestedUrls).toEqual([`${expectedBase}/auth/login`]);
     expect(requestedUrls.some(url => url.startsWith(STALE_LOOPBACK_API))).toBe(false);
     expect(syncSession).toHaveBeenCalledWith(null, expectedBase);
   });

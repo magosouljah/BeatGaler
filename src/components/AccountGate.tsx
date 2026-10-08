@@ -174,12 +174,10 @@ export async function resolveBeatGalerCloudApi(): Promise<string> {
   const remembered = localStorage.getItem(API_KEY);
   const sameOriginProxy = sameOriginProxyApi();
   if (platform.kind === "web") {
+    if (!sameOriginProxy) throw new Error("Could not resolve BeatGaler Cloud API.");
     if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);
-    if (sameOriginProxy && await probe(sameOriginProxy, 1500)) {
-      localStorage.setItem(API_KEY, sameOriginProxy);
-      return sameOriginProxy;
-    }
-    throw new Error("Could not reach BeatGaler Cloud.");
+    localStorage.setItem(API_KEY, sameOriginProxy);
+    return sameOriginProxy;
   }
   if (trustedRememberedApi(remembered) && await probe(remembered, 1200)) return remembered;
   if (LOCAL_API && await probe(LOCAL_API, 900)) {

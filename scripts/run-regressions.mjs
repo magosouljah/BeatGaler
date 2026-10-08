@@ -268,7 +268,8 @@ try {
   if (!app.includes('useTrashActions({') || !appShell.includes('onBeatRestored={handleBeatRestored}')) fail("App/AppShell no longer compose the extracted Trash actions owner.");
   if (app.includes('const deleteBeat = useCallback') || app.includes('const handleRemoveBulk = useCallback') || app.includes('recordOfflineTrashIntent(') || app.includes('removeBeatFromLibrary(')) fail("App.tsx reclaimed Trash mutation ownership.");
   if (!trashActions.includes('const deleteBeat = useCallback') || !trashActions.includes('const handleRemoveBulk = useCallback') || !trashActions.includes('const handleBeatRestored = useCallback')) fail("useTrashActions lost delete, bulk delete, or restore ownership.");
-  if (!trashActions.includes('libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash")') || !trashActions.includes('libraryStateManager.commitSnapshot(next, "bulk-remove")')) fail("Trash actions lost their explicit INDEX commit boundaries.");
+  if (!trashActions.includes('platform.trash.moveBeats([beat.id])') || !trashActions.includes('platform.capabilities.cloudTrashTransactions')) fail("Trash actions no longer route authoritative Web Trash through the platform port.");
+  if (!trashActions.includes('libraryStateManager.commitSnapshot(nextLibrary, "move-to-trash")') || !trashActions.includes('libraryStateManager.commitSnapshot(next, "bulk-remove")')) fail("Desktop Trash actions lost their explicit INDEX commit boundaries.");
   const restoredHandler = trashActions.slice(trashActions.indexOf('const handleBeatRestored = useCallback'));
   if (restoredHandler.includes('commitSnapshot(')) fail("Trash restore reintroduced a duplicate renderer-built INDEX publish.");
   console.log("PASS task 5.5 ownership guard: delete/bulk/restore live in useTrashActions and restore does not double-publish INDEX");

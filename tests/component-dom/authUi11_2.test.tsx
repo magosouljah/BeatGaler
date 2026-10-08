@@ -115,6 +115,49 @@ describe("F2 11.2 complete Auth UI", () => {
     host.remove();
   });
 
+  it("returns the Web auth gate to sign-in when the current account logs out", async () => {
+    localStorage.setItem("beatgaler:web-session-present:v1", "1");
+    sessionStorage.setItem("beatgaler:web-csrf:v1", "csrf-before-logout");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `${SAME_ORIGIN_API}/auth/session`) {
+        return new Response(JSON.stringify({
+          user: {
+            id: "user-1",
+            username: "producer#1234",
+            email: "producer@example.test",
+            storage_ready: true,
+          },
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { host, root } = await renderGate();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="app"]')?.textContent).toBe("Authenticated application");
+
+    localStorage.removeItem("beatgaler:web-session-present:v1");
+    sessionStorage.removeItem("beatgaler:web-csrf:v1");
+    await act(async () => {
+      window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+      await Promise.resolve();
+    });
+
+    expect(host.querySelector('[data-testid="app"]')).toBeNull();
+    expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Welcome back");
+    expect(host.querySelector<HTMLInputElement>("#auth-login-identifier")?.value).toBe("");
+    expect(host.querySelector<HTMLInputElement>("#auth-login-password")?.value).toBe("");
+
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
   it("keeps a remembered local shell visible when auth restore is transiently offline", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     localStorage.setItem("beatgaler:web-session-present:v1", "1");

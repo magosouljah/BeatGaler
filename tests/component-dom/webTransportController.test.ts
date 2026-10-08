@@ -85,7 +85,7 @@ function harness() {
 }
 
 describe("Galer Cloud Web transport lifecycle", () => {
-  it("overlaps activation with temp-auth binding and starts background verification after Worker media initialization", async () => {
+  it("starts the Worker listener before activation and verifies only after activation", async () => {
     const { controller, runtime, api } = harness();
     let finishBind!: () => void;
     let finishActivate!: () => void;
@@ -102,16 +102,15 @@ describe("Galer Cloud Web transport lifecycle", () => {
 
     await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
     expect(api.reserve).toHaveBeenCalledOnce();
-    expect(api.activate).toHaveBeenCalledOnce();
+    expect(api.activate).not.toHaveBeenCalled();
     expect(runtime.initialize).not.toHaveBeenCalled();
     expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
-    expect(vi.mocked(api.reserve).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.activate).mock.invocationCallOrder[0]);
-    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.bind).mock.invocationCallOrder[0]);
+    expect(vi.mocked(api.reserve).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.bind).mock.invocationCallOrder[0]);
 
     finishBind();
-    await Promise.resolve();
-    expect(runtime.initialize).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
+    expect(runtime.initialize).toHaveBeenCalledOnce();
     expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
 
@@ -121,7 +120,8 @@ describe("Galer Cloud Web transport lifecycle", () => {
     expect(runtime.initialize).toHaveBeenCalledOnce();
     expect(runtime.verifyIdentity).toHaveBeenCalledOnce();
     expect(runtime.verifyReady).toHaveBeenCalledOnce();
-    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]);
+    expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.activate).mock.invocationCallOrder[0]);
+    expect(vi.mocked(api.activate).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyIdentity).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.verifyReady).mock.invocationCallOrder[0]);
     await controller.disconnect();
@@ -156,65 +156,37 @@ describe("Galer Cloud Web transport lifecycle", () => {
     await controller.disconnect();
   });
 
-  it("waits for in-flight activation before stopping when temp auth binding fails", async () => {
+  it("never activates when temp auth binding fails and stops the lease", async () => {
     const { controller, runtime, api } = harness();
-    let finishActivate!: () => void;
-    const activationFinished = vi.fn();
-    const activateWaiting = new Promise<void>(resolve => {
-      finishActivate = () => {
-        activationFinished();
-        resolve();
-      };
-    });
-    vi.mocked(api.activate).mockReturnValueOnce(activateWaiting);
     vi.mocked(api.bind).mockRejectedValueOnce(new Error("temp auth failed"));
 
     const failure = controller.connect().catch(error => error as Error);
-    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
-    expect(api.stop).not.toHaveBeenCalled();
-    expect(runtime.shutdown).not.toHaveBeenCalled();
-
-    finishActivate();
     expect((await failure).message).toBe("temp auth failed");
+    expect(api.activate).not.toHaveBeenCalled();
     expect(runtime.initialize).not.toHaveBeenCalled();
     expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledWith(expect.objectContaining({ session_id: "web-session", generation: 7 }));
-    expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
   });
 
-  it("waits for vault activation before running Worker initialization and then cleans up an initialization failure", async () => {
+  it("does not activate when Worker listener initialization fails", async () => {
     const { controller, runtime, api } = harness();
-    let finishActivate!: () => void;
-    const activationFinished = vi.fn();
-    vi.mocked(api.activate).mockReturnValueOnce(new Promise<void>(resolve => {
-      finishActivate = () => {
-        activationFinished();
-        resolve();
-      };
-    }));
     vi.mocked(runtime.initialize).mockRejectedValueOnce(new Error("worker init failed"));
 
     const failure = controller.connect().catch(error => error as Error);
-    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
-    expect(runtime.initialize).not.toHaveBeenCalled();
-    expect(api.stop).not.toHaveBeenCalled();
-
-    finishActivate();
     expect((await failure).message).toBe("worker init failed");
     expect(runtime.initialize).toHaveBeenCalledOnce();
+    expect(api.activate).not.toHaveBeenCalled();
     expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
     expect(api.stop).toHaveBeenCalledOnce();
-    expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]);
-    expect(activationFinished.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.stop).mock.invocationCallOrder[0]);
   });
 
-  it("does not initialize Telegram media when activation fails while temp auth binding is still in flight", async () => {
+  it("cleans up initialized Worker when activation fails after listener startup", async () => {
     const { controller, runtime, api } = harness();
     let finishBind!: () => void;
     vi.mocked(api.bind).mockImplementationOnce(async () => {
@@ -224,13 +196,13 @@ describe("Galer Cloud Web transport lifecycle", () => {
     vi.mocked(api.activate).mockRejectedValueOnce(new Error("activation failed"));
 
     const failure = controller.connect().catch(error => error as Error);
-    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(api.bind).toHaveBeenCalledOnce());
     expect(api.stop).not.toHaveBeenCalled();
     finishBind();
-
+    await vi.waitFor(() => expect(api.activate).toHaveBeenCalledOnce());
     expect((await failure).message).toBe("activation failed");
-    expect(runtime.initialize).not.toHaveBeenCalled();
+    expect(runtime.initialize).toHaveBeenCalledOnce();
+    expect(vi.mocked(runtime.initialize).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.activate).mock.invocationCallOrder[0]);
     expect(runtime.verifyIdentity).not.toHaveBeenCalled();
     expect(runtime.verifyReady).not.toHaveBeenCalled();
     expect(runtime.shutdown).toHaveBeenCalledOnce();
@@ -258,6 +230,7 @@ describe("Galer Cloud Web transport lifecycle", () => {
       sessionId: "web-session",
       generation: 7,
       scope: uploadScope,
+      livenessTimeoutMs: 15_000,
     });
     await controller.disconnect();
   });

@@ -6,6 +6,7 @@ const harness = vi.hoisted(() => {
     onChunk: (chunk: ArrayBuffer, downloadedBytes: number, totalBytes: number) => void | Promise<void>;
   }> = [];
   const connect = vi.fn(async () => {});
+  const waitForVaultPeerReady = vi.fn(async () => {});
   const beginOperation = vi.fn(async (name: string) => ({
     operationId: `operation-${name}`,
     name,
@@ -17,10 +18,13 @@ const harness = vi.hoisted(() => {
   const markPlaybackStable = vi.fn(async () => {});
   const releasePlaybackFocus = vi.fn(async () => {});
   const prewarm = vi.fn();
+  const prefetch = vi.fn(async (input: { messageId: number }) => ({ messageId: input.messageId, prefix: new ArrayBuffer(0), totalBytes: 0, mimeType: "audio/mpeg" }));
+  const prefetchBatch = vi.fn(() => ({ completed: Promise.resolve({ results: [] }), cancelMessage() {}, promoteMessage: async () => {}, cancel() {} }));
 
   return {
     streamCalls,
     connect,
+    waitForVaultPeerReady,
     beginOperation,
     endOperation,
     withOperation,
@@ -28,12 +32,16 @@ const harness = vi.hoisted(() => {
     markPlaybackStable,
     releasePlaybackFocus,
     prewarm,
+    prefetch,
+    prefetchBatch,
   };
 });
 
 vi.mock("../../src/features/cloud/webTransportWorkerClient", () => ({
   WebTransportWorkerClient: class {
     prewarm = harness.prewarm;
+    prefetch = harness.prefetch;
+    prefetchBatch = harness.prefetchBatch;
     focusPlayback = harness.focusPlayback;
     markPlaybackStable = harness.markPlaybackStable;
     releasePlaybackFocus = harness.releasePlaybackFocus;
@@ -54,6 +62,7 @@ vi.mock("../../src/features/cloud/webTransportWorkerClient", () => ({
 vi.mock("../../src/features/cloud/webTransportController", () => ({
   WebTransportController: class {
     connect = harness.connect;
+    waitForVaultPeerReady = harness.waitForVaultPeerReady;
     beginOperation = harness.beginOperation;
     endOperation = harness.endOperation;
     withOperation = harness.withOperation;
@@ -71,6 +80,7 @@ describe("Web playback priority over secondary reads", () => {
   beforeEach(() => {
     harness.streamCalls.length = 0;
     harness.connect.mockClear();
+    harness.waitForVaultPeerReady.mockClear();
     harness.beginOperation.mockClear();
     harness.endOperation.mockClear();
     harness.withOperation.mockClear();
@@ -78,6 +88,54 @@ describe("Web playback priority over secondary reads", () => {
     harness.markPlaybackStable.mockClear();
     harness.releasePlaybackFocus.mockClear();
     harness.prewarm.mockClear();
+    harness.prefetch.mockClear();
+    harness.prefetchBatch.mockClear();
+    harness.waitForVaultPeerReady.mockResolvedValue(undefined);
+    harness.focusPlayback.mockResolvedValue(undefined);
+    harness.markPlaybackStable.mockResolvedValue(undefined);
+    harness.releasePlaybackFocus.mockResolvedValue(undefined);
+  });
+
+  it("retains immediate Play and multiple warm requests until the vault peer is ready", async () => {
+    let releasePeer!: () => void;
+    const peer = new Promise<void>(resolve => { releasePeer = resolve; });
+    harness.waitForVaultPeerReady.mockImplementation(() => peer);
+    const transport = new WebGalerCloudTransport();
+
+    await transport.focusPlayback(10);
+    const stream = transport.streamFile({ messageId: 10, mimeType: "audio/mpeg", purpose: "playback" }, () => {});
+    const focusedWarm = transport.prefetchFile({ messageId: 10, mimeType: "audio/mpeg" });
+    const batch = transport.prefetchFiles([
+      { messageId: 11, mimeType: "audio/mpeg" },
+      { messageId: 12, mimeType: "audio/mpeg" },
+    ]);
+    await tick();
+    expect(harness.focusPlayback).toHaveBeenCalledWith(10, undefined);
+    expect(harness.streamCalls).toHaveLength(0);
+    expect(harness.prefetch).not.toHaveBeenCalled();
+    expect(harness.prefetchBatch).not.toHaveBeenCalled();
+
+    releasePeer();
+    const [playing, , warming] = await Promise.all([stream, focusedWarm, batch]);
+    await Promise.all([playing.completed, warming.completed]);
+    expect(harness.streamCalls).toHaveLength(1);
+    expect(harness.prefetch).toHaveBeenCalledOnce();
+    expect(harness.prefetchBatch).toHaveBeenCalledOnce();
+  });
+
+  it("returns PEER_NOT_RESOLVED without issuing media RPCs when bootstrap fails", async () => {
+    const peerMiss = Object.assign(new Error("Vault peer unavailable"), { code: "PEER_NOT_RESOLVED" });
+    harness.waitForVaultPeerReady.mockRejectedValue(peerMiss);
+    const transport = new WebGalerCloudTransport();
+    await expect(transport.streamFile({ messageId: 10, purpose: "playback" }, () => {}))
+      .rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    await expect(transport.prefetchFile({ messageId: 10, mimeType: "audio/mpeg" }))
+      .rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    await expect(transport.prefetchFiles([{ messageId: 11, mimeType: "audio/mpeg" }]))
+      .rejects.toMatchObject({ code: "PEER_NOT_RESOLVED" });
+    expect(harness.streamCalls).toHaveLength(0);
+    expect(harness.prefetch).not.toHaveBeenCalled();
+    expect(harness.prefetchBatch).not.toHaveBeenCalled();
   });
 
   it("physically holds a background stream before Worker start while Play is critical", async () => {
@@ -126,6 +184,32 @@ describe("Web playback priority over secondary reads", () => {
     await chunk;
     expect(consumer).toHaveBeenCalledTimes(1);
     expect(chunkReleased).toBe(true);
+  });
+
+  it("keeps background work paused when an older same-message focus fails", async () => {
+    let rejectOlder!: (error: Error) => void;
+    harness.focusPlayback
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOlder = reject; }))
+      .mockResolvedValueOnce(undefined);
+    const transport = new WebGalerCloudTransport();
+
+    const older = transport.focusPlayback(11, 1);
+    await transport.focusPlayback(11, 2);
+    let backgroundStarted = false;
+    const background = transport.streamFile(
+      { messageId: 22, mimeType: "image/jpeg", purpose: "other" },
+      () => {},
+    ).then(value => { backgroundStarted = true; return value; });
+
+    rejectOlder(new Error("old focus failed"));
+    await expect(older).rejects.toThrow("old focus failed");
+    await tick();
+    expect(backgroundStarted).toBe(false);
+    expect(harness.streamCalls).toHaveLength(0);
+
+    await transport.markPlaybackStable(11, 2);
+    await background;
+    expect(harness.streamCalls).toHaveLength(1);
   });
 
   it("keeps playback lease-free while export scheduling uses the download capability", async () => {

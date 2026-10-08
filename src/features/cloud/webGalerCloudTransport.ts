@@ -116,6 +116,8 @@ export class WebGalerCloudTransport {
   private indexBarrier: () => Promise<void> = () => Promise.resolve();
   private indexReadPromise: Promise<WebTransportLibraryIndexResult> | null = null;
   private playbackCritical = false;
+  private playbackMessageId: number | null = null;
+  private playbackIntentId: number | null = null;
   private backgroundWaiters = new Set<() => void>();
 
   constructor(startupCandidates: readonly WebStartupWarmCandidate[] = []) {
@@ -160,24 +162,39 @@ export class WebGalerCloudTransport {
     playTrace("DIRECT_MTPROTO_READY");
   }
 
-  async focusPlayback(messageId: number): Promise<void> {
+  async focusPlayback(messageId: number, traceIntentId?: number): Promise<void> {
+    const intentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
+    this.playbackMessageId = messageId;
+    this.playbackIntentId = intentId;
     this.setPlaybackCritical(true);
     try {
-      await this.worker.focusPlayback(messageId);
+      await this.worker.focusPlayback(messageId, traceIntentId);
     } catch (error) {
-      this.setPlaybackCritical(false);
+      if (this.playbackMessageId === messageId && this.playbackIntentId === intentId) {
+        this.playbackMessageId = null;
+        this.playbackIntentId = null;
+        this.setPlaybackCritical(false);
+      }
       throw error;
     }
   }
 
-  async markPlaybackStable(messageId: number): Promise<void> {
-    await this.worker.markPlaybackStable(messageId);
-    this.setPlaybackCritical(false);
+  async markPlaybackStable(messageId: number, traceIntentId?: number): Promise<void> {
+    const intentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
+    if (this.playbackMessageId !== messageId || this.playbackIntentId !== intentId) return;
+    await this.worker.markPlaybackStable(messageId, traceIntentId);
+    if (this.playbackMessageId === messageId && this.playbackIntentId === intentId) this.setPlaybackCritical(false);
   }
 
-  async releasePlaybackFocus(messageId: number): Promise<void> {
-    await this.worker.releasePlaybackFocus(messageId).catch(() => {});
-    this.setPlaybackCritical(false);
+  async releasePlaybackFocus(messageId: number, traceIntentId?: number): Promise<void> {
+    const intentId = Number.isSafeInteger(traceIntentId) && Number(traceIntentId) > 0 ? Number(traceIntentId) : null;
+    if (this.playbackMessageId !== messageId || this.playbackIntentId !== intentId) return;
+    await this.worker.releasePlaybackFocus(messageId, traceIntentId).catch(() => {});
+    if (this.playbackMessageId === messageId && this.playbackIntentId === intentId) {
+      this.playbackMessageId = null;
+      this.playbackIntentId = null;
+      this.setPlaybackCritical(false);
+    }
   }
 
   private checkpointKey(input: { file: File; beatId: string; kind: string }): string {
@@ -231,7 +248,7 @@ export class WebGalerCloudTransport {
       }
       const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] };
       const result = await this.worker.replaceLibraryIndex({ manifest, expectedMessageId: 0 });
-      await commitWebTransportIndexPointer({ messageId: result.messageId, sourceId: "direct-bootstrap", beatCount: 0 });
+      await commitWebTransportIndexPointer({ messageId: result.messageId, expectedMessageId: result.previousMessageId, pointerSource: "publish", sourceId: "direct-bootstrap", beatCount: 0 });
       return { status: "created", messageId: result.messageId, manifest };
     });
   }
@@ -255,6 +272,15 @@ export class WebGalerCloudTransport {
         { objectType: "index", objectIds: ["pinned"] },
         () => this.worker.getLibraryIndex(),
       );
+      if (result.pointerRepair) {
+        await commitWebTransportIndexPointer({
+          messageId: Number(result.messageId || 0),
+          expectedMessageId: result.pointerRepair.expectedMessageId,
+          pointerSource: result.pointerRepair.source,
+          sourceId: "direct-index-recovery",
+          beatCount: Array.isArray((result.manifest as { beats?: unknown[] })?.beats) ? (result.manifest as { beats: unknown[] }).beats.length : 0,
+        });
+      }
       void reconcileWebTransportRouting(result.manifest).catch(error => {
         playTrace("TRANSPORT_ROUTING_RECONCILE_DEFERRED", {
           error_name: error instanceof Error ? error.name : "unknown",
@@ -313,11 +339,13 @@ export class WebGalerCloudTransport {
 
   async prefetchFile(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
     const started = Date.now();
-    playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId });
-    await this.controller.connect();
+    playTrace("TRANSPORT_PREFETCH_ENTER", { message_id: input.messageId, intent_id: input.traceIntentId ?? null });
+    await this.controller.waitForVaultPeerReady();
+    playTrace("TRANSPORT_PREFETCH_PEER_READY", { message_id: input.messageId, intent_id: input.traceIntentId ?? null, wait_ms: Date.now() - started });
     const result = await this.worker.prefetch(input);
     playTrace("TRANSPORT_PREFETCH_READY", {
       message_id: input.messageId,
+      intent_id: input.traceIntentId ?? null,
       bytes: result.prefix.byteLength,
       total_ms: Date.now() - started,
     });
@@ -342,7 +370,8 @@ export class WebGalerCloudTransport {
       inputs.map(input => Number(input.messageId)).filter(id => Number.isInteger(id) && id > 0),
     ));
     playTrace("TRANSPORT_PREFETCH_BATCH_ENTER", { count: ids.length, lanes: this.playbackDataLanes });
-    await this.controller.connect();
+    await this.controller.waitForVaultPeerReady();
+    playTrace("TRANSPORT_PREFETCH_BATCH_PEER_READY", { count: ids.length, wait_ms: Date.now() - started, message_ids: ids });
     const workerBatch = this.worker.prefetchBatch({
       inputs,
       maxConcurrency: this.playbackDataLanes,
@@ -365,10 +394,10 @@ export class WebGalerCloudTransport {
     const started = Date.now();
     const purpose = input.purpose || "playback";
     const background = purpose !== "playback";
-    playTrace("TRANSPORT_STREAM_ENTER", { purpose });
+    playTrace("TRANSPORT_STREAM_ENTER", { purpose, message_id: input.messageId, intent_id: input.traceIntentId ?? null });
     const connectStarted = Date.now();
-    await this.controller.connect();
-    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted, purpose });
+    await this.controller.waitForVaultPeerReady();
+    playTrace("TRANSPORT_STREAM_CONNECTED", { wait_ms: Date.now() - connectStarted, purpose, message_id: input.messageId, intent_id: input.traceIntentId ?? null });
 
     let lease: Awaited<ReturnType<WebTransportController["beginOperation"]>> | null = null;
     if (purpose === "export") {
@@ -421,6 +450,8 @@ export class WebGalerCloudTransport {
     sourceId: string,
     onProgress?: (progress: WebImportCommitProgress) => void,
   ): Promise<Beat> {
+    const started = Date.now();
+    playTrace("IMPORT_COMMIT_BEGIN", { master_bytes: files.master.size, has_wav: Boolean(files.wav), has_project: Boolean(files.project) });
     await this.controller.connect();
     const lease = await this.controller.beginOperation(
       "commit_import",
@@ -429,26 +460,49 @@ export class WebGalerCloudTransport {
     let topic: Promise<number> | null = null;
     try {
       const result = await commitWebImportedBeat(beat, files, {
-        getLibraryIndex: () => this.worker.getLibraryIndex(),
+        // Import must use the same vault-serialized, renewable INDEX path as
+        // normal reads. Calling the Worker directly left a 30s index request
+        // outside the authoritative get_index lease under concurrent imports.
+        getLibraryIndex: () => this.getLibraryIndex(),
         upload: async (input, progress) => {
           topic ||= ensureWebTransportTopic(input.beatId, input.beatName);
           const threadId = await topic;
           return this.uploadOnce({ ...input, threadId }, progress);
         },
-        replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        // The pinned INDEX write is equally authoritative: retain the import
+        // lease for uploaded media, but fence the read/replace pair separately
+        // at the vault INDEX boundary.
+        replaceLibraryIndex: input => this.controller.withOperation(
+          "replace_index",
+          { objectType: "index", objectIds: ["pinned"] },
+          () => this.worker.replaceLibraryIndex(input),
+        ),
       }, onProgress);
+      playTrace("IMPORT_COMMIT_INDEX_PUBLISHED", {
+        index_message_id: result.index?.messageId || null,
+        beat_count: result.index?.beatCount || null,
+        total_ms: Date.now() - started,
+      });
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
           routingChanges: routingChangeForBeat(result.beat),
-        }).catch(() => {});
+        });
       }
       for (const key of Array.from(this.uploadCheckpoints.keys())) {
         if (key.startsWith(`${beat.id}:`)) this.uploadCheckpoints.delete(key);
       }
       return result.beat;
+    } catch (error) {
+      playTrace("IMPORT_COMMIT_FAILED", {
+        error_name: error instanceof Error ? error.name : "unknown",
+        total_ms: Date.now() - started,
+      });
+      throw error;
     } finally {
       await this.controller.endOperation(lease).catch(() => {});
     }
@@ -486,10 +540,12 @@ export class WebGalerCloudTransport {
       }, onProgress);
       await commitWebTransportIndexPointer({
         messageId: result.index.messageId,
+        expectedMessageId: result.index.previousMessageId,
+        pointerSource: "publish",
         sourceId,
         beatCount: result.index.beatCount,
         routingChanges: routingChangeForBeat(result.beat),
-      }).catch(() => {});
+      });
       for (const key of Array.from(this.uploadCheckpoints.keys())) {
         if (key.startsWith(`${original.id}:`)) this.uploadCheckpoints.delete(key);
       }
@@ -519,10 +575,12 @@ export class WebGalerCloudTransport {
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
           routingChanges: Object.fromEntries(beatIds.map(id => [id, null])),
-        }).catch(() => {});
+        });
       }
       return result.value;
     } finally {
@@ -547,10 +605,12 @@ export class WebGalerCloudTransport {
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
           routingChanges: routingChangeForBeat(restored),
-        }).catch(() => {});
+        });
       }
     } finally {
       await this.controller.endOperation(lease).catch(() => {});
@@ -581,9 +641,11 @@ export class WebGalerCloudTransport {
       if (result.index) {
         await commitWebTransportIndexPointer({
           messageId: result.index.messageId,
+          expectedMessageId: result.index.previousMessageId,
+          pointerSource: "publish",
           sourceId,
           beatCount: result.index.beatCount,
-        }).catch(() => {});
+        });
       }
       return result.value;
     } finally {

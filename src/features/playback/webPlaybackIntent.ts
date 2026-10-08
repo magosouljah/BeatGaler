@@ -32,6 +32,11 @@ export function rememberPreparedWebPlaybackUrl(url: string, intent: WebPlaybackI
   }
 }
 
+/** Read-only diagnostic lookup for HTMLAudioElement events. */
+export function preparedWebPlaybackIntentIdForUrl(url: string): number | null {
+  return preparedByUrl.get(String(url || "").trim())?.id ?? null;
+}
+
 export function supersededWebPlaybackUrl(intent: WebPlaybackIntent): string {
   const url = `beatgaler-superseded:${intent.id}`;
   rememberPreparedWebPlaybackUrl(url, intent);

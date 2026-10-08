@@ -330,7 +330,7 @@ const routeBlock = route => {
   if (!handler || (!ts.isArrowFunction(handler) && !ts.isFunctionExpression(handler)) || !ts.isBlock(handler.body)) fail(`Missing route handler boundary ${route}.`);
   return handler.body;
 };
-for (const route of ['/transport/session/start', '/transport/session/activate', '/transport/session/heartbeat', '/transport/session/stop', '/transport/operation/begin', '/transport/operation/end', '/transport/index/commit']) {
+for (const route of ['/transport/session/start', '/transport/session/activate', '/transport/session/heartbeat', '/transport/session/stop', '/transport/operation/begin', '/transport/operation/end', '/transport/operation/renew', '/transport/index/commit']) {
   const handler = routeBlock(route);
   const authCall = requireCall(handler.statements[0], 'authenticatedTransportAccount');
   const authGuard = handler.statements[1];

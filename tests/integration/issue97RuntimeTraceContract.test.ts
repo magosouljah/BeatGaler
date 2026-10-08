@@ -30,7 +30,7 @@ describe("Issue #97 runtime trace contract", () => {
     expect(playback).toContain("PLAY_STREAM_FIRST_CHUNK");
     expect(playback).toContain("PLAY_BUFFER_STABLE");
     expect(worker).toContain("WARM_RESUME");
-    expect(coordinator).toContain("INDEX_WAIT_STARTUP");
+    expect(coordinator).toContain("INDEX_WAIT_DIRECT_READY");
     expect(worker).toContain("INDEX_BEGIN");
     expect(worker).toContain("INDEX_PREEMPTED_PLAY");
     expect(worker).toContain("INDEX_RESUMED");

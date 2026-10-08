@@ -6,8 +6,8 @@ Module._load = function(request, parent, isMain) {
   if (request === '../direct-capability-boundary' || request === '../direct-capability-boundary.js') {
     // Let the boundary module load, but stub only its Direct provider dependency.
   }
-  if (request === './direct-transport-control' && String(parent?.filename || '').endsWith('direct-capability-boundary.js')) {
-    return { endOperation: async () => ({ ok: true }) };
+  if (request === './direct-transport-control' && /direct-capability-(boundary|view)\.js$/.test(String(parent?.filename || ''))) {
+    return { endOperation: async () => ({ ok: true }), recordDiagnostic: () => {} };
   }
   return originalLoad.call(this, request, parent, isMain);
 };

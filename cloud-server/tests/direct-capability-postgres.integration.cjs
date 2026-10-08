@@ -76,6 +76,16 @@ async function main() {
     assert.equal(authorized.ok, true);
     assert.equal(authorized.record.status, 'AUTHORIZED');
 
+    const renewed = await store.renew(request('a', 101, { renewalLeaseMs: 30_000 }));
+    assert.equal(renewed.ok, true);
+    assert.equal(renewed.record.status, 'AUTHORIZED');
+    assert.equal(renewed.record.internal_operation_id, `op-a-${suffix}`);
+    const renewedAgain = await store.renew(request('a', 101, { renewalLeaseMs: 30_000 }));
+    assert.equal(renewedAgain.ok, true);
+    const wrongRenewal = await store.renew(request('a', 101, { generation: 2 }));
+    assert.equal(wrongRenewal.ok, false);
+    assert.equal(wrongRenewal.reason, 'scope');
+
     const replay = await store.authorize(request('a', 101));
     assert.equal(replay.ok, false);
     assert.equal(replay.reason, 'authorized');
@@ -86,6 +96,24 @@ async function main() {
       error => error?.code === 'DIRECT_TENANT_CAP_REACHED' && error?.status === 429,
     );
 
+    const staleRevoked = await store.revokeMissingOperations({
+      tenantId,
+      installationId,
+      sessionId,
+      liveOperationIds: [`op-a-${suffix}`, `op-c-${suffix}`],
+      reason: 'direct_operation_missing',
+    });
+    assert.equal(staleRevoked, 1);
+    const staleRow = await pool.query(
+      'SELECT status,revoke_reason FROM direct_capabilities WHERE tenant_id=$1 AND internal_operation_id=$2',
+      [tenantId, `op-b-${suffix}`],
+    );
+    assert.equal(staleRow.rows[0]?.status, 'REVOKED');
+    assert.equal(staleRow.rows[0]?.revoke_reason, 'direct_operation_missing');
+
+    // Reconciliation frees the tenant slot without raising the configured ceiling.
+    await store.issue(record('c', 'op-c', 303));
+
     const finished = await store.finish(request('a', 101));
     assert.equal(finished.ok, true);
     assert.equal(finished.authorized, true);
@@ -94,9 +122,12 @@ async function main() {
     const finishRetry = await store.finish(request('a', 101));
     assert.equal(finishRetry.ok, true);
     assert.equal(finishRetry.replay, true);
+    const consumedRenewal = await store.renew(request('a', 101));
+    assert.equal(consumedRenewal.ok, false);
+    assert.equal(consumedRenewal.reason, 'consumed');
 
     // CONSUMED no longer counts against the live tenant ceiling.
-    await store.issue(record('c', 'op-c', 303));
+    await store.issue(record('d', 'op-d', 404));
 
     const revoked = await store.revokeTenant({ tenantId, reason: 'ci_incident' });
     assert.equal(revoked, 2);
@@ -110,10 +141,11 @@ async function main() {
       'SELECT capability_hash,status,object_scope FROM direct_capabilities WHERE tenant_id=$1 ORDER BY internal_operation_id',
       [tenantId],
     );
-    assert.equal(stored.rows.length, 3);
+    assert.equal(stored.rows.length, 4);
     assert(stored.rows.every(row => /^[0-9a-f]{64}$/.test(row.capability_hash)));
     assert(stored.rows.some(row => row.status === 'CONSUMED'));
-    assert(stored.rows.filter(row => row.status === 'REVOKED').length === 2);
+    assert(stored.rows.filter(row => row.status === 'REVOKED').length === 3);
+    assert(stored.rows.some(row => row.status === 'REVOKED' && row.object_scope?.object_ids?.[0] === '202'));
 
     console.log('PASS D7 PostgreSQL Direct capability integration');
   } finally {

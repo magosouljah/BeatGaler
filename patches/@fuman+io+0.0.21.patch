@@ -1,0 +1,70 @@
+diff --git a/node_modules/@fuman/io/codec/writer.cjs b/node_modules/@fuman/io/codec/writer.cjs
+index 018d19c..651ea9f 100644
+--- a/node_modules/@fuman/io/codec/writer.cjs
++++ b/node_modules/@fuman/io/codec/writer.cjs
+@@ -1,11 +1,9 @@
+ "use strict";
+ Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+-const utils = require("@fuman/utils");
+ const bytes = require("../bytes.cjs");
+ class FramedWriter {
+   #writable;
+   #encoder;
+-  #buffer;
+   #highWaterMark;
+   /**
+    * @param writable  fuman writable stream to write to
+@@ -16,15 +14,14 @@ class FramedWriter {
+     this.#writable = writable;
+     this.#encoder = encoder;
+     this.#highWaterMark = options?.initialBufferSize ?? 1024;
+-    this.#buffer = bytes.Bytes.alloc(this.#highWaterMark);
+   }
+   /** write a frame to the stream */
+   async write(frame) {
+-    await this.#encoder.encode(frame, this.#buffer);
+-    const buffer = this.#buffer.result();
++    const into = bytes.Bytes.alloc(this.#highWaterMark);
++    await this.#encoder.encode(frame, into);
++    const buffer = into.result();
+     if (buffer.length > 0) {
+-      const copy = utils.u8.allocWith(buffer);
+-      this.#buffer.reset();
++      const copy = new Uint8Array(buffer);
+       await this.#writable.write(copy);
+     }
+   }
+diff --git a/node_modules/@fuman/io/codec/writer.js b/node_modules/@fuman/io/codec/writer.js
+index 435a74d..1ae054d 100644
+--- a/node_modules/@fuman/io/codec/writer.js
++++ b/node_modules/@fuman/io/codec/writer.js
+@@ -1,9 +1,7 @@
+-import { u8 } from "@fuman/utils";
+ import { Bytes } from "../bytes.js";
+ class FramedWriter {
+   #writable;
+   #encoder;
+-  #buffer;
+   #highWaterMark;
+   /**
+    * @param writable  fuman writable stream to write to
+@@ -14,15 +12,14 @@ class FramedWriter {
+     this.#writable = writable;
+     this.#encoder = encoder;
+     this.#highWaterMark = options?.initialBufferSize ?? 1024;
+-    this.#buffer = Bytes.alloc(this.#highWaterMark);
+   }
+   /** write a frame to the stream */
+   async write(frame) {
+-    await this.#encoder.encode(frame, this.#buffer);
+-    const buffer = this.#buffer.result();
++    const into = Bytes.alloc(this.#highWaterMark);
++    await this.#encoder.encode(frame, into);
++    const buffer = into.result();
+     if (buffer.length > 0) {
+-      const copy = u8.allocWith(buffer);
+-      this.#buffer.reset();
++      const copy = new Uint8Array(buffer);
+       await this.#writable.write(copy);
+     }
+   }

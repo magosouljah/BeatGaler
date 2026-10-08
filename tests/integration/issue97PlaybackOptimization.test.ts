@@ -16,7 +16,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_TARGET_SECONDS = Number.POSITIVE_INFINITY;");
     expect(protocol).toContain("export const WEB_PLAYBACK_PREFETCH_MAX_BYTES = STARTUP_PREFIX_BYTES;");
     expect(worker).toContain("const MAX_CONFIGURABLE_DATA_LANES = 16;");
-    expect(worker).toContain("const limit = Math.min(STARTUP_PREFIX_BYTES");
+    expect(worker).toContain("const desired = Math.min(STARTUP_PREFIX_BYTES");
+    expect(worker).toContain("const limit = playbackChunkLimit(desired);");
   });
 
   it("persists an all-beat playback routing cache plus at most fourteen startup routes", () => {
@@ -78,7 +79,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(coordinator).toContain("endPlayback");
     expect(coordinator).toContain("getWebStartupPlaybackCoordinator");
     expect(coordinator).toContain('playTrace("STARTUP_LOCAL_ROUTING_READY"');
-    expect(coordinator).toContain('playTrace("INDEX_WAIT_STARTUP"');
+    expect(coordinator).toContain('playTrace("INDEX_WAIT_DIRECT_READY"');
   });
 
   it("starts Direct from remembered-session OPEN even when the local routing cache is empty", () => {
@@ -129,8 +130,9 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(client).toContain("startupMessageIds: sessionStartupMessageIds");
     expect(worker).toContain("command.startupMessageIds");
-    expect(worker).toContain("return await active.getMessages(targetChatId, messageIds);");
-    expect(worker).toContain("resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)");
+    expect(worker).toContain("await active.getMessages(targetChatId, messageIds)");
+    expect(worker).toContain("void warmStartupPlaybackMedia(active, startupIds)");
+    expect(worker).not.toContain("resolvePlaybackMediaBatch(next, numericChatId, startupMessageIds, false)");
     expect(worker).not.toContain("startupRouteMessageIds(startup_routes)");
   });
 
@@ -193,7 +195,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(playback).toContain("prefetched.totalBytes <= prefetched.prefix.byteLength || prefetched.prefix.byteLength % 4096 === 0");
     expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
-    expect(playback).toContain('this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback" }, chunk => {');
+    expect(playback).toContain('this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback", traceIntentId: intentId }, chunk => {');
   });
 
   it("uses PLAY_CRITICAL zero-warm and PLAY_STABLE six-warm scheduling", () => {
@@ -205,14 +207,14 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain('playbackSchedulerState === "PLAY_STABLE" ? 6 : dataLaneLimit');
     expect(playback).toContain("PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS = 2");
     expect(playback).toContain("bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime)");
-    expect(playback).toContain("this.transport.markPlaybackStable(entry.messageId)");
+    expect(playback).toContain("this.transport.markPlaybackStable(entry.messageId, entry.traceIntentId)");
     expect(playback).toContain("entry.playbackWaiting = Boolean(state.waiting)");
     expect(playback).toContain("const isActive = entry.playbackPlaying || entry.playbackWaiting");
     expect(playback).toContain('reason: entry.playbackWaiting ? "waiting" : "resume"');
-    expect(playback).toContain("this.transport.focusPlayback(entry.messageId)");
+    expect(playback).toContain("this.transport.focusPlayback(entry.messageId, entry.traceIntentId)");
   });
 
-  it("keeps INDEX below WARM/PLAY and makes the INDEX byte download abortable", () => {
+  it("keeps INDEX above WARM but below Play and makes the INDEX byte download abortable", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
@@ -220,7 +222,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain("activeIndexAbortController");
     expect(worker).toContain("waitUntilIndexPriorityAllowed");
     expect(worker).toContain("abortSignal: controller.signal");
-    expect(worker).toContain('playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM", {');
+    expect(worker).toContain('preemptActiveIndex("play")');
+    expect(worker).not.toContain('preemptActiveIndex("warm")');
     expect(worker).toContain("request_id: activeIndexRequestId");
     expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", {');
     expect(worker).toContain("request_id: requestId");
@@ -232,7 +235,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     const initialize = controller.indexOf("await this.runtime.initialize(session, this.startupMessageIds)");
     const publish = controller.indexOf("this.session = session", initialize);
-    const background = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration)", publish);
+    const background = controller.indexOf("this.startBackgroundVerification(session, lifecycleGeneration, activation?.membership || null)", publish);
     expect(initialize).toBeGreaterThanOrEqual(0);
     expect(publish).toBeGreaterThan(initialize);
     expect(background).toBeGreaterThan(publish);

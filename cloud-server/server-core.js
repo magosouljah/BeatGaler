@@ -28,9 +28,11 @@ const multer = require("multer");
 const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verifyPrivateUserStorageGroup, masterStorageReady } = require("./master-storage");
 const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
+const vaultIndexPointers = require("./vault-index-pointer-store");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
 const { hashPassword, verifyPassword } = require("./password-kdf");
+const { createUserStorageLifecycle } = require("./user-storage-lifecycle");
 
 const PORT = process.env.PORT || 4000;
 const MANAGER_BOT_USERNAME = String(process.env.MANAGER_BOT_USERNAME_1 || process.env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, "").trim();
@@ -47,6 +49,7 @@ const bot = new Proxy({}, {
 });
 
 const app = express();
+const criticalPathTrace = require("./stage1-critical-path-trace");
 
 // Diagnostic request IDs. Never logs bot tokens or file contents.
 app.use((req, res, next) => {
@@ -76,6 +79,7 @@ app.use((req, res, next) => {
   });
   next();
 });
+criticalPathTrace.install(app);
 
 const ALLOWED_ORIGINS = new Set(
   String(process.env.BEATGALER_ALLOWED_ORIGINS || "")
@@ -1191,90 +1195,24 @@ function rebindStorageBindingsForUser(user) {
   }
 }
 
+const userStorageLifecycle = createUserStorageLifecycle({
+  validateStoredChatId: botApiChatIdFromStored,
+  createPrivateUserStorageGroup,
+  verifyPrivateUserStorageGroup,
+  ensurePrivateUserStorageBotAbsent,
+  masterStorageReady,
+  managerBotUsername: MANAGER_BOT_USERNAME,
+  storageGroupLimit: MASTER_STORAGE_GROUP_LIMIT,
+  getProvisionedStorageCount: () => [...beatGalerUsers.values()].filter(entry => entry.storageChatId).length,
+  saveAuthData,
+  clearStorageBindingsForUser,
+  rebindStorageBindingsForUser,
+  ensureEmptyIndexForStorage,
+  logger: console,
+});
+
 async function ensureUserStorage(user) {
-  if (user.storageChatId) {
-    const account = {
-      telegramUserId: botApiChatIdFromStored(user.storageChatId),
-      storageChatId: botApiChatIdFromStored(user.storageChatId),
-      storageChatTitle: user.storageChatTitle,
-    };
-
-    // Direct index bootstrap no longer touches MASTER, so it cannot prove
-    // that a persisted vault still exists. Verify the stored chat explicitly.
-    // Only a definitive missing-vault signal reprovisions; transient failures
-    // keep the current vault and retry on a later auth/session restore.
-    if (masterStorageReady()) {
-      try {
-        await verifyPrivateUserStorageGroup({ botApiChatId: user.storageChatId });
-      } catch (error) {
-        const message = String(error?.errorMessage || error?.message || error);
-        if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
-          console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
-          user.storageChatId = null;
-          user.storageChatTitle = null;
-          user.storageCreatedAt = null;
-          saveAuthData();
-          clearStorageBindingsForUser(user);
-          return ensureUserStorage(user);
-        }
-        console.warn(`[storage] vault existence verification deferred for @${user.username}:`, message);
-      }
-    }
-
-    // Migration invariant: the manager bot (001BeatGaler) never belongs to a
-    // user vault. If an older BeatGaler build left it there, MASTER removes it.
-    const managerBotUsername = MANAGER_BOT_USERNAME;
-    if (managerBotUsername) {
-      try {
-        await ensurePrivateUserStorageBotAbsent({
-          botApiChatId: user.storageChatId,
-          botUsername: managerBotUsername,
-        });
-      } catch (error) {
-        console.warn(`[storage] manager-bot cleanup deferred for @${user.username}:`, error?.message || error);
-      }
-    }
-
-    try {
-      await ensureEmptyIndexForStorage(account);
-      return user;
-    } catch (error) {
-      const message = String(error?.message || error);
-      if (/could not be found|group chat was deleted|supergroup chat was deleted|CHANNEL_INVALID|CHANNEL_PRIVATE|peer id invalid/i.test(message)) {
-        console.warn(`[storage] vault no longer exists for @${user.username}; provisioning a replacement vault`);
-        user.storageChatId = null;
-        user.storageChatTitle = null;
-        user.storageCreatedAt = null;
-        saveAuthData();
-        clearStorageBindingsForUser(user);
-        return ensureUserStorage(user);
-      }
-      throw error;
-    }
-  }
-
-  const used = [...beatGalerUsers.values()].filter(entry => entry.storageChatId).length;
-  if (used >= MASTER_STORAGE_GROUP_LIMIT) {
-    throw new Error(`Master Telegram storage account is full (${MASTER_STORAGE_GROUP_LIMIT} user groups). Add master account #2 before registering more users.`);
-  }
-  if (!masterStorageReady()) {
-    throw new Error("Master Telegram storage account is not configured. Run: node setup-master-account.js");
-  }
-
-  const created = await createPrivateUserStorageGroup({ username: user.username, accountId: user.id });
-  user.storageChatId = String(created.botApiChatId);
-  user.storageChatTitle = created.title;
-  user.storageCreatedAt = Date.now();
-  saveAuthData();
-  rebindStorageBindingsForUser(user);
-
-  const account = {
-    telegramUserId: botApiChatIdFromStored(user.storageChatId),
-    storageChatId: botApiChatIdFromStored(user.storageChatId),
-    storageChatTitle: user.storageChatTitle,
-  };
-  await ensureEmptyIndexForStorage(account);
-  return user;
+  return userStorageLifecycle.ensureAssigned(user);
 }
 
 function accountPublicPayload(user, token) {
@@ -1597,13 +1535,14 @@ app.post("/auth/register", async (req, res) => {
 });
 
 app.post("/auth/login", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start");
   const identifier = String(req.body?.identifier || req.body?.username || "").trim();
   const password = String(req.body?.password || "");
   const beatgalerUserId = String(req.body?.beatgalerUserId || "");
   const normalizedIdentifier = normalizeBeatGalerUsername(identifier);
   const user = identifier.includes("@") ? findUserByEmail(identifier) : (beatGalerUsers.get(normalizedIdentifier) || findUserByEmail(identifier));
 
-  if (!user || !user.passwordHash || !(await verifyPassword(password, user))) {
+  if (!user || !user.passwordHash || !(await criticalPathTrace.step(req, "auth_password_verify", () => verifyPassword(password, user)))) {
     return res.status(401).json({ error: "Invalid username/email or password." });
   }
   if (user.mfaSecret && !verifyTotp(user.mfaSecret, req.body?.mfaCode)) {
@@ -1614,10 +1553,13 @@ app.post("/auth/login", async (req, res) => {
   }
 
   try {
-    await syncXIdentity(user).catch(() => false);
-    await ensureUserStorage(user);
+    await criticalPathTrace.step(req, "auth_sync_identity", () => syncXIdentity(user).catch(() => false));
+    await criticalPathTrace.step(req, "auth_ensure_storage", () => ensureUserStorage(user));
+    criticalPathTrace.write(req, "auth_bind_installation_begin");
     bindInstallationToBeatGalerUser(user, beatgalerUserId);
+    criticalPathTrace.write(req, "auth_bind_installation_done");
     const token = createAuthSession(user.id);
+    criticalPathTrace.write(req, "cloud_handler_finished");
     res.json(accountPublicPayload(user, token));
   } catch (error) {
     res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
@@ -1625,6 +1567,7 @@ app.post("/auth/login", async (req, res) => {
 });
 
 app.post("/auth/session", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start");
   const token = bearerToken(req);
   const beatgalerUserId = String(req.body?.beatgalerUserId || req.headers["x-beatgaler-installation-id"] || "");
   const user = getAuthUserFromToken(token);
@@ -1632,9 +1575,12 @@ app.post("/auth/session", async (req, res) => {
   if (!beatgalerUserId) return res.status(400).json({ error: "beatgalerUserId is required." });
 
   try {
-    await syncXIdentity(user).catch(() => false);
-    await ensureUserStorage(user);
+    await criticalPathTrace.step(req, "auth_sync_identity", () => syncXIdentity(user).catch(() => false));
+    await criticalPathTrace.step(req, "auth_ensure_storage", () => ensureUserStorage(user));
+    criticalPathTrace.write(req, "auth_bind_installation_begin");
     bindInstallationToBeatGalerUser(user, beatgalerUserId);
+    criticalPathTrace.write(req, "auth_bind_installation_done");
+    criticalPathTrace.write(req, "cloud_handler_finished");
     res.json(accountPublicPayload(user, token));
   } catch (error) {
     res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
@@ -1984,18 +1930,43 @@ app.get("/transport/status", (req, res) => {
 const { createDirectStartupTrace } = require("./direct-startup-trace");
 
 app.post("/transport/session/start", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start", { transport_stage: req.body?.tempAuthMetadata ? "bind" : "reserve" });
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId, account } = auth;
   const startupTrace = createDirectStartupTrace();
   try {
-    const session = await directTransport.startSession({
+    const vaultChatId = storageChatId(account);
+    startupTrace.mark("SESSION_USER_VAULT", {
+      user_id: account?.beatgalerAccountId || null,
+      vault_chat_id: vaultChatId,
+      channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
+    });
+    const session = await criticalPathTrace.step(req, "direct_start_session", () => directTransport.startSession({
       startupTrace,
       installationId: beatgalerUserId,
-      chatId: storageChatId(account),
-    });
+      chatId: vaultChatId,
+    }));
+    // PostgreSQL is only a pointer cache. A missing value intentionally leaves
+    // recovery to the authoritative Telegram pin/history path in the Worker.
+    let indexPointer = null;
+    try { indexPointer = await vaultIndexPointers.getForChat(storageChatId(account)); } catch (error) {
+      console.warn("[direct] PostgreSQL INDEX pointer read failed:", error?.message || error);
+    }
     startupTrace.publish(res, "done");
-    res.json(wrapWebTransportSession(session, req.body?.webTransportPublicKey));
+    criticalPathTrace.write(req, "cloud_handler_finished");
+    // Direct lease state and the INDEX pointer use their own durable stores,
+    // and this route does not write the legacy JSON snapshots. Waiting for
+    // concurrent accounts' unrelated snapshot replacements can hold this
+    // response past the browser's 30 s request deadline.
+    res.locals.beatGalerDurabilityBypass = true;
+    res.json(wrapWebTransportSession({
+      ...session,
+      user_id: account?.beatgalerAccountId || null,
+      index_pointer: indexPointer?.message_id
+        ? { message_id: indexPointer.message_id, revision: indexPointer.revision }
+        : null,
+    }, req.body?.webTransportPublicKey));
   } catch (error) {
     startupTrace.publish(res, "error");
     console.error("[direct] session start failed:", error?.message || error);
@@ -2004,22 +1975,30 @@ app.post("/transport/session/start", async (req, res) => {
 });
 
 app.post("/transport/session/activate", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start");
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
-  const { beatgalerUserId } = auth;
+  const { beatgalerUserId, account } = auth;
   const startupTrace = createDirectStartupTrace();
   try {
+    const vaultChatId = storageChatId(account);
+    startupTrace.mark("SESSION_USER_VAULT", {
+      user_id: account?.beatgalerAccountId || null,
+      vault_chat_id: vaultChatId,
+      channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
+    });
     const activationMethod = req.body?.repairMembership === true ? "repairMembership" : "activateSession";
     if (typeof directTransport[activationMethod] !== "function") {
       throw new Error("Requested Direct membership repair is unavailable.");
     }
-    const result = await directTransport[activationMethod]({
+    const result = await criticalPathTrace.step(req, "direct_activate_session", () => directTransport[activationMethod]({
       startupTrace,
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
-    });
+    }));
     startupTrace.publish(res, "done");
+    criticalPathTrace.write(req, "cloud_handler_finished");
     res.json(result);
   } catch (error) {
     startupTrace.publish(res, "error");
@@ -2071,23 +2050,53 @@ app.post("/transport/session/stop", async (req, res) => {
 });
 
 app.post("/transport/operation/begin", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start");
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId } = auth;
+  const requestStartedAt = Date.now();
+  let responseFinished = false;
+  res.once("finish", () => {
+    responseFinished = true;
+    directTransport.recordDiagnostic?.("OPERATION_BEGIN_HTTP_FINISH", {
+      session_id: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+      kind: String(req.body?.kind || "data"),
+      status_code: res.statusCode,
+      elapsed_ms: Date.now() - requestStartedAt,
+      document_generation: Number(req.body?.documentContext?.generation || 0) || null,
+    });
+  });
+  res.once("close", () => {
+    if (responseFinished) return;
+    directTransport.recordDiagnostic?.("OPERATION_BEGIN_HTTP_PREMATURE_CLOSE", {
+      session_id: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+      kind: String(req.body?.kind || "data"),
+      elapsed_ms: Date.now() - requestStartedAt,
+      document_generation: Number(req.body?.documentContext?.generation || 0) || null,
+    });
+  });
   try {
-    const operation = await directTransport.beginOperation({
+    const operation = await criticalPathTrace.step(req, "direct_begin_operation", () => directTransport.beginOperation({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       credentialVersion: Number(req.body?.credentialVersion || 0),
       kind: String(req.body?.kind || "data"),
-    });
+      documentContext: {
+        tab_id: String(req.body?.documentContext?.tab_id || ""),
+        document_id: String(req.body?.documentContext?.document_id || ""),
+        generation: Number(req.body?.documentContext?.generation || 0),
+      },
+    }));
     if (operation?.credential_refresh) {
       operation.credential_refresh = wrapWebTransportSession(
         operation.credential_refresh,
         req.body?.webTransportPublicKey,
       );
     }
+    criticalPathTrace.write(req, "cloud_handler_finished");
     res.json(operation);
   } catch (error) {
     const message = String(error?.message || error || "");
@@ -2103,33 +2112,64 @@ app.post("/transport/operation/begin", async (req, res) => {
 });
 
 app.post("/transport/operation/end", async (req, res) => {
+  criticalPathTrace.write(req, "cloud_handler_start");
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId } = auth;
   try {
-    res.json(await directTransport.endOperation({
+    const ended = await criticalPathTrace.step(req, "direct_end_operation", () => directTransport.endOperation({
       installationId: beatgalerUserId,
       sessionId: String(req.body?.sessionId || ""),
       generation: Number(req.body?.generation || 0),
       operationId: String(req.body?.operationId || ""),
     }));
+    criticalPathTrace.write(req, "cloud_handler_finished");
+    res.json(ended);
   } catch (error) {
     console.error("[direct] operation end failed:", error?.message || error);
     res.status(500).json({ error: "Could not finish the transport operation." });
   }
 });
 
-app.post("/transport/index/commit", (req, res) => {
+// A short-lived INDEX operation is renewed independently of the much slower
+// session heartbeat.  This is what distinguishes a paused-but-live Worker from
+// a browser/tab that disappeared without operation/end or session/stop.
+app.post("/transport/operation/renew", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  const { beatgalerUserId } = auth;
+  try {
+    res.json(await directTransport.renewOperation({
+      installationId: beatgalerUserId,
+      sessionId: String(req.body?.sessionId || ""),
+      generation: Number(req.body?.generation || 0),
+      operationId: String(req.body?.operationId || ""),
+    }));
+  } catch (error) {
+    console.error("[direct] operation liveness renewal failed:", error?.message || error);
+    res.status(500).json({ error: "Could not renew the transport operation." });
+  }
+});
+
+app.post("/transport/index/commit", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
   const { beatgalerUserId, account } = auth;
   const messageId = Number(req.body?.messageId || 0);
-  const fileId = String(req.body?.fileId || "").trim();
   if (!Number.isInteger(messageId) || messageId <= 0) return res.status(400).json({ error: "messageId is required." });
   try {
-    directTransport.recordIndexPointer(storageChatId(account), { messageId, fileId });
+    const committed = await vaultIndexPointers.compareAndSetForChat({
+      telegramChatId: storageChatId(account),
+      messageId,
+      expectedMessageId: req.body?.expectedMessageId ?? null,
+      source: String(req.body?.pointerSource || "publish"),
+    });
+    if (committed.status === "conflict") {
+      return res.json({ ok: true, pointer_status: "conflict", index_message_id: committed.message_id || null });
+    }
   } catch (error) {
-    console.warn("[direct] index pointer persistence failed:", error?.message || error);
+    console.warn("[direct] PostgreSQL index pointer persistence failed:", error?.message || error);
+    return res.status(503).json({ error: "Galer Cloud could not persist the library INDEX pointer." });
   }
   broadcastCloudEvent(
     beatgalerUserId,

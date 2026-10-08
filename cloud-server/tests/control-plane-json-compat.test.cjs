@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const path = require('path');
-const { installLegacyJsonCompatibility } = require('../control-plane-json-compat.js');
+const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('../control-plane-json-compat.js');
 
 const passthrough = [];
 const fsModule = {
@@ -46,3 +46,24 @@ uninstall();
 assert.equal(fsModule.existsSync(authPath), false);
 
 console.log('PASS control-plane JSON compatibility: PostgreSQL-backed virtual state, no disk dual-write');
+
+// Routes backed exclusively by their own awaited durable stores can respond
+// without waiting for unrelated legacy snapshot writes from other requests.
+(async () => {
+  let releaseFlush;
+  const flush = new Promise(resolve => { releaseFlush = resolve; });
+  const express = { response: { send(body) { this.body = body; this.writableEnded = true; return this; } } };
+  const restore = installExpressDurabilityBarrier(express, { flush: () => flush });
+  const directResponse = { locals: { beatGalerDurabilityBypass: true }, writableEnded: false };
+  const legacyResponse = { locals: {}, writableEnded: false };
+  express.response.send.call(directResponse, 'direct');
+  express.response.send.call(legacyResponse, 'legacy');
+  assert.equal(directResponse.body, 'direct');
+  assert.equal(legacyResponse.body, undefined);
+  releaseFlush();
+  await flush;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(legacyResponse.body, 'legacy');
+  restore();
+  console.log('PASS control-plane durability barrier: Direct bypass is independent of legacy writes');
+})().catch(error => { console.error(error); process.exitCode = 1; });
