@@ -62,6 +62,9 @@ __pycache__/
 *.zip
 patch-files/
 patches/
+!patches/
+patches/*
+!patches/@fuman+io+0.0.21.patch
 .regression-build/
 
 # Telegram Direct backend runtime/secrets

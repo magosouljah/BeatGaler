@@ -9,6 +9,7 @@
   },
   "packageManager": "npm@10.9.8",
   "scripts": {
+    "postinstall": "patch-package",
     "dev": "vite",
     "dev:web": "vite --mode web",
     "build": "node scripts/patch-wry-pinterest.mjs && tsc && vite build",
@@ -22,6 +23,7 @@
     "test:regressions": "node scripts/run-regressions.mjs && node scripts/regression-direct-peer-bootstrap.mjs && node scripts/regression-task-5.1-hardening.mjs && node scripts/regression-http-containment.mjs && node scripts/regression-legacy-media-upload-disable.mjs",
     "test:security-boundary": "node scripts/regression-task-5.1-hardening.mjs",
     "test:direct:data-plane": "node --test tests/direct-persistent-data-plane.test.mjs",
+    "test:playback:transport-boundary": "node --test tests/playback-f/transport-boundary.test.mjs",
     "test:windows-packaging": "node scripts/test-windows-runtime-packaging.mjs",
     "test:windows-authenticode-guard": "node scripts/test-windows-authenticode-guard.mjs",
     "test:upgrade-matrix": "node scripts/test-upgrade-matrix.mjs",
@@ -69,10 +71,11 @@
     "@tauri-apps/plugin-dialog": "^2.0.3",
     "@tauri-apps/plugin-fs": "^2.0.3",
     "@tauri-apps/plugin-shell": "^2.0.2",
+    "jszip": "3.10.1",
+    "patch-package": "^8.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-easy-crop": "^5.5.7",
-    "jszip": "3.10.1"
+    "react-easy-crop": "^5.5.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
