@@ -66,12 +66,11 @@ export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";
 export interface BeatGalerPlanDefinition {
   id: BeatGalerPlanId;
   label: string;
-  entitlements: { upload_project: boolean; bulk_youtube_upload: "none" | "limited" | "full"; early_access: boolean };
+  price?: { amount_minor: number; currency: string; interval: "month" | null; offer_id: string | null };
+  entitlements: { upload_project: boolean; early_access: boolean };
   quotas: {
     max_beats: number | null;
     max_project_zip_bytes: number | null;
-    youtube_uploads_per_day: number | null;
-    youtube_uploads_per_month: number | null;
     max_active_devices?: number | null;
     max_simultaneous_sessions?: number | null;
   };

@@ -1,5 +1,6 @@
 "use strict";
 
+require('dotenv').config({ quiet: true });
 const express = require("express");
 const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
@@ -19,6 +20,7 @@ const { startPostgresControlPlane, installPostgresShutdown } = require("./postgr
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
+const webBillingRuntime = require("./billing-web-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -57,6 +59,10 @@ async function start() {
   }
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
   accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
+  if (cutover.authority === 'postgres') {
+    const billing = await webBillingRuntime.configure({ env: process.env });
+    console.log(`[billing] sandbox sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
+  }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");

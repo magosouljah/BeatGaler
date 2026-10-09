@@ -77,7 +77,7 @@ function readPolarSandboxConfig(env = process.env) {
     sdkVersion: POLAR_SDK_VERSION,
     accessToken: requiredText(env[ENV.accessToken], ENV.accessToken),
     webhookSecret: requiredText(env[ENV.webhookSecret], ENV.webhookSecret),
-    organizationId: optionalText(env[ENV.organizationId]),
+    organizationId: requiredText(env[ENV.organizationId], ENV.organizationId),
     providerMappings: {
       paid_entry_monthly_v1: {
         productId: requiredText(env[ENV.paidEntryProductId], ENV.paidEntryProductId),
@@ -135,7 +135,7 @@ function validateProviderProductForOffer({ product, offer, organizationId = null
       'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
     );
   }
-  if (organizationId && product.organization_id && String(product.organization_id) !== organizationId) {
+  if (!organizationId || String(product.organization_id || '') !== organizationId) {
     throw new PolarSandboxConfigError(
       `Polar product for ${offer.id} belongs to a different organization.`,
       'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
@@ -147,6 +147,12 @@ function validateProviderProductForOffer({ product, offer, organizationId = null
   if (!price) {
     throw new PolarSandboxConfigError(
       `Polar price for ${offer.id} was not found on the configured product.`,
+      'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
+    );
+  }
+  if (price.is_archived === true) {
+    throw new PolarSandboxConfigError(
+      `Polar price for ${offer.id} is archived.`,
       'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
     );
   }

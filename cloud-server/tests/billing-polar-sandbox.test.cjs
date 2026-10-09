@@ -84,6 +84,7 @@ test('sandbox config uses sandbox-only credential names and requires both monthl
   assert.equal(config.environment, 'sandbox');
   assert.equal(config.providerMappings.paid_entry_monthly_v1.productId, 'prod_paid');
   assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ACCESS_TOKEN: '' }), PolarSandboxConfigError);
+  assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ORGANIZATION_ID: '' }), PolarSandboxConfigError);
   assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID: '' }), PolarSandboxConfigError);
 });
 
@@ -132,6 +133,31 @@ test('checkout fails closed when Polar sandbox price no longer matches BeatGaler
     error => error instanceof PolarSandboxConfigError && error.code === 'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
   );
   assert.equal(calls.checkout, undefined);
+});
+
+test('monthly mapping preflight rejects wrong organization, interval and archived price', async () => {
+  for (const change of [
+    product => { product.organization_id = 'other_org'; },
+    product => { product.recurring_interval = 'year'; },
+    product => { product.prices[0].is_archived = true; },
+  ]) {
+    const calls = {};
+    const client = fakeClient(calls);
+    const getProduct = client.products.get;
+    client.products.get = async id => {
+      const product = await getProduct(id);
+      change(product);
+      return product;
+    };
+    const provider = createPolarSandboxAdapter({
+      config: readPolarSandboxConfig(env()),
+      client,
+      webhooks: { validateEvent: async () => ({ type: 'order.paid' }) },
+    });
+    await assert.rejects(() => provider.validateOfferMapping('paid_entry_monthly_v1'),
+      { code: 'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH' });
+    assert.equal(calls.checkout, undefined);
+  }
 });
 
 test('annual remains unavailable even when adapter exists', async () => {

@@ -112,10 +112,14 @@ test('Account serializer and production routes consume the same Access entrypoin
   const entry = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(source, /app\.get\("\/plans\/me",\s*createPlanMeHandler/);
   assert.match(source, /app\.post\("\/auth\/account",\s*createAccountHandler/);
-  assert.match(source, /plans:\s*accessRuntime\.planCatalog\(\)/);
+  assert.match(source, /app\.get\("\/plans\/catalog",\s*createPlanCatalogHandler/);
+  assert.match(source, /webPlanCatalog:\s*webBillingRuntime\.planCatalog/);
+  assert.match(source, /legacyPlanCatalog:\s*accessRuntime\.planCatalog/);
   assert.match(entry, /accessRuntime\.configure\(\{ pool: cutover\.authority === 'postgres' \? pool : null \}\)/);
   const settings = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'components', 'SettingsPanel.tsx'), 'utf8');
   assert.match(settings, /account\?\.plan\?\.effective_plan_id === plan\.id/);
+  assert.match(settings, /plan\.price\.amount_minor/);
+  assert.doesNotMatch(settings, /(?:6\.99|11\.99)/);
   assert.match(settings, /account\?\.plan\?\.access\?\.commercialAccessState === "grace"/);
   assert.doesNotMatch(settings, /base_plan_id/);
   const access = createAccessRuntime({ pool: { query: async () => ({ rows: [] }) }, now: () => NOW });

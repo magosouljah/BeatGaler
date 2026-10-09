@@ -36,6 +36,8 @@ const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, setBasePlanForUser, CODE_POLICY } = require("./plans");
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
+const webBillingRuntime = require("./billing-web-runtime");
+const { createPlanCatalogHandler } = require("./billing-plan-catalog-route");
 const { createPlanMeHandler, createAccountHandler, accountPublicPayload: buildAccountPublicPayload } = require("./access-consumer-handlers");
 const { hashPassword, verifyPassword } = require("./password-kdf");
 const { createUserStorageLifecycle } = require("./user-storage-lifecycle");
@@ -1451,17 +1453,12 @@ async function fetchRemoteImageDataUrl(rawUrl, redirectsLeft = 3, pageResolveLef
   });
 }
 
-app.get("/plans/catalog", (_req, res) => {
-  res.json({
-    ok: true,
-    plans: accessRuntime.planCatalog(),
-    code_policy: {
-      existing_user_default_days: CODE_POLICY.existing_user_default_days,
-      welcome: CODE_POLICY.welcome,
-      code_types: CODE_POLICY.code_types,
-    },
-  });
-});
+app.get("/plans/catalog", createPlanCatalogHandler({
+  usesPostgresAccess: accessGrants.usesPostgresAccess,
+  webPlanCatalog: webBillingRuntime.planCatalog,
+  legacyPlanCatalog: accessRuntime.planCatalog,
+  codePolicy: CODE_POLICY,
+}));
 
 app.get("/plans/me", createPlanMeHandler({
   getUser: getAuthUserFromToken, bearerToken, resolveUserPlan: accessRuntime.resolveUserPlan,

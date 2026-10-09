@@ -33,6 +33,8 @@ The adapter does not read generic `POLAR_ACCESS_TOKEN`, live/production credenti
 
 Secrets are server-side only. The manual GitHub Actions smoke receives them through repository Actions secrets and does not commit or print them intentionally.
 
+For Web PostgreSQL STEP 7, set `BILLING_PROVIDER_ENVIRONMENT=sandbox` explicitly alongside these seven variables in the server environment. The Web runtime does not accept `production` or an omitted environment as a fallback. From `cloud-server`, run `npm run preflight:web-billing`: it reads and validates both monthly Product/Price mappings without creating checkout. A failure prints only a stable error code and leaves sale unavailable; the Free app can still start. The production environment has no provider adapter or mappings in STEP 7.
+
 ## Commercial mapping owned by BeatGaler
 
 BeatGaler owns the offer identity and expected commercial values. Polar owns the provider Product/Price objects.
@@ -44,7 +46,7 @@ Before creating checkout, the adapter retrieves the configured Polar Product and
 | `paid_entry_monthly_v1` | `paid_entry` | month × 1 | USD | 699 minor units |
 | `highest_paid_monthly_v1` | `highest_paid` | month × 1 | USD | 1199 minor units |
 
-Validation also rejects an archived product, wrong organization, missing configured Price ID, non-fixed price, wrong currency, wrong amount or wrong recurring interval.
+Validation also rejects an archived product or price, missing or wrong organization, missing configured Price ID, non-fixed price, wrong currency, wrong amount or wrong recurring interval.
 
 Annual offers remain intentionally unavailable for sale.
 

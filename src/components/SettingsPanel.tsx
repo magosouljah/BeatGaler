@@ -384,7 +384,7 @@ export default function SettingsPanel(props: Props) {
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, margin: "0 0 12px" }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "#e8e8e8" }}>All plans</div>
-              <div style={{ marginTop: 3, fontSize: 10, color: "#555" }}>Pricing comes later. Buttons simulate checkout for architecture testing.</div>
+              <div style={{ marginTop: 3, fontSize: 10, color: "#555" }}>Checkout is not connected yet. Buttons simulate plan changes for testing.</div>
             </div>
             <div style={{ fontSize: 9, letterSpacing: .6, color: "#7a6546", border: "1px solid #3a3021", background: "#19150f", borderRadius: 999, padding: "4px 7px" }}>DEV ONLY</div>
           </div>
@@ -398,13 +398,11 @@ export default function SettingsPanel(props: Props) {
                 plan.quotas.max_beats == null ? "Unlimited beats" : `${plan.quotas.max_beats} beats`,
                 projectMb,
                 plan.entitlements.upload_project ? "PROJECT upload" : "No PROJECT upload",
-                plan.quotas.youtube_uploads_per_day == null ? "Unlimited YouTube / day" : `${plan.quotas.youtube_uploads_per_day} YouTube / day`,
-                plan.quotas.youtube_uploads_per_month == null ? "Unlimited YouTube / month" : `${plan.quotas.youtube_uploads_per_month} YouTube / month`,
-                plan.entitlements.bulk_youtube_upload === "full" ? "Bulk YouTube Upload" : plan.entitlements.bulk_youtube_upload === "limited" ? "Limited Bulk YouTube" : "No Bulk YouTube",
               ];
               return <div key={plan.id} style={{ position: "relative", minHeight: 310, padding: "17px 16px 15px", borderRadius: 13, border: featured ? "1px solid #5a5a5a" : "1px solid #262626", background: featured ? "#181818" : "#141414", boxShadow: featured ? "0 0 0 1px #1e1e1e inset" : "none", display: "flex", flexDirection: "column" }}>
                 {featured && <div style={{ position: "absolute", top: 13, right: 13, fontSize: 8, fontWeight: 700, letterSpacing: .55, color: "#cfcfcf", background: "#292929", borderRadius: 999, padding: "4px 7px" }}>POPULAR</div>}
                 <div style={{ paddingRight: featured ? 58 : 0, fontSize: 15, color: "#eee", fontWeight: 700 }}>{plan.label}</div>
+                {plan.price && <div style={{ marginTop: 5, color: "#cfcfcf", fontSize: 12, fontWeight: 600 }}>{plan.price.amount_minor === 0 ? "Free" : `${plan.price.currency.toUpperCase()} ${(plan.price.amount_minor / 100).toFixed(2)} / month`}</div>}
                 <div style={{ marginTop: 5, minHeight: 27, fontSize: 9.5, color: "#5c5c5c", lineHeight: 1.45 }}>{plan.id === "free" ? "Start your library." : plan.id === "paid_entry" ? "For producers building every day." : "Maximum BeatGaler access."}</div>
                 <button disabled={current || planSwitching !== null} onClick={() => void switchPlanForTesting(plan.id)} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
                   {current ? "Current plan" : planSwitching === plan.id ? "Changing…" : plan.id === "free" ? "Switch to Free" : "Choose plan"}
