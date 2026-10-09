@@ -72,8 +72,8 @@ export interface BeatGalerPlanDefinition {
     max_project_zip_bytes: number | null;
     youtube_uploads_per_day: number | null;
     youtube_uploads_per_month: number | null;
-    max_active_devices: number | null;
-    max_simultaneous_sessions: number | null;
+    max_active_devices?: number | null;
+    max_simultaneous_sessions?: number | null;
   };
 }
 export interface BeatGalerAccount {
@@ -97,10 +97,20 @@ export interface BeatGalerAccount {
       max_project_zip_bytes: number | null;
       youtube_uploads_per_day: number | null;
       youtube_uploads_per_month: number | null;
-      max_active_devices: number | null;
-      max_simultaneous_sessions: number | null;
+      max_active_devices?: number | null;
+      max_simultaneous_sessions?: number | null;
     };
     referral?: { rewarded_referrals_per_month: number; reward_plan_id: string; reward_days: number };
+    access?: {
+      commercialPlanId: BeatGalerPlanId;
+      commercialAccessState: string;
+      effectivePlanId: BeatGalerPlanId;
+      capabilities: BeatGalerPlanDefinition["entitlements"];
+      quotas: BeatGalerPlanDefinition["quotas"];
+      accessSources: Array<{ type: string; mode: string; planId: BeatGalerPlanId; validUntil: number | null }>;
+      nextRecalculationAt: number | null;
+      billing: { paidThrough: number | null; graceUntil: number | null; cancelAtPeriodEnd: boolean; nextPlanId: BeatGalerPlanId | null; nextPlanEffectiveAt: number | null };
+    };
   };
   providers?: {
     google?: { connected: boolean; email?: string | null; name?: string | null };

@@ -368,7 +368,11 @@ export default function SettingsPanel(props: Props) {
               <div style={{ fontSize: 10, color: "#606060", letterSpacing: .7 }}>CURRENT PLAN</div>
               <div style={{ marginTop: 6, fontSize: 22, color: "#f0f0f0", fontWeight: 700 }}>{account?.plan?.label || "Free"}</div>
               <div style={{ marginTop: 5, color: "#666", fontSize: 10 }}>
-                {account?.plan?.effective_until ? `Temporary access until ${new Date(account.plan.effective_until).toLocaleDateString()}` : "Your plan is synced with your BeatGaler account."}
+                {account?.plan?.access?.commercialAccessState === "grace" && account.plan.access.billing.graceUntil
+                  ? `Payment grace through ${new Date(account.plan.access.billing.graceUntil).toLocaleDateString()}`
+                  : account?.plan?.effective_until
+                    ? `Current access through ${new Date(account.plan.effective_until).toLocaleDateString()}`
+                    : "Your plan is synced with your BeatGaler account."}
               </div>
             </div>
             <div style={{ textAlign: "right", color: "#555", fontSize: 10, lineHeight: 1.55 }}>
@@ -387,7 +391,7 @@ export default function SettingsPanel(props: Props) {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, alignItems: "stretch" }}>
             {(planCatalog.length ? planCatalog : []).map(plan => {
-              const current = account?.plan?.base_plan_id === plan.id;
+              const current = account?.plan?.effective_plan_id === plan.id;
               const featured = plan.id === "paid_entry";
               const projectMb = plan.quotas.max_project_zip_bytes == null ? "Unlimited" : plan.quotas.max_project_zip_bytes >= 1024 * 1024 * 1024 ? `${(plan.quotas.max_project_zip_bytes / 1024 / 1024 / 1024).toFixed(plan.id === "highest_paid" ? 1 : 0)} GB PROJECT` : `${Math.round(plan.quotas.max_project_zip_bytes / 1024 / 1024)} MB PROJECT`;
               const features = [
@@ -410,7 +414,7 @@ export default function SettingsPanel(props: Props) {
                   {features.map((feature, index) => <div key={feature} style={{ display: "flex", alignItems: "flex-start", gap: 7, color: index >= 2 && feature.startsWith("No ") ? "#4d4d4d" : "#929292", fontSize: 9.5, lineHeight: 1.35 }}><span style={{ color: index >= 2 && feature.startsWith("No ") ? "#3f3f3f" : "#6f6f6f", lineHeight: 1 }}>•</span><span>{feature}</span></div>)}
                 </div>
                 <div style={{ marginTop: "auto", paddingTop: 13, fontSize: 8.5, color: "#484848" }}>
-                  {plan.quotas.max_active_devices == null ? "Unlimited devices" : `${plan.quotas.max_active_devices} devices`} · {plan.quotas.max_simultaneous_sessions} simultaneous {plan.quotas.max_simultaneous_sessions === 1 ? "session" : "sessions"}
+                  {plan.quotas.max_active_devices !== undefined && plan.quotas.max_simultaneous_sessions !== undefined ? <>{plan.quotas.max_active_devices == null ? "Unlimited devices" : `${plan.quotas.max_active_devices} devices`} · {plan.quotas.max_simultaneous_sessions} simultaneous {plan.quotas.max_simultaneous_sessions === 1 ? "session" : "sessions"}</> : null}
                   {plan.entitlements.early_access ? " · Early Access" : ""}
                 </div>
               </div>;

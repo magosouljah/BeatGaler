@@ -18,6 +18,7 @@ const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
 const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 const accessGrants = require("./access-grant-runtime");
+const accessRuntime = require("./access-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -46,6 +47,7 @@ async function start() {
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
+  accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");

@@ -30,8 +30,10 @@ const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
-const { ensurePlanState, publicPlanState, publicPlanCatalog, setBasePlanForUser, CODE_POLICY } = require("./plans");
+const { ensurePlanState, setBasePlanForUser, CODE_POLICY } = require("./plans");
 const accessGrants = require("./access-grant-runtime");
+const accessRuntime = require("./access-runtime");
+const { createPlanMeHandler, createAccountHandler, accountPublicPayload: buildAccountPublicPayload } = require("./access-consumer-handlers");
 const { hashPassword, verifyPassword } = require("./password-kdf");
 const { createUserStorageLifecycle } = require("./user-storage-lifecycle");
 
@@ -1230,25 +1232,7 @@ async function ensureUserStorage(user) {
 }
 
 function accountPublicPayload(user, token) {
-  return {
-    ok: true,
-    token,
-    user: {
-      id: user.id,
-      username: user.username,
-      username_source: user.usernameSource || "beatgaler",
-      official_username: user.usernameSource === "x",
-      email: user.email || null,
-      storage_ready: !!user.storageChatId,
-      has_password: !!user.passwordHash,
-      mfa_enabled: !!user.mfaSecret,
-      plan: publicPlanState(user),
-      providers: {
-        google: userProvider(user, "google") ? { connected: true, email: userProvider(user, "google").email || null, name: userProvider(user, "google").name || null } : { connected: false },
-        x: userProvider(user, "x") ? { connected: true, username: userProvider(user, "x").username || null, name: userProvider(user, "x").name || null } : { connected: false },
-      },
-    },
-  };
+  return buildAccountPublicPayload(user, token, { resolveUserPlan: accessRuntime.resolveUserPlan, userProvider });
 }
 
 function loadPersistentData() {
@@ -1457,7 +1441,7 @@ async function fetchRemoteImageDataUrl(rawUrl, redirectsLeft = 3, pageResolveLef
 app.get("/plans/catalog", (_req, res) => {
   res.json({
     ok: true,
-    plans: publicPlanCatalog(),
+    plans: accessRuntime.planCatalog(),
     code_policy: {
       existing_user_default_days: CODE_POLICY.existing_user_default_days,
       welcome: CODE_POLICY.welcome,
@@ -1466,15 +1450,13 @@ app.get("/plans/catalog", (_req, res) => {
   });
 });
 
-app.get("/plans/me", (req, res) => {
-  const user = getAuthUserFromToken(bearerToken(req));
-  if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
-  return res.json({ ok: true, plan: publicPlanState(user) });
-});
+app.get("/plans/me", createPlanMeHandler({
+  getUser: getAuthUserFromToken, bearerToken, resolveUserPlan: accessRuntime.resolveUserPlan,
+}));
 
 // Development-only simulated checkout. It deliberately changes the plan on the
 // server so Desktop/Web never learn to trust a client-side plan flag.
-app.post("/plans/dev-switch", (req, res) => {
+app.post("/plans/dev-switch", async (req, res) => {
   if (process.env.BEATGALER_DEV_PLAN_SWITCH !== "1" || accessGrants.usesPostgresAccess()) {
     return res.status(404).json({ error: "Not available." });
   }
@@ -1484,7 +1466,7 @@ app.post("/plans/dev-switch", (req, res) => {
   try {
     setBasePlanForUser(user, req.body?.plan_id);
     saveAuthData();
-    return res.json(accountPublicPayload(user, token));
+    return res.json(await accountPublicPayload(user, token));
   } catch (error) {
     return res.status(400).json({ error: error?.message || String(error) });
   }
@@ -1543,7 +1525,7 @@ app.post("/auth/register", async (req, res) => {
     await ensureUserStorage(user);
     bindInstallationToBeatGalerUser(user, beatgalerUserId);
     const token = createAuthSession(user.id);
-    return res.status(201).json(accountPublicPayload(user, token));
+    return res.status(201).json(await accountPublicPayload(user, token));
   } catch (error) {
     console.error("[auth] storage provisioning failed:", error?.message || error);
     return res.status(503).json({ error: `BeatGaler account created, but private cloud storage could not be provisioned: ${error?.message || error}`, account_created: true, username });
@@ -1576,7 +1558,7 @@ app.post("/auth/login", async (req, res) => {
     criticalPathTrace.write(req, "auth_bind_installation_done");
     const token = createAuthSession(user.id);
     criticalPathTrace.write(req, "cloud_handler_finished");
-    res.json(accountPublicPayload(user, token));
+    res.json(await accountPublicPayload(user, token));
   } catch (error) {
     res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
   }
@@ -1597,20 +1579,18 @@ app.post("/auth/session", async (req, res) => {
     bindInstallationToBeatGalerUser(user, beatgalerUserId);
     criticalPathTrace.write(req, "auth_bind_installation_done");
     criticalPathTrace.write(req, "cloud_handler_finished");
-    res.json(accountPublicPayload(user, token));
+    res.json(await accountPublicPayload(user, token));
   } catch (error) {
     res.status(503).json({ error: `Private cloud storage is not ready: ${error?.message || error}` });
   }
 });
 
-app.post("/auth/account", async (req, res) => {
-  const user = getAuthUserFromToken(bearerToken(req));
-  if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
-  await syncXIdentity(user).catch(() => false);
-  res.json(accountPublicPayload(user, bearerToken(req)));
-});
+app.post("/auth/account", createAccountHandler({
+  getUser: getAuthUserFromToken, bearerToken, resolveUserPlan: accessRuntime.resolveUserPlan,
+  userProvider, syncIdentity: syncXIdentity,
+}));
 
-app.post("/auth/email/change", (req, res) => {
+app.post("/auth/email/change", async (req, res) => {
   const user = getAuthUserFromToken(bearerToken(req));
   if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
   const email = normalizeEmail(req.body?.email);
@@ -1621,7 +1601,7 @@ app.post("/auth/email/change", (req, res) => {
   if (existing && existing.id !== user.id) return res.status(409).json({ error: "That email is already attached to another BeatGaler account." });
   user.email = email;
   saveAuthData();
-  res.json(accountPublicPayload(user, bearerToken(req)));
+  res.json(await accountPublicPayload(user, bearerToken(req)));
 });
 
 app.post("/auth/password/change", async (req, res) => {
@@ -1791,7 +1771,7 @@ app.post("/auth/oauth/poll", async (req, res) => {
   if (!user) return res.status(404).json({ error: "BeatGaler account not found." });
   if (beatgalerUserId) bindInstallationToBeatGalerUser(user, beatgalerUserId);
   const token = result.token || bearerToken(req);
-  res.json({ ...accountPublicPayload(user, token), linked: !result.token });
+  res.json({ ...await accountPublicPayload(user, token), linked: !result.token });
 });
 
 app.post("/auth/oauth/disconnect", (req, res) => {

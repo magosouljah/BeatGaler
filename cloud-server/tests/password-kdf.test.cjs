@@ -19,7 +19,8 @@ const { hashPassword, verifyPassword, SCRYPT_KEY_LENGTH } = require("../password
   assert.equal(serverSource.includes("scryptSync"), false, "request paths must not contain synchronous scrypt");
   assert.match(serverSource, /const \{ hashPassword, verifyPassword \} = require\("\.\/password-kdf"\);/);
   assert.match(serverSource, /passwordHash:\s*await hashPassword\(password, salt\)/, "register must await async KDF");
-  assert.match(serverSource, /!\(await verifyPassword\(password, user\)\)/, "login must await async password verification");
+  assert.match(serverSource, /!\(await (?:criticalPathTrace\.step\(req, "auth_password_verify", \(\) => )?verifyPassword\(password, user\)\)/,
+    "login must await async password verification, including its tracing wrapper");
   assert.match(serverSource, /app\.post\("\/auth\/password\/change", async \(req, res\) => \{/,
     "password change handler must be async");
   assert.match(serverSource, /!\(await verifyPassword\(currentPassword, user\)\)/,
