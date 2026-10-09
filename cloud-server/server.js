@@ -21,6 +21,7 @@ const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime"
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
+const webCheckoutRuntime = require("./billing-web-checkout-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -62,6 +63,12 @@ async function start() {
   if (cutover.authority === 'postgres') {
     const billing = await webBillingRuntime.configure({ env: process.env });
     console.log(`[billing] sandbox sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
+    const checkout = webCheckoutRuntime.configure({
+      pool,
+      adapter: billing.ready ? webBillingRuntime.provider() : null,
+      env: process.env,
+    });
+    console.log(`[billing] web checkout=${checkout.ready ? 'ready' : 'unavailable'} code=${checkout.failureCode || 'OK'}`);
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {

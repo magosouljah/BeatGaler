@@ -9,7 +9,7 @@ import type {
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import {
   beginMfaSetup, changeBeatGalerEmail, changeBeatGalerPassword, disableMfa, disconnectOAuthProvider,
-  enableMfa, getBeatGalerAccountInfo, getBeatGalerPlanCatalog, devSwitchBeatGalerPlan, oauthBeatGalerAccount,
+  enableMfa, getBeatGalerAccountInfo, getBeatGalerPlanCatalog, devSwitchBeatGalerPlan, startBeatGalerCheckout, oauthBeatGalerAccount,
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
 } from "./AccountGate";
 
@@ -250,6 +250,24 @@ export default function SettingsPanel(props: Props) {
     } catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
     finally { setPlanSwitching(null); }
   };
+  const startCheckout = async (plan: BeatGalerPlanDefinition) => {
+    if (!account || !plan.price?.offer_id) return;
+    setPlanSwitching(plan.id); setAccountStatus(null);
+    const key = `beatgaler:checkout:${account.id}:${plan.price.offer_id}`;
+    let requestId = localStorage.getItem(key);
+    if (!requestId) {
+      requestId = crypto.randomUUID();
+      localStorage.setItem(key, requestId);
+    }
+    try {
+      const checkout = await startBeatGalerCheckout(plan.price.offer_id, requestId);
+      window.location.assign(checkout.url);
+    } catch (e: any) {
+      if (e?.state === "FAILED" || e?.code === "BILLING_CHECKOUT_FAILED") localStorage.removeItem(key);
+      setAccountStatus(null, sanitizeUserVisibleText(String(e?.message || e)));
+      setPlanSwitching(null);
+    }
+  };
   const changeEmail = async () => {
     if (!email.trim()) return setAccountStatus(null, "Enter your new email address.");
     if (email.trim().toLowerCase() !== confirmEmail.trim().toLowerCase()) return setAccountStatus(null, "Email addresses do not match.");
@@ -384,9 +402,9 @@ export default function SettingsPanel(props: Props) {
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, margin: "0 0 12px" }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "#e8e8e8" }}>All plans</div>
-              <div style={{ marginTop: 3, fontSize: 10, color: "#555" }}>Checkout is not connected yet. Buttons simulate plan changes for testing.</div>
+              <div style={{ marginTop: 3, fontSize: 10, color: "#555" }}>{platform.kind === "web" ? "Paid plans open a secure Polar Sandbox checkout. Access changes only after payment confirmation." : "Buttons simulate plan changes for testing."}</div>
             </div>
-            <div style={{ fontSize: 9, letterSpacing: .6, color: "#7a6546", border: "1px solid #3a3021", background: "#19150f", borderRadius: 999, padding: "4px 7px" }}>DEV ONLY</div>
+            {platform.kind !== "web" && <div style={{ fontSize: 9, letterSpacing: .6, color: "#7a6546", border: "1px solid #3a3021", background: "#19150f", borderRadius: 999, padding: "4px 7px" }}>DEV ONLY</div>}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, alignItems: "stretch" }}>
@@ -404,8 +422,8 @@ export default function SettingsPanel(props: Props) {
                 <div style={{ paddingRight: featured ? 58 : 0, fontSize: 15, color: "#eee", fontWeight: 700 }}>{plan.label}</div>
                 {plan.price && <div style={{ marginTop: 5, color: "#cfcfcf", fontSize: 12, fontWeight: 600 }}>{plan.price.amount_minor === 0 ? "Free" : `${plan.price.currency.toUpperCase()} ${(plan.price.amount_minor / 100).toFixed(2)} / month`}</div>}
                 <div style={{ marginTop: 5, minHeight: 27, fontSize: 9.5, color: "#5c5c5c", lineHeight: 1.45 }}>{plan.id === "free" ? "Start your library." : plan.id === "paid_entry" ? "For producers building every day." : "Maximum BeatGaler access."}</div>
-                <button disabled={current || planSwitching !== null} onClick={() => void switchPlanForTesting(plan.id)} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
-                  {current ? "Current plan" : planSwitching === plan.id ? "Changing…" : plan.id === "free" ? "Switch to Free" : "Choose plan"}
+                <button disabled={current || planSwitching !== null || (platform.kind === "web" && !plan.price?.offer_id)} onClick={() => void (platform.kind === "web" ? startCheckout(plan) : switchPlanForTesting(plan.id))} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
+                  {current ? "Current plan" : planSwitching === plan.id ? "Opening…" : platform.kind === "web" && plan.id === "free" ? "Free plan" : plan.id === "free" ? "Switch to Free" : "Choose plan"}
                 </button>
                 <div style={{ height: 1, background: "#222", margin: "15px 0 11px" }}/>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

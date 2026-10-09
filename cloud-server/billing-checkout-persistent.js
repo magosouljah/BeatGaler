@@ -256,6 +256,7 @@ function createPersistentCheckoutService({
 
     return withUserLock(userId, async client => {
       await loadCustomerOwnership(client, userId);
+      await assertNoLiveSubscription(client, userId);
 
       const existingResult = await client.query(`
         SELECT *
@@ -300,8 +301,6 @@ function createPersistentCheckoutService({
           { requestId, state: existing.state },
         );
       }
-
-      await assertNoLiveSubscription(client, userId);
 
       const unresolved = await client.query(`
         SELECT request_id, state
@@ -390,6 +389,7 @@ function createPersistentCheckoutService({
   async function getRequest({ userId, requestId }) {
     const normalizedUserId = requiredText(userId, 'userId');
     const normalizedRequestId = requiredText(requestId, 'requestId', /^[A-Za-z0-9_-]{8,128}$/);
+    await assertNoLiveSubscription(pool, normalizedUserId);
     const result = await pool.query(`
       SELECT *
       FROM billing_checkout_requests

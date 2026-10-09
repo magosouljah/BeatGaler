@@ -343,6 +343,17 @@ export async function getBeatGalerPlanCatalog(): Promise<BeatGalerPlanDefinition
   return Array.isArray(result?.plans) ? result.plans : [];
 }
 
+export async function startBeatGalerCheckout(offerId: string, requestId: string): Promise<{ url: string; recovered: boolean }> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/billing/checkout", { offerId, requestId }, token);
+  const url = String(result?.checkout?.url || "");
+  if (result?.checkout?.state !== "OPEN" || new URL(url).protocol !== "https:") {
+    throw new Error("Checkout could not be opened securely.");
+  }
+  return { url, recovered: Boolean(result.checkout.recovered) };
+}
+
 export async function devSwitchBeatGalerPlan(planId: BeatGalerPlanId): Promise<BeatGalerAccount> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");

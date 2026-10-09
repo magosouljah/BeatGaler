@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client, Pool } = require('pg');
 const { applyMigrations, listMigrations } = require('../postgres-migrations');
+const { createAccessRuntime } = require('../access-runtime');
+const { createCheckoutHandlers } = require('../billing-web-checkout-route');
 const {
   PersistentCheckoutError,
   checkoutRequestHash,
@@ -143,6 +145,68 @@ test('persistent checkout is cross-process idempotent and fail-closed in Postgre
       assert.equal(rows.rows[0].provider_checkout_id, a.checkoutId);
     });
 
+    await t.test('Free can open Highest Paid without acquiring Paid access', async () => {
+      const userId = await newUser('highest');
+      const access = createAccessRuntime({ pool });
+      const before = await access.resolveUserPlan({ id: userId });
+      const h = adapterHarness();
+      const result = await makeService(pool, h.adapter).createSession(
+        checkoutInput(userId, 'request_highest_001', 'highest_paid_monthly_v1'),
+      );
+      const after = await access.resolveUserPlan({ id: userId });
+      assert.equal(before.effective_plan_id, 'free');
+      assert.equal(after.effective_plan_id, 'free');
+      assert.equal(result.state, 'OPEN');
+      assert.equal(result.entitlementGranted, false);
+      assert.equal(h.calls[0].offerId, 'highest_paid_monthly_v1');
+      const subscriptions = await pool.query('SELECT count(*)::int AS n FROM billing_subscription_state WHERE user_id=$1', [userId]);
+      const grants = await pool.query('SELECT count(*)::int AS n FROM entitlements WHERE user_id=$1', [userId]);
+      assert.equal(subscriptions.rows[0].n, 0);
+      assert.equal(grants.rows[0].n, 0);
+    });
+
+    await t.test('HTTP route uses authenticated identity, rejects client authority, and scopes reads', async () => {
+      const userA = await newUser('route_a');
+      const userB = await newUser('route_b');
+      const h = adapterHarness();
+      const service = makeService(pool, h.adapter);
+      const handlers = createCheckoutHandlers({
+        getUser: req => req.authUser || null,
+        currentCheckout: () => ({ service, callbackUrls: callbacks }),
+      });
+      async function invoke(handler, req) {
+        const res = {
+          statusCode: 200,
+          status(code) { this.statusCode = code; return this; },
+          json(body) { this.body = body; return this; },
+        };
+        await handler(req, res);
+        return res;
+      }
+      const body = { offerId: 'paid_entry_monthly_v1', requestId: 'request_route_001' };
+      const created = await invoke(handlers.create, { authUser: { id: userA, email: `${userA}@example.invalid` }, body });
+      assert.equal(created.statusCode, 200);
+      assert.equal(created.body.checkout.state, 'OPEN');
+      assert.equal(h.calls.length, 1);
+      assert.equal(h.calls[0].userId, userA);
+      assert.deepEqual([h.calls[0].successUrl, h.calls[0].returnUrl], [callbacks.successUrl, callbacks.returnUrl]);
+      const retried = await invoke(handlers.create, { authUser: { id: userA }, body });
+      assert.equal(retried.body.checkout.checkoutId, created.body.checkout.checkoutId);
+      assert.equal(retried.body.checkout.recovered, true);
+      assert.equal(h.calls.length, 1);
+      for (const extra of [{ userId: userB }, { productId: 'fake' }, { priceId: 'fake' },
+        { amount: 1 }, { currency: 'EUR' }, { successUrl: 'https://attacker.example/' }]) {
+        const rejected = await invoke(handlers.create, { authUser: { id: userA }, body: { ...body, ...extra } });
+        assert.equal(rejected.statusCode, 400);
+      }
+      const otherRead = await invoke(handlers.get, { authUser: { id: userB }, params: { requestId: body.requestId } });
+      assert.equal(otherRead.statusCode, 404);
+      const ownRead = await invoke(handlers.get, { authUser: { id: userA }, params: { requestId: body.requestId } });
+      assert.equal(ownRead.body.checkout.checkoutId, created.body.checkout.checkoutId);
+      const unauthenticated = await invoke(handlers.create, { body });
+      assert.equal(unauthenticated.statusCode, 401);
+    });
+
     await t.test('two tabs with different requestIds cannot expose two unresolved checkouts', async () => {
       const userId = await newUser('two_tabs');
       const h = adapterHarness({ createDelayMs: 40 });
@@ -232,6 +296,12 @@ test('persistent checkout is cross-process idempotent and fail-closed in Postgre
         state: 'FAILED',
         last_error_code: 'POLAR_SANDBOX_PRODUCT_GET_FAILED',
       });
+      const retryHarness = adapterHarness();
+      const retry = await makeService(pool, retryHarness.adapter).createSession(
+        checkoutInput(userId, 'request_precreate_002'),
+      );
+      assert.equal(retry.state, 'OPEN');
+      assert.equal(retryHarness.calls.length, 1);
     });
 
     await t.test('restart recovers OPEN from PostgreSQL without calling provider again', async () => {
@@ -336,6 +406,26 @@ test('persistent checkout is cross-process idempotent and fail-closed in Postgre
         'BILLING_CHECKOUT_SUBSCRIBER_PORTAL_REQUIRED',
       );
       assert.equal(h.calls.length, 0);
+    });
+
+    await t.test('a subscriber cannot reopen an earlier OPEN checkout after activation', async () => {
+      const userId = await newUser('activated');
+      const h = adapterHarness();
+      const service = makeService(pool, h.adapter);
+      const input = checkoutInput(userId, 'request_activated_001');
+      await service.createSession(input);
+      await pool.query(`
+        INSERT INTO billing_subscription_state(
+          user_id,provider,provider_environment,provider_subscription_id,offer_id,
+          plan_id,status,current_period_start,current_period_end,paid_through
+        ) VALUES (
+          $1,'polar','sandbox',$2,'paid_entry_monthly_v1',
+          'paid_entry','active',now(),now()+interval '30 days',now()+interval '30 days'
+        )
+      `, [userId, `polar_sub_${userId}`]);
+      await expectCode(service.createSession(input), 'BILLING_CHECKOUT_SUBSCRIBER_PORTAL_REQUIRED');
+      await expectCode(service.getRequest({ userId, requestId: input.request.requestId }), 'BILLING_CHECKOUT_SUBSCRIBER_PORTAL_REQUIRED');
+      assert.equal(h.calls.length, 1);
     });
 
     await t.test('callback origin is allowlisted server-side', async () => {

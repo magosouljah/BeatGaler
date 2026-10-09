@@ -37,6 +37,8 @@ const { ensurePlanState, setBasePlanForUser, CODE_POLICY } = require("./plans");
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
+const webCheckoutRuntime = require("./billing-web-checkout-runtime");
+const { createCheckoutHandlers } = require("./billing-web-checkout-route");
 const { createPlanCatalogHandler } = require("./billing-plan-catalog-route");
 const { createPlanMeHandler, createAccountHandler, accountPublicPayload: buildAccountPublicPayload } = require("./access-consumer-handlers");
 const { hashPassword, verifyPassword } = require("./password-kdf");
@@ -1463,6 +1465,13 @@ app.get("/plans/catalog", createPlanCatalogHandler({
 app.get("/plans/me", createPlanMeHandler({
   getUser: getAuthUserFromToken, bearerToken, resolveUserPlan: accessRuntime.resolveUserPlan,
 }));
+
+const webCheckoutHandlers = createCheckoutHandlers({
+  getUser: req => getAuthUserFromToken(bearerToken(req)),
+  currentCheckout: webCheckoutRuntime.current,
+});
+app.post("/billing/checkout", webCheckoutHandlers.create);
+app.get("/billing/checkout/:requestId", webCheckoutHandlers.get);
 
 // Development-only simulated checkout. It deliberately changes the plan on the
 // server so Desktop/Web never learn to trust a client-side plan flag.
