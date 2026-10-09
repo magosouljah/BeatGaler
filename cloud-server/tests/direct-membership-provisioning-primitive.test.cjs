@@ -32,6 +32,7 @@ async function main() {
   const secondName = String(calls[1]?.className || calls[1]?.constructor?.name || '');
   assert.match(firstName, /InviteToChannel/i);
   assert.match(secondName, /EditAdmin/i);
+  assert.equal(calls[1].adminRights.pinMessages, false, 'Direct bot must not be able to pin a client-authored INDEX');
 
   // Other Telegram failures are not swallowed. Repair stops after one attempt,
   // letting the persistent membership state remain REPAIR for an explicit retry.

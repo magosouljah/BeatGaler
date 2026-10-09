@@ -156,7 +156,7 @@ function rollbackPreparedLease({ directTransport, pool, lease }) {
   });
 }
 
-function installPersistentDirectSessionStart({ directTransport, persistentAssignments } = {}) {
+function installPersistentDirectSessionStart({ directTransport, persistentAssignments, indexPinAuthority = null } = {}) {
   if (!directTransport || typeof directTransport.startSession !== 'function') {
     throw new Error('Direct transport startSession() is required.');
   }
@@ -182,6 +182,13 @@ function installPersistentDirectSessionStart({ directTransport, persistentAssign
         `Vault ${chatId} has no persistent transport assignment.`,
         'TRANSPORT_ASSIGNMENT_MISSING',
       );
+    }
+
+    // READY vaults may still have the old bot admin rights. Revoke pin before
+    // returning a temporary credential, including for a reused lease.
+    if (indexPinAuthority) {
+      await indexPinAuthority.ensure({ chatId, botId: assignedBotId,
+        membershipState: resolved?.assignment?.membershipState });
     }
 
     const prepared = prepareAssignedLease({

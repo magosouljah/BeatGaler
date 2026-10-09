@@ -682,18 +682,41 @@ async function inviteAndPromote(master, vault, botEntity) {
     const msg = String(error?.errorMessage || error?.message || error);
     if (!/USER_ALREADY_PARTICIPANT/i.test(msg)) throw error;
   }
-  // Data-plane rights only: write media as a member, plus delete/pin so the
-  // transport bot can maintain the single index and delete replaced media.
+  // The transport bot may write media, but only MASTER may pin the INDEX.
+  // A client holding the temporary bot credential cannot publish a library.
   await master.invoke(new Api.channels.EditAdmin({
     channel: vault,
     userId: botEntity,
     adminRights: new Api.ChatAdminRights({
       deleteMessages: true,
-      pinMessages: true,
+      pinMessages: false,
       other: true,
     }),
     rank: 'BeatGaler',
   }));
+}
+
+async function restrictBotPinRights(chatId, botId) {
+  const config = loadPool().find(bot => String(bot.id) === String(botId));
+  if (!config) throw new Error('Assigned Direct bot is unavailable.');
+  let username = config.telegram_username;
+  let userId = config.telegram_user_id;
+  if (!username && !userId) {
+    const identity = await resolveBotIdentityViaHttp(config.managed
+      ? await resolveManagedToken(config) : config.token);
+    username = identity.telegram_username;
+    userId = identity.telegram_user_id;
+  }
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const entity = await masterInfo.client.getEntity(userId || `@${username}`);
+    await masterInfo.client.invoke(new Api.channels.EditAdmin({
+      channel: masterInfo.vault,
+      userId: entity,
+      adminRights: new Api.ChatAdminRights({ deleteMessages: true, pinMessages: false, other: true }),
+      rank: 'BeatGaler',
+    }));
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
 function botMembershipError(error) {
@@ -1620,6 +1643,36 @@ async function commitIndexCopyOnWrite({ chatId, filePath, caption, previousMessa
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
+async function publishIndexBuffer({ chatId, bytes, caption }) {
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'beatgaler-index-'));
+  const filePath = path.join(directory, 'library.json');
+  try {
+    fs.writeFileSync(filePath, bytes, { flag: 'wx' });
+    return await commitIndexCopyOnWrite({ chatId, filePath, caption, previousMessageId: null });
+  } finally {
+    fs.rmSync(filePath, { force: true });
+    fs.rmdirSync(directory);
+  }
+}
+
+async function pinExistingIndexMessage(chatId, messageId) {
+  const id = Number(messageId);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Valid INDEX message id required.');
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [id] }))?.[0];
+    const caption = String(message?.message || '');
+    if (!message?.media || !(caption === 'BEATGALER_LIBRARY_INDEX_V1' || caption.startsWith('BEATGALER_LIBRARY_INDEX_V1\n'))) {
+      throw new Error('Stored INDEX copy is unavailable for recovery.');
+    }
+    await masterInfo.client.invoke(new Api.messages.UpdatePinnedMessage({
+      peer: masterInfo.vault, id, silent: true, unpin: false, pmOneside: false,
+    }));
+    const full = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
+    if (Number(full?.fullChat?.pinnedMsgId) !== id) throw new Error('INDEX recovery pin could not be verified.');
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
 async function downloadMessageBuffer(chatId, messageId) {
   const masterInfo = await masterForVault(chatId);
   try {
@@ -1652,6 +1705,24 @@ async function getPinnedMessage(chatId) {
     const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [pinnedId] }))?.[0];
     if (!message) return null;
     return { message_id: Number(message.id), caption: String(message.message || ''), text: String(message.message || ''), has_media: Boolean(message.media) };
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function readPinnedIndexBuffer(chatId) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const full = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
+    const id = Number(full?.fullChat?.pinnedMsgId || 0);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [id] }))?.[0];
+    if (!message?.media) throw new Error('Pinned INDEX has no downloadable media.');
+    const raw = await masterInfo.client.downloadMedia(message, {});
+    if (!Buffer.isBuffer(raw)) throw new Error('Pinned INDEX download returned no buffer.');
+    const checked = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
+    if (Number(checked?.fullChat?.pinnedMsgId || 0) !== id) {
+      throw new Error('Pinned INDEX changed during download.');
+    }
+    return { message_id: id, caption: String(message.message || ''), raw };
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
@@ -1765,9 +1836,13 @@ module.exports = {
   decommissionVaultMembership,
   verifyMessage,
   commitIndexCopyOnWrite,
+  publishIndexBuffer,
+  pinExistingIndexMessage,
+  restrictBotPinRights,
   downloadMessageBuffer,
   deleteMessages,
   getPinnedMessage,
+  readPinnedIndexBuffer,
   createForumTopic,
   editForumTopic,
   deleteForumTopic,

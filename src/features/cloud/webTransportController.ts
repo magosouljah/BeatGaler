@@ -483,10 +483,10 @@ export class WebTransportController {
     for (const operationId of this.operationLivenessTimers.keys()) this.stopOperationLiveness(operationId);
   }
 
-  async withOperation<T>(kind: string, scope: WebTransportCapabilityScope, operation: () => Promise<T>): Promise<T> {
+  async withOperation<T>(kind: string, scope: WebTransportCapabilityScope, operation: (lease: WebTransportOperationLease) => Promise<T>): Promise<T> {
     const lease = await this.beginOperation(kind, scope);
     try {
-      return await operation();
+      return await operation(lease);
     } finally {
       await this.endOperation(lease).catch(() => {});
     }

@@ -27,6 +27,8 @@ const { installPersistentDirectMembershipActivation } = require("./direct-persis
 const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index");
 const { installStartupRoutingIndex } = require("./startup-routing-index");
 const vaultIndexPointers = require("./vault-index-pointer-store");
+const libraryIndexPublication = require("./library-index-publication");
+const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -46,6 +48,13 @@ async function start() {
   vaultIndexPointers.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
+  libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
+  const indexPinAuthority = cutover.authority === 'postgres'
+    ? createDirectIndexPinAuthority({ pool, transport: require('./direct-transport-control') }) : null;
+  if (indexPinAuthority) {
+    await indexPinAuthority.ensureAll();
+    await libraryIndexPublication.recoverAll();
+  }
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
   accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
@@ -87,6 +96,7 @@ async function start() {
   installPersistentDirectSessionStart({
     directTransport,
     persistentAssignments: directPersistentAssignments,
+    indexPinAuthority,
   });
   installPersistentDirectMembershipActivation({
     directTransport,

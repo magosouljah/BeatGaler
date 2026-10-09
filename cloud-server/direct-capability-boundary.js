@@ -421,6 +421,30 @@ async function authorizePresentedCapability(req, fallbackIdentity = null) {
   };
 }
 
+async function verifyAuthorizedCapability(req, fallbackIdentity = null) {
+  if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
+  const claims = requestIdentity(req, fallbackIdentity);
+  const { capability, input } = capabilityInput(req, claims, { requireScope: true });
+  const liveSession = directTransport.validateCapabilitySession({
+    installationId: input.installationId,
+    sessionId: input.sessionId,
+    generation: input.generation,
+  });
+  if (!liveSession?.ok) {
+    throw codedError("DIRECT_CAPABILITY_SESSION_INACTIVE", `Direct session is not live (${liveSession?.reason || "unknown"}).`);
+  }
+  const result = await installedRuntime.store.renew({ ...input, renewalLeaseMs: installedRuntime.ttlMs });
+  if (!result.ok) {
+    const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
+    throw codedError(code, "capability is not authorized for this exact session/operation/object.");
+  }
+  if (result.record.operation_type !== input.operationType || !sameScope(result.record.object_scope, input.objectScope)) {
+    throw codedError("DIRECT_CAPABILITY_SCOPE_DENIED", "capability does not match this operation and object.");
+  }
+  return { operation_id: capability, operation: result.record.operation_type,
+    object_scope: result.record.object_scope, vault_scope: result.record.vault_scope };
+}
+
 async function revokeTenantCapabilities(tenantId, reason = "incident") {
   if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
   return installedRuntime.store.revokeTenant({ tenantId: String(tenantId), reason: String(reason || "incident") });
@@ -693,6 +717,7 @@ module.exports = {
   createMemoryStore,
   createPostgresStore,
   authorizePresentedCapability,
+  verifyAuthorizedCapability,
   revokeTenantCapabilities,
   installDirectCapabilityBoundary,
 };

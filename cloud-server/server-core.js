@@ -29,6 +29,8 @@ const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verify
 const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
+const libraryIndexPublication = require("./library-index-publication");
+const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, setBasePlanForUser, CODE_POLICY } = require("./plans");
 const accessGrants = require("./access-grant-runtime");
@@ -100,6 +102,7 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
 });
+app.use('/transport/index/publish', express.json({ limit: '24mb' }));
 app.use(express.json({ limit: "256kb" }));
 const upload = multer({
   dest: "uploads-tmp/",
@@ -2157,6 +2160,8 @@ app.post("/transport/index/commit", async (req, res) => {
   const messageId = Number(req.body?.messageId || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) return res.status(400).json({ error: "messageId is required." });
   try {
+    await libraryIndexPublication.ensureBootstrap(auth.user.id);
+    await libraryIndexPublication.verifyCommitted({ userId: auth.user.id, chatId: storageChatId(account), messageId });
     const committed = await vaultIndexPointers.compareAndSetForChat({
       telegramChatId: storageChatId(account),
       messageId,
@@ -2177,6 +2182,62 @@ app.post("/transport/index/commit", async (req, res) => {
     String(req.body?.sourceId || "")
   );
   res.json({ ok: true });
+});
+
+app.post("/transport/quota/reserve", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  if (req.body?.kind !== 'commit_import' || req.body?.scope?.objectType !== 'beat' ||
+      req.body?.scope?.objectIds?.length !== 1 || req.body.scope.objectIds[0] !== req.body?.beatId) {
+    return res.status(403).json({ code: 'LIBRARY_QUOTA_CAPABILITY_REQUIRED', error: 'Import capability must match the beat.' });
+  }
+  try {
+    await verifyAuthorizedCapability(req);
+    const reserved = await libraryIndexPublication.reserve({ userId: auth.user.id, beatId: req.body.beatId });
+    res.json({ ok: true, reservation: reserved });
+  } catch (error) {
+    res.status(error?.code === 'LIBRARY_QUOTA_EXCEEDED' ? 409 : Number(error?.status || 503))
+      .json({ code: error?.code || 'LIBRARY_QUOTA_UNAVAILABLE', error: error?.message || 'Beat reservation failed.' });
+  }
+});
+
+app.post("/transport/quota/renew", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  if (req.body?.kind !== 'commit_import' || req.body?.scope?.objectType !== 'beat' ||
+      req.body?.scope?.objectIds?.length !== 1 || req.body.scope.objectIds[0] !== req.body?.beatId) {
+    return res.status(403).json({ code: 'LIBRARY_QUOTA_CAPABILITY_REQUIRED', error: 'Import capability must match the beat.' });
+  }
+  try {
+    await verifyAuthorizedCapability(req);
+    res.json({ ok: true, reservation: await libraryIndexPublication.renew({ userId: auth.user.id, beatId: req.body.beatId }) });
+  } catch (error) {
+    res.status(Number(error?.status || 503))
+      .json({ code: error?.code || 'LIBRARY_QUOTA_UNAVAILABLE', error: error?.message || 'Beat reservation renewal failed.' });
+  }
+});
+
+app.post("/transport/index/publish", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  if (req.body?.kind !== 'replace_index' || req.body?.scope?.objectType !== 'index' ||
+      req.body?.scope?.objectIds?.length !== 1 || req.body.scope.objectIds[0] !== 'pinned') {
+    return res.status(403).json({ code: 'LIBRARY_QUOTA_CAPABILITY_REQUIRED', error: 'INDEX capability is required.' });
+  }
+  try {
+    await verifyAuthorizedCapability(req);
+    const result = await libraryIndexPublication.publish({
+      userId: auth.user.id,
+      chatId: storageChatId(auth.account),
+      manifest: req.body.manifest,
+      expectedMessageId: req.body.expectedMessageId,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    await libraryIndexPublication.recover({ userId: auth.user.id, chatId: storageChatId(auth.account) }).catch(() => {});
+    res.status(error?.code === 'LIBRARY_QUOTA_EXCEEDED' ? 409 : Number(error?.status || 503))
+      .json({ code: error?.code || 'LIBRARY_QUOTA_PUBLISH_FAILED', error: error?.message || 'INDEX publication failed.' });
+  }
 });
 
 app.post("/transport/topic/ensure", async (req, res) => {

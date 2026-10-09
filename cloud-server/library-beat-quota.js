@@ -49,15 +49,19 @@ async function readTelegramLibraryIndex(userId, { client, transport = require('.
   const vault = (await client.query('SELECT telegram_chat_id FROM vaults WHERE user_id=$1', [userId])).rows[0];
   if (!vault?.telegram_chat_id) throw new LibraryQuotaError('User vault is unavailable.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
   const chatId = vault.telegram_chat_id;
-  const pinned = await transport.getPinnedMessage(chatId);
+  const pinned = transport.readPinnedIndexBuffer
+    ? await transport.readPinnedIndexBuffer(chatId)
+    : await transport.getPinnedMessage(chatId);
   const caption = String(pinned?.caption || '');
   if (!pinned?.message_id || !(caption === 'BEATGALER_LIBRARY_INDEX_V1' || caption.startsWith('BEATGALER_LIBRARY_INDEX_V1\n'))) {
     throw new LibraryQuotaError('Pinned library INDEX is unavailable.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
   }
-  const raw = await transport.downloadMessageBuffer(chatId, pinned.message_id);
-  const checked = await transport.getPinnedMessage(chatId);
-  if (Number(checked?.message_id) !== Number(pinned.message_id) || String(checked?.caption || '') !== caption) {
-    throw new LibraryQuotaError('Pinned INDEX changed during bootstrap.', 'LIBRARY_QUOTA_INDEX_CHANGED');
+  const raw = pinned.raw || await transport.downloadMessageBuffer(chatId, pinned.message_id);
+  if (!pinned.raw) {
+    const checked = await transport.getPinnedMessage(chatId);
+    if (Number(checked?.message_id) !== Number(pinned.message_id) || String(checked?.caption || '') !== caption) {
+      throw new LibraryQuotaError('Pinned INDEX changed during bootstrap.', 'LIBRARY_QUOTA_INDEX_CHANGED');
+    }
   }
   let manifest;
   try { manifest = JSON.parse(raw.toString('utf8')); }
@@ -155,7 +159,7 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
     });
   }
 
-  async function reserve({ userId, beatId, reservationId }) {
+  async function reserve({ userId, beatId, reservationId, retryDenied = false }) {
     const bid = requiredId(beatId, 'beatId');
     const rid = requiredId(reservationId, 'reservationId');
     const result = await transaction(userId, async (client, uid) => {
@@ -167,9 +171,13 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
         if (existing.beat_id !== bid) {
           throw new LibraryQuotaError('Reservation identity belongs to another beat or user.', 'LIBRARY_QUOTA_IDENTITY_CONFLICT');
         }
-        if (existing.state === 'DENIED') return { reservationId: rid, beatId: bid, status: 'DENIED' };
-        return { reservationId: rid, beatId: bid, status: existing.state, expiresAt: existing.expires_at,
-          usage: await snapshot(client, uid, at) };
+        if (existing.state === 'DENIED' && !retryDenied) {
+          return { reservationId: rid, beatId: bid, status: 'DENIED' };
+        }
+        if (existing.state === 'PENDING' || existing.state === 'COMMITTED') {
+          return { reservationId: rid, beatId: bid, status: existing.state, expiresAt: existing.expires_at,
+            usage: await snapshot(client, uid, at) };
+        }
       }
       const beat = (await client.query('SELECT beat_id FROM library_beats WHERE user_id=$1 AND beat_id=$2', [uid, bid])).rows[0];
       if (beat) throw new LibraryQuotaError('Beat identity already exists.', 'LIBRARY_QUOTA_BEAT_EXISTS');
@@ -177,17 +185,36 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
       if (pendingBeat) throw new LibraryQuotaError('Beat identity is already reserved.', 'LIBRARY_QUOTA_BEAT_RESERVED');
       const before = await snapshot(client, uid, at);
       if (before.limit !== null && before.occupied >= before.limit) {
-        await client.query(`INSERT INTO library_beat_reservations(id,user_id,beat_id,state,expires_at,denial_reason)
+        if (existing) await client.query(`UPDATE library_beat_reservations SET state='DENIED',expires_at=$3,
+          denial_reason='LIBRARY_QUOTA_EXCEEDED',updated_at=$3 WHERE user_id=$1 AND id=$2`, [uid, rid, at]);
+        else await client.query(`INSERT INTO library_beat_reservations(id,user_id,beat_id,state,expires_at,denial_reason)
           VALUES($1,$2,$3,'DENIED',$4,'LIBRARY_QUOTA_EXCEEDED')`, [rid, uid, bid, at]);
         return { reservationId: rid, beatId: bid, status: 'DENIED' };
       }
       const expiresAt = new Date(at.getTime() + reservationTtlMs);
-      await client.query(`INSERT INTO library_beat_reservations(id,user_id,beat_id,state,expires_at)
+      if (existing) await client.query(`UPDATE library_beat_reservations SET state='PENDING',expires_at=$3,
+        denial_reason=NULL,updated_at=$4 WHERE user_id=$1 AND id=$2`, [uid, rid, expiresAt, at]);
+      else await client.query(`INSERT INTO library_beat_reservations(id,user_id,beat_id,state,expires_at)
         VALUES($1,$2,$3,'PENDING',$4)`, [rid, uid, bid, expiresAt]);
       return { reservationId: rid, beatId: bid, status: 'PENDING', expiresAt, usage: await snapshot(client, uid, at) };
     });
     if (result.status === 'DENIED') throw new LibraryQuotaError('Beat quota exceeded.', 'LIBRARY_QUOTA_EXCEEDED');
     return result;
+  }
+
+  async function renew({ userId, reservationId }) {
+    const rid = requiredId(reservationId, 'reservationId');
+    return transaction(userId, async (client, uid) => {
+      await stateLock(client, uid);
+      const at = instant();
+      await expire(client, uid, at);
+      const row = (await client.query('SELECT beat_id,state FROM library_beat_reservations WHERE user_id=$1 AND id=$2 FOR UPDATE', [uid, rid])).rows[0];
+      if (!row || row.state !== 'PENDING') throw new LibraryQuotaError('Reservation is no longer pending.', 'LIBRARY_QUOTA_RESERVATION_CLOSED');
+      const expiresAt = new Date(at.getTime() + reservationTtlMs);
+      await client.query('UPDATE library_beat_reservations SET expires_at=$3,updated_at=$4 WHERE user_id=$1 AND id=$2',
+        [uid, rid, expiresAt, at]);
+      return { reservationId: rid, beatId: row.beat_id, status: 'PENDING', expiresAt };
+    });
   }
 
   async function confirm({ userId, reservationId }) {
@@ -241,7 +268,7 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
     });
   }
 
-  return Object.freeze({ bootstrap, usage, reserve, confirm, cancel,
+  return Object.freeze({ bootstrap, usage, reserve, renew, confirm, cancel,
     moveToTrash: input => setBeatState({ ...input, state: 'TRASH' }),
     restore: input => setBeatState({ ...input, state: 'ACTIVE' }),
   });

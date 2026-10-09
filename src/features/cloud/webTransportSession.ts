@@ -194,7 +194,8 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
     const csrf = readWebCsrfToken();
     if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS);
+    const timeoutMs = path === '/transport/index/publish' ? 180_000 : WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
         method: "POST",
@@ -506,6 +507,49 @@ export async function ensureWebTransportTopic(beatId: string, beatName: string):
     throw new Error("Galer Cloud returned incomplete beat storage information.");
   }
   return threadId;
+}
+
+interface IndexPublicationLease { operationId: string; sessionId: string; generation: number }
+
+export async function reserveWebTransportBeat(beatId: string, lease: IndexPublicationLease): Promise<void> {
+  await transportRequest('/transport/quota/reserve', {
+    beatId,
+    sessionId: lease.sessionId,
+    generation: lease.generation,
+    operationId: lease.operationId,
+    kind: 'commit_import',
+    scope: { objectType: 'beat', objectIds: [beatId] },
+  });
+}
+
+export async function renewWebTransportBeat(beatId: string, lease: IndexPublicationLease): Promise<void> {
+  await transportRequest('/transport/quota/renew', {
+    beatId,
+    sessionId: lease.sessionId,
+    generation: lease.generation,
+    operationId: lease.operationId,
+    kind: 'commit_import',
+    scope: { objectType: 'beat', objectIds: [beatId] },
+  });
+}
+
+export async function publishWebTransportIndex(
+  input: { manifest: unknown; expectedMessageId: number | null },
+  lease: IndexPublicationLease,
+): Promise<{ messageId: number; previousMessageId: number | null; beatCount: number }> {
+  const result = await transportRequest<{ messageId: number; previousMessageId: number | null; beatCount: number }>(
+    '/transport/index/publish', {
+      ...input,
+      sessionId: lease.sessionId,
+      generation: lease.generation,
+      operationId: lease.operationId,
+      kind: 'replace_index',
+      scope: { objectType: 'index', objectIds: ['pinned'] },
+    });
+  if (!Number.isSafeInteger(result.messageId) || result.messageId <= 0) {
+    throw new Error('Galer Cloud did not confirm the published INDEX.');
+  }
+  return result;
 }
 
 /** Records the authoritative INDEX pointer and the small routing delta produced by the same commit. */

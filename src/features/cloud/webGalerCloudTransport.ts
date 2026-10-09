@@ -1,8 +1,11 @@
-import { WebTransportController } from "./webTransportController";
+import { WebTransportController, type WebTransportOperationLease } from "./webTransportController";
 import {
   commitWebTransportIndexPointer,
   ensureWebTransportTopic,
   reconcileWebTransportRouting,
+  reserveWebTransportBeat,
+  renewWebTransportBeat,
+  publishWebTransportIndex,
 } from "./webTransportSession";
 import { WebTransportWorkerClient } from "./webTransportWorkerClient";
 import { isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from "./webLibraryBootstrap";
@@ -27,6 +30,8 @@ import {
   type WebTransportStreamResult,
   type WebTransportUploadInput,
   type WebTransportUploadResult,
+  type WebTransportReplaceIndexInput,
+  type WebTransportReplaceIndexResult,
 } from "./webTransportWorkerProtocol";
 
 export interface WebTransportPrefetchFilesHandle {
@@ -235,8 +240,20 @@ export class WebGalerCloudTransport {
     );
   }
 
+  private publishLibraryIndex(
+    input: WebTransportReplaceIndexInput,
+    lease?: WebTransportOperationLease,
+  ): Promise<WebTransportReplaceIndexResult> {
+    if (lease) return publishWebTransportIndex(input, lease);
+    return this.controller.withOperation(
+      "replace_index",
+      { objectType: "index", objectIds: ["pinned"] },
+      active => publishWebTransportIndex(input, active),
+    );
+  }
+
   async ensureLibraryIndex(): Promise<WebLibraryBootstrapResult> {
-    return this.controller.withOperation("replace_index", { objectType: "index", objectIds: ["pinned"] }, async () => {
+    return this.controller.withOperation("replace_index", { objectType: "index", objectIds: ["pinned"] }, async lease => {
       // Re-read after acquiring the existing per-vault INDEX operation. A second
       // installation must reuse the first winner, including its real manifest.
       try {
@@ -247,7 +264,7 @@ export class WebGalerCloudTransport {
         if (!isMissingWebLibraryIndexError(error)) throw error;
       }
       const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] };
-      const result = await this.worker.replaceLibraryIndex({ manifest, expectedMessageId: 0 });
+      const result = await this.publishLibraryIndex({ manifest, expectedMessageId: 0 }, lease);
       await commitWebTransportIndexPointer({ messageId: result.messageId, expectedMessageId: result.previousMessageId, pointerSource: "publish", sourceId: "direct-bootstrap", beatCount: 0 });
       return { status: "created", messageId: result.messageId, manifest };
     });
@@ -458,7 +475,13 @@ export class WebGalerCloudTransport {
       { objectType: "beat", objectIds: [beat.id] },
     );
     let topic: Promise<number> | null = null;
+    let reservationTimer: ReturnType<typeof setInterval> | null = null;
+    let renewalFailure: unknown = null;
     try {
+      await reserveWebTransportBeat(beat.id, lease);
+      reservationTimer = setInterval(() => {
+        void renewWebTransportBeat(beat.id, lease).catch(error => { renewalFailure = error; });
+      }, 5 * 60_000);
       const result = await commitWebImportedBeat(beat, files, {
         // Import must use the same vault-serialized, renewable INDEX path as
         // normal reads. Calling the Worker directly left a 30s index request
@@ -472,11 +495,10 @@ export class WebGalerCloudTransport {
         // The pinned INDEX write is equally authoritative: retain the import
         // lease for uploaded media, but fence the read/replace pair separately
         // at the vault INDEX boundary.
-        replaceLibraryIndex: input => this.controller.withOperation(
-          "replace_index",
-          { objectType: "index", objectIds: ["pinned"] },
-          () => this.worker.replaceLibraryIndex(input),
-        ),
+        replaceLibraryIndex: input => {
+          if (renewalFailure) throw renewalFailure;
+          return this.publishLibraryIndex(input);
+        },
       }, onProgress);
       playTrace("IMPORT_COMMIT_INDEX_PUBLISHED", {
         index_message_id: result.index?.messageId || null,
@@ -504,6 +526,7 @@ export class WebGalerCloudTransport {
       });
       throw error;
     } finally {
+      if (reservationTimer) clearInterval(reservationTimer);
       await this.controller.endOperation(lease).catch(() => {});
     }
   }
@@ -530,7 +553,7 @@ export class WebGalerCloudTransport {
           const uploaded = await this.uploadOnce({ ...input, threadId }, progress);
           return { ...uploaded, thread_id: threadId };
         },
-        replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        replaceLibraryIndex: input => this.publishLibraryIndex(input),
         downloadProject: async input => {
           const chunks: ArrayBuffer[] = [];
           const stream = await this.streamFile({ messageId: input.messageId, mimeType: input.mimeType, purpose: "other" }, chunk => { chunks.push(chunk); });
@@ -569,7 +592,7 @@ export class WebGalerCloudTransport {
     try {
       const result = await moveWebBeatsToTrash(beatIds, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
-        replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        replaceLibraryIndex: input => this.publishLibraryIndex(input),
         deleteMessages: async ids => (await this.worker.deleteMessages({ messageIds: ids })).deleted,
       });
       if (result.index) {
@@ -598,7 +621,7 @@ export class WebGalerCloudTransport {
     try {
       const result = await restoreWebBeatFromTrash(trashId, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
-        replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        replaceLibraryIndex: input => this.publishLibraryIndex(input),
         deleteMessages: async ids => (await this.worker.deleteMessages({ messageIds: ids })).deleted,
       });
       restored = result.value;
@@ -635,7 +658,7 @@ export class WebGalerCloudTransport {
     try {
       const result = await purgeWebTrash({
         getLibraryIndex: () => this.worker.getLibraryIndex(),
-        replaceLibraryIndex: input => this.worker.replaceLibraryIndex(input),
+        replaceLibraryIndex: input => this.publishLibraryIndex(input),
         deleteMessages: async ids => (await this.worker.deleteMessages({ messageIds: ids })).deleted,
       });
       if (result.index) {

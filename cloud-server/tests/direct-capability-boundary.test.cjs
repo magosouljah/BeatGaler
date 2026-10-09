@@ -8,10 +8,12 @@ const {
   normalizeScope,
   createMemoryStore,
   installDirectCapabilityBoundary,
+  verifyAuthorizedCapability,
 } = require("../direct-capability-boundary");
 const directTransport = require("../direct-transport-capability-view");
 const { activeOperationIdsForSessionState, validateCapabilitySessionState } = require("../direct-transport-capability-view");
 const { installProductiveTempAuthBoundary } = require("../productive-temp-auth-boundary");
+const { installHttpContainment } = require("../http-containment");
 
 function record(overrides = {}) {
   return {
@@ -102,6 +104,23 @@ test("operation kinds are deny-by-default", () => {
   assert.equal(normalizeOperationKind("download"), "download");
   assert.throws(() => normalizeOperationKind("data"), /DIRECT_CAPABILITY_DENIED/);
   assert.throws(() => normalizeOperationKind("admin_anything"), /DIRECT_CAPABILITY_DENIED/);
+});
+
+test("STEP 4 transport writes require the same installation owner boundary as INDEX commit", () => {
+  const routes = new Map();
+  const express = { application: {
+    post(route, ...handlers) { routes.set(route, handlers); return this; },
+    get() { return this; },
+  } };
+  installHttpContainment(express);
+  for (const route of ["/transport/index/commit", "/transport/index/publish",
+    "/transport/quota/reserve", "/transport/quota/renew"]) {
+    express.application.post(route, () => {});
+  }
+  const ownerBoundary = routes.get("/transport/index/commit")[0];
+  for (const route of ["/transport/index/publish", "/transport/quota/reserve", "/transport/quota/renew"]) {
+    assert.equal(routes.get(route)[0], ownerBoundary, `${route} must bind the installation before capability checks`);
+  }
 });
 
 test("scope requires an explicit allowlisted object and rejects wildcard ids", () => {
@@ -277,6 +296,19 @@ test("boundary renews public capabilities without exposing internal operation id
     assert.equal(authorize.statusCode, 200);
     assert.equal(authorize.payload.operation_id, capability);
 
+    const publicationRequest = capabilityRouteRequest({
+      sessionId: "session-a", generation: 1, operationId: capability, kind: "commit_import",
+      scope: { objectType: "beat", objectIds: ["beat-a"] },
+    });
+    assert.equal((await verifyAuthorizedCapability(publicationRequest)).operation_id, capability);
+    await assert.rejects(
+      verifyAuthorizedCapability(capabilityRouteRequest({
+        sessionId: "session-a", generation: 1, operationId: capability, kind: "commit_import",
+        scope: { objectType: "beat", objectIds: ["beat-b"] },
+      })),
+      error => error?.code === "DIRECT_CAPABILITY_SCOPE_DENIED",
+    );
+
     for (let attempt = 0; attempt < 2; attempt += 1) {
       now += 5_000;
       const renewed = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
@@ -309,6 +341,10 @@ test("boundary renews public capabilities without exposing internal operation id
       sessionId: "session-a", generation: 1, operationId: capability,
     }));
     assert.equal(consumed.statusCode, 403);
+    await assert.rejects(
+      verifyAuthorizedCapability(publicationRequest),
+      error => error?.code === "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED",
+    );
 
     const secondBegin = await runRoute(fakeExpress.routes.get("/transport/operation/begin"), beginRequest);
     const secondCapability = secondBegin.payload.operation_id;
