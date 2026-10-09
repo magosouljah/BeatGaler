@@ -22,6 +22,7 @@ const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
+const webhookRuntime = require("./billing-webhook-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -69,6 +70,12 @@ async function start() {
       env: process.env,
     });
     console.log(`[billing] web checkout=${checkout.ready ? 'ready' : 'unavailable'} code=${checkout.failureCode || 'OK'}`);
+    const webhook = webhookRuntime.configure({
+      pool,
+      adapter: billing.ready ? webBillingRuntime.provider() : null,
+      env: process.env,
+    });
+    console.log(`[billing] webhook inbox=${webhook.ready ? 'ready' : 'unavailable'} code=${webhook.failureCode || 'OK'}`);
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {

@@ -39,6 +39,8 @@ const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
 const { createCheckoutHandlers } = require("./billing-web-checkout-route");
+const webhookRuntime = require("./billing-webhook-runtime");
+const { installPolarWebhookRoute } = require("./billing-webhook-route");
 const { createPlanCatalogHandler } = require("./billing-plan-catalog-route");
 const { createPlanMeHandler, createAccountHandler, accountPublicPayload: buildAccountPublicPayload } = require("./access-consumer-handlers");
 const { hashPassword, verifyPassword } = require("./password-kdf");
@@ -108,6 +110,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use('/transport/index/publish', express.json({ limit: '24mb' }));
+installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
 app.use(express.json({ limit: "256kb" }));
 const upload = multer({
   dest: "uploads-tmp/",

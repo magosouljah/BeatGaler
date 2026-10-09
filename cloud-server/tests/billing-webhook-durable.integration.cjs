@@ -4,6 +4,12 @@ const crypto = require('crypto');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client, Pool } = require('pg');
+const express = require('express');
+const { webhooks } = require('@polar-sh/sdk/2026-04');
+const { createAccessRuntime } = require('../access-runtime');
+const { installSessionSecurity } = require('../session-security');
+const { createPolarWebhookRoute, installPolarWebhookRoute } = require('../billing-webhook-route');
+const webhookRuntime = require('../billing-webhook-runtime');
 const { applyMigrations, listMigrations } = require('../postgres-migrations');
 const {
   DurableWebhookError,
@@ -123,6 +129,148 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
     async function resetInbox() {
       await pool.query('TRUNCATE billing_webhook_events');
     }
+
+    await t.test('HTTP ingress preserves signed bytes, commits before ACK, and leaves Access Free', async () => {
+      await resetInbox();
+      const key = Buffer.from('beatgaler-step9-fixture-signing-key');
+      const secret = `whsec_${key.toString('base64')}`;
+      const adapter = {
+        provider: 'polar', environment: 'sandbox',
+        verifyWebhook: ({ rawBody, headers }) => webhooks.validateEvent(new Uint8Array(rawBody), headers, secret),
+      };
+      assert.equal(webhookRuntime.configure({ pool, adapter, env: { POLAR_SANDBOX_WEBHOOK_SECRET: secret } }).ready, true);
+      const app = express();
+      // The production session middleware is installed before the raw route.
+      installSessionSecurity(express, { dataDir: __dirname });
+      app.use((_req, _res, next) => next());
+      installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
+      app.use(express.json({ limit: '256kb' }));
+      app.post('/ordinary-json', (req, res) => res.json(req.body));
+      const server = await new Promise(resolve => {
+        const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+      });
+      const url = `http://127.0.0.1:${server.address().port}`;
+      const access = createAccessRuntime({ pool });
+      function signed(raw, eventId) {
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const signature = crypto.createHmac('sha256', key)
+          .update(`${eventId}.${timestamp}.${raw.toString('utf8')}`).digest('base64');
+        return {
+          'content-type': 'application/json',
+          'webhook-id': eventId,
+          'webhook-timestamp': timestamp,
+          'webhook-signature': `v1,${signature}`,
+        };
+      }
+      async function deliver(raw, headers) {
+        const response = await fetch(`${url}/webhooks/polar`, { method: 'POST', headers, body: raw });
+        return { status: response.status, body: await response.json() };
+      }
+      const raw = Buffer.from(' { "type" : "subscription.active", "timestamp" : "2026-10-09T12:00:00.000Z", "data" : { "id" : "polar_sub_http_1", "customer_id" : "polar_customer_1", "status" : "active" } } ');
+      const headers = signed(raw, 'msg_step9_http_1');
+      try {
+        const before = await access.resolveUserPlan({ id: 'webhook_user_1' });
+        const first = await deliver(raw, { ...headers, authorization: 'Bearer forged', cookie: '__Host-beatgaler_session=forged' });
+        assert.equal(first.status, 202);
+        assert.equal(first.body.state, 'RECEIVED');
+        assert.equal(first.body.duplicate, false);
+        const row = (await pool.query("SELECT state,raw_body_sha256,attempt_count,provider_customer_id FROM billing_webhook_events WHERE event_id='msg_step9_http_1'")).rows[0];
+        assert.equal(row.state, 'RECEIVED');
+        assert.equal(row.raw_body_sha256, crypto.createHash('sha256').update(raw).digest('hex'));
+        assert.equal(row.attempt_count, 0);
+        assert.equal(row.provider_customer_id, 'polar_customer_1');
+        const after = await access.resolveUserPlan({ id: 'webhook_user_1' });
+        assert.equal(before.effective_plan_id, 'free');
+        assert.equal(after.effective_plan_id, 'free');
+        const retry = await deliver(raw, headers);
+        assert.equal(retry.status, 202);
+        assert.equal(retry.body.duplicate, true);
+        const concurrentRaw = Buffer.from(raw.toString('utf8').replace('polar_sub_http_1', 'polar_sub_http_parallel'));
+        const concurrentHeaders = signed(concurrentRaw, 'msg_step9_parallel');
+        const parallel = await Promise.all([
+          deliver(concurrentRaw, concurrentHeaders), deliver(concurrentRaw, concurrentHeaders),
+        ]);
+        assert.deepEqual(parallel.map(item => item.status), [202, 202]);
+        assert.deepEqual(parallel.map(item => item.body.duplicate).sort(), [false, true]);
+        const altered = Buffer.from(raw.toString('utf8').replace('"active"', '"canceled"'));
+        assert.equal((await deliver(altered, headers)).status, 403);
+        const collision = await deliver(altered, signed(altered, 'msg_step9_http_1'));
+        assert.equal(collision.status, 409);
+        assert.equal(collision.body.code, 'WEBHOOK_IDENTITY_COLLISION');
+        assert.equal((await deliver(raw, { 'content-type': 'application/json' })).status, 403);
+        assert.equal((await deliver(raw, {
+          'content-type': 'application/json', authorization: 'Bearer forged',
+          cookie: '__Host-beatgaler_session=forged',
+        })).status, 403);
+        assert.equal((await deliver(Buffer.alloc(256 * 1024 + 1, 32), headers)).status, 413);
+        const compressed = await deliver(raw, { ...headers, 'content-encoding': 'gzip' });
+        assert.equal(compressed.status, 400);
+        const secondTenantRaw = Buffer.from(raw.toString('utf8')
+          .replace('polar_sub_http_1', 'polar_sub_http_2')
+          .replace('polar_customer_1', 'polar_customer_2'));
+        assert.equal((await deliver(secondTenantRaw, signed(secondTenantRaw, 'msg_step9_tenant_2'))).status, 202);
+        const tenants = await pool.query(`
+          SELECT event_id,provider_customer_id,resolved_user_id,state
+          FROM billing_webhook_events
+          WHERE event_id IN ('msg_step9_http_1','msg_step9_tenant_2')
+          ORDER BY event_id
+        `);
+        assert.deepEqual(tenants.rows.map(row => [row.provider_customer_id, row.resolved_user_id, row.state]), [
+          ['polar_customer_1', null, 'RECEIVED'], ['polar_customer_2', null, 'RECEIVED'],
+        ]);
+        assert.equal((await access.resolveUserPlan({ id: 'webhook_user_2' })).effective_plan_id, 'free');
+        const ordinary = await fetch(`${url}/ordinary-json`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ok":true}',
+        });
+        assert.deepEqual(await ordinary.json(), { ok: true });
+        assert.equal((await pool.query("SELECT count(*)::int AS n FROM billing_webhook_events WHERE event_id='msg_step9_http_1'")).rows[0].n, 1);
+        assert.equal((await pool.query("SELECT count(*)::int AS n FROM billing_webhook_events WHERE event_id='msg_step9_parallel'")).rows[0].n, 1);
+      } finally {
+        await new Promise(resolve => server.close(resolve));
+      }
+    });
+
+    await t.test('failure before commit rolls back; lost ACK and restart deduplicate committed event', async () => {
+      await resetInbox();
+      const h = adapterHarness();
+      const raw = rawEvent({ data: { id: 'polar_sub_restart', customer_id: 'polar_customer_2' } });
+      const input = { rawBody: raw, headers: webhookHeaders('msg_step9_restart') };
+      let failCommit = true;
+      const failingPool = {
+        query: (...args) => pool.query(...args),
+        async connect() {
+          const client = await pool.connect();
+          return {
+            query(sql, params) {
+              if (sql === 'COMMIT' && failCommit) {
+                failCommit = false;
+                throw new Error('simulated connection failure before commit');
+              }
+              return client.query(sql, params);
+            },
+            release() { client.release(); },
+          };
+        },
+      };
+      const handler = createPolarWebhookRoute({ currentInbox: () => makeService(failingPool, h.adapter) });
+      const response = {
+        statusCode: 200,
+        status(code) { this.statusCode = code; return this; },
+        json(body) { this.body = body; return this; },
+      };
+      await handler({ body: raw, headers: input.headers }, response);
+      assert.equal(response.statusCode, 503);
+      assert.equal(response.body.code, 'WEBHOOK_INBOX_PERSIST_FAILED');
+      assert.equal((await pool.query("SELECT count(*)::int AS n FROM billing_webhook_events WHERE event_id='msg_step9_restart'")).rows[0].n, 0);
+      const first = await makeService(pool, h.adapter).receive(input);
+      assert.equal(first.duplicate, false);
+      // Simulate process loss after COMMIT, before the HTTP response reaches Polar.
+      const restarted = makeService(pool, adapterHarness().adapter);
+      const repeated = await restarted.receive(input);
+      assert.equal(repeated.duplicate, true);
+      assert.equal((await restarted.getEvent('msg_step9_restart')).state, 'RECEIVED');
+      assert.equal((await pool.query("SELECT count(*)::int AS n FROM billing_webhook_events WHERE event_id='msg_step9_restart'")).rows[0].n, 1);
+    });
 
     await t.test('invalid signature fails before durable persistence', async () => {
       await resetInbox();

@@ -320,6 +320,13 @@ function createSessionSecurityRuntime({
     const route = String(req?.path || req?.url || '').split('?')[0];
     const web = isWebClient(req);
 
+    // Polar delivery is authenticated by its signature over the raw body.
+    // Browser cookies or Bearer headers must neither grant nor block it.
+    if (route === '/webhooks/polar' && String(req?.method || '').toUpperCase() === 'POST') {
+      req.beatgalerSessionSecurity = null;
+      return next();
+    }
+
     if (PUBLIC_LOGIN_ROUTES.has(route)) {
       req.beatgalerSessionSecurity = null;
       return next();
