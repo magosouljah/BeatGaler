@@ -2,7 +2,8 @@
 
 const { BILLING_V1_ACCESS_CATALOG } = require('./billing-access-resolver');
 const { createCommercialCatalog, getCheckoutReadyOffer } = require('./billing-commercial-catalog');
-const { readPolarSandboxConfig, createSandboxCommercialCatalog, createPolarSandboxAdapter } = require('./billing-polar-sandbox');
+const { readPolarSandboxConfig, createSandboxCommercialCatalog } = require('./billing-polar-sandbox');
+const { createPolarSandboxLifecycleAdapter } = require('./billing-polar-lifecycle-adapter');
 
 const MONTHLY_OFFERS = Object.freeze(['paid_entry_monthly_v1', 'highest_paid_monthly_v1']);
 const OFFER_BY_PLAN = Object.freeze({
@@ -42,7 +43,7 @@ function publicPlanCatalog(catalog) {
   });
 }
 
-function createWebBillingRuntime({ env = process.env, adapterFactory = createPolarSandboxAdapter } = {}) {
+function createWebBillingRuntime({ env = process.env, adapterFactory = createPolarSandboxLifecycleAdapter } = {}) {
   // The public V1 contract is available even if provider configuration is absent.
   let catalog = createCommercialCatalog({ environment: 'sandbox' });
   let adapter = null;

@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const { Client, Pool } = require('pg');
 const { applyMigrations, listMigrations } = require('../postgres-migrations');
 const { createCommercialCatalog } = require('../billing-commercial-catalog');
-const { resolveBillingAccess } = require('../billing-access-resolver');
+const { createAccessRuntime } = require('../access-runtime');
+const { createLifecycleWorker } = require('../billing-lifecycle-runtime');
 const { createDurableWebhookInbox, DurableWebhookBindingError } = require('../billing-webhook-durable');
 const {
   DEFAULT_GRACE_MS,
@@ -219,9 +220,7 @@ async function state(pool, userId) {
 }
 
 async function access(pool, userId, now) {
-  const subscription = await state(pool, userId);
-  const grants = (await pool.query('SELECT * FROM entitlements WHERE user_id=$1', [userId])).rows;
-  return resolveBillingAccess({ subscription, grants, now });
+  return createAccessRuntime({ pool, now: () => new Date(now).getTime() }).resolveUserAccess({ id: userId });
 }
 
 test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes and refunds in PostgreSQL', { skip: !ADMIN_URL }, async t => {
@@ -244,6 +243,11 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
         ('life_u4','life4@example.invalid'),
         ('life_u5','life5@example.invalid')
     `);
+    await pool.query("INSERT INTO library_beats(user_id,beat_id,state) VALUES ('life_u1','preserved_beat','TRASH')");
+    await pool.query(`
+      INSERT INTO library_project_uploads(user_id,beat_id,sha256,message_id,telegram_document_id,size_bytes)
+      VALUES ('life_u1','preserved_beat',$1,987654,'preserved_project',100)
+    `, ['a'.repeat(64)]);
 
     const provider = makeProviderHarness();
     const inbox = createDurableWebhookInbox({
@@ -298,6 +302,16 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
         start: S0,
         end: S1,
       }));
+
+      await deliver({
+        eventId: 'evt_life_u1_active_before_paid',
+        type: 'subscription.active',
+        timestamp: '2026-09-11T00:00:03.000Z',
+        data: { id: 'sub_life_u1', customer_id: 'cus_life_u1', checkout_id: 'co_life_u1' },
+      });
+      assert.equal((await access(pool, 'life_u1', '2026-09-11T00:00:04.000Z')).effectivePlanId, 'free');
+      assert.equal((await state(pool, 'life_u1')).paid_through, null);
+      assert.equal((await pool.query("SELECT state FROM billing_checkout_requests WHERE user_id='life_u1'")).rows[0].state, 'OPEN');
 
       const received = await receiveOnly({
         eventId: 'evt_life_u1_paid_1',
@@ -503,6 +517,15 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
       assert.equal((await state(pool, 'life_u1')).next_plan_id, 'paid_entry');
       assert.equal((await access(pool, 'life_u1', '2026-11-10T00:00:00.000Z')).effectivePlanId, 'highest_paid');
 
+      await deliver({
+        eventId: 'evt_life_old_paid_during_pending',
+        type: 'order.updated',
+        timestamp: '2026-10-21T00:00:00.000Z',
+        data: { id: 'order_life_u1_2', customer_id: 'cus_life_u1', subscription_id: 'sub_life_u1' },
+      });
+      assert.equal((await state(pool, 'life_u1')).next_plan_id, 'paid_entry');
+      assert.equal((await access(pool, 'life_u1', '2026-11-10T00:00:00.000Z')).effectivePlanId, 'highest_paid');
+
       provider.subscriptions.set('sub_life_u1', subFixture({
         id: 'sub_life_u1',
         customerId: 'cus_life_u1',
@@ -535,6 +558,14 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
       assert.equal(projected.plan_id, 'paid_entry');
       assert.equal(new Date(projected.paid_through).toISOString(), S3);
       assert.equal(projected.next_plan_id, null);
+      await deliver({
+        eventId: 'evt_life_late_previous_period',
+        type: 'order.updated',
+        timestamp: '2026-11-12T00:00:00.000Z',
+        data: { id: 'order_life_u1_2', customer_id: 'cus_life_u1', subscription_id: 'sub_life_u1' },
+      });
+      assert.equal((await state(pool, 'life_u1')).plan_id, 'paid_entry');
+      assert.equal(new Date((await state(pool, 'life_u1')).paid_through).toISOString(), S3);
     });
 
     await t.test('partial refund keeps access, historical full refund stays historical, current full refund invalidates and queues durable revoke', async () => {
@@ -617,6 +648,12 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
       )).rows[0];
       assert.equal(payment.status, 'refunded');
       assert.ok(payment.invalidated_at);
+      assert.deepEqual((await pool.query(
+        "SELECT beat_id,state FROM library_beats WHERE user_id='life_u1'",
+      )).rows, [{ beat_id: 'preserved_beat', state: 'TRASH' }]);
+      assert.equal((await pool.query(
+        "SELECT count(*)::int AS count FROM library_project_uploads WHERE user_id='life_u1' AND beat_id='preserved_beat'",
+      )).rows[0].count, 1);
     });
 
     await t.test('old paid event after refund cannot reactivate an invalidated period', async () => {
@@ -665,6 +702,40 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
       action = await worker.processNext({ workerId: 'action_worker_b' });
       assert.equal(action.state, 'SUCCEEDED');
       assert.equal(provider.calls.revoke.filter(id => id === 'sub_life_u1').length, 2);
+    });
+
+    await t.test('lease retry observes remote revoke completed before local ACK and does not revoke twice', async () => {
+      const subscriptionId = 'sub_effect_once';
+      provider.subscriptions.set(subscriptionId, subFixture({
+        id: subscriptionId, customerId: 'cus_effect_once', start: S0, end: S1,
+      }));
+      await pool.query(`
+        INSERT INTO billing_provider_actions(
+          id,user_id,provider,provider_environment,action_type,provider_subscription_id,
+          idempotency_key,state
+        ) VALUES ('action_effect_once','life_u4','polar','sandbox','REVOKE_SUBSCRIPTION',$1,
+          'revoke:effect_once','PENDING')
+      `, [subscriptionId]);
+      let remoteCalls = 0;
+      const adapter = {
+        ...provider.adapter,
+        async revokeSubscription(input) {
+          remoteCalls += 1;
+          await provider.adapter.revokeSubscription(input);
+          provider.subscriptions.set(subscriptionId, {
+            ...provider.subscriptions.get(subscriptionId),
+            ended_at: new Date(Date.now() - 1000).toISOString(),
+          });
+          throw Object.assign(new Error('response lost after remote revoke'), { code: 'FIXTURE_REVOKE_ACK_LOST' });
+        },
+      };
+      const worker = createBillingProviderActionWorker({ pool, adapter, retryBaseMs: 5, retryMaxMs: 5 });
+      await assert.rejects(worker.processNext({ workerId: 'action_effect_first' }),
+        error => error.code === 'FIXTURE_REVOKE_ACK_LOST');
+      await pool.query("UPDATE billing_provider_actions SET next_attempt_at=now()-interval '1 second' WHERE id='action_effect_once'");
+      const recovered = await worker.processNext({ workerId: 'action_effect_retry' });
+      assert.equal(recovered.state, 'SUCCEEDED');
+      assert.equal(remoteCalls, 1);
     });
 
     await t.test('initial Highest purchase is confirmed independently', async () => {
@@ -786,6 +857,57 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
       });
       assert.equal(recovered.state, 'PROCESSED');
       assert.equal((await state(pool, 'life_u2')).cancel_at_period_end, true);
+    });
+
+    await t.test('Web poller processes supported events and actions, stops, then resumes RECEIVED after restart', async () => {
+      async function waitFor(check) {
+        const deadline = Date.now() + 3_000;
+        while (Date.now() < deadline) {
+          if (await check()) return;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        assert.fail('lifecycle worker did not reach expected durable state');
+      }
+      const worker = createLifecycleWorker({ pool, adapter: provider.adapter, inbox, pollMs: 100, batchSize: 5 });
+      await receiveOnly({
+        eventId: 'evt_life_worker_supported', type: 'subscription.updated',
+        timestamp: '2026-09-27T00:00:00.000Z',
+        data: { id: 'sub_life_u2', customer_id: 'cus_life_u2' },
+      });
+      await receiveOnly({
+        eventId: 'evt_life_worker_unsupported', type: 'benefit.created',
+        timestamp: '2026-09-27T00:00:01.000Z',
+        data: { id: 'benefit_worker', customer_id: 'cus_life_u2' },
+      });
+      provider.subscriptions.set('sub_worker_action', subFixture({
+        id: 'sub_worker_action', customerId: 'cus_worker_action', start: S0, end: S1,
+      }));
+      await pool.query(`
+        INSERT INTO billing_provider_actions(
+          id,user_id,provider,provider_environment,action_type,provider_subscription_id,
+          idempotency_key,state
+        ) VALUES ('action_worker_runtime','life_u5','polar','sandbox','REVOKE_SUBSCRIPTION',
+          'sub_worker_action','revoke:worker_runtime','PENDING')
+      `);
+      worker.start();
+      try {
+        await waitFor(async () => (await inbox.getEvent('evt_life_worker_supported')).state === 'PROCESSED');
+        await waitFor(async () => (await inbox.getEvent('evt_life_worker_unsupported')).state === 'IGNORED');
+        await waitFor(async () => (await pool.query("SELECT state FROM billing_provider_actions WHERE id='action_worker_runtime'")).rows[0].state === 'SUCCEEDED');
+      } finally { await worker.stop(); }
+      assert.equal(worker.status().running, false);
+
+      await receiveOnly({
+        eventId: 'evt_life_worker_restart', type: 'subscription.updated',
+        timestamp: '2026-09-28T00:00:00.000Z',
+        data: { id: 'sub_life_u2', customer_id: 'cus_life_u2' },
+      });
+      await new Promise(resolve => setTimeout(resolve, 150));
+      assert.equal((await inbox.getEvent('evt_life_worker_restart')).state, 'RECEIVED');
+      const restarted = createLifecycleWorker({ pool, adapter: provider.adapter, inbox, pollMs: 100 });
+      restarted.start();
+      try { await waitFor(async () => (await inbox.getEvent('evt_life_worker_restart')).state === 'PROCESSED'); }
+      finally { await restarted.stop(); }
     });
 
     await t.test('trusted binding conflict still fails closed before lifecycle mutation', async () => {

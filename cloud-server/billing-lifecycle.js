@@ -639,6 +639,15 @@ function actionRetryDelay(attemptCount, baseMs, maxMs) {
   return Math.min(maxMs, baseMs * (2 ** Math.min(exponent, 20)));
 }
 
+function alreadyRevokedAtProvider(subscription) {
+  const status = String(subscription?.status || '').toLowerCase();
+  const endedAt = subscription?.ended_at || subscription?.ends_at;
+  const endedMs = endedAt ? new Date(endedAt).getTime() : NaN;
+  return ['canceled', 'revoked'].includes(status)
+    && subscription?.cancel_at_period_end !== true
+    && Number.isFinite(endedMs) && endedMs <= Date.now();
+}
+
 function createBillingProviderActionWorker({
   pool,
   adapter,
@@ -714,7 +723,11 @@ function createBillingProviderActionWorker({
       if (action.action_type !== 'REVOKE_SUBSCRIPTION') {
         throw new BillingLifecycleError('Unknown provider action.', 'BILLING_ACTION_UNKNOWN');
       }
-      await adapter.revokeSubscription({ subscriptionId: action.provider_subscription_id });
+      // A crash can happen after Polar revokes but before SUCCEEDED is saved.
+      // On lease recovery, verify the remote terminal state before issuing it again.
+      const alreadyRevoked = Number(action.attempt_count) > 1 && typeof adapter.getSubscription === 'function'
+        && alreadyRevokedAtProvider(await adapter.getSubscription(action.provider_subscription_id));
+      if (!alreadyRevoked) await adapter.revokeSubscription({ subscriptionId: action.provider_subscription_id });
       return (await pool.query(`
         UPDATE billing_provider_actions
         SET state='SUCCEEDED',

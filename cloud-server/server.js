@@ -23,6 +23,7 @@ const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
 const webhookRuntime = require("./billing-webhook-runtime");
+const lifecycleRuntime = require("./billing-lifecycle-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -45,7 +46,7 @@ async function start() {
   if (pgConfig.enabled) {
     const started = await startPostgresControlPlane();
     pool = started.pool;
-    installPostgresShutdown(pool);
+    installPostgresShutdown(pool, process, { beforeClose: () => lifecycleRuntime.stop() });
   }
   configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
   directPersistentAssignments.configure({ pool });
@@ -76,6 +77,13 @@ async function start() {
       env: process.env,
     });
     console.log(`[billing] webhook inbox=${webhook.ready ? 'ready' : 'unavailable'} code=${webhook.failureCode || 'OK'}`);
+    const lifecycle = lifecycleRuntime.configure({
+      pool,
+      adapter: billing.ready && webhook.ready ? webBillingRuntime.provider() : null,
+      inbox: webhook.ready ? webhookRuntime.current() : null,
+      onError: (area, code) => console.error(`[billing] lifecycle ${area} code=${code}`),
+    });
+    console.log(`[billing] lifecycle=${lifecycle.ready ? 'ready' : 'unavailable'} code=${lifecycle.failureCode || 'OK'}`);
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
@@ -122,6 +130,7 @@ async function start() {
     directTransport,
     persistentAssignments: directPersistentAssignments,
   });
+  lifecycleRuntime.start();
 }
 
 start().catch((error) => {

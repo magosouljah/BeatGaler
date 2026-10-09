@@ -18,12 +18,13 @@ async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = 
   }
 }
 
-function installPostgresShutdown(pool, processLike = process) {
+function installPostgresShutdown(pool, processLike = process, { beforeClose = async () => {} } = {}) {
   if (!pool || typeof pool.end !== 'function') return () => {};
   let closed = false;
   const close = async () => {
     if (closed) return;
     closed = true;
+    try { await beforeClose(); } catch (_) {}
     try { await pool.end(); } catch (_) {}
   };
   const onSignal = () => { void close(); };
