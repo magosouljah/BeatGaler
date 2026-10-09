@@ -289,7 +289,15 @@ function rebuildTopicMap(userId, account, manifest) {
 async function deleteBeatTopic(account, userId, beatId, topicIdHint) {
   const key = topicKey(userId, beatId);
   const current = beatTopics.get(key);
-  const messageThreadId = Number(topicIdHint || current?.messageThreadId);
+  const mappedTopicId = Number(current?.messageThreadId);
+  const hintedTopicId = Number(topicIdHint || 0);
+  if (current && String(current.chatId) !== String(storageChatId(account))) {
+    throw new Error('Beat Topic belongs to another vault.');
+  }
+  if (hintedTopicId > 0 && hintedTopicId !== mappedTopicId) {
+    throw new Error('Beat Topic hint does not match the server mapping.');
+  }
+  const messageThreadId = mappedTopicId;
   if (!Number.isFinite(messageThreadId) || messageThreadId <= 0) {
     beatTopics.delete(key);
     pendingTopicDeletes.delete(key);
@@ -405,6 +413,7 @@ async function flushPendingTopicDeletes(account, userId) {
       if (index >= entries.length) return;
       const [key, entry] = entries[index];
       try {
+        await libraryIndexPublication.assertPurged({ userId: account?.beatgalerAccountId, beatIds: [entry.beatId] });
         await deleteBeatTopic(account, userId, entry.beatId, entry.telegramTopicId);
         deleted += 1;
       } catch (error) {
@@ -2287,6 +2296,38 @@ app.post("/transport/index/publish", async (req, res) => {
   }
 });
 
+app.post("/transport/trash/purge", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  if (req.body?.kind !== 'trash_purge' || req.body?.scope?.objectType !== 'trash' ||
+      req.body?.scope?.objectIds?.length !== 1 || req.body.scope.objectIds[0] !== 'all' ||
+      !Array.isArray(req.body?.beatIds) || !req.body.beatIds.length) {
+    return res.status(403).json({ code: 'LIBRARY_PURGE_CAPABILITY_REQUIRED', error: 'Trash purge capability and beat IDs are required.' });
+  }
+  try {
+    await verifyAuthorizedCapability(req);
+    const result = await libraryIndexPublication.purgeTrash({
+      userId: auth.user.id, chatId: storageChatId(auth.account), beatIds: req.body.beatIds,
+    });
+    for (const beatId of req.body.beatIds) {
+      const current = beatTopics.get(topicKey(auth.beatgalerUserId, beatId));
+      const topicId = Number(current?.messageThreadId);
+      if (Number.isSafeInteger(topicId) && topicId > 0) {
+        pendingTopicDeletes.set(topicKey(auth.beatgalerUserId, beatId), {
+          beatId, telegramTopicId: topicId, queuedAt: Date.now(),
+        });
+      }
+    }
+    savePersistentData();
+    schedulePendingTopicDeletes(auth.account, auth.beatgalerUserId, 'background');
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    await libraryIndexPublication.recover({ userId: auth.user.id, chatId: storageChatId(auth.account) }).catch(() => {});
+    res.status(Number(error?.status || 503)).json({ code: error?.code || 'LIBRARY_PURGE_FAILED',
+      error: error?.message || 'Trash purge could not be verified. Retry safely.' });
+  }
+});
+
 app.post("/transport/topic/ensure", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
@@ -3007,13 +3048,8 @@ app.post("/library/move-to-trash-batch", (_req, res) => {
   });
 });
 
-// Batch permanent delete// Batch permanent delete for Settings -> Empty beat trash.
-//
-// Logical deletion is committed first (one Telegram index rewrite), then the
-// expensive forum-topic deletion continues from the persisted
-// `pendingTopicDeletes` queue after the response. The desktop can therefore
-// keep working while Telegram performs physical cleanup. Failed topic deletes
-// stay queued in cloud-data.json and are retried on later library activity.
+// Administrative Topic cleanup after a server-confirmed asset purge. Failed
+// Topic deletions stay queued in cloud-data.json for a later retry.
 app.post("/beats/delete-topics-batch", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
@@ -3027,9 +3063,11 @@ app.post("/beats/delete-topics-batch", async (req, res) => {
   if (uniqueBeatIds.length === 0) {
     return res.status(400).json({ error: "At least one beatId is required." });
   }
+  try { await libraryIndexPublication.assertPurged({ userId: auth.user.id, beatIds: uniqueBeatIds }); }
+  catch (error) { return res.status(409).json({ code: error?.code || 'LIBRARY_PURGE_REQUIRED', error: error?.message }); }
 
-  // IMPORTANT: the Desktop transport bot already removed these rows from the
-  // single pinned index. MASTER only owns the administrative Topic cleanup.
+  // The server has already removed each beat from the INDEX and quota ledger
+  // after MASTER verified the referenced assets are absent.
   for (const beatId of uniqueBeatIds) {
     const current = beatTopics.get(topicKey(beatgalerUserId, beatId));
     const topicId = Number(current?.messageThreadId);
@@ -3074,8 +3112,8 @@ app.post("/beats/delete-topic", async (req, res) => {
   const telegramTopicId = Number(req.body?.telegramTopicId || 0) || undefined;
   if (!beatId) return res.status(400).json({ error: "beatId is required." });
   try {
-    // Index/media cleanup is Direct and must happen on Desktop before this
-    // administrative Topic cleanup request.
+    await libraryIndexPublication.assertPurged({ userId: auth.user.id, beatIds: [beatId] });
+    // This endpoint only cleans the Topic of an already-confirmed purge.
     const deleteResult = await deleteBeatTopic(account, beatgalerUserId, beatId, telegramTopicId);
     res.json({ ok: true, ...deleteResult, index_updated: false, index_owner: "desktop-transport-bot" });
   } catch (error) {

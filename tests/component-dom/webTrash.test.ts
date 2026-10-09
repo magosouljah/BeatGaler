@@ -42,16 +42,16 @@ function runtime(source = manifest()) {
     order.push("index");
     return { messageId: 501, previousMessageId: 500, beatCount: 1 };
   });
-  const deleteMessages = vi.fn(async (ids: number[]) => {
-    order.push("media");
-    return ids.length;
+  const purgeServer = vi.fn(async (ids: string[]) => {
+    order.push("server-purge");
+    return { deleted: ids.length, messageId: 501, previousMessageId: 500, beatCount: 1 };
   });
-  const value: WebTrashRuntime = {
+  const value: WebTrashRuntime & { purgeServer: typeof purgeServer } = {
     getLibraryIndex: vi.fn(async () => ({ messageId: 500, manifest: source })),
     replaceLibraryIndex,
-    deleteMessages,
+    purgeServer,
   };
-  return { value, order, replaceLibraryIndex, deleteMessages };
+  return { value, order, replaceLibraryIndex, purgeServer };
 }
 
 describe("Web beat Trash lifecycle", () => {
@@ -61,7 +61,7 @@ describe("Web beat Trash lifecycle", () => {
 
     expect(result.value).toEqual(["beat-1"]);
     expect(cloud.replaceLibraryIndex).toHaveBeenCalledOnce();
-    expect(cloud.deleteMessages).not.toHaveBeenCalled();
+    expect(cloud.purgeServer).not.toHaveBeenCalled();
     const input: any = cloud.replaceLibraryIndex.mock.calls[0][0];
     expect(input.expectedMessageId).toBe(500);
     expect(input.manifest.root_custom).toBe("keep");
@@ -120,29 +120,35 @@ describe("Web beat Trash lifecycle", () => {
     });
   });
 
-  it("commits tombstones before deleting media and blocks later resurrection", async () => {
+  it("delegates permanent deletion to the server and waits for its confirmation", async () => {
     const source = manifest();
     const payload = cloudBeat("beat-1", "First", 10);
     source.beats = [cloudBeat("beat-2", "Second", 20)];
     source.trash = [{ trash_id: "trash-1", trashed_at: 100, beat: payload }] as any;
     const cloud = runtime(source);
 
-    const result = await purgeWebTrash(cloud.value, 2000);
+    const result = await purgeWebTrash(cloud.value);
 
     expect(result.value).toBe(1);
-    expect(cloud.order).toEqual(["index", "media"]);
-    const candidate: any = cloud.replaceLibraryIndex.mock.calls[0][0].manifest;
-    expect(candidate.trash).toEqual([]);
-    expect(candidate.deleted).toEqual([
-      { beat_id: "beat-1", deleted_at: 2000 },
-      { beat_id: "old-gone", deleted_at: 5 },
-    ]);
-    expect(cloud.deleteMessages).toHaveBeenCalledWith([10, 11, 12, 13]);
+    expect(cloud.order).toEqual(["server-purge"]);
+    expect(cloud.replaceLibraryIndex).not.toHaveBeenCalled();
+    expect(cloud.purgeServer).toHaveBeenCalledWith(["beat-1"]);
+    expect(result.index).toEqual({ messageId: 501, previousMessageId: 500, beatCount: 1 });
 
-    const stale = { ...source, beats: [payload, ...source.beats], trash: [], deleted: candidate.deleted };
+    const stale = { ...source, beats: [payload, ...source.beats], trash: [], deleted: [{ beat_id: "beat-1", deleted_at: 2000 }] };
     expect(() => listWebTrashItems(stale)).not.toThrow();
-    const restoreCloud = runtime({ ...source, trash: [{ trash_id: "trash-1", beat: payload }] as any, deleted: candidate.deleted });
+    const restoreCloud = runtime({ ...source, trash: [{ trash_id: "trash-1", beat: payload }] as any, deleted: stale.deleted });
     await expect(restoreWebBeatFromTrash("trash-1", restoreCloud.value)).rejects.toThrow("permanently deleted");
     expect(restoreCloud.replaceLibraryIndex).not.toHaveBeenCalled();
+  });
+
+  it("leaves the client INDEX untouched when server deletion fails", async () => {
+    const source = manifest();
+    source.trash = [{ trash_id: "trash-1", beat: cloudBeat("beat-3", "Third", 30) }] as any;
+    const cloud = runtime(source);
+    cloud.purgeServer.mockRejectedValueOnce(new Error("MASTER could not verify deletion"));
+    await expect(purgeWebTrash(cloud.value)).rejects.toThrow("MASTER could not verify deletion");
+    expect(cloud.replaceLibraryIndex).not.toHaveBeenCalled();
+    expect(listWebTrashItems(source).some(item => item.beat_name === "Third")).toBe(true);
   });
 });

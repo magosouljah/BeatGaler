@@ -33,6 +33,7 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
       await pool.query("INSERT INTO vaults(id,user_id,telegram_chat_id) VALUES('vault-free','free','chat-free')");
 
       const documents = new Map();
+      documents.set(500, Buffer.from('master asset'));
       let pinnedId = 42;
       let nextId = 43;
       let failAfterPin = false;
@@ -56,6 +57,11 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
           return { messageId: id };
         },
         async deleteMessages(_chatId, ids) { for (const id of ids) documents.delete(Number(id)); },
+        async deleteAndVerifyMessages(_chatId, ids) {
+          for (const id of ids) documents.delete(Number(id));
+          assert.ok(ids.every(id => !documents.has(Number(id))));
+          return ids.length;
+        },
         async pinExistingIndexMessage(_chatId, id) {
           assert.ok(documents.has(Number(id)));
           pinnedId = Number(id);
@@ -104,7 +110,8 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
         const edited = { ...before, beats: before.beats.map((row, i) => i === 0 ? { ...row, title: 'Edited' } : row) };
         const editResult = await a.publish({ userId: 'free', chatId: 'chat-free', manifest: edited, expectedMessageId: pinnedId });
         assert.equal((await quota.usage('free')).used, 20);
-        const moved = { ...edited, beats: edited.beats.slice(1), trash: [{ beat: edited.beats[0] }] };
+        const moved = { ...edited, beats: edited.beats.slice(1),
+          trash: [{ beat: { ...edited.beats[0], master: { telegram_message_id: 500 } } }] };
         await b.publish({ userId: 'free', chatId: 'chat-free', manifest: moved, expectedMessageId: editResult.messageId });
         const usage = await quota.usage('free');
         assert.equal(usage.used, 20);
@@ -131,15 +138,19 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
         await assert.rejects(a.publish({ userId: 'free', chatId: 'chat-free',
           manifest: { ...current, beats: current.beats.slice(1),
             deleted: [...current.deleted, { beat_id: activeId, deleted_at: 123 }] },
-          expectedMessageId: currentId }), { code: 'LIBRARY_QUOTA_INDEX_INVALID' });
+          expectedMessageId: currentId }), { code: 'LIBRARY_PURGE_REQUIRED' });
         assert.equal(pinnedId, currentId);
         const removedId = current.trash[0].beat.id;
         const purged = { ...current, trash: [], deleted: [{ beat_id: removedId, deleted_at: 123 }] };
-        await a.publish({ userId: 'free', chatId: 'chat-free', manifest: purged, expectedMessageId: currentId });
+        await assert.rejects(a.publish({ userId: 'free', chatId: 'chat-free', manifest: purged,
+          expectedMessageId: currentId }), { code: 'LIBRARY_PURGE_REQUIRED' });
+        await a.purgeTrash({ userId: 'free', chatId: 'chat-free', beatIds: [removedId] });
+        assert.equal(documents.has(500), false);
         assert.equal((await quota.usage('free')).used, 19);
         const reserved = await b.reserve({ userId: 'free', beatId: 'beat-21' });
         assert.equal(reserved.status, 'PENDING');
-        const next = { ...purged, beats: [...purged.beats, { id: 'beat-21' }] };
+        const confirmed = JSON.parse(documents.get(pinnedId).toString('utf8'));
+        const next = { ...confirmed, beats: [...confirmed.beats, { id: 'beat-21' }] };
         await b.publish({ userId: 'free', chatId: 'chat-free', manifest: next, expectedMessageId: pinnedId });
         assert.equal((await quota.usage('free')).used, 20);
       });

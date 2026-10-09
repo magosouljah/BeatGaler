@@ -17,7 +17,7 @@ const INSTALLATION_POST_ROUTES = new Set([
   "/events/ticket", "/telegram/connect/start", "/telegram/disconnect",
   "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
   "/transport/session/stop", "/transport/operation/begin", "/transport/capability/authorize", "/transport/operation/end", "/transport/operation/renew",
-  "/transport/index/commit", "/transport/index/publish", "/transport/quota/reserve", "/transport/quota/renew",
+  "/transport/index/commit", "/transport/index/publish", "/transport/trash/purge", "/transport/quota/reserve", "/transport/quota/renew",
   "/transport/quota/cancel", "/transport/project/authorize", "/transport/project/upload",
   "/transport/routing/reconcile", "/transport/topic/ensure", "/transport/upload/confirm",
   "/beats/delete-topic", "/beats/delete-topics-batch",

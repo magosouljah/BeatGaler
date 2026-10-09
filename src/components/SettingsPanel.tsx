@@ -204,10 +204,10 @@ export default function SettingsPanel(props: Props) {
     }
     if (!trashItems.length) return;
     const requested = trashItems.length;
+    const cloudPurge = trashItems.some(item => item.is_cloud);
 
-    // Empty Trash is a one-click enqueue action. No native confirmation dialog
-    // and no foreground wait: disappear immediately, then reconcile quietly.
-    setTrashItems([]);
+    // Cloud Trash remains visible until the server verifies every asset delete.
+    if (!cloudPurge) setTrashItems([]);
     setPurging(true);
     setTrashError(null);
     setTrashMessage(`Deleting ${requested} beat${requested === 1 ? "" : "s"} in background…`);
@@ -218,10 +218,10 @@ export default function SettingsPanel(props: Props) {
         const remaining = await platform.trash.listBeats();
         setTrashItems(remaining);
         if (remaining.length > 0) {
-          setTrashError(`${remaining.length} item(s) could not be queued for permanent deletion and were restored to Trash.`);
+          setTrashError(`${remaining.length} item(s) remain in Trash. The deletion can be retried.`);
           setTrashMessage(null);
         } else {
-          setTrashMessage(`${purged || requested} beat${(purged || requested) === 1 ? "" : "s"} queued for permanent deletion.`);
+          setTrashMessage(`${purged || requested} beat${(purged || requested) === 1 ? "" : "s"} ${cloudPurge ? "permanently deleted" : "queued for permanent deletion"}.`);
           window.setTimeout(() => setTrashMessage(null), 3500);
         }
       } catch (e: any) {

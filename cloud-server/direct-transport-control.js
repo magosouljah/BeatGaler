@@ -1804,6 +1804,37 @@ async function deleteMessages(chatId, ids) {
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
+async function deleteAndVerifyMessages(chatId, ids) {
+  const list = [...new Set((ids || []).map(Number))];
+  if (list.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new Error('Invalid purge message ID.');
+  if (!list.length) throw new Error('Purge has no verified assets.');
+  const masterInfo = await masterForVault(chatId);
+  try {
+    for (let i = 0; i < list.length; i += 100) {
+      const batch = list.slice(i, i + 100);
+      const states = async () => {
+        const response = await masterInfo.client.invoke(new Api.channels.GetMessages({
+          channel: masterInfo.vault,
+          id: batch.map(id => new Api.InputMessageID({ id })),
+        }));
+        const byId = new Map((response?.messages || []).map(message => [Number(message.id), message]));
+        if (batch.some(id => !byId.has(id))) throw new Error('MASTER returned an incomplete asset verification.');
+        return byId;
+      };
+      const before = await states();
+      const existing = batch.filter(id => !(before.get(id) instanceof Api.MessageEmpty));
+      if (existing.length) {
+        await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: existing }));
+      }
+      const after = await states();
+      if (batch.some(id => !(after.get(id) instanceof Api.MessageEmpty))) {
+        throw new Error('MASTER could not verify permanent asset deletion.');
+      }
+    }
+    return list.length;
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
 async function getPinnedMessage(chatId) {
   const masterInfo = await masterForVault(chatId);
   try {
@@ -1957,6 +1988,7 @@ module.exports = {
   verifyProjectMediaFromClient,
   findProjectFile,
   deleteMessages,
+  deleteAndVerifyMessages,
   getPinnedMessage,
   readPinnedIndexBuffer,
   createForumTopic,

@@ -195,7 +195,7 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
     const csrf = readWebCsrfToken();
     if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
     const controller = new AbortController();
-    const timeoutMs = path === '/transport/index/publish' || path === '/transport/session/start'
+    const timeoutMs = path === '/transport/index/publish' || path === '/transport/trash/purge' || path === '/transport/session/start'
       ? 30 * 60_000 : WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -616,6 +616,19 @@ export async function publishWebTransportIndex(
     throw new Error('Galer Cloud did not confirm the published INDEX.');
   }
   return result;
+}
+
+export async function purgeWebTransportTrash(beatIds: string[], lease: IndexPublicationLease): Promise<{
+  deleted: number; messageId?: number; previousMessageId?: number; beatCount?: number;
+}> {
+  return transportRequest('/transport/trash/purge', {
+    beatIds,
+    sessionId: lease.sessionId,
+    generation: lease.generation,
+    operationId: lease.operationId,
+    kind: 'trash_purge',
+    scope: { objectType: 'trash', objectIds: ['all'] },
+  });
 }
 
 /** Records the authoritative INDEX pointer and the small routing delta produced by the same commit. */

@@ -14,7 +14,7 @@ use std::process::{Command, Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use url::Url;
 use unicode_normalization::UnicodeNormalization;
 use walkdir::WalkDir;
@@ -1710,7 +1710,7 @@ fn cache_direct_library_manifest(manifest: &Value) {
     }
 }
 
-fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
+fn direct_get_library_index(user_id: &str) -> Result<(Value, i64), String> {
     // INDEX reads are on the critical path for refresh/import/metadata. A
     // transient helper/control-plane miss must not become an Upload Failed.
     let started = std::time::Instant::now();
@@ -1736,7 +1736,8 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
                             started.elapsed().as_millis(),
                         );
                         cache_direct_library_manifest(&manifest);
-                        return Ok(manifest);
+                        let message_id = response.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0);
+                        return Ok((manifest, message_id));
                     }
                     Some(_) => last_error = "Pinned Galer Library document is not a valid BeatGaler library index.".to_string(),
                     None => last_error = "Galer Library index response had no manifest.".to_string(),
@@ -1755,6 +1756,38 @@ fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
         let wait_ms = (120_u64.saturating_mul(1_u64 << shift)).min(1200);
         std::thread::sleep(Duration::from_millis(wait_ms));
     }
+}
+
+fn direct_get_library_manifest(user_id: &str) -> Result<Value, String> {
+    direct_get_library_index(user_id).map(|(manifest, _)| manifest)
+}
+
+fn direct_publish_existing_index(user_id: &str, manifest: &Value, expected_message_id: i64) -> Result<(), String> {
+    if expected_message_id <= 0 { return Err("Committed Cloud INDEX message id is unavailable.".to_string()); }
+    let scope = json!({ "objectType": "index", "objectIds": ["pinned"] });
+    let kind = "replace_index";
+    let (operation_id, session_id, generation) = direct_begin_operation(user_id, kind, &scope)?;
+    let result = (|| {
+        direct_authorize_operation(user_id, &session_id, generation, &operation_id, kind, &scope)?;
+        let url = format!("{}/transport/index/publish", telegram_cloud_api_base());
+        let response = post_json_cloud_auth_timeout(&url, &json!({
+            "beatgalerUserId": user_id,
+            "sessionId": session_id,
+            "generation": generation,
+            "operationId": operation_id,
+            "kind": kind,
+            "scope": scope,
+            "manifest": manifest,
+            "expectedMessageId": expected_message_id,
+        }), 1800)?;
+        if response.get("messageId").and_then(|v| v.as_i64()).unwrap_or(0) <= 0 {
+            return Err("Galer Storage did not confirm the Cloud INDEX.".to_string());
+        }
+        cache_direct_library_manifest(manifest);
+        Ok(())
+    })();
+    direct_end_operation(user_id, &session_id, generation, &operation_id);
+    result
 }
 
 fn direct_replace_library_manifest_with_options(
@@ -1991,17 +2024,17 @@ fn apply_restore_from_trash_to_manifest(manifest: &mut Value, beat_id: &str) -> 
 }
 
 fn direct_restore_beat_from_trash(user_id: &str, beat_id: &str) -> Result<(), String> {
-    let mut manifest = direct_get_library_manifest(user_id)?;
+    let (mut manifest, expected_message_id) = direct_get_library_index(user_id)?;
     let changed = apply_restore_from_trash_to_manifest(&mut manifest, beat_id)?;
     if changed {
-        direct_replace_library_manifest(user_id, &manifest, Some("trash-restore"))?;
+        direct_publish_existing_index(user_id, &manifest, expected_message_id)?;
     }
     Ok(())
 }
 
 fn direct_move_beats_to_trash(user_id: &str, beat_ids: &[String]) -> Result<usize, String> {
     if beat_ids.is_empty() { return Ok(0); }
-    let mut manifest = direct_get_library_manifest(user_id)?;
+    let (mut manifest, expected_message_id) = direct_get_library_index(user_id)?;
     let now = now_epoch() as i64;
     let wanted: std::collections::HashSet<String> = beat_ids.iter().cloned().collect();
 
@@ -2041,125 +2074,36 @@ fn direct_move_beats_to_trash(user_id: &str, beat_ids: &[String]) -> Result<usiz
     }
     if moved == 0 { return Ok(0); }
     root.insert("updated_at".to_string(), json!(now_epoch()));
-    direct_replace_library_manifest(user_id, &manifest, None)?;
+    direct_publish_existing_index(user_id, &manifest, expected_message_id)?;
     Ok(moved)
-}
-
-fn collect_manifest_media_message_ids(entry: &Value, out: &mut std::collections::HashSet<i64>) {
-    let mut add = |value: Option<i64>| { if let Some(id) = value { if id > 0 { out.insert(id); } } };
-    add(entry.get("telegram_message_id").and_then(|v| v.as_i64()));
-    add(entry.get("master").and_then(|v| v.get("telegram_message_id")).and_then(|v| v.as_i64()));
-    add(entry.get("artwork").and_then(|v| v.get("telegram_message_id")).and_then(|v| v.as_i64()));
-    add(entry.get("metadata_message_id").and_then(|v| v.as_i64()));
-    if let Some(files) = entry.get("files").and_then(|v| v.as_array()) {
-        for file in files {
-            add(file.get("telegram_message_id").and_then(|v| v.as_i64()));
-            if let Some(parts) = file.get("parts").and_then(|v| v.as_array()) {
-                for part in parts { add(part.get("telegram_message_id").and_then(|v| v.as_i64())); }
-            }
-            if let Some(parts) = file.get("manifest").and_then(|v| v.get("parts")).and_then(|v| v.as_array()) {
-                for part in parts { add(part.get("telegram_message_id").and_then(|v| v.as_i64())); }
-            }
-        }
-    }
-    if let Some(project) = entry.get("project") {
-        let project = project.get("manifest").unwrap_or(project);
-        add(project.get("telegram_message_id").and_then(|v| v.as_i64()));
-        if let Some(parts) = project.get("parts").and_then(|v| v.as_array()) {
-            for part in parts { add(part.get("telegram_message_id").and_then(|v| v.as_i64())); }
-        }
-    }
-}
-
-fn apply_permanent_delete_to_manifest(
-    manifest: &mut Value,
-    wanted: &std::collections::HashSet<String>,
-    now: i64,
-) -> Result<(usize, std::collections::HashSet<i64>), String> {
-    let root = manifest.as_object_mut().ok_or_else(|| "Galer Library index root is invalid.".to_string())?;
-    let mut media_to_delete = std::collections::HashSet::<i64>::new();
-    if let Some(beats) = root.get("beats").and_then(|v| v.as_array()) {
-        for beat in beats {
-            let id = beat.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            if wanted.contains(id) { collect_manifest_media_message_ids(beat, &mut media_to_delete); }
-        }
-    }
-    if let Some(trash) = root.get("trash").and_then(|v| v.as_array()) {
-        for item in trash {
-            let beat = item.get("beat").unwrap_or(item);
-            let id = beat.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            if wanted.contains(id) { collect_manifest_media_message_ids(beat, &mut media_to_delete); }
-        }
-    }
-
-    let removed_beats = {
-        let beats = root.entry("beats").or_insert_with(|| Value::Array(Vec::new()));
-        let beats_array = beats.as_array_mut().ok_or_else(|| "Galer Library beats field is invalid.".to_string())?;
-        let before = beats_array.len();
-        beats_array.retain(|beat| !wanted.contains(beat.get("id").and_then(|v| v.as_str()).unwrap_or("")));
-        before - beats_array.len()
-    };
-
-    let removed_trash = {
-        let trash = root.entry("trash").or_insert_with(|| Value::Array(Vec::new()));
-        let trash_array = trash.as_array_mut().ok_or_else(|| "Galer Library trash field is invalid.".to_string())?;
-        let before = trash_array.len();
-        trash_array.retain(|item| {
-            let beat = item.get("beat").unwrap_or(item);
-            let id = beat.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            !wanted.contains(id)
-        });
-        before - trash_array.len()
-    };
-
-    // Keep small tombstones inside the ONE index so a delayed stale client
-    // cannot resurrect a permanently-deleted beat on its next sync.
-    let deleted = root.entry("deleted").or_insert_with(|| Value::Array(Vec::new()));
-    let deleted_array = deleted.as_array_mut().ok_or_else(|| "Galer Library deleted field is invalid.".to_string())?;
-    let mut by_id = std::collections::HashMap::<String, i64>::new();
-    for row in deleted_array.iter() {
-        let id = row.get("beat_id").or_else(|| row.get("id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if id.is_empty() { continue; }
-        let at = row.get("deleted_at").and_then(|v| v.as_i64()).unwrap_or(now);
-        by_id.entry(id).and_modify(|old| *old = (*old).max(at)).or_insert(at);
-    }
-    for id in wanted {
-        by_id.entry(id.clone()).and_modify(|old| *old = (*old).max(now)).or_insert(now);
-    }
-    let mut tombstones: Vec<Value> = by_id.into_iter()
-        .map(|(id, at)| json!({ "beat_id": id, "deleted_at": at }))
-        .collect();
-    // Stable ordering keeps the manifest deterministic, which makes retries,
-    // diagnostics and tests easier to reason about.
-    tombstones.sort_by(|a, b| {
-        a.get("beat_id").and_then(|v| v.as_str()).unwrap_or("")
-            .cmp(b.get("beat_id").and_then(|v| v.as_str()).unwrap_or(""))
-    });
-    *deleted_array = tombstones;
-
-    let removed = removed_beats + removed_trash;
-    root.insert("updated_at".to_string(), json!(now as u64));
-    Ok((removed, media_to_delete))
 }
 
 fn direct_permanently_delete_beats(user_id: &str, beat_ids: &[String]) -> Result<usize, String> {
     if beat_ids.is_empty() { return Ok(0); }
-    let mut manifest = direct_get_library_manifest(user_id)?;
-    let wanted: std::collections::HashSet<String> = beat_ids.iter().cloned().collect();
-    let now = now_epoch() as i64;
-    let (removed, media_to_delete) = apply_permanent_delete_to_manifest(&mut manifest, &wanted, now)?;
-
-    // Even when the row was already absent, writing the tombstone is useful and
-    // makes permanent-delete retries idempotent. This is the ONLY path allowed
-    // to shrink beat identity membership. First commit the INDEX, then delete
-    // media that belonged to the permanently deleted beats.
-    direct_replace_library_manifest_with_options(user_id, &manifest, None, true)?;
-    if !media_to_delete.is_empty() {
-        let mut ids: Vec<i64> = media_to_delete.into_iter().collect();
-        ids.sort_unstable();
-        let _ = direct_request(user_id, json!({ "op": "delete_messages", "message_ids": ids }));
-    }
-    Ok(removed)
+    let scope = json!({ "objectType": "trash", "objectIds": ["all"] });
+    let kind = "trash_purge";
+    let (operation_id, session_id, generation) = direct_begin_operation(user_id, kind, &scope)?;
+    let result = (|| {
+        direct_authorize_operation(user_id, &session_id, generation, &operation_id, kind, &scope)?;
+        let url = format!("{}/transport/trash/purge", telegram_cloud_api_base());
+        let response = post_json_cloud_auth_timeout(&url, &json!({
+            "beatgalerUserId": user_id,
+            "sessionId": session_id,
+            "generation": generation,
+            "operationId": operation_id,
+            "kind": kind,
+            "scope": scope,
+            "beatIds": beat_ids,
+        }), 1800)?;
+        if response.get("status").and_then(|v| v.as_str()) != Some("confirmed") {
+            return Err("Galer Storage did not confirm permanent deletion.".to_string());
+        }
+        response.get("deleted").and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .ok_or_else(|| "Galer Storage returned no verified purge count.".to_string())
+    })();
+    direct_end_operation(user_id, &session_id, generation, &operation_id);
+    result
 }
 
 fn direct_ensure_topic(user_id: &str, beat_id: &str, beat_name: &str) -> Result<i64, String> {
@@ -7626,7 +7570,6 @@ pub fn prepare_unique_export_folder(
 }
 
 fn sanitize_tags(tags: &[String]) -> Vec<String> {
-    use std::collections::HashSet;
 
     fn clean_one(raw: &str) -> Option<String> {
         // TCON supports text, including Unicode. We reject characters that
@@ -10672,9 +10615,7 @@ pub fn purge_old_trash_internal(conn: &Connection, data_dir: &Path, max_age_days
         if let Some(user_id) = settings_snapshot.beatgaler_user_id.as_deref() {
             let beat_ids: Vec<String> = cloud_rows.iter().map(|(_, beat_id)| beat_id.clone()).collect();
 
-            // Permanent delete is committed by the active Desktop transport bot.
-            // replace_index pins the new single index first, then deletes media
-            // no longer referenced by it. MASTER only cleans up empty Topics.
+            // MASTER verifies every referenced asset before the quota and INDEX commit.
             match direct_permanently_delete_beats(user_id, &beat_ids) {
                 Ok(_) => {
                     let batch_url = format!("{}/beats/delete-topics-batch", telegram_cloud_api_base());
@@ -10728,7 +10669,7 @@ pub fn purge_old_trash_internal(conn: &Connection, data_dir: &Path, max_age_days
 
     if purged > 0 {
         log_info(data_dir, &format!(
-            "Purged {} trash item(s) older than {} days; Cloud Topics were batch-deleted before local rows",
+            "Purged {} trash item(s) older than {} days; Cloud asset purge was confirmed before local rows, Topic cleanup queued",
             purged, max_age_days
         ));
     }
@@ -10785,8 +10726,7 @@ fn purge_trash_now_blocking(state: &DbState, settings: &SettingsState) -> Result
 
     let beat_ids: Vec<String> = cloud_rows.iter().map(|(_, beat_id)| beat_id.clone()).collect();
 
-    // Commit the logical delete + media cleanup through the active Desktop
-    // transport bot before asking MASTER to clean the now-empty Topics.
+    // MASTER confirms asset deletion and the quota/INDEX commit first.
     direct_permanently_delete_beats(user_id, &beat_ids)?;
 
     let batch_url = format!("{}/beats/delete-topics-batch", telegram_cloud_api_base());
@@ -10823,7 +10763,7 @@ fn purge_trash_now_blocking(state: &DbState, settings: &SettingsState) -> Result
     }
 
     log_info(&settings.data_dir, &format!(
-        "Queued {} Cloud trash item(s) for permanent delete; Galer Storage cleanup continues in background",
+        "Confirmed {} Cloud trash item(s) permanently deleted; Topic cleanup continues in background",
         accepted_ids.len()
     ));
     Ok(purged)
@@ -14435,7 +14375,6 @@ mod project_zip_unit_tests {
 #[cfg(test)]
 mod index_and_cache_unit_tests {
     use super::{
-        apply_permanent_delete_to_manifest,
         apply_restore_from_trash_to_manifest,
         enforce_playback_cache_limit_in_dir,
         playback_cache_access_path,
@@ -14445,10 +14384,6 @@ mod index_and_cache_unit_tests {
     use serde_json::json;
     use std::collections::HashSet;
     use std::path::PathBuf;
-
-    fn wanted(ids: &[&str]) -> HashSet<String> {
-        ids.iter().map(|id| (*id).to_string()).collect()
-    }
 
     #[test]
     fn trash_restore_moves_identity_back_to_active_without_duplicate() {
@@ -14483,77 +14418,6 @@ mod index_and_cache_unit_tests {
         let mut manifest = json!({"beats":[{"id":"a"}],"trash":[],"deleted":[]});
         assert!(!apply_restore_from_trash_to_manifest(&mut manifest, "a").unwrap());
         assert_eq!(manifest["beats"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn permanent_delete_removes_live_and_trashed_beats_and_adds_tombstones() {
-        let mut manifest = json!({
-            "schema": "Galer T-Library",
-            "version": 2,
-            "beats": [
-                {"id":"a","master":{"telegram_message_id":11}},
-                {"id":"b","master":{"telegram_message_id":22}}
-            ],
-            "trash": [
-                {"trash_id":"t-c","beat":{"id":"c","artwork":{"telegram_message_id":33}}}
-            ],
-            "deleted": []
-        });
-        let (removed, media) = apply_permanent_delete_to_manifest(&mut manifest, &wanted(&["a", "c"]), 100).unwrap();
-        assert_eq!(removed, 2);
-        assert_eq!(manifest["beats"].as_array().unwrap().len(), 1);
-        assert_eq!(manifest["beats"][0]["id"], "b");
-        assert!(manifest["trash"].as_array().unwrap().is_empty());
-        assert!(media.contains(&11));
-        assert!(media.contains(&33));
-        let deleted = manifest["deleted"].as_array().unwrap();
-        assert_eq!(deleted.len(), 2);
-        assert_eq!(deleted[0]["beat_id"], "a");
-        assert_eq!(deleted[1]["beat_id"], "c");
-    }
-
-    #[test]
-    fn permanent_delete_is_idempotent_even_when_beat_row_is_already_absent() {
-        let mut manifest = json!({"beats":[],"trash":[],"deleted":[]});
-        let (removed, media) = apply_permanent_delete_to_manifest(&mut manifest, &wanted(&["gone"]), 200).unwrap();
-        assert_eq!(removed, 0);
-        assert!(media.is_empty());
-        assert_eq!(manifest["deleted"][0]["beat_id"], "gone");
-        assert_eq!(manifest["deleted"][0]["deleted_at"], 200);
-    }
-
-    #[test]
-    fn duplicate_tombstones_collapse_to_latest_timestamp() {
-        let mut manifest = json!({
-            "beats":[],"trash":[],
-            "deleted":[
-                {"beat_id":"x","deleted_at":10},
-                {"id":"x","deleted_at":30},
-                {"beat_id":"y","deleted_at":20}
-            ]
-        });
-        apply_permanent_delete_to_manifest(&mut manifest, &wanted(&["x"]), 25).unwrap();
-        let deleted = manifest["deleted"].as_array().unwrap();
-        assert_eq!(deleted.len(), 2);
-        let x = deleted.iter().find(|row| row["beat_id"] == "x").unwrap();
-        assert_eq!(x["deleted_at"], 30, "an older retry must never move a tombstone backwards");
-    }
-
-    #[test]
-    fn media_collector_deduplicates_message_ids_across_slots() {
-        let mut manifest = json!({
-            "beats":[{
-                "id":"a",
-                "telegram_message_id":10,
-                "master":{"telegram_message_id":10},
-                "artwork":{"telegram_message_id":20},
-                "files":[{"telegram_message_id":30,"parts":[{"telegram_message_id":40}]}],
-                "project":{"manifest":{"parts":[{"telegram_message_id":50}]}}
-            }],
-            "trash":[],"deleted":[]
-        });
-        let (_, media) = apply_permanent_delete_to_manifest(&mut manifest, &wanted(&["a"]), 1).unwrap();
-        assert_eq!(media, [10,20,30,40,50].into_iter().collect());
     }
 
     fn candidate(name: &str, bytes: u64, last_used: u64) -> PlaybackCacheCandidate {

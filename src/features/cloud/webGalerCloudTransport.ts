@@ -6,6 +6,7 @@ import {
   reserveWebTransportBeat,
   renewWebTransportBeat,
   publishWebTransportIndex,
+  purgeWebTransportTrash,
   authorizeWebTransportProject,
   cancelWebTransportBeat,
   uploadWebTransportProject,
@@ -611,7 +612,6 @@ export class WebGalerCloudTransport {
       const result = await moveWebBeatsToTrash(beatIds, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
         replaceLibraryIndex: input => this.publishLibraryIndex(input),
-        deleteMessages: async ids => (await this.worker.deleteMessages({ messageIds: ids })).deleted,
       });
       if (result.index) {
         await commitWebTransportIndexPointer({
@@ -640,7 +640,6 @@ export class WebGalerCloudTransport {
       const result = await restoreWebBeatFromTrash(trashId, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
         replaceLibraryIndex: input => this.publishLibraryIndex(input),
-        deleteMessages: async ids => (await this.worker.deleteMessages({ messageIds: ids })).deleted,
       });
       restored = result.value;
       if (result.index) {
@@ -676,8 +675,7 @@ export class WebGalerCloudTransport {
     try {
       const result = await purgeWebTrash({
         getLibraryIndex: () => this.worker.getLibraryIndex(),
-        replaceLibraryIndex: input => this.publishLibraryIndex(input),
-        deleteMessages: async ids => (await this.worker.deleteMessages({ messageIds: ids })).deleted,
+        purgeServer: ids => purgeWebTransportTrash(ids, lease),
       });
       if (result.index) {
         await commitWebTransportIndexPointer({

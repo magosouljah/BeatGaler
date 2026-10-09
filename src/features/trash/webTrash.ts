@@ -11,7 +11,11 @@ type JsonRecord = Record<string, unknown>;
 export interface WebTrashRuntime {
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult>;
   replaceLibraryIndex(input: { manifest: unknown; expectedMessageId: number | null }): Promise<WebTransportReplaceIndexResult>;
-  deleteMessages(messageIds: number[]): Promise<number>;
+}
+
+export interface WebTrashPurgeRuntime {
+  getLibraryIndex(): Promise<WebTransportLibraryIndexResult>;
+  purgeServer(beatIds: string[]): Promise<{ deleted: number; messageId?: number; previousMessageId?: number | null; beatCount?: number }>;
 }
 
 export interface WebTrashMutationResult<T> {
@@ -154,30 +158,8 @@ export async function restoreWebBeatFromTrash(
   return { value: beatFromWebLibraryEntry(existing || payload), index };
 }
 
-function collectMediaMessageIds(value: unknown, out = new Set<number>()): Set<number> {
-  if (Array.isArray(value)) {
-    for (const child of value) collectMediaMessageIds(child, out);
-    return out;
-  }
-  const row = record(value);
-  if (!row) return out;
-  for (const [key, child] of Object.entries(row)) {
-    if (key === "telegram_message_id") {
-      const id = Number(child || 0);
-      if (Number.isInteger(id) && id > 0) out.add(id);
-    } else if (key === "telegram_file_id") {
-      const match = /^direct:(\d+)$/.exec(String(child || ""));
-      const id = Number(match?.[1] || 0);
-      if (Number.isInteger(id) && id > 0) out.add(id);
-    }
-    collectMediaMessageIds(child, out);
-  }
-  return out;
-}
-
 export async function purgeWebTrash(
-  runtime: WebTrashRuntime,
-  now = Math.floor(Date.now() / 1000),
+  runtime: WebTrashPurgeRuntime,
 ): Promise<WebTrashMutationResult<number>> {
   const current = await runtime.getLibraryIndex();
   normalizeWebLibraryManifest(current.manifest);
@@ -185,15 +167,9 @@ export async function purgeWebTrash(
   const trash = Array.isArray(root.trash) ? root.trash : [];
   if (trash.length === 0) return { value: 0, index: null };
   const ids = new Set(trash.map(trashBeat).map(identityId).filter(Boolean));
-  const tombstones = deletedById(root);
-  for (const id of ids) tombstones.set(id, Math.max(tombstones.get(id) || 0, now));
-  const deleted = Array.from(tombstones.entries())
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([beat_id, deleted_at]) => ({ beat_id, deleted_at }));
-  const beats = (Array.isArray(root.beats) ? root.beats : []).filter(value => !ids.has(identityId(value)));
-  const messageIds = Array.from(collectMediaMessageIds(trash)).sort((a, b) => a - b);
-  const candidate = candidateRoot(current, { beats, trash: [], deleted });
-  const index = await runtime.replaceLibraryIndex({ manifest: candidate, expectedMessageId: current.messageId });
-  if (messageIds.length > 0) await runtime.deleteMessages(messageIds).catch(() => 0);
-  return { value: ids.size, index };
+  const result = await runtime.purgeServer([...ids]);
+  const index = result.messageId && result.beatCount !== undefined
+    ? { messageId: result.messageId, previousMessageId: result.previousMessageId ?? null, beatCount: result.beatCount }
+    : null;
+  return { value: result.deleted, index };
 }

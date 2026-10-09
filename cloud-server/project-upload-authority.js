@@ -35,6 +35,10 @@ function createProjectUploadAuthority({ pool, transport }) {
       const owner = (await client.query('SELECT id FROM vaults WHERE user_id=$1 AND telegram_chat_id=$2 FOR UPDATE',
         [userId, String(chatId)])).rows[0];
       if (!owner) throw new ProjectAccessError('PROJECT vault ownership is unavailable.', 'PROJECT_SCOPE_DENIED');
+      if ((await client.query('SELECT 1 FROM library_trash_purges WHERE user_id=$1 AND beat_id=$2',
+        [userId, beatId])).rows[0]) {
+        throw new ProjectAccessError('Beat purge prevents another PROJECT upload.', 'LIBRARY_PURGE_PENDING');
+      }
       const existing = (await client.query(`SELECT message_id,telegram_document_id,size_bytes FROM library_project_uploads
         WHERE user_id=$1 AND beat_id=$2 AND sha256=$3`, [userId, beatId, sha256])).rows[0];
       if (existing) {

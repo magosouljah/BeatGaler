@@ -4,6 +4,7 @@ const { createAccessRuntime } = require('./access-runtime');
 const { createLibraryBeatQuota, indexRows, LibraryQuotaError } = require('./library-beat-quota');
 const { createProjectAccess } = require('./project-access');
 const { createProjectUploadAuthority } = require('./project-upload-authority');
+const { beatAssets, beatHash, messageIds } = require('./library-trash-assets');
 
 function fail(message, code) { throw new LibraryQuotaError(message, code); }
 function messageId(value) {
@@ -70,13 +71,30 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   async function reserve({ userId, beatId }) {
     // A brand-new vault has no INDEX yet. Its empty INDEX is initialized by
     // publish; imports wait for that bootstrap to finish.
-    await quota.bootstrap(userId);
+    // Existing vaults must enter the quota-state lock directly: reading a pin
+    // during an in-flight purge could observe Telegram before PostgreSQL COMMIT.
+    if (!(await pool.query('SELECT 1 FROM library_quota_state WHERE user_id=$1', [String(userId || '').trim()])).rows[0]) {
+      await quota.bootstrap(userId);
+    }
     return quota.reserve({ userId, beatId, reservationId: `new:${beatId}`, retryDenied: true });
   }
 
   async function ensureBootstrap(userId) {
     const state = (await pool.query('SELECT 1 FROM library_quota_state WHERE user_id=$1', [String(userId || '').trim()])).rows[0];
     if (!state) await quota.bootstrap(userId);
+  }
+
+  async function preserveLegacyTombstones(client, userId, manifest) {
+    for (const id of deletedIds(manifest)) {
+      if ([...(manifest.beats || []).map(row => String(row?.id)),
+        ...(manifest.trash || []).map(item => String(item?.beat?.id))].includes(id)) {
+        fail('Tombstoned beat is still in INDEX.', 'LIBRARY_QUOTA_INDEX_INVALID');
+      }
+      await client.query(`INSERT INTO library_trash_purges
+        (user_id,beat_id,operation_id,state,asset_message_ids,beat_sha256)
+        VALUES($1,$2,$3,'LEGACY_TOMBSTONE',ARRAY[]::bigint[],$4) ON CONFLICT DO NOTHING`,
+      [userId, id, `purge:${id}`, beatHash(null)]);
+    }
   }
 
   async function recover({ userId, chatId }) {
@@ -99,6 +117,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
         if (!['LIBRARY_QUOTA_INDEX_UNVERIFIED', 'LIBRARY_QUOTA_INDEX_INVALID'].includes(error?.code)) throw error;
       }
       if (current?.messageId === Number(state.index_message_id) && current.sha256 === state.index_sha256) {
+        await preserveLegacyTombstones(client, uid, current.manifest);
         await client.query('COMMIT');
         return { status: 'current' };
       }
@@ -113,6 +132,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       if (stored.sha256 !== state.index_sha256) {
         fail('Stored INDEX differs from quota ledger.', 'LIBRARY_QUOTA_INDEX_CHANGED');
       }
+      await preserveLegacyTombstones(client, uid, manifest);
       orphanId = current?.messageId || 0;
       await transport.pinExistingIndexMessage(chatId, Number(state.index_message_id));
       const restored = await pinned(chatId);
@@ -136,6 +156,12 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       LEFT JOIN vault_index_pointers p ON p.vault_id=v.id`)).rows;
     for (const row of rows) {
       await recover({ userId: row.user_id, chatId: row.telegram_chat_id });
+      const pending = (await pool.query("SELECT beat_id FROM library_trash_purges WHERE user_id=$1 AND state='PENDING'",
+        [row.user_id])).rows.map(item => item.beat_id);
+      if (pending.length) {
+        try { await purgeTrash({ userId: row.user_id, chatId: row.telegram_chat_id, beatIds: pending }); }
+        catch (error) { console.warn('[library-purge] pending purge remains retryable:', row.user_id, error?.code || error?.message); }
+      }
       await cleanupPrevious(row.telegram_chat_id, Number(row.predecessor_message_id || 0), Number(row.index_message_id));
       await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id });
     }
@@ -157,7 +183,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     }
   }
 
-  async function publish({ userId, chatId, manifest, expectedMessageId, legacyMigration }) {
+  async function publish({ userId, chatId, manifest, expectedMessageId, legacyMigration, purgeIds }) {
     if (!manifest || manifest.version !== 2) fail('Invalid library INDEX version.', 'LIBRARY_QUOTA_INDEX_INVALID');
     const bytes = Buffer.from(JSON.stringify(manifest));
     if (!bytes.length || bytes.length > 16 * 1024 * 1024) fail('Library INDEX is too large.', 'LIBRARY_QUOTA_INDEX_INVALID');
@@ -217,12 +243,49 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       const old = new Map((await client.query('SELECT beat_id,state FROM library_beats WHERE user_id=$1', [uid])).rows
         .map(row => [String(row.beat_id), String(row.state)]));
       const tombstones = deletedIds(manifest);
+      const priorTombstones = deletedIds(previousManifest);
+      const requestedPurges = new Set(purgeIds || []);
+      const removed = [...old.keys()].filter(id => !candidate.rows.has(id));
+      if (removed.length !== requestedPurges.size || removed.some(id => !requestedPurges.has(id))) {
+        fail('Only a server-verified purge may remove a beat.', 'LIBRARY_PURGE_REQUIRED');
+      }
+      for (const id of priorTombstones) if (!tombstones.has(id)) {
+        fail('INDEX cannot discard a permanent tombstone.', 'LIBRARY_PURGE_TOMBSTONE');
+      }
+      for (const id of tombstones) if (!priorTombstones.has(id) && !requestedPurges.has(id)) {
+        fail('Only a confirmed purge may add a tombstone.', 'LIBRARY_PURGE_TOMBSTONE');
+      }
+      const purgeRows = (await client.query('SELECT beat_id,state,asset_message_ids,beat_sha256 FROM library_trash_purges WHERE user_id=$1 FOR UPDATE', [uid])).rows;
+      const purgeById = new Map(purgeRows.map(row => [String(row.beat_id), row]));
+      for (const id of candidate.rows.keys()) if (
+          (purgeById.get(id) && purgeById.get(id).state !== 'PENDING') || priorTombstones.has(id)) {
+        fail('Permanently purged beat cannot reappear.', 'LIBRARY_PURGE_TOMBSTONE');
+      }
+      const beforeRows = new Map([...(previousManifest.beats || []).map(row => [String(row.id), row]),
+        ...(previousManifest.trash || []).map(item => [String(item.beat.id), item.beat])]);
+      const afterRows = new Map([...(manifest.beats || []).map(row => [String(row.id), row]),
+        ...(manifest.trash || []).map(item => [String(item.beat.id), item.beat])]);
+      for (const [id, row] of purgeById) if (row.state === 'PENDING' && !requestedPurges.has(id) &&
+          (candidate.rows.get(id) !== 'TRASH' || beatHash(beforeRows.get(id)) !== beatHash(afterRows.get(id)))) {
+        fail('Pending purge beat cannot be changed or restored.', 'LIBRARY_PURGE_PENDING');
+      }
+      for (const [id, row] of purgeById) if (row.state === 'PENDING') {
+        for (const [otherId, beat] of afterRows) if (otherId !== id &&
+            row.asset_message_ids.some(asset => messageIds(beat).has(Number(asset)))) {
+          fail('Pending purge asset cannot be attached to another beat.', 'LIBRARY_PURGE_ASSETS_UNVERIFIED');
+        }
+      }
       for (const id of old.keys()) {
-        if (!candidate.rows.has(id) && (!tombstones.has(id) || old.get(id) !== 'TRASH')) {
+        if (!candidate.rows.has(id) && (!tombstones.has(id) || old.get(id) !== 'TRASH' ||
+            purgeById.get(id)?.state !== 'PENDING' ||
+            beatHash(beforeRows.get(id)) !== purgeById.get(id).beat_sha256)) {
           fail('Only a tombstoned Trash beat may leave the INDEX.', 'LIBRARY_QUOTA_INDEX_INVALID');
         }
       }
       const fresh = [...candidate.rows.keys()].filter(id => !old.has(id));
+      for (const id of fresh) if (purgeById.has(id) || priorTombstones.has(id)) {
+        fail('Permanently purged beat identity cannot be reused.', 'LIBRARY_PURGE_TOMBSTONE');
+      }
       if (fresh.length) {
         const access = await createAccessRuntime({ pool: client }).resolveUserAccess({ id: uid });
         const limit = access.quotas.max_beats;
@@ -281,6 +344,13 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       }
       await projects.verifyChanges({ client, userId: uid, chatId, previousManifest, candidateManifest: manifest });
 
+      for (const id of removed) {
+        if (typeof transport.deleteAndVerifyMessages !== 'function') {
+          fail('MASTER deletion verification is unavailable.', 'LIBRARY_PURGE_UNVERIFIED');
+        }
+        await transport.deleteAndVerifyMessages(chatId, purgeById.get(id).asset_message_ids.map(Number));
+      }
+
       previousId = expected;
       if (current?.sha256 === candidate.sha256 && currentId !== expected) {
         publishedId = currentId;
@@ -311,6 +381,9 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       }
       for (const id of old.keys()) if (!candidate.rows.has(id)) {
         await client.query('DELETE FROM library_beats WHERE user_id=$1 AND beat_id=$2', [uid, id]);
+        await client.query('DELETE FROM library_project_uploads WHERE user_id=$1 AND beat_id=$2', [uid, id]);
+        await client.query('DELETE FROM library_legacy_project_copies WHERE user_id=$1 AND beat_id=$2', [uid, id]);
+        await client.query("UPDATE library_trash_purges SET state='CONFIRMED',confirmed_at=now(),last_error=NULL WHERE user_id=$1 AND beat_id=$2", [uid, id]);
       }
       await client.query(`INSERT INTO vault_index_pointers(vault_id,index_message_id,predecessor_message_id,revision,source)
         VALUES($1,$2,$3,1,'publish') ON CONFLICT(vault_id) DO UPDATE SET
@@ -324,6 +397,102 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     // Old copies are removed only after the quota ledger and pointer commit.
     await cleanupPrevious(chatId, previousId, publishedId);
     return { messageId: publishedId, previousMessageId: previousId, beatCount: manifest.beats.length, status: 'published' };
+  }
+
+  async function purgeTrash({ userId, chatId, beatIds }) {
+    const uid = String(userId || '').trim();
+    const ids = [...new Set((beatIds || []).map(id => String(id || '').trim()))];
+    if (!ids.length || ids.some(id => !id || id.length > 256)) fail('Trash beat IDs are required.', 'LIBRARY_PURGE_INVALID_INPUT');
+    await recover({ userId: uid, chatId });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const owner = (await client.query('SELECT id FROM vaults WHERE user_id=$1 AND telegram_chat_id=$2 FOR UPDATE',
+        [uid, String(chatId)])).rows[0];
+      if (!owner) fail('Vault ownership could not be verified.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
+      const state = (await client.query('SELECT index_message_id,index_sha256 FROM library_quota_state WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
+      const current = await pinned(chatId);
+      if (!state || current?.messageId !== Number(state.index_message_id) || current.sha256 !== state.index_sha256) {
+        fail('Committed library INDEX is unavailable.', 'LIBRARY_QUOTA_INDEX_CHANGED');
+      }
+      const trash = new Map((current.manifest.trash || []).map(item => [String(item?.beat?.id || ''), item?.beat]));
+      const allOther = [...(current.manifest.beats || []), ...(current.manifest.trash || []).map(item => item.beat)];
+      const previous = (await client.query('SELECT beat_id,state,asset_message_ids,beat_sha256 FROM library_trash_purges WHERE user_id=$1 AND beat_id=ANY($2::text[]) FOR UPDATE',
+        [uid, ids])).rows;
+      const byId = new Map(previous.map(row => [String(row.beat_id), row]));
+      for (const id of ids) {
+        if (byId.get(id)?.state === 'CONFIRMED') continue;
+        const beat = trash.get(id);
+        if (!beat) fail('Beat is not in Trash.', 'LIBRARY_PURGE_INVALID_INPUT');
+        const assets = beatAssets(beat);
+        const receipts = await client.query(`SELECT message_id FROM library_project_uploads WHERE user_id=$1 AND beat_id=$2
+          UNION SELECT message_id FROM library_legacy_project_copies WHERE user_id=$1 AND beat_id=$2
+          UNION SELECT source_message_id AS message_id FROM library_legacy_project_copies WHERE user_id=$1 AND beat_id=$2`, [uid, id]);
+        for (const row of receipts.rows) assets.push(Number(row.message_id));
+        assets.splice(0, assets.length, ...new Set(assets));
+        assets.sort((a, b) => a - b);
+        const receiptConflict = await client.query(`SELECT 1 FROM library_project_uploads
+          WHERE user_id=$1 AND beat_id<>$2 AND message_id=ANY($3::bigint[])
+          UNION SELECT 1 FROM library_legacy_project_copies
+          WHERE user_id=$1 AND beat_id<>$2 AND
+            (message_id=ANY($3::bigint[]) OR source_message_id=ANY($3::bigint[])) LIMIT 1`,
+        [uid, id, assets]);
+        if (receiptConflict.rows[0]) fail('Beat shares an asset receipt with another beat.', 'LIBRARY_PURGE_ASSETS_UNVERIFIED');
+        if (assets.includes(current.messageId)) fail('Beat references the pinned INDEX.', 'LIBRARY_PURGE_ASSETS_UNVERIFIED');
+        for (const other of allOther) if (String(other?.id) !== id) {
+          const shared = messageIds(other);
+          if (assets.some(asset => shared.has(asset))) fail('Beat shares an asset with another beat.', 'LIBRARY_PURGE_ASSETS_UNVERIFIED');
+        }
+        const hash = beatHash(beat);
+        const existing = byId.get(id);
+        if (existing && (existing.beat_sha256 !== hash ||
+            JSON.stringify(existing.asset_message_ids.map(Number).sort((a,b) => a-b)) !== JSON.stringify(assets))) {
+          fail('Pending purge asset snapshot changed.', 'LIBRARY_PURGE_PENDING');
+        }
+        if (!existing) await client.query(`INSERT INTO library_trash_purges
+          (user_id,beat_id,operation_id,state,asset_message_ids,beat_sha256)
+          VALUES($1,$2,$3,'PENDING',$4,$5)`, [uid, id, `purge:${id}`, assets, hash]);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally { client.release(); }
+
+    const remaining = (await pool.query(`SELECT beat_id FROM library_trash_purges
+      WHERE user_id=$1 AND beat_id=ANY($2::text[]) AND state='PENDING'`, [uid, ids])).rows.map(row => String(row.beat_id));
+    if (!remaining.length) return { status: 'confirmed', deleted: ids.length, operationIds: ids.map(id => `purge:${id}`) };
+    try {
+      const current = await pinned(chatId);
+      const manifest = current.manifest;
+      const requested = new Set(remaining);
+      const assets = (await pool.query(`SELECT asset_message_ids FROM library_trash_purges
+        WHERE user_id=$1 AND beat_id=ANY($2::text[]) AND state='PENDING'`, [uid, remaining])).rows;
+      const deletedAssets = new Set(assets.flatMap(row => row.asset_message_ids.map(Number)));
+      const candidate = { ...manifest, updated_at: Math.floor(Date.now() / 1000),
+        trash: (manifest.trash || []).filter(item => !requested.has(String(item?.beat?.id))),
+        deleted: [...(manifest.deleted || []), ...remaining.map(beat_id => ({ beat_id, deleted_at: Math.floor(Date.now() / 1000) }))],
+        ...(Array.isArray(manifest.garbage) ? { garbage: manifest.garbage.filter(item => !deletedAssets.has(Number(item?.message_id))) } : {}) };
+      const result = await publish({ userId: uid, chatId, manifest: candidate,
+        expectedMessageId: current.messageId, purgeIds: remaining });
+      return { ...result, status: 'confirmed', deleted: ids.length, operationIds: ids.map(id => `purge:${id}`) };
+    } catch (error) {
+      const count = Number((await pool.query(`SELECT count(*)::int AS n FROM library_trash_purges
+        WHERE user_id=$1 AND beat_id=ANY($2::text[]) AND state='CONFIRMED'`, [uid, ids])).rows[0].n);
+      if (count === ids.length) return { status: 'confirmed', deleted: ids.length, operationIds: ids.map(id => `purge:${id}`) };
+      await pool.query(`UPDATE library_trash_purges SET last_error=$3 WHERE user_id=$1 AND beat_id=ANY($2::text[]) AND state='PENDING'`,
+        [uid, ids, String(error?.code || error?.message || 'PURGE_FAILED').slice(0, 500)]).catch(() => {});
+      throw error;
+    }
+  }
+
+  async function assertPurged({ userId, beatIds }) {
+    const ids = [...new Set((beatIds || []).map(id => String(id || '').trim()))];
+    if (!ids.length || ids.some(id => !id || id.length > 256)) fail('Beat IDs are required.', 'LIBRARY_PURGE_INVALID_INPUT');
+    const count = Number((await pool.query(`SELECT count(*)::int AS n FROM library_trash_purges
+      WHERE user_id=$1 AND beat_id=ANY($2::text[]) AND state='CONFIRMED'`, [String(userId || '').trim(), ids])).rows[0].n);
+    if (count !== ids.length) fail('Topic cleanup requires confirmed purge.', 'LIBRARY_PURGE_REQUIRED');
+    return true;
   }
 
   async function migrateLegacyProjectsOnce({ userId, chatId }) {
@@ -415,7 +584,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     }
   }
 
-  return Object.freeze({ reserve, ensureBootstrap, recover, recoverAll, migrateLegacyProjects, renew: ({ userId, beatId }) =>
+  return Object.freeze({ reserve, ensureBootstrap, recover, recoverAll, purgeTrash, assertPurged, migrateLegacyProjects, renew: ({ userId, beatId }) =>
     quota.renew({ userId, reservationId: `new:${beatId}` }),
     cancel: ({ userId, beatId }) => quota.cancel({ userId, reservationId: `new:${beatId}` }),
     authorizeProject: ({ userId, declaredBytes }) => projects.authorize({ userId, declaredBytes }),
@@ -472,6 +641,14 @@ module.exports = {
   publish(input) {
     if (!configured) fail('Library quota requires PostgreSQL.', 'LIBRARY_QUOTA_UNAVAILABLE');
     return configured.publish(input);
+  },
+  purgeTrash(input) {
+    if (!configured) fail('Library purge requires PostgreSQL.', 'LIBRARY_QUOTA_UNAVAILABLE');
+    return configured.purgeTrash(input);
+  },
+  assertPurged(input) {
+    if (!configured) fail('Library purge requires PostgreSQL.', 'LIBRARY_QUOTA_UNAVAILABLE');
+    return configured.assertPurged(input);
   },
   verifyCommitted(input) {
     if (!configured) fail('Library quota requires PostgreSQL.', 'LIBRARY_QUOTA_UNAVAILABLE');

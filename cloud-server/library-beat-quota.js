@@ -32,12 +32,12 @@ function indexRows(observation) {
   const rows = new Map();
   for (const item of manifest.beats) {
     const id = requiredId(item?.id, 'INDEX beat ID');
-    if (rows.get(id) === 'TRASH') throw new LibraryQuotaError('Beat appears in ACTIVE and Trash.', 'LIBRARY_QUOTA_INDEX_INVALID');
+    if (rows.has(id)) throw new LibraryQuotaError('Beat appears more than once in INDEX.', 'LIBRARY_QUOTA_INDEX_INVALID');
     rows.set(id, 'ACTIVE');
   }
   for (const item of manifest.trash || []) {
     const id = requiredId(item?.beat?.id, 'INDEX Trash beat ID');
-    if (rows.get(id) === 'ACTIVE') throw new LibraryQuotaError('Beat appears in ACTIVE and Trash.', 'LIBRARY_QUOTA_INDEX_INVALID');
+    if (rows.has(id)) throw new LibraryQuotaError('Beat appears more than once in INDEX.', 'LIBRARY_QUOTA_INDEX_INVALID');
     rows.set(id, 'TRASH');
   }
   const bytes = observation.raw || Buffer.from(JSON.stringify(manifest));
@@ -132,7 +132,8 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
       // where library_quota_state has no row to lock yet.
       const user = await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [uid]);
       if (!user.rows[0]) throw new LibraryQuotaError('User does not exist.', 'LIBRARY_QUOTA_INVALID_INPUT');
-      const index = indexRows(await readIndex(uid, { client }));
+      const observation = await readIndex(uid, { client });
+      const index = indexRows(observation);
       const existing = (await client.query('SELECT * FROM library_quota_state WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
       if (existing) {
         if (Number(existing.index_message_id) !== index.messageId || existing.index_sha256 !== index.sha256) {
@@ -145,6 +146,14 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
         [uid, index.messageId, index.sha256]);
       for (const [beatId, state] of index.rows) {
         await client.query('INSERT INTO library_beats(user_id,beat_id,state) VALUES($1,$2,$3)', [uid, beatId, state]);
+      }
+      for (const row of observation.manifest?.deleted || []) {
+        const beatId = requiredId(row?.beat_id || row?.id, 'INDEX tombstone ID');
+        if (index.rows.has(beatId)) throw new LibraryQuotaError('Tombstoned beat is still in INDEX.', 'LIBRARY_QUOTA_INDEX_INVALID');
+        await client.query(`INSERT INTO library_trash_purges
+          (user_id,beat_id,operation_id,state,asset_message_ids,beat_sha256)
+          VALUES($1,$2,$3,'LEGACY_TOMBSTONE',ARRAY[]::bigint[],$4) ON CONFLICT DO NOTHING`,
+        [uid, beatId, `purge:${beatId}`, crypto.createHash('sha256').update(JSON.stringify(null)).digest('hex')]);
       }
       return snapshot(client, uid, instant());
     });
@@ -164,6 +173,9 @@ function createLibraryBeatQuota({ pool, readIndex = readTelegramLibraryIndex, no
     const rid = requiredId(reservationId, 'reservationId');
     const result = await transaction(userId, async (client, uid) => {
       await stateLock(client, uid);
+      if ((await client.query('SELECT 1 FROM library_trash_purges WHERE user_id=$1 AND beat_id=$2', [uid, bid])).rows[0]) {
+        throw new LibraryQuotaError('Permanently purged beat identity cannot be reused.', 'LIBRARY_PURGE_TOMBSTONE');
+      }
       const at = instant();
       await expire(client, uid, at);
       const existing = (await client.query('SELECT * FROM library_beat_reservations WHERE user_id=$1 AND id=$2', [uid, rid])).rows[0];
