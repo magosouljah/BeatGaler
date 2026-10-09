@@ -77,7 +77,7 @@ function readPolarSandboxConfig(env = process.env) {
     sdkVersion: POLAR_SDK_VERSION,
     accessToken: requiredText(env[ENV.accessToken], ENV.accessToken),
     webhookSecret: requiredText(env[ENV.webhookSecret], ENV.webhookSecret),
-    organizationId: requiredText(env[ENV.organizationId], ENV.organizationId),
+    organizationId: optionalText(env[ENV.organizationId]),
     providerMappings: {
       paid_entry_monthly_v1: {
         productId: requiredText(env[ENV.paidEntryProductId], ENV.paidEntryProductId),
@@ -135,7 +135,7 @@ function validateProviderProductForOffer({ product, offer, organizationId = null
       'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',
     );
   }
-  if (!organizationId || String(product.organization_id || '') !== organizationId) {
+  if (organizationId && String(product.organization_id || '') !== organizationId) {
     throw new PolarSandboxConfigError(
       `Polar product for ${offer.id} belongs to a different organization.`,
       'POLAR_SANDBOX_PROVIDER_MAPPING_MISMATCH',

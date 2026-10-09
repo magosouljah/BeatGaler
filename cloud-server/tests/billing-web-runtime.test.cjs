@@ -77,6 +77,14 @@ test('one validated sandbox adapter serves both monthly offers and cannot sell a
   assert.equal(JSON.stringify(plans).includes('price_entry'), false);
 });
 
+test('organization filter is optional for Web startup', async () => {
+  const runtime = createWebBillingRuntime({
+    env: { ...env(), POLAR_SANDBOX_ORGANIZATION_ID: '' },
+    adapterFactory: fakeAdapter,
+  });
+  assert.equal((await runtime.initialize()).ready, true);
+});
+
 test('incomplete, duplicate, production, and mismatched sandbox mapping all fail closed', async () => {
   for (const testEnv of [
     { ...env(), POLAR_SANDBOX_ACCESS_TOKEN: '' },

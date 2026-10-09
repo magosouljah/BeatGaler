@@ -33,7 +33,7 @@ The adapter does not read generic `POLAR_ACCESS_TOKEN`, live/production credenti
 
 Secrets are server-side only. The manual GitHub Actions smoke receives them through repository Actions secrets and does not commit or print them intentionally.
 
-For Web PostgreSQL STEP 7, set `BILLING_PROVIDER_ENVIRONMENT=sandbox` explicitly alongside these seven variables in the server environment. The Web runtime does not accept `production` or an omitted environment as a fallback. From `cloud-server`, run `npm run preflight:web-billing`: it reads and validates both monthly Product/Price mappings without creating checkout. A failure prints only a stable error code and leaves sale unavailable; the Free app can still start. The production environment has no provider adapter or mappings in STEP 7.
+For Web PostgreSQL STEP 7, set `BILLING_PROVIDER_ENVIRONMENT=sandbox` explicitly alongside the six required `POLAR_SANDBOX_*` variables in the server environment. `POLAR_SANDBOX_ORGANIZATION_ID` is optional; when configured, the product must belong to that organization. The Web runtime does not accept `production` or an omitted environment as a fallback. From `cloud-server`, run `npm run preflight:web-billing`: it reads and validates both monthly Product/Price mappings without creating checkout. A failure prints only a stable error code and leaves sale unavailable; the Free app can still start. The production environment has no provider adapter or mappings in STEP 7.
 
 ## Commercial mapping owned by BeatGaler
 

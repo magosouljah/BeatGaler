@@ -84,7 +84,7 @@ test('sandbox config uses sandbox-only credential names and requires both monthl
   assert.equal(config.environment, 'sandbox');
   assert.equal(config.providerMappings.paid_entry_monthly_v1.productId, 'prod_paid');
   assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ACCESS_TOKEN: '' }), PolarSandboxConfigError);
-  assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ORGANIZATION_ID: '' }), PolarSandboxConfigError);
+  assert.equal(readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ORGANIZATION_ID: '' }).organizationId, null);
   assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID: '' }), PolarSandboxConfigError);
 });
 
