@@ -76,7 +76,7 @@ function readPolarSandboxConfig(env = process.env) {
     sdkPackage: POLAR_SDK_PACKAGE,
     sdkVersion: POLAR_SDK_VERSION,
     accessToken: requiredText(env[ENV.accessToken], ENV.accessToken),
-    webhookSecret: requiredText(env[ENV.webhookSecret], ENV.webhookSecret),
+    webhookSecret: optionalText(env[ENV.webhookSecret]),
     organizationId: optionalText(env[ENV.organizationId]),
     providerMappings: {
       paid_entry_monthly_v1: {
@@ -253,7 +253,7 @@ function normalizeRawBody(rawBody) {
 function createPolarSandboxAdapter(options = {}) {
   const config = options.config || readPolarSandboxConfig(options.env || process.env);
   const catalog = options.catalog || createSandboxCommercialCatalog(config);
-  const sdk = options.sdk || (options.client && options.webhooks ? null : loadPinnedPolarSdk());
+  const sdk = options.sdk || (options.client ? null : loadPinnedPolarSdk());
   const client = options.client || createPinnedSandboxClient({ config, sdk });
   const webhookApi = options.webhooks || sdk?.webhooks;
 
@@ -265,10 +265,6 @@ function createPolarSandboxAdapter(options = {}) {
   const customerGetExternal = assertService(client, 'customers', 'getExternal');
   const subscriptionGet = assertService(client, 'subscriptions', 'get');
   const paymentGet = assertService(client, 'payments', 'get');
-
-  if (!webhookApi || typeof webhookApi.validateEvent !== 'function') {
-    throw new PolarSandboxConfigError('Polar SDK webhooks.validateEvent() is unavailable.');
-  }
 
   async function call(code, action) {
     try {
@@ -371,6 +367,12 @@ function createPolarSandboxAdapter(options = {}) {
     },
 
     async verifyWebhook({ rawBody, headers }) {
+      if (!config.webhookSecret || typeof webhookApi?.validateEvent !== 'function') {
+        throw new PolarSandboxConfigError(
+          'Polar sandbox webhook verification is not configured.',
+          'POLAR_SANDBOX_WEBHOOK_CONFIG_INVALID',
+        );
+      }
       const body = normalizeRawBody(rawBody);
       const normalizedHeaders = normalizeHeaders(headers);
       try {

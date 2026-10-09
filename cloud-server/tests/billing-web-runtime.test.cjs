@@ -85,6 +85,14 @@ test('organization filter is optional for Web startup', async () => {
   assert.equal((await runtime.initialize()).ready, true);
 });
 
+test('Web commerce startup does not require the STEP 9 webhook secret', async () => {
+  const runtime = createWebBillingRuntime({
+    env: { ...env(), POLAR_SANDBOX_WEBHOOK_SECRET: '' },
+    adapterFactory: fakeAdapter,
+  });
+  assert.equal((await runtime.initialize()).ready, true);
+});
+
 test('incomplete, duplicate, production, and mismatched sandbox mapping all fail closed', async () => {
   for (const testEnv of [
     { ...env(), POLAR_SANDBOX_ACCESS_TOKEN: '' },

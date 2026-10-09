@@ -84,6 +84,7 @@ test('sandbox config uses sandbox-only credential names and requires both monthl
   assert.equal(config.environment, 'sandbox');
   assert.equal(config.providerMappings.paid_entry_monthly_v1.productId, 'prod_paid');
   assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ACCESS_TOKEN: '' }), PolarSandboxConfigError);
+  assert.equal(readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_WEBHOOK_SECRET: '' }).webhookSecret, null);
   assert.equal(readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_ORGANIZATION_ID: '' }).organizationId, null);
   assert.throws(() => readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID: '' }), PolarSandboxConfigError);
 });
@@ -207,6 +208,21 @@ test('invalid webhook signature is fail-closed', async () => {
   await assert.rejects(
     () => a.verifyWebhook({ rawBody: '{}', headers: { 'webhook-id':'x','webhook-timestamp':'1','webhook-signature':'x' } }),
     error => error instanceof PolarSandboxAdapterError && error.code === 'POLAR_SANDBOX_WEBHOOK_INVALID',
+  );
+});
+
+test('commerce works without webhook secret while webhook verification fails closed', async () => {
+  const calls = {};
+  const a = createPolarSandboxAdapter({
+    config: readPolarSandboxConfig({ ...env(), POLAR_SANDBOX_WEBHOOK_SECRET: '' }),
+    client: fakeClient(calls),
+  });
+  const offer = await a.validateOfferMapping('paid_entry_monthly_v1');
+  assert.equal(offer.amountMinor, 699);
+  assert.equal(offer.interval, 'month');
+  await assert.rejects(
+    () => a.verifyWebhook({ rawBody: '{}', headers: {} }),
+    { code: 'POLAR_SANDBOX_WEBHOOK_CONFIG_INVALID' },
   );
 });
 
