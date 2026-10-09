@@ -30,6 +30,7 @@ const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
+const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, setBasePlanForUser, CODE_POLICY } = require("./plans");
@@ -97,7 +98,7 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-BeatGaler-Installation-Id");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
@@ -1911,7 +1912,8 @@ function authenticatedTransportAccount(req, res) {
 // ── Telegram Direct Prototype integration ────────────────────────────────
 // The server is now a control plane for large media. It leases a Managed Bot,
 // adds it to the user's private vault, and returns only an ephemeral runtime
-// credential. MP3/WAV/PROJECT bytes go Desktop -> Telegram directly.
+// credential. Web MP3/WAV bytes go directly to Telegram; Web PROJECT bytes
+// enter through the measured MASTER upload route below.
 app.get("/transport/status", (req, res) => {
   const configuredKey = String(process.env.BEATGALER_ADMIN_KEY || "");
   const suppliedKey = String(req.headers["x-beatgaler-admin-key"] || "");
@@ -1944,6 +1946,7 @@ app.post("/transport/session/start", async (req, res) => {
       vault_chat_id: vaultChatId,
       channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
     });
+    await libraryIndexPublication.migrateLegacyProjects({ userId: auth.user.id, chatId: vaultChatId });
     const session = await criticalPathTrace.step(req, "direct_start_session", () => directTransport.startSession({
       startupTrace,
       installationId: beatgalerUserId,
@@ -2217,6 +2220,50 @@ app.post("/transport/quota/renew", async (req, res) => {
   }
 });
 
+function projectBeatCapabilityMatches(req) {
+  const kind = req.body?.kind;
+  return (kind === 'commit_import' || kind === 'commit_edit') &&
+    req.body?.scope?.objectType === 'beat' && req.body?.scope?.objectIds?.length === 1 &&
+    req.body.scope.objectIds[0] === req.body?.beatId;
+}
+
+app.post("/transport/quota/cancel", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  if (req.body?.kind !== 'commit_import' || !projectBeatCapabilityMatches(req)) {
+    return res.status(403).json({ code: 'LIBRARY_QUOTA_CAPABILITY_REQUIRED' });
+  }
+  try {
+    await verifyAuthorizedCapability(req);
+    res.json({ ok: true, reservation: await libraryIndexPublication.cancel({ userId: auth.user.id, beatId: req.body.beatId }) });
+  } catch (error) {
+    res.status(Number(error?.status || 503)).json({ code: error?.code || 'LIBRARY_QUOTA_UNAVAILABLE', error: error?.message });
+  }
+});
+
+app.post("/transport/project/authorize", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  if (!projectBeatCapabilityMatches(req)) return res.status(403).json({ code: 'PROJECT_CAPABILITY_REQUIRED' });
+  try {
+    await verifyAuthorizedCapability(req);
+    const allowed = await libraryIndexPublication.authorizeProject({
+      userId: auth.user.id, declaredBytes: req.body?.declaredBytes,
+    });
+    res.json({ ok: true, ...allowed });
+  } catch (error) {
+    res.status(Number(error?.status || 503)).json({ code: error?.code || 'PROJECT_ACCESS_UNAVAILABLE', error: error?.message });
+  }
+});
+
+app.post("/transport/project/upload", ...createProjectUploadHandlers({
+  authenticate: authenticatedTransportAccount,
+  verifyCapability: verifyAuthorizedCapability,
+  authorizeProject: input => libraryIndexPublication.authorizeProject(input),
+  uploadProject: input => libraryIndexPublication.uploadProject(input),
+  storageChatId,
+}));
+
 app.post("/transport/index/publish", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;
@@ -2266,6 +2313,8 @@ app.post("/transport/upload/confirm", async (req, res) => {
   const beatId = String(req.body?.beatId || "");
   const kind = String(req.body?.kind || "FILE").toUpperCase();
   if (!sessionId || !Number.isInteger(messageId) || messageId <= 0) return res.status(400).json({ error: "sessionId and a valid messageId are required." });
+  if (kind === 'PROJECT') return res.status(403).json({ code: 'PROJECT_AUTHORITATIVE_PUBLICATION_REQUIRED',
+    error: 'PROJECT must pass Access and actual-byte verification during INDEX publication.' });
   try {
     await directTransport.verifyMessage({ installationId: beatgalerUserId, sessionId, messageId });
     const locator = `direct:${messageId}`;

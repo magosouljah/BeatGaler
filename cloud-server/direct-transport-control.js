@@ -7,6 +7,7 @@ const { performance } = require('perf_hooks');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
+const { ProjectAccessError } = require('./project-access');
 
 const { noDirectStartupTrace } = require('./direct-startup-trace');
 
@@ -675,6 +676,11 @@ async function rotateManagedToken(botConfig) {
 }
 
 
+function directBotAdminRights() {
+  return new Api.ChatAdminRights({ deleteMessages: false, editMessages: false,
+    pinMessages: false, other: true });
+}
+
 async function inviteAndPromote(master, vault, botEntity) {
   try {
     await master.invoke(new Api.channels.InviteToChannel({ channel: vault, users: [botEntity] }));
@@ -682,16 +688,12 @@ async function inviteAndPromote(master, vault, botEntity) {
     const msg = String(error?.errorMessage || error?.message || error);
     if (!/USER_ALREADY_PARTICIPANT/i.test(msg)) throw error;
   }
-  // The transport bot may write media, but only MASTER may pin the INDEX.
-  // A client holding the temporary bot credential cannot publish a library.
+  // The bot may write its own media. MASTER documents must remain protected
+  // from a client holding the temporary bot credential.
   await master.invoke(new Api.channels.EditAdmin({
     channel: vault,
     userId: botEntity,
-    adminRights: new Api.ChatAdminRights({
-      deleteMessages: true,
-      pinMessages: false,
-      other: true,
-    }),
+    adminRights: directBotAdminRights(),
     rank: 'BeatGaler',
   }));
 }
@@ -713,7 +715,7 @@ async function restrictBotPinRights(chatId, botId) {
     await masterInfo.client.invoke(new Api.channels.EditAdmin({
       channel: masterInfo.vault,
       userId: entity,
-      adminRights: new Api.ChatAdminRights({ deleteMessages: true, pinMessages: false, other: true }),
+      adminRights: directBotAdminRights(),
       rank: 'BeatGaler',
     }));
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
@@ -1684,6 +1686,112 @@ async function downloadMessageBuffer(chatId, messageId) {
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
+function projectCaption(beatId, sha256) {
+  return `BEATGALER_PROJECT_V1 beat=${beatId} sha256=${sha256}`;
+}
+
+function legacyProjectCaption(beatId, sourceMessageId, partIndex) {
+  return `BEATGALER_LEGACY_PROJECT_V1 beat=${beatId} source=${sourceMessageId} part=${partIndex}`;
+}
+
+async function copyLegacyProjectPartFromClient(client, vault, { beatId, sourceMessageId, partIndex }) {
+    const caption = legacyProjectCaption(beatId, sourceMessageId, partIndex);
+    const source = (await client.getMessages(vault, { ids: [sourceMessageId] }))?.[0];
+    if (!(source?.media?.document instanceof Api.Document)) {
+      throw new ProjectAccessError('Legacy PROJECT document is unavailable.', 'PROJECT_LEGACY_UNAVAILABLE', 503);
+    }
+    const documentId = String(source.media.document.id);
+    const sizeBytes = Number(source.media.document.size);
+    for (const options of [{ search: caption, limit: 100 }, { limit: 100 }]) {
+      for await (const message of client.iterMessages(vault, options)) {
+        if (message?.out === true && String(message.message || '') === caption &&
+            String(message.media?.document?.id || '') === documentId &&
+            Number(message.media.document.size) === sizeBytes) {
+          return { sourceMessageId, messageId: Number(message.id), documentId, sizeBytes, partIndex };
+        }
+      }
+    }
+    const sent = await client.sendFile(vault, {
+      file: source.media, forceDocument: true, caption, workers: 1,
+    });
+    if (!Number.isSafeInteger(Number(sent?.id)) || String(sent?.media?.document?.id || '') !== documentId) {
+      throw new ProjectAccessError('MASTER did not copy the legacy PROJECT.', 'PROJECT_LEGACY_UNAVAILABLE', 503);
+    }
+    return { sourceMessageId, messageId: Number(sent.id), documentId, sizeBytes, partIndex };
+}
+
+async function copyLegacyProjectPart({ chatId, ...input }) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    return await copyLegacyProjectPartFromClient(masterInfo.client, masterInfo.vault, input);
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function verifyLegacyProjectCopy({ chatId, beatId, sourceMessageId, messageId, documentId, sizeBytes, partIndex }) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [messageId] }))?.[0];
+    if (message?.out !== true || String(message.message || '') !== legacyProjectCaption(beatId, sourceMessageId, partIndex) ||
+        !(message.media?.document instanceof Api.Document) ||
+        String(message.media.document.id) !== documentId || Number(message.media.document.size) !== sizeBytes) {
+      throw new ProjectAccessError('MASTER legacy PROJECT copy changed.', 'PROJECT_LEGACY_UNAVAILABLE', 503);
+    }
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, sizeBytes, threadId }) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const sent = await masterInfo.client.sendFile(masterInfo.vault, {
+      file: new CustomFile(path.basename(String(filename || 'project.zip')), sizeBytes, filePath),
+      forceDocument: true,
+      caption: projectCaption(beatId, sha256),
+      ...(Number.isSafeInteger(Number(threadId)) && Number(threadId) > 0 ? { replyTo: Number(threadId) } : {}),
+      workers: 1,
+    });
+    const id = Number(sent?.id || 0);
+    const documentId = String(sent?.media?.document?.id || '');
+    if (!Number.isSafeInteger(id) || id <= 0 || !documentId) {
+      throw new ProjectAccessError('MASTER returned no PROJECT document.', 'PROJECT_BYTES_UNVERIFIED', 503);
+    }
+    return { messageId: id, documentId };
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes }) {
+  const message = (await client.getMessages(vault, { ids: [Number(messageId)] }))?.[0];
+  if (message?.out !== true || String(message?.message || '') !== projectCaption(beatId, sha256) ||
+      !(message?.media?.document instanceof Api.Document) ||
+      String(message.media.document.id) !== String(documentId) ||
+      Number(message.media.document.size) !== Number(sizeBytes)) {
+    throw new ProjectAccessError('MASTER PROJECT document changed or is unavailable.', 'PROJECT_BYTES_UNVERIFIED', 503);
+  }
+  return true;
+}
+
+async function findProjectFile({ chatId, beatId, sha256, sizeBytes }) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const caption = projectCaption(beatId, sha256);
+    for (const options of [{ search: caption, limit: 100 }, { limit: 100 }]) {
+      for await (const message of masterInfo.client.iterMessages(masterInfo.vault, options)) {
+        if (message?.out !== true || String(message?.message || '') !== caption ||
+            !(message?.media?.document instanceof Api.Document) ||
+            Number(message.media.document.size) !== sizeBytes) continue;
+        return { messageId: Number(message.id), documentId: String(message.media.document.id) };
+      }
+    }
+    return null;
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function verifyProjectMessage({ chatId, ...input }) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    return await verifyProjectMediaFromClient(masterInfo.client, masterInfo.vault, input);
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
 async function deleteMessages(chatId, ids) {
   const list = [...new Set((ids || []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
   if (!list.length) return 0;
@@ -1840,6 +1948,14 @@ module.exports = {
   pinExistingIndexMessage,
   restrictBotPinRights,
   downloadMessageBuffer,
+  publishProjectFile,
+  copyLegacyProjectPart,
+  copyLegacyProjectPartFromClient,
+  directBotAdminRights,
+  verifyLegacyProjectCopy,
+  verifyProjectMessage,
+  verifyProjectMediaFromClient,
+  findProjectFile,
   deleteMessages,
   getPinnedMessage,
   readPinnedIndexBuffer,

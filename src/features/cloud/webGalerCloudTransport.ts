@@ -6,6 +6,9 @@ import {
   reserveWebTransportBeat,
   renewWebTransportBeat,
   publishWebTransportIndex,
+  authorizeWebTransportProject,
+  cancelWebTransportBeat,
+  uploadWebTransportProject,
 } from "./webTransportSession";
 import { WebTransportWorkerClient } from "./webTransportWorkerClient";
 import { isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from "./webLibraryBootstrap";
@@ -225,6 +228,7 @@ export class WebGalerCloudTransport {
     input: Omit<WebTransportUploadInput, "threadId"> & { beatName: string },
     onProgress?: (progress: WebTransportProgress) => void,
   ): Promise<WebTransportUploadResult> {
+    if (input.kind === 'PROJECT') throw new Error('PROJECT upload requires an import or edit operation.');
     await this.controller.connect();
     const threadId = await ensureWebTransportTopic(input.beatId, input.beatName);
     return this.controller.withOperation(
@@ -478,6 +482,7 @@ export class WebGalerCloudTransport {
     let reservationTimer: ReturnType<typeof setInterval> | null = null;
     let renewalFailure: unknown = null;
     try {
+      if (files.project) await authorizeWebTransportProject(beat.id, files.project.size, lease, 'commit_import');
       await reserveWebTransportBeat(beat.id, lease);
       reservationTimer = setInterval(() => {
         void renewWebTransportBeat(beat.id, lease).catch(error => { renewalFailure = error; });
@@ -488,8 +493,14 @@ export class WebGalerCloudTransport {
         // outside the authoritative get_index lease under concurrent imports.
         getLibraryIndex: () => this.getLibraryIndex(),
         upload: async (input, progress) => {
+          if (input.kind === 'PROJECT') {
+            await authorizeWebTransportProject(input.beatId, input.file.size, lease, 'commit_import');
+          }
           topic ||= ensureWebTransportTopic(input.beatId, input.beatName);
           const threadId = await topic;
+          if (input.kind === 'PROJECT') {
+            return uploadWebTransportProject({ ...input, threadId }, lease, 'commit_import', progress);
+          }
           return this.uploadOnce({ ...input, threadId }, progress);
         },
         // The pinned INDEX write is equally authoritative: retain the import
@@ -520,6 +531,7 @@ export class WebGalerCloudTransport {
       }
       return result.beat;
     } catch (error) {
+      await cancelWebTransportBeat(beat.id, lease).catch(() => {});
       playTrace("IMPORT_COMMIT_FAILED", {
         error_name: error instanceof Error ? error.name : "unknown",
         total_ms: Date.now() - started,
@@ -545,12 +557,18 @@ export class WebGalerCloudTransport {
     );
     let topic: Promise<number> | null = null;
     try {
+      if (files.PROJECT) await authorizeWebTransportProject(original.id, files.PROJECT.size, lease, 'commit_edit');
       const result = await commitWebBeatEdit(original, updated, files, {
         getLibraryIndex: () => this.worker.getLibraryIndex(),
         upload: async (input, progress) => {
+          if (input.kind === 'PROJECT') {
+            await authorizeWebTransportProject(input.beatId, input.file.size, lease, 'commit_edit');
+          }
           topic ||= ensureWebTransportTopic(input.beatId, input.beatName);
           const threadId = await topic;
-          const uploaded = await this.uploadOnce({ ...input, threadId }, progress);
+          const uploaded = input.kind === 'PROJECT'
+            ? await uploadWebTransportProject({ ...input, threadId }, lease, 'commit_edit', progress)
+            : await this.uploadOnce({ ...input, threadId }, progress);
           return { ...uploaded, thread_id: threadId };
         },
         replaceLibraryIndex: input => this.publishLibraryIndex(input),

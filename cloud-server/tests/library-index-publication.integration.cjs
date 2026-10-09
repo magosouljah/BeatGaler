@@ -158,9 +158,10 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
         assert.equal((await quota.usage('free')).used, 20);
       });
 
-      await t.test('older READY bot pin rights are revoked once before credentials are exposed', async () => {
+      await t.test('older READY bot gains PROJECT media restriction before credentials are exposed', async () => {
         await pool.query("INSERT INTO transport_bots(id) VALUES('bot-a')");
-        await pool.query("UPDATE vaults SET transport_bot_id='bot-a',transport_membership_state='ready' WHERE id='vault-free'");
+        await pool.query(`UPDATE vaults SET transport_bot_id='bot-a',transport_membership_state='ready',
+          index_pin_restricted_bot_id='bot-a' WHERE id='vault-free'`);
         let restrictions = 0;
         const authority = createDirectIndexPinAuthority({ pool, transport: {
           async restrictBotPinRights(chatId, botId) {
@@ -172,6 +173,8 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
         assert.equal(await authority.ensureAll(), 1);
         assert.equal(await authority.ensureAll(), 1);
         assert.equal(restrictions, 1);
+        assert.equal((await pool.query('SELECT project_media_restricted_bot_id FROM vaults WHERE id=$1',
+          ['vault-free'])).rows[0].project_media_restricted_bot_id, 'bot-a');
       });
 
       await t.test('downgraded 21/20 library remains editable while all new identities are denied', async () => {

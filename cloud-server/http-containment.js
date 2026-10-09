@@ -18,6 +18,7 @@ const INSTALLATION_POST_ROUTES = new Set([
   "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
   "/transport/session/stop", "/transport/operation/begin", "/transport/capability/authorize", "/transport/operation/end", "/transport/operation/renew",
   "/transport/index/commit", "/transport/index/publish", "/transport/quota/reserve", "/transport/quota/renew",
+  "/transport/quota/cancel", "/transport/project/authorize", "/transport/project/upload",
   "/transport/routing/reconcile", "/transport/topic/ensure", "/transport/upload/confirm",
   "/beats/delete-topic", "/beats/delete-topics-batch",
 ]);
@@ -421,6 +422,8 @@ function installHttpContainment(express, options = {}) {
     if (routePath === "/auth/oauth/start") return originalPost.call(this, routePath, containment.guardOAuthStart, ...handlers);
     if (routePath === "/auth/oauth/poll") return originalPost.call(this, routePath, containment.guardOAuthPoll, containment.bindSessionOnSuccess, ...handlers);
     if (routePath === "/auth/logout") return originalPost.call(this, routePath, containment.logoutSession, ...handlers);
+    if (routePath === "/transport/project/upload") return originalPost.call(this, routePath,
+      containment.installationOwner, containment.preUpload, ...handlers);
     if (UPLOAD_ROUTES.has(routePath) && handlers.length >= 2) return originalPost.call(this, routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
     if (BODY_OWNER_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.bodyOwner, ...handlers);
     if (routePath === "/beats/delete-topic") return originalPost.call(this, routePath, containment.beatTopicOwner, ...handlers);

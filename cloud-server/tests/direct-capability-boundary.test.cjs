@@ -114,11 +114,13 @@ test("STEP 4 transport writes require the same installation owner boundary as IN
   } };
   installHttpContainment(express);
   for (const route of ["/transport/index/commit", "/transport/index/publish",
-    "/transport/quota/reserve", "/transport/quota/renew"]) {
+    "/transport/quota/reserve", "/transport/quota/renew", "/transport/quota/cancel",
+    "/transport/project/authorize", "/transport/project/upload"]) {
     express.application.post(route, () => {});
   }
   const ownerBoundary = routes.get("/transport/index/commit")[0];
-  for (const route of ["/transport/index/publish", "/transport/quota/reserve", "/transport/quota/renew"]) {
+  for (const route of ["/transport/index/publish", "/transport/quota/reserve", "/transport/quota/renew",
+    "/transport/quota/cancel", "/transport/project/authorize", "/transport/project/upload"]) {
     assert.equal(routes.get(route)[0], ownerBoundary, `${route} must bind the installation before capability checks`);
   }
 });

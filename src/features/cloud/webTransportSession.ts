@@ -4,6 +4,7 @@ import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession
 import { readWebCsrfToken } from "../auth/webSessionBootstrap";
 import { getWebClientId } from "../../platform/webClientId";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
+import type { WebTransportProgress, WebTransportUploadResult } from "./webTransportWorkerProtocol";
 import {
   prepareWebTempAuth,
   type TempAuthBinding,
@@ -194,7 +195,8 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
     const csrf = readWebCsrfToken();
     if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
     const controller = new AbortController();
-    const timeoutMs = path === '/transport/index/publish' ? 180_000 : WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS;
+    const timeoutMs = path === '/transport/index/publish' || path === '/transport/session/start'
+      ? 30 * 60_000 : WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`${getResolvedCloudApiBase()}${path}`, {
@@ -530,6 +532,70 @@ export async function renewWebTransportBeat(beatId: string, lease: IndexPublicat
     operationId: lease.operationId,
     kind: 'commit_import',
     scope: { objectType: 'beat', objectIds: [beatId] },
+  });
+}
+
+export async function cancelWebTransportBeat(beatId: string, lease: IndexPublicationLease): Promise<void> {
+  await transportRequest('/transport/quota/cancel', {
+    beatId, sessionId: lease.sessionId, generation: lease.generation,
+    operationId: lease.operationId, kind: 'commit_import',
+    scope: { objectType: 'beat', objectIds: [beatId] },
+  });
+}
+
+export async function authorizeWebTransportProject(
+  beatId: string, declaredBytes: number, lease: IndexPublicationLease, kind: 'commit_import' | 'commit_edit',
+): Promise<void> {
+  await transportRequest('/transport/project/authorize', {
+    beatId, declaredBytes, sessionId: lease.sessionId, generation: lease.generation,
+    operationId: lease.operationId, kind,
+    scope: { objectType: 'beat', objectIds: [beatId] },
+  });
+}
+
+export function uploadWebTransportProject(
+  input: { file: File; filename: string; beatId: string; threadId: number },
+  lease: IndexPublicationLease,
+  kind: 'commit_import' | 'commit_edit',
+  onProgress?: (progress: WebTransportProgress) => void,
+): Promise<WebTransportUploadResult> {
+  const token = getBeatGalerAuthToken();
+  if (!token) return Promise.reject(new Error('Session expired. Sign in again.'));
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${getResolvedCloudApiBase()}/transport/project/upload`);
+    xhr.withCredentials = true;
+    xhr.timeout = 30 * 60_000;
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.setRequestHeader('X-BeatGaler-Project-Operation', lease.operationId);
+    xhr.setRequestHeader('X-BeatGaler-Project-Session', lease.sessionId);
+    xhr.setRequestHeader('X-BeatGaler-Project-Generation', String(lease.generation));
+    xhr.setRequestHeader('X-BeatGaler-Project-Beat', input.beatId);
+    xhr.setRequestHeader('X-BeatGaler-Project-Kind', kind);
+    xhr.setRequestHeader('X-BeatGaler-Project-Thread', String(input.threadId));
+    const csrf = readWebCsrfToken();
+    if (csrf) xhr.setRequestHeader('X-BeatGaler-CSRF', csrf);
+    xhr.upload.onprogress = event => onProgress?.({ uploadedBytes: Math.min(input.file.size, event.loaded), totalBytes: input.file.size });
+    xhr.onload = () => {
+      let payload: Record<string, unknown> = {};
+      try { payload = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>; } catch { /* handled below */ }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(String(payload.error || `Galer Cloud HTTP ${xhr.status}`)));
+        return;
+      }
+      const result = payload as unknown as WebTransportUploadResult;
+      if (!Number.isSafeInteger(result.telegram_message_id) || result.original_size !== input.file.size) {
+        reject(new Error('Galer Cloud PROJECT byte confirmation is invalid.'));
+        return;
+      }
+      onProgress?.({ uploadedBytes: input.file.size, totalBytes: input.file.size });
+      resolve(result);
+    };
+    xhr.onerror = () => reject(new Error('Galer Cloud PROJECT upload failed. Please retry.'));
+    xhr.ontimeout = () => reject(new Error('Galer Cloud PROJECT upload timed out. Please retry.'));
+    const form = new FormData();
+    form.append('file', input.file, input.filename);
+    xhr.send(form);
   });
 }
 

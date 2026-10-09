@@ -9,14 +9,16 @@ function createDirectIndexPinAuthority({ pool, transport }) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const row = (await client.query(`SELECT transport_bot_id,index_pin_restricted_bot_id
+      const row = (await client.query(`SELECT transport_bot_id,index_pin_restricted_bot_id,project_media_restricted_bot_id
           FROM vaults WHERE telegram_chat_id=$1 FOR UPDATE`, [String(chatId)])).rows[0];
       if (!row || String(row.transport_bot_id) !== String(botId)) {
         throw new Error('INDEX pin restriction does not match the assigned bot.');
       }
-      if (String(row.index_pin_restricted_bot_id || '') !== String(botId)) {
+      if (String(row.index_pin_restricted_bot_id || '') !== String(botId) ||
+          String(row.project_media_restricted_bot_id || '') !== String(botId)) {
         await transport.restrictBotPinRights(chatId, botId);
-        await client.query(`UPDATE vaults SET index_pin_restricted_bot_id=$2,index_pin_restricted_at=now()
+        await client.query(`UPDATE vaults SET index_pin_restricted_bot_id=$2,project_media_restricted_bot_id=$2,
+            index_pin_restricted_at=now()
             WHERE telegram_chat_id=$1`, [String(chatId), String(botId)]);
       }
       await client.query('COMMIT');
