@@ -3,7 +3,7 @@
 const { BILLING_V1_ACCESS_CATALOG, resolveBillingAccess } = require('./billing-access-resolver');
 const { publicPlanState, publicPlanCatalog } = require('./plans');
 
-function publicPlanFromAccess(access) {
+function publicPlanFromAccess(access, initialCheckoutAllowed = false) {
   const source = access.accessSources
     .filter(item => item.planId === access.effectivePlanId)
     .reduce((longest, item) => item.validUntil > longest.validUntil ? item : longest, access.accessSources[0]);
@@ -42,6 +42,7 @@ function publicPlanFromAccess(access) {
     effective_plan_id: access.effectivePlanId,
     label: access.label,
     effective_until: source.validUntil,
+    initial_checkout_allowed: initialCheckoutAllowed,
     access_source: source.source || source.mode,
     entitlements: access.capabilities,
     quotas: access.quotas,
@@ -50,24 +51,29 @@ function publicPlanFromAccess(access) {
 }
 
 function createAccessRuntime({ pool = null, now = Date.now } = {}) {
-  async function resolveUserAccess(user) {
-    if (!pool) return null;
+  async function loadUserAccess(user) {
     const userId = String(user?.id || '').trim();
     if (!userId) throw new Error('Access requires an authenticated user.');
     const [subscriptionResult, grantsResult] = await Promise.all([
       pool.query('SELECT * FROM billing_subscription_state WHERE user_id=$1', [userId]),
       pool.query('SELECT * FROM entitlements WHERE user_id=$1 ORDER BY starts_at,id', [userId]),
     ]);
-    return resolveBillingAccess({
-      subscription: subscriptionResult.rows[0] || null,
-      grants: grantsResult.rows,
-      now: now(),
-    });
+    const subscription = subscriptionResult.rows[0] || null;
+    return {
+      access: resolveBillingAccess({ subscription, grants: grantsResult.rows, now: now() }),
+      initialCheckoutAllowed: !subscription?.provider_subscription_id ||
+        (subscription.ended_at && new Date(subscription.ended_at).getTime() <= now()),
+    };
+  }
+  async function resolveUserAccess(user) {
+    if (!pool) return null;
+    return (await loadUserAccess(user)).access;
   }
 
   async function resolveUserPlan(user) {
     if (!pool) return publicPlanState(user); // JSON-only legacy development mode.
-    return publicPlanFromAccess(await resolveUserAccess(user));
+    const { access, initialCheckoutAllowed } = await loadUserAccess(user);
+    return publicPlanFromAccess(access, Boolean(initialCheckoutAllowed));
   }
 
   function planCatalog() {

@@ -106,7 +106,10 @@ function createWebBillingRuntime({ env = process.env, adapterFactory = createPol
 
   return Object.freeze({
     initialize,
-    planCatalog: () => publicPlanCatalog(catalog),
+    planCatalog: () => publicPlanCatalog(catalog).map(plan => ({
+      ...plan,
+      checkout_available: ready && Boolean(plan.price.offer_id),
+    })),
     status: () => ({ ready, failureCode }),
     // STEP 8 can inject this exact validated adapter into the durable checkout service.
     provider,

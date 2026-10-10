@@ -48,6 +48,7 @@ test('Web catalog publishes the exact V1 prices and quotas without provider conf
     ['free', 0, 20], ['paid_entry', 699, 100], ['highest_paid', 1199, null],
   ]);
   assert.deepEqual(plans.map(plan => plan.price.interval), [null, 'month', 'month']);
+  assert.deepEqual(plans.map(plan => plan.checkout_available), [false, false, false]);
   assert.equal(JSON.stringify(plans).includes('productId'), false);
   assert.equal(JSON.stringify(plans).includes('priceId'), false);
   assert.equal(JSON.stringify(plans).includes('youtube'), false);
@@ -72,6 +73,7 @@ test('one validated sandbox adapter serves both monthly offers and cannot sell a
   assert.throws(() => runtime.getCheckoutOffer({ offerId: 'paid_entry_monthly_v1', productId: 'attacker' }),
     { code: 'WEB_BILLING_OFFER_INVALID' });
   const plans = runtime.planCatalog();
+  assert.deepEqual(plans.map(plan => plan.checkout_available), [false, true, true]);
   assert.equal(JSON.stringify(plans).includes('polar_oat_private_test'), false);
   assert.equal(JSON.stringify(plans).includes('prod_entry'), false);
   assert.equal(JSON.stringify(plans).includes('price_entry'), false);

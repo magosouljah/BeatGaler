@@ -66,6 +66,7 @@ export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";
 export interface BeatGalerPlanDefinition {
   id: BeatGalerPlanId;
   label: string;
+  checkout_available?: boolean;
   price?: { amount_minor: number; currency: string; interval: "month" | null; offer_id: string | null };
   entitlements: { upload_project: boolean; early_access: boolean };
   quotas: {
@@ -87,6 +88,7 @@ export interface BeatGalerAccount {
   plan?: {
     base_plan_id: BeatGalerPlanId;
     effective_plan_id: BeatGalerPlanId;
+    initial_checkout_allowed?: boolean;
     label: string;
     effective_until?: number | null;
     access_source?: string;
@@ -102,13 +104,14 @@ export interface BeatGalerAccount {
     referral?: { rewarded_referrals_per_month: number; reward_plan_id: string; reward_days: number };
     access?: {
       commercialPlanId: BeatGalerPlanId;
+      commercialAccessPlanId?: BeatGalerPlanId | null;
       commercialAccessState: string;
       effectivePlanId: BeatGalerPlanId;
       capabilities: BeatGalerPlanDefinition["entitlements"];
       quotas: BeatGalerPlanDefinition["quotas"];
       accessSources: Array<{ type: string; mode: string; planId: BeatGalerPlanId; validUntil: number | null }>;
       nextRecalculationAt: number | null;
-      billing: { paidThrough: number | null; graceUntil: number | null; cancelAtPeriodEnd: boolean; nextPlanId: BeatGalerPlanId | null; nextPlanEffectiveAt: number | null };
+      billing: { paidThrough: number | null; graceUntil: number | null; cancelAtPeriodEnd: boolean; nextPlanId: BeatGalerPlanId | null; nextPlanEffectiveAt: number | null; providerStatus?: string | null; endedAt?: number | null };
     };
   };
   providers?: {
@@ -306,6 +309,17 @@ export async function getBeatGalerAccountInfo(): Promise<BeatGalerAccount> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
   return (await authRequest("/auth/account", {}, token)).user;
+}
+
+export async function getBeatGalerCurrentPlan(): Promise<NonNullable<BeatGalerAccount["plan"]>> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const base = await resolveBeatGalerCloudApi();
+  const headers: Record<string, string> = {};
+  if (!(platform.kind === "web" && token === BROWSER_SESSION_SENTINEL)) headers.Authorization = `Bearer ${token}`;
+  const result = await fetchJson(`${base}/plans/me`, { headers, credentials: platform.kind === "web" ? "include" : "same-origin" });
+  if (!result?.plan?.effective_plan_id) throw new Error("Current plan is unavailable.");
+  return result.plan;
 }
 
 export async function listBeatGalerSessions(): Promise<BeatGalerSessionInfo[]> {

@@ -53,6 +53,7 @@ test('A/G: resolver, /plans/me and Account share one answer despite stale basePl
   assert.equal(plan.quotas.max_beats, 20);
   assert.equal(plan.entitlements.upload_project, false);
   assert.equal(plan.access.effectivePlanId, 'free');
+  assert.equal(plan.initial_checkout_allowed, true);
 });
 
 test('B: Free plus welcome grant is Paid Entry everywhere', async () => {
@@ -92,6 +93,15 @@ test('E: grace has one temporal access state and quota', async () => {
   assert.equal(plan.quotas.max_beats, 100);
 });
 
+test('initial checkout availability follows the live subscription row without exposing provider IDs', async () => {
+  const subscription = { plan_id: 'paid_entry', status: 'active', provider_subscription_id: 'private_sub', paid_through: NOW + DAY };
+  const active = await observe({ subscription });
+  assert.equal(active.initial_checkout_allowed, false);
+  assert.equal(JSON.stringify(active).includes('private_sub'), false);
+  const ended = await observe({ subscription: { ...subscription, ended_at: NOW - DAY }, now: NOW + DAY });
+  assert.equal(ended.initial_checkout_allowed, true);
+});
+
 test('F: revoked and expired grants cannot grant access', async () => {
   const grants = [
     { id: 'revoked', source: 'support', plan_id: 'highest_paid', starts_at: NOW - DAY, expires_at: NOW + DAY, revoked_at: NOW - 1 },
@@ -113,14 +123,15 @@ test('Account serializer and production routes consume the same Access entrypoin
   assert.match(source, /app\.get\("\/plans\/me",\s*createPlanMeHandler/);
   assert.match(source, /app\.post\("\/auth\/account",\s*createAccountHandler/);
   assert.match(source, /app\.get\("\/plans\/catalog",\s*createPlanCatalogHandler/);
-  assert.match(source, /webPlanCatalog:\s*webBillingRuntime\.planCatalog/);
+  assert.match(source, /webPlanCatalog:\s*\(\) => webBillingRuntime\.planCatalog\(\)\.map/);
   assert.match(source, /legacyPlanCatalog:\s*accessRuntime\.planCatalog/);
   assert.match(entry, /accessRuntime\.configure\(\{ pool: cutover\.authority === 'postgres' \? pool : null \}\)/);
   const settings = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'components', 'SettingsPanel.tsx'), 'utf8');
-  assert.match(settings, /account\?\.plan\?\.effective_plan_id === plan\.id/);
-  assert.match(settings, /plan\.price\.amount_minor/);
+  assert.match(settings, /currentPlan\?\.effective_plan_id === plan\.id/);
+  const presentation = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'components', 'billingPresentation.ts'), 'utf8');
+  assert.match(presentation, /plan\.price\.amount_minor/);
   assert.doesNotMatch(settings, /(?:6\.99|11\.99)/);
-  assert.match(settings, /account\?\.plan\?\.access\?\.commercialAccessState === "grace"/);
+  assert.match(presentation, /commercialAccessState === "grace"/);
   assert.doesNotMatch(settings, /base_plan_id/);
   const access = createAccessRuntime({ pool: { query: async () => ({ rows: [] }) }, now: () => NOW });
   const payload = await accountPublicPayload(user, 'session', { resolveUserPlan: access.resolveUserPlan, userProvider: () => null });

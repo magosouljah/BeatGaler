@@ -9,9 +9,10 @@ import type {
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import {
   beginMfaSetup, changeBeatGalerEmail, changeBeatGalerPassword, disableMfa, disconnectOAuthProvider,
-  enableMfa, getBeatGalerAccountInfo, getBeatGalerPlanCatalog, devSwitchBeatGalerPlan, startBeatGalerCheckout, oauthBeatGalerAccount,
+  enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, devSwitchBeatGalerPlan, startBeatGalerCheckout, oauthBeatGalerAccount,
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
 } from "./AccountGate";
+import { planFeatures, planPrice, planStatus } from "./billingPresentation";
 
 interface Props {
   currentFolder: string | null;
@@ -89,6 +90,12 @@ export default function SettingsPanel(props: Props) {
   const [accountError, setAccountError] = useState<string | null>(null);
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [planCatalog, setPlanCatalog] = useState<BeatGalerPlanDefinition[]>([]);
+  const [currentPlan, setCurrentPlan] = useState<BeatGalerAccount["plan"] | null>(null);
+  const [planLoading, setPlanLoading] = useState(true);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState(false);
+  const [billingReturn, setBillingReturn] = useState(false);
   const [planSwitching, setPlanSwitching] = useState<BeatGalerPlanId | null>(null);
   const [email, setEmail] = useState("");
   const [confirmEmail, setConfirmEmail] = useState("");
@@ -112,13 +119,34 @@ export default function SettingsPanel(props: Props) {
   ];
 
   const refreshAccount = async () => {
-    try { const value = await getBeatGalerAccountInfo(); setAccount(value); }
+    try { const value = await getBeatGalerAccountInfo(); setAccount(value); setAccountError(null); }
     catch (e: any) { setAccountError(String(e?.message || e)); }
+  };
+
+  const refreshPlan = async () => {
+    setPlanLoading(true);
+    try { setCurrentPlan(await getBeatGalerCurrentPlan()); setPlanError(null); }
+    catch { setCurrentPlan(null); setPlanError("Current plan is unavailable. Retry to check your access."); }
+    finally { setPlanLoading(false); }
+  };
+
+  const refreshCatalog = async () => {
+    setCatalogLoading(true);
+    try { setPlanCatalog(await getBeatGalerPlanCatalog()); setCatalogError(false); }
+    catch { setPlanCatalog([]); setCatalogError(true); }
+    finally { setCatalogLoading(false); }
   };
 
   useEffect(() => {
     void refreshAccount();
-    getBeatGalerPlanCatalog().then(setPlanCatalog).catch(console.error);
+    void refreshPlan();
+    void refreshCatalog();
+    if (platform.kind === "web" && new URLSearchParams(window.location.search).get("billing") === "success") {
+      setBillingReturn(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("billing");
+      window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    }
     if (platform.capabilities.trashLifecycle) {
       platform.trash.listBeats().then(setTrashItems).catch(console.error).finally(() => setLoadingTrash(false));
       if (platform.capabilities.localHelper) {
@@ -251,7 +279,7 @@ export default function SettingsPanel(props: Props) {
     finally { setPlanSwitching(null); }
   };
   const startCheckout = async (plan: BeatGalerPlanDefinition) => {
-    if (!account || !plan.price?.offer_id) return;
+    if (!account || !currentPlan?.initial_checkout_allowed || !plan.price?.offer_id) return;
     setPlanSwitching(plan.id); setAccountStatus(null);
     const key = `beatgaler:checkout:${account.id}:${plan.price.offer_id}`;
     let requestId = localStorage.getItem(key);
@@ -264,7 +292,9 @@ export default function SettingsPanel(props: Props) {
       window.location.assign(checkout.url);
     } catch (e: any) {
       if (e?.state === "FAILED" || e?.code === "BILLING_CHECKOUT_FAILED") localStorage.removeItem(key);
-      setAccountStatus(null, sanitizeUserVisibleText(String(e?.message || e)));
+      setAccountStatus(null, e?.code === "BILLING_CHECKOUT_SUBSCRIBER_PORTAL_REQUIRED"
+        ? "Subscription changes are not yet available in Web."
+        : "Checkout could not be opened. Please try again later.");
       setPlanSwitching(null);
     }
   };
@@ -374,6 +404,11 @@ export default function SettingsPanel(props: Props) {
 
           {card(<><div style={{ fontSize: 14, fontWeight: 600 }}>Multi-factor authentication</div><div style={{ color: "#5d5d5d", fontSize: 11, marginTop: 4, lineHeight: 1.5 }}>Use a 6-digit code from an authenticator app when signing in with your BeatGaler password.</div>{!account?.mfa_enabled && !mfaSecret && <button disabled={accountBusy} onClick={() => void beginMfa()} style={{ ...buttonStyle, marginTop: 12 }}>Enable MFA</button>}{mfaSecret && <div style={{ marginTop: 14, padding: 14, borderRadius: 9, background: "#181818", border: "1px solid #242424" }}><div style={{ color: "#aaa", fontSize: 11 }}>Add this secret to your authenticator app:</div><div style={{ marginTop: 8, padding: 9, borderRadius: 6, background: "#0d0d0d", color: "#eee", fontFamily: "monospace", wordBreak: "break-all", userSelect: "text" }}>{mfaSecret}</div><input inputMode="numeric" maxLength={6} placeholder="6-digit code" value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={{ ...fieldStyle, marginTop: 9 }}/><button disabled={accountBusy || mfaCode.length !== 6} onClick={() => void confirmMfa()} style={{ ...buttonStyle, marginTop: 9 }}>Confirm and enable</button></div>}{account?.mfa_enabled && <div style={{ marginTop: 12 }}><div style={{ color: "#7b9b7b", fontSize: 11 }}>MFA is enabled.</div>{!showDisableMfaConfirm ? <button disabled={accountBusy} onClick={() => { setMfaCode(""); setShowDisableMfaConfirm(true); }} style={{ ...buttonStyle, marginTop: 10, color: "#c98787" }}>Disable MFA</button> : <div style={{ marginTop: 10, padding: 12, border: "1px solid #2a2222", background: "#151111", borderRadius: 8 }}><div style={{ color: "#777", fontSize: 10, lineHeight: 1.45, marginBottom: 8 }}>Confirm disabling MFA with one current authenticator code.</div><input autoFocus inputMode="numeric" maxLength={6} placeholder="6-digit authenticator code" value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={fieldStyle}/><div style={{ display: "flex", gap: 8, marginTop: 8 }}><button disabled={accountBusy || mfaCode.length !== 6} onClick={() => void turnOffMfa()} style={{ ...buttonStyle, color: "#c98787" }}>Confirm disable</button><button disabled={accountBusy} onClick={() => { setMfaCode(""); setShowDisableMfaConfirm(false); }} style={buttonStyle}>Cancel</button></div></div>}</div>}</>)}
 
+          {card(<><div style={{ fontSize: 14, fontWeight: 600 }}>Current access</div>
+            {account?.plan ? <><div data-testid="account-current-plan" style={{ marginTop: 8, fontSize: 13 }}>{account.plan.label}</div>{planStatus(account.plan, planCatalog).map(line => <div key={line} style={{ marginTop: 5, color: "#888", fontSize: 11 }}>{line}</div>)}{accountError && <div style={{ marginTop: 8, color: "#d69a9a", fontSize: 11 }}>Could not refresh account access. Showing the last known state.</div>}</> : <div style={{ marginTop: 8, color: "#777", fontSize: 11 }}>Account access unavailable.</div>}
+            <button onClick={() => setActive("plan")} style={{ ...buttonStyle, marginTop: 12 }}>View plans</button>
+          </>)}
+
           {accountMessage && <div style={{ marginBottom: 14, color: "#83a783", fontSize: 11 }}>{accountMessage}</div>}{accountError && <div style={{ marginBottom: 14, padding: 10, border: "1px solid #542020", background: "#241010", borderRadius: 8, color: "#e6a0a0", fontSize: 11 }}>{sanitizeUserVisibleText(accountError)}</div>}
           <button disabled={accountBusy} onClick={() => void onDisconnectTelegram()} style={{ ...buttonStyle, width: "100%", color: "#c98787" }}>Sign out of BeatGaler</button>
         </>}
@@ -381,68 +416,56 @@ export default function SettingsPanel(props: Props) {
         {active === "plan" && <>
           {title("Plan", "Manage your BeatGaler access.")}
 
+          {billingReturn && <div role="status" style={{ marginBottom: 14, padding: 12, border: "1px solid #30302a", borderRadius: 9, color: "#bcbcae", fontSize: 11 }}>Checkout returned. Checking your access with the server; payment processing may still be underway. <button onClick={() => { void refreshPlan(); void refreshAccount(); }} style={{ ...buttonStyle, marginLeft: 8 }}>Refresh status</button></div>}
+
           <div style={{ marginBottom: 22, padding: "18px 20px", border: "1px solid #252525", borderRadius: 13, background: "#151515", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18 }}>
             <div>
               <div style={{ fontSize: 10, color: "#606060", letterSpacing: .7 }}>CURRENT PLAN</div>
-              <div style={{ marginTop: 6, fontSize: 22, color: "#f0f0f0", fontWeight: 700 }}>{account?.plan?.label || "Free"}</div>
-              <div style={{ marginTop: 5, color: "#666", fontSize: 10 }}>
-                {account?.plan?.access?.commercialAccessState === "grace" && account.plan.access.billing.graceUntil
-                  ? `Payment grace through ${new Date(account.plan.access.billing.graceUntil).toLocaleDateString()}`
-                  : account?.plan?.effective_until
-                    ? `Current access through ${new Date(account.plan.effective_until).toLocaleDateString()}`
-                    : "Your plan is synced with your BeatGaler account."}
-              </div>
+              <div data-testid="settings-current-plan" style={{ marginTop: 6, fontSize: 22, color: "#f0f0f0", fontWeight: 700 }}>{currentPlan?.label || (planLoading ? "Checking access…" : "Plan unavailable")}</div>
+              {currentPlan && planStatus(currentPlan, planCatalog).map(line => <div key={line} style={{ marginTop: 5, color: "#999", fontSize: 11 }}>{line}</div>)}
+              {planError && <div role="alert" style={{ marginTop: 8, color: "#d69a9a", fontSize: 11 }}>{planError} <button onClick={() => void refreshPlan()} style={buttonStyle}>Retry</button></div>}
             </div>
             <div style={{ textAlign: "right", color: "#555", fontSize: 10, lineHeight: 1.55 }}>
-              {account?.plan?.quotas.max_beats == null ? "Unlimited beats" : `${account?.plan?.quotas.max_beats ?? 20} beats`}<br/>
-              {account?.plan?.entitlements.upload_project ? "PROJECT upload included" : "PROJECT upload not included"}
+              {currentPlan && !planError && <>{currentPlan.quotas.max_beats === null ? "Unlimited beats" : `Up to ${currentPlan.quotas.max_beats} beats`}<br/>
+              {currentPlan.entitlements.upload_project ? "PROJECT uploads available" : "New PROJECT uploads unavailable"}</>}
             </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, margin: "0 0 12px" }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "#e8e8e8" }}>All plans</div>
-              <div style={{ marginTop: 3, fontSize: 10, color: "#555" }}>{platform.kind === "web" ? "Paid plans open a secure Polar Sandbox checkout. Access changes only after payment confirmation." : "Buttons simulate plan changes for testing."}</div>
+              <div style={{ marginTop: 3, fontSize: 10, color: "#777" }}>{platform.kind === "web" ? "Paid plans use secure checkout. Access changes after payment confirmation." : "Buttons simulate plan changes for testing."}</div>
             </div>
             {platform.kind !== "web" && <div style={{ fontSize: 9, letterSpacing: .6, color: "#7a6546", border: "1px solid #3a3021", background: "#19150f", borderRadius: 999, padding: "4px 7px" }}>DEV ONLY</div>}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, alignItems: "stretch" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, alignItems: "stretch" }}>
             {(planCatalog.length ? planCatalog : []).map(plan => {
-              const current = account?.plan?.effective_plan_id === plan.id;
+              const current = currentPlan?.effective_plan_id === plan.id;
               const featured = plan.id === "paid_entry";
-              const projectMb = plan.quotas.max_project_zip_bytes == null ? "Unlimited" : plan.quotas.max_project_zip_bytes >= 1024 * 1024 * 1024 ? `${(plan.quotas.max_project_zip_bytes / 1024 / 1024 / 1024).toFixed(plan.id === "highest_paid" ? 1 : 0)} GB PROJECT` : `${Math.round(plan.quotas.max_project_zip_bytes / 1024 / 1024)} MB PROJECT`;
-              const features = [
-                plan.quotas.max_beats == null ? "Unlimited beats" : `${plan.quotas.max_beats} beats`,
-                projectMb,
-                plan.entitlements.upload_project ? "PROJECT upload" : "No PROJECT upload",
-              ];
+              const features = planFeatures(plan);
+              const canCheckout = platform.kind === "web" && !planLoading && !planError && currentPlan?.initial_checkout_allowed === true && account?.id && plan.id !== "free" && plan.checkout_available === true && !!plan.price?.offer_id;
               return <div key={plan.id} style={{ position: "relative", minHeight: 310, padding: "17px 16px 15px", borderRadius: 13, border: featured ? "1px solid #5a5a5a" : "1px solid #262626", background: featured ? "#181818" : "#141414", boxShadow: featured ? "0 0 0 1px #1e1e1e inset" : "none", display: "flex", flexDirection: "column" }}>
                 {featured && <div style={{ position: "absolute", top: 13, right: 13, fontSize: 8, fontWeight: 700, letterSpacing: .55, color: "#cfcfcf", background: "#292929", borderRadius: 999, padding: "4px 7px" }}>POPULAR</div>}
                 <div style={{ paddingRight: featured ? 58 : 0, fontSize: 15, color: "#eee", fontWeight: 700 }}>{plan.label}</div>
-                {plan.price && <div style={{ marginTop: 5, color: "#cfcfcf", fontSize: 12, fontWeight: 600 }}>{plan.price.amount_minor === 0 ? "Free" : `${plan.price.currency.toUpperCase()} ${(plan.price.amount_minor / 100).toFixed(2)} / month`}</div>}
-                <div style={{ marginTop: 5, minHeight: 27, fontSize: 9.5, color: "#5c5c5c", lineHeight: 1.45 }}>{plan.id === "free" ? "Start your library." : plan.id === "paid_entry" ? "For producers building every day." : "Maximum BeatGaler access."}</div>
-                <button disabled={current || planSwitching !== null || (platform.kind === "web" && !plan.price?.offer_id)} onClick={() => void (platform.kind === "web" ? startCheckout(plan) : switchPlanForTesting(plan.id))} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
-                  {current ? "Current plan" : planSwitching === plan.id ? "Opening…" : platform.kind === "web" && plan.id === "free" ? "Free plan" : plan.id === "free" ? "Switch to Free" : "Choose plan"}
+                {planPrice(plan) && <div style={{ marginTop: 5, color: "#cfcfcf", fontSize: 12, fontWeight: 600 }}>{planPrice(plan)}</div>}
+                <div style={{ marginTop: 5, minHeight: 27, fontSize: 9.5, color: "#5c5c5c", lineHeight: 1.45 }}>{current ? "Your current access" : ""}</div>
+                <button disabled={current || planSwitching !== null || (platform.kind === "web" && !canCheckout)} onClick={() => void (platform.kind === "web" ? startCheckout(plan) : switchPlanForTesting(plan.id))} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null || (platform.kind === "web" && !canCheckout) ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
+                  {current ? "Current plan" : planSwitching === plan.id ? "Opening…" : platform.kind === "web" && plan.id === "free" ? "Free plan" : platform.kind === "web" && currentPlan?.initial_checkout_allowed === false ? "Subscription changes unavailable in Web" : platform.kind === "web" && !canCheckout ? "Checkout unavailable" : plan.id === "free" ? "Switch to Free" : "Choose plan"}
                 </button>
                 <div style={{ height: 1, background: "#222", margin: "15px 0 11px" }}/>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {features.map((feature, index) => <div key={feature} style={{ display: "flex", alignItems: "flex-start", gap: 7, color: index >= 2 && feature.startsWith("No ") ? "#4d4d4d" : "#929292", fontSize: 9.5, lineHeight: 1.35 }}><span style={{ color: index >= 2 && feature.startsWith("No ") ? "#3f3f3f" : "#6f6f6f", lineHeight: 1 }}>•</span><span>{feature}</span></div>)}
-                </div>
-                <div style={{ marginTop: "auto", paddingTop: 13, fontSize: 8.5, color: "#484848" }}>
-                  {plan.quotas.max_active_devices !== undefined && plan.quotas.max_simultaneous_sessions !== undefined ? <>{plan.quotas.max_active_devices == null ? "Unlimited devices" : `${plan.quotas.max_active_devices} devices`} · {plan.quotas.max_simultaneous_sessions} simultaneous {plan.quotas.max_simultaneous_sessions === 1 ? "session" : "sessions"}</> : null}
-                  {plan.entitlements.early_access ? " · Early Access" : ""}
+                  {features.map(feature => <div key={feature} style={{ display: "flex", alignItems: "flex-start", gap: 7, color: "#929292", fontSize: 9.5, lineHeight: 1.35 }}><span style={{ color: "#6f6f6f", lineHeight: 1 }}>•</span><span>{feature}</span></div>)}
                 </div>
               </div>;
             })}
           </div>
 
-          {planCatalog.length === 0 && <div style={{ padding: 18, border: "1px solid #232323", borderRadius: 12, color: "#555", fontSize: 11 }}>Loading plans…</div>}
+          {planCatalog.length === 0 && <div role={catalogError ? "alert" : undefined} style={{ padding: 18, border: "1px solid #232323", borderRadius: 12, color: "#aaa", fontSize: 11 }}>{catalogLoading ? "Loading plans…" : "Plan catalog unavailable. Prices and checkout cannot be shown."}{catalogError && <button onClick={() => void refreshCatalog()} style={{ ...buttonStyle, marginLeft: 10 }}>Retry</button>}</div>}
 
-          <div style={{ marginTop: 16, padding: "13px 15px", borderRadius: 11, border: "1px solid #242424", background: "#131313" }}>
-            <div style={{ fontSize: 11, color: "#aaa", fontWeight: 600 }}>Free days</div>
-            <div style={{ marginTop: 4, color: "#565656", fontSize: 9.5, lineHeight: 1.55 }}>New users receive 7 days of Paid Entry. Eligible codes can add temporary plan days to existing accounts. Code redemption is architecture-only for now.</div>
-          </div>
+          {platform.kind === "web" && currentPlan?.initial_checkout_allowed === false && <div style={{ marginTop: 14, color: "#999", fontSize: 11 }}>Subscription changes are not yet available in Web. Your current and scheduled access is shown above.</div>}
+
+          {platform.kind === "web" && <div style={{ marginTop: 14, color: "#888", fontSize: 11, lineHeight: 1.6 }}>Changing to a lower plan does not delete existing beats or PROJECT files. Existing PROJECT files remain available to read and download. If your library exceeds the new beat limit, new beat creation pauses until you are below that limit.</div>}
 
           {accountMessage && <div style={{ marginTop: 12, color: "#83a783", fontSize: 10 }}>{accountMessage}</div>}
           {accountError && <div style={{ marginTop: 12, padding: 10, border: "1px solid #542020", background: "#241010", borderRadius: 8, color: "#e6a0a0", fontSize: 10 }}>{sanitizeUserVisibleText(accountError)}</div>}

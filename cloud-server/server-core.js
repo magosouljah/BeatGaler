@@ -1460,7 +1460,9 @@ async function fetchRemoteImageDataUrl(rawUrl, redirectsLeft = 3, pageResolveLef
 
 app.get("/plans/catalog", createPlanCatalogHandler({
   usesPostgresAccess: accessGrants.usesPostgresAccess,
-  webPlanCatalog: webBillingRuntime.planCatalog,
+  webPlanCatalog: () => webBillingRuntime.planCatalog().map(plan => ({
+    ...plan, checkout_available: plan.checkout_available && webCheckoutRuntime.status().ready,
+  })),
   legacyPlanCatalog: accessRuntime.planCatalog,
   codePolicy: CODE_POLICY,
 }));

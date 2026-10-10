@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AccountGate, {
   getBeatGalerAuthToken,
+  getBeatGalerCurrentPlan,
   getBeatGalerInstallationId,
   loginBeatGalerAccount,
   restoreBeatGalerSession,
@@ -111,6 +112,18 @@ describe("AccountGate Web adapter", () => {
     expect(localStorage.getItem(WEB_SESSION_MARKER_KEY)).toBe("1");
     expect(sessionStorage.getItem(CSRF_KEY)).toBe("csrf-web-test");
     expect(getBeatGalerAuthToken()).toBe("browser-cookie-session");
+  });
+
+  it("reads /plans/me through the browser session without exposing a bearer", async () => {
+    localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(`${SAME_ORIGIN_API}/plans/me`);
+      expect(init?.credentials).toBe("include");
+      expect(new Headers(init?.headers).get("Authorization")).toBeNull();
+      return new Response(JSON.stringify({ plan: { effective_plan_id: "free", label: "Free" } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getBeatGalerCurrentPlan()).resolves.toMatchObject({ effective_plan_id: "free" });
   });
 
   it("clears a saved session only for an explicit 401/expiry", async () => {
