@@ -80,7 +80,7 @@ async function start() {
   if (cutover.authority === 'postgres') {
     const billing = await webBillingRuntime.configure({ env: process.env });
     const environment = process.env.BILLING_PROVIDER_ENVIRONMENT;
-    console.log(`[billing] ${environment === 'production' ? 'production' : 'sandbox'} sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
+    console.log(`[billing] ${environment === 'production' ? 'production' : 'sandbox'} adapter=${billing.ready ? 'ready' : 'unavailable'} sales_enabled=${environment === 'production' ? process.env.BILLING_PRODUCTION_SALES_ENABLED === 'true' : billing.ready} code=${billing.failureCode || 'OK'}`);
     const adapter = billing.ready ? webBillingRuntime.provider() : null;
     const webhook = webhookRuntime.configure({
       pool,
