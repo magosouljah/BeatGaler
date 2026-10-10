@@ -32,7 +32,7 @@ function validateState(state, expected) {
     check(Array.isArray(state.codeTransitions) && state.codeTransitions.length > 0, 'DAILY_CODE_LINEAGE_INVALID');
     state.codeTransitions.forEach((t,i) => check(/^[a-f0-9]{40}$/.test(t.fromCommitSha) && /^[a-f0-9]{40}$/.test(t.toCommitSha)
       && t.fromCommitSha!==t.toCommitSha && Number.isFinite(Date.parse(t.at))
-      && t.reason==='LATE_INITIAL_ORDER_UPDATE_CLEARED_PENDING_CHANGE'
+      && ['LATE_INITIAL_ORDER_UPDATE_CLEARED_PENDING_CHANGE','RELAY_FOREIGN_EVENTS_ABORTED_WAIT'].includes(t.reason)
       && (i===0 || state.codeTransitions[i-1].toCommitSha===t.fromCommitSha), 'DAILY_CODE_LINEAGE_INVALID'));
     check(state.codeTransitions.at(-1).toCommitSha===state.commitSha,'DAILY_CODE_LINEAGE_INVALID');
   }

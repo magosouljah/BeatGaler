@@ -10,6 +10,22 @@ const { validateProviderProductForOffer } = require('../billing-polar-sandbox');
 const { MODE,ENTRY,HIGHEST,ENV,readConfig,createCatalog,validateDailyProduct,createAdapter } = require('../scripts/polar-sandbox-daily-config.cjs');
 const { databaseName,sanitize,identity,writeState,readState,orderEvidence,assertBefore,proveRenewal } = require('../scripts/polar-sandbox-daily-state.cjs');
 const { dbUrl,verifyMarker } = require('../scripts/polar-sandbox-daily-e2e.cjs');
+const { drainPending } = require('../scripts/polar-sandbox-daily-e2e.cjs');
+const { assertHarnessOnlyDiff } = require('../scripts/polar-sandbox-daily-repair-code.cjs');
+test('durable handler failure preserves receipt pump; later own events still process',async()=>{
+  let calls=0, observed=0, actionCalls=0;const errors=[];
+  const args={inbox:{processNext:async()=>{calls++;if(calls===1)throw {code:'BILLING_LIFECYCLE_INVALID_INPUT'};return calls===2?{state:'PROCESSED'}:null;}},
+    actions:{processNext:async()=>{actionCalls++;return null;}},lifecycle:{handlers:{}},workerId:'fixture',
+    observe:async()=>{observed++},onError:e=>errors.push(e.code)};
+  await drainPending(args);assert.deepEqual(errors,['BILLING_LIFECYCLE_INVALID_INPUT']);assert.equal(observed,0);
+  await drainPending(args);assert.equal(observed,1);assert.equal(actionCalls,2);
+  await assert.rejects(()=>drainPending({...args,inbox:{processNext:async()=>({state:'PROCESSED'})},observe:async()=>{throw Error('EARLY_ACCESS')}}),/EARLY_ACCESS/);
+});
+test('relay repair cannot silently adopt a change to financial code',()=>{
+  assertHarnessOnlyDiff(['cloud-server/scripts/polar-sandbox-daily-e2e.cjs']);
+  for(const files of [[],['cloud-server/billing-lifecycle.js'],['cloud-server/billing-polar-lifecycle-adapter.js'],['cloud-server/access-runtime.js']])
+    assert.throws(()=>assertHarnessOnlyDiff(files),{code:'DAILY_REPAIR_FINANCIAL_SOURCE_CHANGED'});
+});
 function env() { return { [ENV.mode]:MODE,[ENV.provider]:'polar',[ENV.environment]:'sandbox',POLAR_SANDBOX_ACCESS_TOKEN:'fixture-private-access',POLAR_SANDBOX_WEBHOOK_SECRET:'fixture-private-signing',POLAR_SANDBOX_ORGANIZATION_ID:'org',
   [ENV.entryProduct]:'entry-product',[ENV.entryPrice]:'entry-price',[ENV.entryAmount]:'20000',
   [ENV.highestProduct]:'highest-product',[ENV.highestPrice]:'highest-price',[ENV.highestAmount]:'10000' }; }

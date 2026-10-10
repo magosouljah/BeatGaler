@@ -110,3 +110,21 @@ PostgreSQL-with-fake-provider results. Real Sandbox read-only preflight validate
 both monthly prices. No new payment or webhook is claimed by these checks.
 
 The operational summary and next human handoff belong in `PHASE-3-STATUS.md`.
+
+## Real concurrent-run incident
+
+The organization-wide relay delivered monthly events into the isolated daily DB.
+They had no trusted daily-user binding, so lifecycle correctly rejected them and
+the inbox durably recorded failure. The continuous daily harness incorrectly
+propagated this retryable processing error to its top-level wait and exited.
+The repaired pump follows the production scheduler: report the durable failure,
+end that batch, continue receiving and process later batches. Observation/proof
+invariant exceptions still propagate. No receipt is marked successful by this
+repair, and no provider object or financial row is edited.
+
+The explicit repair reason `RELAY_FOREIGN_EVENTS_ABORTED_WAIT` is limited to an
+`UPGRADE_SCHEDULED` failed run with one initial payment, Entry access and pending
+Highest. It refuses changed Cloud files outside the enumerated harness/tests.
+The original state is backed up; the DB and state record the transition; initial
+evidence retains its old SHA provenance. The repair retains FAIL until a fresh
+resume actually checks the provider and returns to a valid waiting state.

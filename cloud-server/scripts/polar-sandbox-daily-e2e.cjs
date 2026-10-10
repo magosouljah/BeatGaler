@@ -67,6 +67,22 @@ async function receiptProofs(pool, state) {
     FROM billing_webhook_events e JOIN task11_daily_receipts r ON r.event_id=e.event_id
     WHERE e.resolved_user_id=$1 ORDER BY r.received_at`, [state.userId])).rows;
 }
+async function drainPending({ inbox, actions, lifecycle, workerId, observe, onError }) {
+  // Match the production worker: the inbox durably records handler failures.
+  // A failed/foreign event must not terminate the HTTP receiver or the wait.
+  // Financial proof still requires this run's receipt to be PROCESSED.
+  for (let i = 0; i < 100; i++) {
+    let event;
+    try { event = await inbox.processNext({ workerId, handlers: lifecycle.handlers }); }
+    catch (error) { onError(error); break; }
+    if (!event) break;
+    await observe(); // Evidence invariant failures are fatal, never swallowed.
+  }
+  for (let i = 0; i < 20; i++) {
+    try { if (!await actions.processNext({ workerId })) break; }
+    catch (error) { onError(error); break; }
+  }
+}
 async function openRuntime({ pool, adapter, state, port, env }) {
   const lifecycle = createBillingLifecycle({ adapter });
   const inbox = createDurableWebhookInbox({ pool, adapter, retryBaseMs: 1000 });
@@ -84,8 +100,8 @@ async function openRuntime({ pool, adapter, state, port, env }) {
   function processPending() {
     chain = chain.catch(() => {}).then(async () => {
       if (stopping) return;
-      for (let i = 0; i < 100; i++) { const event = await inbox.processNext({ workerId, handlers: lifecycle.handlers }); if (!event) break; await observe(); }
-      for (let i = 0; i < 20; i++) if (!await actions.processNext({ workerId })) break;
+      await drainPending({ inbox, actions, lifecycle, workerId, observe,
+        onError: e => console.error(`[daily] durable-worker-failure ${code(e)}`) });
     });
     return chain;
   }
@@ -289,4 +305,4 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 if(require.main===module) main().catch(e=>{console.error(`[daily] ${code(e)}`);process.exitCode=1;});
-module.exports={main,dbUrl,initializeDatabase,verifyMarker,snapshot,receiptProofs,openRuntime};
+module.exports={main,dbUrl,initializeDatabase,verifyMarker,snapshot,receiptProofs,openRuntime,drainPending};

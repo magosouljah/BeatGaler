@@ -9,7 +9,7 @@ const os=require('node:os');
 const {Client}=require('pg');
 const {MODE,ENTRY,HIGHEST,createCatalog}=require('../scripts/polar-sandbox-daily-config.cjs');
 const {databaseName,writeState,readState}=require('../scripts/polar-sandbox-daily-state.cjs');
-const {adoptRepair}=require('../scripts/polar-sandbox-daily-repair-code.cjs');
+const {adoptRepair,RELAY_REASON}=require('../scripts/polar-sandbox-daily-repair-code.cjs');
 const {initializeDatabase,verifyMarker,snapshot}=require('../scripts/polar-sandbox-daily-e2e.cjs');
 const {createBillingLifecycle}=require('../billing-lifecycle');
 const {createBillingReconciliationService}=require('../billing-reconciliation');
@@ -57,6 +57,18 @@ test('daily equivalents persist pending change under unchanged monthly DB constr
       assert.deepEqual(await adoptRepair({pool,file,state:original,toHead:'c'.repeat(40)}),repaired,'interruption after DB commit completes the staged file handoff');
       assert.equal((await pool.query('SELECT count(*)::int AS count FROM task11_daily_code_repairs')).rows[0].count,1);
       Object.assign(state,repaired);assert.deepEqual(await readState(file,state),state);
+      state.checkpoint='UPGRADE_SCHEDULED';state.result='FAIL';state.lastErrorCode='BILLING_LIFECYCLE_INVALID_INPUT';
+      state.preRenewal=await snapshot(pool,lifecycle,state);await writeState(file,state);
+      const beforeRelayRepair=JSON.parse(JSON.stringify(state));
+      await assert.rejects(()=>adoptRepair({pool,file,state,toHead:'d'.repeat(40),reason:RELAY_REASON,changedFiles:['cloud-server/billing-lifecycle.js']}),{code:'DAILY_REPAIR_FINANCIAL_SOURCE_CHANGED'});
+      const relayRepaired=await adoptRepair({pool,file,state,toHead:'d'.repeat(40),reason:RELAY_REASON,changedFiles:['cloud-server/scripts/polar-sandbox-daily-e2e.cjs']});
+      assert.deepEqual(await readState(`${file}.before-${'d'.repeat(40)}.json`,beforeRelayRepair),beforeRelayRepair);
+      assert.deepEqual(relayRepaired.initialOrder,beforeRelayRepair.initialOrder);
+      assert.deepEqual(relayRepaired.preRenewal,beforeRelayRepair.preRenewal);
+      assert.equal(relayRepaired.result,'FAIL','repair must not relabel a failure as PASS or WAITING');
+      assert.equal(relayRepaired.codeTransitions.at(-1).reason,RELAY_REASON);
+      Object.assign(state,relayRepaired);await verifyMarker(pool,state);
+      assert.equal((await snapshot(pool,lifecycle,state)).payments.length,1);
     }finally{await fs.rm(dir,{recursive:true,force:true});}
     const cycled={...sub,product_id:'high',price_id:'high-price',current_period_start:end,current_period_end:nextEnd};await apply('subscription.updated',cycled);
     assert.equal((await snapshot(pool,lifecycle,state)).effectivePlanId,'paid_entry');
