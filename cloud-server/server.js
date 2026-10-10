@@ -24,6 +24,7 @@ const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
 const webhookRuntime = require("./billing-webhook-runtime");
 const lifecycleRuntime = require("./billing-lifecycle-runtime");
+const reconciliationRuntime = require("./billing-reconciliation-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
@@ -46,7 +47,9 @@ async function start() {
   if (pgConfig.enabled) {
     const started = await startPostgresControlPlane();
     pool = started.pool;
-    installPostgresShutdown(pool, process, { beforeClose: () => lifecycleRuntime.stop() });
+    installPostgresShutdown(pool, process, { beforeClose: async () => {
+      await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop()]);
+    } });
   }
   configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
   directPersistentAssignments.configure({ pool });
@@ -84,6 +87,11 @@ async function start() {
       onError: (area, code) => console.error(`[billing] lifecycle ${area} code=${code}`),
     });
     console.log(`[billing] lifecycle=${lifecycle.ready ? 'ready' : 'unavailable'} code=${lifecycle.failureCode || 'OK'}`);
+    const reconciliation = reconciliationRuntime.configure({
+      pool, authority: cutover.authority,
+      adapter: billing.ready ? webBillingRuntime.provider() : null,
+    });
+    console.log(`[billing] reconciliation=${reconciliation.ready ? 'ready' : 'unavailable'} code=${reconciliation.failureCode || 'OK'}`);
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
@@ -131,6 +139,7 @@ async function start() {
     persistentAssignments: directPersistentAssignments,
   });
   lifecycleRuntime.start();
+  reconciliationRuntime.start();
 }
 
 start().catch((error) => {

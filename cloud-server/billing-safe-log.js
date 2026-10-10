@@ -6,6 +6,7 @@ const SAFE_STATE_KEYS = new Set([
   'customerId','subscriptionId','checkoutId','orderId','offerId','planId','status',
   'cancelAtPeriodEnd','currentPeriodStart','currentPeriodEnd','paidThrough','pastDueAt',
   'graceUntil','endedAt','amountMinor','refundedAmountMinor','currency','missing','count',
+  'nextPlanId','nextPlanEffectiveAt','accessInvalidatedAt','invalidationReason',
 ]);
 
 const SAFE_DETAIL_KEYS = new Set([

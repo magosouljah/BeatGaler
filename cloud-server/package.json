@@ -10,12 +10,14 @@
     "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
     "preflight:web-billing": "node scripts/web-billing-preflight.cjs",
+    "billing:reconcile": "node scripts/billing-reconcile-user.cjs",
     "preflight:polar-sandbox-e2e": "node --check scripts/polar-sandbox-e2e.cjs && node --check scripts/polar-sandbox-e2e-guard.cjs && node --check billing-polar-renewal-proof.js && node --check scripts/polar-sandbox-daily-e2e.cjs && node --check scripts/polar-sandbox-daily-config.cjs && node --check scripts/polar-sandbox-daily-state.cjs",
     "e2e:polar-sandbox": "node scripts/polar-sandbox-e2e-guard.cjs",
     "test:billing-checkout-pg": "node --test tests/billing-checkout-persistent.integration.cjs",
     "test:billing-webhook-pg": "node --test tests/billing-webhook-durable.integration.cjs",
     "test:billing-lifecycle-pg": "node --test tests/billing-lifecycle.integration.cjs",
-    "test:billing-reconciliation-pg": "node --test tests/billing-reconciliation.integration.cjs"
+    "test:billing-reconciliation-pg": "node --test tests/billing-reconciliation.integration.cjs",
+    "test:billing-reconciliation": "node --test tests/billing-reconciliation.test.cjs tests/billing-reconciliation-runtime.test.cjs"
   },
   "keywords": [],
   "author": "",

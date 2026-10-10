@@ -773,6 +773,8 @@ module.exports = {
   ORDER_EVENT_TYPES,
   BillingLifecycleError,
   resolveOffer,
+  providerIds,
+  currentOrderPeriod,
   orderProjection,
   createBillingLifecycle,
   createBillingProviderActionWorker,
