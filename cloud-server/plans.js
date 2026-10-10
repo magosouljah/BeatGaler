@@ -1,6 +1,5 @@
-// BeatGaler Plans architecture v1.
-// Server-side authority for plan capabilities, quotas and time-based access grants.
-// Prices/billing are intentionally out of scope for v0.4.0.
+// Legacy JSON/rollback plan projection and welcome compatibility.
+// PostgreSQL Web commerce and runtime access use billing-access-resolver.js.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
@@ -80,14 +79,6 @@ function normalizePlanId(value) {
   return PLAN_CATALOG[id] ? id : "free";
 }
 
-function setBasePlanForUser(user, planId) {
-  const id = String(planId || "");
-  if (!PLAN_CATALOG[id]) throw new Error("Unknown BeatGaler plan.");
-  const state = ensurePlanState(user);
-  state.basePlanId = id;
-  return publicPlanState(user);
-}
-
 function createWelcomeGrant(now = Date.now()) {
   return {
     id: `welcome_${now}`,
@@ -161,5 +152,4 @@ module.exports = {
   ensurePlanState,
   publicPlanState,
   publicPlanCatalog,
-  setBasePlanForUser,
 };

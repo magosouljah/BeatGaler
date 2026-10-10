@@ -19,7 +19,6 @@ vi.mock("../../src/components/AccountGate", () => ({
     plan: { label: "Free", quotas: {}, entitlements: {} },
   })),
   getBeatGalerPlanCatalog: vi.fn(async () => []),
-  devSwitchBeatGalerPlan: vi.fn(),
   oauthBeatGalerAccount: vi.fn(),
 }));
 

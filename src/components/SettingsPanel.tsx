@@ -9,7 +9,7 @@ import type {
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import {
   beginMfaSetup, changeBeatGalerEmail, changeBeatGalerPassword, disableMfa, disconnectOAuthProvider,
-  enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, devSwitchBeatGalerPlan, startBeatGalerCheckout, oauthBeatGalerAccount,
+  enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, startBeatGalerCheckout, oauthBeatGalerAccount,
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
 } from "./AccountGate";
 import { planFeatures, planPrice, planStatus } from "./billingPresentation";
@@ -269,15 +269,6 @@ export default function SettingsPanel(props: Props) {
   };
 
   const setAccountStatus = (message: string | null, error: string | null = null) => { setAccountMessage(message); setAccountError(error); };
-  const switchPlanForTesting = async (planId: BeatGalerPlanId) => {
-    setPlanSwitching(planId); setAccountStatus(null);
-    try {
-      const updated = await devSwitchBeatGalerPlan(planId);
-      setAccount(updated);
-      setAccountStatus(`Plan changed to ${updated.plan?.label || planId}.`);
-    } catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
-    finally { setPlanSwitching(null); }
-  };
   const startCheckout = async (plan: BeatGalerPlanDefinition) => {
     if (!account || !currentPlan?.initial_checkout_allowed || !plan.price?.offer_id) return;
     setPlanSwitching(plan.id); setAccountStatus(null);
@@ -434,9 +425,8 @@ export default function SettingsPanel(props: Props) {
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, margin: "0 0 12px" }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "#e8e8e8" }}>All plans</div>
-              <div style={{ marginTop: 3, fontSize: 10, color: "#777" }}>{platform.kind === "web" ? "Paid plans use secure checkout. Access changes after payment confirmation." : "Buttons simulate plan changes for testing."}</div>
+              <div style={{ marginTop: 3, fontSize: 10, color: "#777" }}>Paid plans use secure checkout. Access changes after payment confirmation.</div>
             </div>
-            {platform.kind !== "web" && <div style={{ fontSize: 9, letterSpacing: .6, color: "#7a6546", border: "1px solid #3a3021", background: "#19150f", borderRadius: 999, padding: "4px 7px" }}>DEV ONLY</div>}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, alignItems: "stretch" }}>
@@ -444,14 +434,14 @@ export default function SettingsPanel(props: Props) {
               const current = currentPlan?.effective_plan_id === plan.id;
               const featured = plan.id === "paid_entry";
               const features = planFeatures(plan);
-              const canCheckout = platform.kind === "web" && !planLoading && !planError && currentPlan?.initial_checkout_allowed === true && account?.id && plan.id !== "free" && plan.checkout_available === true && !!plan.price?.offer_id;
+              const canCheckout = !planLoading && !planError && currentPlan?.initial_checkout_allowed === true && account?.id && plan.id !== "free" && plan.checkout_available === true && !!plan.price?.offer_id;
               return <div key={plan.id} style={{ position: "relative", minHeight: 310, padding: "17px 16px 15px", borderRadius: 13, border: featured ? "1px solid #5a5a5a" : "1px solid #262626", background: featured ? "#181818" : "#141414", boxShadow: featured ? "0 0 0 1px #1e1e1e inset" : "none", display: "flex", flexDirection: "column" }}>
                 {featured && <div style={{ position: "absolute", top: 13, right: 13, fontSize: 8, fontWeight: 700, letterSpacing: .55, color: "#cfcfcf", background: "#292929", borderRadius: 999, padding: "4px 7px" }}>POPULAR</div>}
                 <div style={{ paddingRight: featured ? 58 : 0, fontSize: 15, color: "#eee", fontWeight: 700 }}>{plan.label}</div>
                 {planPrice(plan) && <div style={{ marginTop: 5, color: "#cfcfcf", fontSize: 12, fontWeight: 600 }}>{planPrice(plan)}</div>}
                 <div style={{ marginTop: 5, minHeight: 27, fontSize: 9.5, color: "#5c5c5c", lineHeight: 1.45 }}>{current ? "Your current access" : ""}</div>
-                <button disabled={current || planSwitching !== null || (platform.kind === "web" && !canCheckout)} onClick={() => void (platform.kind === "web" ? startCheckout(plan) : switchPlanForTesting(plan.id))} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null || (platform.kind === "web" && !canCheckout) ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
-                  {current ? "Current plan" : planSwitching === plan.id ? "Opening…" : platform.kind === "web" && plan.id === "free" ? "Free plan" : platform.kind === "web" && currentPlan?.initial_checkout_allowed === false ? "Subscription changes unavailable in Web" : platform.kind === "web" && !canCheckout ? "Checkout unavailable" : plan.id === "free" ? "Switch to Free" : "Choose plan"}
+                <button disabled={current || planSwitching !== null || !canCheckout} onClick={() => void startCheckout(plan)} style={{ marginTop: 13, width: "100%", height: 34, borderRadius: 8, border: current ? "1px solid #282828" : featured ? "1px solid #e6e6e6" : "1px solid #353535", background: current ? "#171717" : featured ? "#ececec" : "#1d1d1d", color: current ? "#595959" : featured ? "#111" : "#d0d0d0", cursor: current || planSwitching !== null || !canCheckout ? "default" : "pointer", fontSize: 10.5, fontWeight: 700 }}>
+                  {current ? "Current plan" : planSwitching === plan.id ? "Opening…" : plan.id === "free" ? "Free plan" : currentPlan?.initial_checkout_allowed === false ? "Subscription changes unavailable in Web" : !canCheckout ? "Checkout unavailable" : "Choose plan"}
                 </button>
                 <div style={{ height: 1, background: "#222", margin: "15px 0 11px" }}/>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

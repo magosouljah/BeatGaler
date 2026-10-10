@@ -36,11 +36,11 @@ No había una enumeración STEP 0–15 en el repositorio auditado; esta tabla fi
 | 10 | Lifecycle: pago, cambio, cancelación, grace, refunds | **PASS** | Worker Web procesa inbox durable con lookups Polar, leases/retry y acciones provider; PostgreSQL real cubre las transiciones financieras V1, Access, replay/restart, aislamiento y conservación de datos. E2E Polar real completo sigue en STEP 14. |
 | 11 | Reconciliación y reparación segura | **PASS** | Runtime con pending/commercial sweeps paginados, CLI interna, locks compartidos con webhook y repairs mediante lifecycle. Ambigüedad, rollback/restart, aislamiento, Access y conservación de datos probados con PostgreSQL real; escenarios financieros Polar reales siguen en STEP 14. |
 | 12 | Settings/Account comercial veraz | **PASS** | Settings lee `/plans/me`, Account lee `/auth/account` con el mismo resolver; catálogo, lifecycle, checkout habilitado y errores se representan sin inventar acceso. Desktop/JSON conservan simulación temporal. |
-| 13 | Eliminar dev-switch de producto | **NOT STARTED** | `/plans/dev-switch` y su botón siguen presentes; la ruta ya devuelve 404 bajo autoridad PostgreSQL. |
+| 13 | Eliminar dev-switch de producto | **PASS** | Ruta, flag, cliente, botón, helper exclusivo y excepción de sesión eliminados; Welcome, grants, checkout y Access conservan sus contratos. |
 | 14 | Polar Sandbox E2E real completo | **PARTIAL** | Corrida local: compra inicial/webhook/upgrade y Order de renovación `paid`; falta recibo real de webhook de renovación y escenarios independientes de cancelación, refunds, fallos y grace. |
 | 15 | E2E final Web y cierre Fase 3 | **NOT STARTED** | Falta recorrido integrado por planes, operaciones, downgrade y cobro con evidencia en SHA exacto. |
 
-`SUPERSEDED` no aplica a una fila de este mapa: `plans.js` y el dev-switch son legado **a sustituir**, pero siguen activos y por eso no se consideran cerrados.
+`SUPERSEDED` no aplica a una fila de este mapa. `plans.js` conserva sólo proyección/catálogo y Welcome del modo JSON/rollback; el dev-switch fue eliminado en STEP 13.
 
 ## Evidencia y gates abiertos
 
@@ -92,8 +92,12 @@ La auditoría encontró y corrigió el lock distinto al inbox, snapshots locales
 
 **Evidencia STEP 12:** typecheck PASS, build Web PASS, presentación y Settings Web 10/10, AccountGate Web 8/8, shell Web 3/3, consumidores Access 9/9, Billing V1 117/117. El build conserva avisos previos de chunks/imports. No se hizo cobro Polar ni E2E visual con backend desplegado; STEP 14/15 conservan esas verificaciones. Deuda: falta una acción Web real para cambiar/cancelar suscripción existente; no se creó portal en este STEP.
 
+**STEP 13 (2026-10-09; base `d657570202ae78540b92bb37d65efff407a13632`): PASS.** Se eliminó por completo `POST /plans/dev-switch`, su excepción en session-security, el flag `BEATGALER_DEV_PLAN_SWITCH` del arranque local, el cliente `devSwitchBeatGalerPlan`, el control simulado de Settings y `setBasePlanForUser`, que sólo tenía como consumidor esa ruta. No se creó alias ni alternativa de debug. `plans.js` permanece para serialización/catálogo JSON, snapshots y Welcome legacy; Access PostgreSQL ignora `basePlanId` de Auth. La emisión Welcome PostgreSQL por `access-grant-runtime` y los grants durables siguen separados del input del usuario. Los CTA Entry/Highest mantienen `startBeatGalerCheckout` y el estado mostrado sigue saliendo de Access. El modo JSON de rollback conserva `planState` como formato histórico, sin ruta/UI para cambiarlo.
+
+**Evidencia STEP 13:** búsqueda de fuente activa sin ruta, cliente, flag, helper o UI simulada; pruebas negativas de fuente 2/2, consumidores Access 10/10 (Free, Welcome, grant legítimo, `basePlanId` obsoleto, flag antiguo), Settings/Account y shell Web 23/23, seguridad de sesión/account lifecycle PASS, unidad legacy 13/13, Billing V1 117/117, typecheck y build Web PASS. Las suites PostgreSQL aisladas de STEP 1/8/10 no se repitieron: este entorno no tiene las URL de administración de pruebas; sus contratos de producción no se modificaron. El E2E Polar real corresponde a STEP 14.
+
 **Orden:** STEP 1 ownership/grants → STEP 2 resolver runtime → STEP 3–6 cuotas y enforcement Web/Direct/PROJECT/Trash → STEP 7–11 servicios Billing conectados → STEP 12–13 UI y retiro de dev-switch → STEP 14 Polar real → STEP 15 E2E final. Preparar la renovación natural de STEP 14 temprano cuando sus dependencias estén listas.
 
 **Responsabilidad:** la IA puede implementar y probar STEP 1–13 y 15 con fixtures/entornos aislados y registrar evidencia. STEP 14 requiere acceso a una organización Polar Sandbox, credenciales/relay y completar pagos de prueba y observación de eventos reales; la persona dueña debe proveer o autorizar esos recursos y revisar el resultado. Antes de cobrar a usuarios reales, la persona responsable debe aprobar copy, términos/refunds y configuración comercial. STEP 5 no se inicia en el commit de STEP 4.
 
-**Siguiente paso exacto:** STEP 13, eliminar dev-switch de producto. No se inició aquí. Las verificaciones con Telegram real de STEP 5–6 quedan incluidas en el E2E final de STEP 15.
+**Siguiente paso exacto:** STEP 14, Polar Sandbox E2E real completo. No se inició aquí. Las verificaciones con Telegram real de STEP 5–6 quedan incluidas en el E2E final de STEP 15.

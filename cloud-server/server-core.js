@@ -33,7 +33,7 @@ const libraryIndexPublication = require("./library-index-publication");
 const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
-const { ensurePlanState, setBasePlanForUser, CODE_POLICY } = require("./plans");
+const { ensurePlanState, CODE_POLICY } = require("./plans");
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
@@ -1477,24 +1477,6 @@ const webCheckoutHandlers = createCheckoutHandlers({
 });
 app.post("/billing/checkout", webCheckoutHandlers.create);
 app.get("/billing/checkout/:requestId", webCheckoutHandlers.get);
-
-// Development-only simulated checkout. It deliberately changes the plan on the
-// server so Desktop/Web never learn to trust a client-side plan flag.
-app.post("/plans/dev-switch", async (req, res) => {
-  if (process.env.BEATGALER_DEV_PLAN_SWITCH !== "1" || accessGrants.usesPostgresAccess()) {
-    return res.status(404).json({ error: "Not available." });
-  }
-  const token = bearerToken(req);
-  const user = getAuthUserFromToken(token);
-  if (!user) return res.status(401).json({ error: "Session expired. Sign in again." });
-  try {
-    setBasePlanForUser(user, req.body?.plan_id);
-    saveAuthData();
-    return res.json(await accountPublicPayload(user, token));
-  } catch (error) {
-    return res.status(400).json({ error: error?.message || String(error) });
-  }
-});
 
 app.post("/image/fetch", async (req, res) => {
   const user = getAuthUserFromToken(bearerToken(req));

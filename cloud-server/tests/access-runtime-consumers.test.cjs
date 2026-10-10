@@ -65,6 +65,20 @@ test('B: Free plus welcome grant is Paid Entry everywhere', async () => {
   assert.equal(JSON.stringify(plan).includes('internal-secret'), false);
 });
 
+test('a legitimate server-side support grant remains effective independently of client and old flag', async () => {
+  const previous = process.env.BEATGALER_DEV_PLAN_SWITCH;
+  process.env.BEATGALER_DEV_PLAN_SWITCH = '1';
+  try {
+    const free = await observe();
+    assert.equal(free.effective_plan_id, 'free');
+    const granted = await observe({ grants: [{ id: 'support', source: 'support', plan_id: 'highest_paid', starts_at: NOW - DAY, expires_at: NOW + DAY }] });
+    assert.equal(granted.effective_plan_id, 'highest_paid');
+  } finally {
+    if (previous === undefined) delete process.env.BEATGALER_DEV_PLAN_SWITCH;
+    else process.env.BEATGALER_DEV_PLAN_SWITCH = previous;
+  }
+});
+
 test('C/D: paid and cancel-at-period-end remain Paid until paid_through', async () => {
   const subscription = { plan_id: 'highest_paid', status: 'canceled', paid_through: NOW + DAY, cancel_at_period_end: true };
   const current = await observe({ subscription });

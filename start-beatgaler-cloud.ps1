@@ -80,7 +80,6 @@ Set-Location '$botDir'
 Write-Host "Starting BeatGaler Cloud server on 127.0.0.1:4000..."
 $cloudCmd = @"
 Set-Location '$cloudDir'
-`$env:BEATGALER_DEV_PLAN_SWITCH='1'
 node server.js
 "@
 Start-Process powershell.exe -ArgumentList @(

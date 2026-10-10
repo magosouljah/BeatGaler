@@ -58,10 +58,6 @@ passed += test('lower temporary grant cannot downgrade a higher base plan', () =
   assert.equal(plans.publicPlanState(user, 100).effective_plan_id, 'highest_paid');
 }) ? 1 : 0;
 
-passed += test('invalid base plan assignment is rejected', () => {
-  assert.throws(() => plans.setBasePlanForUser({}, 'owner'), /Unknown BeatGaler plan/);
-}) ? 1 : 0;
-
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-direct-unit-'));
 const poolFile = path.join(tmp, 'transport-bots.json');
 const stateFile = path.join(tmp, 'transport-pool-state.json');
@@ -203,4 +199,4 @@ passed += test('canonical Cloud entrypoint installs temporary-auth boundary befo
 }) ? 1 : 0;
 
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`PASS cloud/direct unit tests: ${passed}/14`);
+console.log(`PASS cloud/direct unit tests: ${passed}/13`);

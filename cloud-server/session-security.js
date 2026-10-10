@@ -30,7 +30,6 @@ const RESPONSE_AUTH_ROUTES = new Set([
   '/auth/oauth/disconnect',
   '/auth/logout',
   '/auth/account/delete',
-  '/plans/dev-switch',
 ]);
 const SENSITIVE_ROTATION_ROUTES = new Set(['/auth/password/change']);
 const CLEAR_SESSION_ROUTES = new Set(['/auth/logout', '/auth/account/delete']);

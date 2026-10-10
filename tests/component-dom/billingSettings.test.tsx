@@ -11,7 +11,7 @@ vi.mock("../../src/components/AccountGate", () => ({
   disableMfa: vi.fn(), disconnectOAuthProvider: vi.fn(), enableMfa: vi.fn(),
   getBeatGalerAccountInfo: api.account, getBeatGalerCurrentPlan: api.plan,
   getBeatGalerPlanCatalog: api.catalog, startBeatGalerCheckout: api.checkout,
-  devSwitchBeatGalerPlan: vi.fn(), oauthBeatGalerAccount: vi.fn(),
+  oauthBeatGalerAccount: vi.fn(),
 }));
 
 import SettingsPanel from "../../src/components/SettingsPanel";
@@ -84,12 +84,30 @@ describe("Settings commercial truth", () => {
     await view.close();
   });
 
+  it("keeps both Free upgrade choices wired to real checkout offers", async () => {
+    const view = await mount(); await view.click("plan");
+    const choices = Array.from(view.host.querySelectorAll("button")).filter(button => button.textContent?.trim() === "Choose plan");
+    expect(choices).toHaveLength(2);
+    await act(async () => { choices[0].click(); await Promise.resolve(); });
+    await act(async () => { choices[1].click(); await Promise.resolve(); });
+    expect(api.checkout.mock.calls.map(call => call[0])).toEqual(["entry", "highest"]);
+    expect(view.host.querySelector('[data-testid="settings-current-plan"]')?.textContent).toBe("Free");
+    await view.close();
+  });
+
   it("fails closed when plan or catalog requests fail", async () => {
     api.plan.mockRejectedValue(new Error("offline")); api.catalog.mockRejectedValue(new Error("offline"));
     const view = await mount(); await view.click("plan");
     expect(view.host.textContent).toContain("Plan unavailable");
     expect(view.host.textContent).toContain("Plan catalog unavailable");
     expect(view.host.textContent).not.toContain("USD 6.99");
+    await view.close();
+  });
+
+  it("ignores a client-selected plan in local storage", async () => {
+    localStorage.setItem("beatgaler:selected-plan", "highest_paid");
+    const view = await mount(); await view.click("plan");
+    expect(view.host.querySelector('[data-testid="settings-current-plan"]')?.textContent).toBe("Free");
     await view.close();
   });
 

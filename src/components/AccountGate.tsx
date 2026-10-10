@@ -368,14 +368,6 @@ export async function startBeatGalerCheckout(offerId: string, requestId: string)
   return { url, recovered: Boolean(result.checkout.recovered) };
 }
 
-export async function devSwitchBeatGalerPlan(planId: BeatGalerPlanId): Promise<BeatGalerAccount> {
-  const token = getBeatGalerAuthToken();
-  if (!token) throw new Error("Session expired. Sign in again.");
-  const result = await authRequest("/plans/dev-switch", { plan_id: planId }, token);
-  window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
-  return result.user;
-}
-
 export async function changeBeatGalerEmail(email: string, confirmEmail: string): Promise<BeatGalerAccount> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
