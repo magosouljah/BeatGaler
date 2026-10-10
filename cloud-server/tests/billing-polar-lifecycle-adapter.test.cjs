@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readPolarSandboxConfig } = require('../billing-polar-sandbox');
-const { createPolarSandboxLifecycleAdapter } = require('../billing-polar-lifecycle-adapter');
+const { createPolarSandboxLifecycleAdapter, collectList } = require('../billing-polar-lifecycle-adapter');
 const { SUBSCRIPTION_EVENT_TYPES } = require('../billing-lifecycle');
 
 function env() {
@@ -115,6 +115,29 @@ test('reconciliation discovery is scoped server-side by external customer identi
     page: 1,
     limit: 50,
   });
+});
+
+test('pinned SDK first page cannot conceal further financial history', async () => {
+  const items = Array.from({ length: 100 }, (_, i) => ({ id: `order_${i}` }));
+  for (const pagination of [
+    { total_count: 101, max_page: 2 },
+    { total_count: 100, max_page: 2 },
+    { total_count: null, max_page: 1 },
+    { total_count: 99, max_page: 1 },
+  ]) assert.equal((await collectList({ items, pagination }, 500)).truncated, true);
+  assert.equal((await collectList({ items, pagination: { total_count: 100, max_page: 1 } }, 500)).truncated, false);
+  assert.equal((await collectList({ items, pagination: { total_count: 100, max_page: 1 } }, 50)).truncated, true);
+  assert.deepEqual(await collectList({ items: [], pagination: { total_count: 0, max_page: 0 } }, 100), { items: [], truncated: false });
+});
+
+test('both real discovery primitives propagate provider pagination to reconciliation', async () => {
+  const client = fakeClient({});
+  client.orders.list = client.subscriptions.list = async () => ({
+    items: [{ id: 'first-page-only' }], pagination: { total_count: 2, max_page: 2 },
+  });
+  const instance = createPolarSandboxLifecycleAdapter({ config: readPolarSandboxConfig(env()), client, webhooks: {} });
+  assert.equal((await instance.listOrdersForUser({ userId: 'u1' })).truncated, true);
+  assert.equal((await instance.listSubscriptionsForUser({ userId: 'u1' })).truncated, true);
 });
 
 test('paid plan change is always scheduled with explicit next_period proration behavior', async () => {

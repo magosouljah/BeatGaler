@@ -115,9 +115,17 @@ async function collectList(raw, maxItems) {
 
   const direct = pageItems(raw);
   if (direct) {
+    // The pinned SDK's list() returns one page, not an async paginator.
+    // A partial financial history must never be treated as authoritative.
+    const pagination = raw?.pagination ?? raw?.result?.pagination ?? raw?.data?.pagination;
+    const morePages = pagination != null && (
+      !Number.isSafeInteger(pagination.total_count) || pagination.total_count < direct.length
+      || pagination.total_count > direct.length
+      || !Number.isSafeInteger(pagination.max_page) || pagination.max_page > 1
+    );
     return Object.freeze({
       items: Object.freeze(direct.slice(0, maxItems)),
-      truncated: direct.length > maxItems,
+      truncated: direct.length > maxItems || morePages,
     });
   }
 

@@ -11,6 +11,7 @@ const { createPersistentCheckoutService } = require('../billing-checkout-persist
 const { createDurableWebhookInbox } = require('../billing-webhook-durable');
 const { createBillingLifecycle, createBillingProviderActionWorker } = require('../billing-lifecycle');
 const { createBillingReconciliationService } = require('../billing-reconciliation');
+const { createAccessRuntime } = require('../access-runtime');
 const { MODE, ENTRY, HIGHEST, check, text, readConfig, createAdapter } = require('./polar-sandbox-daily-config.cjs');
 const { databaseName, identity, writeState, readState, orderEvidence, assertPaidOrder, assertBefore, proveRenewal } = require('./polar-sandbox-daily-state.cjs');
 const ROOT = path.resolve(__dirname, '../..');
@@ -52,8 +53,10 @@ async function initializeDatabase(adminUrl, state) {
 async function snapshot(pool, lifecycle, state) {
   const sub = (await pool.query('SELECT provider_subscription_id,provider_customer_id,paid_through,next_plan_id,current_period_end,status FROM billing_subscription_state WHERE user_id=$1', [state.userId])).rows[0];
   const payments = (await pool.query('SELECT provider_order_id,status,period_start,period_end,amount_minor,offer_id FROM billing_payments WHERE user_id=$1 ORDER BY created_at,provider_order_id', [state.userId])).rows;
-  const access = await lifecycle.resolveUserAccess(pool, state.userId, new Date());
+  const access = await createAccessRuntime({ pool }).resolveUserAccess({ id: state.userId });
   return { at: new Date().toISOString(), effectivePlanId: access.effectivePlanId, nextPlanId: sub?.next_plan_id || null,
+    commercialAccessState: access.commercialAccessState, quotas: access.quotas, capabilities: access.capabilities,
+    cancelAtPeriodEnd: access.billing.cancelAtPeriodEnd, pastDueAt: access.billing.pastDueAt, graceUntil: access.billing.graceUntil,
     subscriptionId: sub?.provider_subscription_id || null, customerId: sub?.provider_customer_id || null,
     providerStatus: sub?.status || null, paidThrough: iso(sub?.paid_through), periodEnd: iso(sub?.current_period_end),
     payments: payments.map(p => ({ orderId: p.provider_order_id, status: p.status, periodStart: iso(p.period_start), periodEnd: iso(p.period_end), amountMinor: p.amount_minor, offerId: p.offer_id })) };
@@ -120,8 +123,9 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const phase = argv[0]; check(['start','resume','listen'].includes(phase), 'DAILY_PHASE_REQUIRED');
   const config = readConfig(env);
   const expectedHead = text(env,'BILLING_E2E_EXPECTED_HEAD');
-  check(git(['rev-parse','HEAD']) === expectedHead && git(['branch','--show-current']) === 'billing/v1-policy', 'DAILY_HEAD_OR_BRANCH_MISMATCH');
+  check(git(['rev-parse','HEAD']) === expectedHead && git(['branch','--show-current']) === 'integration-v0.9.0-alpha.4', 'DAILY_HEAD_OR_BRANCH_MISMATCH');
   check(git(['diff','--ignore-cr-at-eol','--stat','HEAD','--','cloud-server', '.github/workflows']).length === 0, 'DAILY_COMMITTED_CODE_REQUIRED');
+  check(git(['ls-files','--others','--exclude-standard','--','cloud-server']).length === 0, 'DAILY_COMMITTED_CODE_REQUIRED');
   check(env.POLAR_SANDBOX_E2E_WEBHOOK_TRANSPORT === 'polar-cli-listen', 'DAILY_REAL_RELAY_REQUIRED');
   const adminUrl = text(env,'BILLING_E2E_TEST_ADMIN_URL');
   dbUrl(adminUrl, 'postgres');
@@ -225,16 +229,33 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       state.preRenewal=before;state.checkpoint='UPGRADE_SCHEDULED';state.result='WAITING_FOR_NATURAL_RENEWAL';await save();
     }
     await runtime.processPending();
-    const rawOrders=await adapter.listOrdersForUser({userId:state.userId});check(!rawOrders.truncated,'DAILY_ORDER_LIST_TRUNCATED');
-    const candidates=rawOrders.items.filter(o=>o.subscription_id===state.subscriptionId&&o.id!==state.initialOrder.id&&o.billing_reason==='subscription_cycle'&&o.paid===true)
-      .sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));
+    async function findRenewals() {
+      const rawOrders=await adapter.listOrdersForUser({userId:state.userId});check(!rawOrders.truncated,'DAILY_ORDER_LIST_TRUNCATED');
+      return rawOrders.items.filter(o=>o.subscription_id===state.subscriptionId&&o.id!==state.initialOrder.id&&o.billing_reason==='subscription_cycle'&&o.paid===true)
+        .sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));
+    }
+    let candidates=await findRenewals();
     if (!candidates.length) {
       const s=await snapshot(pool,runtime.lifecycle,state);check(s.effectivePlanId!=='highest_paid','DAILY_HIGHEST_GRANTED_EARLY');
       if (Date.now()>Date.parse(state.expectedRenewalAt)+1800000) check(false,'DAILY_NO_SECOND_PAID_ORDER');
       state.result='WAITING_FOR_NATURAL_RENEWAL';await save();
-      console.log(`[daily] WAITING_FOR_NATURAL_RENEWAL UTC=${state.expectedRenewalAt} Mexico=${new Date(state.expectedRenewalAt).toLocaleString('es-MX',{timeZone:'America/Mexico_City',timeZoneName:'short'})}`);return;
+      console.log(`[daily] WAITING_FOR_NATURAL_RENEWAL UTC=${state.expectedRenewalAt} Mexico=${new Date(state.expectedRenewalAt).toLocaleString('es-MX',{timeZone:'America/Mexico_City',timeZoneName:'short'})}`);
+      if (env.POLAR_SANDBOX_E2E_CONTINUOUS !== '1') return;
+      // Keep the same receiver alive across the real provider period boundary.
+      // This is observation at wall-clock time; no provider dates are mutated.
+      while (!candidates.length) {
+        await delay(30000); await runtime.processPending();
+        candidates=await findRenewals();
+        if (!candidates.length && Date.now()>Date.parse(state.expectedRenewalAt)+1800000) check(false,'DAILY_NO_SECOND_PAID_ORDER');
+      }
     }
     const renewal=orderEvidence(await adapter.getFinancialOrder(candidates[0].id));state.renewalOrder=renewal;await save();
+    if (env.POLAR_SANDBOX_E2E_CONTINUOUS === '1') {
+      // An API read can observe settlement before its asynchronous delivery.
+      // Keep the receiver available instead of closing it in that race.
+      await waitFor(async () => (await receiptProofs(pool,state)).some(p =>
+        p.eventType==='order.paid' && p.subjectId===renewal.id && p.state==='PROCESSED'));
+    }
     const observations=(await pool.query('SELECT snapshot FROM task11_daily_observations ORDER BY id')).rows.map(r=>r.snapshot);
     check(!observations.some(s=>s.effectivePlanId==='highest_paid'&&!s.payments.some(p=>p.orderId===renewal.id&&p.status==='succeeded')),'DAILY_HIGHEST_GRANTED_EARLY');
     const beforeReconciliation=await snapshot(pool,runtime.lifecycle,state);
@@ -253,6 +274,10 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     state.result='PASS';state.checkpoint='RENEWAL_VERIFIED';
     state.scenarios.push({name:'natural_daily_paid_renewal',result:'PASS',initialOrderId:state.initialOrder.id,renewalOrderId:renewal.id});
     await save();console.log('[daily] RENOVACIÓN REAL DAILY: PASS. Task 11 overall remains PARTIAL; other scenarios are tracked separately.');
+    if (env.POLAR_SANDBOX_E2E_CONTINUOUS === '1') {
+      console.log('[daily] LISTENING after renewal proof; STEP 14 is not closed.');
+      await new Promise(resolve => { process.once('SIGINT',resolve); process.once('SIGTERM',resolve); });
+    }
   } catch(e) {
     if (runtime || phase==='start') { state.result=e.code==='DAILY_WAIT_TIMEOUT'?'PARTIAL':'FAIL';state.lastErrorCode=code(e);await save(); }
     throw e;
