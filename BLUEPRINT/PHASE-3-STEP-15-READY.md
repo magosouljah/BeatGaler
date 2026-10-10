@@ -18,6 +18,23 @@ Preparado el 10 de octubre de 2026 sobre `bafacba9c6b03948f6081831a7f58723d44670
 - Fixtures pequeños y deterministas: MP3 y WAV reproducibles con SHA-256 local, artwork, PROJECT ZIP con árbol y hash conocidos, un PROJECT heredado de dos partes, 20 beats con IDs únicos, beat con ACTIVE y beat en Trash. Conservar originales para descarga/hash. Preparar un PROJECT de tamaño mayor a 2 MiB para atravesar Nginx y uno cerca del límite comercial sólo cuando el proxy, disco, timeout y Telegram real hayan pasado el smoke pequeño. El fallo del borde exacto de 1.0/1.9 GB ya tiene pruebas de stream sintético; una prueba real de ese tamaño es una prueba operacional separada y costosa.
 - Evidencia: timestamps UTC, SHA/build, entorno, IDs de usuario/vault/beat/Order/Payment/webhook **sanitizados**, resultado de cada acción, estado Access antes/después, puntero/pin y ledger PostgreSQL de sólo lectura, IDs de mensaje Telegram, hash de descarga, errores/retries y captura/screenshot sin tokens ni PII. `PASS` exige la misma identidad correlacionada de Browser→Cloud→PostgreSQL→Telegram; un estado UI aislado no basta.
 
+### Primeras órdenes reproducibles en el worktree aislado
+
+```powershell
+cd E:\777\app\beatvault-step15-prep
+node scripts\step15-readonly-preflight.mjs --live
+npm ci
+npm run build:web
+cd cloud-server
+npm ci --ignore-scripts
+npm run test:billing-v1
+$env:BEATGALER_STEP3_TEST_ADMIN_URL = '<URL de administrador PostgreSQL exclusivo para tests STEP 15>'
+node --test tests/library-beat-quota.integration.cjs tests/library-index-publication.integration.cjs tests/project-access.integration.cjs tests/library-trash-purge.integration.cjs
+Remove-Item Env:BEATGALER_STEP3_TEST_ADMIN_URL
+```
+
+Las cuatro suites crean DB temporales y pueden saltarse silenciosamente si falta `BEATGALER_STEP3_TEST_ADMIN_URL`: exigir `zero skipped`. `npm run test:web:smoke` sólo prueba montaje React; el glob previo también disparaba Stage 1 y por eso se acotó en este worktree. `scripts/seed-stage1-real-accounts.mjs` escribe `.env.stage1` y crea cuentas reales; invocarlo únicamente cuando el Cloud de STEP 15 esté aislado y `STAGE1_CLOUD_URL` apunte a él. No ejecutar ningún `polar-sandbox-*` desde este protocolo: STEP 14 conserva sus propios procesos/evidencia.
+
 ## Orden de ejecución al cierre de STEP 14
 
 **0. Entrada (automatizable, sin mutaciones externas).** Confirmar que STEP 14 cerró con sus propios criterios de eventos naturales. La evidencia de 19:03/19:24 es el siguiente punto de observación, no equivale por sí sola al cierre: todavía puede faltar Highest→Entry, recuperación, cancelación y expiración natural. Congelar SHA y revisar `git diff`, migraciones, configuración y estado de los workers. Ejecutar primero pruebas locales/PG con DB exclusiva; después levantar el stack E2E separado.
