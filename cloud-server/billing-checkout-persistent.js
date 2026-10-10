@@ -4,6 +4,7 @@ const crypto = require('crypto');
 
 const PROVIDER = 'polar';
 const PROVIDER_ENVIRONMENT = 'sandbox';
+const SUPPORTED_ENVIRONMENTS = Object.freeze(['sandbox', 'production']);
 const UNRESOLVED_STATES = Object.freeze(['CREATING', 'OPEN', 'AMBIGUOUS']);
 const TERMINAL_STATES = Object.freeze(['COMPLETED', 'EXPIRED', 'FAILED']);
 
@@ -116,12 +117,13 @@ function createPersistentCheckoutService({
   if (!adapter || typeof adapter.createCheckout !== 'function' || typeof adapter.getCheckoutOffer !== 'function') {
     throw new PersistentCheckoutError('Billing provider adapter is required.', 'BILLING_CHECKOUT_CONFIG_INVALID');
   }
-  if (adapter.provider !== PROVIDER || adapter.environment !== PROVIDER_ENVIRONMENT) {
+  if (adapter.provider !== PROVIDER || !SUPPORTED_ENVIRONMENTS.includes(adapter.environment)) {
     throw new PersistentCheckoutError(
-      'Billing V1 persistent checkout currently requires Polar sandbox.',
+      'Billing V1 persistent checkout requires a pinned Polar environment.',
       'BILLING_CHECKOUT_CONFIG_INVALID',
     );
   }
+  const providerEnvironment = adapter.environment;
   const allowedOrigins = new Set(Array.from(allowedCallbackOrigins || [], value => {
     const url = new URL(String(value));
     return url.origin;
@@ -174,7 +176,7 @@ function createPersistentCheckoutService({
       FROM billing_customers
       WHERE user_id=$1 AND provider=$2 AND provider_environment=$3
       LIMIT 1
-    `, [userId, PROVIDER, PROVIDER_ENVIRONMENT]);
+    `, [userId, PROVIDER, providerEnvironment]);
     const row = result.rows[0] || null;
     if (row && row.external_id !== userId) {
       throw new PersistentCheckoutError(
@@ -217,7 +219,7 @@ function createPersistentCheckoutService({
           external_id=EXCLUDED.external_id,
           updated_at=now()
         WHERE billing_customers.external_id=EXCLUDED.external_id
-      `, [crypto.randomUUID(), userId, PROVIDER, PROVIDER_ENVIRONMENT, providerCustomerId, userId]);
+      `, [crypto.randomUUID(), userId, PROVIDER, providerEnvironment, providerCustomerId, userId]);
     } catch (_) {
       // Checkout recovery must not depend on this cache/projection. The checkout
       // itself is already identity-bound by external_customer_id=userId.
@@ -267,6 +269,11 @@ function createPersistentCheckoutService({
       const existing = existingResult.rows[0] || null;
 
       if (existing) {
+        if (existing.provider !== PROVIDER || existing.provider_environment !== providerEnvironment) {
+          throw new PersistentCheckoutError(
+            'requestId belongs to another billing environment.', 'BILLING_CHECKOUT_REQUEST_CONFLICT',
+          );
+        }
         if (existing.request_hash_sha256 !== requestHash) {
           throw new PersistentCheckoutError(
             'requestId was already used with different checkout parameters.',
@@ -305,9 +312,9 @@ function createPersistentCheckoutService({
       const unresolved = await client.query(`
         SELECT request_id, state
         FROM billing_checkout_requests
-        WHERE user_id=$1 AND state = ANY($2::text[])
+        WHERE user_id=$1 AND provider=$3 AND provider_environment=$4 AND state = ANY($2::text[])
         LIMIT 1
-      `, [userId, UNRESOLVED_STATES]);
+      `, [userId, UNRESOLVED_STATES, PROVIDER, providerEnvironment]);
       if (unresolved.rows[0]) {
         throw new PersistentCheckoutError(
           'Another checkout attempt for this user is unresolved.',
@@ -320,7 +327,7 @@ function createPersistentCheckoutService({
         INSERT INTO billing_checkout_requests(
           user_id,request_id,offer_id,request_hash_sha256,provider,provider_environment,state,created_at,updated_at
         ) VALUES ($1,$2,$3,$4,$5,$6,'CREATING',now(),now())
-      `, [userId, requestId, offer.id, requestHash, PROVIDER, PROVIDER_ENVIRONMENT]);
+      `, [userId, requestId, offer.id, requestHash, PROVIDER, providerEnvironment]);
 
       let checkout;
       try {
@@ -393,9 +400,9 @@ function createPersistentCheckoutService({
     const result = await pool.query(`
       SELECT *
       FROM billing_checkout_requests
-      WHERE user_id=$1 AND request_id=$2
+      WHERE user_id=$1 AND request_id=$2 AND provider=$3 AND provider_environment=$4
       LIMIT 1
-    `, [normalizedUserId, normalizedRequestId]);
+    `, [normalizedUserId, normalizedRequestId, PROVIDER, providerEnvironment]);
     return result.rows[0] ? publicRow(result.rows[0], { recovered: true }) : null;
   }
 

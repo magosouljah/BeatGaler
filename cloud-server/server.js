@@ -23,6 +23,7 @@ const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
 const webPortalRuntime = require("./billing-web-portal-runtime");
+const { assertProductionBillingIsolation } = require("./billing-production-isolation");
 const webhookRuntime = require("./billing-webhook-runtime");
 const lifecycleRuntime = require("./billing-lifecycle-runtime");
 const reconciliationRuntime = require("./billing-reconciliation-runtime");
@@ -52,7 +53,14 @@ async function start() {
       await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop()]);
     } });
   }
-  configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
+  configureRuntimeDependencies({
+    pool, postgresRequired: pgConfig.enabled,
+    billingRequired: process.env.BILLING_PROVIDER_ENVIRONMENT === 'production' &&
+      process.env.BILLING_PRODUCTION_SALES_ENABLED === 'true',
+    billingStatus: () => Boolean(webCheckoutRuntime.current() && webhookRuntime.status().ready &&
+      lifecycleRuntime.status().running && lifecycleRuntime.status().healthy &&
+      reconciliationRuntime.status().running && reconciliationRuntime.status().healthy),
+  });
   directPersistentAssignments.configure({ pool });
   vaultIndexPointers.configure({ pool });
 
@@ -66,39 +74,39 @@ async function start() {
   }
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
   accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
+  if (cutover.authority === 'postgres' && process.env.BEATGALER_DEPLOYMENT_ENV === 'production') {
+    await assertProductionBillingIsolation(pool);
+  }
   if (cutover.authority === 'postgres') {
     const billing = await webBillingRuntime.configure({ env: process.env });
-    console.log(`[billing] sandbox sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
-    const checkout = webCheckoutRuntime.configure({
-      pool,
-      adapter: billing.ready ? webBillingRuntime.provider() : null,
-      env: process.env,
-    });
-    console.log(`[billing] web checkout=${checkout.ready ? 'ready' : 'unavailable'} code=${checkout.failureCode || 'OK'}`);
-    const portal = webPortalRuntime.configure({
-      pool,
-      adapter: billing.ready ? webBillingRuntime.provider() : null,
-      env: process.env,
-    });
-    console.log(`[billing] web portal=${portal.ready ? 'ready' : 'unavailable'}`);
+    const environment = process.env.BILLING_PROVIDER_ENVIRONMENT;
+    console.log(`[billing] ${environment === 'production' ? 'production' : 'sandbox'} sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
+    const adapter = billing.ready ? webBillingRuntime.provider() : null;
     const webhook = webhookRuntime.configure({
       pool,
-      adapter: billing.ready ? webBillingRuntime.provider() : null,
+      adapter,
       env: process.env,
     });
     console.log(`[billing] webhook inbox=${webhook.ready ? 'ready' : 'unavailable'} code=${webhook.failureCode || 'OK'}`);
     const lifecycle = lifecycleRuntime.configure({
       pool,
-      adapter: billing.ready && webhook.ready ? webBillingRuntime.provider() : null,
+      adapter: billing.ready && webhook.ready ? adapter : null,
       inbox: webhook.ready ? webhookRuntime.current() : null,
       onError: (area, code) => console.error(`[billing] lifecycle ${area} code=${code}`),
     });
     console.log(`[billing] lifecycle=${lifecycle.ready ? 'ready' : 'unavailable'} code=${lifecycle.failureCode || 'OK'}`);
     const reconciliation = reconciliationRuntime.configure({
       pool, authority: cutover.authority,
-      adapter: billing.ready ? webBillingRuntime.provider() : null,
+      adapter,
     });
     console.log(`[billing] reconciliation=${reconciliation.ready ? 'ready' : 'unavailable'} code=${reconciliation.failureCode || 'OK'}`);
+    const saleAdapter = environment !== 'production' ||
+      (process.env.BILLING_PRODUCTION_SALES_ENABLED === 'true' && webhook.ready && lifecycle.ready && reconciliation.ready)
+      ? adapter : null;
+    const checkout = webCheckoutRuntime.configure({ pool, adapter: saleAdapter, env: process.env });
+    console.log(`[billing] web checkout=${checkout.ready ? 'ready' : 'unavailable'} code=${checkout.failureCode || 'OK'}`);
+    const portal = webPortalRuntime.configure({ pool, adapter, env: process.env });
+    console.log(`[billing] web portal=${portal.ready ? 'ready' : 'unavailable'}`);
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {

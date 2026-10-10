@@ -10,9 +10,25 @@ on:
       - 'cloud-server/billing-commercial-catalog.js'
       - 'cloud-server/billing-polar-sandbox.js'
       - 'cloud-server/billing-polar-lifecycle-adapter.js'
+      - 'cloud-server/billing-checkout-persistent.js'
+      - 'cloud-server/billing-web-runtime.js'
+      - 'cloud-server/billing-webhook-runtime.js'
+      - 'cloud-server/billing-lifecycle-runtime.js'
+      - 'cloud-server/billing-reconciliation-runtime.js'
+      - 'cloud-server/billing-web-checkout-runtime.js'
+      - 'cloud-server/server-core.js'
+      - 'cloud-server/server.js'
       - 'cloud-server/billing-web-portal-runtime.js'
       - 'cloud-server/billing-web-portal-route.js'
       - 'cloud-server/tests/billing-web-portal.test.cjs'
+      - 'cloud-server/billing-polar-production.js'
+      - 'cloud-server/billing-production-isolation.js'
+      - 'cloud-server/billing-production-preflight.js'
+      - 'cloud-server/scripts/polar-production-preflight.cjs'
+      - 'cloud-server/runtime-operability.js'
+      - 'cloud-server/tests/runtime-operability.test.cjs'
+      - 'cloud-server/tests/billing-production-readiness.test.cjs'
+      - 'cloud-server/tests/billing-reconciliation-runtime.test.cjs'
       - 'cloud-server/billing-polar-renewal-proof.js'
       - 'cloud-server/scripts/polar-sandbox-daily-*.cjs'
       - 'cloud-server/scripts/polar-sandbox-e2e-guard.cjs'
@@ -50,3 +66,9 @@ jobs:
       - name: Test Billing V1 policy, catalog, adapter and real SDK contract
         working-directory: cloud-server
         run: npm run test:billing-v1
+      - name: Test production readiness gate
+        working-directory: cloud-server
+        run: node --test tests/runtime-operability.test.cjs
+      - name: Test reconciliation scheduler health
+        working-directory: cloud-server
+        run: npm run test:billing-reconciliation

@@ -32,6 +32,19 @@ test('readiness verifies postgres with SELECT 1', async () => {
   assert.deepEqual(seen, ['SELECT 1']);
 });
 
+test('Live billing readiness follows checkout and worker availability', async () => {
+  let billingReady = false;
+  runtime.configureRuntimeDependencies({ pool: { query: async () => ({}) }, postgresRequired: true,
+    billingRequired: true, billingStatus: () => billingReady });
+  const config = runtime.runtimeConfig({ NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'production' });
+  assert.deepEqual((await runtime.readinessSnapshot({ config })).dependencies,
+    { postgres: 'ready', billing: 'unavailable' });
+  billingReady = true;
+  const result = await runtime.readinessSnapshot({ config });
+  assert.equal(result.ok, true);
+  assert.equal(result.dependencies.billing, 'ready');
+});
+
 test('HTTP server receives bounded timeout contract', () => {
   const server = { setTimeout(ms) { this.socketTimeout = ms; } };
   runtime.configureHttpServer(server, runtime.runtimeConfig({ NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test' }));

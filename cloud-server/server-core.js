@@ -42,6 +42,9 @@ const { createCheckoutHandlers } = require("./billing-web-checkout-route");
 const webPortalRuntime = require("./billing-web-portal-runtime");
 const { createPortalHandler } = require("./billing-web-portal-route");
 const webhookRuntime = require("./billing-webhook-runtime");
+const lifecycleRuntime = require("./billing-lifecycle-runtime");
+const reconciliationRuntime = require("./billing-reconciliation-runtime");
+const { currentSellableCheckout } = require("./billing-production-isolation");
 const { installPolarWebhookRoute } = require("./billing-webhook-route");
 const { createPlanCatalogHandler } = require("./billing-plan-catalog-route");
 const { createPlanMeHandler, createAccountHandler, accountPublicPayload: buildAccountPublicPayload } = require("./access-consumer-handlers");
@@ -1463,7 +1466,14 @@ async function fetchRemoteImageDataUrl(rawUrl, redirectsLeft = 3, pageResolveLef
 app.get("/plans/catalog", createPlanCatalogHandler({
   usesPostgresAccess: accessGrants.usesPostgresAccess,
   webPlanCatalog: () => webBillingRuntime.planCatalog().map(plan => ({
-    ...plan, checkout_available: plan.checkout_available && webCheckoutRuntime.status().ready,
+    ...plan, checkout_available: plan.checkout_available && Boolean(currentSellableCheckout({
+      environment: process.env.BILLING_PROVIDER_ENVIRONMENT,
+      salesEnabled: process.env.BILLING_PRODUCTION_SALES_ENABLED === 'true',
+      currentCheckout: webCheckoutRuntime.current,
+      webhookStatus: webhookRuntime.status,
+      lifecycleStatus: lifecycleRuntime.status,
+      reconciliationStatus: reconciliationRuntime.status,
+    })),
   })),
   legacyPlanCatalog: accessRuntime.planCatalog,
   codePolicy: CODE_POLICY,
@@ -1475,7 +1485,14 @@ app.get("/plans/me", createPlanMeHandler({
 
 const webCheckoutHandlers = createCheckoutHandlers({
   getUser: req => getAuthUserFromToken(bearerToken(req)),
-  currentCheckout: webCheckoutRuntime.current,
+  currentCheckout: () => currentSellableCheckout({
+    environment: process.env.BILLING_PROVIDER_ENVIRONMENT,
+    salesEnabled: process.env.BILLING_PRODUCTION_SALES_ENABLED === 'true',
+    currentCheckout: webCheckoutRuntime.current,
+    webhookStatus: webhookRuntime.status,
+    lifecycleStatus: lifecycleRuntime.status,
+    reconciliationStatus: reconciliationRuntime.status,
+  }),
 });
 app.post("/billing/checkout", webCheckoutHandlers.create);
 app.get("/billing/checkout/:requestId", webCheckoutHandlers.get);

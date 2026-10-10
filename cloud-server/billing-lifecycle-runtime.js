@@ -9,8 +9,9 @@ const DEFAULT_BATCH_SIZE = 25;
 function createLifecycleWorker({ pool, adapter, inbox, pollMs = DEFAULT_POLL_MS, batchSize = DEFAULT_BATCH_SIZE,
   onError = () => {}, lifecycleFactory = createBillingLifecycle,
   actionWorkerFactory = createBillingProviderActionWorker } = {}) {
-  if (!pool || !inbox || inbox.provider !== 'polar' || inbox.environment !== 'sandbox' ||
-      adapter?.provider !== 'polar' || adapter?.environment !== 'sandbox' ||
+  if (!pool || !inbox || inbox.provider !== 'polar' ||
+      adapter?.provider !== 'polar' || !['sandbox', 'production'].includes(adapter.environment) ||
+      inbox.environment !== adapter.environment ||
       !Number.isInteger(pollMs) || pollMs < 100 || !Number.isInteger(batchSize) || batchSize < 1) {
     throw new Error('BILLING_LIFECYCLE_RUNTIME_CONFIG_INVALID');
   }
@@ -18,6 +19,7 @@ function createLifecycleWorker({ pool, adapter, inbox, pollMs = DEFAULT_POLL_MS,
   const actions = actionWorkerFactory({ pool, adapter });
   const workerId = `lifecycle_${crypto.randomUUID()}`;
   let running = false;
+  let healthy = false;
   let timer = null;
   let active = null;
 
@@ -29,18 +31,20 @@ function createLifecycleWorker({ pool, adapter, inbox, pollMs = DEFAULT_POLL_MS,
   async function pumpOnce() {
     let events = 0;
     let providerActions = 0;
+    let failed = false;
     for (; events < batchSize && running; events += 1) {
       let result;
       try { result = await inbox.processNext({ workerId, handlers: lifecycle.handlers }); }
-      catch (error) { report('inbox', error?.code || 'BILLING_LIFECYCLE_PROCESS_FAILED'); break; }
+      catch (error) { failed = true; report('inbox', error?.code || 'BILLING_LIFECYCLE_PROCESS_FAILED'); break; }
       if (!result) break;
     }
     for (; providerActions < batchSize && running; providerActions += 1) {
       let result;
       try { result = await actions.processNext({ workerId }); }
-      catch (error) { report('action', error?.code || 'BILLING_ACTION_PROCESS_FAILED'); break; }
+      catch (error) { failed = true; report('action', error?.code || 'BILLING_ACTION_PROCESS_FAILED'); break; }
       if (!result) break;
     }
+    healthy = !failed;
     return { events, providerActions };
   }
 
@@ -49,7 +53,7 @@ function createLifecycleWorker({ pool, adapter, inbox, pollMs = DEFAULT_POLL_MS,
     timer = setTimeout(() => {
       timer = null;
       active = pumpOnce()
-        .catch(error => report('poll', error?.code || 'BILLING_LIFECYCLE_POLL_FAILED'))
+        .catch(error => { healthy = false; report('poll', error?.code || 'BILLING_LIFECYCLE_POLL_FAILED'); })
         .finally(() => { active = null; schedule(); });
     }, pollMs);
     timer.unref?.();
@@ -57,19 +61,21 @@ function createLifecycleWorker({ pool, adapter, inbox, pollMs = DEFAULT_POLL_MS,
 
   function start() {
     if (running) return;
+    healthy = false;
     running = true;
     schedule();
   }
 
   async function stop() {
     running = false;
+    healthy = false;
     if (timer) clearTimeout(timer);
     timer = null;
     if (active) await active;
   }
 
   return Object.freeze({ lifecycle, actions, start, stop, pumpOnce,
-    status: () => ({ running, active: Boolean(active) }),
+    status: () => ({ running, healthy, active: Boolean(active) }),
   });
 }
 
@@ -86,7 +92,8 @@ function configure(options) {
   return status();
 }
 
-function status() { return Object.freeze({ ready: Boolean(worker), running: Boolean(worker?.status().running), failureCode }); }
+function status() { return Object.freeze({ ready: Boolean(worker), running: Boolean(worker?.status().running),
+  healthy: Boolean(worker?.status().healthy), failureCode }); }
 function start() { if (worker) worker.start(); return status(); }
 async function stop() { if (worker) await worker.stop(); return status(); }
 

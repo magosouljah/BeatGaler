@@ -148,6 +148,7 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
     client,
     webhooks,
     validateProduct: options.validateProduct,
+    allowProduction: options.allowProduction,
   });
 
   const checkoutGet = assertService(client, 'checkouts', 'get');

@@ -21,11 +21,12 @@ async function providerCall(promise) {
 
 function createBillingPortalService({ pool, adapter, env = process.env }) {
   if (!pool || typeof pool.query !== 'function' || adapter?.provider !== 'polar' ||
-      adapter.environment !== 'sandbox' || typeof adapter.getCustomerByExternalId !== 'function' ||
+      !['sandbox', 'production'].includes(adapter.environment) || typeof adapter.getCustomerByExternalId !== 'function' ||
       typeof adapter.createCustomerPortal !== 'function') {
     throw new BillingPortalError('BILLING_PORTAL_UNAVAILABLE');
   }
   const returnUrl = `${callbackOrigin(env)}/?billing=return`;
+  const environment = adapter.environment;
 
   return Object.freeze({
     async createSession(userId) {
@@ -35,8 +36,8 @@ function createBillingPortalService({ pool, adapter, env = process.env }) {
       const result = await pool.query(`
         SELECT provider_customer_id, external_id
         FROM billing_customers
-        WHERE user_id=$1 AND provider='polar' AND provider_environment='sandbox'
-      `, [userId]);
+        WHERE user_id=$1 AND provider='polar' AND provider_environment=$2
+      `, [userId, environment]);
       const customer = result.rows[0];
       if (!customer || customer.external_id !== userId || !customer.provider_customer_id) {
         throw new BillingPortalError('BILLING_PORTAL_CUSTOMER_NOT_FOUND');
@@ -53,7 +54,9 @@ function createBillingPortalService({ pool, adapter, env = process.env }) {
       let url;
       try { url = new URL(session?.url); }
       catch { throw new BillingPortalError('BILLING_PORTAL_UNAVAILABLE'); }
-      if (url.protocol !== 'https:' || url.username || url.password || url.hostname !== 'sandbox.polar.sh') {
+      const providerHost = environment === 'sandbox' ? url.hostname === 'sandbox.polar.sh'
+        : (url.hostname === 'polar.sh' || (url.hostname.endsWith('.polar.sh') && !url.hostname.startsWith('sandbox.')));
+      if (url.protocol !== 'https:' || url.username || url.password || !providerHost) {
         throw new BillingPortalError('BILLING_PORTAL_UNAVAILABLE');
       }
       return Object.freeze({ url: url.toString() });

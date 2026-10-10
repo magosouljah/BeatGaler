@@ -28,8 +28,10 @@ export async function probePublicLaunch({ origin = DEFAULT_ORIGIN, expectedSha, 
   }), false);
   await request('/web-health', 'web_health', value => ({ ok: value === 'ok', observation: value }), false);
   await request('/beatgaler-api/readyz', 'api_ready', value => ({
-    ok: value?.ok === true && value?.status === 'ready' && value?.dependencies?.postgres === 'ready' && value?.environment === 'production',
-    observation: { status: value?.status || null, postgres: value?.dependencies?.postgres || null, environment: value?.environment || null },
+    ok: value?.ok === true && value?.status === 'ready' && value?.dependencies?.postgres === 'ready' &&
+      value?.dependencies?.billing === 'ready' && value?.environment === 'production',
+    observation: { status: value?.status || null, postgres: value?.dependencies?.postgres || null,
+      billing: value?.dependencies?.billing || null, environment: value?.environment || null },
   }));
   await request('/beatgaler-api/auth/health', 'account_and_master', value => ({
     ok: value?.ok === true && value?.account_auth === true && value?.master_storage_ready === true,

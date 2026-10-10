@@ -273,7 +273,8 @@ export default function SettingsPanel(props: Props) {
   const startCheckout = async (plan: BeatGalerPlanDefinition) => {
     if (!account || !currentPlan?.initial_checkout_allowed || !plan.price?.offer_id) return;
     setPlanSwitching(plan.id); setAccountStatus(null);
-    const key = `beatgaler:checkout:${account.id}:${plan.price.offer_id}`;
+    // A new key avoids replaying a pre-launch Sandbox requestId after Live cutover.
+    const key = `beatgaler:checkout:v2:${account.id}:${plan.price.offer_id}`;
     let requestId = localStorage.getItem(key);
     if (!requestId) {
       requestId = crypto.randomUUID();

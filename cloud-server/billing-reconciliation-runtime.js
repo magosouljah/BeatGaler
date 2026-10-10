@@ -10,13 +10,17 @@ const DEFAULT_COMMERCIAL_MS = 15 * 60_000;
 function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEFAULT_PENDING_MS,
   commercialMs = DEFAULT_COMMERCIAL_MS, pendingLimit = 50, commercialLimit = 100,
   logger = createBillingSafeLogger(), serviceFactory = createBillingReconciliationService } = {}) {
-  if (authority !== 'postgres' || !pool || adapter?.provider !== 'polar' || adapter?.environment !== 'sandbox' ||
+  if (authority !== 'postgres' || !pool || adapter?.provider !== 'polar' ||
+      !['sandbox', 'production'].includes(adapter.environment) ||
       ![pendingMs, commercialMs].every(ms => Number.isInteger(ms) && ms >= 100) ||
       ![pendingLimit, commercialLimit].every(limit => Number.isInteger(limit) && limit > 0 && limit <= MAX_SWEEP_LIMIT)) {
     throw Object.assign(new Error('Reconciliation runtime is unavailable.'), { code: 'BILLING_RECONCILIATION_CONFIG_INVALID' });
   }
   const service = serviceFactory({ pool, adapter, logger });
   let running = false;
+  let healthy = false;
+  let pendingHealthy = true;
+  let commercialHealthy = true;
   let timer = null;
   let active = null;
   let pendingCursor = null;
@@ -35,10 +39,15 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
       });
       if (pending) pendingCursor = result.nextCursor;
       else commercialCursor = result.nextCursor;
+      if (pending) pendingHealthy = true;
+      else commercialHealthy = true;
     } catch (error) {
-      logger.emit('reconciliation_failed', { provider: 'polar', environment: 'sandbox', mode: kind,
+      if (pending) pendingHealthy = false;
+      else commercialHealthy = false;
+      logger.emit('reconciliation_failed', { provider: 'polar', environment: adapter.environment, mode: kind,
         reason: 'SWEEP_FAILED', errorCode: safeErrorCode(error) });
     }
+    healthy = pendingHealthy && commercialHealthy;
   }
 
   async function tick() {
@@ -65,6 +74,9 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
   function start() {
     if (running) return;
     running = true;
+    pendingHealthy = true;
+    commercialHealthy = true;
+    healthy = true;
     pendingDue = Date.now() + pendingMs;
     commercialDue = Date.now() + commercialMs;
     schedule();
@@ -72,6 +84,7 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
 
   async function stop() {
     running = false;
+    healthy = false;
     if (timer) clearTimeout(timer);
     timer = null;
     if (active) await active;
@@ -79,7 +92,7 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
 
   return Object.freeze({ start, stop,
     reconcileUser: options => service.reconcileUser(options),
-    status: () => ({ running, active: Boolean(active), pendingCursor, commercialCursor }),
+    status: () => ({ running, healthy, active: Boolean(active), pendingCursor, commercialCursor }),
   });
 }
 
@@ -92,7 +105,8 @@ function configure(options) {
   try { runtime = createReconciliationRuntime(options); failureCode = null; } catch (_) {}
   return status();
 }
-function status() { return { ready: Boolean(runtime), running: Boolean(runtime?.status().running), failureCode }; }
+function status() { return { ready: Boolean(runtime), running: Boolean(runtime?.status().running),
+  healthy: Boolean(runtime?.status().healthy), failureCode }; }
 function start() { runtime?.start(); return status(); }
 async function stop() { if (runtime) await runtime.stop(); return status(); }
 module.exports = { DEFAULT_PENDING_MS, DEFAULT_COMMERCIAL_MS, createReconciliationRuntime, configure, status, start, stop };

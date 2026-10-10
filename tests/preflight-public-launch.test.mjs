@@ -9,7 +9,7 @@ function fakeFetch(environment = 'production', sourceSha = sha) {
     const data = {
       '/.well-known/source-sha.txt': sourceSha,
       '/web-health': 'ok',
-      '/beatgaler-api/readyz': { ok: true, status: 'ready', dependencies: { postgres: 'ready' }, environment },
+      '/beatgaler-api/readyz': { ok: true, status: 'ready', dependencies: { postgres: 'ready', billing: 'ready' }, environment },
       '/beatgaler-api/auth/health': { ok: true, account_auth: true, master_storage_ready: true },
     }[path];
     return { ok: true, status: 200, async json() { return data; }, async text() { return data; } };

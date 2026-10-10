@@ -216,9 +216,12 @@ function createPinnedSandboxClient({ config, sdk }) {
   if (!sdk || typeof sdk.createPolar !== 'function') {
     throw new PolarSandboxConfigError('Polar SDK createPolar() is unavailable.');
   }
+  if (!['sandbox', 'production'].includes(config?.environment)) {
+    throw new PolarSandboxConfigError('Pinned Polar environment is invalid.');
+  }
   return sdk.createPolar({
     accessToken: config.accessToken,
-    environment: POLAR_ENVIRONMENT,
+    environment: config.environment,
     version: POLAR_API_VERSION,
   });
 }
@@ -253,6 +256,11 @@ function normalizeRawBody(rawBody) {
 function createPolarSandboxAdapter(options = {}) {
   const config = options.config || readPolarSandboxConfig(options.env || process.env);
   const catalog = options.catalog || createSandboxCommercialCatalog(config);
+  if (config?.provider !== POLAR_PROVIDER || !['sandbox', 'production'].includes(config.environment) ||
+      (config.environment === 'production' && options.allowProduction !== true) ||
+      catalog?.provider !== POLAR_PROVIDER || catalog?.providerEnvironment !== config.environment) {
+    throw new PolarSandboxConfigError('Polar adapter environment and catalog must match.');
+  }
   const sdk = options.sdk || (options.client ? null : loadPinnedPolarSdk());
   const client = options.client || createPinnedSandboxClient({ config, sdk });
   const webhookApi = options.webhooks || sdk?.webhooks;
@@ -282,7 +290,7 @@ function createPolarSandboxAdapter(options = {}) {
 
   return Object.freeze({
     provider: POLAR_PROVIDER,
-    environment: POLAR_ENVIRONMENT,
+    environment: config.environment,
     apiVersion: POLAR_API_VERSION,
     sdkVersion: POLAR_SDK_VERSION,
     catalog,

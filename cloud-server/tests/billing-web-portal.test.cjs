@@ -23,7 +23,7 @@ test('portal binds local and remote customer identity and owns return URL', asyn
   const service = createBillingPortalService({ ...f, env: { NODE_ENV: 'production' } });
   assert.deepEqual(await service.createSession('user_1'), { url: 'https://sandbox.polar.sh/portal/session' });
   assert.deepEqual(f.calls, [
-    ['query', ['user_1']], ['get', 'user_1'],
+    ['query', ['user_1', 'sandbox']], ['get', 'user_1'],
     ['portal', { userId: 'user_1', returnUrl: 'https://beatgaler.com/?billing=return' }],
   ]);
 });

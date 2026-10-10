@@ -4,6 +4,8 @@ const { BILLING_V1_ACCESS_CATALOG } = require('./billing-access-resolver');
 const { createCommercialCatalog, getCheckoutReadyOffer } = require('./billing-commercial-catalog');
 const { readPolarSandboxConfig, createSandboxCommercialCatalog } = require('./billing-polar-sandbox');
 const { createPolarSandboxLifecycleAdapter } = require('./billing-polar-lifecycle-adapter');
+const { readPolarProductionConfig, createProductionCommercialCatalog,
+  createPolarProductionLifecycleAdapter } = require('./billing-polar-production');
 
 const MONTHLY_OFFERS = Object.freeze(['paid_entry_monthly_v1', 'highest_paid_monthly_v1']);
 const OFFER_BY_PLAN = Object.freeze({
@@ -43,7 +45,7 @@ function publicPlanCatalog(catalog) {
   });
 }
 
-function createWebBillingRuntime({ env = process.env, adapterFactory = createPolarSandboxLifecycleAdapter } = {}) {
+function createWebBillingRuntime({ env = process.env, adapterFactory = null } = {}) {
   // The public V1 contract is available even if provider configuration is absent.
   let catalog = createCommercialCatalog({ environment: 'sandbox' });
   let adapter = null;
@@ -56,18 +58,30 @@ function createWebBillingRuntime({ env = process.env, adapterFactory = createPol
     catalog = createCommercialCatalog({ environment: 'sandbox' });
     failureCode = 'WEB_BILLING_UNAVAILABLE';
     try {
-      if (env.BILLING_PROVIDER_ENVIRONMENT !== 'sandbox') {
+      const environment = env.BILLING_PROVIDER_ENVIRONMENT;
+      if (!['sandbox', 'production'].includes(environment)) {
         throw new WebBillingUnavailableError('WEB_BILLING_ENVIRONMENT_UNSUPPORTED');
       }
-      const config = readPolarSandboxConfig(env);
-      const configuredCatalog = createSandboxCommercialCatalog(config);
+      if (environment === 'sandbox' && env.BEATGALER_DEPLOYMENT_ENV === 'production') {
+        throw new WebBillingUnavailableError('WEB_BILLING_SANDBOX_ON_PRODUCTION');
+      }
+      if (environment === 'production' && (env.NODE_ENV !== 'production' ||
+          env.BEATGALER_DEPLOYMENT_ENV !== 'production')) {
+        throw new WebBillingUnavailableError('WEB_BILLING_PRODUCTION_GATE_CLOSED');
+      }
+      const config = environment === 'sandbox' ? readPolarSandboxConfig(env) : readPolarProductionConfig(env);
+      const configuredCatalog = environment === 'sandbox'
+        ? createSandboxCommercialCatalog(config) : createProductionCommercialCatalog(config);
       const entry = configuredCatalog.offers.paid_entry_monthly_v1.providerMapping;
       const highest = configuredCatalog.offers.highest_paid_monthly_v1.providerMapping;
       if (entry.productId === highest.productId || entry.priceId === highest.priceId) {
         throw new WebBillingUnavailableError('WEB_BILLING_MAPPING_DUPLICATE');
       }
-      const provider = adapterFactory({ config, catalog: configuredCatalog });
-      if (!provider || provider.environment !== 'sandbox' || typeof provider.validateOfferMapping !== 'function' ||
+      const factory = adapterFactory || (environment === 'sandbox'
+        ? createPolarSandboxLifecycleAdapter : createPolarProductionLifecycleAdapter);
+      const provider = factory({ config, catalog: configuredCatalog });
+      if (!provider || provider.provider !== 'polar' || provider.environment !== environment ||
+          typeof provider.validateOfferMapping !== 'function' ||
           typeof provider.createCheckout !== 'function' || typeof provider.getCheckoutOffer !== 'function') {
         throw new WebBillingUnavailableError('WEB_BILLING_PROVIDER_INVALID');
       }
@@ -86,7 +100,7 @@ function createWebBillingRuntime({ env = process.env, adapterFactory = createPol
       failureCode = null;
     } catch (error) {
       // No provider exception or configuration value is exposed in logs or public responses.
-      failureCode = /^(WEB_BILLING|POLAR_SANDBOX|BILLING)_[A-Z0-9_]{1,70}$/.test(error?.code || '')
+      failureCode = /^(WEB_BILLING|POLAR_SANDBOX|POLAR_PRODUCTION|BILLING)_[A-Z0-9_]{1,70}$/.test(error?.code || '')
         ? error.code : 'WEB_BILLING_UNAVAILABLE';
     }
     return { ready, failureCode };
@@ -108,7 +122,8 @@ function createWebBillingRuntime({ env = process.env, adapterFactory = createPol
     initialize,
     planCatalog: () => publicPlanCatalog(catalog).map(plan => ({
       ...plan,
-      checkout_available: ready && Boolean(plan.price.offer_id),
+      checkout_available: ready && Boolean(plan.price.offer_id) &&
+        (env.BILLING_PROVIDER_ENVIRONMENT !== 'production' || env.BILLING_PRODUCTION_SALES_ENABLED === 'true'),
     })),
     status: () => ({ ready, failureCode }),
     // STEP 8 can inject this exact validated adapter into the durable checkout service.

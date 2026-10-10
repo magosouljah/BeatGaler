@@ -9,7 +9,7 @@ const DEFAULTS = Object.freeze({
   shutdownGraceMs: 10000,
 });
 
-let runtimeDependencies = { pool: null, postgresRequired: false };
+let runtimeDependencies = { pool: null, postgresRequired: false, billingRequired: false, billingStatus: null };
 let draining = false;
 
 function boundedInt(raw, fallback, min, max, name) {
@@ -45,8 +45,10 @@ function runtimeConfig(env = process.env) {
   });
 }
 
-function configureRuntimeDependencies({ pool = null, postgresRequired = false } = {}) {
-  runtimeDependencies = { pool, postgresRequired: Boolean(postgresRequired) };
+function configureRuntimeDependencies({ pool = null, postgresRequired = false,
+  billingRequired = false, billingStatus = null } = {}) {
+  runtimeDependencies = { pool, postgresRequired: Boolean(postgresRequired),
+    billingRequired: Boolean(billingRequired), billingStatus };
 }
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -77,7 +79,14 @@ async function readinessSnapshot({ config = runtimeConfig(), dependencies = runt
       return { ok: false, status: 'not-ready', dependencies: { postgres: 'unavailable' } };
     }
   }
-  return { ok: true, status: 'ready', dependencies: { postgres: pool ? 'ready' : 'disabled' } };
+  const state = { postgres: pool ? 'ready' : 'disabled' };
+  if (dependencies.billingRequired) {
+    let ready = false;
+    try { ready = dependencies.billingStatus?.() === true; } catch (_) {}
+    state.billing = ready ? 'ready' : 'unavailable';
+    if (!ready) return { ok: false, status: 'not-ready', dependencies: state };
+  }
+  return { ok: true, status: 'ready', dependencies: state };
 }
 
 function installRoutesAndProxy(app, config) {
@@ -145,7 +154,7 @@ function installRuntimeOperability(express, { env = process.env, processLike = p
 }
 
 function _resetForTests() {
-  runtimeDependencies = { pool: null, postgresRequired: false };
+  runtimeDependencies = { pool: null, postgresRequired: false, billingRequired: false, billingStatus: null };
   draining = false;
 }
 

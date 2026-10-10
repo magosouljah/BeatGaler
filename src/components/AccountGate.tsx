@@ -373,7 +373,8 @@ export async function startBeatGalerPortal(): Promise<string> {
   if (!token) throw new Error("Session expired. Sign in again.");
   const result = await authRequest("/billing/portal", {}, token);
   const url = new URL(String(result?.portal?.url || ""));
-  if (url.protocol !== "https:" || url.hostname !== "sandbox.polar.sh" || url.username || url.password) {
+  const providerHost = url.hostname === "polar.sh" || url.hostname.endsWith(".polar.sh");
+  if (url.protocol !== "https:" || !providerHost || url.username || url.password) {
     throw new Error("Billing portal could not be opened securely.");
   }
   return url.toString();
