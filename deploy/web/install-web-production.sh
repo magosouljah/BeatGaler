@@ -208,6 +208,11 @@ else
   echo "STATUS_RUNTIME_UNVERIFIED host=$STATUS_HOST reason=DNS_NOT_READY"
 fi
 
+# Verify the public route while rollback is still armed. A local --resolve
+# smoke can pass even when DNS or an upstream proxy serves another release.
+curl --fail --silent --show-error --max-time 15 -H 'Cache-Control: no-cache' \
+  "https://$WEB_HOST/.well-known/source-sha.txt" | grep -Fxq "$EXPECTED_SOURCE_SHA"
+
 # The new release has passed every local smoke. Older releases remain retained
 # for a deliberate operator rollback after this point.
 ROLLBACK_ARMED=0

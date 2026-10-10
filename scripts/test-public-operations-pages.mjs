@@ -80,6 +80,7 @@ assert.match(installer, /source-sha\.txt/, 'installer must require a packaged so
 assert.match(installer, /ACTUAL_SOURCE_SHA=.*tr -d/, 'installer must read the packaged source SHA marker');
 assert.match(installer, /ACTUAL_SOURCE_SHA" != "\$EXPECTED_SOURCE_SHA/, 'installer must fail closed when archive SHA and expected SHA differ');
 assert.match(installer, /\.well-known\/source-sha\.txt" \| grep -Fxq "\$EXPECTED_SOURCE_SHA"/, 'installer must verify the active local HTTPS source marker');
+assert.match(installer, /--max-time 15 -H 'Cache-Control: no-cache'[\s\S]*https:\/\/\$WEB_HOST\/\.well-known\/source-sha\.txt" \| grep -Fxq "\$EXPECTED_SOURCE_SHA"/, 'installer must verify the public source marker before disarming rollback');
 assert.match(installer, /WEB_RUNTIME_SOURCE_PROOF_OK source=\$EXPECTED_SOURCE_SHA/, 'installer must emit explicit runtime/source proof');
 
 const deployScript = read(deployScriptPath);
