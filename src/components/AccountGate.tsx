@@ -368,6 +368,17 @@ export async function startBeatGalerCheckout(offerId: string, requestId: string)
   return { url, recovered: Boolean(result.checkout.recovered) };
 }
 
+export async function startBeatGalerPortal(): Promise<string> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/billing/portal", {}, token);
+  const url = new URL(String(result?.portal?.url || ""));
+  if (url.protocol !== "https:" || url.hostname !== "sandbox.polar.sh" || url.username || url.password) {
+    throw new Error("Billing portal could not be opened securely.");
+  }
+  return url.toString();
+}
+
 export async function changeBeatGalerEmail(email: string, confirmEmail: string): Promise<BeatGalerAccount> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");

@@ -11,6 +11,9 @@ on:
       - 'vite.config.ts'
       - 'deploy/web/**'
       - 'scripts/deploy-web-production.ps1'
+      - 'scripts/preflight-public-launch.mjs'
+      - 'tests/web-deploy-rollback.sh'
+      - 'tests/preflight-public-launch.test.mjs'
       - 'scripts/test-public-operations-pages.mjs'
       - 'scripts/regression-web-startup-bridge.mjs'
       - 'scripts/regression-web-bound-temp-rpc.mjs'
@@ -37,6 +40,8 @@ jobs:
         run: node scripts/regression-web-startup-bridge.mjs
       - name: Guard bound-temp Web RPC seam
         run: node scripts/regression-web-bound-temp-rpc.mjs
+      - name: Test read-only public launch probe
+        run: node --test tests/preflight-public-launch.test.mjs
       - name: Build browser Web
         run: npm run build:web
       - name: Validate static package
@@ -49,6 +54,8 @@ jobs:
           grep -R --include='*.js' -q '/beatgaler-api' dist
       - name: Validate EC2 installer syntax
         run: bash -n deploy/web/install-web-production.sh
+      - name: Verify failed Web deploy restores previous release
+        run: bash tests/web-deploy-rollback.sh
       - name: Validate PowerShell deploy script syntax
         shell: pwsh
         run: |

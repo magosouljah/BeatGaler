@@ -9,7 +9,7 @@ import type {
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import {
   beginMfaSetup, changeBeatGalerEmail, changeBeatGalerPassword, disableMfa, disconnectOAuthProvider,
-  enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, startBeatGalerCheckout, oauthBeatGalerAccount,
+  enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, startBeatGalerCheckout, startBeatGalerPortal, oauthBeatGalerAccount,
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
 } from "./AccountGate";
 import { planFeatures, planPrice, planStatus } from "./billingPresentation";
@@ -97,6 +97,7 @@ export default function SettingsPanel(props: Props) {
   const [catalogError, setCatalogError] = useState(false);
   const [billingReturn, setBillingReturn] = useState(false);
   const [planSwitching, setPlanSwitching] = useState<BeatGalerPlanId | null>(null);
+  const [portalBusy, setPortalBusy] = useState(false);
   const [email, setEmail] = useState("");
   const [confirmEmail, setConfirmEmail] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
@@ -289,6 +290,15 @@ export default function SettingsPanel(props: Props) {
       setPlanSwitching(null);
     }
   };
+  const openBillingPortal = async () => {
+    if (platform.kind !== "web" || !account) return;
+    setPortalBusy(true); setAccountStatus(null);
+    try { window.location.assign(await startBeatGalerPortal()); }
+    catch {
+      setAccountStatus(null, "Billing management could not be opened. Please try again later.");
+      setPortalBusy(false);
+    }
+  };
   const changeEmail = async () => {
     if (!email.trim()) return setAccountStatus(null, "Enter your new email address.");
     if (email.trim().toLowerCase() !== confirmEmail.trim().toLowerCase()) return setAccountStatus(null, "Email addresses do not match.");
@@ -453,7 +463,10 @@ export default function SettingsPanel(props: Props) {
 
           {planCatalog.length === 0 && <div role={catalogError ? "alert" : undefined} style={{ padding: 18, border: "1px solid #232323", borderRadius: 12, color: "#aaa", fontSize: 11 }}>{catalogLoading ? "Loading plans…" : "Plan catalog unavailable. Prices and checkout cannot be shown."}{catalogError && <button onClick={() => void refreshCatalog()} style={{ ...buttonStyle, marginLeft: 10 }}>Retry</button>}</div>}
 
-          {platform.kind === "web" && currentPlan?.initial_checkout_allowed === false && <div style={{ marginTop: 14, color: "#999", fontSize: 11 }}>Subscription changes are not yet available in Web. Your current and scheduled access is shown above.</div>}
+          {platform.kind === "web" && currentPlan?.access?.billing?.providerStatus && <div style={{ marginTop: 14, color: "#999", fontSize: 11 }}>
+            <button disabled={portalBusy || planSwitching !== null || !account || !!planError} onClick={() => void openBillingPortal()} style={buttonStyle}>{portalBusy ? "Opening billing…" : "Manage billing"}</button>
+            {currentPlan.initial_checkout_allowed === false && <div style={{ marginTop: 7 }}>Plan changes are not yet available in Web. Your current and scheduled access is shown above.</div>}
+          </div>}
 
           {platform.kind === "web" && <div style={{ marginTop: 14, color: "#888", fontSize: 11, lineHeight: 1.6 }}>Changing to a lower plan does not delete existing beats or PROJECT files. Existing PROJECT files remain available to read and download. If your library exceeds the new beat limit, new beat creation pauses until you are below that limit.</div>}
 

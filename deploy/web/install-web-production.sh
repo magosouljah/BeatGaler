@@ -19,7 +19,7 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }
 }
 
-for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp tr; do
+for command_name in nginx certbot getent tar curl grep awk sort date install ln mv readlink cp rm openssl mktemp tr; do
   require_command "$command_name"
 done
 
@@ -92,9 +92,58 @@ if [ "$ACTUAL_SOURCE_SHA" != "$EXPECTED_SOURCE_SHA" ]; then
   exit 29
 fi
 
-# Switch static files atomically. If later TLS/nginx validation fails, the files are
-# still complete and the previous release remains available under releases/.
-ln -sfn "$RELEASE_DIR" "$WEB_ROOT/current"
+# Preserve the last known-good Web and Nginx configuration until every local
+# TLS/API smoke succeeds. A failed deploy must not leave a broken Web active.
+PREVIOUS_RELEASE=""
+if [ -e "$WEB_ROOT/current" ] && [ ! -L "$WEB_ROOT/current" ]; then
+  echo "Refusing to replace a non-symlink Web current path." >&2
+  exit 30
+fi
+if [ -L "$WEB_ROOT/current" ]; then
+  [ -d "$WEB_ROOT/current" ] || { echo "Current Web release symlink is broken." >&2; exit 31; }
+  PREVIOUS_RELEASE="$(readlink "$WEB_ROOT/current")"
+fi
+PREVIOUS_NGINX_CONF=""
+if [ -f "$NGINX_CONF" ]; then
+  PREVIOUS_NGINX_CONF="$(mktemp)"
+  cp -p "$NGINX_CONF" "$PREVIOUS_NGINX_CONF"
+fi
+SECURITY_HEADERS=""
+SECURITY_BODY=""
+ROLLBACK_ARMED=1
+
+switch_release() {
+  local next_link="$WEB_ROOT/.current-next-$$"
+  [ ! -e "$next_link" ] && [ ! -L "$next_link" ] || rm -f "$next_link"
+  ln -s "$1" "$next_link"
+  mv -Tf "$next_link" "$WEB_ROOT/current"
+}
+
+finish_deploy() {
+  local status="$1"
+  trap - EXIT
+  set +e
+  [ -z "$SECURITY_HEADERS" ] || rm -f "$SECURITY_HEADERS"
+  [ -z "$SECURITY_BODY" ] || rm -f "$SECURITY_BODY"
+  if [ "$status" -ne 0 ] && [ "$ROLLBACK_ARMED" -eq 1 ]; then
+    if [ -n "$PREVIOUS_RELEASE" ]; then
+      switch_release "$PREVIOUS_RELEASE" || echo "CRITICAL: Web symlink rollback failed." >&2
+    else
+      rm -f "$WEB_ROOT/current"
+    fi
+    if [ -n "$PREVIOUS_NGINX_CONF" ]; then
+      cp -p "$PREVIOUS_NGINX_CONF" "$NGINX_CONF" || echo "CRITICAL: Nginx config rollback failed." >&2
+    else
+      rm -f "$NGINX_CONF"
+    fi
+    nginx -t && systemctl reload nginx || echo "CRITICAL: Nginx rollback reload failed; operator action required." >&2
+    echo "WEB_DEPLOY_ROLLED_BACK previous=${PREVIOUS_RELEASE:-none} failed_release=$RELEASE_ID" >&2
+  fi
+  [ -z "$PREVIOUS_NGINX_CONF" ] || rm -f "$PREVIOUS_NGINX_CONF"
+  exit "$status"
+}
+trap 'finish_deploy $?' EXIT
+switch_release "$RELEASE_DIR"
 
 # Bootstrap HTTP first so Certbot can satisfy ACME without touching api.beatgaler.com.
 install -m 0644 "$BOOTSTRAP_CONF" "$NGINX_CONF"
@@ -142,7 +191,6 @@ curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0
 
 SECURITY_HEADERS="$(mktemp)"
 SECURITY_BODY="$(mktemp)"
-trap 'rm -f "$SECURITY_HEADERS" "$SECURITY_BODY"' EXIT
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" \
   -D "$SECURITY_HEADERS" -o "$SECURITY_BODY" "https://$WEB_HOST/.well-known/security.txt"
 grep -Eiq '^content-type:[[:space:]]*text/plain;[[:space:]]*charset=utf-8([[:space:]]|$)' "$SECURITY_HEADERS"
@@ -159,6 +207,10 @@ if [ "$STATUS_DNS_READY" -eq 1 ]; then
 else
   echo "STATUS_RUNTIME_UNVERIFIED host=$STATUS_HOST reason=DNS_NOT_READY"
 fi
+
+# The new release has passed every local smoke. Older releases remain retained
+# for a deliberate operator rollback after this point.
+ROLLBACK_ARMED=0
 
 # Keep rollback material without growing the tiny EC2 disk indefinitely.
 mapfile -t OLD_RELEASES < <(find "$WEB_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | awk 'NR>5 {$1=""; sub(/^ /, ""); print}')
