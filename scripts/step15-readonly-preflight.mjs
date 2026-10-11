@@ -64,6 +64,7 @@ const facts = {
   runtimeProjectTimeout30mOptIn: runtimeAllowsProjectWindow(runtime),
   projectIngressSmokePresent: existsSync(resolve(root, 'scripts/step15-project-ingress-smoke.mjs')),
   projectCloudRouteSmokePresent: existsSync(resolve(root, 'cloud-server/scripts/step15-project-route-smoke.cjs')),
+  projectProxyRouteSmokePresent: existsSync(resolve(root, 'cloud-server/scripts/step15-project-proxy-route-smoke.cjs')),
   billingSandboxOnly: billing.includes("env.BILLING_PROVIDER_ENVIRONMENT !== 'sandbox'"),
   settingsSubscriptionChangesUnavailable: settings.includes('Subscription changes are not yet available in Web'),
 };
@@ -76,6 +77,7 @@ if (!facts.nginxApiDefault2MiB) violations.push('GENERIC_API_BODY_LIMIT_WIDENED'
 if (!facts.runtimeProjectTimeout30mOptIn) violations.push('PROJECT_RUNTIME_TIMEOUT_CAP_BELOW_BROWSER_WINDOW');
 if (!facts.projectIngressSmokePresent) violations.push('PROJECT_INGRESS_SMOKE_MISSING');
 if (!facts.projectCloudRouteSmokePresent) violations.push('PROJECT_CLOUD_ROUTE_SMOKE_MISSING');
+if (!facts.projectProxyRouteSmokePresent) violations.push('PROJECT_PROXY_ROUTE_SMOKE_MISSING');
 
 async function getPublic(path) {
   const url = `https://beatgaler.com${path}`;
@@ -104,7 +106,7 @@ const report = {
     webSource: await getPublic('/.well-known/source-sha.txt'),
     apiReady: await getPublic('/beatgaler-api/readyz'),
   } } : {}),
-  note: '30 minute runtime timeout is opt-in for the isolated STEP15/public Web stack; this report does not inspect deployment secrets or environment variables. The PROJECT Cloud route smoke is local-only and uses a simulated publisher. No financial, Telegram, backup, or production infrastructure state is proven by this report.',
+  note: '30 minute runtime timeout is opt-in for the isolated STEP15/public Web stack; this report does not inspect deployment secrets or environment variables. PROJECT prep smokes are local-only and use a simulated publisher. No financial, Telegram, backup, or production infrastructure state is proven by this report.',
 };
 console.log(JSON.stringify(report, null, 2));
 if (violations.length > 0) process.exitCode = 2;
