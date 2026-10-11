@@ -6,6 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:containment": "node ../scripts/regression-http-containment.mjs",
+    "test:project-multipart": "node --test tests/project-multipart.test.cjs tests/project-upload-route.test.cjs",
     "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-sdk-contract.test.cjs tests/billing-polar-lifecycle-adapter.test.cjs tests/billing-polar-renewal-proof.test.cjs tests/billing-polar-daily.test.cjs tests/billing-web-runtime.test.cjs tests/billing-web-checkout-runtime.test.cjs tests/billing-web-portal.test.cjs tests/billing-production-readiness.test.cjs tests/billing-webhook-runtime.test.cjs",
     "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
@@ -24,7 +25,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1116.0",
     "@aws-sdk/client-secrets-manager": "3.1116.0",
+    "@aws-sdk/s3-request-presigner": "3.1116.0",
     "@mtcute/web": "0.31.0",
     "@polar-sh/sdk": "1.0.0-alpha.20",
     "dotenv": "^17.4.2",

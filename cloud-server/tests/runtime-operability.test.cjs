@@ -45,6 +45,16 @@ test('Live billing readiness follows checkout and worker availability', async ()
   assert.equal(result.dependencies.billing, 'ready');
 });
 
+test('public readiness requires the resumable PROJECT worker', async () => {
+  let projectReady = false;
+  runtime.configureRuntimeDependencies({ pool: { query: async () => ({}) }, postgresRequired: true,
+    projectRequired: true, projectStatus: () => projectReady });
+  const config = runtime.runtimeConfig({ NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'production' });
+  assert.equal((await runtime.readinessSnapshot({ config })).dependencies.project, 'unavailable');
+  projectReady = true;
+  assert.equal((await runtime.readinessSnapshot({ config })).dependencies.project, 'ready');
+});
+
 test('HTTP server receives bounded timeout contract', () => {
   const server = { setTimeout(ms) { this.socketTimeout = ms; } };
   runtime.configureHttpServer(server, runtime.runtimeConfig({ NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test' }));

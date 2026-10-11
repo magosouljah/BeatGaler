@@ -173,6 +173,7 @@ export async function commitWebImportedBeat(
       stage: "project",
       uploadedBytes: uploadedBytes + Math.min(project.size, progress.uploadedBytes),
       totalBytes,
+      phase: progress.phase,
     }));
     uploadedBytes += project.size;
   }

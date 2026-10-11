@@ -1,0 +1,61 @@
+name: PROJECT multipart staging
+
+on:
+  pull_request:
+    paths:
+      - 'cloud-server/project-multipart-*.js'
+      - 'cloud-server/migrations/0019_project_multipart_staging.sql'
+      - 'cloud-server/tests/project-multipart*.cjs'
+      - 'cloud-server/package*.json'
+      - 'src/features/cloud/webTransportSession.ts'
+      - 'deploy/project-staging/**'
+      - '.github/workflows/project-multipart.yml'
+  push:
+    branches:
+      - prep/phase4-public-launch
+
+permissions:
+  contents: read
+
+jobs:
+  multipart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Install Web dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck and build Web
+        run: npm run test:typecheck && npm run build:web
+      - name: Test browser multipart protocol
+        run: npx vitest run tests/component-dom/webTransportSession.test.ts --environment jsdom
+      - name: Install Cloud dependencies
+        working-directory: cloud-server
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test multipart service and worker
+        working-directory: cloud-server
+        run: npm run test:project-multipart
+      - name: Test migration and worker fencing in isolated PostgreSQL
+        working-directory: cloud-server
+        env:
+          PROJECT_MULTIPART_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: node --test tests/project-multipart-pg.integration.cjs

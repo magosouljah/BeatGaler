@@ -31,6 +31,8 @@ const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
 const { createProjectUploadHandlers } = require('./project-upload-route');
+const projectMultipartRuntime = require('./project-multipart-runtime');
+const { installProjectMultipartRoutes } = require('./project-multipart-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
 const { ensurePlanState, CODE_POLICY } = require("./plans");
@@ -2288,6 +2290,14 @@ app.post("/transport/project/upload", ...createProjectUploadHandlers({
   uploadProject: input => libraryIndexPublication.uploadProject(input),
   storageChatId,
 }));
+
+installProjectMultipartRoutes(app, {
+  authenticate: authenticatedTransportAccount,
+  verifyCapability: verifyAuthorizedCapability,
+  capabilityMatches: projectBeatCapabilityMatches,
+  storageChatId,
+  currentService: projectMultipartRuntime.current,
+});
 
 app.post("/transport/index/publish", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);

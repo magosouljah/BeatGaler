@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { webcrypto } from "node:crypto";
 
 vi.mock("../../src/platform/webClientId", () => ({
   getWebClientId: () => "beatgaler-web-browser-test",
@@ -12,7 +13,7 @@ vi.mock("../../src/components/AccountGate", () => ({
 
 import { authorizeWebTransportProject, cancelWebTransportBeat, uploadWebTransportProject, webTransportRequestBody } from "../../src/features/cloud/webTransportSession";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 
 describe("Web transport control-plane identity", () => {
   it("attaches the authorized browser installation id to every request body", () => {
@@ -53,39 +54,55 @@ describe("Web transport control-plane identity", () => {
       .rejects.toThrow("PROJECT upload is not available on this plan.");
   });
 
-  it("uploads PROJECT through the server with its exact capability and measured response", async () => {
-    let captured: { url: string; headers: Record<string, string>; body: FormData } | null = null;
-    class FakeXhr {
-      status = 200;
-      responseText = JSON.stringify({ telegram_file_id: 'direct:88', telegram_message_id: 88,
-        original_size: 3, filename: 'project.zip', parts: [], transport: 'direct-web' });
-      upload: { onprogress: ((event: { loaded: number }) => void) | null } = { onprogress: null };
-      onload: (() => void) | null = null;
-      onerror: (() => void) | null = null;
-      ontimeout: (() => void) | null = null;
-      withCredentials = false;
-      timeout = 0;
-      headers: Record<string, string> = {};
-      url = '';
-      open(_method: string, url: string) { this.url = url; }
-      setRequestHeader(name: string, value: string) { this.headers[name] = value; }
-      send(body: FormData) {
-        captured = { url: this.url, headers: this.headers, body };
-        this.upload.onprogress?.({ loaded: 2 });
-        this.onload?.();
+  it("sends PROJECT bytes only to signed staging parts and waits for the MASTER receipt", async () => {
+    vi.stubGlobal('crypto', webcrypto);
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const file = { size: 3, slice: (start: number, end: number) => ({
+      size: end - start,
+      arrayBuffer: async () => bytes.slice(start, end).buffer,
+    }) } as unknown as File;
+    const receipt = { telegram_file_id: 'direct:88', telegram_message_id: 88,
+      original_size: 3, filename: 'project.zip', parts: [], transport: 'direct-web' };
+    const requests: { path: string; body: Record<string, unknown> }[] = [];
+    let stagedBytes = 0;
+    let resumeParts: { number: number; size: number; checksum: string }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (inputUrl: string | URL, options: RequestInit) => {
+      const url = String(inputUrl);
+      if (url.startsWith('https://staging.s3.')) {
+        stagedBytes += Number((options.body as { size?: number })?.size || 0);
+        expect(options.headers).toMatchObject({ 'x-amz-checksum-sha256': expect.any(String) });
+        return { ok: true };
       }
-    }
-    vi.stubGlobal('XMLHttpRequest', FakeXhr);
-    const file = new File([new Uint8Array([1, 2, 3])], 'project.zip');
+      const path = url.replace('https://cloud.test', '');
+      const body = JSON.parse(String(options.body));
+      requests.push({ path, body });
+      const response = path.endsWith('/start') ? { id: 'upload-id', state: 'UPLOADING', partBytes: 16 * 1024 * 1024 }
+        : path.endsWith('/status') ? { id: 'upload-id', state: 'UPLOADING', parts: resumeParts }
+        : path.endsWith('/part-url') ? { url: 'https://staging.s3.us-east-1.amazonaws.com/part',
+          headers: { 'x-amz-checksum-sha256': body.sha256Base64 } }
+        : { id: 'upload-id', state: 'COMPLETED', upload: receipt };
+      return { ok: true, json: async () => response };
+    }));
     const progress: number[] = [];
-    const result = await uploadWebTransportProject({ file, filename: file.name, beatId: 'beat-a', threadId: 42 },
+    const result = await uploadWebTransportProject({ file, filename: 'project.zip', beatId: 'beat-a', threadId: 42 },
       { operationId: 'cap_project', sessionId: 'session-1', generation: 2 }, 'commit_import',
       state => progress.push(state.uploadedBytes));
     expect(result.telegram_message_id).toBe(88);
-    expect(captured?.url).toBe('https://cloud.test/transport/project/upload');
-    expect(captured?.headers['X-BeatGaler-Project-Operation']).toBe('cap_project');
-    expect(captured?.headers['X-BeatGaler-Project-Kind']).toBe('commit_import');
-    expect(captured?.body.get('file')).toBeInstanceOf(File);
-    expect(progress).toEqual([2, 3]);
+    expect(stagedBytes).toBe(3);
+    expect(requests.map(request => request.path)).toEqual([
+      '/transport/project/multipart/start', '/transport/project/multipart/status',
+      '/transport/project/multipart/part-url', '/transport/project/multipart/complete',
+    ]);
+    expect(requests[0].body).toMatchObject({ beatId: 'beat-a', sizeBytes: 3,
+      operationId: 'cap_project', kind: 'commit_import',
+      scope: { objectType: 'beat', objectIds: ['beat-a'] } });
+    expect(progress).toEqual([0, 3, 3]);
+    resumeParts = [{ number: 1, size: 3,
+      checksum: String(requests.find(request => request.path.endsWith('/part-url'))?.body.sha256Base64) }];
+    const resumed = await uploadWebTransportProject({ file, filename: 'project.zip', beatId: 'beat-a', threadId: 42 },
+      { operationId: 'cap_project', sessionId: 'session-1', generation: 2 }, 'commit_import');
+    expect(resumed.telegram_message_id).toBe(88);
+    expect(stagedBytes).toBe(3);
+    expect(requests.filter(request => request.path.endsWith('/part-url'))).toHaveLength(1);
   });
 });

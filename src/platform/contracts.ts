@@ -114,6 +114,7 @@ export interface PlatformCloudUploadProgress {
 
 export interface PlatformCloudCommitProgress extends PlatformCloudUploadProgress {
   stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library";
+  phase?: "staging" | "telegram";
 }
 
 export interface PlatformCloudUploadResult {

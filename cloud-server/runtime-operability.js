@@ -9,7 +9,8 @@ const DEFAULTS = Object.freeze({
   shutdownGraceMs: 10000,
 });
 
-let runtimeDependencies = { pool: null, postgresRequired: false, billingRequired: false, billingStatus: null };
+let runtimeDependencies = { pool: null, postgresRequired: false, billingRequired: false, billingStatus: null,
+  projectRequired: false, projectStatus: null };
 let draining = false;
 
 function boundedInt(raw, fallback, min, max, name) {
@@ -46,9 +47,10 @@ function runtimeConfig(env = process.env) {
 }
 
 function configureRuntimeDependencies({ pool = null, postgresRequired = false,
-  billingRequired = false, billingStatus = null } = {}) {
+  billingRequired = false, billingStatus = null, projectRequired = false, projectStatus = null } = {}) {
   runtimeDependencies = { pool, postgresRequired: Boolean(postgresRequired),
-    billingRequired: Boolean(billingRequired), billingStatus };
+    billingRequired: Boolean(billingRequired), billingStatus,
+    projectRequired: Boolean(projectRequired), projectStatus };
 }
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -84,6 +86,12 @@ async function readinessSnapshot({ config = runtimeConfig(), dependencies = runt
     let ready = false;
     try { ready = dependencies.billingStatus?.() === true; } catch (_) {}
     state.billing = ready ? 'ready' : 'unavailable';
+    if (!ready) return { ok: false, status: 'not-ready', dependencies: state };
+  }
+  if (dependencies.projectRequired) {
+    let ready = false;
+    try { ready = dependencies.projectStatus?.() === true; } catch (_) {}
+    state.project = ready ? 'ready' : 'unavailable';
     if (!ready) return { ok: false, status: 'not-ready', dependencies: state };
   }
   return { ok: true, status: 'ready', dependencies: state };
@@ -154,7 +162,8 @@ function installRuntimeOperability(express, { env = process.env, processLike = p
 }
 
 function _resetForTests() {
-  runtimeDependencies = { pool: null, postgresRequired: false, billingRequired: false, billingStatus: null };
+  runtimeDependencies = { pool: null, postgresRequired: false, billingRequired: false, billingStatus: null,
+    projectRequired: false, projectStatus: null };
   draining = false;
 }
 

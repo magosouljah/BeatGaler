@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private, short-lived multipart ingress for BeatGaler PROJECT ZIPs.
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally unique DNS-safe name without dots.
+    AllowedPattern: '[a-z0-9][a-z0-9-]{1,61}[a-z0-9]'
+  CloudRoleName:
+    Type: String
+    Description: Name of the existing Cloud EC2/task IAM role.
+  CloudRoleArn:
+    Type: String
+    Description: ARN of the same existing Cloud role for KMS key policy.
+  WebOrigin:
+    Type: String
+    Default: https://beatgaler.com
+Resources:
+  ProjectKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: BeatGaler temporary PROJECT ingress
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+          - Sid: CloudProjectWorker
+            Effect: Allow
+            Principal:
+              AWS: !Ref CloudRoleArn
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:DescribeKey
+            Resource: '*'
+  ProjectBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt ProjectKmsKey.Arn
+            BucketKeyEnabled: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref WebOrigin
+            AllowedMethods:
+              - PUT
+            AllowedHeaders:
+              - x-amz-checksum-sha256
+              - content-type
+            ExposedHeaders:
+              - ETag
+            MaxAge: 600
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 2
+          - Id: ExpireCompletedStaging
+            Status: Enabled
+            Prefix: project-staging/
+            ExpirationInDays: 7
+  ProjectBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ProjectBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ProjectBucket.Arn
+              - !Sub '${ProjectBucket.Arn}/project-staging/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+  ProjectCloudPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: beatgaler-project-staging
+      Roles:
+        - !Ref CloudRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: BucketRead
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource: !GetAtt ProjectBucket.Arn
+          - Sid: ProjectMultipartOnly
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource: !Sub '${ProjectBucket.Arn}/project-staging/*'
+Outputs:
+  BucketName:
+    Value: !Ref ProjectBucket
+  Region:
+    Value: !Ref AWS::Region
+  KmsKeyArn:
+    Value: !GetAtt ProjectKmsKey.Arn

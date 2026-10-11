@@ -160,6 +160,7 @@ export async function commitWebBeatEdit(
       stage: item.stage,
       uploadedBytes: completedBytes + Math.min(item.file.size, progress.uploadedBytes),
       totalBytes,
+      phase: progress.phase,
     }));
     uploads.set(item.kind, upload);
     const uploadThreadId = Number((upload as WebTransportUploadResult & { thread_id?: number }).thread_id || 0);

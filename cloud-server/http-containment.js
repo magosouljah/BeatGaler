@@ -19,6 +19,9 @@ const INSTALLATION_POST_ROUTES = new Set([
   "/transport/session/stop", "/transport/operation/begin", "/transport/capability/authorize", "/transport/operation/end", "/transport/operation/renew",
   "/transport/index/commit", "/transport/index/publish", "/transport/trash/purge", "/transport/quota/reserve", "/transport/quota/renew",
   "/transport/quota/cancel", "/transport/project/authorize", "/transport/project/upload",
+  "/transport/project/multipart/start", "/transport/project/multipart/status",
+  "/transport/project/multipart/part-url", "/transport/project/multipart/complete",
+  "/transport/project/multipart/abort", "/transport/project/multipart/retry",
   "/transport/routing/reconcile", "/transport/topic/ensure", "/transport/upload/confirm",
   "/beats/delete-topic", "/beats/delete-topics-batch",
 ]);

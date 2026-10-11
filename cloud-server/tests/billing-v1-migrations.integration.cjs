@@ -36,8 +36,7 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
     pool = new Pool({ connectionString: databaseUrl(ADMIN_URL, dbName), max: 2 });
 
     const migrations = listMigrations();
-    assert.equal(migrations.at(-1)?.version, '0013');
-    assert.equal(migrations.at(-1)?.name, '0013_billing_lifecycle.sql');
+    assert.ok(migrations.some(item => item.version === '0013' && item.name === '0013_billing_lifecycle.sql'));
 
     const first = await applyMigrations(pool, migrations);
     assert.deepEqual(first.applied, migrations.map(item => item.version));

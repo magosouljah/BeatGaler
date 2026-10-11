@@ -41,7 +41,11 @@ export interface WebTransportUploadResult {
   parts: [WebTransportStoredFile];
   transport: "direct-web";
 }
-export interface WebTransportProgress { uploadedBytes: number; totalBytes: number; }
+export interface WebTransportProgress {
+  uploadedBytes: number;
+  totalBytes: number;
+  phase?: "staging" | "telegram";
+}
 export interface WebTransportLibraryIndexResult {
   manifest: unknown;
   messageId: number | null;

@@ -553,50 +553,153 @@ export async function authorizeWebTransportProject(
   });
 }
 
-export function uploadWebTransportProject(
+type ProjectMultipartStatus = { id: string; state: string; partBytes: number; partCount: number;
+  sizeBytes: number; failureCode?: string | null; upload?: WebTransportUploadResult;
+  parts?: Array<{ number: number; size: number; checksum: string }> };
+
+function base64Digest(bytes: Uint8Array): string {
+  let value = "";
+  for (const byte of bytes) value += String.fromCharCode(byte);
+  return btoa(value);
+}
+
+async function projectPartChecksums(file: File, partBytes: number): Promise<string[]> {
+  const result: string[] = [];
+  for (let offset = 0; offset < file.size; offset += partBytes) {
+    const chunk = await file.slice(offset, offset + partBytes).arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", chunk);
+    result.push(base64Digest(new Uint8Array(digest)));
+  }
+  return result;
+}
+
+async function projectFingerprint(checksums: string[]): Promise<string> {
+  const bytes = new TextEncoder().encode(checksums.join("."));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function uploadWebTransportProject(
   input: { file: File; filename: string; beatId: string; threadId: number },
   lease: IndexPublicationLease,
   kind: 'commit_import' | 'commit_edit',
   onProgress?: (progress: WebTransportProgress) => void,
 ): Promise<WebTransportUploadResult> {
-  const token = getBeatGalerAuthToken();
-  if (!token) return Promise.reject(new Error('Session expired. Sign in again.'));
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${getResolvedCloudApiBase()}/transport/project/upload`);
-    xhr.withCredentials = true;
-    xhr.timeout = 30 * 60_000;
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    xhr.setRequestHeader('X-BeatGaler-Project-Operation', lease.operationId);
-    xhr.setRequestHeader('X-BeatGaler-Project-Session', lease.sessionId);
-    xhr.setRequestHeader('X-BeatGaler-Project-Generation', String(lease.generation));
-    xhr.setRequestHeader('X-BeatGaler-Project-Beat', input.beatId);
-    xhr.setRequestHeader('X-BeatGaler-Project-Kind', kind);
-    xhr.setRequestHeader('X-BeatGaler-Project-Thread', String(input.threadId));
-    const csrf = readWebCsrfToken();
-    if (csrf) xhr.setRequestHeader('X-BeatGaler-CSRF', csrf);
-    xhr.upload.onprogress = event => onProgress?.({ uploadedBytes: Math.min(input.file.size, event.loaded), totalBytes: input.file.size });
-    xhr.onload = () => {
-      let payload: Record<string, unknown> = {};
-      try { payload = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>; } catch { /* handled below */ }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(String(payload.error || `Galer Cloud HTTP ${xhr.status}`)));
-        return;
-      }
-      const result = payload as unknown as WebTransportUploadResult;
-      if (!Number.isSafeInteger(result.telegram_message_id) || result.original_size !== input.file.size) {
-        reject(new Error('Galer Cloud PROJECT byte confirmation is invalid.'));
-        return;
-      }
-      onProgress?.({ uploadedBytes: input.file.size, totalBytes: input.file.size });
-      resolve(result);
-    };
-    xhr.onerror = () => reject(new Error('Galer Cloud PROJECT upload failed. Please retry.'));
-    xhr.ontimeout = () => reject(new Error('Galer Cloud PROJECT upload timed out. Please retry.'));
-    const form = new FormData();
-    form.append('file', input.file, input.filename);
-    xhr.send(form);
+  const partBytes = 16 * 1024 * 1024;
+  if (input.file.size < 1 || input.file.size > 1_900_000_000) throw new Error("PROJECT exceeds the 1.9 GB plan limit.");
+  const checksums = await projectPartChecksums(input.file, partBytes);
+  const fingerprint = await projectFingerprint(checksums);
+  const key = `beatgaler:project-multipart:v1:${input.beatId}:${input.filename}:${input.file.size}`;
+  let saved: { clientUploadId: string; fingerprint: string; id?: string } | null = null;
+  try { saved = JSON.parse(localStorage.getItem(key) || "null"); } catch { /* storage optional */ }
+  const request = <T>(action: string, fields: Record<string, unknown> = {}) => transportRequest<T>(
+    `/transport/project/multipart/${action}`, {
+      beatId: input.beatId, sessionId: lease.sessionId, generation: lease.generation,
+      operationId: lease.operationId, kind, scope: { objectType: "beat", objectIds: [input.beatId] },
+      ...fields,
+    });
+  if (saved?.fingerprint !== fingerprint) {
+    if (saved?.id) await request("abort", { id: saved.id }).catch(() => {});
+    saved = null;
+  }
+  let clientUploadId = saved?.clientUploadId || crypto.randomUUID();
+  const start = () => request<{ id: string; state: string; partBytes: number }>("start", {
+    clientUploadId, fingerprint, filename: input.filename, sizeBytes: input.file.size, threadId: input.threadId,
   });
+  let started;
+  try { started = await start(); }
+  catch (error) {
+    if (!saved || !(error instanceof Error) || !error.message.includes("PROJECT_UPLOAD_EXPIRED")) throw error;
+    try { localStorage.removeItem(key); } catch { /* storage optional */ }
+    clientUploadId = crypto.randomUUID();
+    started = await start();
+  }
+  if (started.partBytes !== partBytes) throw new Error("Galer Cloud PROJECT part size changed.");
+  try { localStorage.setItem(key, JSON.stringify({ clientUploadId, fingerprint, id: started.id })); }
+  catch { /* retries within this invocation still work */ }
+  const status = () => request<ProjectMultipartStatus>("status", { id: started.id });
+  let current = await status();
+  if (current.state === "FAILED") {
+    await request("retry", { id: started.id });
+    current = await status();
+  }
+  if (current.state === "STARTING") {
+    for (let attempt = 0; attempt < 15 && current.state === "STARTING"; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      current = await status();
+    }
+    if (current.state === "STARTING") {
+      throw new Error("PROJECT staging is still starting. Retry to resume the same upload.");
+    }
+  }
+  if (current.state === "UPLOADING") {
+    const confirmed = new Map((current.parts || []).map(part => [part.number, part]));
+    let uploadedBytes = 0;
+    const missing: number[] = [];
+    for (let number = 1; number <= checksums.length; number++) {
+      const size = Math.min(partBytes, input.file.size - (number - 1) * partBytes);
+      const part = confirmed.get(number);
+      if (part?.size === size && part.checksum === checksums[number - 1]) uploadedBytes += size;
+      else missing.push(number);
+    }
+    onProgress?.({ uploadedBytes, totalBytes: input.file.size, phase: "staging" });
+    let cursor = 0;
+    let firstError: unknown = null;
+    await Promise.all(Array.from({ length: Math.min(3, missing.length) }, async () => {
+      while (cursor < missing.length && !firstError) {
+        const number = missing[cursor++];
+        const offset = (number - 1) * partBytes;
+        const size = Math.min(partBytes, input.file.size - offset);
+        try {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const signed = await request<{ url: string; headers: Record<string, string> }>("part-url", {
+              id: started.id, partNumber: number, sizeBytes: size, sha256Base64: checksums[number - 1],
+            });
+            const url = new URL(signed.url);
+            if (url.protocol !== "https:" || !url.hostname.endsWith(".amazonaws.com")) {
+              throw new Error("Galer Cloud returned an invalid PROJECT staging URL.");
+            }
+            try {
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 10 * 60_000);
+              let response: Response;
+              try {
+                response = await fetch(url, { method: "PUT", headers: signed.headers,
+                  body: input.file.slice(offset, offset + size), signal: controller.signal });
+              } finally { clearTimeout(timeout); }
+              if (!response.ok) throw new Error(`PROJECT part ${number} HTTP ${response.status}`);
+              break;
+            } catch (error) {
+              if (attempt === 2) throw error;
+              await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+            }
+          }
+          uploadedBytes += size;
+          onProgress?.({ uploadedBytes, totalBytes: input.file.size, phase: "staging" });
+        } catch (error) { firstError ||= error; }
+      }
+    }));
+    if (firstError) throw firstError;
+    current = await request<ProjectMultipartStatus>("complete", { id: started.id });
+  }
+  const deadline = Date.now() + 2 * 60 * 60_000;
+  if (current.state === "READY" || current.state === "PROCESSING") {
+    onProgress?.({ uploadedBytes: input.file.size, totalBytes: input.file.size, phase: "telegram" });
+  }
+  while (Date.now() < deadline) {
+    if (current.state === "COMPLETED" && current.upload) {
+      if (!Number.isSafeInteger(current.upload.telegram_message_id) ||
+          current.upload.original_size !== input.file.size) throw new Error("PROJECT receipt is invalid.");
+      onProgress?.({ uploadedBytes: input.file.size, totalBytes: input.file.size });
+      return current.upload;
+    }
+    if (current.state === "FAILED" || current.state === "ABORTED") {
+      throw new Error(current.failureCode || "PROJECT staging failed. Retry to resume the upload.");
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    current = await status();
+  }
+  throw new Error("PROJECT is still processing in Telegram. Retry to resume its result.");
 }
 
 export async function publishWebTransportIndex(

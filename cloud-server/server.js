@@ -36,6 +36,7 @@ const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index")
 const { installStartupRoutingIndex } = require("./startup-routing-index");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
+const projectMultipartRuntime = require('./project-multipart-runtime');
 const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority");
 
 installRuntimeOperability(express);
@@ -50,7 +51,7 @@ async function start() {
     const started = await startPostgresControlPlane();
     pool = started.pool;
     installPostgresShutdown(pool, process, { beforeClose: async () => {
-      await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop()]);
+      await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop(), projectMultipartRuntime.stop()]);
     } });
   }
   configureRuntimeDependencies({
@@ -60,12 +61,20 @@ async function start() {
     billingStatus: () => Boolean(webCheckoutRuntime.current() && webhookRuntime.status().ready &&
       lifecycleRuntime.status().running && lifecycleRuntime.status().healthy &&
       reconciliationRuntime.status().running && reconciliationRuntime.status().healthy),
+    projectRequired: process.env.BEATGALER_DEPLOYMENT_ENV === 'production',
+    projectStatus: () => projectMultipartRuntime.status().ready && projectMultipartRuntime.status().running,
   });
   directPersistentAssignments.configure({ pool });
   vaultIndexPointers.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
+  const projectStaging = projectMultipartRuntime.configure({ pool, authority: cutover.authority,
+    authorizeProject: input => libraryIndexPublication.authorizeProject(input),
+    uploadProject: input => libraryIndexPublication.uploadProject(input), env: process.env });
+  const projectPreflight = projectStaging.failureCode === 'PROJECT_STAGING_DISABLED'
+    ? projectStaging : await projectMultipartRuntime.preflight();
+  console.log(`[project-staging] ready=${projectPreflight.ready} code=${projectPreflight.failureCode || 'OK'}`);
   const indexPinAuthority = cutover.authority === 'postgres'
     ? createDirectIndexPinAuthority({ pool, transport: require('./direct-transport-control') }) : null;
   if (indexPinAuthority) {
@@ -155,6 +164,7 @@ async function start() {
   });
   lifecycleRuntime.start();
   reconciliationRuntime.start();
+  projectMultipartRuntime.start();
 }
 
 start().catch((error) => {

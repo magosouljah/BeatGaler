@@ -889,7 +889,11 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             const { disabled, label, canSaveAll } = footerState;
             return <div style={{ display: "flex", gap: canSaveAll ? 8 : 0 }}>
               <button onClick={() => void handleSave("next")} disabled={disabled} style={{ flex: 1, width: "100%", padding: "10px", background: disabled ? "#1e1e1e" : "#fff", border: "none", borderRadius: 8, color: disabled ? "#3a3a3a" : "#000", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>
-                {saving && saveProgress ? `Saving ${Math.round((saveProgress.uploadedBytes / Math.max(1, saveProgress.totalBytes)) * 100)}%…` : label}
+                {saving && saveProgress?.stage === "project" && saveProgress.phase === "telegram"
+                  ? "Finalizing PROJECT in Galer Cloud…"
+                  : saving && saveProgress
+                    ? `Saving ${Math.round((saveProgress.uploadedBytes / Math.max(1, saveProgress.totalBytes)) * 100)}%…`
+                    : label}
               </button>
               {canSaveAll && <button onClick={() => void handleSave("all")} disabled={disabled} style={{ flex: 1, padding: "10px", background: disabled ? "#1e1e1e" : "#171717", border: `1px solid ${disabled ? "#222" : "#353535"}`, borderRadius: 8, color: disabled ? "#3a3a3a" : "#e7e7e7", fontWeight: 500, fontSize: 14, cursor: disabled ? "default" : "pointer" }}>Save all</button>}
             </div>;
