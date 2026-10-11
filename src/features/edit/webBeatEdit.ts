@@ -1,6 +1,6 @@
 import type { Beat } from "../../types";
 import type { PlatformBeatEditFiles } from "../../platform/contracts";
-import { prepareBrowserProjectArchive, type PreparedBrowserProject } from "../projects/browserProjectArchive";
+import { MAX_BROWSER_PROJECT_ARCHIVE_BYTES, prepareBrowserProjectArchive, type PreparedBrowserProject } from "../projects/browserProjectArchive";
 import { isProjectDawFileName, projectExtensionFromName } from "../projects/projectFileTypes";
 import { beatFromWebLibraryEntry, normalizeWebLibraryManifest } from "../library/webLibrary";
 import type {
@@ -115,10 +115,16 @@ export async function commitWebBeatEdit(
     if (projectExtension !== "zip" && !isProjectDawFileName(files.PROJECT.name)) {
       throw new Error("Choose a supported DAW project file or PROJECT ZIP.");
     }
+    if (isProjectDawFileName(files.PROJECT.name) && files.PROJECT.size > MAX_BROWSER_PROJECT_ARCHIVE_BYTES) {
+      throw new Error("For a large PROJECT, prepare a ZIP locally and upload that ZIP.");
+    }
     let existingProjectFile: File | null = null;
     if (isProjectDawFileName(files.PROJECT.name) && record(existing.project)) {
       const currentBeat = beatFromWebLibraryEntry(existing);
       const projectRef = currentBeat.assets?.project || null;
+      if (Number(projectRef?.size_bytes || 0) > MAX_BROWSER_PROJECT_ARCHIVE_BYTES) {
+        throw new Error("For a large PROJECT, prepare a ZIP locally and upload that ZIP.");
+      }
       const messageId = directMessageId(projectRef?.object_id);
       if (!messageId || !runtime.downloadProject) {
         throw new Error("The current PROJECT could not be loaded for a safe update. Refresh and try again.");

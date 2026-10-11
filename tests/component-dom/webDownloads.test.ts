@@ -214,6 +214,15 @@ describe("BeatGaler Web downloads", () => {
     }
   });
 
+  it("refuses a large PROJECT before buffering it in browsers without direct file saving", () => {
+    const large = beat();
+    large.assets!.project!.size_bytes = 1_900_000_000;
+    const transport = immediateTransport();
+    const manager = new WebDownloadsManager(transport);
+    expect(() => manager.start(large, "PROJECT")).toThrow("direct file saving");
+    expect(transport.streamFile).not.toHaveBeenCalled();
+  });
+
   it("cancels the active Cloud stream and aborts the partial native file", async () => {
     const writable = { write: vi.fn(async () => undefined), close: vi.fn(async () => undefined), abort: vi.fn(async () => undefined) };
     (window as any).showSaveFilePicker = vi.fn(async () => ({ createWritable: async () => writable }));

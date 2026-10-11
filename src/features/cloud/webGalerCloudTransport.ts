@@ -16,6 +16,7 @@ import { isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from ".
 import type { Beat } from "../../types";
 import { commitWebImportedBeat, type WebImportCommitProgress, type WebImportFiles } from "../import/webImportCommit";
 import { commitWebBeatEdit, type WebBeatEditProgress } from "../edit/webBeatEdit";
+import { MAX_BROWSER_PROJECT_ARCHIVE_BYTES } from "../projects/browserProjectArchive";
 import type { PlatformBeatEditFiles, PlatformTrashItem } from "../../platform/contracts";
 import { playTrace } from "../playback/playTrace";
 import { listWebTrashItems, moveWebBeatsToTrash, purgeWebTrash, restoreWebBeatFromTrash } from "../trash/webTrash";
@@ -575,7 +576,14 @@ export class WebGalerCloudTransport {
         replaceLibraryIndex: input => this.publishLibraryIndex(input),
         downloadProject: async input => {
           const chunks: ArrayBuffer[] = [];
-          const stream = await this.streamFile({ messageId: input.messageId, mimeType: input.mimeType, purpose: "other" }, chunk => { chunks.push(chunk); });
+          let receivedBytes = 0;
+          const stream = await this.streamFile({ messageId: input.messageId, mimeType: input.mimeType, purpose: "other" }, chunk => {
+            receivedBytes += chunk.byteLength;
+            if (receivedBytes > MAX_BROWSER_PROJECT_ARCHIVE_BYTES) {
+              throw new Error("For a large PROJECT, prepare a ZIP locally and upload that ZIP.");
+            }
+            chunks.push(chunk);
+          });
           await stream.completed;
           return new File(chunks, input.filename, { type: input.mimeType, lastModified: 0 });
         },

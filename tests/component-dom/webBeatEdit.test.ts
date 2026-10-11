@@ -236,6 +236,17 @@ describe("Web Galer Cloud beat editing", () => {
     expect(zip.file("Samples/kick.wav")).toBeNull();
   });
 
+  it("does not download a huge PROJECT into JSZip to merge one DAW file", async () => {
+    const source = manifest();
+    source.beats[0].project!.size = 1_900_000_000;
+    const downloadProject = vi.fn(async () => { throw new Error("should not download"); });
+    const cloud = runtime(vi.fn(), source, downloadProject);
+    await expect(commitWebBeatEdit(beat(), beat(),
+      { PROJECT: new File(["replacement"], "New.rpp") }, cloud)).rejects.toThrow("prepare a ZIP locally");
+    expect(downloadProject).not.toHaveBeenCalled();
+    expect(cloud.upload).not.toHaveBeenCalled();
+  });
+
   it("does not publish a new PROJECT index when preparation/upload fails", async () => {
     const currentProject = await zipFile("Before.zip", { "Old.flp": "old", "Audio/render.wav": "keep" });
     const upload = vi.fn(async () => { throw new Error("upload failed"); });

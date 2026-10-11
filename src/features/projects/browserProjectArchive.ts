@@ -11,6 +11,7 @@ export type PreparedBrowserProject = {
 };
 
 const MAX_PROJECT_ZIP_ENTRIES = 100_000;
+export const MAX_BROWSER_PROJECT_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 function safeArchiveBase(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").replace(/[. ]+$/g, "").trim() || "Beat";
@@ -43,6 +44,10 @@ export async function prepareBrowserProjectArchive(
     return { file: incoming, openable: false, hasFlp: false, hasAls: false, hasSamples: false };
   }
   if (!isProjectDawExtension(extension)) throw new Error("Choose a supported DAW project file or PROJECT ZIP.");
+  if (incoming.size > MAX_BROWSER_PROJECT_ARCHIVE_BYTES ||
+      (existingProject && existingProject.size > MAX_BROWSER_PROJECT_ARCHIVE_BYTES)) {
+    throw new Error("For a large PROJECT, prepare a ZIP locally and upload that ZIP.");
+  }
 
   const zip = existingProject ? await JSZip.loadAsync(await readBlobAsArrayBuffer(existingProject)) : new JSZip();
   const existingNames = Object.keys(zip.files);

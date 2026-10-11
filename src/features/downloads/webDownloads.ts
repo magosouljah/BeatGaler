@@ -44,6 +44,7 @@ type DownloadAsset = {
 };
 
 type CachedArtwork = Mp3Artwork & { messageId: number | null };
+const MAX_BUFFERED_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 function safeName(value: string, fallback: string): string {
   return value
@@ -137,6 +138,10 @@ export class WebDownloadsManager {
     let activeWritable: BrowserWritable | null = null;
     let cachedCloudArtwork: CachedArtwork | null | undefined;
     const browser = window as DownloadWindow;
+    const streamsToFile = kind === "ALL" ? Boolean(browser.showDirectoryPicker) : Boolean(browser.showSaveFilePicker);
+    if (!streamsToFile && assets.some(asset => asset.size > MAX_BUFFERED_DOWNLOAD_BYTES)) {
+      throw new Error("This large file needs a browser with direct file saving, or the desktop app.");
+    }
     const singleHandle = kind !== "ALL" && browser.showSaveFilePicker
       ? browser.showSaveFilePicker({ suggestedName: assets[0].filename })
       : null;
@@ -253,7 +258,12 @@ export class WebDownloadsManager {
               }, async (chunk, downloadedBytes, streamTotal) => {
                 if (controller.signal.aborted) throw abortError();
                 if (writable) await writable.write(chunk);
-                else chunks.push(chunk);
+                else {
+                  if (downloadedBytes > MAX_BUFFERED_DOWNLOAD_BYTES || streamTotal > MAX_BUFFERED_DOWNLOAD_BYTES) {
+                    throw new Error("This large file needs a browser with direct file saving, or the desktop app.");
+                  }
+                  chunks.push(chunk);
+                }
                 assetBytes = downloadedBytes;
                 onProgress?.({
                   currentKind: asset.kind,
