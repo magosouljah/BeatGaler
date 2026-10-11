@@ -27,8 +27,10 @@ describe("Web CSRF fetch coordinator", () => {
     window.sessionStorage.setItem(WEB_CSRF_SESSION_KEY, "csrf-old");
     cookieHeader = "__Host-beatgaler_csrf=csrf-old";
 
-    const delegate = vi.fn(async () => {
+    const delegate = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const csrfHeader = new Headers(init?.headers).get("X-BeatGaler-CSRF");
       if (delegate.mock.calls.length === 1) {
+        expect(csrfHeader).toBe("csrf-old");
         // Simulate /auth/session applying Set-Cookie while this unsafe request
         // was already in flight with the previous header value.
         cookieHeader = "__Host-beatgaler_csrf=csrf-new";
@@ -38,6 +40,7 @@ describe("Web CSRF fetch coordinator", () => {
         });
       }
       expect(window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)).toBe("csrf-new");
+      expect(csrfHeader).toBe("csrf-new");
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -47,7 +50,10 @@ describe("Web CSRF fetch coordinator", () => {
     const coordinatedFetch = createWebCsrfCoordinatedFetch(delegate);
     const response = await coordinatedFetch("/beatgaler-api/transport/session/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-BeatGaler-CSRF": "csrf-old",
+      },
       body: JSON.stringify({ beatgalerUserId: "web-installation" }),
     });
 
