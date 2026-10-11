@@ -67,6 +67,23 @@ async function receiptProofs(pool, state) {
     FROM billing_webhook_events e JOIN task11_daily_receipts r ON r.event_id=e.event_id
     WHERE e.resolved_user_id=$1 ORDER BY r.received_at`, [state.userId])).rows;
 }
+function assertHighestCoverage(snapshot, state) {
+  if (snapshot.effectivePlanId !== 'highest_paid') return;
+  // The initial Order may have been legitimately refunded after renewal.
+  // Require the paid Highest period itself, not a count of successful Orders.
+  check(snapshot.payments.some(p => p.status === 'succeeded' && p.offerId === HIGHEST &&
+    p.orderId !== state.initialOrder?.id && Date.parse(p.periodStart) >= Date.parse(state.initialOrder?.periodEnd) &&
+    Date.parse(p.periodEnd) > Date.parse(p.periodStart) && Date.parse(snapshot.paidThrough) >= Date.parse(p.periodEnd)),
+  'DAILY_HIGHEST_GRANTED_EARLY');
+}
+function recordRenewalOrder(state, renewal) {
+  assertPaidOrder(renewal);
+  state.renewalOrder=renewal;state.result='PARTIAL';state.checkpoint='RENEWAL_PAID_OBSERVED';delete state.lastErrorCode;
+}
+function recordMissingRenewalReceipt(state) {
+  check(state.renewalOrder?.paid===true,'DAILY_REAL_PAID_ORDER_REQUIRED');
+  state.result='PARTIAL';state.checkpoint='RENEWAL_PAID_WEBHOOK_MISSING';state.lastErrorCode='DAILY_REAL_RENEWAL_WEBHOOK_REQUIRED';
+}
 async function drainPending({ inbox, actions, lifecycle, workerId, observe, onError }) {
   // Match the production worker: the inbox durably records handler failures.
   // A failed/foreign event must not terminate the HTTP receiver or the wait.
@@ -92,9 +109,7 @@ async function openRuntime({ pool, adapter, state, port, env }) {
   async function observe() {
     const s = await snapshot(pool, lifecycle, state);
     await pool.query('INSERT INTO task11_daily_observations(snapshot) VALUES($1::jsonb)', [JSON.stringify(s)]);
-    if (s.effectivePlanId === 'highest_paid') {
-      check(s.payments.filter(p => p.status === 'succeeded').length >= 2, 'DAILY_HIGHEST_GRANTED_EARLY');
-    }
+    assertHighestCoverage(s, state);
     return s;
   }
   function processPending() {
@@ -185,7 +200,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       while (Date.now()<deadline) {
         await runtime.processPending();
         const observed = await snapshot(pool,runtime.lifecycle,state);
-        check(observed.effectivePlanId!=='highest_paid' || observed.payments.filter(p=>p.status==='succeeded').length>=2,'DAILY_HIGHEST_GRANTED_EARLY');
+        assertHighestCoverage(observed, state);
         if (await predicate()) return; await delay(2000);
       }
       check(false,'DAILY_WAIT_TIMEOUT');
@@ -265,13 +280,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
         if (!candidates.length && Date.now()>Date.parse(state.expectedRenewalAt)+1800000) check(false,'DAILY_NO_SECOND_PAID_ORDER');
       }
     }
-    const renewal=orderEvidence(await adapter.getFinancialOrder(candidates[0].id));state.renewalOrder=renewal;await save();
-    if (env.POLAR_SANDBOX_E2E_CONTINUOUS === '1') {
-      // An API read can observe settlement before its asynchronous delivery.
-      // Keep the receiver available instead of closing it in that race.
-      await waitFor(async () => (await receiptProofs(pool,state)).some(p =>
-        p.eventType==='order.paid' && p.subjectId===renewal.id && p.state==='PROCESSED'));
-    }
+    const renewal=orderEvidence(await adapter.getFinancialOrder(candidates[0].id));recordRenewalOrder(state,renewal);await save();
     const observations=(await pool.query('SELECT snapshot FROM task11_daily_observations ORDER BY id')).rows.map(r=>r.snapshot);
     check(!observations.some(s=>s.effectivePlanId==='highest_paid'&&!s.payments.some(p=>p.orderId===renewal.id&&p.status==='succeeded')),'DAILY_HIGHEST_GRANTED_EARLY');
     const beforeReconciliation=await snapshot(pool,runtime.lifecycle,state);
@@ -280,14 +289,35 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     check(reconciled.reconciled,'DAILY_RECONCILIATION_FAILED');
     const repeated=await reconciliation.reconcileUser({userId:state.userId,reconciliationId:`daily-repeat:${state.runId}:${Date.now()}`});
     check(repeated.reconciled && !repeated.repaired,'DAILY_RECONCILIATION_NOT_STABLE');
-    const after=await snapshot(pool,runtime.lifecycle,state), receipts=await receiptProofs(pool,state);
+    const after=await snapshot(pool,runtime.lifecycle,state);let receipts=await receiptProofs(pool,state);
     const subscription=await adapter.getSubscription(state.subscriptionId);
     state.verification={beforeReconciliation,after,receipts,reconciliation:{reconciled:reconciled.reconciled,repaired:reconciled.repaired,repeatRepaired:repeated.repaired},observations};
     // Persist financial/reconciliation evidence even if the relay missed the renewal webhook.
     await save();
     try { proveRenewal({state,order:renewal,subscription,after,webhookProofs:receipts}); }
-    catch(e) { if(e.code==='DAILY_REAL_RENEWAL_WEBHOOK_REQUIRED'){state.result='PARTIAL';state.lastErrorCode=e.code;await save();console.log('[daily] PARTIAL: real paid renewal reconciled; real renewal webhook receipt still missing.');return;}throw e; }
+    catch(e) {
+      if(e.code!=='DAILY_REAL_RENEWAL_WEBHOOK_REQUIRED')throw e;
+      recordMissingRenewalReceipt(state);await save();
+      console.log('[daily] PARTIAL: real paid renewal reconciled; real renewal webhook receipt still missing.');
+      if(env.POLAR_SANDBOX_E2E_CONTINUOUS!=='1')return;
+      // Missing delivery is evidence, not a financial failure or a reason to
+      // discard the receiver. Re-check only durable receipts, never synthesize.
+      await new Promise(resolve=>{
+        let stopped=false;
+        const stop=()=>{stopped=true;resolve()};process.once('SIGINT',stop);process.once('SIGTERM',stop);
+        (async()=>{while(!stopped){
+          const current=await receiptProofs(pool,state);
+          if(current.some(p=>p.eventType==='order.paid'&&p.subjectId===renewal.id&&p.state==='PROCESSED'&&p.signatureVerified&&p.replayDeduplicated)){
+            receipts=current;state.verification.receipts=current;resolve();return;
+          }
+          await delay(10000);
+        }})().catch(error=>{console.error(`[daily] receipt-watch ${code(error)}`);stop()});
+      });
+      if(!receipts.some(p=>p.eventType==='order.paid'&&p.subjectId===renewal.id&&p.state==='PROCESSED'&&p.signatureVerified&&p.replayDeduplicated))return;
+      proveRenewal({state,order:renewal,subscription,after,webhookProofs:receipts});
+    }
     state.result='PASS';state.checkpoint='RENEWAL_VERIFIED';
+    delete state.lastErrorCode;
     state.scenarios.push({name:'natural_daily_paid_renewal',result:'PASS',initialOrderId:state.initialOrder.id,renewalOrderId:renewal.id});
     await save();console.log('[daily] RENOVACIÓN REAL DAILY: PASS. Task 11 overall remains PARTIAL; other scenarios are tracked separately.');
     if (env.POLAR_SANDBOX_E2E_CONTINUOUS === '1') {
@@ -305,4 +335,4 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 if(require.main===module) main().catch(e=>{console.error(`[daily] ${code(e)}`);process.exitCode=1;});
-module.exports={main,dbUrl,initializeDatabase,verifyMarker,snapshot,receiptProofs,openRuntime,drainPending};
+module.exports={main,dbUrl,initializeDatabase,verifyMarker,snapshot,receiptProofs,openRuntime,drainPending,assertHighestCoverage,recordRenewalOrder,recordMissingRenewalReceipt};
