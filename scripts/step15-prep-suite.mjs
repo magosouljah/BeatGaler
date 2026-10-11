@@ -14,6 +14,8 @@ if (unknown.length) {
 
 const steps = [
   { name: 'readonly-preflight', command: process.execPath, args: ['scripts/step15-readonly-preflight.mjs'] },
+  { name: 'browser-gate-syntax', command: process.execPath, args: ['--check', 'wdio.step15-real.conf.mjs'] },
+  { name: 'browser-spec-syntax', command: process.execPath, args: ['--check', 'tests/e2e-web/step15-real-auth-access.e2e.mjs'] },
   { name: 'pure-node-contracts', command: process.execPath, args: ['--test',
     'cloud-server/tests/runtime-operability.test.cjs',
     'cloud-server/tests/project-upload-admission.test.cjs',

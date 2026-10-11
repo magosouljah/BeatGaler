@@ -71,6 +71,8 @@ const facts = {
   changedPaths: git('status', '--porcelain', '--untracked-files=all').split(/\r?\n/).filter(Boolean).map(line => line.slice(3)),
   migration0018Present: existsSync(resolve(root, 'cloud-server/migrations/0018_library_trash_purge.sql')),
   stage1RealHarnessPresent: existsSync(resolve(root, 'tests/e2e-web/stage1-real-multi-account.e2e.mjs')),
+  step15BrowserConfigPresent: existsSync(resolve(root, 'wdio.step15-real.conf.mjs')),
+  step15BrowserAuthAccessSpecPresent: existsSync(resolve(root, 'tests/e2e-web/step15-real-auth-access.e2e.mjs')),
   webSmokeMountOnly: smoke.includes('root.childElementCount > 0') && !smoke.includes('/billing/checkout'),
   projectUsesCloudMultipart: upload.includes('/transport/project/upload') && upload.includes('new FormData()'),
   nginxProjectUploadStreamed30m: projectIngressReady(nginx),
@@ -101,6 +103,8 @@ if (!facts.projectCloudRouteSmokePresent) violations.push('PROJECT_CLOUD_ROUTE_S
 if (!facts.projectProxyRouteSmokePresent) violations.push('PROJECT_PROXY_ROUTE_SMOKE_MISSING');
 if (!facts.isolatedEnvGuardPresent) violations.push('STEP15_ISOLATED_ENV_GUARD_MISSING');
 if (!facts.isolatedEnvGuardTestPresent) violations.push('STEP15_ISOLATED_ENV_GUARD_TEST_MISSING');
+if (!facts.step15BrowserConfigPresent) violations.push('STEP15_BROWSER_CONFIG_MISSING');
+if (!facts.step15BrowserAuthAccessSpecPresent) violations.push('STEP15_BROWSER_AUTH_ACCESS_SPEC_MISSING');
 
 async function getPublic(path) {
   const url = `https://beatgaler.com${path}`;
@@ -129,7 +133,7 @@ const report = {
     webSource: await getPublic('/.well-known/source-sha.txt'),
     apiReady: await getPublic('/beatgaler-api/readyz'),
   } } : {}),
-  note: 'STEP15 isolated/non-financial work may proceed while STEP14 remains PARTIAL, but Phase 3 cannot close until the remaining STEP14 financial gate is resolved. PROJECT defaults admit one upload and reserve up to 2,000,000,000 temporary bytes; STEP15 must use a run-specific temp directory and the isolated-env guard before starting Cloud. The 30 minute runtime timeout remains opt-in. This report does not inspect deployment secrets or environment variables. Local PROJECT smokes use simulated publishers and prove no financial, Telegram, backup, or production infrastructure state.',
+  note: 'STEP15 isolated/non-financial work may proceed while STEP14 remains PARTIAL, but Phase 3 cannot close until the remaining STEP14 financial gate is resolved. PROJECT defaults admit one upload and reserve up to 2,000,000,000 temporary bytes; STEP15 must use a run-specific temp directory and the isolated-env guard before starting Cloud. The dedicated Browser config/spec use STEP15 account variables and do not reuse the Stage1 cohort. The 30 minute runtime timeout remains opt-in. This report does not inspect deployment secrets or environment variables. Local PROJECT smokes use simulated publishers and prove no financial, Telegram, backup, or production infrastructure state.',
 };
 console.log(JSON.stringify(report, null, 2));
 if (violations.length > 0) process.exitCode = 2;
