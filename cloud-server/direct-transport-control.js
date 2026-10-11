@@ -307,23 +307,36 @@ function normalizeState(pool) {
     lease.started_at = String(lease.started_at || nowIso());
     lease.last_heartbeat_at = String(lease.last_heartbeat_at || lease.started_at);
   }
+  return state;
+}
+
+function cleanupStaleOperations(state) {
+  const reaped = [];
+  const removedOperationIds = [];
   for (const opId of Object.keys(state.operations)) {
     const op = state.operations[opId];
     const stale = operationIsStale(op, opId);
     if (!op || !state.leases[String(op.session_id || '')] || stale) {
-      if (op && stale) diag('STALE_OPERATION_REAPED', {
-        operation_id: opId,
-        session_id: op.session_id || null,
-        kind: op.kind || null,
-        liveness_age_ms: Math.round(operationLivenessAge(op, opId)),
-        liveness_timeout_ms: operationLivenessTimeout(op),
-        reason: 'operation_liveness_expired',
-      });
+      if (op && stale) {
+        reaped.push({
+          operation_id: opId,
+          session_id: op.session_id || null,
+          kind: op.kind || null,
+          liveness_age_ms: Math.round(operationLivenessAge(op, opId)),
+          liveness_timeout_ms: operationLivenessTimeout(op),
+          reason: 'operation_liveness_expired',
+        });
+      }
       delete state.operations[opId];
-      unconfirmedOperationSince.delete(opId);
+      removedOperationIds.push(opId);
     }
   }
-  return state;
+  return { reaped, removedOperationIds };
+}
+
+function finishOperationCleanup(cleanup) {
+  for (const opId of cleanup.removedOperationIds) unconfirmedOperationSince.delete(opId);
+  for (const fields of cleanup.reaped) diag('STALE_OPERATION_REAPED', fields);
 }
 
 function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -356,14 +369,27 @@ function withPoolLock(fn) {
 function mutateState(pool, mutator) {
   return withPoolLock(() => {
     const state = normalizeState(pool);
+    const cleanup = cleanupStaleOperations(state);
     const result = mutator(state);
     writeJsonAtomic(STATE_FILE, state);
+    finishOperationCleanup(cleanup);
     return result;
   });
 }
 
 function stateSnapshot(pool) {
   return withPoolLock(() => normalizeState(pool));
+}
+
+function cleanupStaleOperationsDurably(pool) {
+  return withPoolLock(() => {
+    const state = normalizeState(pool);
+    const cleanup = cleanupStaleOperations(state);
+    if (cleanup.removedOperationIds.length === 0) return 0;
+    writeJsonAtomic(STATE_FILE, state);
+    finishOperationCleanup(cleanup);
+    return cleanup.removedOperationIds.length;
+  });
 }
 
 function leasesForBot(state, botId) {
@@ -1585,6 +1611,9 @@ async function stopSession({ installationId, sessionId, generation }) {
 async function cleanupExpiredSessions() {
   if (!enabled()) return;
   const pool = loadPool();
+  // Reaping is a durable maintenance mutation. Keep stateSnapshot read-only so
+  // ordinary status/read paths never write the pool state file.
+  cleanupStaleOperationsDurably(pool);
   const snapshot = stateSnapshot(pool);
   const expired = Object.values(snapshot.leases).filter(lease => leaseExpired(lease));
   for (const lease of expired) {
