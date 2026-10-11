@@ -21,16 +21,30 @@ function source(path) {
   return readFileSync(resolve(root, path), 'utf8');
 }
 
-function projectIngressAllowsCommercialCeiling(config) {
-  return /location\s*=\s*\/beatgaler-api\/transport\/project\/upload\s*\{[\s\S]*?proxy_pass\s+http:\/\/127\.0\.0\.1:4000\/transport\/project\/upload\s*;[\s\S]*?client_max_body_size\s+2g\s*;/m.test(config);
+function projectIngressReady(config) {
+  const match = config.match(/location\s*=\s*\/beatgaler-api\/transport\/project\/upload\s*\{([\s\S]*?)\n\s*\}/m);
+  const block = match?.[1] || '';
+  return /proxy_pass\s+http:\/\/127\.0\.0\.1:4000\/transport\/project\/upload\s*;/.test(block) &&
+    /proxy_request_buffering\s+off\s*;/.test(block) &&
+    /client_body_timeout\s+30m\s*;/.test(block) &&
+    /proxy_read_timeout\s+30m\s*;/.test(block) &&
+    /proxy_send_timeout\s+30m\s*;/.test(block) &&
+    /send_timeout\s+30m\s*;/.test(block) &&
+    /client_max_body_size\s+2g\s*;/.test(block);
 }
 
 function genericApiRemainsSmall(config) {
   return /location\s+\/beatgaler-api\/\s*\{[^}]*client_max_body_size\s+2m\s*;/s.test(config);
 }
 
+function runtimeAllowsProjectWindow(runtime) {
+  return /BEATGALER_HTTP_REQUEST_TIMEOUT_MS[\s\S]*?1000,\s*1800000/.test(runtime) &&
+    /BEATGALER_HTTP_SOCKET_TIMEOUT_MS[\s\S]*?1000,\s*1800000/.test(runtime);
+}
+
 const nginx = source('deploy/web/beatgaler.com.conf');
 const nginxBootstrap = source('deploy/web/beatgaler.com.bootstrap.conf');
+const runtime = source('cloud-server/runtime-operability.js');
 const billing = source('cloud-server/billing-web-runtime.js');
 const settings = source('src/components/SettingsPanel.tsx');
 const smoke = source('tests/e2e-web/web-smoke.e2e.mjs');
@@ -44,18 +58,22 @@ const facts = {
   stage1RealHarnessPresent: existsSync(resolve(root, 'tests/e2e-web/stage1-real-multi-account.e2e.mjs')),
   webSmokeMountOnly: smoke.includes('root.childElementCount > 0') && !smoke.includes('/billing/checkout'),
   projectUsesCloudMultipart: upload.includes('/transport/project/upload') && upload.includes('new FormData()'),
-  nginxProjectUpload2GiB: projectIngressAllowsCommercialCeiling(nginx),
-  nginxBootstrapProjectUpload2GiB: projectIngressAllowsCommercialCeiling(nginxBootstrap),
+  nginxProjectUploadStreamed30m: projectIngressReady(nginx),
+  nginxBootstrapProjectUploadStreamed30m: projectIngressReady(nginxBootstrap),
   nginxApiDefault2MiB: genericApiRemainsSmall(nginx) && genericApiRemainsSmall(nginxBootstrap),
+  runtimeProjectTimeout30mOptIn: runtimeAllowsProjectWindow(runtime),
+  projectIngressSmokePresent: existsSync(resolve(root, 'scripts/step15-project-ingress-smoke.mjs')),
   billingSandboxOnly: billing.includes("env.BILLING_PROVIDER_ENVIRONMENT !== 'sandbox'"),
   settingsSubscriptionChangesUnavailable: settings.includes('Subscription changes are not yet available in Web'),
 };
 
 const violations = [];
 if (!facts.projectUsesCloudMultipart) violations.push('PROJECT_WEB_MULTIPART_ROUTE_MISSING');
-if (!facts.nginxProjectUpload2GiB) violations.push('PROJECT_INGRESS_FINAL_BELOW_COMMERCIAL_CEILING');
-if (!facts.nginxBootstrapProjectUpload2GiB) violations.push('PROJECT_INGRESS_BOOTSTRAP_BELOW_COMMERCIAL_CEILING');
+if (!facts.nginxProjectUploadStreamed30m) violations.push('PROJECT_INGRESS_FINAL_NOT_STREAMED_30M');
+if (!facts.nginxBootstrapProjectUploadStreamed30m) violations.push('PROJECT_INGRESS_BOOTSTRAP_NOT_STREAMED_30M');
 if (!facts.nginxApiDefault2MiB) violations.push('GENERIC_API_BODY_LIMIT_WIDENED');
+if (!facts.runtimeProjectTimeout30mOptIn) violations.push('PROJECT_RUNTIME_TIMEOUT_CAP_BELOW_BROWSER_WINDOW');
+if (!facts.projectIngressSmokePresent) violations.push('PROJECT_INGRESS_SMOKE_MISSING');
 
 async function getPublic(path) {
   const url = `https://beatgaler.com${path}`;
@@ -84,7 +102,7 @@ const report = {
     webSource: await getPublic('/.well-known/source-sha.txt'),
     apiReady: await getPublic('/beatgaler-api/readyz'),
   } } : {}),
-  note: 'No financial, Telegram, backup, or production infrastructure state is proven by this report.',
+  note: '30 minute runtime timeout is opt-in for the isolated STEP15/public Web stack; this report does not inspect deployment secrets or environment variables. No financial, Telegram, backup, or production infrastructure state is proven by this report.',
 };
 console.log(JSON.stringify(report, null, 2));
 if (violations.length > 0) process.exitCode = 2;

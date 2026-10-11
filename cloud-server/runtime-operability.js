@@ -31,7 +31,7 @@ function runtimeConfig(env = process.env) {
     throw new Error('BEATGALER_DEPLOYMENT_ENV must be development, test, staging, or production.');
   }
   const trustProxyHops = boundedInt(env.BEATGALER_TRUST_PROXY_HOPS, 0, 0, 4, 'BEATGALER_TRUST_PROXY_HOPS');
-  const requestTimeoutMs = boundedInt(env.BEATGALER_HTTP_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs, 1000, 120000, 'BEATGALER_HTTP_REQUEST_TIMEOUT_MS');
+  const requestTimeoutMs = boundedInt(env.BEATGALER_HTTP_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs, 1000, 1800000, 'BEATGALER_HTTP_REQUEST_TIMEOUT_MS');
   return Object.freeze({
     nodeEnv,
     deploymentEnv,
@@ -40,7 +40,7 @@ function runtimeConfig(env = process.env) {
     requestTimeoutMs,
     headersTimeoutMs: Math.min(requestTimeoutMs, boundedInt(env.BEATGALER_HTTP_HEADERS_TIMEOUT_MS, DEFAULTS.headersTimeoutMs, 1000, 60000, 'BEATGALER_HTTP_HEADERS_TIMEOUT_MS')),
     keepAliveTimeoutMs: boundedInt(env.BEATGALER_HTTP_KEEPALIVE_TIMEOUT_MS, DEFAULTS.keepAliveTimeoutMs, 1000, 30000, 'BEATGALER_HTTP_KEEPALIVE_TIMEOUT_MS'),
-    socketTimeoutMs: boundedInt(env.BEATGALER_HTTP_SOCKET_TIMEOUT_MS, DEFAULTS.socketTimeoutMs, 1000, 120000, 'BEATGALER_HTTP_SOCKET_TIMEOUT_MS'),
+    socketTimeoutMs: boundedInt(env.BEATGALER_HTTP_SOCKET_TIMEOUT_MS, DEFAULTS.socketTimeoutMs, 1000, 1800000, 'BEATGALER_HTTP_SOCKET_TIMEOUT_MS'),
     shutdownGraceMs: boundedInt(env.BEATGALER_SHUTDOWN_GRACE_MS, DEFAULTS.shutdownGraceMs, 1000, 60000, 'BEATGALER_SHUTDOWN_GRACE_MS'),
   });
 }

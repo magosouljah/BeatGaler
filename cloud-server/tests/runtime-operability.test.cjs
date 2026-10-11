@@ -41,6 +41,25 @@ test('HTTP server receives bounded timeout contract', () => {
   assert.equal(server.socketTimeout, 30000);
 });
 
+test('STEP15 can opt into the browser PROJECT 30 minute timeout window', () => {
+  const config = runtime.runtimeConfig({
+    NODE_ENV: 'test',
+    BEATGALER_DEPLOYMENT_ENV: 'test',
+    BEATGALER_HTTP_REQUEST_TIMEOUT_MS: '1800000',
+    BEATGALER_HTTP_SOCKET_TIMEOUT_MS: '1800000',
+  });
+  const server = { setTimeout(ms) { this.socketTimeout = ms; } };
+  runtime.configureHttpServer(server, config);
+  assert.equal(server.requestTimeout, 1800000);
+  assert.equal(server.socketTimeout, 1800000);
+  assert.throws(() => runtime.runtimeConfig({
+    NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test', BEATGALER_HTTP_REQUEST_TIMEOUT_MS: '1800001',
+  }), /BEATGALER_HTTP_REQUEST_TIMEOUT_MS/);
+  assert.throws(() => runtime.runtimeConfig({
+    NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test', BEATGALER_HTTP_SOCKET_TIMEOUT_MS: '1800001',
+  }), /BEATGALER_HTTP_SOCKET_TIMEOUT_MS/);
+});
+
 test('graceful shutdown marks readiness draining and closes HTTP server', async () => {
   const processLike = new EventEmitter(); processLike.exitCode = 0;
   let closed = 0;
