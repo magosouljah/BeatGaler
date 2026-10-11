@@ -21,7 +21,16 @@ function source(path) {
   return readFileSync(resolve(root, path), 'utf8');
 }
 
+function projectIngressAllowsCommercialCeiling(config) {
+  return /location\s*=\s*\/beatgaler-api\/transport\/project\/upload\s*\{[\s\S]*?proxy_pass\s+http:\/\/127\.0\.0\.1:4000\/transport\/project\/upload\s*;[\s\S]*?client_max_body_size\s+2g\s*;/m.test(config);
+}
+
+function genericApiRemainsSmall(config) {
+  return /location\s+\/beatgaler-api\/\s*\{[^}]*client_max_body_size\s+2m\s*;/s.test(config);
+}
+
 const nginx = source('deploy/web/beatgaler.com.conf');
+const nginxBootstrap = source('deploy/web/beatgaler.com.bootstrap.conf');
 const billing = source('cloud-server/billing-web-runtime.js');
 const settings = source('src/components/SettingsPanel.tsx');
 const smoke = source('tests/e2e-web/web-smoke.e2e.mjs');
@@ -35,10 +44,18 @@ const facts = {
   stage1RealHarnessPresent: existsSync(resolve(root, 'tests/e2e-web/stage1-real-multi-account.e2e.mjs')),
   webSmokeMountOnly: smoke.includes('root.childElementCount > 0') && !smoke.includes('/billing/checkout'),
   projectUsesCloudMultipart: upload.includes('/transport/project/upload') && upload.includes('new FormData()'),
-  nginxProxy2MiB: /location \/beatgaler-api\/\s*\{[^}]*client_max_body_size\s+2m\s*;/s.test(nginx),
+  nginxProjectUpload2GiB: projectIngressAllowsCommercialCeiling(nginx),
+  nginxBootstrapProjectUpload2GiB: projectIngressAllowsCommercialCeiling(nginxBootstrap),
+  nginxApiDefault2MiB: genericApiRemainsSmall(nginx) && genericApiRemainsSmall(nginxBootstrap),
   billingSandboxOnly: billing.includes("env.BILLING_PROVIDER_ENVIRONMENT !== 'sandbox'"),
   settingsSubscriptionChangesUnavailable: settings.includes('Subscription changes are not yet available in Web'),
 };
+
+const violations = [];
+if (!facts.projectUsesCloudMultipart) violations.push('PROJECT_WEB_MULTIPART_ROUTE_MISSING');
+if (!facts.nginxProjectUpload2GiB) violations.push('PROJECT_INGRESS_FINAL_BELOW_COMMERCIAL_CEILING');
+if (!facts.nginxBootstrapProjectUpload2GiB) violations.push('PROJECT_INGRESS_BOOTSTRAP_BELOW_COMMERCIAL_CEILING');
+if (!facts.nginxApiDefault2MiB) violations.push('GENERIC_API_BODY_LIMIT_WIDENED');
 
 async function getPublic(path) {
   const url = `https://beatgaler.com${path}`;
@@ -62,6 +79,7 @@ const report = {
   proof: 'REPO_AND_OPTIONAL_PUBLIC_HTTP_ONLY',
   checkedAtUtc: new Date().toISOString(),
   ...facts,
+  violations,
   ...(live ? { publicHttp: {
     webSource: await getPublic('/.well-known/source-sha.txt'),
     apiReady: await getPublic('/beatgaler-api/readyz'),
@@ -69,3 +87,4 @@ const report = {
   note: 'No financial, Telegram, backup, or production infrastructure state is proven by this report.',
 };
 console.log(JSON.stringify(report, null, 2));
+if (violations.length > 0) process.exitCode = 2;
