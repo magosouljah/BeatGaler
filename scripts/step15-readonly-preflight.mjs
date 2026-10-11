@@ -42,9 +42,21 @@ function runtimeAllowsProjectWindow(runtime) {
     /BEATGALER_HTTP_SOCKET_TIMEOUT_MS[\s\S]*?1000,\s*1800000/.test(runtime);
 }
 
+function projectUploadAdmissionReady(admission, envExample) {
+  return /DEFAULT_MAX_CONCURRENT\s*=\s*1/.test(admission) &&
+    /DEFAULT_TEMP_BUDGET_BYTES\s*=\s*2_000_000_000/.test(admission) &&
+    /BEATGALER_PROJECT_UPLOAD_MAX_CONCURRENT/.test(admission) &&
+    /BEATGALER_PROJECT_UPLOAD_TEMP_BUDGET_BYTES/.test(admission) &&
+    /PROJECT_UPLOAD_BUSY/.test(admission) &&
+    /BEATGALER_PROJECT_UPLOAD_MAX_CONCURRENT=1/.test(envExample) &&
+    /BEATGALER_PROJECT_UPLOAD_TEMP_BUDGET_BYTES=2000000000/.test(envExample);
+}
+
 const nginx = source('deploy/web/beatgaler.com.conf');
 const nginxBootstrap = source('deploy/web/beatgaler.com.bootstrap.conf');
 const runtime = source('cloud-server/runtime-operability.js');
+const admission = source('cloud-server/project-upload-admission.js');
+const envExample = source('cloud-server/.env.example');
 const billing = source('cloud-server/billing-web-runtime.js');
 const settings = source('src/components/SettingsPanel.tsx');
 const smoke = source('tests/e2e-web/web-smoke.e2e.mjs');
@@ -62,6 +74,8 @@ const facts = {
   nginxBootstrapProjectUploadStreamed30m: projectIngressReady(nginxBootstrap),
   nginxApiDefault2MiB: genericApiRemainsSmall(nginx) && genericApiRemainsSmall(nginxBootstrap),
   runtimeProjectTimeout30mOptIn: runtimeAllowsProjectWindow(runtime),
+  projectUploadAdmissionBounded: projectUploadAdmissionReady(admission, envExample),
+  projectUploadAdmissionTestPresent: existsSync(resolve(root, 'cloud-server/tests/project-upload-admission.test.cjs')),
   projectIngressSmokePresent: existsSync(resolve(root, 'scripts/step15-project-ingress-smoke.mjs')),
   projectCloudRouteSmokePresent: existsSync(resolve(root, 'cloud-server/scripts/step15-project-route-smoke.cjs')),
   projectProxyRouteSmokePresent: existsSync(resolve(root, 'cloud-server/scripts/step15-project-proxy-route-smoke.cjs')),
@@ -75,6 +89,8 @@ if (!facts.nginxProjectUploadStreamed30m) violations.push('PROJECT_INGRESS_FINAL
 if (!facts.nginxBootstrapProjectUploadStreamed30m) violations.push('PROJECT_INGRESS_BOOTSTRAP_NOT_STREAMED_30M');
 if (!facts.nginxApiDefault2MiB) violations.push('GENERIC_API_BODY_LIMIT_WIDENED');
 if (!facts.runtimeProjectTimeout30mOptIn) violations.push('PROJECT_RUNTIME_TIMEOUT_CAP_BELOW_BROWSER_WINDOW');
+if (!facts.projectUploadAdmissionBounded) violations.push('PROJECT_UPLOAD_TEMP_ADMISSION_MISSING');
+if (!facts.projectUploadAdmissionTestPresent) violations.push('PROJECT_UPLOAD_ADMISSION_TEST_MISSING');
 if (!facts.projectIngressSmokePresent) violations.push('PROJECT_INGRESS_SMOKE_MISSING');
 if (!facts.projectCloudRouteSmokePresent) violations.push('PROJECT_CLOUD_ROUTE_SMOKE_MISSING');
 if (!facts.projectProxyRouteSmokePresent) violations.push('PROJECT_PROXY_ROUTE_SMOKE_MISSING');
@@ -106,7 +122,7 @@ const report = {
     webSource: await getPublic('/.well-known/source-sha.txt'),
     apiReady: await getPublic('/beatgaler-api/readyz'),
   } } : {}),
-  note: '30 minute runtime timeout is opt-in for the isolated STEP15/public Web stack; this report does not inspect deployment secrets or environment variables. PROJECT prep smokes are local-only and use a simulated publisher. No financial, Telegram, backup, or production infrastructure state is proven by this report.',
+  note: 'STEP15 isolated/non-financial work may proceed while STEP14 remains PARTIAL, but Phase 3 cannot close until the remaining STEP14 financial gate is resolved. PROJECT defaults admit one upload and reserve up to 2,000,000,000 temporary bytes; 30 minute runtime timeout remains opt-in. This report does not inspect deployment secrets or environment variables. Local PROJECT smokes use simulated publishers and prove no financial, Telegram, backup, or production infrastructure state.',
 };
 console.log(JSON.stringify(report, null, 2));
 if (violations.length > 0) process.exitCode = 2;
