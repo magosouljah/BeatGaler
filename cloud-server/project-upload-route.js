@@ -5,7 +5,9 @@ const multer = require('multer');
 const { createProjectUploadAdmission } = require('./project-upload-admission');
 
 function createProjectUploadHandlers({ authenticate, verifyCapability, authorizeProject,
-  uploadProject, storageChatId, tempDir = 'uploads-tmp/', uploadAdmission = createProjectUploadAdmission() }) {
+  uploadProject, storageChatId,
+  tempDir = process.env.BEATGALER_PROJECT_UPLOAD_TEMP_DIR || 'uploads-tmp/',
+  uploadAdmission = createProjectUploadAdmission() }) {
   return [
     async (req, res, next) => {
       const auth = authenticate(req, res);

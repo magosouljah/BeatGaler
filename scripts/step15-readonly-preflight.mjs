@@ -42,20 +42,23 @@ function runtimeAllowsProjectWindow(runtime) {
     /BEATGALER_HTTP_SOCKET_TIMEOUT_MS[\s\S]*?1000,\s*1800000/.test(runtime);
 }
 
-function projectUploadAdmissionReady(admission, envExample) {
+function projectUploadAdmissionReady(admission, envExample, route) {
   return /DEFAULT_MAX_CONCURRENT\s*=\s*1/.test(admission) &&
     /DEFAULT_TEMP_BUDGET_BYTES\s*=\s*2_000_000_000/.test(admission) &&
     /BEATGALER_PROJECT_UPLOAD_MAX_CONCURRENT/.test(admission) &&
     /BEATGALER_PROJECT_UPLOAD_TEMP_BUDGET_BYTES/.test(admission) &&
     /PROJECT_UPLOAD_BUSY/.test(admission) &&
     /BEATGALER_PROJECT_UPLOAD_MAX_CONCURRENT=1/.test(envExample) &&
-    /BEATGALER_PROJECT_UPLOAD_TEMP_BUDGET_BYTES=2000000000/.test(envExample);
+    /BEATGALER_PROJECT_UPLOAD_TEMP_BUDGET_BYTES=2000000000/.test(envExample) &&
+    /BEATGALER_PROJECT_UPLOAD_TEMP_DIR/.test(route) &&
+    /BEATGALER_PROJECT_UPLOAD_TEMP_DIR=\.\/uploads-tmp\//.test(envExample);
 }
 
 const nginx = source('deploy/web/beatgaler.com.conf');
 const nginxBootstrap = source('deploy/web/beatgaler.com.bootstrap.conf');
 const runtime = source('cloud-server/runtime-operability.js');
 const admission = source('cloud-server/project-upload-admission.js');
+const projectRoute = source('cloud-server/project-upload-route.js');
 const envExample = source('cloud-server/.env.example');
 const billing = source('cloud-server/billing-web-runtime.js');
 const settings = source('src/components/SettingsPanel.tsx');
@@ -74,11 +77,13 @@ const facts = {
   nginxBootstrapProjectUploadStreamed30m: projectIngressReady(nginxBootstrap),
   nginxApiDefault2MiB: genericApiRemainsSmall(nginx) && genericApiRemainsSmall(nginxBootstrap),
   runtimeProjectTimeout30mOptIn: runtimeAllowsProjectWindow(runtime),
-  projectUploadAdmissionBounded: projectUploadAdmissionReady(admission, envExample),
+  projectUploadAdmissionBounded: projectUploadAdmissionReady(admission, envExample, projectRoute),
   projectUploadAdmissionTestPresent: existsSync(resolve(root, 'cloud-server/tests/project-upload-admission.test.cjs')),
   projectIngressSmokePresent: existsSync(resolve(root, 'scripts/step15-project-ingress-smoke.mjs')),
   projectCloudRouteSmokePresent: existsSync(resolve(root, 'cloud-server/scripts/step15-project-route-smoke.cjs')),
   projectProxyRouteSmokePresent: existsSync(resolve(root, 'cloud-server/scripts/step15-project-proxy-route-smoke.cjs')),
+  isolatedEnvGuardPresent: existsSync(resolve(root, 'scripts/step15-isolated-env-guard.mjs')),
+  isolatedEnvGuardTestPresent: existsSync(resolve(root, 'tests/step15-isolated-env-guard.test.mjs')),
   billingSandboxOnly: billing.includes("env.BILLING_PROVIDER_ENVIRONMENT !== 'sandbox'"),
   settingsSubscriptionChangesUnavailable: settings.includes('Subscription changes are not yet available in Web'),
 };
@@ -94,6 +99,8 @@ if (!facts.projectUploadAdmissionTestPresent) violations.push('PROJECT_UPLOAD_AD
 if (!facts.projectIngressSmokePresent) violations.push('PROJECT_INGRESS_SMOKE_MISSING');
 if (!facts.projectCloudRouteSmokePresent) violations.push('PROJECT_CLOUD_ROUTE_SMOKE_MISSING');
 if (!facts.projectProxyRouteSmokePresent) violations.push('PROJECT_PROXY_ROUTE_SMOKE_MISSING');
+if (!facts.isolatedEnvGuardPresent) violations.push('STEP15_ISOLATED_ENV_GUARD_MISSING');
+if (!facts.isolatedEnvGuardTestPresent) violations.push('STEP15_ISOLATED_ENV_GUARD_TEST_MISSING');
 
 async function getPublic(path) {
   const url = `https://beatgaler.com${path}`;
@@ -122,7 +129,7 @@ const report = {
     webSource: await getPublic('/.well-known/source-sha.txt'),
     apiReady: await getPublic('/beatgaler-api/readyz'),
   } } : {}),
-  note: 'STEP15 isolated/non-financial work may proceed while STEP14 remains PARTIAL, but Phase 3 cannot close until the remaining STEP14 financial gate is resolved. PROJECT defaults admit one upload and reserve up to 2,000,000,000 temporary bytes; 30 minute runtime timeout remains opt-in. This report does not inspect deployment secrets or environment variables. Local PROJECT smokes use simulated publishers and prove no financial, Telegram, backup, or production infrastructure state.',
+  note: 'STEP15 isolated/non-financial work may proceed while STEP14 remains PARTIAL, but Phase 3 cannot close until the remaining STEP14 financial gate is resolved. PROJECT defaults admit one upload and reserve up to 2,000,000,000 temporary bytes; STEP15 must use a run-specific temp directory and the isolated-env guard before starting Cloud. The 30 minute runtime timeout remains opt-in. This report does not inspect deployment secrets or environment variables. Local PROJECT smokes use simulated publishers and prove no financial, Telegram, backup, or production infrastructure state.',
 };
 console.log(JSON.stringify(report, null, 2));
 if (violations.length > 0) process.exitCode = 2;
