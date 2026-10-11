@@ -62,6 +62,28 @@ describe("Web CSRF fetch coordinator", () => {
     expect(window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)).toBe("csrf-new");
   });
 
+  it("replaces a caller's stale CSRF header before the first unsafe request", async () => {
+    window.sessionStorage.setItem(WEB_CSRF_SESSION_KEY, "csrf-old");
+    cookieHeader = "__Host-beatgaler_csrf=csrf-new";
+    const delegate = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("X-BeatGaler-CSRF")).toBe("csrf-new");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof window.fetch;
+
+    const response = await createWebCsrfCoordinatedFetch(delegate)(
+      "/beatgaler-api/auth/account",
+      {
+        method: "POST",
+        headers: { "X-BeatGaler-CSRF": "csrf-old" },
+        body: "{}",
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(delegate).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)).toBe("csrf-new");
+  });
+
   it("does not retry a non-CSRF forbidden control-plane response", async () => {
     cookieHeader = "__Host-beatgaler_csrf=csrf-live";
     const delegate = vi.fn(async () => new Response(JSON.stringify({ code: "FORBIDDEN" }), {
