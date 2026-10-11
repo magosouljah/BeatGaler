@@ -60,6 +60,18 @@ export function syncWebCsrfSessionFromCookie(): string {
   return cookieToken;
 }
 
+function requestWithCurrentCsrf(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): RequestInit | undefined {
+  const csrf = syncWebCsrfSessionFromCookie();
+  if (!csrf) return init;
+  const requestInput = typeof Request !== "undefined" && input instanceof Request ? input : null;
+  const headers = new Headers(init?.headers || requestInput?.headers);
+  headers.set("X-BeatGaler-CSRF", csrf);
+  return { ...init, headers };
+}
+
 async function responseCode(response: Response): Promise<string> {
   try {
     const payload = await response.clone().json();
@@ -107,23 +119,24 @@ export function createWebCsrfCoordinatedFetch(delegate: typeof window.fetch): ty
     const beatGalerApi = isBeatGalerWebApiRequest(input);
     const unsafe = beatGalerApi && !SAFE_METHODS.has(method);
 
-    if (unsafe) syncWebCsrfSessionFromCookie();
+    let requestInit = unsafe ? requestWithCurrentCsrf(input, init) : init;
 
-    let response = await delegate(input, init);
+    let response = await delegate(input, requestInit);
     let code = response.status === 403 ? await responseCode(response) : "";
 
     // CSRF_REQUIRED is rejected by session-security before route execution, so
     // one replay is safe: no application mutation was admitted by the failed
-    // request. Re-read the browser cookie first so the retried header and cookie
-    // are coherent even when /auth/session rotated CSRF concurrently.
+    // request. Re-read the browser cookie and rebuild the outgoing header so
+    // the retried request is coherent even when /auth/session rotated CSRF
+    // concurrently after another wrapper had already captured the old token.
     if (
       unsafe &&
       response.status === 403 &&
       code === "CSRF_REQUIRED" &&
       requestCanBeReplayed(input, init)
     ) {
-      syncWebCsrfSessionFromCookie();
-      response = await delegate(input, init);
+      requestInit = requestWithCurrentCsrf(input, init);
+      response = await delegate(input, requestInit);
       code = response.status === 403 ? await responseCode(response) : "";
     }
 
