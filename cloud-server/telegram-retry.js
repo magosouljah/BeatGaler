@@ -6,6 +6,7 @@ function telegramRetryAfterSeconds(error) {
     error?.parameters?.retry_after,
     error?.response?.body?.parameters?.retry_after,
     error?.response?.body?.retry_after,
+    error?.seconds,
   ];
   for (const value of direct) {
     const n = Number(value);
@@ -15,7 +16,8 @@ function telegramRetryAfterSeconds(error) {
   const message = String(
     error?.response?.body?.description || error?.message || error || ""
   );
-  const match = message.match(/retry\s+after\s+(\d+)/i);
+  const match = message.match(/retry\s+after\s+(\d+)/i)
+    || message.match(/a wait of (\d+) seconds? is required/i);
   if (!match) return null;
   const n = Number(match[1]);
   return Number.isFinite(n) && n > 0 ? Math.ceil(n) : null;

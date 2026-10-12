@@ -8,6 +8,7 @@ const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 const { ProjectAccessError } = require('./project-access');
+const { withTelegramFloodWait } = require('./telegram-retry');
 
 const { noDirectStartupTrace } = require('./direct-startup-trace');
 
@@ -1654,23 +1655,40 @@ async function verifyMessage({ installationId, sessionId, messageId }) {
   return true;
 }
 
-// Compatibility helpers retained for server-side migration/admin tools. New
-// BeatGaler clients do not use MASTER for index reads/writes or media bytes.
+// MASTER publishes and restores the server-authoritative INDEX. Media uploads
+// and reads remain on the Direct data plane.
+async function pinMasterIndexMessage(masterInfo, messageId, retryOptions = {}) {
+  return withTelegramFloodWait('MASTER INDEX pin', () => masterInfo.client.invoke(
+    new Api.messages.UpdatePinnedMessage({
+      peer: masterInfo.vault, id: messageId, silent: true, unpin: false, pmOneside: false,
+    })
+  ), {
+    onWait: ({ retryAfter, attempt }) => {
+      console.warn(`[telegram] MASTER INDEX pin rate limited; waiting ${retryAfter}s before retry ${attempt}.`);
+    },
+    ...retryOptions,
+  });
+}
+
+async function commitIndexCopyOnWriteWithMaster(masterInfo, { filePath, caption, previousMessageId }, retryOptions) {
+  const stat = fs.statSync(filePath);
+  const sent = await masterInfo.client.sendFile(masterInfo.vault, {
+    file: new CustomFile(path.basename(filePath), stat.size, filePath),
+    forceDocument: true,
+    caption,
+    workers: 1,
+  });
+  await pinMasterIndexMessage(masterInfo, Number(sent.id), retryOptions);
+  if (Number(previousMessageId) > 0) {
+    try { await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: [Number(previousMessageId)] })); } catch (_) {}
+  }
+  return { messageId: Number(sent.id), backups: [] };
+}
+
 async function commitIndexCopyOnWrite({ chatId, filePath, caption, previousMessageId }) {
   const masterInfo = await masterForVault(chatId);
   try {
-    const stat = fs.statSync(filePath);
-    const sent = await masterInfo.client.sendFile(masterInfo.vault, {
-      file: new CustomFile(path.basename(filePath), stat.size, filePath),
-      forceDocument: true,
-      caption,
-      workers: 1,
-    });
-    await masterInfo.client.invoke(new Api.messages.UpdatePinnedMessage({ peer: masterInfo.vault, id: Number(sent.id), silent: true, unpin: false, pmOneside: false }));
-    if (Number(previousMessageId) > 0) {
-      try { await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: [Number(previousMessageId)] })); } catch (_) {}
-    }
-    return { messageId: Number(sent.id), backups: [] };
+    return await commitIndexCopyOnWriteWithMaster(masterInfo, { filePath, caption, previousMessageId });
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
@@ -1696,9 +1714,7 @@ async function pinExistingIndexMessage(chatId, messageId) {
     if (!message?.media || !(caption === 'BEATGALER_LIBRARY_INDEX_V1' || caption.startsWith('BEATGALER_LIBRARY_INDEX_V1\n'))) {
       throw new Error('Stored INDEX copy is unavailable for recovery.');
     }
-    await masterInfo.client.invoke(new Api.messages.UpdatePinnedMessage({
-      peer: masterInfo.vault, id, silent: true, unpin: false, pmOneside: false,
-    }));
+    await pinMasterIndexMessage(masterInfo, id);
     const full = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
     if (Number(full?.fullChat?.pinnedMsgId) !== id) throw new Error('INDEX recovery pin could not be verified.');
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
@@ -2026,6 +2042,8 @@ module.exports = {
   poolStatus,
   cleanupExpiredSessions,
   __test: {
+    pinMasterIndexMessage,
+    commitIndexCopyOnWriteWithMaster,
     normalizeState,
     stateSnapshot,
     mutateState,
