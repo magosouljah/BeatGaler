@@ -73,6 +73,28 @@ test('STEP 4: real PostgreSQL INDEX publication enforces reservations and recove
       const b = createLibraryIndexPublication({ pool, transport, readIndex });
       const quota = createLibraryBeatQuota({ pool, readIndex });
 
+      await t.test('first Free reservation bootstraps an empty server-verified INDEX before media upload', async () => {
+        await pool.query("INSERT INTO users(id,email) VALUES('fresh-free','fresh-free-step15@example.com')");
+        await pool.query("INSERT INTO vaults(id,user_id,telegram_chat_id) VALUES('vault-fresh-free','fresh-free','chat-fresh-free')");
+        const empty = library([]);
+        const raw = Buffer.from(JSON.stringify(empty));
+        const freshReadIndex = async (userId, { client }) => {
+          assert.equal(userId, 'fresh-free');
+          const vault = (await client.query('SELECT telegram_chat_id FROM vaults WHERE user_id=$1', [userId])).rows[0];
+          assert.equal(vault.telegram_chat_id, 'chat-fresh-free');
+          return { messageId: 700, raw, manifest: empty, serverVerified: true };
+        };
+        const fresh = createLibraryIndexPublication({ pool, transport, readIndex: freshReadIndex });
+
+        const reservation = await fresh.reserve({ userId: 'fresh-free', beatId: 'first-real-beat' });
+
+        assert.equal(reservation.status, 'PENDING');
+        assert.equal(Number((await pool.query("SELECT count(*) AS n FROM library_quota_state WHERE user_id='fresh-free'")).rows[0].n), 1);
+        assert.equal(Number((await pool.query("SELECT count(*) AS n FROM library_beats WHERE user_id='fresh-free'")).rows[0].n), 0);
+        assert.equal(Number((await pool.query("SELECT count(*) AS n FROM library_beat_reservations WHERE user_id='fresh-free' AND state='PENDING'")).rows[0].n), 1);
+        assert.equal(nextId, 43);
+      });
+
       await t.test('Free 19/20 across two instances admits only one new beat', async () => {
         await quota.bootstrap('free');
         const worker = path.join(__dirname, 'library-index-publication.worker.cjs');

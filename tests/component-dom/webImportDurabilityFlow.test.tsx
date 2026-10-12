@@ -20,7 +20,7 @@ vi.mock("../../src/features/cloud/webTransportWorkerClient", () => ({
 vi.mock("../../src/features/cloud/webTransportController", () => ({
   WebTransportController: class {
     async connect() {}
-    async beginOperation() { return "lease"; }
+    async beginOperation() { return { operationId: "op", sessionId: "session", generation: 1 }; }
     async endOperation() {}
     async withOperation(_operation: string, _scope: unknown, run: () => Promise<unknown>) { return run(); }
   },
@@ -28,6 +28,12 @@ vi.mock("../../src/features/cloud/webTransportController", () => ({
 
 vi.mock("../../src/features/cloud/webTransportSession", () => ({
   ensureWebTransportTopic: vi.fn(async () => 42),
+  publishWebTransportIndex: vi.fn(async input => input.expectedMessageId === 0
+    ? { messageId: 500, previousMessageId: 0, beatCount: 0 }
+    : network.replaceLibraryIndex(input)),
+  reserveWebTransportBeat: vi.fn(async () => undefined),
+  renewWebTransportBeat: vi.fn(async () => undefined),
+  cancelWebTransportBeat: vi.fn(async () => undefined),
   commitWebTransportIndexPointer: vi.fn(async () => undefined),
   reconcileWebTransportRouting: vi.fn(async () => undefined),
 }));

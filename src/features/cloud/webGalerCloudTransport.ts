@@ -275,6 +275,30 @@ export class WebGalerCloudTransport {
     });
   }
 
+  private async ensureImportQuotaIndex(): Promise<void> {
+    const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] };
+    await this.controller.withOperation(
+      "replace_index",
+      { objectType: "index", objectIds: ["pinned"] },
+      async lease => {
+        try {
+          const result = await this.publishLibraryIndex({ manifest, expectedMessageId: 0 }, lease);
+          await commitWebTransportIndexPointer({
+            messageId: result.messageId,
+            expectedMessageId: result.previousMessageId,
+            pointerSource: "publish",
+            sourceId: "master-import-bootstrap",
+            beatCount: result.beatCount,
+          });
+        } catch (error) {
+          // A coherent existing INDEX rejects expectedMessageId=0. The quota
+          // reservation below verifies it server-side before any media upload.
+          if (!/^Library INDEX changed\.$/.test(error instanceof Error ? error.message : String(error))) throw error;
+        }
+      },
+    );
+  }
+
   getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
     if (this.indexReadPromise) {
       playTrace("TRANSPORT_GET_INDEX_JOIN");
@@ -475,6 +499,9 @@ export class WebGalerCloudTransport {
     const started = Date.now();
     playTrace("IMPORT_COMMIT_BEGIN", { master_bytes: files.master.size, has_wav: Boolean(files.wav), has_project: Boolean(files.project) });
     await this.controller.connect();
+    // Make the new-vault INDEX authoritative through MASTER without waiting
+    // for Direct to exhaust an empty Telegram history.
+    await this.ensureImportQuotaIndex();
     const lease = await this.controller.beginOperation(
       "commit_import",
       { objectType: "beat", objectIds: [beat.id] },
