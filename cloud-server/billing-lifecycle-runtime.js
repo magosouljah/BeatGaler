@@ -9,8 +9,8 @@ const DEFAULT_BATCH_SIZE = 25;
 function createLifecycleWorker({ pool, adapter, inbox, pollMs = DEFAULT_POLL_MS, batchSize = DEFAULT_BATCH_SIZE,
   onError = () => {}, lifecycleFactory = createBillingLifecycle,
   actionWorkerFactory = createBillingProviderActionWorker } = {}) {
-  if (!pool || !inbox || inbox.provider !== 'polar' || inbox.environment !== 'sandbox' ||
-      adapter?.provider !== 'polar' || adapter?.environment !== 'sandbox' ||
+  if (!pool || !inbox || inbox.provider !== 'polar' || adapter?.provider !== 'polar' ||
+      !['sandbox', 'production'].includes(adapter.environment) || inbox.environment !== adapter.environment ||
       !Number.isInteger(pollMs) || pollMs < 100 || !Number.isInteger(batchSize) || batchSize < 1) {
     throw new Error('BILLING_LIFECYCLE_RUNTIME_CONFIG_INVALID');
   }

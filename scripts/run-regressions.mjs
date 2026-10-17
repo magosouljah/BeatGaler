@@ -233,6 +233,7 @@ try {
     readFileSync(path.join(root, "cloud-server", "server.js"), "utf8"),
     readFileSync(path.join(root, "cloud-server", "server-core.js"), "utf8"),
   ].join("\n");
+  const cloudIndexPublication = readFileSync(path.join(root, "cloud-server", "library-index-publication.js"), "utf8");
 
   const forbiddenEmptyRecovery = /if \(!settings\?\.telegram_cloud_connected\) return;\s*if \(beats\.length !== 0\) return;\s*void recoverTelegramLibraryOnceIfEmpty\(\);/;
   if (forbiddenEmptyRecovery.test(app)) fail("App.tsx reintroduced automatic Telegram recovery whenever beats becomes empty; Remove All can resurrect stale cards.");
@@ -254,9 +255,11 @@ try {
   if (cloudServer.includes("await flushPendingTopicDeletes(account, beatgalerUserId)")) fail("Library requests must never block on physical Telegram Trash cleanup.");
   if (!cloudServer.includes("workerCount = Math.min(4")) fail("Background Telegram cleanup lost bounded concurrency.");
   if (!cloudServer.includes("TOPIC_ID_INVALID")) fail("Already-missing Telegram topics must count as successfully deleted, including TOPIC_ID_INVALID.");
-  if (!rustCommands.includes("fn direct_permanently_delete_beats")) fail("Permanent delete must mutate the single index through the Desktop transport bot.");
-  if (!rustCommands.includes('root.entry("deleted")')) fail("Direct permanent delete must retain tombstones in the single index so stale clients cannot resurrect deleted beats.");
-  if (!rustCommands.includes("direct_replace_library_manifest(user_id, &manifest")) fail("Direct Trash mutations must publish through the transport bot.");
+  if (!rustCommands.includes("fn direct_permanently_delete_beats") || !rustCommands.includes('/transport/trash/purge')) fail("Permanent delete must request the scoped Cloud purge before topic cleanup.");
+  if (!cloudServer.includes('app.post("/transport/trash/purge"')) fail("Cloud Server lost the authorized permanent-delete route.");
+  if (!/deleted:\s*\[\.\.\.\(manifest\.deleted\s*\|\|\s*\[\]\),\s*\.\.\.remaining\.map\(/.test(cloudIndexPublication)) fail("Cloud permanent delete must retain tombstones in the single INDEX so stale clients cannot resurrect deleted beats.");
+  if (!cloudIndexPublication.includes('const result = await publish({ userId: uid, chatId, manifest: candidate')) fail("Cloud permanent delete must publish the tombstoned INDEX before confirming purge.");
+  if (!rustCommands.includes("direct_publish_existing_index(user_id, &manifest, expected_message_id)")) fail("Direct Trash moves must publish the INDEX through the authorized path.");
   if (!cloudServer.includes('Legacy server-side library index upload is disabled')) fail("MASTER/server library upsert must remain disabled in Direct mode.");
   if (!cloudServer.includes('index_owner: "desktop-transport-bot"')) fail("Permanent-delete Topic cleanup must acknowledge that the Desktop transport bot owns index mutation.");
 

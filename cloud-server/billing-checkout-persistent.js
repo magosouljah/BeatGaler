@@ -4,6 +4,7 @@ const crypto = require('crypto');
 
 const PROVIDER = 'polar';
 const PROVIDER_ENVIRONMENT = 'sandbox';
+const SUPPORTED_ENVIRONMENTS = new Set(['sandbox', 'production']);
 const UNRESOLVED_STATES = Object.freeze(['CREATING', 'OPEN', 'AMBIGUOUS']);
 const TERMINAL_STATES = Object.freeze(['COMPLETED', 'EXPIRED', 'FAILED']);
 
@@ -116,12 +117,14 @@ function createPersistentCheckoutService({
   if (!adapter || typeof adapter.createCheckout !== 'function' || typeof adapter.getCheckoutOffer !== 'function') {
     throw new PersistentCheckoutError('Billing provider adapter is required.', 'BILLING_CHECKOUT_CONFIG_INVALID');
   }
-  if (adapter.provider !== PROVIDER || adapter.environment !== PROVIDER_ENVIRONMENT) {
+  if (adapter.provider !== PROVIDER || !SUPPORTED_ENVIRONMENTS.has(adapter.environment) ||
+      (adapter.catalog && adapter.catalog.providerEnvironment !== adapter.environment)) {
     throw new PersistentCheckoutError(
-      'Billing V1 persistent checkout currently requires Polar sandbox.',
+      'Billing provider environment is invalid.',
       'BILLING_CHECKOUT_CONFIG_INVALID',
     );
   }
+  const providerEnvironment = adapter.environment;
   const allowedOrigins = new Set(Array.from(allowedCallbackOrigins || [], value => {
     const url = new URL(String(value));
     return url.origin;
@@ -174,7 +177,7 @@ function createPersistentCheckoutService({
       FROM billing_customers
       WHERE user_id=$1 AND provider=$2 AND provider_environment=$3
       LIMIT 1
-    `, [userId, PROVIDER, PROVIDER_ENVIRONMENT]);
+    `, [userId, PROVIDER, providerEnvironment]);
     const row = result.rows[0] || null;
     if (row && row.external_id !== userId) {
       throw new PersistentCheckoutError(
@@ -217,7 +220,7 @@ function createPersistentCheckoutService({
           external_id=EXCLUDED.external_id,
           updated_at=now()
         WHERE billing_customers.external_id=EXCLUDED.external_id
-      `, [crypto.randomUUID(), userId, PROVIDER, PROVIDER_ENVIRONMENT, providerCustomerId, userId]);
+      `, [crypto.randomUUID(), userId, PROVIDER, providerEnvironment, providerCustomerId, userId]);
     } catch (_) {
       // Checkout recovery must not depend on this cache/projection. The checkout
       // itself is already identity-bound by external_customer_id=userId.
@@ -267,6 +270,12 @@ function createPersistentCheckoutService({
       const existing = existingResult.rows[0] || null;
 
       if (existing) {
+        if (existing.provider !== PROVIDER || existing.provider_environment !== providerEnvironment) {
+          throw new PersistentCheckoutError(
+            'Checkout request belongs to another provider environment.',
+            'BILLING_CHECKOUT_ENVIRONMENT_MISMATCH',
+          );
+        }
         if (existing.request_hash_sha256 !== requestHash) {
           throw new PersistentCheckoutError(
             'requestId was already used with different checkout parameters.',
@@ -320,7 +329,7 @@ function createPersistentCheckoutService({
         INSERT INTO billing_checkout_requests(
           user_id,request_id,offer_id,request_hash_sha256,provider,provider_environment,state,created_at,updated_at
         ) VALUES ($1,$2,$3,$4,$5,$6,'CREATING',now(),now())
-      `, [userId, requestId, offer.id, requestHash, PROVIDER, PROVIDER_ENVIRONMENT]);
+      `, [userId, requestId, offer.id, requestHash, PROVIDER, providerEnvironment]);
 
       let checkout;
       try {
@@ -396,7 +405,14 @@ function createPersistentCheckoutService({
       WHERE user_id=$1 AND request_id=$2
       LIMIT 1
     `, [normalizedUserId, normalizedRequestId]);
-    return result.rows[0] ? publicRow(result.rows[0], { recovered: true }) : null;
+    const row = result.rows[0] || null;
+    if (row && (row.provider !== PROVIDER || row.provider_environment !== providerEnvironment)) {
+      throw new PersistentCheckoutError(
+        'Checkout request belongs to another provider environment.',
+        'BILLING_CHECKOUT_ENVIRONMENT_MISMATCH',
+      );
+    }
+    return row ? publicRow(row, { recovered: true }) : null;
   }
 
   return Object.freeze({

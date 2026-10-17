@@ -1,7 +1,7 @@
 import { observePlayStep } from "../playback/playTrace";
 import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession } from "../../components/AccountGate";
-import { readWebCsrfToken } from "../auth/webSessionBootstrap";
+import { readWebCsrfToken, WEB_CSRF_SESSION_KEY } from "../auth/webSessionBootstrap";
 import { getWebClientId } from "../../platform/webClientId";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
 import type { WebTransportProgress, WebTransportUploadResult } from "./webTransportWorkerProtocol";
@@ -553,6 +553,16 @@ export async function authorizeWebTransportProject(
   });
 }
 
+function readWebUploadCsrfToken(): string {
+  // AccountGate's credentialed fetch boundary sends the current token from
+  // sessionStorage. Keep the raw XHR upload on that same session generation.
+  try {
+    const stored = window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY);
+    if (stored) return stored;
+  } catch { /* Cookie remains available when storage is blocked. */ }
+  return readWebCsrfToken();
+}
+
 export function uploadWebTransportProject(
   input: { file: File; filename: string; beatId: string; threadId: number },
   lease: IndexPublicationLease,
@@ -562,40 +572,60 @@ export function uploadWebTransportProject(
   const token = getBeatGalerAuthToken();
   if (!token) return Promise.reject(new Error('Session expired. Sign in again.'));
   return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${getResolvedCloudApiBase()}/transport/project/upload`);
-    xhr.withCredentials = true;
-    xhr.timeout = 30 * 60_000;
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    xhr.setRequestHeader('X-BeatGaler-Project-Operation', lease.operationId);
-    xhr.setRequestHeader('X-BeatGaler-Project-Session', lease.sessionId);
-    xhr.setRequestHeader('X-BeatGaler-Project-Generation', String(lease.generation));
-    xhr.setRequestHeader('X-BeatGaler-Project-Beat', input.beatId);
-    xhr.setRequestHeader('X-BeatGaler-Project-Kind', kind);
-    xhr.setRequestHeader('X-BeatGaler-Project-Thread', String(input.threadId));
-    const csrf = readWebCsrfToken();
-    if (csrf) xhr.setRequestHeader('X-BeatGaler-CSRF', csrf);
-    xhr.upload.onprogress = event => onProgress?.({ uploadedBytes: Math.min(input.file.size, event.loaded), totalBytes: input.file.size });
-    xhr.onload = () => {
-      let payload: Record<string, unknown> = {};
-      try { payload = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>; } catch { /* handled below */ }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(String(payload.error || `Galer Cloud HTTP ${xhr.status}`)));
-        return;
-      }
-      const result = payload as unknown as WebTransportUploadResult;
-      if (!Number.isSafeInteger(result.telegram_message_id) || result.original_size !== input.file.size) {
-        reject(new Error('Galer Cloud PROJECT byte confirmation is invalid.'));
-        return;
-      }
-      onProgress?.({ uploadedBytes: input.file.size, totalBytes: input.file.size });
-      resolve(result);
-    };
-    xhr.onerror = () => reject(new Error('Galer Cloud PROJECT upload failed. Please retry.'));
-    xhr.ontimeout = () => reject(new Error('Galer Cloud PROJECT upload timed out. Please retry.'));
     const form = new FormData();
     form.append('file', input.file, input.filename);
-    xhr.send(form);
+    let csrfRetryUsed = false;
+    const send = () => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${getResolvedCloudApiBase()}/transport/project/upload`);
+      xhr.withCredentials = true;
+      xhr.timeout = 30 * 60_000;
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('X-BeatGaler-Project-Operation', lease.operationId);
+      xhr.setRequestHeader('X-BeatGaler-Project-Session', lease.sessionId);
+      xhr.setRequestHeader('X-BeatGaler-Project-Generation', String(lease.generation));
+      xhr.setRequestHeader('X-BeatGaler-Project-Beat', input.beatId);
+      xhr.setRequestHeader('X-BeatGaler-Project-Kind', kind);
+      xhr.setRequestHeader('X-BeatGaler-Project-Thread', String(input.threadId));
+      const csrf = readWebUploadCsrfToken();
+      if (csrf) xhr.setRequestHeader('X-BeatGaler-CSRF', csrf);
+      xhr.upload.onprogress = event => onProgress?.({ uploadedBytes: Math.min(input.file.size, event.loaded), totalBytes: input.file.size });
+      xhr.onload = () => {
+        let payload: Record<string, unknown> = {};
+        try { payload = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>; } catch { /* handled below */ }
+        if (xhr.status === 403 && payload.code === 'CSRF_REQUIRED' && !csrfRetryUsed) {
+          csrfRetryUsed = true;
+          void (async () => {
+            let refreshedCsrf = readWebUploadCsrfToken();
+            if (!refreshedCsrf || refreshedCsrf === csrf) {
+              const account = await restoreBeatGalerSession();
+              if (!account) throw new Error('Session expired. Sign in again.');
+              refreshedCsrf = readWebUploadCsrfToken();
+            }
+            if (!refreshedCsrf || refreshedCsrf === csrf) {
+              throw new Error(String(payload.error || 'CSRF validation failed. Refresh the session and retry.'));
+            }
+            send();
+          })().catch(reject);
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(String(payload.error || `Galer Cloud HTTP ${xhr.status}`)));
+          return;
+        }
+        const result = payload as unknown as WebTransportUploadResult;
+        if (!Number.isSafeInteger(result.telegram_message_id) || result.original_size !== input.file.size) {
+          reject(new Error('Galer Cloud PROJECT byte confirmation is invalid.'));
+          return;
+        }
+        onProgress?.({ uploadedBytes: input.file.size, totalBytes: input.file.size });
+        resolve(result);
+      };
+      xhr.onerror = () => reject(new Error('Galer Cloud PROJECT upload failed. Please retry.'));
+      xhr.ontimeout = () => reject(new Error('Galer Cloud PROJECT upload timed out. Please retry.'));
+      xhr.send(form);
+    };
+    send();
   });
 }
 

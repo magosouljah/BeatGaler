@@ -21,7 +21,9 @@ function env() {
 
 function fakeAdapter({ catalog }, { mismatch = null, calls = [] } = {}) {
   return {
-    environment: 'sandbox',
+    provider: 'polar',
+    environment: catalog.providerEnvironment,
+    catalog,
     getCheckoutOffer: offerId => catalog.offers[offerId],
     createCheckout: async () => ({ id: 'unused' }),
     validateOfferMapping: async offerId => {

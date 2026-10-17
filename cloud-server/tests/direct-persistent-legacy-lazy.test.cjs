@@ -23,7 +23,7 @@ function fakeDirectTransport() {
       Bot02: { sessions_today: 0, total_sessions: 0, last_used_at: null },
     },
   };
-  const calls = { legacyAllocator: 0, membershipCleanup: 0, provisioning: [] };
+  const calls = { legacyAllocator: 0, membershipCleanup: 0, provisioning: [], membershipProbes: [] };
 
   const direct = {
     poolStatus() {
@@ -71,6 +71,14 @@ function fakeDirectTransport() {
       lease.status = 'ACTIVE';
       lease.last_heartbeat_at = nowIso();
       return { ok: true, activated: true, status: 'ACTIVE' };
+    },
+    async probeSessionMembership({ installationId, sessionId, generation }) {
+      const lease = state.leases[String(sessionId)] || null;
+      assert.ok(lease, 'membership probe requires a prepared lease');
+      assert.equal(lease.installation_id, String(installationId));
+      assert.equal(Number(lease.generation), Number(generation));
+      calls.membershipProbes.push(lease.chat_id);
+      return { state: 'bot_visible' };
     },
   };
   return { direct, state, calls };
@@ -155,6 +163,7 @@ async function main() {
     generation: repeated.generation,
   });
   assert.equal(directCalls.provisioning.length, 1);
+  assert.deepEqual(directCalls.membershipProbes, ['legacy-a']);
   assert.equal(rows.get('legacy-b').transportBotId, null);
 
   state.leases.old_live = {

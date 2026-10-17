@@ -119,8 +119,11 @@ const configure = requireCall(boot, 'directPersistentAssignments.configure');
 if (compact(configure.arguments[0]) !== '{pool}') fail('Persistent assignment runtime must receive the PostgreSQL pool.');
 const installStart = requireCall(boot, 'installPersistentDirectSessionStart');
 const installMembership = requireCall(boot, 'installPersistentDirectMembershipActivation');
-for (const install of [installStart, installMembership]) {
-  if (compact(install.arguments[0]) !== '{directTransport,persistentAssignments:directPersistentAssignments,}') fail('Direct runtime wrapper is not wired to the PostgreSQL assignment runtime.');
+for (const [install, expectedOptions] of [
+  [installStart, '{directTransport,persistentAssignments:directPersistentAssignments,indexPinAuthority,}'],
+  [installMembership, '{directTransport,persistentAssignments:directPersistentAssignments,}'],
+]) {
+  if (compact(install.arguments[0]) !== expectedOptions) fail('Direct runtime wrapper is not wired to the PostgreSQL assignment runtime.');
   before(configure, install, 'PostgreSQL assignment must be configured before installing Direct wrappers.');
   if (!ts.isExpressionStatement(install.parent) || install.parent.parent !== boot) fail('Persistent Direct wrappers must install unconditionally during server startup.');
 }
@@ -185,8 +188,15 @@ if (!nodes(installStartBody, node => ts.isBinaryExpression(node) && compact(node
 // lock. Inspect its prefix and reachable helpers, not the whole mixed function.
 const wrappedActivate = block(membershipRuntime, 'wrappedActivateSession');
 const ready = branch(wrappedActivate, "String(initial.membershipState)==='ready'");
-const readyReturn = one(ready.thenStatement.statements || [], 'READY local return');
-if (!ts.isReturnStatement(readyReturn) || compact(readyReturn.expression) !== 'readyResult(finalizeReadyLease({directTransport,pool:checked.pool,lease:checked.lease,}))') fail('READY activation must return the local ACTIVE lease transition.');
+const readyProbe = requireCall(ready.thenStatement, 'directTransport.probeSessionMembership');
+const readyReturns = nodes(ready.thenStatement, ts.isReturnStatement);
+const positiveReturn = one(readyReturns.filter(item => compact(item.expression) ===
+  'readyResult(finalizeReadyLease({directTransport,pool:checked.pool,lease:checked.lease,}),membership)'), 'READY verified return');
+const transientReturn = one(nodes(branch(ready.thenStatement, 'transientProbeFailure(error)').thenStatement, ts.isReturnStatement)
+  .filter(item => compact(item.expression) ===
+    'readyResult(finalizeReadyLease({directTransport,pool:checked.pool,lease:checked.lease,}))'), 'READY transient fallback');
+before(readyProbe, positiveReturn, 'READY membership must be probed before the local ACTIVE lease transition.');
+if (!transientReturn) fail('READY activation must preserve the local ACTIVE lease transition on transient probe failure.');
 const forbiddenMembership = /master|Master|InviteToChannel|EditAdmin|GetParticipant|EditBanned|kickAndUnban|decommissionVaultMembership|originalActivateSession|provisionCurrentLease|withMembershipLock|markMembership|repairMembership/;
 for (const statement of wrappedActivate.statements) {
   if (statement.pos >= ready.end) break;
@@ -196,7 +206,7 @@ const pendingLock = requireCall(wrappedActivate, 'persistentAssignments.withMemb
 before(ready, pendingLock, 'READY activation must return before membership provisioning lock.');
 const pendingCallback = pendingLock.arguments[1];
 requireCall(pendingCallback, 'assertAssignmentMatches');
-requireCall(pendingCallback, 'provisionCurrentLease');
+if (calls(pendingCallback, 'provisionCurrentLease').length !== 2) fail('Locked Direct activation must provision only pending membership or an authoritative same-bot repair.');
 const provision = block(membershipRuntime, 'provisionCurrentLease');
 before(requireCall(provision, 'originalActivateSession'), requireCall(provision, 'persistentAssignments.markMembershipReady'), 'Membership can become READY only after successful provisioning.');
 const repair = block(membershipRuntime, 'repairMembership');
@@ -242,11 +252,15 @@ const invite = block(controlAst, 'inviteAndPromote');
 for (const rpc of ['Api.channels.InviteToChannel', 'Api.channels.EditAdmin']) {
   one(nodes(invite, node => ts.isNewExpression(node) && node.expression.getText() === rpc), `exceptional provisioning ${rpc}`);
 }
-const rights = one(nodes(invite, node => ts.isNewExpression(node) && node.expression.getText() === 'Api.ChatAdminRights'), 'transport admin rights');
+requireCall(invite, 'directBotAdminRights');
+requireCall(block(controlAst, 'restrictBotPinRights'), 'directBotAdminRights');
+const rights = one(nodes(block(controlAst, 'directBotAdminRights'), node => ts.isNewExpression(node) && node.expression.getText() === 'Api.ChatAdminRights'), 'transport admin rights');
 for (const right of ['pinMessages', 'deleteMessages']) {
   const field = one(nodes(rights, node => ts.isPropertyAssignment(node) && node.name.getText() === right), `required ${right} permission`);
-  if (field.initializer.kind !== ts.SyntaxKind.TrueKeyword) fail(`${right} (pin_messages/delete_messages) is required for Direct INDEX/media maintenance.`);
+  if (field.initializer.kind !== ts.SyntaxKind.FalseKeyword) fail(`${right} must remain disabled for the Direct bot; MASTER owns INDEX pin/delete.`);
 }
+const otherRight = one(nodes(rights, node => ts.isPropertyAssignment(node) && node.name.getText() === 'other'), 'Direct topic administration right');
+if (otherRight.initializer.kind !== ts.SyntaxKind.TrueKeyword) fail('Direct topic administration right is required.');
 
 // Temporary MTProto data plane: no permanent credentials or Local Bot API.
 if (/iterDialogs\s*\(|getDialogs\s*\(|GetDialogs/.test(helper)) fail('Transport helper enumerates dialogs.');
@@ -332,8 +346,11 @@ const routeBlock = route => {
 };
 for (const route of ['/transport/session/start', '/transport/session/activate', '/transport/session/heartbeat', '/transport/session/stop', '/transport/operation/begin', '/transport/operation/end', '/transport/operation/renew', '/transport/index/commit']) {
   const handler = routeBlock(route);
-  const authCall = requireCall(handler.statements[0], 'authenticatedTransportAccount');
-  const authGuard = handler.statements[1];
+  const first = handler.statements[0];
+  const traceBeforeAuth = ts.isExpressionStatement(first) && calls(first, 'criticalPathTrace.write').length === 1;
+  const authIndex = traceBeforeAuth ? 1 : 0;
+  const authCall = requireCall(handler.statements[authIndex], 'authenticatedTransportAccount');
+  const authGuard = handler.statements[authIndex + 1];
   if (!ts.isIfStatement(authGuard) || compact(authGuard.expression) !== '!auth' || !ts.isReturnStatement(authGuard.thenStatement)) fail(`Unauthenticated ${route} must return before doing work.`);
   before(authCall, authGuard, `${route} must authenticate before checking authorization.`);
 }
@@ -361,7 +378,7 @@ if (nodes(transform, node => ts.isSpreadAssignment(node) && node.expression.getT
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     verifyDirectArchitecture();
-    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, assigned sessions, READY without MASTER, ephemeral cleanup, explicit same-bot repair/decommission, secret/temp-auth boundary and Direct INDEX/media with pin/delete rights.');
+    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, assigned sessions, READY without MASTER, ephemeral cleanup, explicit same-bot repair/decommission, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
   } catch (error) {
     console.error(`FAIL Direct persistent guard: ${error.message}`);
     process.exitCode = 1;

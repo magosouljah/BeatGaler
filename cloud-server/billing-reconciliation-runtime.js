@@ -10,7 +10,8 @@ const DEFAULT_COMMERCIAL_MS = 15 * 60_000;
 function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEFAULT_PENDING_MS,
   commercialMs = DEFAULT_COMMERCIAL_MS, pendingLimit = 50, commercialLimit = 100,
   logger = createBillingSafeLogger(), serviceFactory = createBillingReconciliationService } = {}) {
-  if (authority !== 'postgres' || !pool || adapter?.provider !== 'polar' || adapter?.environment !== 'sandbox' ||
+  if (authority !== 'postgres' || !pool || adapter?.provider !== 'polar' ||
+      !['sandbox', 'production'].includes(adapter.environment) ||
       ![pendingMs, commercialMs].every(ms => Number.isInteger(ms) && ms >= 100) ||
       ![pendingLimit, commercialLimit].every(limit => Number.isInteger(limit) && limit > 0 && limit <= MAX_SWEEP_LIMIT)) {
     throw Object.assign(new Error('Reconciliation runtime is unavailable.'), { code: 'BILLING_RECONCILIATION_CONFIG_INVALID' });
@@ -36,7 +37,7 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
       if (pending) pendingCursor = result.nextCursor;
       else commercialCursor = result.nextCursor;
     } catch (error) {
-      logger.emit('reconciliation_failed', { provider: 'polar', environment: 'sandbox', mode: kind,
+      logger.emit('reconciliation_failed', { provider: 'polar', environment: adapter.environment, mode: kind,
         reason: 'SWEEP_FAILED', errorCode: safeErrorCode(error) });
     }
   }

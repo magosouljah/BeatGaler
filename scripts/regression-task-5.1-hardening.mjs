@@ -18,7 +18,7 @@ const tempAuthBoundary = read("cloud-server/productive-temp-auth-boundary.js");
 
 if (!vite.includes("beatgaler-productive-trust-boundary")) fail("productive Vite trust-boundary transform is missing");
 if (vite.includes("unsafeCloudConstants") || vite.includes("safeCloudConstants") || vite.includes("unsafeResolver") || vite.includes("safeResolver")) fail("Cloud-origin policy drifted back into a build-only Vite source rewrite");
-if (!vite.includes('"/beatgaler-api": {') || !vite.includes('target: "http://127.0.0.1:4000"')) fail("development same-origin Cloud proxy is missing");
+if (!vite.includes('"/beatgaler-api": {') || !vite.includes('target: process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000"')) fail("development same-origin Cloud proxy is missing");
 if (!vite.includes("safeId3Loader") || !vite.includes("unsafeId3Loader")) fail("remote ID3 loader stripping is missing");
 if (!main.includes('browserId3Reader') || !main.includes('(window as any).jsmediatags = browserId3Reader')) fail("local browser ID3 parser is not installed before app render");
 
@@ -57,7 +57,8 @@ for (const header of ["X-Content-Type-Options", "X-Frame-Options", "Referrer-Pol
   if (!headers.includes(header)) fail(`API security header missing: ${header}`);
 }
 
-if (!tempAuthBoundary.includes("serializePermanentAuthorization")) fail("fresh permanent bot authorizations are no longer globally serialized");
+if (!tempAuthBoundary.includes('const cacheKey = `${transportId}:${credentialVersion}`') ||
+    !tempAuthBoundary.includes('permanentByTransport.set(cacheKey, promise)')) fail("per-bot permanent authorization coalescing is missing");
 if (!tempAuthBoundary.includes("const { credential_refresh: refresh, ...safeBody } = body")) fail("credential refresh is no longer stripped before safe reconstruction");
 const noMetadataBranch = tempAuthBoundary.slice(
   tempAuthBoundary.indexOf("if (!metadata) {", tempAuthBoundary.indexOf("async function transformTransportBody")),
@@ -82,4 +83,4 @@ if (existsSync(dist)) {
   }
 }
 
-console.log("PASS Task 5.1 hardening: source-level Web Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and serialized permanent auth");
+console.log("PASS Task 5.1 hardening: source-level Web Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and per-bot permanent auth coalescing");

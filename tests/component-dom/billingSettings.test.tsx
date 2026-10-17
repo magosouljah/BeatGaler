@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  account: vi.fn(), plan: vi.fn(), catalog: vi.fn(), checkout: vi.fn(),
+  account: vi.fn(), plan: vi.fn(), catalog: vi.fn(), checkout: vi.fn(), portalAvailable: vi.fn(),
 }));
 vi.mock("../../src/components/AccountGate", () => ({
   beginMfaSetup: vi.fn(), changeBeatGalerEmail: vi.fn(), changeBeatGalerPassword: vi.fn(),
@@ -12,6 +12,10 @@ vi.mock("../../src/components/AccountGate", () => ({
   getBeatGalerAccountInfo: api.account, getBeatGalerCurrentPlan: api.plan,
   getBeatGalerPlanCatalog: api.catalog, startBeatGalerCheckout: api.checkout,
   oauthBeatGalerAccount: vi.fn(),
+}));
+vi.mock("../../src/components/billingPortal", () => ({
+  beatGalerPortalAvailable: api.portalAvailable,
+  openBeatGalerPortal: vi.fn(),
 }));
 
 import SettingsPanel from "../../src/components/SettingsPanel";
@@ -54,6 +58,7 @@ describe("Settings commercial truth", () => {
     api.plan.mockResolvedValue(plan());
     api.account.mockResolvedValue({ id: "user", username: "user", providers: {}, plan: plan() });
     api.checkout.mockRejectedValue(new Error("provider secret error"));
+    api.portalAvailable.mockResolvedValue(false);
   });
 
   it.each(["free", "paid_entry", "highest_paid"])("shows %s as current from /plans/me", async id => {
@@ -114,7 +119,7 @@ describe("Settings commercial truth", () => {
   it("blocks initial checkout for an existing subscriber", async () => {
     api.plan.mockResolvedValue(plan("paid_entry", false));
     const view = await mount(); await view.click("plan");
-    expect(view.host.textContent).toContain("Subscription changes are not yet available in Web");
+    expect(view.host.textContent).toContain("Subscriber management is currently unavailable");
     expect(api.checkout).not.toHaveBeenCalled();
     await view.close();
   });

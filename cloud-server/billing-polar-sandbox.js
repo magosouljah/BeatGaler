@@ -7,6 +7,7 @@ const {
 
 const POLAR_PROVIDER = 'polar';
 const POLAR_ENVIRONMENT = 'sandbox';
+const POLAR_PRODUCTION_ENVIRONMENT = 'production';
 const POLAR_API_VERSION = '2026-04';
 const POLAR_SDK_PACKAGE = '@polar-sh/sdk';
 const POLAR_SDK_VERSION = '1.0.0-alpha.20';
@@ -21,6 +22,9 @@ const ENV = Object.freeze({
   highestPaidProductId: 'POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRODUCT_ID',
   highestPaidPriceId: 'POLAR_SANDBOX_HIGHEST_PAID_MONTHLY_PRICE_ID',
 });
+const PRODUCTION_ENV = Object.freeze(Object.fromEntries(
+  Object.entries(ENV).map(([key, name]) => [key, name.replace('POLAR_SANDBOX_', 'POLAR_PRODUCTION_')]),
+));
 
 class PolarSandboxConfigError extends Error {
   constructor(message, code = 'POLAR_SANDBOX_CONFIG_INVALID') {
@@ -99,6 +103,39 @@ function readPolarSandboxConfig(env = process.env) {
   });
 }
 
+function readPolarProductionConfig(env = process.env) {
+  if (!env || typeof env !== 'object') {
+    throw new PolarSandboxConfigError('Production environment configuration is required.', 'POLAR_PRODUCTION_CONFIG_INVALID');
+  }
+  const values = {};
+  for (const [key, name] of Object.entries(PRODUCTION_ENV)) {
+    values[key] = optionalText(env[name]);
+    if (!values[key]) {
+      throw new PolarSandboxConfigError(`${name} is required.`, 'POLAR_PRODUCTION_CONFIG_INVALID');
+    }
+    // Polar identifiers are opaque; equality with configured Sandbox values is
+    // the only reliable local cross-environment signal before provider lookup.
+    if (values[key] === optionalText(env[ENV[key]])) {
+      throw new PolarSandboxConfigError(`${name} matches the Sandbox configuration.`, 'POLAR_PRODUCTION_SANDBOX_VALUE');
+    }
+  }
+  const mappings = {
+    paid_entry_monthly_v1: Object.freeze({ productId: values.paidEntryProductId, priceId: values.paidEntryPriceId }),
+    highest_paid_monthly_v1: Object.freeze({ productId: values.highestPaidProductId, priceId: values.highestPaidPriceId }),
+  };
+  return Object.freeze({
+    provider: POLAR_PROVIDER,
+    environment: POLAR_PRODUCTION_ENVIRONMENT,
+    apiVersion: POLAR_API_VERSION,
+    sdkPackage: POLAR_SDK_PACKAGE,
+    sdkVersion: POLAR_SDK_VERSION,
+    accessToken: values.accessToken,
+    webhookSecret: values.webhookSecret,
+    organizationId: values.organizationId,
+    providerMappings: Object.freeze(mappings),
+  });
+}
+
 function createSandboxCommercialCatalog(config) {
   if (!config || config.environment !== POLAR_ENVIRONMENT || config.provider !== POLAR_PROVIDER) {
     throw new PolarSandboxConfigError('Polar sandbox adapter requires provider=polar and environment=sandbox.');
@@ -108,6 +145,40 @@ function createSandboxCommercialCatalog(config) {
     environment: POLAR_ENVIRONMENT,
     providerMappings: config.providerMappings,
   });
+}
+
+function createProductionCommercialCatalog(config) {
+  assertPolarConfig(config, POLAR_PRODUCTION_ENVIRONMENT);
+  return createCommercialCatalog({
+    provider: POLAR_PROVIDER,
+    environment: POLAR_PRODUCTION_ENVIRONMENT,
+    providerMappings: config.providerMappings,
+  });
+}
+
+function assertPolarConfig(config, environment) {
+  if (!config || config.provider !== POLAR_PROVIDER || config.environment !== environment ||
+      !config.accessToken || !config.providerMappings) {
+    throw new PolarSandboxConfigError(`Polar ${environment} configuration is invalid.`, 'POLAR_CONFIG_ENVIRONMENT_MISMATCH');
+  }
+  if (environment === POLAR_PRODUCTION_ENVIRONMENT && (!config.webhookSecret || !config.organizationId)) {
+    throw new PolarSandboxConfigError('Polar production webhook secret and organization are required.', 'POLAR_PRODUCTION_CONFIG_INVALID');
+  }
+}
+
+function assertCatalogEnvironment(catalog, environment, config = null) {
+  if (catalog?.provider !== POLAR_PROVIDER || catalog.providerEnvironment !== environment) {
+    throw new PolarSandboxConfigError('Polar catalog environment does not match configuration.', 'POLAR_CONFIG_ENVIRONMENT_MISMATCH');
+  }
+  if (config && environment === POLAR_PRODUCTION_ENVIRONMENT) {
+    for (const offerId of ['paid_entry_monthly_v1', 'highest_paid_monthly_v1']) {
+      const configured = config.providerMappings?.[offerId];
+      const mapped = catalog.offers?.[offerId]?.providerMapping;
+      if (!configured || !mapped || configured.productId !== mapped.productId || configured.priceId !== mapped.priceId) {
+        throw new PolarSandboxConfigError('Polar catalog mapping does not match configuration.', 'POLAR_CONFIG_MAPPING_MISMATCH');
+      }
+    }
+  }
 }
 
 function validateProviderProductForOffer({ product, offer, organizationId = null }) {
@@ -213,12 +284,17 @@ function loadPinnedPolarSdk() {
 }
 
 function createPinnedSandboxClient({ config, sdk }) {
+  assertPolarConfig(config, POLAR_ENVIRONMENT);
+  return createPinnedPolarClient({ config, sdk });
+}
+
+function createPinnedPolarClient({ config, sdk }) {
   if (!sdk || typeof sdk.createPolar !== 'function') {
     throw new PolarSandboxConfigError('Polar SDK createPolar() is unavailable.');
   }
   return sdk.createPolar({
     accessToken: config.accessToken,
-    environment: POLAR_ENVIRONMENT,
+    environment: config.environment,
     version: POLAR_API_VERSION,
   });
 }
@@ -250,11 +326,20 @@ function normalizeRawBody(rawBody) {
   throw new PolarSandboxConfigError('Webhook raw body must be an unmodified string, Buffer, or Uint8Array.');
 }
 
-function createPolarSandboxAdapter(options = {}) {
-  const config = options.config || readPolarSandboxConfig(options.env || process.env);
-  const catalog = options.catalog || createSandboxCommercialCatalog(config);
+function createPolarAdapter(options = {}) {
+  const environment = options.environment || POLAR_ENVIRONMENT;
+  if (![POLAR_ENVIRONMENT, POLAR_PRODUCTION_ENVIRONMENT].includes(environment)) {
+    throw new PolarSandboxConfigError('Polar environment is unsupported.', 'POLAR_CONFIG_ENVIRONMENT_MISMATCH');
+  }
+  const config = options.config || (environment === POLAR_ENVIRONMENT
+    ? readPolarSandboxConfig(options.env || process.env)
+    : readPolarProductionConfig(options.env || process.env));
+  assertPolarConfig(config, environment);
+  const catalog = options.catalog || (environment === POLAR_ENVIRONMENT
+    ? createSandboxCommercialCatalog(config) : createProductionCommercialCatalog(config));
+  assertCatalogEnvironment(catalog, environment, config);
   const sdk = options.sdk || (options.client ? null : loadPinnedPolarSdk());
-  const client = options.client || createPinnedSandboxClient({ config, sdk });
+  const client = options.client || createPinnedPolarClient({ config, sdk });
   const webhookApi = options.webhooks || sdk?.webhooks;
 
   const productsList = assertService(client, 'products', 'list');
@@ -282,7 +367,7 @@ function createPolarSandboxAdapter(options = {}) {
 
   return Object.freeze({
     provider: POLAR_PROVIDER,
-    environment: POLAR_ENVIRONMENT,
+    environment,
     apiVersion: POLAR_API_VERSION,
     sdkVersion: POLAR_SDK_VERSION,
     catalog,
@@ -388,19 +473,36 @@ function createPolarSandboxAdapter(options = {}) {
   });
 }
 
+function createPolarSandboxAdapter(options = {}) {
+  return createPolarAdapter({ ...options, environment: POLAR_ENVIRONMENT });
+}
+
+function createPolarProductionAdapter(options = {}) {
+  return createPolarAdapter({ ...options, environment: POLAR_PRODUCTION_ENVIRONMENT });
+}
+
 module.exports = {
   POLAR_PROVIDER,
   POLAR_ENVIRONMENT,
+  POLAR_PRODUCTION_ENVIRONMENT,
   POLAR_API_VERSION,
   POLAR_SDK_PACKAGE,
   POLAR_SDK_VERSION,
   POLAR_SDK_ENTRY,
   ENV,
+  PRODUCTION_ENV,
   PolarSandboxConfigError,
   PolarSandboxAdapterError,
   readPolarSandboxConfig,
+  readPolarProductionConfig,
   createSandboxCommercialCatalog,
+  createProductionCommercialCatalog,
   createPinnedSandboxClient,
+  createPinnedPolarClient,
   validateProviderProductForOffer,
   createPolarSandboxAdapter,
+  createPolarProductionAdapter,
+  createPolarAdapter,
+  assertPolarConfig,
+  assertCatalogEnvironment,
 };

@@ -9,7 +9,7 @@ const os=require('node:os');
 const {Client}=require('pg');
 const {MODE,ENTRY,HIGHEST,createCatalog}=require('../scripts/polar-sandbox-daily-config.cjs');
 const {databaseName,writeState,readState}=require('../scripts/polar-sandbox-daily-state.cjs');
-const {adoptRepair,RELAY_REASON}=require('../scripts/polar-sandbox-daily-repair-code.cjs');
+const {adoptRepair,RELAY_REASON,BOOKKEEPING_REASON}=require('../scripts/polar-sandbox-daily-repair-code.cjs');
 const {initializeDatabase,verifyMarker,snapshot}=require('../scripts/polar-sandbox-daily-e2e.cjs');
 const {createBillingLifecycle}=require('../billing-lifecycle');
 const {createBillingReconciliationService}=require('../billing-reconciliation');
@@ -76,6 +76,19 @@ test('daily equivalents persist pending change under unchanged monthly DB constr
     await apply('order.paid',{order:second,subscription:cycled});s=await snapshot(pool,lifecycle,state);assert.equal(s.effectivePlanId,'highest_paid');assert.equal(s.paidThrough,nextEnd);assert.equal(s.payments.length,2);
     assert.equal(s.nextPlanId,null,'new-period payment consumes the applied upgrade');
     await apply('order.paid',{order:second,subscription:cycled});assert.equal((await snapshot(pool,lifecycle,state)).payments.length,2);
+    const repairDir=await fs.mkdtemp(path.join(os.tmpdir(),'daily-bookkeeping-test-'));
+    try{
+      const file=path.join(repairDir,'state.json');
+      state.subscriptionId=sub.id;state.renewalOrder={id:second.id,paid:true,subscriptionId:sub.id};
+      state.result='PARTIAL';state.checkpoint='RENEWAL_PAID_WEBHOOK_MISSING';state.lastErrorCode='DAILY_REAL_RENEWAL_WEBHOOK_REQUIRED';
+      await writeState(file,state);const before=structuredClone(state),payments=(await snapshot(pool,lifecycle,state)).payments;
+      const next=await adoptRepair({pool,file,state,toHead:'e'.repeat(40),reason:BOOKKEEPING_REASON,
+        changedFiles:['cloud-server/scripts/polar-sandbox-daily-e2e.cjs','cloud-server/scripts/polar-sandbox-failure-progress.cjs']});
+      assert.equal(next.result,'PARTIAL');assert.equal(next.lastErrorCode,'DAILY_REAL_RENEWAL_WEBHOOK_REQUIRED');
+      assert.deepEqual(await readState(`${file}.before-${'e'.repeat(40)}.json`,before),before);
+      assert.deepEqual((await snapshot(pool,lifecycle,state)).payments,payments,'harness adoption never changes financial rows');
+      Object.assign(state,next);await verifyMarker(pool,state);
+    }finally{await fs.rm(repairDir,{recursive:true,force:true});}
     await pool.end();pool=null;
     pool=await initializeDatabase(ADMIN,state);await verifyMarker(pool,state);assert.equal((await snapshot(pool,lifecycle,state)).payments.length,2);
     await assert.rejects(()=>verifyMarker(pool,{...state,commitSha:'b'.repeat(40)}));

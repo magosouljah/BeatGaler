@@ -39,6 +39,8 @@ const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
 const { createCheckoutHandlers } = require("./billing-web-checkout-route");
+const webPortalRuntime = require("./billing-web-portal-runtime");
+const { createPortalHandlers } = require("./billing-web-portal-route");
 const webhookRuntime = require("./billing-webhook-runtime");
 const { installPolarWebhookRoute } = require("./billing-webhook-route");
 const { createPlanCatalogHandler } = require("./billing-plan-catalog-route");
@@ -1477,6 +1479,12 @@ const webCheckoutHandlers = createCheckoutHandlers({
 });
 app.post("/billing/checkout", webCheckoutHandlers.create);
 app.get("/billing/checkout/:requestId", webCheckoutHandlers.get);
+const webPortalHandlers = createPortalHandlers({
+  getUser: req => getAuthUserFromToken(bearerToken(req)),
+  currentPortal: webPortalRuntime.current,
+});
+app.get("/billing/portal/availability", webPortalHandlers.availability);
+app.post("/billing/portal", webPortalHandlers.create);
 
 app.post("/image/fetch", async (req, res) => {
   const user = getAuthUserFromToken(bearerToken(req));

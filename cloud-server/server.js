@@ -22,6 +22,7 @@ const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
 const webCheckoutRuntime = require("./billing-web-checkout-runtime");
+const webPortalRuntime = require("./billing-web-portal-runtime");
 const webhookRuntime = require("./billing-webhook-runtime");
 const lifecycleRuntime = require("./billing-lifecycle-runtime");
 const reconciliationRuntime = require("./billing-reconciliation-runtime");
@@ -67,13 +68,19 @@ async function start() {
   accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
   if (cutover.authority === 'postgres') {
     const billing = await webBillingRuntime.configure({ env: process.env });
-    console.log(`[billing] sandbox sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
+    console.log(`[billing] ${process.env.BILLING_PROVIDER_ENVIRONMENT || 'unconfigured'} sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
     const checkout = webCheckoutRuntime.configure({
       pool,
       adapter: billing.ready ? webBillingRuntime.provider() : null,
       env: process.env,
     });
     console.log(`[billing] web checkout=${checkout.ready ? 'ready' : 'unavailable'} code=${checkout.failureCode || 'OK'}`);
+    const portal = webPortalRuntime.configure({
+      pool,
+      adapter: billing.ready ? webBillingRuntime.provider() : null,
+      env: process.env,
+    });
+    console.log(`[billing] web portal=${portal.ready ? 'ready' : 'unavailable'} code=${portal.failureCode || 'OK'}`);
     const webhook = webhookRuntime.configure({
       pool,
       adapter: billing.ready ? webBillingRuntime.provider() : null,

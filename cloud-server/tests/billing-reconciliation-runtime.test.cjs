@@ -15,9 +15,9 @@ async function until(check) {
   assert.ok(check(), 'runtime did not reach expected state');
 }
 
-test('reconciliation is unavailable without PostgreSQL authority, sandbox adapter or bounded schedules', async () => {
+test('reconciliation is unavailable without PostgreSQL authority, supported adapter or bounded schedules', async () => {
   for (const override of [{ authority: 'json' }, { pool: null }, { adapter: null },
-    { adapter: { ...adapter, environment: 'production' } }, { pendingMs: 0 }, { commercialLimit: 501 }]) {
+    { adapter: { ...adapter, environment: 'staging' } }, { pendingMs: 0 }, { commercialLimit: 501 }]) {
     assert.throws(() => createReconciliationRuntime({ ...options, ...override }), { code: 'BILLING_RECONCILIATION_CONFIG_INVALID' });
   }
   assert.equal(configure({}).ready, false);

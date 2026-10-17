@@ -11,15 +11,21 @@ const {identity,readState,writeState}=require('./polar-sandbox-daily-state.cjs')
 const {dbUrl,verifyMarker}=require('./polar-sandbox-daily-e2e.cjs');
 const REASON='LATE_INITIAL_ORDER_UPDATE_CLEARED_PENDING_CHANGE';
 const RELAY_REASON='RELAY_FOREIGN_EVENTS_ABORTED_WAIT';
+const BOOKKEEPING_REASON='HARNESS_EVIDENCE_BOOKKEEPING';
 function assertHarnessOnlyDiff(files) {
   const allowed=new Set(['scripts/polar-sandbox-daily-e2e.cjs','scripts/polar-sandbox-daily-state.cjs','scripts/polar-sandbox-daily-repair-code.cjs',
-    'tests/billing-polar-daily.test.cjs','tests/billing-polar-daily.integration.cjs'].map(p=>`cloud-server/${p}`));
+    'scripts/polar-sandbox-failure-progress.cjs','scripts/polar-sandbox-failed-renewal-e2e.cjs',
+    'tests/billing-polar-failure-progress.test.cjs','tests/billing-polar-daily.test.cjs','tests/billing-polar-daily.integration.cjs','package.json'].map(p=>`cloud-server/${p}`));
   check(Array.isArray(files)&&files.length>0&&files.every(p=>allowed.has(p)), 'DAILY_REPAIR_FINANCIAL_SOURCE_CHANGED');
 }
 async function adoptRepair({pool,file,state,toHead,secrets=[],reason=REASON,changedFiles}) {
   check(/^[a-f0-9]{40}$/.test(toHead)&&toHead!==state.commitSha,'DAILY_REPAIR_HEAD_INVALID');
-  check([REASON,RELAY_REASON].includes(reason),'DAILY_REPAIR_REASON_INVALID');
-  if(reason===RELAY_REASON) {
+  check([REASON,RELAY_REASON,BOOKKEEPING_REASON].includes(reason),'DAILY_REPAIR_REASON_INVALID');
+  if(reason===BOOKKEEPING_REASON){
+    assertHarnessOnlyDiff(changedFiles);
+    check(state.initialOrder?.paid===true&&state.renewalOrder?.paid===true&&state.renewalOrder.id!==state.initialOrder.id
+      &&state.renewalOrder.subscriptionId===state.subscriptionId,'DAILY_REPAIR_CHECKPOINT_INVALID');
+  } else if(reason===RELAY_REASON) {
     assertHarnessOnlyDiff(changedFiles);
     check(state.checkpoint==='UPGRADE_SCHEDULED' && state.result==='FAIL' && state.lastErrorCode==='BILLING_LIFECYCLE_INVALID_INPUT'
       && state.initialOrder?.paid===true && state.preRenewal?.effectivePlanId==='paid_entry'
@@ -38,7 +44,10 @@ async function adoptRepair({pool,file,state,toHead,secrets=[],reason=REASON,chan
     }
     await verifyMarker(client,state);
     const payments=(await client.query('SELECT provider_order_id,status FROM billing_payments WHERE user_id=$1',[state.userId])).rows;
-    check(payments.length===1 && payments[0].provider_order_id===state.initialOrder.id && payments[0].status==='succeeded','DAILY_REPAIR_INITIAL_PAYMENT_REQUIRED');
+    if(reason===BOOKKEEPING_REASON){
+      check(payments.some(p=>p.provider_order_id===state.initialOrder.id&&['succeeded','refunded'].includes(p.status))
+        &&payments.some(p=>p.provider_order_id===state.renewalOrder.id&&p.status==='succeeded'),'DAILY_REPAIR_RENEWAL_PAYMENT_REQUIRED');
+    }else check(payments.length===1 && payments[0].provider_order_id===state.initialOrder.id && payments[0].status==='succeeded','DAILY_REPAIR_INITIAL_PAYMENT_REQUIRED');
     try {await fs.copyFile(file,backup,constants.COPYFILE_EXCL);} catch(e){if(e.code!=='EEXIST')throw e;const old=await readState(backup,state);check(JSON.stringify(old)===JSON.stringify(state),'DAILY_REPAIR_BACKUP_MISMATCH');}
     const at=new Date().toISOString();
     const transition={fromCommitSha:state.commitSha,toCommitSha:toHead,at,reason};
@@ -71,4 +80,4 @@ async function main(){
   try{const next=await adoptRepair({pool,file,state,toHead:to,reason,changedFiles,secrets:[config.accessToken,config.webhookSecret,admin]});console.log(JSON.stringify({runId:next.runId,databaseName:next.databaseName,codeTransition:next.codeTransitions.at(-1)}));}finally{await pool.end();}
 }
 if(require.main===module)main().catch(e=>{console.error(/^[A-Z0-9_:-]{1,160}$/.test(e.code||'')?e.code:'DAILY_CODE_REPAIR_FAILED');process.exitCode=1;});
-module.exports={adoptRepair,assertHarnessOnlyDiff,RELAY_REASON};
+module.exports={adoptRepair,assertHarnessOnlyDiff,RELAY_REASON,BOOKKEEPING_REASON};

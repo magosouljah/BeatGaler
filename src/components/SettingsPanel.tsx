@@ -13,6 +13,7 @@ import {
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
 } from "./AccountGate";
 import { planFeatures, planPrice, planStatus } from "./billingPresentation";
+import { beatGalerPortalAvailable, openBeatGalerPortal } from "./billingPortal";
 
 interface Props {
   currentFolder: string | null;
@@ -95,7 +96,9 @@ export default function SettingsPanel(props: Props) {
   const [planError, setPlanError] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState(false);
-  const [billingReturn, setBillingReturn] = useState(false);
+  const [billingReturn, setBillingReturn] = useState<"checkout" | "portal" | null>(null);
+  const [portalAvailable, setPortalAvailable] = useState<boolean | null>(null);
+  const [portalBusy, setPortalBusy] = useState(false);
   const [planSwitching, setPlanSwitching] = useState<BeatGalerPlanId | null>(null);
   const [email, setEmail] = useState("");
   const [confirmEmail, setConfirmEmail] = useState("");
@@ -137,12 +140,20 @@ export default function SettingsPanel(props: Props) {
     finally { setCatalogLoading(false); }
   };
 
+  const refreshPortal = async () => {
+    if (platform.kind !== "web") return;
+    try { setPortalAvailable(await beatGalerPortalAvailable()); }
+    catch { setPortalAvailable(false); }
+  };
+
   useEffect(() => {
     void refreshAccount();
     void refreshPlan();
     void refreshCatalog();
-    if (platform.kind === "web" && new URLSearchParams(window.location.search).get("billing") === "success") {
-      setBillingReturn(true);
+    void refreshPortal();
+    const billingQuery = platform.kind === "web" ? new URLSearchParams(window.location.search).get("billing") : null;
+    if (billingQuery === "success" || billingQuery === "portal-return") {
+      setBillingReturn(billingQuery === "success" ? "checkout" : "portal");
       const url = new URL(window.location.href);
       url.searchParams.delete("billing");
       window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -289,6 +300,12 @@ export default function SettingsPanel(props: Props) {
       setPlanSwitching(null);
     }
   };
+  const openPortal = async () => {
+    if (platform.kind !== "web" || !portalAvailable || portalBusy) return;
+    setPortalBusy(true); setAccountStatus(null);
+    try { window.location.assign(await openBeatGalerPortal()); }
+    catch { setAccountStatus(null, "Subscriber management could not be opened. Please try again later."); setPortalBusy(false); }
+  };
   const changeEmail = async () => {
     if (!email.trim()) return setAccountStatus(null, "Enter your new email address.");
     if (email.trim().toLowerCase() !== confirmEmail.trim().toLowerCase()) return setAccountStatus(null, "Email addresses do not match.");
@@ -407,7 +424,7 @@ export default function SettingsPanel(props: Props) {
         {active === "plan" && <>
           {title("Plan", "Manage your BeatGaler access.")}
 
-          {billingReturn && <div role="status" style={{ marginBottom: 14, padding: 12, border: "1px solid #30302a", borderRadius: 9, color: "#bcbcae", fontSize: 11 }}>Checkout returned. Checking your access with the server; payment processing may still be underway. <button onClick={() => { void refreshPlan(); void refreshAccount(); }} style={{ ...buttonStyle, marginLeft: 8 }}>Refresh status</button></div>}
+          {billingReturn && <div role="status" style={{ marginBottom: 14, padding: 12, border: "1px solid #30302a", borderRadius: 9, color: "#bcbcae", fontSize: 11 }}>{billingReturn === "portal" ? "Subscriber management returned. Checking your access with the server; changes may still be processing." : "Checkout returned. Checking your access with the server; payment processing may still be underway."} <button onClick={() => { void refreshPlan(); void refreshAccount(); void refreshPortal(); }} style={{ ...buttonStyle, marginLeft: 8 }}>Refresh status</button></div>}
 
           <div style={{ marginBottom: 22, padding: "18px 20px", border: "1px solid #252525", borderRadius: 13, background: "#151515", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18 }}>
             <div>
@@ -421,6 +438,11 @@ export default function SettingsPanel(props: Props) {
               {currentPlan.entitlements.upload_project ? "PROJECT uploads available" : "New PROJECT uploads unavailable"}</>}
             </div>
           </div>
+
+          {platform.kind === "web" && currentPlan?.initial_checkout_allowed === false && portalAvailable && !planError && <div style={{ marginBottom: 18, padding: "14px 16px", border: "1px solid #30302a", borderRadius: 10, color: "#aaa", fontSize: 11 }}>
+            Manage your existing subscription in Polar. Any plan or cancellation change appears here after the server confirms it.
+            <button disabled={portalBusy} onClick={() => void openPortal()} style={{ ...buttonStyle, marginLeft: 12 }}>{portalBusy ? "Opening…" : "Manage subscription"}</button>
+          </div>}
 
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, margin: "0 0 12px" }}>
             <div>
@@ -453,7 +475,7 @@ export default function SettingsPanel(props: Props) {
 
           {planCatalog.length === 0 && <div role={catalogError ? "alert" : undefined} style={{ padding: 18, border: "1px solid #232323", borderRadius: 12, color: "#aaa", fontSize: 11 }}>{catalogLoading ? "Loading plans…" : "Plan catalog unavailable. Prices and checkout cannot be shown."}{catalogError && <button onClick={() => void refreshCatalog()} style={{ ...buttonStyle, marginLeft: 10 }}>Retry</button>}</div>}
 
-          {platform.kind === "web" && currentPlan?.initial_checkout_allowed === false && <div style={{ marginTop: 14, color: "#999", fontSize: 11 }}>Subscription changes are not yet available in Web. Your current and scheduled access is shown above.</div>}
+          {platform.kind === "web" && currentPlan?.initial_checkout_allowed === false && portalAvailable === false && <div style={{ marginTop: 14, color: "#999", fontSize: 11 }}>Subscriber management is currently unavailable. Your current and scheduled access is shown above.</div>}
 
           {platform.kind === "web" && <div style={{ marginTop: 14, color: "#888", fontSize: 11, lineHeight: 1.6 }}>Changing to a lower plan does not delete existing beats or PROJECT files. Existing PROJECT files remain available to read and download. If your library exceeds the new beat limit, new beat creation pauses until you are below that limit.</div>}
 

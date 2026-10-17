@@ -122,3 +122,29 @@ test('guard rejects production daily without external effects',()=>{
   assert.equal(result.status,2);assert.match(result.stderr,/DAILY_SANDBOX_ONLY/);
 });
 module.exports={env,fixture};
+
+test('a real paid cycle stops being WAITING even when its signed delivery is missing',()=>{
+  const {recordRenewalOrder,recordMissingRenewalReceipt}=require('../scripts/polar-sandbox-daily-e2e.cjs');
+  const {state,order}=fixture();state.result='WAITING_FOR_NATURAL_RENEWAL';state.checkpoint='UPGRADE_SCHEDULED';state.lastErrorCode='POLAR_SANDBOX_ORDERS_LIST_FAILED';
+  const original=structuredClone(state.initialOrder);
+  recordRenewalOrder(state,order);
+  assert.equal(state.result,'PARTIAL');assert.equal(state.checkpoint,'RENEWAL_PAID_OBSERVED');assert.equal(state.lastErrorCode,undefined);
+  recordMissingRenewalReceipt(state);
+  assert.equal(state.result,'PARTIAL');assert.equal(state.checkpoint,'RENEWAL_PAID_WEBHOOK_MISSING');
+  assert.equal(state.lastErrorCode,'DAILY_REAL_RENEWAL_WEBHOOK_REQUIRED');assert.deepEqual(state.initialOrder,original);
+  assert.throws(()=>recordRenewalOrder(state,{...order,paid:false}));
+});
+
+test('Highest is supported by its own paid renewal after an initial-period refund',()=>{
+  const {assertHighestCoverage}=require('../scripts/polar-sandbox-daily-e2e.cjs');
+  const {state,order}=fixture();
+  const after={effectivePlanId:'highest_paid',paidThrough:order.periodEnd,payments:[
+    {orderId:'A',status:'refunded',offerId:ENTRY,periodStart:state.initialOrder.periodStart,periodEnd:state.initialOrder.periodEnd},
+    {orderId:'B',status:'succeeded',offerId:HIGHEST,periodStart:order.periodStart,periodEnd:order.periodEnd}]};
+  assertHighestCoverage(after,state);
+  for(const mutate of [x=>x.payments.pop(),x=>x.payments[1].status='pending',x=>x.payments[1].offerId=ENTRY,
+    x=>x.payments[1].periodStart=state.initialOrder.periodStart,x=>x.paidThrough=state.initialOrder.periodEnd]){
+    const invalid=structuredClone(after);mutate(invalid);
+    assert.throws(()=>assertHighestCoverage(invalid,state),{code:'DAILY_HIGHEST_GRANTED_EARLY'});
+  }
+});

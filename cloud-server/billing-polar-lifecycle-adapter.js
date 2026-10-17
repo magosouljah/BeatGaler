@@ -5,9 +5,13 @@ const {
   PolarSandboxConfigError,
   PolarSandboxAdapterError,
   readPolarSandboxConfig,
+  readPolarProductionConfig,
   createSandboxCommercialCatalog,
-  createPinnedSandboxClient,
-  createPolarSandboxAdapter,
+  createProductionCommercialCatalog,
+  createPinnedPolarClient,
+  createPolarAdapter,
+  assertPolarConfig,
+  assertCatalogEnvironment,
 } = require('./billing-polar-sandbox');
 const { getCheckoutReadyOffer } = require('./billing-commercial-catalog');
 
@@ -135,14 +139,24 @@ async function collectList(raw, maxItems) {
   );
 }
 
-function createPolarSandboxLifecycleAdapter(options = {}) {
-  const config = options.config || readPolarSandboxConfig(options.env || process.env);
-  const catalog = options.catalog || createSandboxCommercialCatalog(config);
+function createPolarLifecycleAdapter(options = {}) {
+  const environment = options.environment || 'sandbox';
+  if (environment !== 'sandbox' && environment !== 'production') {
+    throw new PolarSandboxConfigError('Polar environment is unsupported.', 'POLAR_CONFIG_ENVIRONMENT_MISMATCH');
+  }
+  const config = options.config || (environment === 'sandbox'
+    ? readPolarSandboxConfig(options.env || process.env)
+    : readPolarProductionConfig(options.env || process.env));
+  assertPolarConfig(config, environment);
+  const catalog = options.catalog || (environment === 'sandbox'
+    ? createSandboxCommercialCatalog(config) : createProductionCommercialCatalog(config));
+  assertCatalogEnvironment(catalog, environment, config);
   const sdk = options.sdk || (options.client && options.webhooks ? null : loadSdk());
-  const client = options.client || createPinnedSandboxClient({ config, sdk });
+  const client = options.client || createPinnedPolarClient({ config, sdk });
   const webhooks = options.webhooks || sdk?.webhooks;
 
-  const base = createPolarSandboxAdapter({
+  const base = createPolarAdapter({
+    environment,
     config,
     catalog,
     client,
@@ -275,10 +289,20 @@ function createPolarSandboxLifecycleAdapter(options = {}) {
   });
 }
 
+function createPolarSandboxLifecycleAdapter(options = {}) {
+  return createPolarLifecycleAdapter({ ...options, environment: 'sandbox' });
+}
+
+function createPolarProductionLifecycleAdapter(options = {}) {
+  return createPolarLifecycleAdapter({ ...options, environment: 'production' });
+}
+
 module.exports = {
   DEFAULT_DISCOVERY_LIMIT,
   MAX_DISCOVERY_ITEMS,
   REFUND_REASONS,
   collectList,
   createPolarSandboxLifecycleAdapter,
+  createPolarProductionLifecycleAdapter,
+  createPolarLifecycleAdapter,
 };
