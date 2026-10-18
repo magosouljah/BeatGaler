@@ -384,8 +384,11 @@ test('STEP 5: PROJECT publication enforces Access and server-measured bytes on r
         assert.equal((await quota.usage('other')).used, 1);
       });
     } finally {
-      if (pool) await pool.end();
-      await admin.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => {});
-      await admin.end();
+      try {
+        if (pool) await pool.end();
+        await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+      } finally {
+        await admin.end();
+      }
     }
   });

@@ -271,8 +271,11 @@ test('STEP 6: real PostgreSQL Trash purge, quota and recovery', { skip: !ADMIN_U
       assert.equal(await used(v.uid), 19);
     });
   } finally {
-    if (pool) await pool.end();
-    await admin.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => {});
-    await admin.end();
+    try {
+      if (pool) await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+    } finally {
+      await admin.end();
+    }
   }
 });

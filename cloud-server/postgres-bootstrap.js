@@ -3,7 +3,8 @@
 const { postgresConfig, createPostgresPool } = require('./postgres-runtime-config');
 const { applyMigrations } = require('./postgres-migrations');
 
-async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = applyMigrations } = {}) {
+async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = applyMigrations,
+  onMigrationError = () => {} } = {}) {
   const config = postgresConfig(env);
   if (!config.enabled) return Object.freeze({ enabled: false, pool: null, migrations: null });
 
@@ -13,6 +14,7 @@ async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = 
     const migrations = await apply(pool);
     return Object.freeze({ enabled: true, pool, migrations });
   } catch (error) {
+    try { onMigrationError(); } catch (_) {}
     try { await pool.end(); } catch (_) {}
     throw error;
   }

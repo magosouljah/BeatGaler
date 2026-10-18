@@ -64,6 +64,7 @@ const bot = new Proxy({}, {
 
 const app = express();
 const criticalPathTrace = require("./stage1-critical-path-trace");
+const { operationsRuntime } = require('./operations-runtime');
 
 // Diagnostic request IDs. Never logs bot tokens or file contents.
 app.use((req, res, next) => {
@@ -84,6 +85,8 @@ app.use((req, res, next) => {
   }
 
   res.on("finish", () => {
+    operationsRuntime.recordHttp({ statusCode: res.statusCode, durationMs: Date.now() - started,
+      authRoute: req.path.startsWith('/auth/'), path: req.path });
     if (isUpload || res.statusCode >= 400) {
       console.log(
         `[http ${requestId}] ${req.method} ${req.path} -> ${res.statusCode} ` +
@@ -2882,7 +2885,6 @@ app.post("/metadata/upsert", async (req, res) => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`BeatGaler Cloud API escuchando en http://0.0.0.0:${PORT}`);
-  console.log(`LAN para Mac: http://192.168.86.98:${PORT}`);
   console.log(`Transport: Telegram Direct MTProto (MASTER + managed bot pool)`);
 });
 

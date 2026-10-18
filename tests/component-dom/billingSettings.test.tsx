@@ -11,6 +11,7 @@ vi.mock("../../src/components/AccountGate", () => ({
   disableMfa: vi.fn(), disconnectOAuthProvider: vi.fn(), enableMfa: vi.fn(),
   getBeatGalerAccountInfo: api.account, getBeatGalerCurrentPlan: api.plan,
   getBeatGalerPlanCatalog: api.catalog, startBeatGalerCheckout: api.checkout,
+  resolveBeatGalerCloudApi: vi.fn(() => new Promise<string>(() => {})),
   oauthBeatGalerAccount: vi.fn(),
 }));
 vi.mock("../../src/components/billingPortal", () => ({

@@ -19,9 +19,10 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }
 }
 
-for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp tr; do
+for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp tr readlink realpath mv cp; do
   require_command "$command_name"
 done
+source "$(dirname "${BASH_SOURCE[0]}")/release-switch.sh"
 
 for file_path in "$ARCHIVE" "$BOOTSTRAP_CONF" "$PRODUCTION_CONF"; do
   [ -f "$file_path" ] || { echo "Missing deployment input: $file_path" >&2; exit 3; }
@@ -31,6 +32,27 @@ if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Missing or invalid expected source SHA; production deployment requires an exact 40-character lowercase Git SHA." >&2
   exit 4
 fi
+
+PREVIOUS_NGINX_CONF="$(mktemp)"
+HAD_PREVIOUS_CONF=0
+SECURITY_HEADERS=
+SECURITY_BODY=
+if [ -f "$NGINX_CONF" ]; then
+  cp -p -- "$NGINX_CONF" "$PREVIOUS_NGINX_CONF"
+  HAD_PREVIOUS_CONF=1
+fi
+cleanup_install() {
+  local result=$?
+  if [ "$result" -ne 0 ] && [ "$RS_SWITCHED" -eq 1 ]; then
+    release_switch_restore_with_config "$PREVIOUS_NGINX_CONF" "$NGINX_CONF" "$HAD_PREVIOUS_CONF" \
+      || echo 'WEB_ROLLBACK_FAILED: previous release/config could not be restored.' >&2
+    nginx -t && systemctl reload nginx || echo 'WEB_ROLLBACK_FAILED: previous Nginx configuration did not reload.' >&2
+  fi
+  rm -f -- "$PREVIOUS_NGINX_CONF"
+  [ -z "$SECURITY_HEADERS" ] || rm -f -- "$SECURITY_HEADERS"
+  [ -z "$SECURITY_BODY" ] || rm -f -- "$SECURITY_BODY"
+}
+trap cleanup_install EXIT
 
 dns_ips() {
   getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u || true
@@ -92,9 +114,9 @@ if [ "$ACTUAL_SOURCE_SHA" != "$EXPECTED_SOURCE_SHA" ]; then
   exit 29
 fi
 
-# Switch static files atomically. If later TLS/nginx validation fails, the files are
-# still complete and the previous release remains available under releases/.
-ln -sfn "$RELEASE_DIR" "$WEB_ROOT/current"
+# Keep the previous symlink and Nginx config until every local HTTPS smoke passes.
+release_switch_init "$WEB_ROOT"
+release_switch_activate "$RELEASE_DIR"
 
 # Bootstrap HTTP first so Certbot can satisfy ACME without touching api.beatgaler.com.
 install -m 0644 "$BOOTSTRAP_CONF" "$NGINX_CONF"
@@ -142,7 +164,6 @@ curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0
 
 SECURITY_HEADERS="$(mktemp)"
 SECURITY_BODY="$(mktemp)"
-trap 'rm -f "$SECURITY_HEADERS" "$SECURITY_BODY"' EXIT
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" \
   -D "$SECURITY_HEADERS" -o "$SECURITY_BODY" "https://$WEB_HOST/.well-known/security.txt"
 grep -Eiq '^content-type:[[:space:]]*text/plain;[[:space:]]*charset=utf-8([[:space:]]|$)' "$SECURITY_HEADERS"
@@ -163,8 +184,14 @@ fi
 # Keep rollback material without growing the tiny EC2 disk indefinitely.
 mapfile -t OLD_RELEASES < <(find "$WEB_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | awk 'NR>5 {$1=""; sub(/^ /, ""); print}')
 for old_release in "${OLD_RELEASES[@]:-}"; do
-  [ -n "$old_release" ] && rm -rf -- "$old_release"
+  [ -n "$old_release" ] || continue
+  old_resolved="$(realpath -m -- "$old_release")"
+  [[ "$old_resolved" == "$WEB_ROOT/releases/"* ]] || { echo 'Refusing release cleanup outside WEB_ROOT.' >&2; exit 30; }
+  [ "$old_resolved" = "$RS_PREVIOUS_TARGET" ] && continue
+  [ "$old_resolved" = "$RELEASE_DIR" ] && continue
+  rm -rf -- "$old_resolved"
 done
 
+release_switch_commit
 echo "WEB_RUNTIME_SOURCE_PROOF_OK source=$EXPECTED_SOURCE_SHA release=$RELEASE_ID"
 echo "WEB_DEPLOY_OK release=$RELEASE_ID source=$EXPECTED_SOURCE_SHA url=https://$WEB_HOST api_proxy=https://$WEB_HOST/beatgaler-api"

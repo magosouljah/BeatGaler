@@ -42,7 +42,7 @@ describe("Issue #97 INDEX priority", () => {
   it("never interprets an INDEX preemption as an authoritative deletion or warm failure", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
-    expect(worker).toContain("controller?.signal.aborted || isAbortError(error)");
+    expect(worker).toContain('activeIndexAbortController?.signal.aborted || isAbortError(error) || !indexPriorityAllowed()');
     expect(worker).toContain("resumed = true");
     expect(worker).toContain("continue;");
   });

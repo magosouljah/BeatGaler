@@ -31471,7 +31471,6 @@ var FramedReader = class {
 var FramedWriter = class {
   #writable;
   #encoder;
-  #buffer;
   #highWaterMark;
   /**
    * @param writable  fuman writable stream to write to
@@ -31482,15 +31481,14 @@ var FramedWriter = class {
     this.#writable = writable;
     this.#encoder = encoder2;
     this.#highWaterMark = options?.initialBufferSize ?? 1024;
-    this.#buffer = Bytes.alloc(this.#highWaterMark);
   }
   /** write a frame to the stream */
   async write(frame) {
-    await this.#encoder.encode(frame, this.#buffer);
-    const buffer = this.#buffer.result();
+    const into = Bytes.alloc(this.#highWaterMark);
+    await this.#encoder.encode(frame, into);
+    const buffer = into.result();
     if (buffer.length > 0) {
-      const copy = u8_exports.allocWith(buffer);
-      this.#buffer.reset();
+      const copy = new Uint8Array(buffer);
       await this.#writable.write(copy);
     }
   }

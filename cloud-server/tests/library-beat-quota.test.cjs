@@ -11,7 +11,7 @@ test('INDEX bootstrap refuses unverified or ambiguous identities', () => {
   assert.throws(() => indexRows({ messageId: 42, manifest: manifest(), serverVerified: false }), { code: 'LIBRARY_QUOTA_INDEX_UNVERIFIED' });
   assert.throws(() => indexRows(observation(manifest([{ id: 'same' }], [{ beat: { id: 'same' } }]))), { code: 'LIBRARY_QUOTA_INDEX_INVALID' });
   assert.throws(() => indexRows(observation(manifest([{ name: 'missing-id' }]))), { code: 'LIBRARY_QUOTA_INVALID_INPUT' });
-  assert.equal(indexRows(observation(manifest([{ id: 'one' }, { id: 'one' }]))).rows.size, 1);
+  assert.throws(() => indexRows(observation(manifest([{ id: 'one' }, { id: 'one' }]))), { code: 'LIBRARY_QUOTA_INDEX_INVALID' });
 });
 
 test('server INDEX reader downloads the pinned Telegram document and checks the pin again', async () => {

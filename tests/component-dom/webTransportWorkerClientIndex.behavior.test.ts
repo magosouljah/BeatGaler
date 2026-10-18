@@ -69,7 +69,7 @@ describe("WorkerClient INDEX active-time accounting", () => {
     const request = messages(worker, "get_index")[0];
 
     worker.event(request.requestId, "active");
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(90_000);
     await rejection;
 
     expect(worker.terminate).not.toHaveBeenCalled();

@@ -680,8 +680,11 @@ test('Billing V1 reconciliation repairs only authoritative provider facts and lo
         { code: 'BILLING_RECONCILIATION_USER_UNKNOWN' });
     });
   } finally {
-    if (pool) await pool.end().catch(() => {});
-    await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)} WITH (FORCE)`).catch(() => {});
-    await admin.end().catch(() => {});
+    try {
+      if (pool) await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`);
+    } finally {
+      await admin.end().catch(() => {});
+    }
   }
 });

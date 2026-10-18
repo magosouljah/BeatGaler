@@ -46,7 +46,7 @@ describe("Web startup Cloud resolution race", () => {
     const vite = source("vite.config.ts");
 
     expect(vite).toContain('"/beatgaler-api": {');
-    expect(vite).toContain('target: "http://127.0.0.1:4000"');
+    expect(vite).toContain('target: process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000"');
     expect(vite).toContain('requestPath.replace(/^\\/beatgaler-api/, "")');
   });
 });

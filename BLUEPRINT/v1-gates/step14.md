@@ -39,7 +39,20 @@ ABANDON: F3 Requires current Sandbox/isolated-DB inspection of the existing dail
   EVIDENCE: Candidate `3a942cd` includes `bafacba9` but not `3146cf9`; no artifact is bound to `3a942cd`. Since `bafacba9`, STEP15 changed Cloud/Access/transport source. The later commit changed daily/failure harness, state, package scripts, and `billing-polar-daily` tests; candidate lacks those changes. Production billing lifecycle/adapter/reconciliation files show no diff from `bafacba9` to candidate, but that does not satisfy the exact-SHA gate.
 ABANDON: F4 Requires root integration of the later harness fix or an explicit alternative, tests on the frozen candidate, then an authorized real Sandbox run bound to that exact SHA. New purchases/renewals and a human hosted-payment action may be necessary; no charge is authorized by this audit.
 
-## Provenance and historical contradictions
+## Provenance and read-only re-audit at 9263523 (2026-10-17)
+
+The canonical `.billing-e2e` artifacts remain present and were listed without writing to that directory. The current WSL shell has none of the checked Sandbox/admin environment variables. The canonical `cloud-server/.env` file has nonempty Sandbox access-token and webhook-secret keys plus `DATABASE_URL`, but lacks the E2E email, webhook transport and isolated admin database URL. No value was printed or copied. This is a presence check, not a validity, connectivity, or live-provider check. Production Polar token is absent from that file.
+
+| STEP14_GAP | ALREADY_PROVEN | MISSING_EVIDENCE | REQUIRES_NEW_TRANSACTION | CAN_BE_PROVEN_READ_ONLY | NEXT_ACTION |
+| --- | --- | --- | --- | --- | --- |
+| F1 renewal paid webhook | Existing paid renewal Order/Payment and Highest Access at `bafacba9`; reconciliation stable | Signed, processed `order.paid` for that exact renewal Order, bound to final candidate SHA | Possibly, only if provider history/redelivery cannot recover it | First inspect provider delivery history and preserved isolated DB with credentials | Restore isolated admin connection and inspect/redeliver the exact event if provider allows; otherwise obtain explicit authorization before any new Sandbox purchase |
+| F2 natural cancellation expiration | Cancel-at-period-end scheduled and paid Access retained at `bafacba9` | Boundary crossed, Access Free, retained data and no subsequent paid cycle | Possibly, if preserved subscription/run cannot show the boundary | First inspect present provider state and isolated DB read only | Query existing subscription/Access/event history; authorize a new cycle only if old evidence cannot close the gate |
+| F3 inverse Highest→Entry | Inverse change scheduled at `bafacba9` | Distinct later successful paid cycle, signed receipt and resulting Entry Access | Possibly, if no later cycle exists | First inspect current existing daily run read only | Correlate later Order, Payment, signed receipt and Access; seek charge approval only if necessary |
+| F4 exact final SHA | Several scenarios proven on `78a02f6`/`bafacba9`; later harness state at `3146cf9` | Unified financial path and signed receipts on the frozen final source SHA | Likely for full end-to-end attestation; requires explicit authorization | Local billing tests and artifact provenance can be checked read only; live transaction cannot | Freeze candidate, run all local billing suites, then agree exact Sandbox scope, hosted-payment operator and transaction count before any charge |
+
+All four gaps remain open. No Sandbox or production charge was attempted in this re-audit.
+
+### Historical contradictions
 
 - `PHASE-3-STATUS.md` ends with the earlier claim that daily renewal, refunds, failed renewal/grace/recovery and monthly Highest are still pending, and that STEP15 has not begun. The later artifacts prove several of those scenarios occurred on Oct 10–11, and this STEP15 worktree now exists. Treat the status prose as historical, not current evidence.
 - The same prose says the daily run was `WAITING_FOR_NATURAL_RENEWAL`; the latest preserved daily envelope instead says `PARTIAL / RENEWAL_PAID_WEBHOOK_MISSING`. A paid renewal Order plus reconciliation is narrower than the Task 11 signed-receipt requirement.

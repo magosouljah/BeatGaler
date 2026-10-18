@@ -149,16 +149,14 @@ describe("Task 2 opt-in observer through its actual Worker hooks", () => {
     connection._doFlush();
     connection._doFlush();
     await Promise.all(queued);
-    expect(socket.sent).toHaveLength(1);
+    expect(socket.sent).toHaveLength(2);
     const traces = () => posted.flatMap(message => message.trace ? [message.trace] : []);
-    const sent = traces().find(trace => trace.stage === "TASK2_INPUT_WEBSOCKET_SEND" && trace.detail.byte_correlation === "exact");
-    expect(sent?.detail.ping_msg_ids).toEqual(["100", "120"]);
-    expect(sent?.detail.outgoing_packets).toHaveLength(2);
-    expect(sent?.detail.outgoing_packets[0].rpc_msg_ids).toEqual(["108"]);
-    expect(sent?.detail.outgoing_packets[0].container_msg_ids).toEqual(["112"]);
-    expect(sent?.detail.outgoing_packets[1].rpc_msg_ids).toEqual(["128"]);
-    expect(sent?.detail.outgoing_packets[1].container_msg_ids).toEqual(["132"]);
-    expect(sent?.detail.encoded_fingerprint).toBeTruthy();
+    const sends = traces().filter(trace => trace.stage === "TASK2_INPUT_WEBSOCKET_SEND" && trace.detail.byte_correlation === "exact");
+    expect(sends).toHaveLength(2);
+    expect(sends.flatMap(trace => trace.detail.ping_msg_ids)).toEqual(["100", "120"]);
+    expect(sends.map(trace => trace.detail.outgoing_packets[0].rpc_msg_ids)).toEqual([["108"], ["128"]]);
+    expect(sends.map(trace => trace.detail.outgoing_packets[0].container_msg_ids)).toEqual([["112"], ["132"]]);
+    expect(sends.every(trace => trace.detail.outgoing_packets.length === 1 && trace.detail.encoded_fingerprint)).toBe(true);
     const rpcSet = traces().find(trace => trace.stage === "TASK2_PING_RPC_PENDING_SET");
     expect(rpcSet?.detail.rpc_msg_id).toBe("108");
     const firstContainerKey = [...session.pendingMessages.keys()].find(key => String(key) === String(containerId));
@@ -208,7 +206,7 @@ describe("Task 2 opt-in observer through its actual Worker hooks", () => {
     codec._encryptor = { process(plain: Uint8Array) { return Uint8Array.from(plain, byte => byte ^ 0x33); } };
     connection._doFlush();
     await queued.at(-1);
-    expect(socket.sent).toHaveLength(2);
+    expect(socket.sent).toHaveLength(3);
     expect(traces().filter(trace => trace.stage === "TASK2_INPUT_WEBSOCKET_SEND").at(-1)?.detail)
       .toMatchObject({ byte_correlation: "exact", ping_msg_ids: ["140"] });
     socket.failSend = true;

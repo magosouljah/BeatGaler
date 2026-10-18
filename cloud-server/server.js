@@ -28,6 +28,7 @@ const lifecycleRuntime = require("./billing-lifecycle-runtime");
 const reconciliationRuntime = require("./billing-reconciliation-runtime");
 const { createPostgresInstallationClaimCoordinator } = require("./postgres-installation-claim-coordinator");
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
+const { operationsRuntime } = require('./operations-runtime');
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
 const { installPersistentDirectSessionStart } = require("./direct-persistent-session-runtime");
 const { installPersistentDirectMembershipActivation } = require("./direct-persistent-membership-runtime");
@@ -46,7 +47,9 @@ async function start() {
   let pool = null;
 
   if (pgConfig.enabled) {
-    const started = await startPostgresControlPlane();
+    const started = await startPostgresControlPlane({
+      onMigrationError: () => operationsRuntime.recordCondition('migration_failure'),
+    });
     pool = started.pool;
     installPostgresShutdown(pool, process, { beforeClose: async () => {
       await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop()]);
@@ -97,8 +100,13 @@ async function start() {
     const reconciliation = reconciliationRuntime.configure({
       pool, authority: cutover.authority,
       adapter: billing.ready ? webBillingRuntime.provider() : null,
+      onError: () => operationsRuntime.recordCondition('billing_reconciliation_exception'),
+      onBacklog: () => operationsRuntime.recordCondition('queue_backlog'),
     });
     console.log(`[billing] reconciliation=${reconciliation.ready ? 'ready' : 'unavailable'} code=${reconciliation.failureCode || 'OK'}`);
+    if (!billing.ready || !checkout.ready || !portal.ready || !webhook.ready || !lifecycle.ready || !reconciliation.ready) {
+      operationsRuntime.recordCondition('provider_failure');
+    }
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {

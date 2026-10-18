@@ -66,7 +66,8 @@ describe("Issue #97 startup reveal architecture", () => {
   });
 
   it("keeps productive Web auth on the same-origin proxy and clears remembered legacy endpoints", () => {
-    expect(accountGate).toContain('if (platform.kind === "web") {\n    if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);');
+    expect(accountGate).toContain('if (!sameOriginProxy) throw new Error("Could not resolve BeatGaler Cloud API.");');
+    expect(accountGate).toContain('if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);');
     expect(accountGate).toContain('if (platform.kind === "web") return sameOriginProxyApi() || "";');
     expect(viteConfig).not.toContain('code.replace(unsafeCloudResolver');
   });

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { File } from 'node:buffer';
 import ts from 'typescript';
@@ -30,7 +31,8 @@ function executableSource(filename, desktop = false) {
     return true;
   }).map(node => node.getText(ast)).join('\n');
   if (desktop) assert.equal(mainRemoved, 1, 'omit only the CLI entrypoint, never helper implementation');
-  return ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const executable = desktop ? body : body.replaceAll('import.meta.env', 'VITE_ENV');
+  return ts.transpileModule(executable, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 }
 
 function harness(desktop = false) {
@@ -49,6 +51,15 @@ function harness(desktop = false) {
   const telegram = {
     async getMe() { calls.push(['getMe', BOT]); return { id: BOT, isBot: true }; },
     async getChat(chatId) { assert.equal(chatId, CHAT); calls.push(['getChat', chatId]); return { id: CHAT }; },
+    async resolvePeer(chatId) {
+      assert.equal(chatId, CHAT);
+      return { _: 'inputPeerChannel', channelId: Number(String(CHAT).slice(4)),
+        accessHash: { low: 1, high: 0 } };
+    },
+    async *iterHistory(chatId) {
+      assert.equal(chatId, CHAT);
+      for (const message of [...messages.values()].reverse()) yield message;
+    },
     async getFullChat(chatId) {
       assert.equal(chatId, CHAT); calls.push(['getFullChat', pinned]);
       if (faults.read) throw new Error('socket timeout');
@@ -108,7 +119,7 @@ function harness(desktop = false) {
   let context;
   context = vm.createContext({
     fs, os, path, Readable, Buffer, File, process, console, TextEncoder, TextDecoder, Uint8Array,
-    ArrayBuffer, AbortController, DOMException, setTimeout, clearTimeout, performance,
+    ArrayBuffer, AbortController, DOMException, setTimeout, clearTimeout, performance, crypto: webcrypto,
     InputMedia: { document: (file, options) => ({ file, options }) },
     MemoryStorage: class {}, prepareCleanMp3CloudUpload,
     playTrace() {}, playTraceSpan() {},
@@ -124,7 +135,9 @@ function harness(desktop = false) {
       events.push(event);
       if (event.event === 'download-chunk') queueMicrotask(() => vm.runInContext(`acknowledgeStream(${JSON.stringify(event.requestId)})`, context));
     },
-    telegram, CHAT, BOT, exports: {},
+    telegram, CHAT, BOT, VITE_ENV: {}, exports: {},
+    MtPeerNotFoundError: class MtPeerNotFoundError extends Error {},
+    armMtcuteIndexLivenessGuard: () => () => {},
   });
   const filename = desktop ? 'src-tauri/direct-transport/transport-helper.source.mjs' : 'src/features/cloud/webTransport.worker.ts';
   vm.runInContext(executableSource(filename, desktop), context, { filename });
@@ -219,7 +232,7 @@ test('Web playback prefix reads avoid mtcute precise EOF truncation and stay res
   const single = h.add(60, bytes, BOT, 'short playback');
   const batch = h.add(61, bytes, BOT, 'short warm playback');
 
-  const prefetched = await h.api.prefetch({ messageId: single.id, mimeType: 'audio/mpeg' });
+  const prefetched = await h.api.prefetch('single-prefix', { messageId: single.id, mimeType: 'audio/mpeg' });
   assert.equal(Buffer.from(prefetched.prefix).length, 4284);
   assert.deepEqual(Buffer.from(prefetched.prefix), bytes);
   const singleCall = h.calls.find(call => call[0] === 'chunk' && call[1] === single.id);
@@ -252,7 +265,7 @@ test('Web MP3/WAV/artwork/PROJECT upload, export/playback streams and warm prefi
       const downloaded = Buffer.concat(h.events.filter(event => event.requestId === requestId && event.event === 'download-chunk').map(event => Buffer.from(event.chunk)));
       assert.deepEqual(downloaded, bytes);
     }
-    const warm = await h.api.prefetch({ messageId: id, mimeType: mime });
+    const warm = await h.api.prefetch(`warm-${id}`, { messageId: id, mimeType: mime });
     assert.deepEqual(Buffer.from(warm.prefix), bytes);
     if (kind === 'ARTWORK') assert.equal((await h.api.download({ messageId: id, mimeType: mime })).dataUrl, `data:${mime};base64,${bytes.toString('base64')}`);
   }

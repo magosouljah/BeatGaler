@@ -1,5 +1,7 @@
 'use strict';
 
+const { operationsRuntime } = require('./operations-runtime');
+
 const DEFAULTS = Object.freeze({
   dependencyTimeoutMs: 1500,
   requestTimeoutMs: 30000,
@@ -30,11 +32,16 @@ function runtimeConfig(env = process.env) {
   if (!['development', 'test', 'staging', 'production'].includes(deploymentEnv)) {
     throw new Error('BEATGALER_DEPLOYMENT_ENV must be development, test, staging, or production.');
   }
+  const sourceSha = String(env.BEATGALER_SOURCE_SHA || '').trim();
+  if (nodeEnv === 'production' && !/^[0-9a-f]{40}$/.test(sourceSha)) {
+    throw new Error('Production NODE_ENV requires an exact BEATGALER_SOURCE_SHA.');
+  }
   const trustProxyHops = boundedInt(env.BEATGALER_TRUST_PROXY_HOPS, 0, 0, 4, 'BEATGALER_TRUST_PROXY_HOPS');
   const requestTimeoutMs = boundedInt(env.BEATGALER_HTTP_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs, 1000, 1800000, 'BEATGALER_HTTP_REQUEST_TIMEOUT_MS');
   return Object.freeze({
     nodeEnv,
     deploymentEnv,
+    sourceSha: sourceSha || null,
     trustProxy: trustProxyHops === 0 ? false : trustProxyHops,
     dependencyTimeoutMs: boundedInt(env.BEATGALER_DEPENDENCY_TIMEOUT_MS, DEFAULTS.dependencyTimeoutMs, 100, 10000, 'BEATGALER_DEPENDENCY_TIMEOUT_MS'),
     requestTimeoutMs,
@@ -85,11 +92,13 @@ function installRoutesAndProxy(app, config) {
   app.__beatgalerRuntimeRoutesInstalled = true;
   app.set('trust proxy', config.trustProxy);
   app.get('/healthz', (_req, res) => {
-    res.status(200).json({ ok: true, status: draining ? 'draining' : 'live', environment: config.deploymentEnv });
+    res.status(200).json({ ok: true, status: draining ? 'draining' : 'live', environment: config.deploymentEnv, sourceSha: config.sourceSha });
   });
   app.get('/readyz', async (_req, res) => {
     const snapshot = await readinessSnapshot({ config });
-    res.status(snapshot.ok ? 200 : 503).json({ ...snapshot, environment: config.deploymentEnv });
+    operationsRuntime.recordReadiness(snapshot);
+    operationsRuntime.recordPool(runtimeDependencies.pool);
+    res.status(snapshot.ok ? 200 : 503).json({ ...snapshot, environment: config.deploymentEnv, sourceSha: config.sourceSha });
   });
 }
 

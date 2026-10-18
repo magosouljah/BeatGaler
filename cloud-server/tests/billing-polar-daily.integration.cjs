@@ -95,6 +95,6 @@ test('daily equivalents persist pending change under unchanged monthly DB constr
   }finally{
     if(pool)await pool.end();
     // Only the database created by this local fixture, with its exact generated name.
-    assert.equal(state.databaseName,databaseName(runId));const admin=new Client({connectionString:ADMIN});await admin.connect();try{await admin.query(`DROP DATABASE IF EXISTS "${state.databaseName}" WITH (FORCE)`);}finally{await admin.end();}
+    assert.equal(state.databaseName,databaseName(runId));const admin=new Client({connectionString:ADMIN});await admin.connect();try{await admin.query(`DROP DATABASE IF EXISTS "${state.databaseName}"`);}finally{await admin.end();}
   }
 });

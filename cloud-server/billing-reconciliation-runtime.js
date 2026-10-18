@@ -9,7 +9,8 @@ const DEFAULT_COMMERCIAL_MS = 15 * 60_000;
 
 function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEFAULT_PENDING_MS,
   commercialMs = DEFAULT_COMMERCIAL_MS, pendingLimit = 50, commercialLimit = 100,
-  logger = createBillingSafeLogger(), serviceFactory = createBillingReconciliationService } = {}) {
+  logger = createBillingSafeLogger(), serviceFactory = createBillingReconciliationService,
+  onError = () => {}, onBacklog = () => {} } = {}) {
   if (authority !== 'postgres' || !pool || adapter?.provider !== 'polar' ||
       !['sandbox', 'production'].includes(adapter.environment) ||
       ![pendingMs, commercialMs].every(ms => Number.isInteger(ms) && ms >= 100) ||
@@ -24,6 +25,8 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
   let commercialCursor = null;
   let pendingDue = 0;
   let commercialDue = 0;
+  const backlogPages = { pending: 0, commercial: 0 };
+  const backlogAlerted = { pending: false, commercial: false };
 
   async function sweep(kind) {
     const pending = kind === 'pending';
@@ -36,9 +39,16 @@ function createReconciliationRuntime({ pool, adapter, authority, pendingMs = DEF
       });
       if (pending) pendingCursor = result.nextCursor;
       else commercialCursor = result.nextCursor;
+      backlogPages[kind] = result.nextCursor ? backlogPages[kind] + 1 : 0;
+      if (!result.nextCursor) backlogAlerted[kind] = false;
+      if (backlogPages[kind] >= 3 && !backlogAlerted[kind]) {
+        backlogAlerted[kind] = true;
+        try { onBacklog({ kind }); } catch (_) {}
+      }
     } catch (error) {
       logger.emit('reconciliation_failed', { provider: 'polar', environment: adapter.environment, mode: kind,
         reason: 'SWEEP_FAILED', errorCode: safeErrorCode(error) });
+      try { onError({ kind, code: safeErrorCode(error) }); } catch (_) {}
     }
   }
 

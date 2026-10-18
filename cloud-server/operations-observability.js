@@ -45,6 +45,14 @@ function alertRoute(condition, env = process.env) {
     queue_backlog: env.BEATGALER_ALERT_QUEUE_ROUTE,
     release_failure: env.BEATGALER_ALERT_RELEASE_ROUTE,
     backup_failure: env.BACKUP_FAILURE_ALERT_ROUTE,
+    direct_unavailable: env.BEATGALER_ALERT_DIRECT_ROUTE,
+    master_upload_failure: env.BEATGALER_ALERT_MASTER_ROUTE,
+    project_failure: env.BEATGALER_ALERT_PROJECT_ROUTE,
+    index_publish_failure: env.BEATGALER_ALERT_INDEX_ROUTE,
+    billing_webhook_failure: env.BEATGALER_ALERT_WEBHOOK_ROUTE,
+    api_latency_spike: env.BEATGALER_ALERT_LATENCY_ROUTE,
+    migration_failure: env.BEATGALER_ALERT_MIGRATION_ROUTE,
+    temp_storage_pressure: env.BEATGALER_ALERT_TEMP_ROUTE,
   };
   if (!(condition in routes)) throw new Error('Unknown alert condition.');
   const route = String(routes[condition] || '').trim();

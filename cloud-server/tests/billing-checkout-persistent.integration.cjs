@@ -442,12 +442,13 @@ test('persistent checkout is cross-process idempotent and fail-closed in Postgre
       assert.equal(h.calls.length, 0);
     });
   } finally {
-    if (pool) await pool.end().catch(() => {});
-    await admin.query(
-      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid <> pg_backend_pid()',
-      [dbName],
-    ).catch(() => {});
-    await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`).catch(() => {});
-    await admin.end().catch(() => {});
+    try {
+      if (pool) await pool.end();
+      // A completed pool must release this isolated database without killing
+      // backends; a leaked connection should fail the test visibly.
+      await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`);
+    } finally {
+      await admin.end().catch(() => {});
+    }
   }
 });

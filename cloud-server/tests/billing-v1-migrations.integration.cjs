@@ -36,8 +36,8 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
     pool = new Pool({ connectionString: databaseUrl(ADMIN_URL, dbName), max: 2 });
 
     const migrations = listMigrations();
-    assert.equal(migrations.at(-1)?.version, '0013');
-    assert.equal(migrations.at(-1)?.name, '0013_billing_lifecycle.sql');
+    assert(migrations.some(item => item.version === '0013' && item.name === '0013_billing_lifecycle.sql'));
+    assert(migrations.some(item => item.version === '0018' && item.name === '0018_library_trash_purge.sql'));
 
     const first = await applyMigrations(pool, migrations);
     assert.deepEqual(first.applied, migrations.map(item => item.version));
@@ -321,12 +321,11 @@ test('Billing V1 migrations apply cleanly and enforce the isolated PostgreSQL sc
     const webhookUser = await pool.query("SELECT resolved_user_id FROM billing_webhook_events WHERE event_id='webhook_schema_1'");
     assert.equal(webhookUser.rows[0].resolved_user_id, null, 'webhook inbox should retain financial history while clearing deleted user FK');
   } finally {
-    if (pool) await pool.end().catch(() => {});
-    await admin.query(
-      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid <> pg_backend_pid()',
-      [dbName],
-    ).catch(() => {});
-    await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`).catch(() => {});
-    await admin.end().catch(() => {});
+    try {
+      if (pool) await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`);
+    } finally {
+      await admin.end().catch(() => {});
+    }
   }
 });

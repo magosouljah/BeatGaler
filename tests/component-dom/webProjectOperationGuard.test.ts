@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spies = vi.hoisted(() => ({
-  authorize: vi.fn(), reserve: vi.fn(), cancel: vi.fn(), upload: vi.fn(), projectUpload: vi.fn(),
+  authorize: vi.fn(), reserve: vi.fn(), cancel: vi.fn(), upload: vi.fn(), projectUpload: vi.fn(), publish: vi.fn(),
   importCommit: vi.fn(), editCommit: vi.fn(), pointer: vi.fn(),
 }));
 
@@ -13,7 +13,7 @@ vi.mock('../../src/features/cloud/webTransportSession', () => ({
   renewWebTransportBeat: vi.fn(),
   cancelWebTransportBeat: spies.cancel,
   ensureWebTransportTopic: vi.fn(async () => 42),
-  publishWebTransportIndex: vi.fn(),
+  publishWebTransportIndex: spies.publish,
   commitWebTransportIndexPointer: spies.pointer,
   reconcileWebTransportRouting: vi.fn(),
 }));
@@ -29,7 +29,7 @@ function createTransport() {
   const lease = { operationId: 'cap_project', sessionId: 'session-a', generation: 1,
     scope: { objectType: 'beat', objectIds: ['beat-a'] }, livenessTimeoutMs: 15_000 };
   const controller = { connect: vi.fn(async () => {}), beginOperation: vi.fn(async () => lease),
-    endOperation: vi.fn(async () => {}) };
+    endOperation: vi.fn(async () => {}), withOperation: vi.fn(async (_kind, _scope, action) => action(lease)) };
   const worker = { upload: spies.upload };
   const transport = Object.assign(Object.create(WebGalerCloudTransport.prototype), {
     controller, worker, uploadCheckpoints: new Map(),
@@ -47,6 +47,7 @@ beforeEach(() => {
   spies.reserve.mockResolvedValue(undefined);
   spies.cancel.mockResolvedValue(undefined);
   spies.pointer.mockResolvedValue(undefined);
+  spies.publish.mockResolvedValue({ messageId: 1, previousMessageId: 0, beatCount: 0 });
   spies.upload.mockResolvedValue({ telegram_file_id: 'direct:88', telegram_message_id: 88,
     original_size: 3, filename: 'project.zip', parts: [], transport: 'direct-web' });
   spies.projectUpload.mockResolvedValue({ telegram_file_id: 'direct:88', telegram_message_id: 88,

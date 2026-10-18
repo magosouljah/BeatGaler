@@ -11,7 +11,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  console.log('[web-billing-preflight] PASS sandbox paid_entry_monthly_v1 highest_paid_monthly_v1');
+  console.log(`[web-billing-preflight] PASS ${runtime.provider().environment} paid_entry_monthly_v1 highest_paid_monthly_v1`);
 }
 
 main().catch(() => {

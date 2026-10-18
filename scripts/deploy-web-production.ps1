@@ -69,6 +69,7 @@ try {
 
   Invoke-NativeChecked -Command "scp" -Arguments ($CommonSsh + @(
     (Join-Path $RepoRoot "deploy\web\install-web-production.sh"),
+    (Join-Path $RepoRoot "deploy\web\release-switch.sh"),
     (Join-Path $RepoRoot "deploy\web\beatgaler.com.bootstrap.conf"),
     (Join-Path $RepoRoot "deploy\web\beatgaler.com.conf"),
     "${SshTarget}:/tmp/"

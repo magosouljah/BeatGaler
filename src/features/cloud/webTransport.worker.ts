@@ -2454,6 +2454,7 @@ async function getLibraryIndex(requestId: string | null = null, allowMissing = f
         }
         if (recovered) return finish(recovered.messageId, recovered.loaded, { expectedMessageId: pointerId || null, source: "history_recovery" });
         if (requestId) stage1Trace(requestId, "WORKER_INDEX_HISTORY_RECOVERY_EMPTY");
+        if (pinnedId > 0) throw new Error("Galer Cloud library index is not available for initial creation.");
         if (allowMissing) return { messageId: 0, manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] } };
         throw new Error("Galer Cloud library index is still synchronizing.");
       } catch (error) {

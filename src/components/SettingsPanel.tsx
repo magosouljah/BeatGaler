@@ -147,6 +147,7 @@ export default function SettingsPanel(props: Props) {
   };
 
   useEffect(() => {
+    let active = true;
     void refreshAccount();
     void refreshPlan();
     void refreshCatalog();
@@ -159,9 +160,11 @@ export default function SettingsPanel(props: Props) {
       window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     }
     if (platform.capabilities.trashLifecycle) {
-      platform.trash.listBeats().then(setTrashItems).catch(console.error).finally(() => setLoadingTrash(false));
+      platform.trash.listBeats().then(items => { if (active) setTrashItems(items); })
+        .catch(console.error).finally(() => { if (active) setLoadingTrash(false); });
       if (platform.capabilities.localHelper) {
-        platform.trash.listPresets().then(setPresetTrashItems).catch(console.error).finally(() => setLoadingPresetTrash(false));
+        platform.trash.listPresets().then(items => { if (active) setPresetTrashItems(items); })
+          .catch(console.error).finally(() => { if (active) setLoadingPresetTrash(false); });
       } else {
         setLoadingPresetTrash(false);
       }
@@ -170,8 +173,11 @@ export default function SettingsPanel(props: Props) {
       setLoadingPresetTrash(false);
     }
     if (platform.capabilities.playbackCache) {
-      platform.playbackCache.status().then(status => { setCacheStatus(status); setCustomCacheMb(String(status.limit_mb)); }).catch(console.error);
+      platform.playbackCache.status().then(status => {
+        if (active) { setCacheStatus(status); setCustomCacheMb(String(status.limit_mb)); }
+      }).catch(console.error);
     }
+    return () => { active = false; };
   }, []);
 
   const toggleIncomplete = async () => {
@@ -295,7 +301,7 @@ export default function SettingsPanel(props: Props) {
     } catch (e: any) {
       if (e?.state === "FAILED" || e?.code === "BILLING_CHECKOUT_FAILED") localStorage.removeItem(key);
       setAccountStatus(null, e?.code === "BILLING_CHECKOUT_SUBSCRIBER_PORTAL_REQUIRED"
-        ? "Subscription changes are not yet available in Web."
+        ? "Use Subscriber management to change your plan."
         : "Checkout could not be opened. Please try again later.");
       setPlanSwitching(null);
     }

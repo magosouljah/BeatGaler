@@ -32,9 +32,14 @@ test('sweeps do not overlap; shutdown waits for active work and restart resumes 
   let inFlight = 0, maximum = 0;
   async function page(kind, input) {
     inFlight += 1; maximum = Math.max(maximum, inFlight);
+    const continuedAtStart = input.shouldContinue();
     calls.push({ kind, cursor: input.cursor, limit: input.limit });
-    if (calls.length === 1) await gate;
-    assert.equal(input.shouldContinue(), calls.length > 1);
+    if (calls.length === 1) {
+      await gate;
+      assert.equal(input.shouldContinue(), false);
+    } else {
+      assert.equal(continuedAtStart, true);
+    }
     inFlight -= 1;
     return { nextCursor: `${kind}_cursor` };
   }
@@ -51,11 +56,14 @@ test('sweeps do not overlap; shutdown waits for active work and restart resumes 
   release(); await stopping;
   assert.equal(runtime.status().active, false);
   runtime.start();
-  try { await until(() => calls.length >= 3); } finally { await runtime.stop(); }
+  try { await until(() => calls.slice(1).some(call => call.kind === 'pending') &&
+    calls.slice(1).some(call => call.kind === 'commercial')); } finally { await runtime.stop(); }
   assert.equal(maximum, 1);
-  assert.equal(calls[1].cursor, 'pending_cursor');
-  assert.equal(calls[1].limit, 2);
-  assert.equal(calls[2].limit, 3);
+  const resumedPending = calls.slice(1).find(call => call.kind === 'pending');
+  const resumedCommercial = calls.slice(1).find(call => call.kind === 'commercial');
+  assert.equal(resumedPending.cursor, 'pending_cursor');
+  assert.equal(resumedPending.limit, 2);
+  assert.equal(resumedCommercial.limit, 3);
   const count = calls.length;
   await delay(150);
   assert.equal(calls.length, count);
@@ -63,9 +71,11 @@ test('sweeps do not overlap; shutdown waits for active work and restart resumes 
 
 test('scheduler errors are sanitized and do not stop future sweeps', async () => {
   const emitted = [];
+  const conditions = [];
   let attempts = 0;
   const runtime = createReconciliationRuntime({ ...options,
     logger: createBillingSafeLogger({ sink: entry => emitted.push(entry) }),
+    onError: failure => conditions.push(failure),
     serviceFactory: () => ({
       async runPendingSweep() {
         attempts += 1;
@@ -79,4 +89,25 @@ test('scheduler errors are sanitized and do not stop future sweeps', async () =>
   assert.ok(emitted.length >= 2);
   assert.equal(emitted[0].errorCode, 'BILLING_RECONCILIATION_FAILED');
   assert.equal(JSON.stringify(emitted).includes('secret'), false);
+  assert.ok(conditions.length >= 2);
+  assert.deepEqual(conditions[0], { kind: 'pending', code: 'BILLING_RECONCILIATION_FAILED' });
+  assert.equal(JSON.stringify(conditions).includes('secret'), false);
+});
+
+test('three consecutive paged reconciliation sweeps signal backlog once per streak', async () => {
+  const backlog = [];
+  let pendingCalls = 0;
+  const runtime = createReconciliationRuntime({ ...options, commercialMs: 60_000,
+    onBacklog: event => backlog.push(event),
+    serviceFactory: () => ({
+      async runPendingSweep() {
+        pendingCalls += 1;
+        return { nextCursor: pendingCalls === 4 ? null : `cursor_${pendingCalls}` };
+      },
+      async runCommercialSweep() { return { nextCursor: null }; },
+    }),
+  });
+  runtime.start();
+  try { await until(() => pendingCalls >= 7); } finally { await runtime.stop(); }
+  assert.deepEqual(backlog, [{ kind: 'pending' }, { kind: 'pending' }]);
 });

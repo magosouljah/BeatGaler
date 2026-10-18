@@ -946,12 +946,11 @@ test('Billing V1 durable lifecycle projects paid coverage, grace, plan changes a
       assert.equal((await inbox.getEvent('evt_life_binding_conflict')).state, 'FAILED');
     });
   } finally {
-    if (pool) await pool.end().catch(() => {});
-    await admin.query(
-      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid <> pg_backend_pid()',
-      [dbName],
-    ).catch(() => {});
-    await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`).catch(() => {});
-    await admin.end().catch(() => {});
+    try {
+      if (pool) await pool.end();
+      await admin.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`);
+    } finally {
+      await admin.end().catch(() => {});
+    }
   }
 });

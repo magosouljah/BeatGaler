@@ -8,7 +8,10 @@ test.afterEach(() => runtime._resetForTests());
 
 test('production requires explicit staging/production deployment contract', () => {
   assert.throws(() => runtime.runtimeConfig({ NODE_ENV: 'production' }), /BEATGALER_DEPLOYMENT_ENV/);
-  assert.equal(runtime.runtimeConfig({ NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'staging' }).deploymentEnv, 'staging');
+  assert.throws(() => runtime.runtimeConfig({ NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'staging' }), /BEATGALER_SOURCE_SHA/);
+  const config = runtime.runtimeConfig({ NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'staging', BEATGALER_SOURCE_SHA: 'a'.repeat(40) });
+  assert.equal(config.deploymentEnv, 'staging');
+  assert.equal(config.sourceSha, 'a'.repeat(40));
 });
 
 test('proxy trust is explicit and bounded', () => {
@@ -86,4 +89,24 @@ test('express patch installs routes/proxy and wraps listen without server-core e
   assert.equal(application['trust proxy'], 1);
   assert.deepEqual(routes.map(([path]) => path), ['/healthz', '/readyz']);
   assert.equal(result.requestTimeout, 30000);
+});
+
+test('health and readiness expose the configured exact source SHA for deploy comparison', async () => {
+  const routes = new Map();
+  const application = {
+    use() { return this; }, get(path, handler) { routes.set(path, handler); return this; },
+    set() { return this; }, listen() { return { setTimeout() {}, close() {}, closeIdleConnections() {} }; },
+  };
+  runtime.installRuntimeOperability({ application }, { env: {
+    NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'production', BEATGALER_SOURCE_SHA: 'b'.repeat(40),
+  }, processLike: new EventEmitter(), logger: { log() {}, error() {} } });
+  application.use(() => {});
+  const response = () => ({ statusCode: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
+  const health = response();
+  routes.get('/healthz')({}, health);
+  assert.equal(health.body.sourceSha, 'b'.repeat(40));
+  const ready = response();
+  await routes.get('/readyz')({}, ready);
+  assert.equal(ready.body.sourceSha, 'b'.repeat(40));
+  assert.equal(ready.statusCode, 200);
 });
