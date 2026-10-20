@@ -1959,7 +1959,15 @@ app.post("/transport/session/start", async (req, res) => {
       vault_chat_id: vaultChatId,
       channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
     });
-    await libraryIndexPublication.migrateLegacyProjects({ userId: auth.user.id, chatId: vaultChatId });
+    try {
+      await libraryIndexPublication.migrateLegacyProjects({ userId: auth.user.id, chatId: vaultChatId });
+    } catch (error) {
+      if (!['TELEGRAM_MESSAGE_MISSING', 'TELEGRAM_MESSAGE_NO_MEDIA'].includes(error?.code)) throw error;
+      console.warn('[vault-recovery]', {
+        event: 'vault_recovery_degraded', phase: 'session_start_legacy_projects',
+        chat_id: String(vaultChatId), code: error.code, message_id: error.messageId,
+      });
+    }
     const session = await criticalPathTrace.step(req, "direct_start_session", () => directTransport.startSession({
       startupTrace,
       installationId: beatgalerUserId,
