@@ -39,6 +39,7 @@ class FakeMediaSource extends EventTarget {
   static instances: FakeMediaSource[] = [];
   static isTypeSupported = vi.fn(() => true);
   readyState: "closed" | "open" | "ended" = "closed";
+  duration = Number.NaN;
   sourceBuffer = new FakeSourceBuffer();
   endReason: string | null = null;
 
@@ -87,6 +88,57 @@ afterEach(() => {
 });
 
 describe("Web MASTER playback source", () => {
+  it("replaces MSE Infinity with the MP3's declared duration while streaming", async () => {
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:mse-duration"), revokeObjectURL: vi.fn() });
+    let emitChunk!: (chunk: ArrayBuffer, downloaded: number, total: number) => void | Promise<void>;
+    const transport: WebPlaybackTransport = {
+      prefetchFiles: unusedPrefetchFiles(),
+      streamFile: vi.fn(async (_input, onChunk) => {
+        emitChunk = onChunk;
+        return { completed: new Promise<never>(() => {}), cancel: vi.fn() };
+      }),
+    };
+    const manager = new WebPlaybackSourceManager(transport);
+    await manager.prepare("beat-mse-duration", 93);
+    const mediaSource = FakeMediaSource.instances[0];
+    expect(Number.isNaN(mediaSource.duration)).toBe(true);
+    mediaSource.open();
+    mediaSource.duration = Number.POSITIVE_INFINITY;
+    const first = new Uint8Array(417);
+    first.set([0xff, 0xfb, 0x90, 0x64]);
+    first.set([0x58, 0x69, 0x6e, 0x67, 0, 0, 0, 1, 0, 0, 0x11, 0x39], 36);
+    await emitChunk(first.buffer, first.byteLength, 417 * 4409);
+    expect(mediaSource.readyState).toBe("open");
+    expect(mediaSource.duration).toBeCloseTo(4409 * 1152 / 44100, 6);
+    manager.releaseAll();
+  });
+
+  it("uses the final decoded MSE buffer end when the MP3 has no duration header", async () => {
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:mse-buffer-end"), revokeObjectURL: vi.fn() });
+    let emitChunk!: (chunk: ArrayBuffer, downloaded: number, total: number) => void | Promise<void>;
+    let finish!: (value: { messageId: number; totalBytes: number; mimeType: string }) => void;
+    const manager = new WebPlaybackSourceManager({
+      prefetchFiles: unusedPrefetchFiles(),
+      streamFile: vi.fn(async (_input, onChunk) => {
+        emitChunk = onChunk;
+        return { completed: new Promise(resolve => { finish = resolve; }), cancel: vi.fn() };
+      }),
+    });
+    const prepared = await manager.prepare("beat-mse-buffer-end", 94);
+    const mediaSource = FakeMediaSource.instances[0];
+    mediaSource.open();
+    mediaSource.duration = Number.POSITIVE_INFINITY;
+    await emitChunk(new Uint8Array([1, 2, 3]).buffer, 3, 3);
+    mediaSource.sourceBuffer.ranges = [[0, 7.25]];
+    finish({ messageId: 94, totalBytes: 3, mimeType: "audio/mpeg" });
+    await prepared.completed;
+    expect(mediaSource.duration).toBe(7.25);
+    expect(mediaSource.endReason).toBe("complete");
+    manager.releaseAll();
+  });
+
   it("preserves PEER_NOT_RESOLVED instead of turning a pending vault into a transfer failure", async () => {
     const peerMiss = Object.assign(new Error("Vault peer unavailable"), { code: "PEER_NOT_RESOLVED" });
     const prefetchFiles = vi.fn(async () => { throw peerMiss; });

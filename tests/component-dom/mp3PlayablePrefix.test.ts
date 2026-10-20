@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { measureMp3PlayablePrefix } from "../../src/features/audio/mp3PlayablePrefix";
+import { measureMp3PlayablePrefix, mp3DeclaredDuration } from "../../src/features/audio/mp3PlayablePrefix";
 
 function frameLengthMpeg1Layer3(bitrateKbps: number, sampleRate = 44100, padding = 0): number {
   return Math.floor((144 * bitrateKbps * 1000) / sampleRate + padding);
@@ -49,6 +49,21 @@ function synchsafe(value: number): Uint8Array {
 }
 
 describe("MP3 playable prefix meter", () => {
+  it("reads the real MPEG frame count from Xing before the full song is buffered", () => {
+    const first = mpeg1Layer3Frame();
+    first.set([0x58, 0x69, 0x6e, 0x67, 0, 0, 0, 1, 0, 0, 0x11, 0x39], 36); // Xing, frame count 4409.
+    expect(mp3DeclaredDuration(first)).toBeCloseTo(4409 * 1152 / 44100, 6);
+    expect(mp3DeclaredDuration(first.subarray(0, 100))).toBeNull();
+  });
+
+  it("reads VBRI's frame count and leaves headerless MP3 duration unknown", () => {
+    const first = mpeg1Layer3Frame();
+    first.set([0x56, 0x42, 0x52, 0x49], 36);
+    first.set([0, 0, 0x11, 0x39], 50);
+    expect(mp3DeclaredDuration(first)).toBeCloseTo(4409 * 1152 / 44100, 6);
+    expect(mp3DeclaredDuration(mpeg1Layer3Frame())).toBeNull();
+  });
+
   it("counts only complete MPEG frames", () => {
     const full = mpeg1Layer3Frame();
     const prefix = concat([

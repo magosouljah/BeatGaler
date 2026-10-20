@@ -294,7 +294,7 @@ afterEach(async () => {
 });
 
 describe("useAudio ↔ platform integration", () => {
-  it("updates progress and seeks after a streamed source gains a finite duration", async () => {
+  it("updates progress and seeks when MSE changes duration from NaN/Infinity to finite", async () => {
     const mounted = await mountAudioHook();
     audioRoot = mounted.root;
     await act(async () => {
@@ -302,6 +302,16 @@ describe("useAudio ↔ platform integration", () => {
       mounted.audio.duration = Number.NaN;
       mounted.audio.dispatchEvent(new Event("loadedmetadata"));
     });
+    expect(mounted.hook.state.duration).toBe(0);
+    await act(async () => {
+      mounted.audio.duration = Number.POSITIVE_INFINITY;
+      mounted.audio.currentTime = 15;
+      mounted.audio.dispatchEvent(new Event("durationchange"));
+      mounted.audio.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(mounted.hook.state.progress).toBe(0);
+    await act(async () => mounted.hook.seek(0.75));
+    expect(mounted.audio.currentTime).toBe(15);
     await act(async () => {
       mounted.audio.duration = 120;
       mounted.audio.dispatchEvent(new Event("durationchange"));

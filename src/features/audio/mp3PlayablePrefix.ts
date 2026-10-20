@@ -13,6 +13,9 @@ type MpegLayer = 1 | 2 | 3;
 type ParsedFrame = {
   byteLength: number;
   durationSeconds: number;
+  version: MpegVersion;
+  layer: MpegLayer;
+  sampleRate: number;
 };
 
 const BITRATES_MPEG1: Record<MpegLayer, readonly number[]> = {
@@ -111,7 +114,56 @@ function parseFrame(bytes: Uint8Array, offset: number): ParsedFrame | null {
   return {
     byteLength,
     durationSeconds: samplesPerFrame(version, layer) / sampleRate,
+    version,
+    layer,
+    sampleRate,
   };
+}
+
+function bigEndianUint32(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] * 0x1000000) + (bytes[offset + 1] << 16)
+    + (bytes[offset + 2] << 8) + bytes[offset + 3]) >>> 0;
+}
+
+function hasMarker(bytes: Uint8Array, offset: number, marker: string): boolean {
+  if (offset < 0 || offset + marker.length > bytes.length) return false;
+  for (let index = 0; index < marker.length; index += 1) {
+    if (bytes[offset + index] !== marker.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+/** Duration recorded by an MP3 encoder in the first MPEG frame, if present. */
+export function mp3DeclaredDuration(input: ArrayBuffer | Uint8Array): number | null {
+  const bytes = asBytes(input);
+  const firstFrameOffset = measureMp3PlayablePrefix(bytes).firstFrameOffset;
+  if (firstFrameOffset === null) return null;
+  const frame = parseFrame(bytes, firstFrameOffset);
+  if (!frame || frame.layer !== 3) return null;
+  const frameEnd = firstFrameOffset + frame.byteLength;
+  const readFrames = (offset: number): number | null => {
+    if (offset + 4 > frameEnd || offset + 4 > bytes.length) return null;
+    const count = bigEndianUint32(bytes, offset);
+    const duration = count * samplesPerFrame(frame.version, frame.layer) / frame.sampleRate;
+    return count > 0 && Number.isFinite(duration) && duration > 0 ? duration : null;
+  };
+
+  const mono = (bytes[firstFrameOffset + 3] >> 6) === 3;
+  const sideInfoBytes = frame.version === 1 ? (mono ? 17 : 32) : (mono ? 9 : 17);
+  const crcBytes = (bytes[firstFrameOffset + 1] & 1) === 0 ? 2 : 0;
+  const xing = firstFrameOffset + 4 + crcBytes + sideInfoBytes;
+  if (hasMarker(bytes, xing, "Xing") || hasMarker(bytes, xing, "Info")) {
+    if (xing + 12 <= frameEnd && xing + 12 <= bytes.length
+      && (bigEndianUint32(bytes, xing + 4) & 1) !== 0) {
+      return readFrames(xing + 8);
+    }
+  }
+
+  // Fraunhofer VBRI stores the total MPEG frame count after its byte count.
+  for (const offset of [firstFrameOffset + 36, firstFrameOffset + 38]) {
+    if (hasMarker(bytes, offset, "VBRI")) return readFrames(offset + 14);
+  }
+  return null;
 }
 
 /**
