@@ -506,7 +506,9 @@ async function resolveVault(client, chatId) {
   for await (const dialog of client.iterDialogs({ limit: Number(process.env.MASTER_DIALOG_LIMIT || 1000) })) {
     if (markedChatId(dialog.entity) === wanted) return dialog.entity;
   }
-  throw new Error(`MASTER cannot find private vault ${wanted}.`);
+  const error = new Error(`MASTER cannot find private vault ${wanted}.`);
+  error.code = 'MASTER_VAULT_NOT_FOUND';
+  throw error;
 }
 
 async function masterForVault(chatId) {
@@ -518,6 +520,7 @@ async function masterForVault(chatId) {
     ? [...masters.filter(m => m.id === assigned), ...masters.filter(m => m.id !== assigned)]
     : masters;
   let lastError = null;
+  let globalError = null;
   for (const config of ordered) {
     let client = null;
     try {
@@ -534,10 +537,11 @@ async function masterForVault(chatId) {
       return { config, client, vault };
     } catch (error) {
       lastError = error;
+      if (error?.code !== 'MASTER_VAULT_NOT_FOUND') globalError = error;
       try { if (client) await client.disconnect(); } catch (_) {}
     }
   }
-  throw lastError || new Error(`No MASTER could resolve vault ${key}.`);
+  throw globalError || lastError || new Error(`No MASTER could resolve vault ${key}.`);
 }
 
 async function managerBotApiCall(token, method, payload, options = {}) {

@@ -5,6 +5,7 @@ const { createLibraryBeatQuota, indexRows, LibraryQuotaError } = require('./libr
 const { createProjectAccess } = require('./project-access');
 const { createProjectUploadAuthority } = require('./project-upload-authority');
 const { beatAssets, beatHash, messageIds } = require('./library-trash-assets');
+const { skipMissingVault } = require('./startup-vault-recovery');
 
 function fail(message, code) { throw new LibraryQuotaError(message, code); }
 function messageId(value) {
@@ -154,23 +155,32 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     const rows = (await pool.query(`SELECT s.user_id,v.telegram_chat_id,s.index_message_id,
       p.predecessor_message_id FROM library_quota_state s JOIN vaults v ON v.user_id=s.user_id
       LEFT JOIN vault_index_pointers p ON p.vault_id=v.id`)).rows;
+    let recovered = 0;
     for (const row of rows) {
-      await recover({ userId: row.user_id, chatId: row.telegram_chat_id });
-      const pending = (await pool.query("SELECT beat_id FROM library_trash_purges WHERE user_id=$1 AND state='PENDING'",
-        [row.user_id])).rows.map(item => item.beat_id);
-      if (pending.length) {
-        try { await purgeTrash({ userId: row.user_id, chatId: row.telegram_chat_id, beatIds: pending }); }
-        catch (error) { console.warn('[library-purge] pending purge remains retryable:', row.user_id, error?.code || error?.message); }
+      try {
+        await recover({ userId: row.user_id, chatId: row.telegram_chat_id });
+        const pending = (await pool.query("SELECT beat_id FROM library_trash_purges WHERE user_id=$1 AND state='PENDING'",
+          [row.user_id])).rows.map(item => item.beat_id);
+        if (pending.length) {
+          try { await purgeTrash({ userId: row.user_id, chatId: row.telegram_chat_id, beatIds: pending }); }
+          catch (error) { console.warn('[library-purge] pending purge remains retryable:', row.user_id, error?.code || error?.message); }
+        }
+        await cleanupPrevious(row.telegram_chat_id, Number(row.predecessor_message_id || 0), Number(row.index_message_id));
+        await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id });
+        recovered += 1;
+      } catch (error) {
+        if (!await skipMissingVault({ pool, chatId: row.telegram_chat_id, phase: 'library_index', error })) throw error;
       }
-      await cleanupPrevious(row.telegram_chat_id, Number(row.predecessor_message_id || 0), Number(row.index_message_id));
-      await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id });
     }
     const uninitialized = (await pool.query(`SELECT v.user_id,v.telegram_chat_id FROM vaults v
       LEFT JOIN library_quota_state s ON s.user_id=v.user_id WHERE s.user_id IS NULL`)).rows;
     for (const row of uninitialized) {
-      await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id });
+      try { await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id }); recovered += 1; }
+      catch (error) {
+        if (!await skipMissingVault({ pool, chatId: row.telegram_chat_id, phase: 'legacy_projects', error })) throw error;
+      }
     }
-    return rows.length + uninitialized.length;
+    return recovered;
   }
 
   async function verifyCommitted({ userId, chatId, messageId: requested }) {

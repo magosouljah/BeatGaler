@@ -1,5 +1,7 @@
 'use strict';
 
+const { skipMissingVault } = require('./startup-vault-recovery');
+
 function createDirectIndexPinAuthority({ pool, transport }) {
   if (!pool?.connect || typeof transport?.restrictBotPinRights !== 'function') {
     throw new Error('PostgreSQL and MASTER bot-rights control are required.');
@@ -32,11 +34,17 @@ function createDirectIndexPinAuthority({ pool, transport }) {
     async ensureAll() {
       const rows = (await pool.query(`SELECT telegram_chat_id,transport_bot_id,transport_membership_state
         FROM vaults WHERE transport_bot_id IS NOT NULL AND transport_membership_state='ready'`)).rows;
+      let recovered = 0;
       for (const row of rows) {
-        await ensure({ chatId: row.telegram_chat_id, botId: row.transport_bot_id,
-          membershipState: row.transport_membership_state });
+        try {
+          await ensure({ chatId: row.telegram_chat_id, botId: row.transport_bot_id,
+            membershipState: row.transport_membership_state });
+          recovered += 1;
+        } catch (error) {
+          if (!await skipMissingVault({ pool, chatId: row.telegram_chat_id, phase: 'index_pin', error })) throw error;
+        }
       }
-      return rows.length;
+      return recovered;
     },
   });
 }
