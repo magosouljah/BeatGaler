@@ -352,6 +352,10 @@ export default function Player({
   const scrubberRef = useRef<HTMLDivElement | null>(null);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [dragProgress, setDragProgress] = useState(0);
+  const activePointerIdRef = useRef<number | null>(null);
+  const stopProgressDragRef = useRef<(() => void) | null>(null);
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
   const [hoveringScrubber, setHoveringScrubber] = useState(false);
   const queueButtonRef = useRef<HTMLButtonElement | null>(null);
   const queuePopoverRef = useRef<HTMLDivElement | null>(null);
@@ -400,30 +404,60 @@ export default function Player({
 
   const computeSeekRatio = (clientX: number) => {
     const rect = scrubberRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0) return 0;
+    if (!rect || rect.width === 0) return null;
     return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
   };
 
   useEffect(() => {
-    if (!isDraggingProgress) return;
-    const onMove = (e: MouseEvent) => {
-      const ratio = computeSeekRatio(e.clientX);
-      setDragProgress(ratio);
-      onSeek(ratio);
-    };
-    const onUp = (e: MouseEvent) => {
-      const ratio = computeSeekRatio(e.clientX);
-      onSeek(ratio);
+    return () => stopProgressDragRef.current?.();
+  }, []);
+
+  const startProgressDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerIdRef.current !== null || (e.pointerType === "mouse" && e.button !== 0)) return;
+    const ratio = computeSeekRatio(e.clientX);
+    if (ratio === null) return;
+    const bar = e.currentTarget;
+    const pointerId = e.pointerId;
+    activePointerIdRef.current = pointerId;
+    setDragProgress(ratio);
+    setIsDraggingProgress(true);
+    onSeekRef.current(ratio);
+
+    const stop = () => {
+      if (activePointerIdRef.current !== pointerId) return;
+      activePointerIdRef.current = null;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cancel);
+      bar.removeEventListener("lostpointercapture", cancel);
+      if (bar.hasPointerCapture?.(pointerId)) bar.releasePointerCapture(pointerId);
+      stopProgressDragRef.current = null;
       setIsDraggingProgress(false);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+    const move = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
+      if (event.pointerType === "mouse" && event.buttons === 0) { stop(); return; }
+      const next = computeSeekRatio(event.clientX);
+      if (next === null) return;
+      setDragProgress(next);
+      onSeekRef.current(next);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDraggingProgress]);
+    const up = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
+      const next = computeSeekRatio(event.clientX);
+      if (next !== null) onSeekRef.current(next);
+      stop();
+    };
+    const cancel = () => stop();
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", cancel);
+    bar.addEventListener("lostpointercapture", cancel);
+    stopProgressDragRef.current = stop;
+    bar.setPointerCapture?.(pointerId);
+  };
 
   const isCompact = viewportWidth < 1100;
   const isSmall = viewportWidth < 860;
@@ -545,19 +579,17 @@ export default function Player({
           {/* Scrubber bar */}
           <div
             ref={scrubberRef}
-            onMouseEnter={() => setHoveringScrubber(true)}
-            onMouseLeave={() => setHoveringScrubber(false)}
+            data-testid="player-scrubber"
+            onPointerEnter={() => setHoveringScrubber(true)}
+            onPointerLeave={() => setHoveringScrubber(false)}
+            onPointerDown={startProgressDrag}
             style={{
               marginTop: 6,
               paddingTop: 6, paddingBottom: 6, marginBottom: -6, // wider invisible hit area, same visual position
               cursor: "pointer",
               position: "relative",
-            }}
-            onMouseDown={(e) => {
-              const ratio = computeSeekRatio(e.clientX);
-              setDragProgress(ratio);
-              setIsDraggingProgress(true);
-              onSeek(ratio);
+              touchAction: "none",
+              userSelect: "none",
             }}
           >
             <div style={{ height: 4, background: "rgba(255, 255, 255, 0.2)", borderRadius: 2, position: "relative" }}>

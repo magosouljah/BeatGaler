@@ -176,6 +176,62 @@ afterEach(async () => {
 });
 
 describe("Player real DOM", () => {
+  it("seeks on a quick press and release without leaving the thumb attached to the pointer", async () => {
+    const onSeek = vi.fn();
+    const beat = makeBeat();
+    await render(<Player beat={beat} playing progress={0.2} duration={120} volume={1}
+      queue={[beat]} currentIndex={0} showQueue={false} canShowQueue
+      shuffleEnabled={false} repeatMode="off" onToggle={() => undefined}
+      onSeek={onSeek} onPrev={() => undefined} onNext={() => undefined}
+      onVolumeChange={() => undefined} onToggleShuffle={() => undefined}
+      onCycleRepeat={() => undefined} onToggleQueue={() => undefined}
+      onPlayQueueIndex={() => undefined} canAddBeat onAddBeat={() => undefined}
+      onDetail={() => undefined} onEdit={() => undefined} onDelete={() => undefined}
+      onAddToQueue={() => undefined} />);
+    const bar = host.firstElementChild?.children[1]?.children[1]?.children[1] as HTMLDivElement;
+    expect(bar).not.toBeNull();
+    vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({ left: 100, width: 200 } as DOMRect);
+    const pointer = (type: string, clientX: number, buttons: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX, buttons });
+      Object.defineProperty(event, "pointerId", { value: 1 });
+      return event;
+    };
+    await act(async () => {
+      bar.dispatchEvent(pointer("pointerdown", 150, 1));
+      window.dispatchEvent(pointer("pointerup", 150, 0));
+    });
+    expect(onSeek).toHaveBeenLastCalledWith(0.25);
+    const count = onSeek.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(pointer("pointermove", 250, 0));
+    });
+    expect(onSeek).toHaveBeenCalledTimes(count);
+
+    const capture = vi.fn();
+    const release = vi.fn();
+    bar.setPointerCapture = capture;
+    bar.hasPointerCapture = () => true;
+    bar.releasePointerCapture = release;
+    await act(async () => {
+      bar.dispatchEvent(pointer("pointerdown", 120, 1));
+    });
+    await act(async () => {
+      window.dispatchEvent(pointer("pointermove", 240, 1));
+    });
+    expect(onSeek).toHaveBeenLastCalledWith(0.7);
+    await act(async () => {
+      window.dispatchEvent(pointer("pointerup", 260, 0));
+    });
+    expect(onSeek).toHaveBeenLastCalledWith(0.8);
+    expect(capture).toHaveBeenCalledWith(1);
+    expect(release).toHaveBeenCalledWith(1);
+    const releasedCount = onSeek.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(pointer("pointermove", 180, 1));
+    });
+    expect(onSeek).toHaveBeenCalledTimes(releasedCount);
+  });
+
   it("renders Play and a real click calls onToggle exactly once", async () => {
     const onToggle = vi.fn();
     const beat = makeBeat();

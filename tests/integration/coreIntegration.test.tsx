@@ -294,6 +294,29 @@ afterEach(async () => {
 });
 
 describe("useAudio ↔ platform integration", () => {
+  it("updates progress and seeks after a streamed source gains a finite duration", async () => {
+    const mounted = await mountAudioHook();
+    audioRoot = mounted.root;
+    await act(async () => {
+      mounted.hook.play("beat-1", ["beat.mp3"]);
+      mounted.audio.duration = Number.NaN;
+      mounted.audio.dispatchEvent(new Event("loadedmetadata"));
+    });
+    await act(async () => {
+      mounted.audio.duration = 120;
+      mounted.audio.dispatchEvent(new Event("durationchange"));
+    });
+    expect(mounted.hook.state.duration).toBe(120);
+    await act(async () => {
+      mounted.audio.currentTime = 30;
+      mounted.audio.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(mounted.hook.state.progress).toBe(0.25);
+    await act(async () => mounted.hook.seek(0.75));
+    expect(mounted.audio.currentTime).toBe(90);
+    expect(mounted.hook.state.progress).toBe(0.75);
+  });
+
   it("arms the shared audio element synchronously for delayed Safari cloud playback", async () => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
