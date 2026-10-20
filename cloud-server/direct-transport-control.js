@@ -1727,8 +1727,23 @@ async function pinExistingIndexMessage(chatId, messageId) {
 async function downloadMessageBuffer(chatId, messageId) {
   const masterInfo = await masterForVault(chatId);
   try {
-    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [Number(messageId)] }))?.[0];
-    if (!message?.media) throw new Error(`Message ${messageId} has no downloadable media.`);
+    const response = await masterInfo.client.invoke(new Api.channels.GetMessages({
+      channel: masterInfo.vault,
+      id: [new Api.InputMessageID({ id: Number(messageId) })],
+    }));
+    const message = response?.messages?.[0];
+    if (!message || message instanceof Api.MessageEmpty) {
+      const error = new Error(`Message ${messageId} is missing.`);
+      error.code = 'TELEGRAM_MESSAGE_MISSING';
+      error.messageId = Number(messageId);
+      throw error;
+    }
+    if (!message.media) {
+      const error = new Error(`Message ${messageId} has no downloadable media.`);
+      error.code = 'TELEGRAM_MESSAGE_NO_MEDIA';
+      error.messageId = Number(messageId);
+      throw error;
+    }
     const result = await masterInfo.client.downloadMedia(message, {});
     if (!Buffer.isBuffer(result)) throw new Error(`Message ${messageId} download returned no buffer.`);
     return result;
