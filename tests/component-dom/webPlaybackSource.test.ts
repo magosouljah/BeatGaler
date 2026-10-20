@@ -228,6 +228,52 @@ describe("Web MASTER playback source", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("completes the foreground stream from a warm prefix while currentTime stays near zero", async () => {
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:eager"), revokeObjectURL: vi.fn() });
+    const prefixBytes = 65536;
+    const chunkBytes = 4096;
+    const totalBytes = prefixBytes + 3 * chunkBytes;
+    const prefetchFiles = vi.fn(async (_inputs: unknown, onChunk?: (progress: WebTransportPrefetchChunk) => void) => {
+      onChunk?.({ messageId: 95, totalBytes, mimeType: "audio/mpeg", offsetBytes: 0,
+        chunk: new ArrayBuffer(prefixBytes), downloadedBytes: prefixBytes, playableSeconds: 0, targetMet: false });
+      return { completed: Promise.resolve({ results: [{ ok: true as const, result: {
+        messageId: 95, totalBytes, mimeType: "audio/mpeg", prefix: new ArrayBuffer(prefixBytes),
+        playableSeconds: 0, targetMet: false,
+      } }] }), cancelMessage: vi.fn(), cancel: vi.fn() };
+    });
+    const requested: number[] = [];
+    const streamFile = vi.fn(async (_input: unknown, onChunk: (chunk: ArrayBuffer, downloaded: number, total: number) => void | Promise<void>) => ({
+      completed: (async () => {
+        for (let index = 1; index <= 3; index += 1) {
+          requested.push(index);
+          await onChunk(new ArrayBuffer(chunkBytes), prefixBytes + index * chunkBytes, totalBytes);
+        }
+        return { messageId: 95, totalBytes, mimeType: "audio/mpeg" };
+      })(),
+      cancel: vi.fn(),
+    }));
+    const manager = new WebPlaybackSourceManager({ prefetchFiles, streamFile });
+    await manager.prefetch("beat-eager", 95);
+    const prepared = await manager.prepare("beat-eager", 95);
+    expect(streamFile).toHaveBeenCalledWith(
+      { messageId: 95, mimeType: "audio/mpeg", offsetBytes: prefixBytes, purpose: "playback", traceIntentId: undefined },
+      expect.any(Function),
+    );
+
+    const mediaSource = FakeMediaSource.instances[0];
+    mediaSource.sourceBuffer.ranges = [[0, 8]];
+    manager.updatePlaybackState({ beatId: "beat-eager", currentTime: 0.1, playing: true, waiting: false });
+    mediaSource.open();
+    manager.updatePlaybackState({ beatId: "beat-eager", currentTime: 0.2, playing: true, waiting: false });
+    await vi.waitFor(() => expect(mediaSource.readyState).toBe("ended"), { timeout: 1000 });
+    await prepared.completed;
+    expect(requested).toEqual([1, 2, 3]);
+    expect(mediaSource.sourceBuffer.appended).toHaveLength(4);
+    expect(mediaSource.endReason).toBe("complete");
+    expect(mediaSource.duration).toBe(8);
+  });
+
   it("coalesces all currently visible warm candidates into one batch", async () => {
     const cancel = vi.fn();
     const cancelMessage = vi.fn();
