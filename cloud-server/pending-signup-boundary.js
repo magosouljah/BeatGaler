@@ -31,6 +31,13 @@ function publicError(error) {
   return { error: safeMessages.get(code) || 'Account creation is temporarily unavailable.', code };
 }
 
+function shouldOwnRegister(env = process.env) {
+  const production = String(env.NODE_ENV || '').toLowerCase() === 'production';
+  const pendingEnabled = String(env.BEATGALER_PENDING_SIGNUP_ENABLED || '') === '1';
+  const publicFlagExplicit = String(env.BEATGALER_PUBLIC_REGISTRATION || '') === '1';
+  return production || pendingEnabled || publicFlagExplicit;
+}
+
 function installPendingSignupBoundary(express, {
   service = null,
   env = process.env,
@@ -170,7 +177,7 @@ function installPendingSignupBoundary(express, {
   application.post = function pendingSignupPost(routePath, ...handlers) {
     if (!routesInstalling) ensureRoutes(this);
     const pathName = String(routePath || '');
-    if (pathName === '/auth/register') {
+    if (pathName === '/auth/register' && shouldOwnRegister(env)) {
       return previousPost.call(this, routePath, (req, res) => { void register(req, res); }, ...handlers);
     }
     return previousPost.call(this, routePath, ...handlers);
@@ -180,5 +187,6 @@ function installPendingSignupBoundary(express, {
 module.exports = {
   statusForError,
   publicError,
+  shouldOwnRegister,
   installPendingSignupBoundary,
 };
