@@ -10,11 +10,25 @@ const EMAIL_TEMPLATES = Object.freeze({
     name: 'VERIFY_EMAIL',
     subject: 'Verify your BeatGaler email',
     intro: 'Use this one-time verification code to verify your BeatGaler email:',
+    requiresToken: true,
   }),
   password_reset: Object.freeze({
     name: 'RESET_PASSWORD',
     subject: 'Reset your BeatGaler password',
     intro: 'Use this one-time reset code to reset your BeatGaler password:',
+    requiresToken: true,
+  }),
+  email_change_confirmation: Object.freeze({
+    name: 'CONFIRM_EMAIL_CHANGE',
+    subject: 'Confirm your new BeatGaler email',
+    intro: 'Use this one-time verification code to confirm your new BeatGaler sign-in email:',
+    requiresToken: true,
+  }),
+  email_changed_notice: Object.freeze({
+    name: 'EMAIL_CHANGED_NOTICE',
+    subject: 'Your BeatGaler email was changed',
+    intro: 'The sign-in email on your BeatGaler account was changed. If you did not make this change, secure your account and contact support.',
+    requiresToken: false,
   }),
 });
 
@@ -48,10 +62,18 @@ function renderAccountEmail(kind, token, expiresAt) {
   }
   const rawToken = String(token || '');
   const expiry = String(expiresAt || '');
-  if (!rawToken || !expiry) {
+  if (template.requiresToken && (!rawToken || !expiry)) {
     const error = new Error('Account email token and expiry are required.');
     error.code = 'SES_TEMPLATE_INPUT_INVALID';
     throw error;
+  }
+  if (!template.requiresToken) {
+    return {
+      template_name: template.name,
+      subject: template.subject,
+      text: `${template.intro}\n\nIf you made this change, no action is required.`,
+      html: `<p>${escapeHtml(template.intro)}</p><p>If you made this change, no action is required.</p>`,
+    };
   }
   const safeToken = escapeHtml(rawToken);
   const safeExpiry = escapeHtml(expiry);
