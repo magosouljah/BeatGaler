@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS pending_signups (
   challenge_expires_at timestamptz NOT NULL,
   challenge_failures integer NOT NULL DEFAULT 0 CHECK (challenge_failures >= 0),
   resend_count integer NOT NULL DEFAULT 0 CHECK (resend_count >= 0),
+  last_requested_at timestamptz NOT NULL DEFAULT now(),
   last_sent_at timestamptz,
   status text NOT NULL CHECK (status IN (
     'NEW','DELIVERY_PENDING','CODE_SENT','VERIFIED','ACTIVATING','PROVISIONING','ACTIVE','RETRYABLE','EXPIRED','CANCELLED'
