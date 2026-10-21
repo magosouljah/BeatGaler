@@ -14,6 +14,7 @@ const REQUIRED_MARKERS = Object.freeze([
   'function createAuthSession(userId)',
   'function accountPublicPayload(user, token)',
 ]);
+let activeLoader = null;
 
 function validateCoreSource(source) {
   const text = String(source || '');
@@ -195,20 +196,28 @@ function bridgeSuffix() {
 
 function installServerCoreAuthBridgeLoader({ exposeBridge = true } = {}) {
   if (require.cache[TARGET]?.exports?.__beatgalerAuthBridge) return () => {};
+  if (activeLoader) {
+    if (exposeBridge) activeLoader.exposeBridge = true;
+    return activeLoader.restore;
+  }
+
   const previous = require.extensions['.js'];
   if (typeof previous !== 'function') throw new Error('Node CommonJS .js loader is unavailable.');
-  let restored = false;
+  const state = { exposeBridge: Boolean(exposeBridge), restored: false, restore: null };
   function restore() {
-    if (restored) return;
-    restored = true;
+    if (state.restored) return;
+    state.restored = true;
     if (require.extensions['.js'] === hooked) require.extensions['.js'] = previous;
+    if (activeLoader === state) activeLoader = null;
   }
+  state.restore = restore;
   function hooked(mod, filename) {
     if (filename !== TARGET) return previous(mod, filename);
     restore();
     const source = hardenCoreSource(fs.readFileSync(filename, 'utf8'));
-    mod._compile(exposeBridge ? `${source}${bridgeSuffix()}` : source, filename);
+    mod._compile(state.exposeBridge ? `${source}${bridgeSuffix()}` : source, filename);
   }
+  activeLoader = state;
   require.extensions['.js'] = hooked;
   return restore;
 }
@@ -216,6 +225,12 @@ function installServerCoreAuthBridgeLoader({ exposeBridge = true } = {}) {
 function getServerCoreAuthBridge() {
   return require.cache[TARGET]?.exports?.__beatgalerAuthBridge || null;
 }
+
+// server.js imports this module before server-core. Install a one-shot loader at
+// import time so the stable-id serialization fix applies even when pending
+// signup is disabled. A later pending-signup install upgrades the same hook to
+// expose the activation bridge before server-core is required.
+installServerCoreAuthBridgeLoader({ exposeBridge: false });
 
 module.exports = {
   TARGET,
