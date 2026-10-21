@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:containment": "node ../scripts/regression-http-containment.mjs",
-    "test:auth-hardening": "node tests/auth-public-registration-hardening.test.cjs",
+    "test:auth-hardening": "node tests/auth-public-registration-hardening.test.cjs && node tests/auth-identity-preflight.test.cjs",
+    "preflight:auth-identity": "node scripts/auth-identity-preflight.cjs",
     "test:billing-v1": "node --test tests/billing-commercial-catalog.test.cjs tests/billing-access-resolver.test.cjs tests/billing-polar-sandbox.test.cjs tests/billing-polar-production.test.cjs tests/billing-polar-sdk-contract.test.cjs tests/billing-polar-lifecycle-adapter.test.cjs tests/billing-polar-renewal-proof.test.cjs tests/billing-polar-daily.test.cjs tests/billing-polar-failure-progress.test.cjs tests/billing-web-runtime.test.cjs tests/billing-web-checkout-runtime.test.cjs tests/billing-webhook-runtime.test.cjs tests/billing-provider-environment-runtime.test.cjs",
     "smoke:aws-secret-provider": "node scripts/aws-secret-provider-smoke.cjs",
     "smoke:polar-sandbox": "node scripts/polar-sandbox-smoke.cjs",
