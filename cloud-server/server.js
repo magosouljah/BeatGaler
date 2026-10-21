@@ -18,6 +18,7 @@ const { createSignupActivationCoordinator } = require("./signup-activation-coord
 const { installServerCoreAuthBridgeLoader, getServerCoreAuthBridge } = require("./server-core-auth-bridge-loader");
 const { createProviderIdentityAuthority } = require("./provider-identity-authority");
 const { createAuthDeliveryWorker } = require("./auth-delivery-worker");
+const { createStagedEmailChange, installStagedEmailChange, createStagedEmailChangeNoticeWorker } = require("./staged-email-change");
 const { resolveSecretEnvelopeKeyring } = require("./secret-envelope-provider");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
@@ -57,6 +58,7 @@ async function start() {
   const pgConfig = postgresConfig(process.env);
   let pool = null;
   let authDeliveryWorker = null;
+  let emailChangeNoticeWorker = null;
 
   if (pgConfig.enabled) {
     const started = await startPostgresControlPlane({
@@ -65,6 +67,7 @@ async function start() {
     pool = started.pool;
     installPostgresShutdown(pool, process, { beforeClose: async () => {
       authDeliveryWorker?.stop?.();
+      emailChangeNoticeWorker?.stop?.();
       await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop()]);
     } });
   }
@@ -175,6 +178,35 @@ async function start() {
     onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
   installLifecyclePasswordAuthority(accountLifecycle);
+
+  if (pool && cutover.authority === 'postgres') {
+    const stagedEmailChange = createStagedEmailChange({
+      pool,
+      runtime: accountLifecycle,
+      emailNotifier: accountEmailNotifier,
+      commitLocalEmail: async (userId, email, sessionUser) => {
+        const bridge = getServerCoreAuthBridge();
+        if (!bridge?.adoptIdentityUser) {
+          const error = new Error('Local auth identity bridge is unavailable.');
+          error.code = 'EMAIL_CHANGE_LOCAL_COMMIT_UNAVAILABLE';
+          throw error;
+        }
+        bridge.adoptIdentityUser({
+          id: String(userId),
+          username: sessionUser?.username,
+          usernameSource: sessionUser?.usernameSource || 'beatgaler',
+          email,
+        });
+      },
+      flushAuthority: () => cutover.runtime.flush(),
+      env: process.env,
+    });
+    installStagedEmailChange(express, stagedEmailChange);
+    emailChangeNoticeWorker = createStagedEmailChangeNoticeWorker(stagedEmailChange, {
+      onError: error => console.error('[auth] email-change notice retry failed:', error?.message || String(error)),
+    });
+  }
+
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
   installSensitiveAuthContainment(express, accountLifecycle);
@@ -233,6 +265,7 @@ async function start() {
   lifecycleRuntime.start();
   reconciliationRuntime.start();
   authDeliveryWorker?.start?.();
+  emailChangeNoticeWorker?.start?.();
 }
 
 start().catch((error) => {
