@@ -122,14 +122,14 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
   }
 }
 
-async function installMultiprocessAuthSnapshotCompatibility(runtime, pool) {
+async function installMultiprocessAuthSnapshotCompatibility(runtime, pool, { initialAuth = null } = {}) {
   if (!runtime || typeof runtime.enqueue !== 'function' || typeof runtime.flush !== 'function') {
     throw new Error('PostgreSQL auth delta compatibility requires PostgresControlPlaneRuntime.');
   }
   if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL auth delta compatibility requires a pool.');
   if (runtime.__beatgalerMultiprocessAuthDeltaInstalled) return runtime;
 
-  let desired = clone(await loadAuthSnapshot(pool, runtime.cryptoConfig));
+  let desired = clone(initialAuth || await loadAuthSnapshot(pool, runtime.cryptoConfig));
   runtime.__beatgalerMultiprocessAuthDeltaInstalled = true;
   runtime.saveAuthSnapshot = function saveAuthSnapshotDelta(snapshot) {
     const captured = clone(snapshot);
