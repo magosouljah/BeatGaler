@@ -110,6 +110,7 @@ function createSignupActivationCoordinator({
 
     const client = await pool.connect();
     const lockKey = `signup-activation:${id}`;
+    let activeCommitted = false;
     try {
       await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
       const stateResult = await client.query('SELECT * FROM pending_signups WHERE id=$1 LIMIT 1', [id]);
@@ -117,6 +118,7 @@ function createSignupActivationCoordinator({
       if (!pending) throw coded('Pending signup was not found.', 'SIGNUP_NOT_FOUND');
 
       if (String(pending.status) === 'ACTIVE') {
+        activeCommitted = true;
         const userId = String(pending.activated_user_id || stableUserId(id));
         const authoritative = await loadAuthoritativeUser(client, userId);
         const bridge = getBridge();
@@ -139,6 +141,7 @@ function createSignupActivationCoordinator({
 
       const claimed = await service.claimActivation({ signupId: id, continuationSecret: continuation });
       if (!claimed?.claimed && String(claimed?.row?.status || '') === 'ACTIVE') {
+        activeCommitted = true;
         return { status: 'ACTIVE', user_id: String(claimed.row.activated_user_id || stableUserId(id)), session_required: true };
       }
       pending = claimed.row;
@@ -202,8 +205,11 @@ function createSignupActivationCoordinator({
       });
 
       await service.setActivationState(id, 'ACTIVE', { userId });
+      activeCommitted = true;
 
       // Session issuance is deliberately after the durable ACTIVE transition.
+      // If only session delivery fails, the account stays ACTIVE and the user can
+      // retry verification or simply sign in with email + password.
       const token = bridge.createSession(userId);
       await flushAuthority();
       const account = await bridge.publicPayload(userId, token);
@@ -217,10 +223,12 @@ function createSignupActivationCoordinator({
       };
     } catch (error) {
       const code = errorCode(error);
-      if (permanentActivationError(error)) {
-        await pool.query("UPDATE pending_signups SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status<>'ACTIVE'", [id]).catch(() => {});
-      } else {
-        await service.setActivationState(id, 'RETRYABLE', { errorCode: code }).catch(() => {});
+      if (!activeCommitted) {
+        if (permanentActivationError(error)) {
+          await pool.query("UPDATE pending_signups SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status<>'ACTIVE'", [id]).catch(() => {});
+        } else {
+          await service.setActivationState(id, 'RETRYABLE', { errorCode: code }).catch(() => {});
+        }
       }
       throw error;
     } finally {
