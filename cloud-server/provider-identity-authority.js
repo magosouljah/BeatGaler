@@ -25,6 +25,9 @@ async function allocateTemporaryUsername(client, base, userId) {
   const seed = tempSeed(userId);
   for (let offset = 0; offset < 10_000; offset += 1) {
     const candidate = `${normalized}#${String((seed + offset) % 10_000).padStart(4, '0')}`;
+    // Different X handles may converge on the same manual fallback. Lock each
+    // candidate before testing it so two processes cannot both select it.
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`username:${candidate}`]);
     const occupied = await client.query('SELECT id FROM users WHERE lower(username)=lower($1) AND id<>$2 LIMIT 1', [candidate, String(userId)]);
     if (!occupied.rows.length) return candidate;
   }
@@ -159,6 +162,25 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
           await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [String(handleOwner.id), temporary]);
           renamed = { userId: String(handleOwner.id), from: String(handleOwner.username), to: temporary };
         }
+      }
+
+      // For an already-known X subject, the provider row tells us exactly which
+      // immutable BeatGaler user owns it. Transfer the recycled handle to that
+      // stable user in the *same transaction* that moves the previous display
+      // owner away. This is the A -> base#NNNN / B -> handle atomic pair.
+      if (existing) {
+        await client.query("UPDATE users SET username=$2,username_source='x',updated_at=now() WHERE id=$1", [String(existing.id), handle]);
+        await client.query(`
+          UPDATE provider_identities
+          SET profile=COALESCE(profile,'{}'::jsonb) || $3::jsonb,updated_at=now()
+          WHERE provider=$1 AND provider_subject=$2
+        `, ['x', subject, JSON.stringify({
+          id: subject,
+          username: handle,
+          ...(identity?.name ? { name: String(identity.name) } : {}),
+          profileSyncedAt: Date.now(),
+        })]);
+        existing = await providerOwner(client, 'x', subject);
       }
       await client.query('COMMIT');
     } catch (error) {
