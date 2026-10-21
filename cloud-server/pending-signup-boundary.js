@@ -1,5 +1,6 @@
 'use strict';
 
+const { EventEmitter } = require('node:events');
 const { publicRegistrationOpen } = require('./auth-public-registration-hardening');
 
 function statusForError(error) {
@@ -7,7 +8,10 @@ function statusForError(error) {
   if (code === 'SIGNUP_RESEND_COOLDOWN' || code === 'SIGNUP_RESEND_LIMIT' || code === 'SIGNUP_CHALLENGE_LOCKED') return 429;
   if (code === 'EMAIL_INVALID' || code === 'USERNAME_BASE_INVALID' || code === 'PASSWORD_POLICY'
     || code === 'SIGNUP_CONTINUATION_INVALID' || code === 'SIGNUP_CHALLENGE_INVALID'
-    || code === 'SIGNUP_CHALLENGE_EXPIRED' || code === 'SIGNUP_NOT_ACTIVE' || code === 'SIGNUP_RESEND_NOT_ALLOWED') return 400;
+    || code === 'SIGNUP_CHALLENGE_EXPIRED' || code === 'SIGNUP_NOT_ACTIVE' || code === 'SIGNUP_RESEND_NOT_ALLOWED'
+    || code === 'INSTALLATION_REQUIRED') return 400;
+  if (code === 'INSTALLATION_CONFLICT' || code === 'INSTALLATION_CLAIM_BUSY'
+    || code === 'ACCOUNT_ACTIVATION_PENDING' || code === 'SIGNUP_ACTIVATION_PENDING') return 409;
   if (code === 'SIGNUP_EXPIRED') return 410;
   return 503;
 }
@@ -27,6 +31,11 @@ function publicError(error) {
     ['SIGNUP_RESEND_NOT_ALLOWED', 'A verification email cannot be resent in the current signup state.'],
     ['SIGNUP_EXPIRED', 'This signup expired. Start again.'],
     ['SIGNUP_NOT_ACTIVE', 'This signup is no longer active.'],
+    ['INSTALLATION_REQUIRED', 'A BeatGaler installation id is required to finish signup.'],
+    ['INSTALLATION_CONFLICT', 'This BeatGaler installation already belongs to another account.'],
+    ['INSTALLATION_CLAIM_BUSY', 'This BeatGaler installation is already being claimed. Try again.'],
+    ['ACCOUNT_ACTIVATION_PENDING', 'Account setup is still being completed.'],
+    ['SIGNUP_ACTIVATION_PENDING', 'Account setup is still being completed.'],
   ]);
   return { error: safeMessages.get(code) || 'Account creation is temporarily unavailable.', code };
 }
@@ -38,17 +47,54 @@ function shouldOwnRegister(env = process.env) {
   return production || pendingEnabled || publicFlagExplicit;
 }
 
+function createHandlerResponse() {
+  const res = new EventEmitter();
+  res.statusCode = 200;
+  res.headers = {};
+  res.locals = {};
+  res.writableEnded = false;
+  res.status = code => { res.statusCode = Number(code); return res; };
+  res.setHeader = (name, value) => { res.headers[String(name).toLowerCase()] = value; };
+  res.getHeader = name => res.headers[String(name).toLowerCase()];
+  res.json = body => { res.body = body; res.writableEnded = true; res.emit('finish'); return res; };
+  res.send = body => { res.body = body; res.writableEnded = true; res.emit('finish'); return res; };
+  return res;
+}
+
+async function invokeCapturedHandler(handler, body, { headers = {} } = {}) {
+  if (typeof handler !== 'function') {
+    throw Object.assign(new Error('Legacy authentication primitive is unavailable.'), { code: 'LEGACY_AUTH_PRIMITIVE_UNAVAILABLE' });
+  }
+  const req = {
+    body: { ...(body || {}) },
+    headers: { ...headers },
+    query: {},
+    params: {},
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' },
+  };
+  const res = createHandlerResponse();
+  let nextError = null;
+  const next = error => { if (error) nextError = error; };
+  await Promise.resolve(handler(req, res, next));
+  if (nextError) throw nextError;
+  return { statusCode: Number(res.statusCode || 200), body: res.body, headers: res.headers };
+}
+
 function installPendingSignupBoundary(express, {
   service = null,
   env = process.env,
   activation = null,
 } = {}) {
   const application = express?.application;
-  if (!application || application.__beatgalerPendingSignupBoundaryInstalled) return;
+  if (!application) return null;
+  if (application.__beatgalerPendingSignupBoundaryInstalled) return application.__beatgalerPendingSignupBoundaryRuntime || null;
   application.__beatgalerPendingSignupBoundaryInstalled = true;
   const previousPost = application.post;
   let routesInstalled = false;
   let routesInstalling = false;
+  let legacyRegisterHandler = null;
+  let legacyLoginHandler = null;
 
   function runtimeReady(res) {
     if (service) return true;
@@ -83,9 +129,9 @@ function installPendingSignupBoundary(express, {
     try {
       const result = await service.begin({
         email: req?.body?.email,
-        usernameBase: req?.body?.username_base ?? req?.body?.username,
+        usernameBase: req?.body?.username_base ?? req?.body?.usernameBase ?? req?.body?.username,
         password: req?.body?.password,
-        installationId: req?.body?.installationId ?? req?.body?.installation_id ?? null,
+        installationId: req?.body?.beatgalerUserId ?? req?.body?.installationId ?? req?.body?.installation_id ?? null,
       });
       if (!result.created) {
         return res.status(202).json({
@@ -190,9 +236,21 @@ function installPendingSignupBoundary(express, {
     }
   }
 
+  const runtimeApi = {
+    invokeLegacyRegister(body) { return invokeCapturedHandler(legacyRegisterHandler, body); },
+    invokeLegacyLogin(body) { return invokeCapturedHandler(legacyLoginHandler, body); },
+    captured() { return { register: Boolean(legacyRegisterHandler), login: Boolean(legacyLoginHandler) }; },
+    _test: { createHandlerResponse, invokeCapturedHandler },
+  };
+  application.__beatgalerPendingSignupBoundaryRuntime = runtimeApi;
+
   application.post = function pendingSignupPost(routePath, ...handlers) {
     if (!routesInstalling) ensureRoutes(this);
     const pathName = String(routePath || '');
+    const lastHandler = [...handlers].reverse().find(handler => typeof handler === 'function') || null;
+    if (pathName === '/auth/register' && lastHandler) legacyRegisterHandler = lastHandler;
+    if (pathName === '/auth/login' && lastHandler) legacyLoginHandler = lastHandler;
+
     if (pathName === '/auth/register' && shouldOwnRegister(env)) {
       return previousPost.call(this, routePath, (req, res) => { void register(req, res); }, ...handlers);
     }
@@ -201,11 +259,15 @@ function installPendingSignupBoundary(express, {
     }
     return previousPost.call(this, routePath, ...handlers);
   };
+
+  return runtimeApi;
 }
 
 module.exports = {
   statusForError,
   publicError,
   shouldOwnRegister,
+  createHandlerResponse,
+  invokeCapturedHandler,
   installPendingSignupBoundary,
 };
