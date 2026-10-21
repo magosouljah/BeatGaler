@@ -62,6 +62,22 @@ function installPendingSignupBoundary(express, {
     return false;
   }
 
+  async function passwordLoginGate(req, res, next) {
+    if (!service?.loginGate) return next();
+    try {
+      const gate = await service.loginGate(req?.body?.email ?? req?.body?.identifier ?? req?.body?.username);
+      if (!gate?.blocked) return next();
+      return res.status(409).json({
+        error: 'Account activation is still finishing. Try again shortly.',
+        code: 'ACCOUNT_ACTIVATION_PENDING',
+        activation_status: gate.status,
+      });
+    } catch (error) {
+      console.error('[auth] activation login gate failed:', error?.message || String(error));
+      return res.status(503).json({ error: 'Authentication service is temporarily unavailable.', code: 'AUTH_ACTIVATION_GATE_UNAVAILABLE' });
+    }
+  }
+
   async function register(req, res) {
     if (!registrationAllowed(res) || !runtimeReady(res)) return;
     try {
@@ -179,6 +195,9 @@ function installPendingSignupBoundary(express, {
     const pathName = String(routePath || '');
     if (pathName === '/auth/register' && shouldOwnRegister(env)) {
       return previousPost.call(this, routePath, (req, res) => { void register(req, res); }, ...handlers);
+    }
+    if (pathName === '/auth/login' && service?.loginGate) {
+      return previousPost.call(this, routePath, (req, res, next) => { void passwordLoginGate(req, res, next); }, ...handlers);
     }
     return previousPost.call(this, routePath, ...handlers);
   };
