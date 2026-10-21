@@ -11,6 +11,11 @@ const { installAccountLifecycle } = require("./account-lifecycle");
 const { installAuthPublicRegistrationHardening } = require("./auth-public-registration-hardening");
 const { installSensitiveAuthContainment } = require("./sensitive-auth-containment");
 const { installDurableAuthAbuseControls } = require("./auth-durable-abuse-controls");
+const { createPendingSignupRuntime } = require("./pending-signup-runtime");
+const { createPendingSignupService } = require("./pending-signup-service");
+const { installPendingSignupBoundary } = require("./pending-signup-boundary");
+const { createAuthDeliveryWorker } = require("./auth-delivery-worker");
+const { resolveSecretEnvelopeKeyring } = require("./secret-envelope-provider");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
 const { createSesEmailNotifier } = require("./account-email-ses");
@@ -48,6 +53,7 @@ installLegacyMediaUploadDisable(express);
 async function start() {
   const pgConfig = postgresConfig(process.env);
   let pool = null;
+  let authDeliveryWorker = null;
 
   if (pgConfig.enabled) {
     const started = await startPostgresControlPlane({
@@ -55,6 +61,7 @@ async function start() {
     });
     pool = started.pool;
     installPostgresShutdown(pool, process, { beforeClose: async () => {
+      authDeliveryWorker?.stop?.();
       await Promise.all([lifecycleRuntime.stop(), reconciliationRuntime.stop()]);
     } });
   }
@@ -116,17 +123,36 @@ async function start() {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
   }
 
+  const accountEmailNotifier = createSesEmailNotifier({ env: process.env });
+  let pendingSignupService = null;
+  const pendingSignupEnabled = String(process.env.BEATGALER_PENDING_SIGNUP_ENABLED || '') === '1';
+  if (pendingSignupEnabled) {
+    if (!pool) throw new Error('BEATGALER_PENDING_SIGNUP_ENABLED=1 requires PostgreSQL.');
+    const keyring = await resolveSecretEnvelopeKeyring(process.env);
+    const pendingRuntime = createPendingSignupRuntime({ pool, keyring, env: process.env });
+    pendingSignupService = createPendingSignupService({ pool, runtime: pendingRuntime, env: process.env });
+    authDeliveryWorker = createAuthDeliveryWorker({
+      service: pendingSignupService,
+      emailNotifier: accountEmailNotifier,
+    });
+  }
+
   let directCapabilities = null;
-  // Install this boundary before the lifecycle/containment wrappers so its
-  // request guards run first after all wrappers compose around server-core.
+  // Install these boundaries before lifecycle/containment wrappers so a public
+  // register request can never fall through to the legacy create+provision path.
   installAuthPublicRegistrationHardening(express, {
     env: process.env,
     getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
   });
+  installPendingSignupBoundary(express, {
+    service: pendingSignupService,
+    env: process.env,
+    activation: null,
+  });
   const accountLifecycle = installAccountLifecycle(express, {
     dataDir: __dirname,
     env: d8LifecycleEnv(process.env),
-    emailNotifier: createSesEmailNotifier({ env: process.env }),
+    emailNotifier: accountEmailNotifier,
     getCapabilityStore: () => directCapabilities?.store || null,
     onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
@@ -151,7 +177,7 @@ async function start() {
   installProductiveTempAuthBoundary(express);
   installAtomicLibraryIndexBootstrap(express);
   installStartupRoutingIndex(express, { pool, dataDir: __dirname });
-  console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"}`);
+  console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
 
   // server-core loads dotenv and the Direct module using the existing startup
   // order. Its request handlers dereference Direct methods only when a request
@@ -171,6 +197,7 @@ async function start() {
   });
   lifecycleRuntime.start();
   reconciliationRuntime.start();
+  authDeliveryWorker?.start?.();
 }
 
 start().catch((error) => {
