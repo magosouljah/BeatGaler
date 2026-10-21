@@ -14,7 +14,8 @@ const { installDurableAuthAbuseControls } = require("./auth-durable-abuse-contro
 const { createPendingSignupRuntime } = require("./pending-signup-runtime");
 const { createPendingSignupService } = require("./pending-signup-service");
 const { installPendingSignupBoundary } = require("./pending-signup-boundary");
-const { createPendingSignupActivation } = require("./pending-signup-activation");
+const { createSignupActivationCoordinator } = require("./signup-activation-coordinator");
+const { installServerCoreAuthBridgeLoader, getServerCoreAuthBridge } = require("./server-core-auth-bridge-loader");
 const { createAuthDeliveryWorker } = require("./auth-delivery-worker");
 const { resolveSecretEnvelopeKeyring } = require("./secret-envelope-provider");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
@@ -126,9 +127,12 @@ async function start() {
 
   const accountEmailNotifier = createSesEmailNotifier({ env: process.env });
   let pendingSignupService = null;
+  let pendingSignupActivation = null;
   const pendingSignupEnabled = String(process.env.BEATGALER_PENDING_SIGNUP_ENABLED || '') === '1';
   if (pendingSignupEnabled) {
-    if (!pool) throw new Error('BEATGALER_PENDING_SIGNUP_ENABLED=1 requires PostgreSQL.');
+    if (!pool || cutover.authority !== 'postgres' || typeof cutover.runtime?.flush !== 'function') {
+      throw new Error('BEATGALER_PENDING_SIGNUP_ENABLED=1 requires PostgreSQL control-plane authority.');
+    }
     const keyring = await resolveSecretEnvelopeKeyring(process.env);
     const pendingRuntime = createPendingSignupRuntime({ pool, keyring, env: process.env });
     pendingSignupService = createPendingSignupService({ pool, runtime: pendingRuntime, env: process.env });
@@ -140,14 +144,13 @@ async function start() {
   }
 
   let directCapabilities = null;
-  let pendingSignupActivation = null;
   // Install these boundaries before lifecycle/containment wrappers so a public
   // register request can never fall through to the legacy create+provision path.
   installAuthPublicRegistrationHardening(express, {
     env: process.env,
     getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
   });
-  const pendingSignupBoundary = installPendingSignupBoundary(express, {
+  installPendingSignupBoundary(express, {
     service: pendingSignupService,
     env: process.env,
     activation: input => {
@@ -167,17 +170,6 @@ async function start() {
     onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
   installLifecyclePasswordAuthority(accountLifecycle);
-  if (pendingSignupEnabled) {
-    pendingSignupActivation = createPendingSignupActivation({
-      pool,
-      service: pendingSignupService,
-      accountLifecycle,
-      legacyInvoker: pendingSignupBoundary,
-      installationClaimCoordinator,
-      onActivated: userId => accessGrants.issueWelcomeAfterActivation(userId),
-      env: process.env,
-    });
-  }
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
   installSensitiveAuthContainment(express, accountLifecycle);
@@ -200,18 +192,29 @@ async function start() {
   installStartupRoutingIndex(express, { pool, dataDir: __dirname });
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
 
-  // server-core loads dotenv and the Direct module using the existing startup
-  // order. Its request handlers dereference Direct methods only when a request
-  // arrives, so patching the cached module immediately after the synchronous
-  // require preserves that ordering while installing persistent ownership and
-  // membership semantics before the event loop can serve Direct requests.
-  require("./server-core");
-  if (pendingSignupEnabled) {
-    const captured = pendingSignupBoundary?.captured?.() || {};
-    if (!captured.register || !captured.login) {
-      throw new Error('Pending signup activation could not capture legacy register/login primitives.');
-    }
+  // Install a one-shot loader only for server-core so activation can reuse its
+  // in-process user/storage/session primitives without adding internal routes.
+  const restoreCoreAuthBridgeLoader = pendingSignupEnabled ? installServerCoreAuthBridgeLoader() : () => {};
+  try {
+    // Keep this literal require: regression tooling verifies contained core boot order.
+    require("./server-core");
+  } finally {
+    restoreCoreAuthBridgeLoader();
   }
+
+  if (pendingSignupEnabled) {
+    if (!getServerCoreAuthBridge()) throw new Error('Pending signup activation bridge was not installed into server-core.');
+    pendingSignupActivation = createSignupActivationCoordinator({
+      pool,
+      service: pendingSignupService,
+      getBridge: getServerCoreAuthBridge,
+      flushAuthority: () => cutover.runtime.flush(),
+      accountLifecycle,
+      issueWelcome: userId => accessGrants.issueWelcomeAfterActivation(userId),
+      staleMs: Number(process.env.BEATGALER_SIGNUP_ACTIVATION_STALE_MS || 5 * 60_000),
+    });
+  }
+
   const directTransport = require("./direct-transport-control");
   installPersistentDirectSessionStart({
     directTransport,
