@@ -25,6 +25,8 @@ jobs:
           node --check cloud-server/provider-identity-authority.js
           node --check cloud-server/sensitive-auth-containment.js
           node --check cloud-server/auth-durable-abuse-controls.js
+          node --check cloud-server/staged-email-change.js
+          node --check cloud-server/staged-email-change-routes.js
           node --check cloud-server/pending-signup-runtime.js
           node --check cloud-server/pending-signup-service.js
           node --check cloud-server/pending-signup-boundary.js
@@ -46,6 +48,7 @@ jobs:
           node --check cloud-server/tests/postgres-auth-multiprocess-compat.test.cjs
           node --check cloud-server/tests/provider-identity-authority.test.cjs
           node --check cloud-server/tests/sensitive-auth-containment.test.cjs
+          node --check cloud-server/tests/staged-email-change.test.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
