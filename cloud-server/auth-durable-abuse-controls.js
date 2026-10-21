@@ -6,6 +6,8 @@ const SEND_ROUTES = new Set([
   '/auth/register',
   '/auth/email/verification/request',
   '/auth/password/reset/request',
+  '/auth/email/change/start',
+  '/auth/email/change/resend',
 ]);
 
 const PROTECTED_ROUTES = new Set([
@@ -16,6 +18,9 @@ const PROTECTED_ROUTES = new Set([
   '/auth/password/reset/complete',
   '/auth/email/verification/request',
   '/auth/email/verification/confirm',
+  '/auth/email/change/start',
+  '/auth/email/change/resend',
+  '/auth/email/change/confirm',
   '/auth/reauth',
   '/auth/oauth/start',
   '/auth/oauth/poll',
