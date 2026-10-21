@@ -217,7 +217,7 @@ assert.equal(authErrorLooksInternal('That Google account is already connected to
   assert.equal(validBase('name#1234'), false);
   assert.equal(validBase('UpperCase'), false);
 
-  const pepper = '01234567890123456789012345678901';
+  const pepper = 'p'.repeat(32);
   const linkHash = digest(pepper, 'link', 'same-value');
   const codeHash = digest(pepper, 'code', 'same-value');
   assert.notEqual(linkHash, codeHash, 'challenge kinds must be domain-separated');
