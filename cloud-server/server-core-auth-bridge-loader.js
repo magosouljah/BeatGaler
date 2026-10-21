@@ -5,10 +5,20 @@ const fs = require('node:fs');
 const TARGET = require.resolve('./server-core');
 const LEGACY_SAVE_USERS = 'users: [...beatGalerUsers.values()],';
 const STABLE_SAVE_USERS = 'users: [...beatGalerUsersById.values()],';
+const LEGACY_LOGIN_LOOKUP = `  const identifier = String(req.body?.identifier || req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+  const beatgalerUserId = String(req.body?.beatgalerUserId || "");
+  const normalizedIdentifier = normalizeBeatGalerUsername(identifier);
+  const user = identifier.includes("@") ? findUserByEmail(identifier) : (beatGalerUsers.get(normalizedIdentifier) || findUserByEmail(identifier));`;
+const EMAIL_ONLY_LOGIN_LOOKUP = `  const identifier = normalizeEmail(req.body?.email || req.body?.identifier || "");
+  const password = String(req.body?.password || "");
+  const beatgalerUserId = String(req.body?.beatgalerUserId || "");
+  const user = validEmail(identifier) ? findUserByEmail(identifier) : null;`;
 const REQUIRED_MARKERS = Object.freeze([
   'function generateBeatGalerHandle(rawBase)',
   'function saveAuthData()',
   LEGACY_SAVE_USERS,
+  LEGACY_LOGIN_LOOKUP,
   'async function ensureUserStorage(user)',
   'function bindInstallationToBeatGalerUser(user, beatgalerUserId)',
   'function createAuthSession(userId)',
@@ -27,17 +37,23 @@ function validateCoreSource(source) {
   return true;
 }
 
-function hardenCoreSource(source) {
-  const text = String(source || '');
-  validateCoreSource(text);
-  const first = text.indexOf(LEGACY_SAVE_USERS);
-  const last = text.lastIndexOf(LEGACY_SAVE_USERS);
+function replaceExactlyOnce(text, legacy, replacement, code) {
+  const first = text.indexOf(legacy);
+  const last = text.lastIndexOf(legacy);
   if (first < 0 || first !== last) {
-    const error = new Error('server-core stable-id persistence patch is ambiguous.');
-    error.code = 'SERVER_CORE_STABLE_ID_PATCH_AMBIGUOUS';
+    const error = new Error(`server-core auth hardening patch is ambiguous: ${code}`);
+    error.code = code;
     throw error;
   }
-  return `${text.slice(0, first)}${STABLE_SAVE_USERS}${text.slice(first + LEGACY_SAVE_USERS.length)}`;
+  return `${text.slice(0, first)}${replacement}${text.slice(first + legacy.length)}`;
+}
+
+function hardenCoreSource(source) {
+  let text = String(source || '');
+  validateCoreSource(text);
+  text = replaceExactlyOnce(text, LEGACY_SAVE_USERS, STABLE_SAVE_USERS, 'SERVER_CORE_STABLE_ID_PATCH_AMBIGUOUS');
+  text = replaceExactlyOnce(text, LEGACY_LOGIN_LOOKUP, EMAIL_ONLY_LOGIN_LOOKUP, 'SERVER_CORE_EMAIL_LOGIN_PATCH_AMBIGUOUS');
+  return text;
 }
 
 function bridgeSuffix() {
@@ -316,8 +332,11 @@ module.exports = {
   TARGET,
   LEGACY_SAVE_USERS,
   STABLE_SAVE_USERS,
+  LEGACY_LOGIN_LOOKUP,
+  EMAIL_ONLY_LOGIN_LOOKUP,
   REQUIRED_MARKERS,
   validateCoreSource,
+  replaceExactlyOnce,
   hardenCoreSource,
   bridgeSuffix,
   installServerCoreAuthBridgeLoader,
