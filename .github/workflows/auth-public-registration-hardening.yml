@@ -25,7 +25,12 @@ jobs:
           node --check cloud-server/sensitive-auth-containment.js
           node --check cloud-server/auth-durable-abuse-controls.js
           node --check cloud-server/pending-signup-runtime.js
+          node --check cloud-server/auth-identity-preflight.js
+          node --check cloud-server/scripts/auth-identity-preflight.cjs
           node --check cloud-server/server.js
           node --check cloud-server/tests/auth-public-registration-hardening.test.cjs
+          node --check cloud-server/tests/auth-identity-preflight.test.cjs
       - name: Focused auth tests
-        run: node cloud-server/tests/auth-public-registration-hardening.test.cjs
+        run: |
+          node cloud-server/tests/auth-public-registration-hardening.test.cjs
+          node cloud-server/tests/auth-identity-preflight.test.cjs
