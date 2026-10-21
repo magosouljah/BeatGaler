@@ -84,23 +84,23 @@ function createDurableRateLimitStore(pool, { now = () => Date.now() } = {}) {
     const keyHash = opaque(key);
     const result = await pool.query(`
       INSERT INTO auth_rate_limit_buckets(scope,key_hash,window_started_at,request_count,expires_at,updated_at)
-      VALUES($1,$2,now(),1,now() + ($4::bigint * interval '1 millisecond'),now())
+      VALUES($1,$2,now(),1,now() + ($3::bigint * interval '1 millisecond'),now())
       ON CONFLICT(scope,key_hash) DO UPDATE SET
         window_started_at = CASE
-          WHEN auth_rate_limit_buckets.window_started_at <= now() - ($4::bigint * interval '1 millisecond') THEN now()
+          WHEN auth_rate_limit_buckets.window_started_at <= now() - ($3::bigint * interval '1 millisecond') THEN now()
           ELSE auth_rate_limit_buckets.window_started_at
         END,
         request_count = CASE
-          WHEN auth_rate_limit_buckets.window_started_at <= now() - ($4::bigint * interval '1 millisecond') THEN 1
+          WHEN auth_rate_limit_buckets.window_started_at <= now() - ($3::bigint * interval '1 millisecond') THEN 1
           ELSE auth_rate_limit_buckets.request_count + 1
         END,
         expires_at = CASE
-          WHEN auth_rate_limit_buckets.window_started_at <= now() - ($4::bigint * interval '1 millisecond') THEN now() + ($4::bigint * interval '1 millisecond')
-          ELSE auth_rate_limit_buckets.window_started_at + ($4::bigint * interval '1 millisecond')
+          WHEN auth_rate_limit_buckets.window_started_at <= now() - ($3::bigint * interval '1 millisecond') THEN now() + ($3::bigint * interval '1 millisecond')
+          ELSE auth_rate_limit_buckets.window_started_at + ($3::bigint * interval '1 millisecond')
         END,
         updated_at = now()
       RETURNING request_count,window_started_at,expires_at
-    `, [String(scope), keyHash, Number(limit), Number(windowMs)]);
+    `, [String(scope), keyHash, Number(windowMs)]);
     const row = result.rows[0];
     const count = Number(row?.request_count || 0);
     const retryAt = new Date(row?.expires_at || now() + windowMs).getTime();
