@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const SESSION_FILE = path.join(__dirname, "master-session.txt");
+const STORAGE_TITLE_LIMIT = 120;
 
 function readSession() {
   const envSession = String(process.env.BEATGALER_MASTER_SESSION || "").trim();
@@ -26,6 +27,49 @@ function channelIdToBotApiChatId(channelId) {
     throw new Error(`Telegram chat id ${asText} is outside JavaScript safe integer range.`);
   }
   return asNumber;
+}
+
+function storageAccountMarker(accountId) {
+  const id = String(accountId || "").trim();
+  if (!/^[a-z0-9_-]{3,128}$/i.test(id)) {
+    throw new Error("Stable BeatGaler account id is required for recoverable storage provisioning.");
+  }
+  return `[BG:${id}]`;
+}
+
+function storageGroupTitle(username, accountId) {
+  const marker = storageAccountMarker(accountId);
+  let base = String(username || "user").trim().replace(/\s+/g, " ") || "user";
+  const available = Math.max(1, STORAGE_TITLE_LIMIT - marker.length - 1);
+  base = base.slice(0, available).trim() || "user";
+  return `${base} ${marker}`;
+}
+
+function storageGroupMatchesAccount(entity, accountId) {
+  const title = String(entity?.title || "").trim();
+  return title.endsWith(storageAccountMarker(accountId));
+}
+
+function storageGroupResult(entity) {
+  if (!entity?.id) throw new Error("Telegram storage channel entity is missing an id.");
+  return {
+    title: String(entity.title || ""),
+    channelId: String(entity.id),
+    botApiChatId: channelIdToBotApiChatId(entity.id),
+  };
+}
+
+async function findStorageChannelByAccountId(client, accountId) {
+  const dialogs = await client.getDialogs({ limit: 1000 });
+  const matches = dialogs
+    .map(item => item?.entity)
+    .filter(entity => entity?.id && storageGroupMatchesAccount(entity, accountId));
+  if (matches.length > 1) {
+    const error = new Error(`Multiple Telegram storage groups exist for BeatGaler account ${accountId}.`);
+    error.code = "DUPLICATE_STORAGE_GROUPS";
+    throw error;
+  }
+  return matches[0] || null;
 }
 
 async function openMasterClient() {
@@ -58,13 +102,19 @@ async function openMasterClient() {
   return { client, Api };
 }
 
-async function createPrivateUserStorageGroup({ username }) {
+async function createPrivateUserStorageGroup({ username, accountId }) {
   const { client, Api } = await openMasterClient();
   try {
-    const title = String(username || "user").trim();
+    // The stable account id is part of the private MASTER-only title so a retry
+    // after process death can recover the already-created Telegram group instead
+    // of creating a duplicate vault.
+    const existing = await findStorageChannelByAccountId(client, accountId);
+    if (existing) return storageGroupResult(existing);
+
+    const title = storageGroupTitle(username, accountId);
     const created = await client.invoke(new Api.channels.CreateChannel({
       title,
-      about: "Private BeatGaler storage. Managed automatically. End users are not members.",
+      about: `Private BeatGaler storage. Managed automatically. ${storageAccountMarker(accountId)}`,
       megagroup: true,
       forum: true,
     }));
@@ -184,6 +234,12 @@ async function ensurePrivateUserStorageBotAbsent({ botApiChatId, botUsername }) 
 }
 
 module.exports = {
+  STORAGE_TITLE_LIMIT,
+  storageAccountMarker,
+  storageGroupTitle,
+  storageGroupMatchesAccount,
+  storageGroupResult,
+  findStorageChannelByAccountId,
   createPrivateUserStorageGroup,
   ensurePrivateUserStorageBotAbsent,
   verifyPrivateUserStorageGroup,
