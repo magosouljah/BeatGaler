@@ -16,6 +16,7 @@ const { createPendingSignupService } = require("./pending-signup-service");
 const { installPendingSignupBoundary } = require("./pending-signup-boundary");
 const { createSignupActivationCoordinator } = require("./signup-activation-coordinator");
 const { installServerCoreAuthBridgeLoader, getServerCoreAuthBridge } = require("./server-core-auth-bridge-loader");
+const { createProviderIdentityAuthority } = require("./provider-identity-authority");
 const { createAuthDeliveryWorker } = require("./auth-delivery-worker");
 const { resolveSecretEnvelopeKeyring } = require("./secret-envelope-provider");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
@@ -124,6 +125,9 @@ async function start() {
   if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
   }
+  const providerIdentityAuthority = pool && cutover.authority === 'postgres'
+    ? createProviderIdentityAuthority({ pool, getBridge: getServerCoreAuthBridge })
+    : null;
 
   const accountEmailNotifier = createSesEmailNotifier({ env: process.env });
   let pendingSignupService = null;
@@ -149,6 +153,7 @@ async function start() {
   installAuthPublicRegistrationHardening(express, {
     env: process.env,
     getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
+    getProviderIdentityAuthority: () => providerIdentityAuthority,
   });
   installPendingSignupBoundary(express, {
     service: pendingSignupService,
