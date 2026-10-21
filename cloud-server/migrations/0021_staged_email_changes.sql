@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS auth_email_changes (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   delivery_count INTEGER NOT NULL DEFAULT 0 CHECK (delivery_count >= 0),
   last_delivery_at TIMESTAMPTZ,
+  old_notice_attempts INTEGER NOT NULL DEFAULT 0 CHECK (old_notice_attempts >= 0),
+  old_notice_sent_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ NOT NULL,
   confirmed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -19,3 +21,7 @@ CREATE INDEX IF NOT EXISTS auth_email_changes_token_idx
 
 CREATE INDEX IF NOT EXISTS auth_email_changes_state_expiry_idx
   ON auth_email_changes(state, expires_at);
+
+CREATE INDEX IF NOT EXISTS auth_email_changes_notice_idx
+  ON auth_email_changes(state, old_notice_sent_at)
+  WHERE state='CONFIRMED' AND old_notice_sent_at IS NULL;
