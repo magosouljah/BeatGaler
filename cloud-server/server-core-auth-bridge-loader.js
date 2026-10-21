@@ -96,10 +96,43 @@ function bridgeSuffix() {
 
   adoptAuthoritativeUser(input = {}) {
     const userId = String(input.id || '').trim();
-    if (!userId) throw Object.assign(new Error('Stable user id is required.'), { code: 'AUTH_BRIDGE_USER_INPUT_INVALID' });
+    const email = normalizeEmail(input.email);
+    const passwordHash = String(input.passwordHash || '').trim();
+    const passwordSalt = String(input.passwordSalt || '').trim();
+    if (!userId || !email || !passwordHash || !passwordSalt) {
+      throw Object.assign(new Error('Stable id, email and password material are required.'), { code: 'AUTH_BRIDGE_USER_INPUT_INVALID' });
+    }
+
     const current = beatGalerUsersById.get(userId) || null;
-    if (current) return { userId: current.id, username: current.username, storageReady: Boolean(current.storageChatId) };
-    return this.adoptOrCreatePasswordUser(input);
+    if (!current) return this.adoptOrCreatePasswordUser(input);
+    if (normalizeEmail(current.email) && normalizeEmail(current.email) !== email) {
+      throw Object.assign(new Error('Stable user id already exists with a different email.'), { code: 'AUTH_BRIDGE_USER_ID_CONFLICT' });
+    }
+
+    const nextUsername = normalizeBeatGalerUsername(input.username || current.username);
+    if (!nextUsername || !validBeatGalerUsername(nextUsername)) {
+      throw Object.assign(new Error('Authoritative username is invalid.'), { code: 'AUTH_BRIDGE_USERNAME_INVALID' });
+    }
+    const usernameOwner = beatGalerUsers.get(nextUsername);
+    if (usernameOwner && String(usernameOwner.id) !== userId) {
+      throw Object.assign(new Error('Authoritative username is already owned by another local user.'), { code: 'AUTH_BRIDGE_USERNAME_CONFLICT' });
+    }
+    const previousUsername = normalizeBeatGalerUsername(current.username);
+    if (previousUsername && previousUsername !== nextUsername && beatGalerUsers.get(previousUsername)?.id === userId) {
+      beatGalerUsers.delete(previousUsername);
+    }
+
+    current.username = nextUsername;
+    current.usernameSource = String(input.usernameSource || current.usernameSource || 'beatgaler');
+    current.email = email;
+    current.passwordHash = passwordHash;
+    current.passwordSalt = passwordSalt;
+    if (input.createdAt != null) current.createdAt = Number(input.createdAt) || current.createdAt;
+    if (input.storageChatId != null) current.storageChatId = String(input.storageChatId);
+    if (input.storageChatTitle != null) current.storageChatTitle = input.storageChatTitle;
+    if (input.storageCreatedAt != null) current.storageCreatedAt = input.storageCreatedAt;
+    beatGalerUsers.set(nextUsername, current);
+    return { userId: current.id, username: current.username, storageReady: Boolean(current.storageChatId) };
   },
 
   userState(userId) {
