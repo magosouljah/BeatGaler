@@ -45,6 +45,7 @@ jobs:
           node --check cloud-server/tests/server-core-auth-bridge-loader.test.cjs
           node --check cloud-server/tests/postgres-auth-multiprocess-compat.test.cjs
           node --check cloud-server/tests/provider-identity-authority.test.cjs
+          node --check cloud-server/tests/sensitive-auth-containment.test.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
