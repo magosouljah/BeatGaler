@@ -14,6 +14,7 @@ const { installDurableAuthAbuseControls } = require("./auth-durable-abuse-contro
 const { createPendingSignupRuntime } = require("./pending-signup-runtime");
 const { createPendingSignupService } = require("./pending-signup-service");
 const { installPendingSignupBoundary } = require("./pending-signup-boundary");
+const { createPendingSignupActivation } = require("./pending-signup-activation");
 const { createAuthDeliveryWorker } = require("./auth-delivery-worker");
 const { resolveSecretEnvelopeKeyring } = require("./secret-envelope-provider");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
@@ -131,6 +132,7 @@ async function start() {
     const keyring = await resolveSecretEnvelopeKeyring(process.env);
     const pendingRuntime = createPendingSignupRuntime({ pool, keyring, env: process.env });
     pendingSignupService = createPendingSignupService({ pool, runtime: pendingRuntime, env: process.env });
+    await pendingSignupService.recoverStaleActivations();
     authDeliveryWorker = createAuthDeliveryWorker({
       service: pendingSignupService,
       emailNotifier: accountEmailNotifier,
@@ -138,16 +140,24 @@ async function start() {
   }
 
   let directCapabilities = null;
+  let pendingSignupActivation = null;
   // Install these boundaries before lifecycle/containment wrappers so a public
   // register request can never fall through to the legacy create+provision path.
   installAuthPublicRegistrationHardening(express, {
     env: process.env,
     getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
   });
-  installPendingSignupBoundary(express, {
+  const pendingSignupBoundary = installPendingSignupBoundary(express, {
     service: pendingSignupService,
     env: process.env,
-    activation: null,
+    activation: input => {
+      if (!pendingSignupActivation) {
+        const error = new Error('Pending signup activation is unavailable.');
+        error.code = 'SIGNUP_ACTIVATION_UNAVAILABLE';
+        throw error;
+      }
+      return pendingSignupActivation.activate(input);
+    },
   });
   const accountLifecycle = installAccountLifecycle(express, {
     dataDir: __dirname,
@@ -157,6 +167,17 @@ async function start() {
     onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
   installLifecyclePasswordAuthority(accountLifecycle);
+  if (pendingSignupEnabled) {
+    pendingSignupActivation = createPendingSignupActivation({
+      pool,
+      service: pendingSignupService,
+      accountLifecycle,
+      legacyInvoker: pendingSignupBoundary,
+      installationClaimCoordinator,
+      onActivated: userId => accessGrants.issueWelcomeAfterActivation(userId),
+      env: process.env,
+    });
+  }
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
   installSensitiveAuthContainment(express, accountLifecycle);
@@ -185,6 +206,12 @@ async function start() {
   // require preserves that ordering while installing persistent ownership and
   // membership semantics before the event loop can serve Direct requests.
   require("./server-core");
+  if (pendingSignupEnabled) {
+    const captured = pendingSignupBoundary?.captured?.() || {};
+    if (!captured.register || !captured.login) {
+      throw new Error('Pending signup activation could not capture legacy register/login primitives.');
+    }
+  }
   const directTransport = require("./direct-transport-control");
   installPersistentDirectSessionStart({
     directTransport,
