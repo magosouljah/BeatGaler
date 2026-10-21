@@ -5,6 +5,7 @@ const {
   normalizeEmail,
   validEmail,
   normalizeUsername,
+  preserveUsersByStableId,
   publicRegistrationOpen,
   oauthDecision,
   authErrorLooksInternal,
@@ -96,6 +97,39 @@ assert.equal(publicRegistrationOpen({ NODE_ENV: 'production', BEATGALER_PUBLIC_R
     users: [user({ id: 'usr-a', username: 'pepito', x: 'x-a' })],
   });
   assert.equal(result.allow, true, 'same X subject may present a new free handle');
+}
+
+{
+  const previous = [
+    user({ id: 'usr-a', username: 'pepito', x: 'x-a' }),
+    user({ id: 'usr-b', username: 'other', x: 'x-b' }),
+  ];
+  const serializedFromUsernameMap = [
+    user({ id: 'usr-b', username: 'pepito', x: 'x-b' }),
+  ];
+  const repaired = preserveUsersByStableId(serializedFromUsernameMap, previous, new Set());
+  assert.equal(repaired.length, 2, 'a username collision must not drop the previous stable user id');
+  assert.deepEqual(new Set(repaired.map(row => row.id)), new Set(['usr-a', 'usr-b']));
+  assert.equal(repaired.find(row => row.id === 'usr-b').username, 'pepito');
+  const preservedA = repaired.find(row => row.id === 'usr-a');
+  assert.match(preservedA.username, /^pepito#[0-9]{4}$/);
+  assert.equal(preservedA.usernameSource, 'beatgaler');
+  assert.equal(preservedA.usernameReconciliation, 'snapshot_preserved');
+  assert.notEqual(normalizeUsername(preservedA.username), normalizeUsername(repaired.find(row => row.id === 'usr-b').username));
+}
+
+{
+  const previous = [user({ id: 'usr-deleted', username: 'gone', x: 'x-gone' })];
+  const repaired = preserveUsersByStableId([], previous, new Set(['usr-deleted']));
+  assert.equal(repaired.length, 0, 'lifecycle tombstones must prevent legitimate deletions from being resurrected');
+}
+
+{
+  const previous = [user({ id: 'usr-a', username: 'alpha#1234' })];
+  const next = [user({ id: 'usr-a', username: 'renamed#1234' })];
+  const repaired = preserveUsersByStableId(next, previous, new Set());
+  assert.equal(repaired.length, 1);
+  assert.equal(repaired[0].username, 'renamed#1234', 'new record for the same user.id remains authoritative');
 }
 
 {
