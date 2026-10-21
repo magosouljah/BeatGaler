@@ -8,6 +8,7 @@ const { installDirectCapabilityBoundary } = require("./direct-capability-boundar
 const { installSensitiveAuthCapabilityRevocation } = require("./sensitive-auth-capability-revocation");
 const { installSessionSecurity } = require("./session-security");
 const { installAccountLifecycle } = require("./account-lifecycle");
+const { installAuthPublicRegistrationHardening } = require("./auth-public-registration-hardening");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
 const { createSesEmailNotifier } = require("./account-email-ses");
@@ -114,6 +115,12 @@ async function start() {
   }
 
   let directCapabilities = null;
+  // Install this boundary before the lifecycle/containment wrappers so its
+  // request guards run first after all wrappers compose around server-core.
+  installAuthPublicRegistrationHardening(express, {
+    env: process.env,
+    getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
+  });
   const accountLifecycle = installAccountLifecycle(express, {
     dataDir: __dirname,
     env: d8LifecycleEnv(process.env),
