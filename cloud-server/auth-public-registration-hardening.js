@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { AsyncLocalStorage } = require('node:async_hooks');
 
@@ -28,6 +29,66 @@ function publicRegistrationOpen(env = process.env) {
 
 function providerSubject(user, provider) {
   return String(user?.providers?.[provider]?.id || '');
+}
+
+function cloneUser(user) {
+  return user && typeof user === 'object' ? JSON.parse(JSON.stringify(user)) : user;
+}
+
+function normalUsernameBase(value) {
+  let base = normalizeUsername(value).replace(/#[0-9]{4}$/i, '').replace(/[^a-z0-9._]/g, '').slice(0, 20);
+  if (base.length < 3) base = 'user';
+  return base;
+}
+
+function temporaryUsername(value, userId, used) {
+  const base = normalUsernameBase(value);
+  const seed = Number.parseInt(crypto.createHash('sha256').update(String(userId || value || base)).digest('hex').slice(0, 8), 16) % 10_000;
+  for (let offset = 0; offset < 10_000; offset += 1) {
+    const suffix = String((seed + offset) % 10_000).padStart(4, '0');
+    const candidate = `${base}#${suffix}`;
+    if (!used.has(normalizeUsername(candidate))) return candidate;
+  }
+  throw new Error('No temporary BeatGaler username is available.');
+}
+
+function preserveUsersByStableId(nextUsers, previousUsers, deletedUserIds = new Set()) {
+  const deleted = deletedUserIds instanceof Set ? deletedUserIds : new Set(deletedUserIds || []);
+  const output = [];
+  const byId = new Set();
+  const usedNames = new Set();
+
+  for (const raw of Array.isArray(nextUsers) ? nextUsers : []) {
+    const id = String(raw?.id || '').trim();
+    if (!id || deleted.has(id) || byId.has(id)) continue;
+    const user = cloneUser(raw);
+    const nameKey = normalizeUsername(user?.username);
+    if (nameKey && usedNames.has(nameKey)) {
+      user.username = temporaryUsername(user.username, id, usedNames);
+      user.usernameSource = 'beatgaler';
+      user.usernameReconciliation = 'snapshot_collision';
+    }
+    byId.add(id);
+    if (user?.username) usedNames.add(normalizeUsername(user.username));
+    output.push(user);
+  }
+
+  for (const raw of Array.isArray(previousUsers) ? previousUsers : []) {
+    const id = String(raw?.id || '').trim();
+    if (!id || deleted.has(id) || byId.has(id)) continue;
+    const user = cloneUser(raw);
+    const nameKey = normalizeUsername(user?.username);
+    if (nameKey && usedNames.has(nameKey)) {
+      user.username = temporaryUsername(user.username, id, usedNames);
+      user.usernameSource = 'beatgaler';
+      user.usernameReconciliation = 'snapshot_preserved';
+    }
+    byId.add(id);
+    if (user?.username) usedNames.add(normalizeUsername(user.username));
+    output.push(user);
+  }
+
+  return output;
 }
 
 function oauthDecision({ provider, identity, users, link, registrationOpen }) {
@@ -93,6 +154,11 @@ function installAuthPublicRegistrationHardening(express, {
   function accountsSnapshot() {
     try { return lifecycle()?._test?.accountsSnapshot?.() || { users: [], sessions: {} }; }
     catch { return { users: [], sessions: {} }; }
+  }
+
+  function deletedUserIds() {
+    try { return lifecycle()?._test?.deletedUserIds || new Set(); }
+    catch { return new Set(); }
   }
 
   function sessionInfo(req) {
@@ -274,13 +340,14 @@ function installAuthPublicRegistrationHardening(express, {
   if (!fs[FS_PATCH]) {
     const originalWriteFileSync = fs.writeFileSync;
     fs[FS_PATCH] = { originalWriteFileSync };
-    fs.writeFileSync = function scrubPersistedOAuthTokens(file, data, ...rest) {
+    fs.writeFileSync = function preserveStableUsersAndScrubOAuthTokens(file, data, ...rest) {
       let next = data;
       try {
         const name = String(file || '').replace(/\\/g, '/');
         if (typeof data === 'string' && name.endsWith('/accounts-data.json.tmp')) {
           const parsed = JSON.parse(data);
           if (Array.isArray(parsed?.users)) {
+            parsed.users = preserveUsersByStableId(parsed.users, accountsSnapshot().users, deletedUserIds());
             for (const user of parsed.users) {
               if (!user?.providers?.x) continue;
               delete user.providers.x.accessToken;
@@ -290,7 +357,9 @@ function installAuthPublicRegistrationHardening(express, {
           }
           next = JSON.stringify(parsed, null, 2);
         }
-      } catch {}
+      } catch (error) {
+        console.error('[auth] stable-id snapshot preservation failed:', error?.message || String(error));
+      }
       return originalWriteFileSync.call(fs, file, next, ...rest);
     };
   }
@@ -301,6 +370,9 @@ module.exports = {
   normalizeEmail,
   validEmail,
   normalizeUsername,
+  normalUsernameBase,
+  temporaryUsername,
+  preserveUsersByStableId,
   publicRegistrationOpen,
   oauthDecision,
   authErrorLooksInternal,
