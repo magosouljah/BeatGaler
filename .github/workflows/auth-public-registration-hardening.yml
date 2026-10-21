@@ -49,6 +49,8 @@ jobs:
           node --check cloud-server/tests/provider-identity-authority.test.cjs
           node --check cloud-server/tests/sensitive-auth-containment.test.cjs
           node --check cloud-server/tests/staged-email-change.test.cjs
+          node --check cloud-server/tests/staged-email-change-routes.test.cjs
+          node --check cloud-server/tests/account-email-ses-staged.test.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
