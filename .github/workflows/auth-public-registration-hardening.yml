@@ -33,6 +33,8 @@ jobs:
           node --check cloud-server/account-lifecycle-verified-email-activation.js
           node --check cloud-server/server-core-auth-bridge-loader.js
           node --check cloud-server/signup-activation-coordinator.js
+          node --check cloud-server/postgres-auth-multiprocess-compat.js
+          node --check cloud-server/control-plane-cutover-runtime.js
           node --check cloud-server/master-storage.js
           node --check cloud-server/server.js
           node --check cloud-server/tests/auth-public-registration-hardening.test.cjs
@@ -40,6 +42,7 @@ jobs:
           node --check cloud-server/tests/pending-signup-safety.test.mjs
           node --check cloud-server/tests/signup-activation-safety.test.cjs
           node --check cloud-server/tests/server-core-auth-bridge-loader.test.cjs
+          node --check cloud-server/tests/postgres-auth-multiprocess-compat.test.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
