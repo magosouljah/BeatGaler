@@ -13,6 +13,35 @@ function stableUserId(signupId) {
   return `usr_${crypto.createHash('sha256').update(`signup\0${value}`).digest('hex').slice(0, 24)}`;
 }
 
+function normalizeUsernameBase(value) {
+  const base = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._]/g, '').slice(0, 20);
+  if (!/^[a-z0-9._]{3,20}$/.test(base)) throw coded('Signup username base is invalid.', 'USERNAME_BASE_INVALID');
+  return base;
+}
+
+function usernameSeed(userId) {
+  return Number.parseInt(crypto.createHash('sha256').update(`username\0${String(userId || '')}`).digest('hex').slice(0, 8), 16) % 10_000;
+}
+
+async function withCasefoldUsernameClaim(client, rawBase, userId, work) {
+  const base = normalizeUsernameBase(rawBase);
+  const lockKey = `username-base:${base}`;
+  await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+  try {
+    const seed = usernameSeed(userId);
+    for (let offset = 0; offset < 10_000; offset += 1) {
+      const suffix = String((seed + offset) % 10_000).padStart(4, '0');
+      const candidate = `${base}#${suffix}`;
+      const occupied = await client.query('SELECT id FROM users WHERE lower(username)=lower($1) LIMIT 1', [candidate]);
+      if (occupied.rows.length) continue;
+      return await work(candidate);
+    }
+    throw coded('No BeatGaler username discriminator is available.', 'USERNAME_SPACE_EXHAUSTED');
+  } finally {
+    try { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]); } catch {}
+  }
+}
+
 function errorCode(error) {
   return String(error?.code || 'SIGNUP_ACTIVATION_FAILED').slice(0, 120);
 }
@@ -158,15 +187,20 @@ function createSignupActivationCoordinator({
           if (emailOwner && String(emailOwner.id) !== userId) {
             throw coded('Email was claimed by another account before activation completed.', 'EMAIL_CONFLICT_DURING_ACTIVATION');
           }
-          bridge.adoptOrCreatePasswordUser({
-            id: userId,
-            usernameBase: pending.username_base,
-            email: pending.email_normalized,
-            passwordHash: pending.password_hash,
-            passwordSalt: pending.password_salt,
-            createdAt: pending.created_at ? new Date(pending.created_at).getTime() : now(),
+          await withCasefoldUsernameClaim(client, pending.username_base, userId, async username => {
+            bridge.adoptOrCreatePasswordUser({
+              id: userId,
+              username,
+              usernameBase: pending.username_base,
+              email: pending.email_normalized,
+              passwordHash: pending.password_hash,
+              passwordSalt: pending.password_salt,
+              createdAt: pending.created_at ? new Date(pending.created_at).getTime() : now(),
+            });
+            // Hold the username-base advisory lock until PostgreSQL confirms
+            // the exact username, preventing another process from choosing it.
+            await flushAuthority();
           });
-          await flushAuthority();
           authoritative = await loadAuthoritativeUser(client, userId);
           if (!authoritative) throw coded('Activated user was not durable after control-plane flush.', 'AUTH_USER_DURABILITY_FAILED');
         } else {
@@ -245,6 +279,9 @@ function createSignupActivationCoordinator({
 
 module.exports = {
   stableUserId,
+  normalizeUsernameBase,
+  usernameSeed,
+  withCasefoldUsernameClaim,
   errorCode,
   permanentActivationError,
   authoritativeBridgeInput,
