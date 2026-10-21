@@ -27,15 +27,18 @@ jobs:
           node --check cloud-server/pending-signup-runtime.js
           node --check cloud-server/pending-signup-service.js
           node --check cloud-server/pending-signup-boundary.js
-          node --check cloud-server/pending-signup-activation.js
           node --check cloud-server/auth-delivery-worker.js
           node --check cloud-server/auth-identity-preflight.js
           node --check cloud-server/scripts/auth-identity-preflight.cjs
+          node --check cloud-server/account-lifecycle-verified-email-activation.js
+          node --check cloud-server/server-core-auth-bridge-loader.js
+          node --check cloud-server/signup-activation-coordinator.js
+          node --check cloud-server/master-storage.js
           node --check cloud-server/server.js
           node --check cloud-server/tests/auth-public-registration-hardening.test.cjs
           node --check cloud-server/tests/auth-identity-preflight.test.cjs
           node --check cloud-server/tests/pending-signup-safety.test.mjs
-          node --check cloud-server/tests/pending-signup-activation.test.cjs
+          node --check cloud-server/tests/signup-activation-safety.test.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
