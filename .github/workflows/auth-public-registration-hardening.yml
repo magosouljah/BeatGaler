@@ -39,6 +39,7 @@ jobs:
           node --check cloud-server/tests/auth-identity-preflight.test.cjs
           node --check cloud-server/tests/pending-signup-safety.test.mjs
           node --check cloud-server/tests/signup-activation-safety.test.cjs
+          node --check cloud-server/tests/server-core-auth-bridge-loader.test.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
