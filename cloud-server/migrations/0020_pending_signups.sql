@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE IF NOT EXISTS pending_signups (
   id text PRIMARY KEY,
   email_normalized text NOT NULL UNIQUE,
@@ -69,3 +71,5 @@ COMMENT ON TABLE auth_delivery_outbox IS
   'Durable email delivery queue. Verification secrets are envelope-encrypted; plaintext codes/tokens are never stored.';
 COMMENT ON TABLE auth_provisioning_ledger IS
   'Idempotent activation/provisioning steps used to recover crashes without duplicating external resources.';
+
+COMMIT;
