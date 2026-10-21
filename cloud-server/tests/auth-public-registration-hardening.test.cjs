@@ -173,10 +173,12 @@ assert.equal(authErrorLooksInternal('Invalid email or password.'), false);
 assert.equal(authErrorLooksInternal('That Google account is already connected to another BeatGaler account.'), false);
 
 {
+  // A password by itself is no longer a usable sign-in method. It only becomes
+  // usable once the account also has one unique verified email address.
   const runtime = { passwordOverrideForUser: () => null };
-  assert.equal(hasUsablePassword(runtime, { userId: 'u1', user: { passwordHash: 'abc' } }), true);
+  assert.equal(hasUsablePassword(runtime, { userId: 'u1', user: { passwordHash: 'abc' } }), false);
   assert.equal(hasUsablePassword(runtime, { userId: 'u1', user: {} }), false);
-  assert.equal(hasUsablePassword({ passwordOverrideForUser: () => ({ passwordHash: 'override' }) }, { userId: 'u1', user: {} }), true);
+  assert.equal(hasUsablePassword({ passwordOverrideForUser: () => ({ passwordHash: 'override' }) }, { userId: 'u1', user: {} }), false);
 }
 
 {
