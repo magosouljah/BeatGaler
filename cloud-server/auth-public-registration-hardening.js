@@ -131,13 +131,30 @@ function oauthDecision({ provider, identity, users, link, registrationOpen }) {
   return { allow: true, existing };
 }
 
-function authErrorLooksInternal(value) {
-  return /(storage account|not configured|postgres|telegram|master|secret|access[_ -]?token|refresh[_ -]?token|econn|enotfound|stack|aws|ses|database|sqlstate)/i.test(String(value || ''));
+function oauthAuthorityError(error) {
+  const code = String(error?.code || 'OAUTH_IDENTITY_AUTHORITY_UNAVAILABLE');
+  const messages = new Map([
+    ['PUBLIC_REGISTRATION_CLOSED', 'Public registration is temporarily unavailable.'],
+    ['GOOGLE_EMAIL_NOT_VERIFIED', 'Google did not confirm this email address.'],
+    ['GOOGLE_EMAIL_CONFLICT', 'Sign in to the existing BeatGaler account, then connect Google from Settings.'],
+    ['PROVIDER_ALREADY_CONNECTED', 'That provider account is already connected to another BeatGaler account.'],
+    ['X_HANDLE_CASEFOLD_COLLISION', 'This username needs migration before X sign-in can continue.'],
+    ['X_HANDLE_INVALID', 'X returned an invalid username.'],
+    ['X_USERNAME_SPACE_EXHAUSTED', 'A temporary BeatGaler username could not be allocated.'],
+  ]);
+  const conflictCodes = new Set(['GOOGLE_EMAIL_CONFLICT', 'PROVIDER_ALREADY_CONNECTED', 'X_HANDLE_CASEFOLD_COLLISION']);
+  const deniedCodes = new Set(['PUBLIC_REGISTRATION_CLOSED', 'GOOGLE_EMAIL_NOT_VERIFIED', 'X_HANDLE_INVALID']);
+  return {
+    code,
+    message: messages.get(code) || 'Authentication service is temporarily unavailable. Please try again.',
+    status: conflictCodes.has(code) ? 409 : (deniedCodes.has(code) ? 403 : 503),
+  };
 }
 
 function installAuthPublicRegistrationHardening(express, {
   env = process.env,
   getAccountLifecycle = () => express?.application?.__beatgalerAccountLifecycleRuntime || null,
+  getProviderIdentityAuthority = () => null,
   now = () => Date.now(),
 } = {}) {
   const application = express?.application;
@@ -185,7 +202,9 @@ function installAuthPublicRegistrationHardening(express, {
   function decorateOAuthStart(req, res, next) {
     cleanupFlows();
     const provider = String(req?.body?.provider || '').toLowerCase();
-    const linked = Boolean(sessionInfo(req));
+    const linkedInfo = sessionInfo(req);
+    const linked = Boolean(linkedInfo);
+    const linkUserId = linkedInfo?.userId ? String(linkedInfo.userId) : null;
     const originalJson = res.json.bind(res);
     res.json = payload => {
       let nextPayload = payload;
@@ -193,7 +212,7 @@ function installAuthPublicRegistrationHardening(express, {
         try {
           const url = new URL(payload.authorization_url);
           const state = String(url.searchParams.get('state') || '');
-          if (state) oauthFlows.set(state, { provider, link: linked, expiresAt: now() + OAUTH_FLOW_TTL_MS });
+          if (state) oauthFlows.set(state, { provider, link: linked, linkUserId, expiresAt: now() + OAUTH_FLOW_TTL_MS });
           if (provider === 'x') {
             const scope = String(url.searchParams.get('scope') || '')
               .split(/\s+/).filter(Boolean).filter(value => value !== 'offline.access');
@@ -217,6 +236,7 @@ function installAuthPublicRegistrationHardening(express, {
       provider,
       state,
       link: Boolean(remembered?.link),
+      linkUserId: remembered?.linkUserId ? String(remembered.linkUserId) : null,
       registrationOpen: publicRegistrationOpen(env),
     }, next);
   }
@@ -305,6 +325,27 @@ function installAuthPublicRegistrationHardening(express, {
             name: body?.data?.name || null,
           };
       if (!identity.id) return response;
+
+      let authority = null;
+      try { authority = getProviderIdentityAuthority?.() || null; } catch {}
+      if (authority && typeof authority.prepare === 'function') {
+        try {
+          await authority.prepare({
+            provider: ctx.provider,
+            identity,
+            linkUserId: ctx.linkUserId || null,
+            registrationOpen: ctx.registrationOpen,
+          });
+          return response;
+        } catch (error) {
+          const safe = oauthAuthorityError(error);
+          return new Response(JSON.stringify({ error: safe.code, error_description: safe.message }), {
+            status: safe.status,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          });
+        }
+      }
+
       const decision = oauthDecision({
         provider: ctx.provider,
         identity,
@@ -375,5 +416,6 @@ module.exports = {
   preserveUsersByStableId,
   publicRegistrationOpen,
   oauthDecision,
+  oauthAuthorityError,
   authErrorLooksInternal,
 };
