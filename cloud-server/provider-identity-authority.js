@@ -71,6 +71,14 @@ async function xSubjectsForUser(client, userId) {
   return result.rows.map(row => String(row.provider_subject));
 }
 
+async function providerForUser(client, userId, provider) {
+  const userResult = await client.query('SELECT id,username,username_source FROM users WHERE id=$1 FOR UPDATE', [String(userId)]);
+  const user = userResult.rows[0] || null;
+  if (!user) return null;
+  const providerResult = await client.query('SELECT provider_subject FROM provider_identities WHERE user_id=$1 AND provider=$2 LIMIT 1', [String(userId), String(provider)]);
+  return { user, subject: providerResult.rows[0]?.provider_subject ? String(providerResult.rows[0].provider_subject) : null };
+}
+
 function bridgeIdentityInput(row, provider, subject, identity = {}) {
   if (!row) return null;
   return {
@@ -196,6 +204,43 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
     return { allow: true, existingUserId: existing ? String(existing.id) : null, handle, renamed };
   }
 
+  async function prepareDisconnect({ provider: providerInput, userId: userIdInput } = {}) {
+    const provider = String(providerInput || '').trim().toLowerCase();
+    const userId = String(userIdInput || '').trim();
+    if (!userId) throw coded('BeatGaler user id is required.', 'USER_ID_REQUIRED');
+    if (!['google', 'x'].includes(provider)) throw coded('Unsupported OAuth provider.', 'OAUTH_PROVIDER_UNSUPPORTED');
+
+    const client = await pool.connect();
+    let temporary = null;
+    let connected = false;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`provider-unlink:${provider}:${userId}`]);
+      const current = await providerForUser(client, userId, provider);
+      if (!current) throw coded('BeatGaler account not found.', 'ACCOUNT_NOT_FOUND');
+      connected = Boolean(current.subject);
+      if (!connected) {
+        await client.query('COMMIT');
+        return { ok: true, connected: false, provider, userId };
+      }
+
+      if (provider === 'x' && String(current.user.username_source || '') === 'x') {
+        temporary = await allocateTemporaryUsername(client, current.user.username, userId);
+        await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [userId, temporary]);
+      }
+      await client.query('DELETE FROM provider_identities WHERE user_id=$1 AND provider=$2', [userId, provider]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (temporary) getBridge()?.setUsernameByUserId?.(userId, temporary, 'beatgaler');
+    return { ok: true, connected, provider, userId, ...(temporary ? { username: temporary } : {}) };
+  }
+
   async function prepare(input = {}) {
     const provider = String(input.provider || '').toLowerCase();
     if (provider === 'google') return prepareGoogle(input);
@@ -203,7 +248,7 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
     throw coded('Unsupported OAuth provider.', 'OAUTH_PROVIDER_UNSUPPORTED');
   }
 
-  return { prepare, prepareGoogle, prepareX };
+  return { prepare, prepareGoogle, prepareX, prepareDisconnect };
 }
 
 module.exports = {
@@ -215,6 +260,7 @@ module.exports = {
   emailOwner,
   handleOwners,
   xSubjectsForUser,
+  providerForUser,
   bridgeIdentityInput,
   createProviderIdentityAuthority,
 };
