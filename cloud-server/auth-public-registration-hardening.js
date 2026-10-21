@@ -151,6 +151,10 @@ function oauthAuthorityError(error) {
   };
 }
 
+function authErrorLooksInternal(value) {
+  return /(storage account|not configured|postgres|telegram|master|secret|access[_ -]?token|refresh[_ -]?token|econn|enotfound|stack|aws|ses|database|sqlstate)/i.test(String(value || ''));
+}
+
 function installAuthPublicRegistrationHardening(express, {
   env = process.env,
   getAccountLifecycle = () => express?.application?.__beatgalerAccountLifecycleRuntime || null,
