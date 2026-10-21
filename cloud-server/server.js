@@ -18,7 +18,8 @@ const { createSignupActivationCoordinator } = require("./signup-activation-coord
 const { installServerCoreAuthBridgeLoader, getServerCoreAuthBridge } = require("./server-core-auth-bridge-loader");
 const { createProviderIdentityAuthority } = require("./provider-identity-authority");
 const { createAuthDeliveryWorker } = require("./auth-delivery-worker");
-const { createStagedEmailChange, installStagedEmailChange, createStagedEmailChangeNoticeWorker } = require("./staged-email-change");
+const { createStagedEmailChange, createStagedEmailChangeNoticeWorker } = require("./staged-email-change");
+const { installStagedEmailChangeRoutes } = require("./staged-email-change-routes");
 const { resolveSecretEnvelopeKeyring } = require("./secret-envelope-provider");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
@@ -201,7 +202,7 @@ async function start() {
       flushAuthority: () => cutover.runtime.flush(),
       env: process.env,
     });
-    installStagedEmailChange(express, stagedEmailChange);
+    installStagedEmailChangeRoutes(express, stagedEmailChange);
     emailChangeNoticeWorker = createStagedEmailChangeNoticeWorker(stagedEmailChange, {
       onError: error => console.error('[auth] email-change notice retry failed:', error?.message || String(error)),
     });
