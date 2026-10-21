@@ -53,6 +53,21 @@ function createPendingSignupService({
     });
   }
 
+  async function loginGate(email) {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return { blocked: false };
+    const result = await pool.query(`SELECT id,status,updated_at,expires_at
+      FROM pending_signups WHERE email_normalized=$1 LIMIT 1`, [normalized]);
+    const row = result.rows[0] || null;
+    if (!row) return { blocked: false };
+    const status = String(row.status || '');
+    if (status === 'ACTIVE' || status === 'EXPIRED' || status === 'CANCELLED') return { blocked: false, status };
+    if (ACTIVE_PENDING_STATES.has(status)) {
+      return { blocked: true, status, signupId: String(row.id) };
+    }
+    return { blocked: false, status };
+  }
+
   async function resend({ signupId, continuationSecret } = {}) {
     const client = await pool.connect();
     try {
@@ -93,8 +108,21 @@ function createPendingSignupService({
     return result.rows.length;
   }
 
+  async function recoverStaleActivations({ staleMs = 5 * 60_000 } = {}) {
+    const delay = Math.max(60_000, Number(staleMs || 5 * 60_000));
+    const result = await pool.query(`
+      UPDATE pending_signups
+      SET status='RETRYABLE',updated_at=now()
+      WHERE status IN ('ACTIVATING','PROVISIONING')
+        AND updated_at <= now() - ($1::bigint * interval '1 millisecond')
+      RETURNING id
+    `, [delay]);
+    return result.rows.length;
+  }
+
   return {
     begin,
+    loginGate,
     resend,
     verify: input => runtime.verify(input),
     status: input => runtime.status(input),
@@ -103,6 +131,7 @@ function createPendingSignupService({
     claimDelivery: () => runtime.claimDelivery(),
     completeDelivery: (...args) => runtime.completeDelivery(...args),
     requeueStaleDeliveries,
+    recoverStaleActivations,
     constants: { cooldownMs },
   };
 }
