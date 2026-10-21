@@ -193,10 +193,8 @@ function bridgeSuffix() {
 `;
 }
 
-function installServerCoreAuthBridgeLoader() {
-  if (require.cache[TARGET]?.exports?.__beatgalerAuthBridge) {
-    return () => {};
-  }
+function installServerCoreAuthBridgeLoader({ exposeBridge = true } = {}) {
+  if (require.cache[TARGET]?.exports?.__beatgalerAuthBridge) return () => {};
   const previous = require.extensions['.js'];
   if (typeof previous !== 'function') throw new Error('Node CommonJS .js loader is unavailable.');
   let restored = false;
@@ -209,7 +207,7 @@ function installServerCoreAuthBridgeLoader() {
     if (filename !== TARGET) return previous(mod, filename);
     restore();
     const source = hardenCoreSource(fs.readFileSync(filename, 'utf8'));
-    mod._compile(`${source}${bridgeSuffix()}`, filename);
+    mod._compile(exposeBridge ? `${source}${bridgeSuffix()}` : source, filename);
   }
   require.extensions['.js'] = hooked;
   return restore;
