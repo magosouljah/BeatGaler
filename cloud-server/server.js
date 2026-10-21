@@ -9,6 +9,7 @@ const { installSensitiveAuthCapabilityRevocation } = require("./sensitive-auth-c
 const { installSessionSecurity } = require("./session-security");
 const { installAccountLifecycle } = require("./account-lifecycle");
 const { installAuthPublicRegistrationHardening } = require("./auth-public-registration-hardening");
+const { installSensitiveAuthContainment } = require("./sensitive-auth-containment");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
 const { createSesEmailNotifier } = require("./account-email-ses");
@@ -129,6 +130,9 @@ async function start() {
     onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
   installLifecyclePasswordAuthority(accountLifecycle);
+  // Sensitive legacy mutations are contained before provider reauth wraps the
+  // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
+  installSensitiveAuthContainment(express, accountLifecycle);
   applyD8RoResolutions(express, accountLifecycle, { env: process.env });
   installSessionSecurity(express, {
     dataDir: __dirname,
