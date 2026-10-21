@@ -10,6 +10,7 @@ const { installSessionSecurity } = require("./session-security");
 const { installAccountLifecycle } = require("./account-lifecycle");
 const { installAuthPublicRegistrationHardening } = require("./auth-public-registration-hardening");
 const { installSensitiveAuthContainment } = require("./sensitive-auth-containment");
+const { installDurableAuthAbuseControls } = require("./auth-durable-abuse-controls");
 const { installLifecyclePasswordAuthority } = require("./account-lifecycle-password-authority");
 const { installLifecycleRequestGuard } = require("./account-lifecycle-request-guard");
 const { createSesEmailNotifier } = require("./account-email-ses");
@@ -142,6 +143,10 @@ async function start() {
   installHttpContainment(express, { dataDir: __dirname, installationClaimCoordinator });
   directCapabilities = installDirectCapabilityBoundary(express, { dataDir: __dirname, pool });
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
+  // PostgreSQL is mandatory in production. These shared buckets therefore
+  // coordinate auth abuse controls across every production process/restart;
+  // the existing in-memory layer remains as an additional low-latency guard.
+  installDurableAuthAbuseControls(express, { pool, runtime: accountLifecycle, env: process.env });
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
   installAtomicLibraryIndexBootstrap(express);
