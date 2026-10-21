@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE IF NOT EXISTS auth_rate_limit_buckets (
   scope text NOT NULL,
   key_hash text NOT NULL,
@@ -13,3 +15,5 @@ CREATE INDEX IF NOT EXISTS auth_rate_limit_buckets_expires_idx
 
 COMMENT ON TABLE auth_rate_limit_buckets IS
   'Durable, cross-process authentication abuse-control buckets. Keys are SHA-256 digests; raw IP/email/account identifiers are not stored.';
+
+COMMIT;
