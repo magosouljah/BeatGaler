@@ -2,6 +2,51 @@
 
 const { EventEmitter } = require('node:events');
 const { publicRegistrationOpen } = require('./auth-public-registration-hardening');
+const SIGNUP_COOKIE = '__Host-beatgaler_signup';
+
+function webSignupRequest(req) {
+  return String(req?.headers?.['x-beatgaler-client'] || '').toLowerCase() === 'web';
+}
+
+function appendCookie(res, value) {
+  const previous = res.getHeader?.('Set-Cookie');
+  const values = previous == null ? [] : Array.isArray(previous) ? previous : [previous];
+  res.setHeader('Set-Cookie', [...values, value]);
+}
+
+function signupCookie(req) {
+  if (!webSignupRequest(req)) return null;
+  const part = String(req?.headers?.cookie || '').split(';').map(value => value.trim())
+    .find(value => value.startsWith(`${SIGNUP_COOKIE}=`));
+  if (!part) return null;
+  let raw;
+  try { raw = decodeURIComponent(part.slice(SIGNUP_COOKIE.length + 1)); }
+  catch { return null; }
+  const separator = raw.indexOf('.');
+  if (separator < 1) return null;
+  return { signupId: raw.slice(0, separator), continuationSecret: raw.slice(separator + 1) };
+}
+
+function signupInput(req) {
+  if (webSignupRequest(req)) return signupCookie(req) || { signupId: '', continuationSecret: '' };
+  return {
+    signupId: String(req?.body?.signup_id || ''),
+    continuationSecret: String(req?.body?.continuation_secret || ''),
+  };
+}
+
+function setSignupCookie(res, result) {
+  const expires = new Date(result.expires_at).getTime();
+  const seconds = Number.isFinite(expires)
+    ? Math.max(60, Math.min(86_400, Math.ceil((expires - Date.now()) / 1000)))
+    : 86_400;
+  const value = encodeURIComponent(`${result.signup_id}.${result.continuation_secret}`);
+  appendCookie(res, `${SIGNUP_COOKIE}=${value}; Path=/; Max-Age=${seconds}; HttpOnly; Secure; SameSite=Lax`);
+}
+
+function clearSignupCookie(res) {
+  appendCookie(res, `${SIGNUP_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+}
 
 function statusForError(error) {
   const code = String(error?.code || '');
@@ -140,11 +185,12 @@ function installPendingSignupBoundary(express, {
           message: 'If this address can be used, verification instructions will be sent.',
         });
       }
+      if (webSignupRequest(req)) setSignupCookie(res, result);
       return res.status(202).json({
         ok: true,
         signup_pending: true,
         signup_id: result.signup_id,
-        continuation_secret: result.continuation_secret,
+        ...(!webSignupRequest(req) ? { continuation_secret: result.continuation_secret } : {}),
         status: result.status,
         expires_at: result.expires_at,
         challenge_expires_at: result.challenge_expires_at,
@@ -165,17 +211,18 @@ function installPendingSignupBoundary(express, {
   async function verify(req, res) {
     if (!runtimeReady(res)) return;
     try {
-      const continuationSecret = String(req?.body?.continuation_secret || '');
+      const { signupId, continuationSecret } = signupInput(req);
       const result = await service.verify({
-        signupId: req?.body?.signup_id,
+        signupId,
         continuationSecret,
         challenge: req?.body?.code ?? req?.body?.challenge,
       });
       let activationResult = null;
       if (result?.verified && typeof activation === 'function') {
-        activationResult = await activation({ signupId: req?.body?.signup_id, continuationSecret });
+        activationResult = await activation({ signupId, continuationSecret });
       }
       const status = activationResult?.status || result?.status || 'VERIFIED';
+      if (status === 'ACTIVE' && webSignupRequest(req)) clearSignupCookie(res);
       return res.status(status === 'ACTIVE' ? 200 : 202).json({
         ok: true,
         signup_pending: status !== 'ACTIVE',
@@ -195,10 +242,7 @@ function installPendingSignupBoundary(express, {
   async function resend(req, res) {
     if (!runtimeReady(res)) return;
     try {
-      const result = await service.resend({
-        signupId: req?.body?.signup_id,
-        continuationSecret: String(req?.body?.continuation_secret || ''),
-      });
+      const result = await service.resend(signupInput(req));
       return res.status(202).json({ ok: true, signup_pending: true, ...result });
     } catch (error) {
       const status = statusForError(error);
@@ -212,16 +256,15 @@ function installPendingSignupBoundary(express, {
   async function signupStatus(req, res) {
     if (!runtimeReady(res)) return;
     try {
-      const result = await service.status({
-        signupId: req?.body?.signup_id,
-        continuationSecret: String(req?.body?.continuation_secret || ''),
-      });
+      const { signupId, continuationSecret } = signupInput(req);
+      const result = await service.status({ signupId, continuationSecret });
       if (!result) return res.status(404).json({ error: 'Signup session was not found.', code: 'SIGNUP_NOT_FOUND' });
       const retryable = result.status === 'VERIFIED' || result.status === 'RETRYABLE';
       const activationResult = retryable && typeof activation === 'function'
-        ? await activation({ signupId: req?.body?.signup_id, continuationSecret: String(req?.body?.continuation_secret || '') })
+        ? await activation({ signupId, continuationSecret })
         : null;
       const status = activationResult?.status || result.status;
+      if (status === 'ACTIVE' && webSignupRequest(req)) clearSignupCookie(res);
       return res.json({
         ok: true,
         signup_pending: status !== 'ACTIVE',

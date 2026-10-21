@@ -215,4 +215,67 @@ assert.equal(retryDelay(100), 3_600_000);
   assert.equal(result.token, 'session');
 }
 
+{
+  const routes = new Map();
+  const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
+  let statusInput = null;
+  installPendingSignupBoundary({ application: app }, {
+    service: {
+      async begin() { return { created: true, signup_id: 'psu_web', continuation_secret: 'private-secret', status: 'CODE_SENT', expires_at: new Date(Date.now() + 60_000).toISOString() }; },
+      async status(input) { statusInput = input; return { status: 'CODE_SENT' }; },
+    },
+    env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
+  });
+  app.post('/auth/register', () => {});
+  const headers = new Map();
+  const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; },
+    setHeader(name, value) { headers.set(String(name).toLowerCase(), value); },
+    getHeader(name) { return headers.get(String(name).toLowerCase()); },
+    json(body) { this.body = body; return this; } });
+  const registered = response();
+  await routes.get('/auth/register')[0]({ headers: { 'x-beatgaler-client': 'web' }, body: {} }, registered);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(registered.body.continuation_secret, undefined);
+  const cookie = headers.get('set-cookie')[0];
+  assert.match(cookie, /HttpOnly; Secure; SameSite=Lax/);
+  const checked = response();
+  await routes.get('/auth/signup/status')[0]({ headers: { 'x-beatgaler-client': 'web', cookie: cookie.split(';')[0] }, body: {} }, checked);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(statusInput, { signupId: 'psu_web', continuationSecret: 'private-secret' });
+}
+
+{
+  const routes = new Map();
+  const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
+  let verifiedInput;
+  installPendingSignupBoundary({ application: app }, {
+    service: {
+      async begin() { return { created: true, signup_id: 'psu_web', continuation_secret: 'private-secret',
+        status: 'CODE_SENT', expires_at: new Date(Date.now() + 60_000).toISOString() }; },
+      async verify(input) { verifiedInput = input; return { status: 'VERIFIED', verified: true }; },
+    },
+    activation: async () => ({ status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }),
+    env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
+  });
+  app.post('/auth/register', () => {});
+  const response = () => {
+    const headers = new Map();
+    return { statusCode: 200, status(code) { this.statusCode = code; return this; },
+      setHeader(name, value) { headers.set(String(name).toLowerCase(), value); },
+      getHeader(name) { return headers.get(String(name).toLowerCase()); },
+      json(body) { this.body = body; return this; } };
+  };
+  const registered = response();
+  await routes.get('/auth/register')[0]({ headers: { 'x-beatgaler-client': 'web' }, body: {} }, registered);
+  await new Promise(resolve => setImmediate(resolve));
+  const cookie = registered.getHeader('Set-Cookie')[0].split(';')[0];
+  const activated = response();
+  await routes.get('/auth/signup/verify')[0]({ headers: { 'x-beatgaler-client': 'web', cookie }, body: { code: '12345678' } }, activated);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(verifiedInput, { signupId: 'psu_web', continuationSecret: 'private-secret', challenge: '12345678' });
+  assert.equal(activated.body.user.id, 'usr_1');
+  assert.equal(activated.body.continuation_secret, undefined);
+  assert.match(activated.getHeader('Set-Cookie')[0], /Max-Age=0/);
+}
+
 console.log('pending-signup-safety tests: PASS');

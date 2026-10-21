@@ -75,6 +75,16 @@ function fakeDatabase() {
         user.username_source = 'x';
         return { rows: [] };
       }
+      if (text.startsWith('INSERT INTO users(id,username,username_source,email,password_hash,password_hash_algorithm,password_salt)')) {
+        users.set(String(params[0]), { id: String(params[0]), username: String(params[1]), username_source: 'x', email: null,
+          password_hash: null, password_salt: null, created_at: new Date() });
+        return { rows: [] };
+      }
+      if (text.startsWith('INSERT INTO provider_identities(id,user_id,provider,provider_subject,profile)')) {
+        const provider = { user_id: String(params[1]), provider: 'x', provider_subject: String(params[2]), profile: JSON.parse(String(params[3])) };
+        providers.set(`x:${provider.provider_subject}`, provider);
+        return { rows: [] };
+      }
       if (text.startsWith('UPDATE provider_identities SET profile=')) {
         const p = providers.get(`${params[0]}:${params[1]}`);
         p.profile = { ...(p.profile || {}), ...JSON.parse(String(params[2])) };
@@ -163,10 +173,52 @@ function fakeDatabase() {
 
   {
     const db = fakeDatabase();
-    const authority = createProviderIdentityAuthority({ pool: db.pool });
-    await assert.rejects(authority.prepareX({ identity: { id: 'x-new', username: 'pepito' }, registrationOpen: true }),
-      error => error?.code === 'X_HANDLE_ATOMIC_CLAIM_REQUIRED');
-    assert.equal(db.users.get('usr_a').username, 'pepito');
+    const bridgeCalls = [];
+    const authority = createProviderIdentityAuthority({ pool: db.pool, getBridge: () => ({
+      setUsernameByUserId(...args) { bridgeCalls.push(['rename', ...args]); },
+      adoptIdentityUser(input) { bridgeCalls.push(['adopt', input.id, input.providerSubject]); },
+    }) });
+    const result = await authority.prepareX({ identity: { id: 'x-new', username: 'pepito' }, registrationOpen: true });
+    assert.equal(result.created, true);
+    assert.match(db.users.get('usr_a').username, /^pepito#\d{4}$/);
+    const b = db.providers.get('x:x-new');
+    assert.match(b.user_id, /^usr_[0-9a-f]{24}$/);
+    assert.equal(db.users.get(b.user_id).username, 'pepito');
+    assert.equal(bridgeCalls[0][0], 'rename');
+    assert.deepEqual(bridgeCalls[1], ['adopt', b.user_id, 'x-new']);
+    assert.equal(db.queries.filter(([sql]) => sql === 'COMMIT').length, 1);
+    const retry = await authority.prepareX({ identity: { id: 'x-new', username: 'pepito' }, registrationOpen: true });
+    assert.equal(retry.created, false);
+    assert.equal(retry.existingUserId, b.user_id);
+    assert.equal(db.users.size, 3);
+  }
+
+  {
+    const db = fakeDatabase();
+    db.providers.delete('x:x-b');
+    const authority = createProviderIdentityAuthority({ pool: db.pool, getBridge: () => ({
+      setUsernameByUserId() {}, adoptIdentityUser() {},
+    }) });
+    const result = await authority.prepareX({ identity: { id: 'x-new', username: 'pepito' }, linkUserId: 'usr_b', registrationOpen: false });
+    assert.equal(result.created, true);
+    assert.equal(result.existingUserId, 'usr_b');
+    assert.equal(db.providers.get('x:x-new').user_id, 'usr_b');
+    assert.equal(db.users.get('usr_b').username, 'pepito');
+    assert.equal(db.users.size, 2);
+  }
+
+  {
+    const db = fakeDatabase();
+    const authority = createProviderIdentityAuthority({ pool: db.pool, getBridge: () => ({
+      setUsernameByUserId() {}, adoptIdentityUser() {},
+    }) });
+    const first = await authority.prepareX({ identity: { id: 'x-fresh', username: 'fresh' }, registrationOpen: true });
+    const second = await authority.prepareX({ identity: { id: 'x-fresh', username: 'fresh' }, registrationOpen: true });
+    assert.equal(first.created, true);
+    assert.equal(second.created, false);
+    assert.equal(first.existingUserId, second.existingUserId);
+    assert.equal(db.providers.get('x:x-fresh').user_id, first.existingUserId);
+    assert.equal(db.users.size, 3);
   }
 
   {

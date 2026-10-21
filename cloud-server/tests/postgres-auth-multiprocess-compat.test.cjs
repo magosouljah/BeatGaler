@@ -79,5 +79,14 @@ const {
   assert.equal(statements.some(sql => /(?:INSERT INTO|UPDATE) users\b/.test(sql)), false);
   assert.equal(statements.some(sql => /INSERT INTO provider_identities\b/.test(sql)), false);
   assert.equal(statements.some(sql => /INSERT INTO auth_sessions\b/.test(sql)), true);
+  const adopted = {
+    users: [...current.users, { id: 'u2', username: 'newhandle', usernameSource: 'x',
+      providers: { x: { id: 'x-new' } } }],
+    sessions: current.sessions,
+  };
+  statements.length = 0;
+  await mergeAuthSnapshotDelta({ async connect() { return client; } }, adopted,
+    { key: Buffer.alloc(32, 7), keyVersion: 1 }, current);
+  assert.equal(statements.some(sql => /INSERT INTO users\b[\s\S]*ON CONFLICT\(id\) DO NOTHING/.test(sql)), true);
   console.log('postgres-auth-multiprocess-compat tests: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });

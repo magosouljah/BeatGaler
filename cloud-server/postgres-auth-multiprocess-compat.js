@@ -63,7 +63,7 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
       const previous = previousUsers.get(String(row.id));
       if (!previous) {
         await client.query(`INSERT INTO users(id,username,username_source,email,password_hash,password_hash_algorithm,password_salt,created_at,updated_at)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,now())`,
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO NOTHING`,
         [row.id,row.username,row.username_source,row.email,row.password_hash,row.password_hash_algorithm,row.password_salt,row.created_at]);
         continue;
       }

@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { deterministicId } = require('./legacy-import-executor');
 
 function coded(message, code, extras = {}) {
   return Object.assign(new Error(message), { code, ...extras });
@@ -21,7 +22,8 @@ function tempSeed(userId) {
 }
 
 async function allocateTemporaryUsername(client, base, userId) {
-  const normalized = normalizeXHandle(base);
+  const handle = normalizeXHandle(base);
+  const normalized = handle.length >= 3 ? handle : 'user';
   const seed = tempSeed(userId);
   for (let offset = 0; offset < 10_000; offset += 1) {
     const candidate = `${normalized}#${String((seed + offset) % 10_000).padStart(4, '0')}`;
@@ -144,6 +146,7 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null, flushAu
     const handle = normalizeXHandle(identity?.username);
     const client = await pool.connect();
     let existing = null;
+    let created = null;
     let renamed = null;
     let staleLocal = null;
     try {
@@ -167,18 +170,44 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null, flushAu
         const subjects = await xSubjectsForUser(client, handleOwner.id);
         const sameSubject = subjects.includes(subject);
         if (!sameSubject) {
-          if (!existing) {
-            // Creating B happens later in the legacy callback. Moving A now
-            // would commit only half of the transfer if that callback fails.
-            throw coded('This X handle needs an atomic account claim before sign-in can continue.', 'X_HANDLE_ATOMIC_CLAIM_REQUIRED');
-          }
-          if (String(handleOwner.username_source || '') !== 'x' || subjects.length === 0) {
+          if (linkUserId && String(handleOwner.id) === String(linkUserId)) {
+            // The linking account already owns this display name.
+          } else if (String(handleOwner.username_source || '') !== 'x' || subjects.length === 0) {
             throw coded('This username belongs to another BeatGaler account.', 'X_HANDLE_NOT_RECLAIMABLE');
+          } else {
+            const temporary = await allocateTemporaryUsername(client, handle, handleOwner.id);
+            await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [String(handleOwner.id), temporary]);
+            renamed = { userId: String(handleOwner.id), from: String(handleOwner.username), to: temporary };
           }
-          const temporary = await allocateTemporaryUsername(client, handle, handleOwner.id);
-          await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [String(handleOwner.id), temporary]);
-          renamed = { userId: String(handleOwner.id), from: String(handleOwner.username), to: temporary };
         }
+      }
+
+      // Claim every new subject while the provider lock is held. This also
+      // makes A -> temporary and B -> recycled handle one PostgreSQL commit.
+      if (!existing) {
+        const bridge = getBridge();
+        if (typeof bridge?.adoptIdentityUser !== 'function' || typeof bridge?.setUsernameByUserId !== 'function') {
+          throw coded('X account reconciliation is temporarily unavailable.', 'X_HANDLE_ATOMIC_CLAIM_REQUIRED');
+        }
+        const userId = linkUserId ? String(linkUserId) : `usr_${crypto.randomBytes(12).toString('hex')}`;
+        if (linkUserId) {
+          const linked = await providerForUser(client, userId, 'x');
+          if (!linked) throw coded('BeatGaler account no longer exists.', 'ACCOUNT_NOT_FOUND');
+          if (linked.subject && linked.subject !== subject) {
+            throw coded('Disconnect the current X account before connecting another.', 'PROVIDER_ALREADY_CONNECTED');
+          }
+          await client.query("UPDATE users SET username=$2,username_source='x',updated_at=now() WHERE id=$1", [userId, handle]);
+        } else {
+          await client.query(`INSERT INTO users(id,username,username_source,email,password_hash,password_hash_algorithm,password_salt)
+            VALUES($1,$2,'x',NULL,NULL,NULL,NULL)`, [userId, handle]);
+        }
+        await client.query(`INSERT INTO provider_identities(id,user_id,provider,provider_subject,profile)
+          VALUES($1,$2,'x',$3,$4::jsonb)`, [
+          deterministicId('prv', userId, 'x', subject), userId, subject,
+          JSON.stringify({ id: subject, username: handle, ...(identity?.name ? { name: String(identity.name) } : {}) }),
+        ]);
+        created = { userId };
+        existing = await providerOwner(client, 'x', subject);
       }
 
       // For an already-known X subject, the provider row tells us exactly which
@@ -219,7 +248,7 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null, flushAu
     if (renamed) bridge?.setUsernameByUserId?.(renamed.userId, renamed.to, 'beatgaler');
     if (staleLocal) bridge?.setUsernameByUserId?.(staleLocal.userId, staleLocal.username, staleLocal.source);
     if (existing) bridge?.adoptIdentityUser?.(bridgeIdentityInput(existing, 'x', subject, identity));
-    return { allow: true, existingUserId: existing ? String(existing.id) : null, handle, renamed };
+    return { allow: true, existingUserId: existing ? String(existing.id) : null, handle, renamed, created: Boolean(created) };
   }
 
   async function prepareDisconnect({ provider: providerInput, userId: userIdInput, usablePassword = false } = {}) {

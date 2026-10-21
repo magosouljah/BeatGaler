@@ -8,6 +8,7 @@ const TOKEN_KEY = "beatgaler:account-session:v1";
 const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
 const CSRF_KEY = "beatgaler:web-csrf:v1";
 const BROWSER_SESSION_SENTINEL = "browser-cookie-session";
+const PENDING_SIGNUP_KEY = "beatgaler:pending-signup:v1";
 export function getBeatGalerAuthToken(): string | null {
   if (platform.kind === "web") return localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1" ? BROWSER_SESSION_SENTINEL : null;
   return localStorage.getItem(TOKEN_KEY);
@@ -254,9 +255,69 @@ async function storeSession(result: AuthResponse) {
   return result.user;
 }
 
-export async function registerBeatGalerAccount(usernameBase: string, email: string, password: string): Promise<BeatGalerAccount> {
+export type PendingBeatGalerSignup = {
+  signup_pending: boolean;
+  signup_id?: string;
+  continuation_secret?: string;
+  status: string;
+  expires_at?: string;
+};
+
+function rememberDesktopSignup(result: PendingBeatGalerSignup): void {
+  if (platform.kind === "web" || !result.signup_id || !result.continuation_secret) return;
+  localStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify({
+    signup_id: result.signup_id,
+    continuation_secret: result.continuation_secret,
+    expires_at: result.expires_at,
+  }));
+}
+
+function clearDesktopSignup(): void {
+  if (platform.kind !== "web") localStorage.removeItem(PENDING_SIGNUP_KEY);
+}
+
+function rememberedDesktopSignup(): { signup_id: string; continuation_secret: string } | null {
+  if (platform.kind === "web") return null;
+  try {
+    const value = JSON.parse(localStorage.getItem(PENDING_SIGNUP_KEY) || "null");
+    if (!value?.signup_id || !value?.continuation_secret || (value.expires_at && Date.parse(value.expires_at) <= Date.now())) {
+      clearDesktopSignup();
+      return null;
+    }
+    return value;
+  } catch { clearDesktopSignup(); return null; }
+}
+
+export async function registerBeatGalerAccount(usernameBase: string, email: string, password: string): Promise<BeatGalerAccount | PendingBeatGalerSignup> {
   const result = await authRequest("/auth/register", { usernameBase, email, password, beatgalerUserId: await getBeatGalerInstallationId() });
+  if (result?.signup_pending) { rememberDesktopSignup(result); return result as PendingBeatGalerSignup; }
+  clearDesktopSignup();
   return await storeSession(result);
+}
+
+export async function verifyBeatGalerSignup(signupId: string, code: string, continuationSecret = ""): Promise<BeatGalerAccount | PendingBeatGalerSignup> {
+  const result = await authRequest("/auth/signup/verify", { signup_id: signupId, continuation_secret: continuationSecret, code });
+  if (result?.user) { clearDesktopSignup(); return await storeSession(result); }
+  if (result?.status === "ACTIVE") clearDesktopSignup();
+  return result as PendingBeatGalerSignup;
+}
+
+export async function resendBeatGalerSignup(signupId: string, continuationSecret = ""): Promise<void> {
+  await authRequest("/auth/signup/resend", { signup_id: signupId, continuation_secret: continuationSecret });
+}
+
+export async function resumeBeatGalerSignup(signupId = "", continuationSecret = ""): Promise<PendingBeatGalerSignup | BeatGalerAccount> {
+  const remembered = !signupId ? rememberedDesktopSignup() : null;
+  const result = await authRequest("/auth/signup/status", {
+    signup_id: signupId || remembered?.signup_id || "",
+    continuation_secret: continuationSecret || remembered?.continuation_secret || "",
+  });
+  if (result?.user) { clearDesktopSignup(); return await storeSession(result); }
+  if (result?.status === "ACTIVE") clearDesktopSignup();
+  if (platform.kind !== "web" && result?.signup_pending) {
+    return { ...result, continuation_secret: continuationSecret || remembered?.continuation_secret || "" } as PendingBeatGalerSignup;
+  }
+  return result as PendingBeatGalerSignup;
 }
 
 export async function loginBeatGalerAccount(email: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
@@ -548,6 +609,9 @@ export default function AccountGate({ children }: { children: React.ReactNode })
   const [confirmPassword, setConfirmPassword] = useState("");
   const [mfaCode, setMfaCode] = useState("");
   const [mfaRequired, setMfaRequired] = useState(false);
+  const [pendingSignup, setPendingSignup] = useState<PendingBeatGalerSignup | null>(null);
+  const [signupCode, setSignupCode] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unlockUsername, setUnlockUsername] = useState<string | null>(null);
@@ -557,10 +621,26 @@ export default function AccountGate({ children }: { children: React.ReactNode })
 
     let cancelled = false;
     void restoreBeatGalerSession()
-      .then(value => {
+      .then(async value => {
         if (cancelled) return;
         setAccount(value);
-        if (!value) setOptimisticRememberedSession(false);
+        if (!value) {
+          setOptimisticRememberedSession(false);
+          if (platform.kind !== "web" && rememberedDesktopSignup()) {
+            try {
+              const result = await resumeBeatGalerSignup();
+              if (cancelled) return;
+              if ("signup_pending" in result) {
+                if (result.status === "ACTIVE") setNotice("Your account is ready. Sign in with your email.");
+                else setPendingSignup(result);
+              } else setAccount(result);
+            } catch (error: any) {
+              if (["SIGNUP_NOT_FOUND", "SIGNUP_CONTINUATION_INVALID", "SIGNUP_EXPIRED"].includes(String(error?.code || ""))) {
+                clearDesktopSignup();
+              } else if (!cancelled) setError(String(error?.message || error));
+            }
+          }
+        }
       })
       .catch(e => { if (!cancelled) setError(String((e as Error)?.message || e)); })
       .finally(() => { if (!cancelled) setChecking(false); });
@@ -615,11 +695,52 @@ export default function AccountGate({ children }: { children: React.ReactNode })
       const value = registerMode
         ? await registerBeatGalerAccount(usernameBase, email, password)
         : await loginBeatGalerAccount(identifier, password, mfaCode);
-      setAccount(value);
+      if ("signup_pending" in value) {
+        setPassword(""); setConfirmPassword("");
+        if (value.signup_id) setPendingSignup(value);
+        else { setRegisterMode(false); setNotice("If this address is eligible, verification instructions will arrive shortly."); }
+      } else setAccount(value);
     } catch (e: any) {
       if (e?.mfa_required) setMfaRequired(true);
       setError(String(e?.message || e));
     } finally { setBusy(false); }
+  };
+
+  const confirmPendingSignup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy || !pendingSignup?.signup_id) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await verifyBeatGalerSignup(pendingSignup.signup_id, signupCode.trim(), pendingSignup.continuation_secret || "");
+      if ("signup_pending" in result) {
+        if (result.status === "ACTIVE") { setPendingSignup(null); setNotice("Your account is ready. Sign in with your email."); }
+        else setNotice("Account setup is still in progress. Check status shortly.");
+      } else { setPendingSignup(null); setAccount(result); }
+    } catch (e: any) { setError(String(e?.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const checkPendingSignup = async () => {
+    if (busy || !pendingSignup?.signup_id) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await resumeBeatGalerSignup(pendingSignup.signup_id, pendingSignup.continuation_secret || "");
+      if ("signup_pending" in result) {
+        if (result.status === "ACTIVE") { setPendingSignup(null); setNotice("Your account is ready. Sign in with your email."); }
+        else setNotice("Account setup is still in progress.");
+      } else { setPendingSignup(null); setAccount(result); }
+    } catch (e: any) { setError(String(e?.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const resendPendingSignup = async () => {
+    if (busy || !pendingSignup?.signup_id) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await resendBeatGalerSignup(pendingSignup.signup_id, pendingSignup.continuation_secret || "");
+      setNotice("If this signup is active, a new code will arrive shortly.");
+    } catch (e: any) { setError(String(e?.message || e)); }
+    finally { setBusy(false); }
   };
 
   const social = async (provider: OAuthProvider) => {
@@ -630,6 +751,17 @@ export default function AccountGate({ children }: { children: React.ReactNode })
   };
 
   return <div className="bg-account-gate">
+    {pendingSignup ? <form className="bg-account-card" onSubmit={confirmPendingSignup}>
+      <h1 className="bg-account-title">Check your email</h1>
+      <p className="bg-account-subtitle">Enter the verification code to finish creating your account.</p>
+      <UiField id="beatgaler-signup-code" label="VERIFICATION CODE" autoFocus value={signupCode} onChange={e => setSignupCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" autoComplete="one-time-code" maxLength={8} required />
+      {notice && <UiFeedback tone="info">{notice}</UiFeedback>}
+      {error && <UiFeedback tone="error" role="alert">{sanitizeUserVisibleText(error)}</UiFeedback>}
+      <UiButton variant="primary" fullWidth loading={busy} type="submit">Verify and create account</UiButton>
+      <UiButton variant="secondary" fullWidth disabled={busy} type="button" onClick={() => void resendPendingSignup()}>Resend code</UiButton>
+      <UiButton variant="ghost" fullWidth disabled={busy} type="button" onClick={() => void checkPendingSignup()}>Check setup status</UiButton>
+      <UiButton variant="ghost" fullWidth type="button" onClick={() => { setPendingSignup(null); setRegisterMode(false); }}>Back to sign in</UiButton>
+    </form> :
     <form className="bg-account-card" onSubmit={submit} autoComplete="on">
       <h1 className="bg-account-title">BeatGaler</h1>
       <p className="bg-account-subtitle">{registerMode ? "Create your BeatGaler account" : "Sign in to your BeatGaler account"}</p>
@@ -669,11 +801,12 @@ export default function AccountGate({ children }: { children: React.ReactNode })
         {mfaRequired && <UiField id="beatgaler-login-mfa" label="AUTHENTICATOR CODE" inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" />}
       </>}
 
+      {notice && <UiFeedback tone="info">{notice}</UiFeedback>}
       {error && <UiFeedback tone="error" role="alert" aria-live="assertive">{sanitizeUserVisibleText(error)}</UiFeedback>}
       <UiButton className="bg-account-submit" variant="primary" fullWidth loading={busy} type="submit">{registerMode ? "Create account" : "Sign in"}</UiButton>
       <UiButton className="bg-account-switch" variant="ghost" fullWidth type="button" disabled={busy} onClick={() => { setRegisterMode(v => !v); setError(null); setMfaRequired(false); setMfaCode(""); setPassword(""); setConfirmPassword(""); }}>{registerMode ? "Already have an account? Sign in" : "New to BeatGaler? Create account"}</UiButton>
       <div className="bg-account-footer">Normal BeatGaler usernames use username#1234. Claiming X replaces it with your official X username.</div>
-    </form>
+    </form>}
     {unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>} 
   </div>;
 }
