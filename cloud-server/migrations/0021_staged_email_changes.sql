@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE IF NOT EXISTS auth_email_changes (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   request_id TEXT NOT NULL UNIQUE,
@@ -25,3 +27,5 @@ CREATE INDEX IF NOT EXISTS auth_email_changes_state_expiry_idx
 CREATE INDEX IF NOT EXISTS auth_email_changes_notice_idx
   ON auth_email_changes(state, old_notice_sent_at)
   WHERE state='CONFIRMED' AND old_notice_sent_at IS NULL;
+
+COMMIT;
