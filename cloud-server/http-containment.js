@@ -92,10 +92,9 @@ function createHttpContainment(options = {}) {
   }
 
   function findLoginUser(req) {
-    const identifier = String(req.body?.identifier || req.body?.username || "").trim().toLowerCase();
+    const identifier = String(req.body?.email || req.body?.identifier || "").trim().toLowerCase();
     if (!identifier) return null;
     return (accountsData().users || []).find(user =>
-      String(user?.username || "").trim().toLowerCase() === identifier ||
       String(user?.email || "").trim().toLowerCase() === identifier
     ) || null;
   }
@@ -202,7 +201,7 @@ function createHttpContainment(options = {}) {
       if (candidate && String(current.beatgalerAccountId || "") !== String(candidate.id || "")) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
       return next();
     }
-    if (!(await reserveInstallationClaim(res, installationId, candidate?.id || `login:${String(req.body?.identifier || req.body?.username || "").trim().toLowerCase()}`))) return;
+    if (!(await reserveInstallationClaim(res, installationId, candidate?.id || `login:${String(req.body?.email || req.body?.identifier || "").trim().toLowerCase()}`))) return;
     next();
   }
 
@@ -375,7 +374,7 @@ function createHttpContainment(options = {}) {
   }
 
   function registrationGate(_req, res, next) {
-    if (String(env.NODE_ENV || "") === "production" && String(env.BEATGALER_PUBLIC_REGISTRATION || "") !== "1") return sendJson(res, 503, "Public registration is temporarily unavailable.");
+    if (String(env.BEATGALER_PUBLIC_REGISTRATION || "") !== "1") return sendJson(res, 503, "Public registration is temporarily unavailable.");
     next();
   }
 

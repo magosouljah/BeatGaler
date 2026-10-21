@@ -69,6 +69,11 @@ async function findStorageChannelByAccountId(client, accountId) {
     error.code = "DUPLICATE_STORAGE_GROUPS";
     throw error;
   }
+  if (!matches.length && dialogs.length >= 1000) {
+    const error = new Error('Telegram storage reconciliation did not inspect every dialog.');
+    error.code = 'STORAGE_RECONCILIATION_INCOMPLETE';
+    throw error;
+  }
   return matches[0] || null;
 }
 

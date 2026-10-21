@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const { hasUsablePassword } = require('./sensitive-auth-containment');
 
 const FETCH_PATCH = Symbol.for('beatgaler.authPublicRegistration.fetchPatch');
 const FS_PATCH = Symbol.for('beatgaler.authPublicRegistration.fsPatch');
@@ -24,7 +25,7 @@ function normalizeUsername(value) {
 }
 
 function publicRegistrationOpen(env = process.env) {
-  return String(env.NODE_ENV || '') !== 'production' || String(env.BEATGALER_PUBLIC_REGISTRATION || '') === '1';
+  return String(env.BEATGALER_PUBLIC_REGISTRATION || '') === '1';
 }
 
 function providerSubject(user, provider) {
@@ -139,10 +140,12 @@ function oauthAuthorityError(error) {
     ['GOOGLE_EMAIL_CONFLICT', 'Sign in to the existing BeatGaler account, then connect Google from Settings.'],
     ['PROVIDER_ALREADY_CONNECTED', 'That provider account is already connected to another BeatGaler account.'],
     ['X_HANDLE_CASEFOLD_COLLISION', 'This username needs migration before X sign-in can continue.'],
+    ['X_HANDLE_NOT_RECLAIMABLE', 'This username belongs to another BeatGaler account.'],
+    ['X_HANDLE_ATOMIC_CLAIM_REQUIRED', 'This X handle is being reconciled. Please try again later.'],
     ['X_HANDLE_INVALID', 'X returned an invalid username.'],
     ['X_USERNAME_SPACE_EXHAUSTED', 'A temporary BeatGaler username could not be allocated.'],
   ]);
-  const conflictCodes = new Set(['GOOGLE_EMAIL_CONFLICT', 'PROVIDER_ALREADY_CONNECTED', 'X_HANDLE_CASEFOLD_COLLISION']);
+  const conflictCodes = new Set(['GOOGLE_EMAIL_CONFLICT', 'PROVIDER_ALREADY_CONNECTED', 'X_HANDLE_CASEFOLD_COLLISION', 'X_HANDLE_NOT_RECLAIMABLE', 'X_HANDLE_ATOMIC_CLAIM_REQUIRED']);
   const deniedCodes = new Set(['PUBLIC_REGISTRATION_CLOSED', 'GOOGLE_EMAIL_NOT_VERIFIED', 'X_HANDLE_INVALID']);
   return {
     code,
@@ -159,6 +162,7 @@ function installAuthPublicRegistrationHardening(express, {
   env = process.env,
   getAccountLifecycle = () => express?.application?.__beatgalerAccountLifecycleRuntime || null,
   getProviderIdentityAuthority = () => null,
+  getAuthPool = () => null,
   now = () => Date.now(),
 } = {}) {
   const application = express?.application;
@@ -200,7 +204,36 @@ function installAuthPublicRegistrationHardening(express, {
     req.body.email = email;
     req.body.identifier = email;
     delete req.body.username;
-    next();
+    const pool = getAuthPool?.();
+    if (!pool) return next();
+    // A process with an old local snapshot must not authenticate the previous
+    // email after another process committed a staged email change.
+    void pool.query('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1', [email]).then(result => {
+      const local = accountsSnapshot().users.find(user => normalizeEmail(user?.email) === email);
+      if (!local || String(local.id) !== String(result.rows[0]?.id || '')) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+      next();
+    }).catch(() => res.status(503).json({ error: 'Authentication service is temporarily unavailable.' }));
+  }
+
+  function disconnectProvider(req, res, next) {
+    const info = sessionInfo(req);
+    if (!info) return next();
+    const authority = getProviderIdentityAuthority?.();
+    if (!authority?.prepareDisconnect) {
+      if (String(env.NODE_ENV || '') !== 'production') return next();
+      return res.status(503).json({ error: 'Authentication service is temporarily unavailable.', code: 'AUTH_SERVICE_UNAVAILABLE' });
+    }
+    void authority.prepareDisconnect({
+      provider: req?.body?.provider,
+      userId: info.userId,
+      usablePassword: hasUsablePassword(lifecycle(), info),
+    }).then(() => next()).catch(error => {
+      const code = String(error?.code || 'OAUTH_IDENTITY_AUTHORITY_UNAVAILABLE');
+      const status = code === 'LAST_SIGNIN_METHOD_REQUIRED' ? 409 : code === 'OAUTH_PROVIDER_UNSUPPORTED' ? 400 : 503;
+      res.status(status).json({ error: status === 409 ? 'Add another usable sign-in method before disconnecting this provider.' : 'Authentication service is temporarily unavailable.', code });
+    });
   }
 
   function decorateOAuthStart(req, res, next) {
@@ -291,6 +324,7 @@ function installAuthPublicRegistrationHardening(express, {
     if (pathName.startsWith('/auth/')) extras.push((req, res, next) => sanitizeAuthJson(pathName, req, res, next));
     if (pathName === '/auth/login') extras.push(emailOnlyLogin);
     if (pathName === '/auth/oauth/start') extras.push(decorateOAuthStart);
+    if (pathName === '/auth/oauth/disconnect') extras.push(disconnectProvider);
     return previousPost.call(this, routePath, ...extras, ...handlers);
   };
 

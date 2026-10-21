@@ -9,6 +9,7 @@ const {
   publicRegistrationOpen,
   oauthDecision,
   authErrorLooksInternal,
+  installAuthPublicRegistrationHardening,
 } = require('../auth-public-registration-hardening');
 const { hasUsablePassword } = require('../sensitive-auth-containment');
 const {
@@ -54,7 +55,7 @@ assert.equal(validEmail('person@example.com'), true);
 assert.equal(validEmail('pepito#1234'), false);
 assert.equal(normalizeUsername(' @PePiTo '), 'pepito');
 
-assert.equal(publicRegistrationOpen({ NODE_ENV: 'development', BEATGALER_PUBLIC_REGISTRATION: '0' }), true);
+assert.equal(publicRegistrationOpen({ NODE_ENV: 'development', BEATGALER_PUBLIC_REGISTRATION: '0' }), false);
 assert.equal(publicRegistrationOpen({ NODE_ENV: 'production', BEATGALER_PUBLIC_REGISTRATION: '0' }), false);
 assert.equal(publicRegistrationOpen({ NODE_ENV: 'production', BEATGALER_PUBLIC_REGISTRATION: '1' }), true);
 
@@ -230,4 +231,44 @@ assert.equal(authErrorLooksInternal('That Google account is already connected to
   assert.equal(randomManualCode(zeroRandom), '00000000');
 }
 
-console.log('auth-public-registration-hardening tests: PASS');
+(async () => {
+  const routes = new Map();
+  const app = {
+    post(path, ...handlers) { routes.set(path, handlers); },
+    get() {},
+  };
+  const calls = [];
+  const info = { userId: 'usr_stable', user: { providers: { google: { id: 'g1' }, x: { id: 'x1' } } } };
+  installAuthPublicRegistrationHardening({ application: app }, {
+    env: { NODE_ENV: 'production', BEATGALER_PUBLIC_REGISTRATION: '0' },
+    getAccountLifecycle: () => ({ _test: { sessionInfoFromRequest: () => info } }),
+    getProviderIdentityAuthority: () => ({
+      async prepareDisconnect(input) { calls.push(input); return { ok: true }; },
+    }),
+  });
+  app.post('/auth/oauth/disconnect', () => {});
+  const middleware = routes.get('/auth/oauth/disconnect')[1];
+  await new Promise((resolve, reject) => {
+    const req = { body: { provider: 'x' } };
+    const res = { status() { reject(new Error('unlink unexpectedly rejected')); return this; }, json() {} };
+    middleware(req, res, resolve);
+  });
+  assert.deepEqual(calls, [{ provider: 'x', userId: 'usr_stable', usablePassword: false }]);
+
+  const loginRoutes = new Map();
+  const loginApp = { post(path, ...handlers) { loginRoutes.set(path, handlers); }, get() {} };
+  let queries = 0;
+  installAuthPublicRegistrationHardening({ application: loginApp }, {
+    getAccountLifecycle: () => ({ _test: { accountsSnapshot: () => ({ users: [{ id: 'usr_stable', email: 'old@example.com' }] }) } }),
+    getAuthPool: () => ({ async query() { queries += 1; return { rows: [] }; } }),
+  });
+  loginApp.post('/auth/login', () => {});
+  const loginGuard = loginRoutes.get('/auth/login')[1];
+  const loginResult = await new Promise(resolve => {
+    const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(payload) { resolve({ status: this.statusCode, payload }); } };
+    loginGuard({ body: { email: 'old@example.com' } }, res, () => resolve({ status: 200 }));
+  });
+  assert.equal(loginResult.status, 401);
+  assert.equal(queries, 1);
+  console.log('auth-public-registration-hardening tests: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });

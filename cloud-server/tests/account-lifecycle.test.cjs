@@ -337,6 +337,32 @@ async function main() {
     fs.rmSync(authorityDir, { recursive: true, force: true });
   }
 
+  {
+    const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-account-lifecycle-shared-'));
+    const localHash = sha256('local-session');
+    const foreignHash = sha256('foreign-session');
+    fs.writeFileSync(path.join(sharedDir, 'accounts-data.json'), JSON.stringify({
+      users: [{ id: 'usr_shared', username: 'shared#0001', email: 'shared@example.com' }],
+      sessions: { [localHash]: { userId: 'usr_shared', createdAt: clock, expiresAt: clock + 60_000 } },
+    }));
+    const queries = [];
+    const revoked = [];
+    const sharedRuntime = createAccountLifecycleRuntime({
+      dataDir: sharedDir,
+      pool: { async query(sql) {
+        queries.push(sql);
+        if (sql.startsWith('SELECT session_key_hash')) return { rows: [{ session_key_hash: localHash }, { session_key_hash: foreignHash }] };
+        return { rows: [] };
+      } },
+      getCapabilityStore: () => ({ async revokeAuthSession(input) { revoked.push(input.authSessionHash); } }),
+    });
+    assert.equal(await sharedRuntime._test.revokeUserSessions('usr_shared', 'password_reset'), 2);
+    assert.deepEqual(new Set(revoked), new Set([localHash, foreignHash]));
+    assert.equal(queries.some(sql => sql.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')), true);
+    assert.equal(queries.some(sql => sql.startsWith("UPDATE direct_capabilities SET status='REVOKED'")), true);
+    fs.rmSync(sharedDir, { recursive: true, force: true });
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('account-lifecycle: PASS');
 }

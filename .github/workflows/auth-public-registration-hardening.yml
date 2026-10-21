@@ -24,6 +24,7 @@ jobs:
           node --check cloud-server/auth-public-registration-hardening.js
           node --check cloud-server/provider-identity-authority.js
           node --check cloud-server/sensitive-auth-containment.js
+          node --check cloud-server/session-security.js
           node --check cloud-server/auth-durable-abuse-controls.js
           node --check cloud-server/staged-email-change.js
           node --check cloud-server/staged-email-change-routes.js

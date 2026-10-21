@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   removedKeys,
   authSnapshotDelta,
+  mergeAuthSnapshotDelta,
 } = require('../postgres-auth-multiprocess-compat');
 
 {
@@ -61,4 +62,22 @@ const {
   assert.equal(delta.removed_providers.includes('foreign-provider'), false);
 }
 
-console.log('postgres-auth-multiprocess-compat tests: PASS');
+// A stale process adding a session must not restore an email or provider that
+// another process changed directly in PostgreSQL after this snapshot loaded.
+(async () => {
+  const original = {
+    users: [{ id: 'u1', username: 'alpha#0001', email: 'old@example.com',
+      providers: { x: { id: 'x-alpha' } } }],
+    sessions: {},
+  };
+  const current = JSON.parse(JSON.stringify(original));
+  current.sessions[`${'a'.repeat(64)}`] = { userId: 'u1', createdAt: 1, expiresAt: 9999999999999 };
+  const statements = [];
+  const client = { async query(sql) { statements.push(String(sql)); return { rows: [], rowCount: 0 }; }, release() {} };
+  await mergeAuthSnapshotDelta({ async connect() { return client; } }, current,
+    { key: Buffer.alloc(32, 7), keyVersion: 1 }, original);
+  assert.equal(statements.some(sql => /(?:INSERT INTO|UPDATE) users\b/.test(sql)), false);
+  assert.equal(statements.some(sql => /INSERT INTO provider_identities\b/.test(sql)), false);
+  assert.equal(statements.some(sql => /INSERT INTO auth_sessions\b/.test(sql)), true);
+  console.log('postgres-auth-multiprocess-compat tests: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });

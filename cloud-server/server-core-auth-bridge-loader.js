@@ -60,6 +60,9 @@ function bridgeSuffix() {
   return `
 
 ;module.exports.__beatgalerAuthBridge = Object.freeze({
+  userIdByUsername(usernameInput) {
+    return beatGalerUsers.get(normalizeBeatGalerUsername(usernameInput))?.id || null;
+  },
   adoptIdentityUser(input = {}) {
     const userId = String(input.id || '').trim();
     const nextUsername = normalizeBeatGalerUsername(input.username || '');
@@ -138,6 +141,19 @@ function bridgeSuffix() {
     user.usernameSource = String(sourceInput || 'beatgaler');
     beatGalerUsers.set(nextUsername, user);
     return { found: true, userId: user.id, username: user.username };
+  },
+
+  disconnectProviderByUserId(userIdInput, providerInput, authoritativeUsername) {
+    const userId = String(userIdInput || '').trim();
+    const provider = String(providerInput || '').toLowerCase();
+    const user = beatGalerUsersById.get(userId) || null;
+    if (!user) return { found: false, userId };
+    if (authoritativeUsername && normalizeBeatGalerUsername(user.username) !== normalizeBeatGalerUsername(authoritativeUsername)) {
+      this.setUsernameByUserId(userId, authoritativeUsername, 'beatgaler');
+    }
+    if (user.providers) delete user.providers[provider];
+    saveAuthData();
+    return { found: true, userId, username: user.username };
   },
 
   adoptOrCreatePasswordUser(input = {}) {

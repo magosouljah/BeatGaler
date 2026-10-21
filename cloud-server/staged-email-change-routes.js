@@ -5,7 +5,8 @@ function statusForEmailChangeError(error) {
   if (code === 'SESSION_REQUIRED' || code.startsWith('REAUTH_')) return 401;
   if (code === 'EMAIL_CHANGE_CONFLICT' || code === 'EMAIL_CHANGE_STALE') return 409;
   if (code === 'EMAIL_CHANGE_DELIVERY_UNAVAILABLE' || code === 'EMAIL_CHANGE_DELIVERY_FAILED'
-      || code === 'EMAIL_VERIFICATION_AUTHORITY_UNAVAILABLE' || code === 'EMAIL_CHANGE_LOCAL_COMMIT_UNAVAILABLE') return 503;
+      || code === 'EMAIL_VERIFICATION_AUTHORITY_UNAVAILABLE' || code === 'EMAIL_CHANGE_LOCAL_COMMIT_UNAVAILABLE'
+      || code === 'EMAIL_CHANGE_NOTICE_PENDING') return 503;
   return 400;
 }
 
@@ -26,6 +27,7 @@ function publicEmailChangeError(error) {
     ['EMAIL_CHANGE_STALE', 'The account email changed while this request was pending. Start again.'],
     ['EMAIL_CHANGE_DELIVERY_UNAVAILABLE', 'Email delivery is temporarily unavailable.'],
     ['EMAIL_CHANGE_DELIVERY_FAILED', 'The verification message could not be delivered. Retry safely.'],
+    ['EMAIL_CHANGE_NOTICE_PENDING', 'The previous email-change notice is still being delivered. Try again shortly.'],
   ]);
   return { error: safe.get(code) || 'Email change is temporarily unavailable.', code };
 }

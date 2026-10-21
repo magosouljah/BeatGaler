@@ -154,6 +154,7 @@ function createAccountLifecycleRuntime({
   now = () => Date.now(),
   randomBytes = size => crypto.randomBytes(size),
   emailNotifier = null,
+  pool = null,
   getCapabilityStore = () => null,
   onEmailVerified = null,
 } = {}) {
@@ -378,9 +379,13 @@ function createAccountLifecycleRuntime({
 
   async function revokeUserSessions(userId, reason) {
     const snapshot = accountsSnapshot();
-    const hashes = Object.entries(snapshot.sessions)
+    const localHashes = Object.entries(snapshot.sessions)
       .filter(([, session]) => String(session?.userId || session?.user_id || '') === String(userId))
       .map(([sessionHash]) => sessionHash);
+    const durable = pool
+      ? await pool.query('SELECT session_key_hash FROM auth_sessions WHERE user_id=$1', [String(userId)])
+      : { rows: [] };
+    const hashes = [...new Set([...localHashes, ...durable.rows.map(row => String(row.session_key_hash))])];
     const store = getCapabilityStore?.();
     if (hashes.length && (!store || typeof store.revokeAuthSession !== 'function')) {
       const error = new Error('Capability revocation store is unavailable.');
@@ -388,6 +393,10 @@ function createAccountLifecycleRuntime({
       throw error;
     }
     for (const sessionHash of hashes) await store.revokeAuthSession({ authSessionHash: sessionHash, reason });
+    if (pool) {
+      await pool.query("UPDATE direct_capabilities SET status='REVOKED',revoked_at=now(),revoke_reason=$2 WHERE user_id=$1 AND status IN ('ACTIVE','AUTHORIZED')", [String(userId), String(reason)]);
+      await pool.query('DELETE FROM auth_sessions WHERE user_id=$1', [String(userId)]);
+    }
     for (const sessionHash of hashes) revokedSessionHashes.add(sessionHash);
     saveState();
     scrubAccountsFile();
@@ -686,11 +695,11 @@ function createAccountLifecycleRuntime({
 
   function loginRecoveryMiddleware(req, res, next) {
     const code = String(req?.body?.mfaCode || '');
-    const identifier = String(req?.body?.identifier || req?.body?.username || '');
+    const identifier = String(req?.body?.email || req?.body?.identifier || '');
     const snapshot = accountsSnapshot();
-    const user = userByIdentifier(identifier, snapshot);
+    const user = userByEmail(identifier, snapshot);
     if (!user) return next();
-    if (deletedUserIds.has(String(user.id))) return res.status(401).json({ error: 'Invalid username/email or password.' });
+    if (deletedUserIds.has(String(user.id))) return res.status(401).json({ error: 'Invalid email or password.' });
     if (!code.startsWith(RECOVERY_PREFIX) || !validateRecoveryCode(String(user.id), code)) return next();
     if (!user.mfaSecret) return next();
     req.body.mfaCode = totpCode(user.mfaSecret, now());
@@ -715,7 +724,7 @@ function createAccountLifecycleRuntime({
       let nextPayload = payload;
       if (success && req.beatgalerLifecycleRecoveryCode) {
         const info = routePath === '/auth/login'
-          ? userByIdentifier(String(req?.body?.identifier || req?.body?.username || ''))
+          ? userByEmail(String(req?.body?.email || req?.body?.identifier || ''))
           : sessionInfoFromRequest(req)?.user;
         if (info?.id) validateRecoveryCode(String(info.id), req.beatgalerLifecycleRecoveryCode, { consume: true });
       }

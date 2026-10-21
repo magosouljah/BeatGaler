@@ -111,6 +111,15 @@ async function main() {
   }
 
   {
+    const req = baseReq({ pathName: '/auth/signup/verify', web: true });
+    const res = makeRes();
+    runtime.decorateResponse('/auth/signup/verify', req, res, () => {});
+    res.json({ ok: true, token: tokenOne, user: { id: 'usr_1' } });
+    assert.equal(res.body.token, undefined);
+    assert.equal(res.body.session_transport, 'cookie');
+  }
+
+  {
     const req = baseReq({ token: tokenOne, pathName: '/auth/sessions', body: { beatgalerUserId: 'desktop-a' } });
     const res = makeRes();
     runtime.requestMiddleware(req, res, () => {});
@@ -197,6 +206,64 @@ async function main() {
     assert.equal(res.body.revoked_count, 2);
     assert.deepEqual(new Set(revoked.map(item => item.authSessionHash)), new Set([hashOne, hashTwo]));
     fs.rmSync(freshDir, { recursive: true, force: true });
+  }
+
+  {
+    const pgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-session-security-pg-'));
+    writeAccounts(pgDir, { [hashOne]: { userId: 'usr_1', createdAt: now - 10_000, expiresAt: now + 100_000 } });
+    let live = true;
+    const pgRuntime = createSessionSecurityRuntime({
+      dataDir: pgDir,
+      now: () => now,
+      pool: { async query(sql, params) {
+        assert.match(sql, /FROM auth_sessions/);
+        assert.deepEqual(params, [hashOne, 'usr_1']);
+        return { rows: live ? [{ '?column?': 1 }] : [] };
+      } },
+    });
+    const request = () => new Promise(resolve => {
+      const res = makeRes();
+      pgRuntime.requestMiddleware(baseReq({ token: tokenOne }), res, () => resolve({ accepted: true, res }));
+      setImmediate(() => { if (res.body) resolve({ accepted: false, res }); });
+    });
+    assert.equal((await request()).accepted, true);
+    live = false;
+    const revoked = await request();
+    assert.equal(revoked.accepted, false);
+    assert.equal(revoked.res.body.code, 'SESSION_REVOKED');
+    fs.rmSync(pgDir, { recursive: true, force: true });
+  }
+
+  {
+    const pgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-session-security-shared-'));
+    writeAccounts(pgDir, { [hashOne]: { userId: 'usr_1', createdAt: now - 10_000, expiresAt: now + 100_000 } });
+    const durable = new Set([hashOne, hashTwo]);
+    const revoked = [];
+    const shared = createSessionSecurityRuntime({
+      dataDir: pgDir,
+      now: () => now,
+      pool: { async query(sql, params) {
+        if (sql.startsWith('SELECT 1 FROM auth_sessions')) return { rows: durable.has(params[0]) ? [{}] : [] };
+        if (sql.startsWith('SELECT session_key_hash,created_at,expires_at FROM auth_sessions')) {
+          return { rows: [...durable].map(session_key_hash => ({ session_key_hash, created_at: new Date(now - 1_000), expires_at: new Date(now + 100_000) })) };
+        }
+        if (sql.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')) { durable.clear(); return { rows: [] }; }
+        throw new Error(`Unexpected session SQL: ${sql}`);
+      } },
+      getCapabilityStore: () => ({ async revokeAuthSession(input) { revoked.push(input.authSessionHash); } }),
+    });
+    const req = baseReq({ token: tokenOne, pathName: '/auth/sessions/revoke-all' });
+    const res = makeRes();
+    await new Promise(resolve => shared.requestMiddleware(req, res, resolve));
+    const listed = makeRes();
+    shared.listSessions(req, listed);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(listed.body.sessions.length, 2, 'sessions from another process are listed');
+    await shared.revokeAll(req, res);
+    assert.equal(res.body.revoked_count, 2);
+    assert.deepEqual(new Set(revoked), new Set([hashOne, hashTwo]));
+    assert.equal(durable.size, 0);
+    fs.rmSync(pgDir, { recursive: true, force: true });
   }
 
   fs.rmSync(dir, { recursive: true, force: true });

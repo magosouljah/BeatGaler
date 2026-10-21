@@ -259,8 +259,8 @@ export async function registerBeatGalerAccount(usernameBase: string, email: stri
   return await storeSession(result);
 }
 
-export async function loginBeatGalerAccount(identifier: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
-  const result = await authRequest("/auth/login", { identifier, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() });
+export async function loginBeatGalerAccount(email: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
+  const result = await authRequest("/auth/login", { email, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() });
   return await storeSession(result);
 }
 
@@ -664,7 +664,7 @@ export default function AccountGate({ children }: { children: React.ReactNode })
         <UiField id="beatgaler-register-password" label="PASSWORD" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
         <UiField id="beatgaler-register-password-confirm" label="CONFIRM PASSWORD" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" />
       </> : <>
-        <UiField id="beatgaler-login-identifier" label="USERNAME OR EMAIL" autoFocus value={identifier} onChange={e => setIdentifier(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="username#1234 or email@example.com" />
+        <UiField id="beatgaler-login-identifier" label="EMAIL" type="email" autoFocus value={identifier} onChange={e => setIdentifier(e.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="email@example.com" />
         <UiField id="beatgaler-login-password" label="PASSWORD" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" />
         {mfaRequired && <UiField id="beatgaler-login-mfa" label="AUTHENTICATOR CODE" inputMode="numeric" maxLength={6} value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" />}
       </>}

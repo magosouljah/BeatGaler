@@ -68,7 +68,7 @@ try {
     assert.equal(req.beatgalerAuthorizedTenantId, userId);
   }
   {
-    const req = request({ body: { beatgalerUserId: "other_install", identifier: "tester#0001" } });
+    const req = request({ body: { beatgalerUserId: "other_install", email: "tester@example.test" } });
     const res = responseRecorder(); let nextCalled = false;
     await containment.guardLoginInstallation(req, res, () => { nextCalled = true; });
     assert.equal(res.statusCode, 403); assert.equal(nextCalled, false, "login must not rebind another account's installation");

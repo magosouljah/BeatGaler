@@ -72,7 +72,7 @@ async function xSubjectsForUser(client, userId) {
 }
 
 async function providerForUser(client, userId, provider) {
-  const userResult = await client.query('SELECT id,username,username_source FROM users WHERE id=$1 FOR UPDATE', [String(userId)]);
+  const userResult = await client.query('SELECT id,username,username_source,email,password_hash FROM users WHERE id=$1 FOR UPDATE', [String(userId)]);
   const user = userResult.rows[0] || null;
   if (!user) return null;
   const providerResult = await client.query('SELECT provider_subject FROM provider_identities WHERE user_id=$1 AND provider=$2 LIMIT 1', [String(userId), String(provider)]);
@@ -102,7 +102,7 @@ function bridgeIdentityInput(row, provider, subject, identity = {}) {
   };
 }
 
-function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) {
+function createProviderIdentityAuthority({ pool, getBridge = () => null, flushAuthority = async () => {} } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('Provider identity authority requires PostgreSQL.');
 
   async function prepareGoogle({ identity, linkUserId = null, registrationOpen = false } = {}) {
@@ -145,6 +145,7 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
     const client = await pool.connect();
     let existing = null;
     let renamed = null;
+    let staleLocal = null;
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`provider:x:${subject}`]);
@@ -166,6 +167,14 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
         const subjects = await xSubjectsForUser(client, handleOwner.id);
         const sameSubject = subjects.includes(subject);
         if (!sameSubject) {
+          if (!existing) {
+            // Creating B happens later in the legacy callback. Moving A now
+            // would commit only half of the transfer if that callback fails.
+            throw coded('This X handle needs an atomic account claim before sign-in can continue.', 'X_HANDLE_ATOMIC_CLAIM_REQUIRED');
+          }
+          if (String(handleOwner.username_source || '') !== 'x' || subjects.length === 0) {
+            throw coded('This username belongs to another BeatGaler account.', 'X_HANDLE_NOT_RECLAIMABLE');
+          }
           const temporary = await allocateTemporaryUsername(client, handle, handleOwner.id);
           await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [String(handleOwner.id), temporary]);
           renamed = { userId: String(handleOwner.id), from: String(handleOwner.username), to: temporary };
@@ -189,6 +198,14 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
           profileSyncedAt: Date.now(),
         })]);
         existing = await providerOwner(client, 'x', subject);
+        const localOwnerId = getBridge()?.userIdByUsername?.(handle);
+        if (localOwnerId && String(localOwnerId) !== String(existing.id) && !renamed) {
+          const ownerResult = await client.query('SELECT id,username,username_source FROM users WHERE id=$1', [String(localOwnerId)]);
+          const owner = ownerResult.rows[0];
+          if (owner && String(owner.username).toLowerCase() !== handle) {
+            staleLocal = { userId: String(owner.id), username: String(owner.username), source: String(owner.username_source || 'beatgaler') };
+          }
+        }
       }
       await client.query('COMMIT');
     } catch (error) {
@@ -200,35 +217,45 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
 
     const bridge = getBridge();
     if (renamed) bridge?.setUsernameByUserId?.(renamed.userId, renamed.to, 'beatgaler');
+    if (staleLocal) bridge?.setUsernameByUserId?.(staleLocal.userId, staleLocal.username, staleLocal.source);
     if (existing) bridge?.adoptIdentityUser?.(bridgeIdentityInput(existing, 'x', subject, identity));
     return { allow: true, existingUserId: existing ? String(existing.id) : null, handle, renamed };
   }
 
-  async function prepareDisconnect({ provider: providerInput, userId: userIdInput } = {}) {
+  async function prepareDisconnect({ provider: providerInput, userId: userIdInput, usablePassword = false } = {}) {
     const provider = String(providerInput || '').trim().toLowerCase();
     const userId = String(userIdInput || '').trim();
     if (!userId) throw coded('BeatGaler user id is required.', 'USER_ID_REQUIRED');
     if (!['google', 'x'].includes(provider)) throw coded('Unsupported OAuth provider.', 'OAUTH_PROVIDER_UNSUPPORTED');
+    if (typeof getBridge()?.disconnectProviderByUserId !== 'function') {
+      throw coded('Local provider identity bridge is unavailable.', 'OAUTH_IDENTITY_BRIDGE_UNAVAILABLE');
+    }
+    // Drain local writes that were queued before the direct PostgreSQL mutation.
+    await flushAuthority();
 
     const client = await pool.connect();
     let temporary = null;
+    let authoritativeUsername = null;
     let connected = false;
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`provider-unlink:${provider}:${userId}`]);
       const current = await providerForUser(client, userId, provider);
       if (!current) throw coded('BeatGaler account not found.', 'ACCOUNT_NOT_FOUND');
+      authoritativeUsername = String(current.user.username || '');
       connected = Boolean(current.subject);
-      if (!connected) {
-        await client.query('COMMIT');
-        return { ok: true, connected: false, provider, userId };
+      if (connected) {
+        const others = await client.query('SELECT provider FROM provider_identities WHERE user_id=$1 AND provider<>$2 LIMIT 1', [userId, provider]);
+        if (!others.rows.length && !(usablePassword && current.user.password_hash && current.user.email)) {
+          throw coded('Add another usable sign-in method before disconnecting this provider.', 'LAST_SIGNIN_METHOD_REQUIRED');
+        }
+        if (provider === 'x' && String(current.user.username_source || '') === 'x') {
+          temporary = await allocateTemporaryUsername(client, current.user.username, userId);
+          await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [userId, temporary]);
+          authoritativeUsername = temporary;
+        }
+        await client.query('DELETE FROM provider_identities WHERE user_id=$1 AND provider=$2', [userId, provider]);
       }
-
-      if (provider === 'x' && String(current.user.username_source || '') === 'x') {
-        temporary = await allocateTemporaryUsername(client, current.user.username, userId);
-        await client.query("UPDATE users SET username=$2,username_source='beatgaler',updated_at=now() WHERE id=$1", [userId, temporary]);
-      }
-      await client.query('DELETE FROM provider_identities WHERE user_id=$1 AND provider=$2', [userId, provider]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -237,7 +264,8 @@ function createProviderIdentityAuthority({ pool, getBridge = () => null } = {}) 
       client.release();
     }
 
-    if (temporary) getBridge()?.setUsernameByUserId?.(userId, temporary, 'beatgaler');
+    getBridge()?.disconnectProviderByUserId?.(userId, provider, authoritativeUsername);
+    await flushAuthority();
     return { ok: true, connected, provider, userId, ...(temporary ? { username: temporary } : {}) };
   }
 

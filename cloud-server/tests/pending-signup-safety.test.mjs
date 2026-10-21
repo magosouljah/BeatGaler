@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const { createPendingSignupService } = require('../pending-signup-service');
 const { digest } = require('../pending-signup-runtime');
 const { retryDelay, createAuthDeliveryWorker } = require('../auth-delivery-worker');
-const { statusForError, publicError, shouldOwnRegister } = require('../pending-signup-boundary');
+const { statusForError, publicError, shouldOwnRegister, installPendingSignupBoundary } = require('../pending-signup-boundary');
 
 function poolWithClient(queryImpl) {
   const client = {
@@ -23,7 +23,7 @@ function poolWithClient(queryImpl) {
 }
 
 assert.equal(shouldOwnRegister({ NODE_ENV: 'production' }), true);
-assert.equal(shouldOwnRegister({ NODE_ENV: 'development' }), false);
+assert.equal(shouldOwnRegister({ NODE_ENV: 'development' }), true);
 assert.equal(shouldOwnRegister({ NODE_ENV: 'development', BEATGALER_PENDING_SIGNUP_ENABLED: '1' }), true);
 assert.equal(shouldOwnRegister({ NODE_ENV: 'development', BEATGALER_PUBLIC_REGISTRATION: '1' }), true);
 assert.equal(statusForError({ code: 'SIGNUP_RESEND_COOLDOWN' }), 429);
@@ -193,6 +193,26 @@ assert.equal(retryDelay(100), 3_600_000);
   assert.equal(completions[0][1].ok, false);
   assert.equal(completions[0][1].errorCode, 'SES_TIMEOUT');
   assert.equal(completions[0][1].retryDelayMs, 120_000);
+}
+
+{
+  const routes = new Map();
+  const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
+  let activations = 0;
+  installPendingSignupBoundary({ application: app }, {
+    service: { async status() { return { status: 'VERIFIED' }; } },
+    activation: async () => { activations += 1; return { status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }; },
+    env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
+  });
+  app.post('/auth/register', () => {});
+  const result = await new Promise(resolve => {
+    const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { resolve(body); } };
+    routes.get('/auth/signup/status')[0]({ body: { signup_id: 'psu_1', continuation_secret: 'secret' } }, res);
+  });
+  assert.equal(activations, 1);
+  assert.equal(result.signup_pending, false);
+  assert.equal(result.user.id, 'usr_1');
+  assert.equal(result.token, 'session');
 }
 
 console.log('pending-signup-safety tests: PASS');

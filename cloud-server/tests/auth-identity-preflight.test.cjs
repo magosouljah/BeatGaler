@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   sha256,
   usablePassword,
@@ -76,5 +78,9 @@ function verifiedState(userId, email, extra = {}) {
   assert.equal(report.blockers.length, 0);
   assert.equal(report.counts.password_email_ready, 1);
 }
+
+const casefoldMigration = fs.readFileSync(path.join(__dirname, '..', 'migrations', '0022_auth_casefold_identity.sql'), 'utf8');
+assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(username\)/s);
+assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(email\)/s);
 
 console.log('auth-identity-preflight tests: PASS');

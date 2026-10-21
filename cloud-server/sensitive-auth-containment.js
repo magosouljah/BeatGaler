@@ -105,7 +105,7 @@ function installSensitiveAuthContainment(express, runtime) {
     const info = sessionInfo(req);
     if (!info) return next();
     const provider = String(req?.body?.provider || '').toLowerCase();
-    if (!provider || !info.user?.providers?.[provider]?.id) return next();
+    if (!provider) return next();
     const grant = consumeStrongReauth(runtime, req);
     if (!grant.ok) {
       return res.status(401).json({

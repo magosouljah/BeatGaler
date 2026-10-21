@@ -46,8 +46,10 @@ function markLifecycleEmailVerified(runtime, userId, email, now = () => Date.now
   const stateFile = runtime?._test?.stateFile;
   if (!state || !stateFile) throw coded('Email verification authority is unavailable.', 'EMAIL_VERIFICATION_AUTHORITY_UNAVAILABLE');
   state.email_verified = state.email_verified && typeof state.email_verified === 'object' ? state.email_verified : {};
+  const emailHash = sha256(normalizeEmail(email));
+  if (state.email_verified[String(userId)]?.email_hash === emailHash) return;
   state.email_verified[String(userId)] = {
-    email_hash: sha256(normalizeEmail(email)),
+    email_hash: emailHash,
     verified_at: new Date(now()).toISOString(),
   };
   atomicWriteJson(stateFile, state);
@@ -125,6 +127,10 @@ function createStagedEmailChange({
       await client.query('BEGIN');
       const user = await currentDbUser(client, info.userId, { lock: true });
       if (!user) throw coded('BeatGaler account not found.', 'ACCOUNT_NOT_FOUND');
+      const priorChange = await client.query('SELECT state,old_notice_sent_at FROM auth_email_changes WHERE user_id=$1 FOR UPDATE', [String(info.userId)]);
+      if (priorChange.rows[0]?.state === 'CONFIRMED' && !priorChange.rows[0]?.old_notice_sent_at) {
+        throw coded('The previous email-change notice is still pending delivery.', 'EMAIL_CHANGE_NOTICE_PENDING');
+      }
       const oldEmail = normalizeEmail(user.email);
       if (!oldEmail) throw coded('This account needs a verified sign-in email before it can be changed.', 'EMAIL_CHANGE_OLD_EMAIL_REQUIRED');
       if (oldEmail === newEmail) throw coded('The new email must be different from the current email.', 'EMAIL_CHANGE_SAME_EMAIL');
@@ -254,6 +260,7 @@ function createStagedEmailChange({
     // revocation fails, the old email remains authoritative and the token can
     // be retried safely.
     await runtime._test.revokeUserSessions(String(info.userId), 'email_change');
+    await flushAuthority();
 
     const tokenHash = sha256(token);
     const client = await pool.connect();
@@ -281,6 +288,8 @@ function createStagedEmailChange({
         SET state='CONFIRMED',confirmed_at=now(),updated_at=now()
         WHERE user_id=$1
       `, [String(info.userId)]);
+      await client.query("UPDATE direct_capabilities SET status='REVOKED',revoked_at=now(),revoke_reason='email_change' WHERE user_id=$1 AND status IN ('ACTIVE','AUTHORIZED')", [String(info.userId)]);
+      await client.query('DELETE FROM auth_sessions WHERE user_id=$1', [String(info.userId)]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -289,9 +298,9 @@ function createStagedEmailChange({
       client.release();
     }
 
-    await commitLocalEmail(String(info.userId), normalizeEmail(row.new_email), info.user);
-    markLifecycleEmailVerified(runtime, info.userId, row.new_email, now);
-    await flushAuthority();
+    // PostgreSQL committed the identity swap. Re-read its authoritative row so
+    // a crash here can be repaired by the worker without the original session.
+    await reconcileConfirmedUser(String(info.userId));
 
     let oldEmailNotified = false;
     if (typeof emailNotifier === 'function' && row.old_email) {
@@ -318,6 +327,29 @@ function createStagedEmailChange({
       sessions_revoked: true,
       old_email_notified: oldEmailNotified,
     };
+  }
+
+  async function reconcileConfirmedUser(userId) {
+    const result = await pool.query(`
+      SELECT c.user_id,c.new_email,u.username,u.username_source
+      FROM auth_email_changes c JOIN users u ON u.id=c.user_id
+      WHERE c.user_id=$1 AND c.state='CONFIRMED' AND lower(u.email)=lower(c.new_email)
+    `, [String(userId)]);
+    const row = result.rows[0];
+    if (!row) return false;
+    await commitLocalEmail(String(row.user_id), normalizeEmail(row.new_email), row);
+    markLifecycleEmailVerified(runtime, row.user_id, row.new_email, now);
+    return true;
+  }
+
+  async function reconcileConfirmed() {
+    const result = await pool.query(`
+      SELECT c.user_id FROM auth_email_changes c JOIN users u ON u.id=c.user_id
+      WHERE c.state='CONFIRMED' AND lower(u.email)=lower(c.new_email)
+      ORDER BY c.confirmed_at ASC
+    `);
+    for (const row of result.rows) await reconcileConfirmedUser(row.user_id);
+    return result.rows.length;
   }
 
   async function deliverPendingOldNotices(limit = 20) {
@@ -355,6 +387,8 @@ function createStagedEmailChange({
     resend,
     confirm,
     inspectToken,
+    reconcileConfirmed,
+    reconcileConfirmedUser,
     deliverPendingOldNotices,
     constants: { ttlMs, maxAttempts: MAX_ATTEMPTS },
   };
@@ -399,6 +433,8 @@ function installStagedEmailChange(express, service) {
 function createStagedEmailChangeNoticeWorker(service, { intervalMs = 30_000, onError = () => {} } = {}) {
   let timer = null;
   async function tick() {
+    try { await service.reconcileConfirmed(); }
+    catch (error) { onError(error); }
     try { await service.deliverPendingOldNotices(); }
     catch (error) { onError(error); }
   }

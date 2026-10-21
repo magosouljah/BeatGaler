@@ -27,6 +27,26 @@ function fakeDatabase() {
       queries.push([text, params]);
       if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return { rows: [] };
       if (text.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (text.startsWith('SELECT id,username,username_source,email,password_hash FROM users WHERE id=$1 FOR UPDATE')) {
+        const user = users.get(String(params[0]));
+        return { rows: user ? [{ ...user }] : [] };
+      }
+      if (text.startsWith('SELECT id,username,username_source FROM users WHERE id=$1')) {
+        const user = users.get(String(params[0]));
+        return { rows: user ? [{ id: user.id, username: user.username, username_source: user.username_source }] : [] };
+      }
+      if (text.startsWith('SELECT provider_subject FROM provider_identities WHERE user_id=$1 AND provider=$2')) {
+        const match = [...providers.values()].find(p => p.user_id === String(params[0]) && p.provider === String(params[1]));
+        return { rows: match ? [{ provider_subject: match.provider_subject }] : [] };
+      }
+      if (text.startsWith('SELECT provider FROM provider_identities WHERE user_id=$1 AND provider<>$2')) {
+        const match = [...providers.values()].find(p => p.user_id === String(params[0]) && p.provider !== String(params[1]));
+        return { rows: match ? [{ provider: match.provider }] : [] };
+      }
+      if (text.startsWith('DELETE FROM provider_identities WHERE user_id=$1 AND provider=$2')) {
+        for (const [key, value] of providers) if (value.user_id === String(params[0]) && value.provider === String(params[1])) providers.delete(key);
+        return { rows: [] };
+      }
       if (text.includes('FROM provider_identities p') && text.includes('JOIN users u')) {
         const row = providerRow(String(params[0]), String(params[1]));
         return { rows: row ? [row] : [] };
@@ -107,12 +127,69 @@ function fakeDatabase() {
 
   {
     const db = fakeDatabase();
+    db.users.get('usr_a').username = 'pepito#4321';
+    db.users.get('usr_a').username_source = 'beatgaler';
+    db.users.get('usr_b').username = 'pepito';
+    db.users.get('usr_b').username_source = 'x';
+    const calls = [];
+    const authority = createProviderIdentityAuthority({ pool: db.pool, getBridge: () => ({
+      userIdByUsername: () => 'usr_a',
+      setUsernameByUserId(...args) { calls.push(['rename', ...args]); },
+      adoptIdentityUser(input) { calls.push(['adopt', input.id]); },
+    }) });
+    await authority.prepareX({ identity: { id: 'x-b', username: 'pepito' }, registrationOpen: false });
+    assert.deepEqual(calls[0], ['rename', 'usr_a', 'pepito#4321', 'beatgaler']);
+    assert.deepEqual(calls[1], ['adopt', 'usr_b']);
+  }
+
+  {
+    const db = fakeDatabase();
     const authority = createProviderIdentityAuthority({ pool: db.pool });
     await assert.rejects(
       authority.prepareX({ identity: { id: 'x-new', username: 'fresh' }, registrationOpen: false }),
       error => error?.code === 'PUBLIC_REGISTRATION_CLOSED',
     );
     assert.equal(db.queries.some(([sql]) => sql === 'ROLLBACK'), true);
+  }
+
+  {
+    const db = fakeDatabase();
+    db.users.get('usr_a').username_source = 'beatgaler';
+    const authority = createProviderIdentityAuthority({ pool: db.pool });
+    await assert.rejects(authority.prepareX({ identity: { id: 'x-b', username: 'pepito' }, registrationOpen: false }),
+      error => error?.code === 'X_HANDLE_NOT_RECLAIMABLE');
+    assert.equal(db.users.get('usr_a').username, 'pepito');
+  }
+
+  {
+    const db = fakeDatabase();
+    const authority = createProviderIdentityAuthority({ pool: db.pool });
+    await assert.rejects(authority.prepareX({ identity: { id: 'x-new', username: 'pepito' }, registrationOpen: true }),
+      error => error?.code === 'X_HANDLE_ATOMIC_CLAIM_REQUIRED');
+    assert.equal(db.users.get('usr_a').username, 'pepito');
+  }
+
+  {
+    const db = fakeDatabase();
+    const bridgeCalls = [];
+    let flushes = 0;
+    const authority = createProviderIdentityAuthority({
+      pool: db.pool,
+      getBridge: () => ({ disconnectProviderByUserId(...args) { bridgeCalls.push(args); } }),
+      flushAuthority: async () => { flushes += 1; },
+    });
+    await assert.rejects(authority.prepareDisconnect({ provider: 'x', userId: 'usr_a' }),
+      error => error?.code === 'LAST_SIGNIN_METHOD_REQUIRED');
+    assert.equal(db.providers.has('x:x-a'), true);
+    db.providers.set('google:g-a', { user_id: 'usr_a', provider: 'google', provider_subject: 'g-a' });
+    const result = await authority.prepareDisconnect({ provider: 'x', userId: 'usr_a' });
+    assert.equal(result.connected, true);
+    assert.equal(db.providers.has('x:x-a'), false);
+    assert.match(db.users.get('usr_a').username, /^pepito#\d{4}$/);
+    assert.deepEqual(bridgeCalls[0], ['usr_a', 'x', db.users.get('usr_a').username]);
+    assert.equal(flushes, 3);
+    await authority.prepareDisconnect({ provider: 'x', userId: 'usr_a' });
+    assert.equal(bridgeCalls.length, 2);
   }
 
   console.log('provider-identity-authority tests: PASS');

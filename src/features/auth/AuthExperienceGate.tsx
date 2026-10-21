@@ -418,7 +418,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
         </UiFeedback>}
         {oauthState === "cancelled" && oauthProvider && <UiButton type="button" variant="ghost" onClick={() => void beginOAuth(oauthProvider)}>Retry provider sign-in</UiButton>}
         <div className="bg-auth-divider"><span>or use your password</span></div>
-        <UiField id="auth-login-identifier" label="Username or email" autoFocus value={identifier} onChange={event => setIdentifier(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+        <UiField id="auth-login-identifier" label="Email" type="email" autoFocus value={identifier} onChange={event => setIdentifier(event.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
         <UiField id="auth-login-password" label="Password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required />
         <UiButton type="submit" variant="primary" fullWidth loading={busy}>Sign in</UiButton>
         <div className="bg-auth-inline-actions bg-auth-inline-actions--center">

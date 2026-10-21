@@ -41,10 +41,9 @@ function publicError(error) {
 }
 
 function shouldOwnRegister(env = process.env) {
-  const production = String(env.NODE_ENV || '').toLowerCase() === 'production';
-  const pendingEnabled = String(env.BEATGALER_PENDING_SIGNUP_ENABLED || '') === '1';
-  const publicFlagExplicit = String(env.BEATGALER_PUBLIC_REGISTRATION || '') === '1';
-  return production || pendingEnabled || publicFlagExplicit;
+  // The legacy handler creates a permanent user and vault before verification.
+  // It must never be reachable, including in development with the flag off.
+  return true;
 }
 
 function createHandlerResponse() {
@@ -182,6 +181,7 @@ function installPendingSignupBoundary(express, {
         signup_pending: status !== 'ACTIVE',
         ...result,
         ...(activationResult && typeof activationResult === 'object' ? activationResult : {}),
+        ...(activationResult?.account && typeof activationResult.account === 'object' ? activationResult.account : {}),
       });
     } catch (error) {
       const status = statusForError(error);
@@ -217,7 +217,18 @@ function installPendingSignupBoundary(express, {
         continuationSecret: String(req?.body?.continuation_secret || ''),
       });
       if (!result) return res.status(404).json({ error: 'Signup session was not found.', code: 'SIGNUP_NOT_FOUND' });
-      return res.json({ ok: true, signup_pending: result.status !== 'ACTIVE', ...result });
+      const retryable = result.status === 'VERIFIED' || result.status === 'RETRYABLE';
+      const activationResult = retryable && typeof activation === 'function'
+        ? await activation({ signupId: req?.body?.signup_id, continuationSecret: String(req?.body?.continuation_secret || '') })
+        : null;
+      const status = activationResult?.status || result.status;
+      return res.json({
+        ok: true,
+        signup_pending: status !== 'ACTIVE',
+        ...result,
+        ...(activationResult && typeof activationResult === 'object' ? activationResult : {}),
+        ...(activationResult?.account && typeof activationResult.account === 'object' ? activationResult.account : {}),
+      });
     } catch (error) {
       return res.status(statusForError(error)).json(publicError(error));
     }

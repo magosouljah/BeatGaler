@@ -47,6 +47,9 @@ function fakeDatabase() {
     if (text.startsWith('SELECT id,email,username,username_source FROM users WHERE id=$1')) {
       return { rows: String(params[0]) === state.user.id ? [clone(state.user)] : [] };
     }
+    if (text.startsWith('SELECT state,old_notice_sent_at FROM auth_email_changes WHERE user_id=$1 FOR UPDATE')) {
+      return { rows: state.change ? [{ state: state.change.state, old_notice_sent_at: state.change.old_notice_sent_at }] : [] };
+    }
     if (text.startsWith('SELECT id FROM users WHERE lower(email)=lower($1) AND id<>$2')) {
       const target = String(params[0] || '').toLowerCase();
       const conflict = state.conflictEmail && String(state.conflictEmail).toLowerCase() === target;
@@ -110,6 +113,8 @@ function fakeDatabase() {
       state.change.confirmed_at = new Date().toISOString();
       return { rows: [] };
     }
+    if (text.startsWith("UPDATE direct_capabilities SET status='REVOKED'")) return { rows: [] };
+    if (text.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')) return { rows: [] };
     if (text.startsWith('UPDATE auth_email_changes SET old_notice_attempts=old_notice_attempts+1,old_notice_sent_at=now()')) {
       state.change.old_notice_attempts += 1;
       state.change.old_notice_sent_at = new Date().toISOString();
@@ -122,6 +127,14 @@ function fakeDatabase() {
     if (text.startsWith('SELECT user_id,old_email FROM auth_email_changes WHERE state=')) {
       const eligible = state.change?.state === 'CONFIRMED' && !state.change.old_notice_sent_at && state.change.old_notice_attempts < 10;
       return { rows: eligible ? [{ user_id: state.change.user_id, old_email: state.change.old_email }] : [] };
+    }
+    if (text.startsWith('SELECT c.user_id,c.new_email,u.username,u.username_source FROM auth_email_changes c JOIN users u')) {
+      const eligible = state.change?.state === 'CONFIRMED' && state.user.email === state.change.new_email && String(params[0]) === state.user.id;
+      return { rows: eligible ? [{ user_id: state.user.id, new_email: state.user.email, username: state.user.username, username_source: state.user.username_source }] : [] };
+    }
+    if (text.startsWith('SELECT c.user_id FROM auth_email_changes c JOIN users u')) {
+      const eligible = state.change?.state === 'CONFIRMED' && state.user.email === state.change.new_email;
+      return { rows: eligible ? [{ user_id: state.user.id }] : [] };
     }
     throw new Error(`Unexpected SQL in staged-email test: ${text}`);
   }
@@ -137,7 +150,7 @@ function fakeDatabase() {
   };
 }
 
-function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = false } = {}) {
+function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = false, localCommitFails = false } = {}) {
   const db = fakeDatabase();
   let clock = nowMs;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-email-change-'));
@@ -149,6 +162,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
   let flushes = 0;
   let revocations = 0;
   let failOldNotice = noticeFails;
+  let failLocalCommit = localCommitFails;
 
   const user = { id: 'usr_1', email: 'old@example.com', username: 'tester#0001', usernameSource: 'beatgaler' };
   const runtime = {
@@ -185,6 +199,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
       return { delivered: true };
     },
     commitLocalEmail: async (userId, email) => {
+      if (failLocalCommit) throw new Error('injected process interruption after PostgreSQL commit');
       localCommits.push([userId, email]);
       user.email = email;
     },
@@ -205,6 +220,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     get flushes() { return flushes; },
     advance(ms) { clock += ms; },
     allowOldNotice() { failOldNotice = false; },
+    allowLocalCommit() { failLocalCommit = false; },
     req(reauth = 'reauth_good') { return { body: { reauthToken: reauth }, headers: {} }; },
   };
 }
@@ -303,6 +319,8 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     const revokeIndex = h.db.events.findIndex(event => event[0] === 'revoke');
     const swapIndex = h.db.events.findIndex(event => event[0] === 'email-swap');
     assert.ok(revokeIndex >= 0 && swapIndex > revokeIndex);
+    assert.equal(h.db.events.some(event => event[1]?.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')), true);
+    assert.equal(h.db.events.some(event => event[1]?.startsWith("UPDATE direct_capabilities SET status='REVOKED'")), true);
     assert.equal(h.deliveries.at(-1).kind, 'email_changed_notice');
     assert.equal(h.deliveries.at(-1).to, 'old@example.com');
     assert.equal(h.lifecycleState.email_verified.usr_1.email_hash, sha256('new@example.com'));
@@ -322,10 +340,28 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     assert.equal(h.db.state.user.email, 'new@example.com');
     assert.equal(h.db.state.change.state, 'CONFIRMED');
     assert.equal(h.db.state.change.old_notice_sent_at, null);
+    await assert.rejects(h.service.start(h.req(), 'third@example.com'),
+      error => error?.code === 'EMAIL_CHANGE_NOTICE_PENDING');
     h.allowOldNotice();
     const delivered = await h.service.deliverPendingOldNotices();
     assert.equal(delivered, 1);
     assert.ok(h.db.state.change.old_notice_sent_at);
+  }
+
+  // A process interruption after COMMIT leaves a durable CONFIRMED row. The
+  // startup/periodic worker can rebuild the local identity and verified state.
+  {
+    const h = harness({ localCommitFails: true });
+    await h.service.start(h.req(), 'new@example.com');
+    const token = h.deliveries[0].token;
+    await assert.rejects(h.service.confirm(h.req(), token), /injected process interruption/);
+    assert.equal(h.db.state.user.email, 'new@example.com');
+    assert.equal(h.db.state.change.state, 'CONFIRMED');
+    assert.equal(h.localCommits.length, 0);
+    h.allowLocalCommit();
+    assert.equal(await h.service.reconcileConfirmed(), 1);
+    assert.deepEqual(h.localCommits, [['usr_1', 'new@example.com']]);
+    assert.equal(h.lifecycleState.email_verified.usr_1.email_hash, sha256('new@example.com'));
   }
 
   console.log('staged-email-change tests: PASS');

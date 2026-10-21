@@ -130,7 +130,7 @@ async function start() {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
   }
   const providerIdentityAuthority = pool && cutover.authority === 'postgres'
-    ? createProviderIdentityAuthority({ pool, getBridge: getServerCoreAuthBridge })
+    ? createProviderIdentityAuthority({ pool, getBridge: getServerCoreAuthBridge, flushAuthority: () => cutover.runtime.flush() })
     : null;
 
   const accountEmailNotifier = createSesEmailNotifier({ env: process.env });
@@ -158,6 +158,7 @@ async function start() {
     env: process.env,
     getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
     getProviderIdentityAuthority: () => providerIdentityAuthority,
+    getAuthPool: () => cutover.authority === 'postgres' ? pool : null,
   });
   installPendingSignupBoundary(express, {
     service: pendingSignupService,
@@ -175,6 +176,7 @@ async function start() {
     dataDir: __dirname,
     env: d8LifecycleEnv(process.env),
     emailNotifier: accountEmailNotifier,
+    pool: cutover.authority === 'postgres' ? pool : null,
     getCapabilityStore: () => directCapabilities?.store || null,
     onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
@@ -185,7 +187,7 @@ async function start() {
       pool,
       runtime: accountLifecycle,
       emailNotifier: accountEmailNotifier,
-      commitLocalEmail: async (userId, email, sessionUser) => {
+      commitLocalEmail: async (userId, email, authoritativeUser) => {
         const bridge = getServerCoreAuthBridge();
         if (!bridge?.adoptIdentityUser) {
           const error = new Error('Local auth identity bridge is unavailable.');
@@ -194,8 +196,8 @@ async function start() {
         }
         bridge.adoptIdentityUser({
           id: String(userId),
-          username: sessionUser?.username,
-          usernameSource: sessionUser?.usernameSource || 'beatgaler',
+          username: authoritativeUser?.username,
+          usernameSource: authoritativeUser?.username_source || 'beatgaler',
           email,
         });
       },
@@ -214,6 +216,7 @@ async function start() {
   applyD8RoResolutions(express, accountLifecycle, { env: process.env });
   installSessionSecurity(express, {
     dataDir: __dirname,
+    pool: cutover.authority === 'postgres' ? pool : null,
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecycleRequestGuard(express, accountLifecycle);

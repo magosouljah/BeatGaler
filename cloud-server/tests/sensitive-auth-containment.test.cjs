@@ -152,6 +152,19 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
+    installSensitiveAuthContainment(express, runtimeFor({
+      verified: true,
+      providers: { google: { id: 'g-1' } },
+      reauthOk: false,
+    }));
+    express.application.post('/auth/oauth/disconnect', () => {});
+    const { res, nextCalled } = await runFirst(express, '/auth/oauth/disconnect', { body: { provider: 'x' } });
+    assert.equal(nextCalled, false, 'a stale local snapshot cannot bypass provider unlink reauthentication');
+    assert.equal(res.statusCode, 401);
+  }
+
+  {
+    const express = fakeExpress();
     installSensitiveAuthContainment(express, runtimeFor({ verified: true, reauthOk: false }));
     express.application.post('/auth/oauth/start', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/start', {
