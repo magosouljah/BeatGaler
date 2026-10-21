@@ -5,6 +5,7 @@ const {
   LEGACY_SAVE_USERS,
   STABLE_SAVE_USERS,
   hardenCoreSource,
+  installServerCoreAuthBridgeLoader,
 } = require('../server-core-auth-bridge-loader');
 
 function representativeCore(extra = '') {
@@ -41,6 +42,12 @@ function representativeCore(extra = '') {
     () => hardenCoreSource(missingMarker),
     error => error?.code === 'SERVER_CORE_AUTH_BRIDGE_INCOMPATIBLE',
   );
+}
+
+{
+  const restore = installServerCoreAuthBridgeLoader({ exposeBridge: true });
+  assert.equal(typeof restore, 'function');
+  restore();
 }
 
 console.log('server-core auth bridge loader tests: PASS');
