@@ -44,6 +44,86 @@ function bridgeSuffix() {
   return `
 
 ;module.exports.__beatgalerAuthBridge = Object.freeze({
+  adoptIdentityUser(input = {}) {
+    const userId = String(input.id || '').trim();
+    const nextUsername = normalizeBeatGalerUsername(input.username || '');
+    if (!userId || !nextUsername || !validBeatGalerUsername(nextUsername)) {
+      throw Object.assign(new Error('Stable user id and valid username are required.'), { code: 'AUTH_BRIDGE_IDENTITY_INPUT_INVALID' });
+    }
+    const usernameOwner = beatGalerUsers.get(nextUsername);
+    if (usernameOwner && String(usernameOwner.id) !== userId) {
+      throw Object.assign(new Error('Authoritative username is already owned by another local user.'), { code: 'AUTH_BRIDGE_USERNAME_CONFLICT' });
+    }
+
+    let user = beatGalerUsersById.get(userId) || null;
+    if (!user) {
+      user = {
+        id: userId,
+        username: nextUsername,
+        usernameSource: String(input.usernameSource || 'beatgaler'),
+        email: input.email ? normalizeEmail(input.email) : null,
+        passwordSalt: input.passwordSalt || null,
+        passwordHash: input.passwordHash || null,
+        createdAt: Number(input.createdAt || Date.now()),
+        storageChatId: input.storageChatId == null ? null : String(input.storageChatId),
+        storageChatTitle: input.storageChatTitle || null,
+        storageCreatedAt: input.storageCreatedAt || null,
+        providers: {},
+      };
+      ensurePlanState(user, { newAccount: false });
+      beatGalerUsersById.set(userId, user);
+    } else {
+      const previousUsername = normalizeBeatGalerUsername(user.username);
+      if (previousUsername && previousUsername !== nextUsername && beatGalerUsers.get(previousUsername)?.id === userId) {
+        beatGalerUsers.delete(previousUsername);
+      }
+      user.username = nextUsername;
+      user.usernameSource = String(input.usernameSource || user.usernameSource || 'beatgaler');
+      if (input.email !== undefined) user.email = input.email ? normalizeEmail(input.email) : null;
+      if (input.passwordHash !== undefined) user.passwordHash = input.passwordHash || null;
+      if (input.passwordSalt !== undefined) user.passwordSalt = input.passwordSalt || null;
+      if (input.createdAt != null) user.createdAt = Number(input.createdAt) || user.createdAt;
+      if (input.storageChatId !== undefined) user.storageChatId = input.storageChatId == null ? null : String(input.storageChatId);
+      if (input.storageChatTitle !== undefined) user.storageChatTitle = input.storageChatTitle || null;
+      if (input.storageCreatedAt !== undefined) user.storageCreatedAt = input.storageCreatedAt || null;
+    }
+
+    user.providers = user.providers || {};
+    const provider = String(input.provider || '').toLowerCase();
+    const providerSubject = String(input.providerSubject || '').trim();
+    if (provider && providerSubject) {
+      user.providers[provider] = {
+        ...(user.providers[provider] || {}),
+        id: providerSubject,
+        ...(input.providerProfile && typeof input.providerProfile === 'object' ? input.providerProfile : {}),
+      };
+    }
+    beatGalerUsers.set(nextUsername, user);
+    return { userId: user.id, username: user.username, storageReady: Boolean(user.storageChatId) };
+  },
+
+  setUsernameByUserId(userIdInput, usernameInput, sourceInput = 'beatgaler') {
+    const userId = String(userIdInput || '').trim();
+    const nextUsername = normalizeBeatGalerUsername(usernameInput);
+    const user = beatGalerUsersById.get(userId) || null;
+    if (!user) return { found: false, userId, username: nextUsername };
+    if (!nextUsername || !validBeatGalerUsername(nextUsername)) {
+      throw Object.assign(new Error('Authoritative username is invalid.'), { code: 'AUTH_BRIDGE_USERNAME_INVALID' });
+    }
+    const owner = beatGalerUsers.get(nextUsername);
+    if (owner && String(owner.id) !== userId) {
+      throw Object.assign(new Error('Authoritative username is already owned by another local user.'), { code: 'AUTH_BRIDGE_USERNAME_CONFLICT' });
+    }
+    const previousUsername = normalizeBeatGalerUsername(user.username);
+    if (previousUsername && previousUsername !== nextUsername && beatGalerUsers.get(previousUsername)?.id === userId) {
+      beatGalerUsers.delete(previousUsername);
+    }
+    user.username = nextUsername;
+    user.usernameSource = String(sourceInput || 'beatgaler');
+    beatGalerUsers.set(nextUsername, user);
+    return { found: true, userId: user.id, username: user.username };
+  },
+
   adoptOrCreatePasswordUser(input = {}) {
     const userId = String(input.id || '').trim();
     const email = normalizeEmail(input.email);
@@ -226,11 +306,11 @@ function getServerCoreAuthBridge() {
   return require.cache[TARGET]?.exports?.__beatgalerAuthBridge || null;
 }
 
-// server.js imports this module before server-core. Install a one-shot loader at
-// import time so the stable-id serialization fix applies even when pending
-// signup is disabled. A later pending-signup install upgrades the same hook to
-// expose the activation bridge before server-core is required.
-installServerCoreAuthBridgeLoader({ exposeBridge: false });
+// The bridge exposes only in-process stable-id primitives; it creates no HTTP
+// routes. Keep it available for both pending-signup activation and provider
+// identity reconciliation while always hardening saveAuthData() to serialize
+// from beatGalerUsersById rather than the mutable username index.
+installServerCoreAuthBridgeLoader({ exposeBridge: true });
 
 module.exports = {
   TARGET,
