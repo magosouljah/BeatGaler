@@ -3,9 +3,12 @@
 const fs = require('node:fs');
 
 const TARGET = require.resolve('./server-core');
+const LEGACY_SAVE_USERS = 'users: [...beatGalerUsers.values()],';
+const STABLE_SAVE_USERS = 'users: [...beatGalerUsersById.values()],';
 const REQUIRED_MARKERS = Object.freeze([
   'function generateBeatGalerHandle(rawBase)',
   'function saveAuthData()',
+  LEGACY_SAVE_USERS,
   'async function ensureUserStorage(user)',
   'function bindInstallationToBeatGalerUser(user, beatgalerUserId)',
   'function createAuthSession(userId)',
@@ -21,6 +24,19 @@ function validateCoreSource(source) {
     throw error;
   }
   return true;
+}
+
+function hardenCoreSource(source) {
+  const text = String(source || '');
+  validateCoreSource(text);
+  const first = text.indexOf(LEGACY_SAVE_USERS);
+  const last = text.lastIndexOf(LEGACY_SAVE_USERS);
+  if (first < 0 || first !== last) {
+    const error = new Error('server-core stable-id persistence patch is ambiguous.');
+    error.code = 'SERVER_CORE_STABLE_ID_PATCH_AMBIGUOUS';
+    throw error;
+  }
+  return `${text.slice(0, first)}${STABLE_SAVE_USERS}${text.slice(first + LEGACY_SAVE_USERS.length)}`;
 }
 
 function bridgeSuffix() {
@@ -192,8 +208,7 @@ function installServerCoreAuthBridgeLoader() {
   function hooked(mod, filename) {
     if (filename !== TARGET) return previous(mod, filename);
     restore();
-    const source = fs.readFileSync(filename, 'utf8');
-    validateCoreSource(source);
+    const source = hardenCoreSource(fs.readFileSync(filename, 'utf8'));
     mod._compile(`${source}${bridgeSuffix()}`, filename);
   }
   require.extensions['.js'] = hooked;
@@ -206,8 +221,11 @@ function getServerCoreAuthBridge() {
 
 module.exports = {
   TARGET,
+  LEGACY_SAVE_USERS,
+  STABLE_SAVE_USERS,
   REQUIRED_MARKERS,
   validateCoreSource,
+  hardenCoreSource,
   bridgeSuffix,
   installServerCoreAuthBridgeLoader,
   getServerCoreAuthBridge,
