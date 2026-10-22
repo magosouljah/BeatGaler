@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { AsyncLocalStorage } = require('node:async_hooks');
-const { hasUsablePassword } = require('./sensitive-auth-containment');
+const { hasUsablePasswordShared } = require('./sensitive-auth-containment');
 
 const FETCH_PATCH = Symbol.for('beatgaler.authPublicRegistration.fetchPatch');
 const FS_PATCH = Symbol.for('beatgaler.authPublicRegistration.fsPatch');
@@ -225,11 +225,11 @@ function installAuthPublicRegistrationHardening(express, {
       if (String(env.NODE_ENV || '') !== 'production') return next();
       return res.status(503).json({ error: 'Authentication service is temporarily unavailable.', code: 'AUTH_SERVICE_UNAVAILABLE' });
     }
-    void authority.prepareDisconnect({
+    void hasUsablePasswordShared(lifecycle(), info, getAuthPool?.()).then(usablePassword => authority.prepareDisconnect({
       provider: req?.body?.provider,
       userId: info.userId,
-      usablePassword: hasUsablePassword(lifecycle(), info),
-    }).then(() => next()).catch(error => {
+      usablePassword,
+    })).then(() => next()).catch(error => {
       const code = String(error?.code || 'OAUTH_IDENTITY_AUTHORITY_UNAVAILABLE');
       const status = code === 'LAST_SIGNIN_METHOD_REQUIRED' ? 409 : code === 'OAUTH_PROVIDER_UNSUPPORTED' ? 400 : 503;
       res.status(status).json({ error: status === 409 ? 'Add another usable sign-in method before disconnecting this provider.' : 'Authentication service is temporarily unavailable.', code });

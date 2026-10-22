@@ -8,6 +8,7 @@ const { promisify } = require('node:util');
 const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations');
 const { createProviderIdentityAuthority } = require('../provider-identity-authority');
+const { hasVerifiedEmailShared } = require('../sensitive-auth-containment');
 const execFileAsync = promisify(execFile);
 
 function databaseUrl(base, database) {
@@ -96,6 +97,19 @@ async function main() {
     assert.equal(JSON.parse(first.stdout).userId, JSON.parse(second.stdout).userId);
     assert.equal((await poolA.query("SELECT count(*)::int AS n FROM provider_identities WHERE provider='x' AND provider_subject='x-c'")).rows[0].n, 1);
     assert.equal((await poolA.query("SELECT count(*)::int AS n FROM users WHERE lower(username)='juanito'")).rows[0].n, 1);
+
+    // The second process can authorize password bootstrap from the committed
+    // email proof even while its local lifecycle snapshot remains stale.
+    await poolA.query("UPDATE users SET email='verified@example.com' WHERE id='usr_x_a'");
+    await poolA.query(`INSERT INTO auth_email_changes(
+      user_id,request_id,old_email,new_email,token_hash,state,expires_at,confirmed_at
+    ) VALUES('usr_x_a','emc_live_test',NULL,'verified@example.com',$1,'CONFIRMED',now()+interval '1 hour',now())`,
+    ['a'.repeat(64)]);
+    const staleRuntime = { _test: { publicStatusForUser() { return { email_verified: false }; } } };
+    const info = { userId: 'usr_x_a', user: { id: 'usr_x_a', email: 'verified@example.com' } };
+    assert.equal(await hasVerifiedEmailShared(staleRuntime, info, poolB), true);
+    await poolA.query("UPDATE users SET email='changed-again@example.com' WHERE id='usr_x_a'");
+    assert.equal(await hasVerifiedEmailShared(staleRuntime, info, poolB), false);
     console.log('auth identity PostgreSQL integration: PASS');
   } finally {
     if (poolA) await poolA.end();

@@ -32,6 +32,25 @@ function hasUsablePassword(runtime, info) {
   return Boolean(passwordMaterial(runtime, info)) && hasVerifiedUniqueEmail(runtime, info);
 }
 
+async function hasVerifiedEmailShared(runtime, info, pool) {
+  if (hasVerifiedUniqueEmail(runtime, info)) return true;
+  if (!info?.userId || !pool?.query) return false;
+  // A staged confirmation is committed with users.email in PostgreSQL. A
+  // different process may not yet have refreshed its local lifecycle file.
+  const result = await pool.query(`
+    SELECT 1 FROM users u JOIN auth_email_changes c ON c.user_id=u.id
+    WHERE u.id=$1 AND c.state='CONFIRMED' AND lower(u.email)=lower(c.new_email)
+      AND NOT EXISTS (
+        SELECT 1 FROM users other WHERE other.id<>u.id AND lower(other.email)=lower(u.email)
+      ) LIMIT 1
+  `, [String(info.userId)]);
+  return result.rows.length === 1;
+}
+
+async function hasUsablePasswordShared(runtime, info, pool) {
+  return Boolean(passwordMaterial(runtime, info)) && await hasVerifiedEmailShared(runtime, info, pool);
+}
+
 function reauthToken(req) {
   return String(req?.body?.reauthToken || req?.body?.reauth_token || req?.headers?.['x-beatgaler-reauth'] || '');
 }
@@ -41,7 +60,7 @@ function consumeStrongReauth(runtime, req) {
   catch { return { ok: false, code: 'REAUTH_REQUIRED' }; }
 }
 
-function installSensitiveAuthContainment(express, runtime) {
+function installSensitiveAuthContainment(express, runtime, { pool = null } = {}) {
   const application = express?.application;
   if (!application || !runtime || application.__beatgalerSensitiveAuthContainmentInstalled) return;
   application.__beatgalerSensitiveAuthContainmentInstalled = true;
@@ -59,11 +78,19 @@ function installSensitiveAuthContainment(express, runtime) {
     });
   }
 
-  function protectPasswordChange(req, res, next) {
+  async function protectPasswordChange(req, res, next) {
     const info = sessionInfo(req);
     if (!info) return next();
-    if (hasUsablePassword(runtime, info)) return next();
-    if (!hasVerifiedUniqueEmail(runtime, info)) {
+    let usable;
+    let verified;
+    try {
+      usable = await hasUsablePasswordShared(runtime, info, pool);
+      verified = usable || await hasVerifiedEmailShared(runtime, info, pool);
+    } catch {
+      return res.status(503).json({ error: 'Authentication service is temporarily unavailable.', code: 'AUTH_SERVICE_UNAVAILABLE' });
+    }
+    if (usable) return next();
+    if (!verified) {
       return res.status(409).json({
         error: 'A unique verified email is required before password can be used as a sign-in method.',
         code: 'PASSWORD_VERIFIED_EMAIL_REQUIRED',
@@ -101,7 +128,7 @@ function installSensitiveAuthContainment(express, runtime) {
     next();
   }
 
-  function protectProviderUnlink(req, res, next) {
+  async function protectProviderUnlink(req, res, next) {
     const info = sessionInfo(req);
     if (!info) return next();
     const provider = String(req?.body?.provider || '').toLowerCase();
@@ -115,7 +142,10 @@ function installSensitiveAuthContainment(express, runtime) {
     }
     const remainingProviders = Object.keys(info.user.providers || {})
       .filter(key => key !== provider && info.user.providers?.[key]?.id).length;
-    if (remainingProviders === 0 && !hasUsablePassword(runtime, info)) {
+    let usable = false;
+    try { usable = await hasUsablePasswordShared(runtime, info, pool); }
+    catch { return res.status(503).json({ error: 'Authentication service is temporarily unavailable.', code: 'AUTH_SERVICE_UNAVAILABLE' }); }
+    if (remainingProviders === 0 && !usable) {
       return res.status(409).json({
         error: 'Add another usable sign-in method before disconnecting this provider.',
         code: 'LAST_SIGNIN_METHOD_REQUIRED',
@@ -147,6 +177,8 @@ module.exports = {
   passwordMaterial,
   hasVerifiedUniqueEmail,
   hasUsablePassword,
+  hasVerifiedEmailShared,
+  hasUsablePasswordShared,
   reauthToken,
   consumeStrongReauth,
   installSensitiveAuthContainment,

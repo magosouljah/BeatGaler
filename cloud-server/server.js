@@ -212,7 +212,7 @@ async function start() {
 
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
-  installSensitiveAuthContainment(express, accountLifecycle);
+  installSensitiveAuthContainment(express, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
   applyD8RoResolutions(express, accountLifecycle, { env: process.env });
   installSessionSecurity(express, {
     dataDir: __dirname,

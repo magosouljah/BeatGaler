@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   hasVerifiedUniqueEmail,
   hasUsablePassword,
+  hasVerifiedEmailShared,
   installSensitiveAuthContainment,
 } = require('../sensitive-auth-containment');
 
@@ -76,6 +77,23 @@ async function runFirst(express, route, req = {}) {
     const info = runtime._test.sessionInfoFromRequest({});
     assert.equal(hasVerifiedUniqueEmail(runtime, info), false);
     assert.equal(hasUsablePassword(runtime, info), false);
+  }
+
+  {
+    const runtime = runtimeFor({ verified: false, reauthOk: true });
+    const pool = { async query(sql, params) {
+      assert.match(sql, /auth_email_changes c/);
+      assert.deepEqual(params, ['usr_1']);
+      return { rows: [{ '?column?': 1 }] };
+    } };
+    assert.equal(await hasVerifiedEmailShared(runtime, runtime._test.sessionInfoFromRequest({}), pool), true);
+    const express = fakeExpress();
+    installSensitiveAuthContainment(express, runtime, { pool });
+    express.application.post('/auth/password/change', () => {});
+    const { nextCalled } = await runFirst(express, '/auth/password/change', {
+      body: { reauthToken: 'reauth_good' },
+    });
+    assert.equal(nextCalled, true, 'a confirmed staged email is usable on another process after provider reauth');
   }
 
   {
