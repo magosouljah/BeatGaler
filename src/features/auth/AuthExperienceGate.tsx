@@ -22,7 +22,7 @@ const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
 const TOKEN_KEY = "beatgaler:account-session:v1";
 const CSRF_KEY = "beatgaler:web-csrf:v1";
 
-type Phase = "login" | "register" | "signup-verify" | "mfa" | "verify" | "reset-request" | "reset-complete" | "offline";
+type Phase = "login" | "register" | "signup-verify" | "mfa" | "reset-request" | "reset-complete" | "offline";
 type OAuthState = "idle" | "opening" | "polling" | "blocked" | "cancelled" | "error";
 
 type PublicAuthError = Error & { status?: number; code?: string; mfa_required?: boolean };
@@ -109,7 +109,6 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const [confirmPassword, setConfirmPassword] = useState("");
   const [mfaCode, setMfaCode] = useState("");
   const [useRecoveryCode, setUseRecoveryCode] = useState(false);
-  const [verifyToken, setVerifyToken] = useState("");
   const [signupId, setSignupId] = useState("");
   const [signupCode, setSignupCode] = useState("");
   const signupResumeChecked = useRef(false);
@@ -317,30 +316,6 @@ export default function AuthExperienceGate({ children }: { children: React.React
     finally { setBusy(false); }
   };
 
-  const resendVerification = async () => {
-    if (!email || busy) return;
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const result = await publicAuthRequest("/auth/email/verification/request", { email });
-      setNotice(String(result?.message || "If that email belongs to an account, a verification message was sent."));
-    } catch (errorValue) {
-      setError(humanError(errorValue));
-    } finally { setBusy(false); }
-  };
-
-  const confirmVerification = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (busy) return;
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      await publicAuthRequest("/auth/email/verification/confirm", { token: verifyToken.trim() });
-      setNotice("Email verified. You can sign in now.");
-      setPhase("login");
-    } catch (errorValue) {
-      setError(humanError(errorValue));
-    } finally { setBusy(false); }
-  };
-
   const requestReset = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy) return;
@@ -444,8 +419,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const title = phase === "register" ? "Create your account"
     : phase === "signup-verify" ? "Check your email"
     : phase === "mfa" ? "Two-step verification"
-      : phase === "verify" ? "Verify your email"
-        : phase === "reset-request" ? "Reset your password"
+      : phase === "reset-request" ? "Reset your password"
           : phase === "reset-complete" ? "Choose a new password"
             : phase === "offline" ? "BeatGaler Cloud is unavailable"
               : "Welcome back";
@@ -458,8 +432,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
         {phase === "register" ? "Create one account for your BeatGaler library."
           : phase === "signup-verify" ? "Enter the code we sent to finish creating your account."
           : phase === "mfa" ? "Use your authenticator or one unused recovery code."
-            : phase === "verify" ? "Confirm the address connected to your BeatGaler account."
-              : phase === "reset-request" ? "We will send reset instructions without revealing whether an account exists."
+            : phase === "reset-request" ? "We will send reset instructions without revealing whether an account exists."
                 : phase === "reset-complete" ? "Paste the reset code and set a new password."
                   : phase === "offline" ? "Your saved session was kept. Retry when your connection is back."
                     : "Sign in to your BeatGaler account."}
@@ -491,7 +464,6 @@ export default function AuthExperienceGate({ children }: { children: React.React
         <UiButton type="submit" variant="primary" fullWidth loading={busy}>Sign in</UiButton>
         <div className="bg-auth-inline-actions bg-auth-inline-actions--center">
           <UiButton type="button" variant="ghost" onClick={() => go("reset-request")}>Forgot password?</UiButton>
-          <UiButton type="button" variant="ghost" onClick={() => go("verify")}>Verify email</UiButton>
         </div>
         <UiButton type="button" variant="ghost" fullWidth onClick={() => go("register")}>New to BeatGaler? Create account</UiButton>
       </form>}
@@ -530,14 +502,6 @@ export default function AuthExperienceGate({ children }: { children: React.React
           {useRecoveryCode ? "Use authenticator code" : "Use a recovery code"}
         </UiButton>
         <UiButton type="button" variant="ghost" fullWidth onClick={() => go("login")}>Cancel</UiButton>
-      </form>}
-
-      {phase === "verify" && <form className="bg-auth-form" onSubmit={confirmVerification}>
-        <UiField id="auth-verify-email" label="Email" type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" />
-        <UiButton type="button" variant="secondary" fullWidth loading={busy} disabled={!email} onClick={() => void resendVerification()}>Send or resend verification</UiButton>
-        <UiField id="auth-verify-token" label="Verification code" autoFocus value={verifyToken} onChange={event => setVerifyToken(event.target.value)} autoComplete="one-time-code" required />
-        <UiButton type="submit" variant="primary" fullWidth loading={busy}>Verify email</UiButton>
-        <UiButton type="button" variant="ghost" fullWidth onClick={() => go("login")}>Back to sign in</UiButton>
       </form>}
 
       {phase === "reset-request" && <form className="bg-auth-form" onSubmit={requestReset}>

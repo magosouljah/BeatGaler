@@ -31,27 +31,51 @@ describe("F2 11.2 complete Auth UI", () => {
     vi.restoreAllMocks();
   });
 
-  it("exposes reachable login, register, verify and password recovery flows with native labels/autocomplete", async () => {
+  it("exposes login, signup OTP and password recovery without the legacy verification flow", async () => {
     const { host, root } = await renderGate();
     expect(host.querySelector("main.bg-auth-shell")).not.toBeNull();
     expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Welcome back");
-    expect(host.querySelector<HTMLInputElement>("#auth-login-identifier")?.autocomplete).toBe("username");
+    expect(host.querySelector<HTMLInputElement>("#auth-login-identifier")?.autocomplete).toBe("email");
     expect(host.querySelector<HTMLInputElement>("#auth-login-password")?.autocomplete).toBe("current-password");
+    expect(button(host, "Verify email")).toBeUndefined();
+    expect(host.querySelector("#auth-verify-token")).toBeNull();
 
     await act(async () => button(host, "Forgot password?")?.click());
     expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Reset your password");
     expect(host.querySelector<HTMLInputElement>("#auth-reset-email")?.type).toBe("email");
 
     await act(async () => button(host, "Back to sign in")?.click());
-    await act(async () => button(host, "Verify email")?.click());
-    expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Verify your email");
-    expect(host.querySelector<HTMLInputElement>("#auth-verify-token")?.autocomplete).toBe("one-time-code");
-
-    await act(async () => button(host, "Back to sign in")?.click());
     await act(async () => button(host, "New to BeatGaler? Create account")?.click());
     expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Create your account");
     expect(host.querySelector<HTMLInputElement>("#auth-register-email")?.autocomplete).toBe("email");
     expect(host.querySelector<HTMLInputElement>("#auth-register-password")?.autocomplete).toBe("new-password");
+
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
+  it("moves a pending signup to the six digit OTP form", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === `${SAME_ORIGIN_API}/auth/register`) {
+        return new Response(JSON.stringify({ signup_pending: true, signup_id: "signup-1", status: "PENDING_VERIFICATION" }), { status: 202 });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { host, root } = await renderGate();
+    await act(async () => button(host, "New to BeatGaler? Create account")?.click());
+    await act(async () => {
+      host.querySelector("form.bg-auth-form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+
+    expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Check your email");
+    expect(host.querySelector<HTMLInputElement>("#auth-signup-code")?.autocomplete).toBe("one-time-code");
+    expect(host.querySelector<HTMLInputElement>("#auth-signup-code")?.pattern).toBe("[0-9]{3}-[0-9]{3}");
+    expect(button(host, "Verify and create account")).toBeTruthy();
+    expect(button(host, "Verify email")).toBeUndefined();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === `${SAME_ORIGIN_API}/auth/register`)).toHaveLength(1);
 
     await act(async () => root.unmount());
     host.remove();
@@ -72,7 +96,7 @@ describe("F2 11.2 complete Auth UI", () => {
     const identifier = host.querySelector<HTMLInputElement>("#auth-login-identifier")!;
     const password = host.querySelector<HTMLInputElement>("#auth-login-password")!;
     await act(async () => {
-      identifier.value = "producer#1234";
+      identifier.value = "producer@example.test";
       identifier.dispatchEvent(new Event("input", { bubbles: true }));
       password.value = "password-123";
       password.dispatchEvent(new Event("input", { bubbles: true }));
