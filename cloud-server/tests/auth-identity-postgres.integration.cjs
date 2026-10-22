@@ -114,7 +114,9 @@ async function main() {
   } finally {
     if (poolA) await poolA.end();
     if (poolB) await poolB.end();
-    await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => {});
+    // Let pg pools close normally. FORCE can terminate a connection that is
+    // still finishing setup and emit an unhandled pool error after PASS.
+    await admin.query(`DROP DATABASE IF EXISTS "${name}"`).catch(() => {});
     await admin.end();
   }
 }
