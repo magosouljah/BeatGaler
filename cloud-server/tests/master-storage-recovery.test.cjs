@@ -37,6 +37,10 @@ Module._load = function(request, parent, isMain) {
   try {
     delete require.cache[require.resolve('../master-storage.js')];
     const storage = require('../master-storage.js');
+    await assert.rejects(
+      () => storage.findStorageChannelByAccountId({ async getDialogs() { return Array.from({ length: 1000 }, (_, id) => ({ entity: { id: id + 1, title: 'other' } })); } }, 'usr_recovery'),
+      error => error?.code === 'STORAGE_RECONCILIATION_INCOMPLETE',
+    );
 
     await assert.rejects(
       () => storage.verifyPrivateUserStorageGroup({ botApiChatId: '-100123' }),

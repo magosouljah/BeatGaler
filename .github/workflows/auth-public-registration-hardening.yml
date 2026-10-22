@@ -1,0 +1,95 @@
+name: Auth public registration hardening
+
+on:
+  push:
+    branches:
+      - feat/auth-public-registration-hardening
+  pull_request:
+    branches:
+      - release/0.9.0-beta.1
+
+jobs:
+  auth-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+      - name: Syntax
+        run: |
+          node --check cloud-server/auth-public-registration-hardening.js
+          node --check cloud-server/provider-identity-authority.js
+          node --check cloud-server/sensitive-auth-containment.js
+          node --check cloud-server/session-security.js
+          node --check cloud-server/auth-durable-abuse-controls.js
+          node --check cloud-server/staged-email-change.js
+          node --check cloud-server/staged-email-change-routes.js
+          node --check cloud-server/pending-signup-runtime.js
+          node --check cloud-server/pending-signup-service.js
+          node --check cloud-server/pending-signup-boundary.js
+          node --check cloud-server/auth-delivery-worker.js
+          node --check cloud-server/auth-identity-preflight.js
+          node --check cloud-server/scripts/auth-identity-preflight.cjs
+          node --check cloud-server/account-lifecycle-verified-email-activation.js
+          node --check cloud-server/server-core-auth-bridge-loader.js
+          node --check cloud-server/signup-activation-coordinator.js
+          node --check cloud-server/postgres-auth-multiprocess-compat.js
+          node --check cloud-server/control-plane-cutover-runtime.js
+          node --check cloud-server/master-storage.js
+          node --check cloud-server/server.js
+          node --check cloud-server/tests/auth-public-registration-hardening.test.cjs
+          node --check cloud-server/tests/auth-identity-preflight.test.cjs
+          node --check cloud-server/tests/pending-signup-safety.test.mjs
+          node --check cloud-server/tests/signup-activation-safety.test.cjs
+          node --check cloud-server/tests/server-core-auth-bridge-loader.test.cjs
+          node --check cloud-server/tests/postgres-auth-multiprocess-compat.test.cjs
+          node --check cloud-server/tests/provider-identity-authority.test.cjs
+          node --check cloud-server/tests/sensitive-auth-containment.test.cjs
+          node --check cloud-server/tests/staged-email-change.test.cjs
+          node --check cloud-server/tests/staged-email-change-routes.test.cjs
+          node --check cloud-server/tests/account-email-ses-staged.test.cjs
+          node --check cloud-server/tests/auth-identity-postgres.integration.cjs
+          node --check cloud-server/tests/auth-identity-postgres.worker.cjs
+          node --check cloud-server/tests/signup-activation-postgres.integration.cjs
+          node --check cloud-server/tests/signup-activation-postgres.worker.cjs
+      - name: Focused auth tests
+        working-directory: cloud-server
+        run: npm run test:auth-hardening
+
+  auth-postgres-live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: beatgaler_auth_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d beatgaler_auth_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/beatgaler_auth_ci
+      BEATGALER_POSTGRES_SSL_MODE: disable
+      BEATGALER_PUBLIC_REGISTRATION: "0"
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up pinned Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Install locked cloud-server graph
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+      - name: Verify X claim, rollback, two-process concurrency and first-email migration in PostgreSQL
+        run: node cloud-server/tests/auth-identity-postgres.integration.cjs
+      - name: Inject activation and Telegram provisioning failures in PostgreSQL
+        run: node cloud-server/tests/signup-activation-postgres.integration.cjs

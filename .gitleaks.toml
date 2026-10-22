@@ -22,3 +22,11 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''^cloud-server/tests/unit\.test\.cjs$''']
 regexes = ['''^\s*telegram_api_hash:\s*['"]REDACTED_TELEGRAM_API_HASH['"],?\s*$''']
+
+[[allowlists]]
+description = "STEP15 isolation guard compares an environment variable name, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = ['''^scripts/step15-isolated-env-guard\.mjs$''']
+regexes = ['''^\s*key\.startsWith\('BILLING_E2E_'\) \|\| key === '[A-Z0-9_]{16}' \|\| key === 'STAGE1_COHORT_PASSWORD'\);$''']

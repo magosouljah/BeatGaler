@@ -6,6 +6,7 @@ const express = require('express');
 const { controlPlaneAuthorityConfig } = require('./control-plane-authority');
 const { resolveSecretEnvelopeKeyring } = require('./secret-envelope-provider');
 const { PostgresControlPlaneRuntime } = require('./postgres-control-plane-runtime');
+const { installMultiprocessAuthSnapshotCompatibility } = require('./postgres-auth-multiprocess-compat');
 const { assertJsonRollbackSnapshot } = require('./postgres-rollback-preparation');
 const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('./control-plane-json-compat');
 
@@ -33,6 +34,10 @@ async function prepareControlPlaneCutover({ pool, env = process.env, secretProvi
     cryptoConfig,
   });
   const initial = await runtime.initialize();
+  // Multiple cloud processes share this authority. Install per-process auth
+  // deltas before virtual JSON writes can reach saveAuthSnapshot(), so one
+  // process never globally deletes another process's sessions/providers/MFA.
+  await installMultiprocessAuthSnapshotCompatibility(runtime, pool, { initialAuth: initial.auth });
 
   installLegacyJsonCompatibility({
     fsModule: fs,

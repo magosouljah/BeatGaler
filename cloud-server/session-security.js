@@ -13,14 +13,17 @@ const STATE_VERSION = 1;
 const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const STATE_FILE_NAME = 'session-security-state.json';
 const ACCOUNTS_FILE_NAME = 'accounts-data.json';
-const PUBLIC_LOGIN_ROUTES = new Set(['/auth/login', '/auth/register']);
-const CSRF_EXEMPT_ROUTES = new Set(['/auth/login', '/auth/register', '/auth/session']);
+const PUBLIC_LOGIN_ROUTES = new Set(['/auth/login', '/auth/register', '/auth/signup/verify', '/auth/signup/resend', '/auth/signup/status']);
+const CSRF_EXEMPT_ROUTES = new Set(['/auth/login', '/auth/register', '/auth/signup/verify', '/auth/signup/resend', '/auth/signup/status', '/auth/session']);
 const RESPONSE_AUTH_ROUTES = new Set([
   '/auth/register',
+  '/auth/signup/verify',
+  '/auth/signup/status',
   '/auth/login',
   '/auth/session',
   '/auth/account',
   '/auth/email/change',
+  '/auth/email/change/confirm',
   '/auth/password/change',
   '/auth/mfa/setup',
   '/auth/mfa/enable',
@@ -32,7 +35,7 @@ const RESPONSE_AUTH_ROUTES = new Set([
   '/auth/account/delete',
 ]);
 const SENSITIVE_ROTATION_ROUTES = new Set(['/auth/password/change']);
-const CLEAR_SESSION_ROUTES = new Set(['/auth/logout', '/auth/account/delete']);
+const CLEAR_SESSION_ROUTES = new Set(['/auth/logout', '/auth/account/delete', '/auth/email/change/confirm']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function sha256(value) {
@@ -151,6 +154,7 @@ function normalizePersistentState(input) {
 
 function createSessionSecurityRuntime({
   dataDir = __dirname,
+  pool = null,
   now = () => Date.now(),
   randomBytes = size => crypto.randomBytes(size),
   getCapabilityStore = () => null,
@@ -347,10 +351,23 @@ function createSessionSecurityRuntime({
       return reject(res, 403, 'CSRF_REQUIRED', 'CSRF validation failed. Refresh the session and retry.');
     }
 
-    req.beatgalerSessionSecurity = credential;
-    req.headers.authorization = `Bearer ${credential.innerToken}`;
-    recordSessionMeta(credential.innerHash, req, credential.userId);
-    return next();
+    const accept = () => {
+      req.beatgalerSessionSecurity = credential;
+      req.headers.authorization = `Bearer ${credential.innerToken}`;
+      recordSessionMeta(credential.innerHash, req, credential.userId);
+      next();
+    };
+    if (!pool) return accept();
+    // A different process may have revoked this session after our local JSON
+    // snapshot was loaded. PostgreSQL decides whether it is still usable.
+    void pool.query('SELECT 1 FROM auth_sessions WHERE session_key_hash=$1 AND user_id=$2 AND expires_at>now() LIMIT 1',
+      [credential.innerHash, credential.userId]).then(result => {
+      if (!result.rows.length) {
+        if (web) clearBrowserCookies(req, res);
+        return reject(res, 401, 'SESSION_REVOKED', 'Session revoked. Sign in again.');
+      }
+      accept();
+    }).catch(() => reject(res, 503, 'SESSION_AUTHORITY_UNAVAILABLE', 'Session validation is temporarily unavailable.'));
   }
 
   function issueBrowserCookies(req, res, token) {
@@ -458,6 +475,24 @@ function createSessionSecurityRuntime({
     return sessions;
   }
 
+  async function sharedUserSessions(userId) {
+    if (!pool) return userSessions(userId);
+    const result = await pool.query('SELECT session_key_hash,created_at,expires_at FROM auth_sessions WHERE user_id=$1 AND expires_at>now()', [String(userId)]);
+    return result.rows.map(row => {
+      const sessionHash = String(row.session_key_hash);
+      const meta = sessionMeta.get(sessionHash) || {};
+      return {
+        id: publicSessionId(sessionHash),
+        sessionHash,
+        created_at: new Date(row.created_at).toISOString(),
+        expires_at: new Date(row.expires_at).toISOString(),
+        last_seen_at: meta.last_seen_at ? new Date(Number(meta.last_seen_at)).toISOString() : null,
+        client_kind: String(meta.client_kind || 'unknown'),
+        installation_id: meta.installation_id ? String(meta.installation_id) : null,
+      };
+    }).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
   function requireManagedRequest(req, res) {
     const credential = req.beatgalerSessionSecurity;
     if (!credential?.ok) {
@@ -470,7 +505,8 @@ function createSessionSecurityRuntime({
   function listSessions(req, res) {
     const credential = requireManagedRequest(req, res);
     if (!credential) return;
-    const sessions = userSessions(credential.userId).map(item => ({
+    const respond = items => {
+      const sessions = items.map(item => ({
       id: item.id,
       current: item.sessionHash === credential.innerHash,
       created_at: item.created_at,
@@ -478,9 +514,13 @@ function createSessionSecurityRuntime({
       last_seen_at: item.last_seen_at,
       client_kind: item.client_kind,
       installation_id: item.installation_id,
-    }));
-    res.setHeader('Cache-Control', 'no-store');
-    return res.json({ ok: true, sessions });
+      }));
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ ok: true, sessions });
+    };
+    if (!pool) return respond(userSessions(credential.userId));
+    void sharedUserSessions(credential.userId).then(respond)
+      .catch(() => reject(res, 503, 'SESSION_AUTHORITY_UNAVAILABLE', 'Session listing is temporarily unavailable.'));
   }
 
   async function revokeCapabilitySession(sessionHash, reason) {
@@ -497,13 +537,17 @@ function createSessionSecurityRuntime({
     const credential = requireManagedRequest(req, res);
     if (!credential) return;
     const targetId = String(req?.body?.session_id || req?.body?.sessionId || '').trim();
-    const target = userSessions(credential.userId).find(item => item.id === targetId);
+    let target;
+    try { target = (await sharedUserSessions(credential.userId)).find(item => item.id === targetId); }
+    catch { return reject(res, 503, 'SESSION_AUTHORITY_UNAVAILABLE', 'Session revocation is temporarily unavailable.'); }
     if (!target) return reject(res, 404, 'SESSION_NOT_FOUND', 'Session was not found.');
     try {
       await revokeCapabilitySession(target.sessionHash, 'session_revoke_one');
     } catch {
       return reject(res, 503, 'DIRECT_CAPABILITY_REVOKE_FAILED', 'Session revocation could not safely revoke active capabilities.');
     }
+    try { if (pool) await pool.query('DELETE FROM auth_sessions WHERE session_key_hash=$1 AND user_id=$2', [target.sessionHash, credential.userId]); }
+    catch { return reject(res, 503, 'SESSION_AUTHORITY_UNAVAILABLE', 'Session revocation is temporarily unavailable.'); }
     revokedSessionHashes.add(target.sessionHash);
     managedSessionHashes.delete(target.sessionHash);
     for (const [aliasHash, alias] of rotatedAliases) if (alias.innerHash === target.sessionHash) rotatedAliases.delete(aliasHash);
@@ -516,12 +560,16 @@ function createSessionSecurityRuntime({
   async function revokeAll(req, res) {
     const credential = requireManagedRequest(req, res);
     if (!credential) return;
-    const targets = userSessions(credential.userId);
+    let targets;
+    try { targets = await sharedUserSessions(credential.userId); }
+    catch { return reject(res, 503, 'SESSION_AUTHORITY_UNAVAILABLE', 'Session revocation is temporarily unavailable.'); }
     try {
       for (const target of targets) await revokeCapabilitySession(target.sessionHash, 'session_revoke_all');
     } catch {
       return reject(res, 503, 'DIRECT_CAPABILITY_REVOKE_FAILED', 'Session revocation could not safely revoke all active capabilities.');
     }
+    try { if (pool) await pool.query('DELETE FROM auth_sessions WHERE user_id=$1', [credential.userId]); }
+    catch { return reject(res, 503, 'SESSION_AUTHORITY_UNAVAILABLE', 'Session revocation is temporarily unavailable.'); }
     for (const target of targets) {
       revokedSessionHashes.add(target.sessionHash);
       managedSessionHashes.delete(target.sessionHash);

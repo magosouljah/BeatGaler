@@ -4,6 +4,9 @@ import {
   getBeatGalerInstallationId,
   loginBeatGalerAccount,
   registerBeatGalerAccount,
+  verifyBeatGalerSignup,
+  resendBeatGalerSignup,
+  resumeBeatGalerSignup,
   resolveBeatGalerCloudApi,
   restoreBeatGalerSession,
   type BeatGalerAccount,
@@ -13,12 +16,13 @@ import { UiButton, UiFeedback, UiField, UiSpinner } from "../../components/ui/De
 import { sanitizeUserVisibleText } from "../../lib/userVisibleError";
 import { platform } from "../../platform";
 import { hasRememberedWebSessionMarker } from "./webSessionBootstrap";
+import { formatSignupVerificationCode } from "./signupVerificationCode";
 
 const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
 const TOKEN_KEY = "beatgaler:account-session:v1";
 const CSRF_KEY = "beatgaler:web-csrf:v1";
 
-type Phase = "login" | "register" | "mfa" | "verify" | "reset-request" | "reset-complete" | "offline";
+type Phase = "login" | "register" | "signup-verify" | "mfa" | "verify" | "reset-request" | "reset-complete" | "offline";
 type OAuthState = "idle" | "opening" | "polling" | "blocked" | "cancelled" | "error";
 
 type PublicAuthError = Error & { status?: number; code?: string; mfa_required?: boolean };
@@ -106,6 +110,9 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const [mfaCode, setMfaCode] = useState("");
   const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [verifyToken, setVerifyToken] = useState("");
+  const [signupId, setSignupId] = useState("");
+  const [signupCode, setSignupCode] = useState("");
+  const signupResumeChecked = useRef(false);
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
@@ -142,6 +149,20 @@ export default function AuthExperienceGate({ children }: { children: React.React
       .finally(() => { if (!cancelled) setChecking(false); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (platform.kind !== "web" || checking || account || phase !== "login" || signupResumeChecked.current) return;
+    signupResumeChecked.current = true;
+    void resumeBeatGalerSignup().then(result => {
+      if ('signup_pending' in result) {
+        if (result.status === "ACTIVE") setNotice("Your account is ready. Sign in with your email.");
+        else if (result.signup_id) {
+          setSignupId(result.signup_id);
+          setPhase("signup-verify");
+        }
+      } else setAccount(result);
+    }).catch(() => {});
+  }, [checking, account, phase]);
 
   useEffect(() => {
     if (platform.kind === "web" && optimisticRememberedSession && !account) {
@@ -242,13 +263,58 @@ export default function AuthExperienceGate({ children }: { children: React.React
     if (password !== confirmPassword) { setError("Passwords do not match."); return; }
     setBusy(true); setError(null); setNotice(null);
     try {
-      const user = await registerBeatGalerAccount(usernameBase, email, password);
-      setAccount(null);
-      setPhase("verify");
-      setNotice(`Account created for ${user.email || email}. Check your email for the verification link or paste the verification code below.`);
+      const result = await registerBeatGalerAccount(usernameBase, email, password);
+      if ('signup_pending' in result) {
+        setPassword(""); setConfirmPassword("");
+        if (result.signup_id) {
+          setSignupId(result.signup_id);
+          setPhase("signup-verify");
+          setNotice("If this address is eligible, a verification code will arrive shortly.");
+        } else {
+          setPhase("login");
+          setNotice("If this address is eligible, verification instructions will arrive shortly.");
+        }
+      } else setAccount(result);
     } catch (errorValue) {
       setError(humanError(errorValue));
     } finally { setBusy(false); }
+  };
+
+  const confirmSignup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await verifyBeatGalerSignup(signupId, signupCode.trim());
+      if ('signup_pending' in result) {
+        if (result.status === "ACTIVE") { setPhase("login"); setNotice("Your account is ready. Sign in with your email."); }
+        else setNotice("Account setup is still in progress. Retry status shortly.");
+      }
+      else setAccount(result);
+    } catch (errorValue) { setError(humanError(errorValue)); }
+    finally { setBusy(false); }
+  };
+
+  const resendSignup = async () => {
+    if (busy) return;
+    setBusy(true); setError(null); setNotice(null);
+    try { await resendBeatGalerSignup(signupId); setNotice("If this signup is active, a new code will arrive shortly."); }
+    catch (errorValue) { setError(humanError(errorValue)); }
+    finally { setBusy(false); }
+  };
+
+  const retrySignup = async () => {
+    if (busy) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await resumeBeatGalerSignup(signupId);
+      if ('signup_pending' in result) {
+        if (result.status === "ACTIVE") { setPhase("login"); setNotice("Your account is ready. Sign in with your email."); }
+        else setNotice("Account setup is still in progress.");
+      }
+      else setAccount(result);
+    } catch (errorValue) { setError(humanError(errorValue)); }
+    finally { setBusy(false); }
   };
 
   const resendVerification = async () => {
@@ -376,6 +442,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
   };
 
   const title = phase === "register" ? "Create your account"
+    : phase === "signup-verify" ? "Check your email"
     : phase === "mfa" ? "Two-step verification"
       : phase === "verify" ? "Verify your email"
         : phase === "reset-request" ? "Reset your password"
@@ -389,6 +456,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
       <h1 ref={headingRef} tabIndex={-1} id="beatgaler-auth-title" className="bg-auth-title">{title}</h1>
       <p className="bg-auth-subtitle">
         {phase === "register" ? "Create one account for your BeatGaler library."
+          : phase === "signup-verify" ? "Enter the code we sent to finish creating your account."
           : phase === "mfa" ? "Use your authenticator or one unused recovery code."
             : phase === "verify" ? "Confirm the address connected to your BeatGaler account."
               : phase === "reset-request" ? "We will send reset instructions without revealing whether an account exists."
@@ -418,7 +486,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
         </UiFeedback>}
         {oauthState === "cancelled" && oauthProvider && <UiButton type="button" variant="ghost" onClick={() => void beginOAuth(oauthProvider)}>Retry provider sign-in</UiButton>}
         <div className="bg-auth-divider"><span>or use your password</span></div>
-        <UiField id="auth-login-identifier" label="Username or email" autoFocus value={identifier} onChange={event => setIdentifier(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+        <UiField id="auth-login-identifier" label="Email" type="email" autoFocus value={identifier} onChange={event => setIdentifier(event.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
         <UiField id="auth-login-password" label="Password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required />
         <UiButton type="submit" variant="primary" fullWidth loading={busy}>Sign in</UiButton>
         <div className="bg-auth-inline-actions bg-auth-inline-actions--center">
@@ -434,6 +502,14 @@ export default function AuthExperienceGate({ children }: { children: React.React
         <UiField id="auth-register-password" label="Password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" minLength={8} required />
         <UiField id="auth-register-confirm" label="Confirm password" type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" minLength={8} required />
         <UiButton type="submit" variant="primary" fullWidth loading={busy}>Create account</UiButton>
+        <UiButton type="button" variant="ghost" fullWidth onClick={() => go("login")}>Back to sign in</UiButton>
+      </form>}
+
+      {phase === "signup-verify" && <form className="bg-auth-form" onSubmit={confirmSignup}>
+        <UiField id="auth-signup-code" label="Verification code" autoFocus value={signupCode} onChange={event => setSignupCode(formatSignupVerificationCode(event.target.value))} inputMode="numeric" autoComplete="one-time-code" maxLength={7} pattern="[0-9]{3}-[0-9]{3}" placeholder="123-123" required />
+        <UiButton type="submit" variant="primary" fullWidth loading={busy}>Verify and create account</UiButton>
+        <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void resendSignup()}>Resend code</UiButton>
+        <UiButton type="button" variant="ghost" fullWidth disabled={busy} onClick={() => void retrySignup()}>Check setup status</UiButton>
         <UiButton type="button" variant="ghost" fullWidth onClick={() => go("login")}>Back to sign in</UiButton>
       </form>}
 
