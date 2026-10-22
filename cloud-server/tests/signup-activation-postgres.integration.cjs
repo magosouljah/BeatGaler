@@ -282,6 +282,41 @@ async function main() {
       }
     }
 
+    // Kill an actual Node process after the mocked Telegram transport accepts
+    // CreateChannel. PostgreSQL still says PROVISIONING/RUNNING. A restarted
+    // process must find that external group instead of issuing CreateChannel.
+    const killedId = 'psu_killed_telegram';
+    await seed(killedId);
+    activeFaults.set(killedId, 'before-vault');
+    await assert.rejects(coordinator(poolA, killedId).activate({ signupId: killedId,
+      continuationSecret: continuation }), /injected crash after user/);
+    const groupFile = path.join(stateRoot, 'telegram-after-process-death.json');
+    const worker = path.join(__dirname, 'signup-activation-postgres.worker.cjs');
+    await assert.rejects(execFileAsync(process.execPath, [worker], {
+      env: { ...process.env, DATABASE_URL: url, TEST_SIGNUP_ID: killedId,
+        TEST_TELEGRAM_GROUPS: JSON.stringify([...groups.values()]),
+        TEST_TELEGRAM_GROUP_FILE: groupFile, TEST_CRASH_AFTER_TELEGRAM: '1' },
+      timeout: 20_000,
+    }), error => error?.code === 82);
+    const createdBeforeDeath = JSON.parse(fs.readFileSync(groupFile, 'utf8'));
+    const orphan = createdBeforeDeath.at(-1);
+    groups.set(orphan.id, orphan);
+    assert.equal((await poolA.query('SELECT status FROM pending_signups WHERE id=$1', [killedId])).rows[0].status,
+      'PROVISIONING');
+    assert.equal((await poolA.query("SELECT state FROM auth_provisioning_ledger WHERE signup_id=$1 AND step='vault'",
+      [killedId])).rows[0].state, 'RUNNING');
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1',
+      [stableUserId(killedId)])).rows[0].n, 0);
+    await poolA.query("UPDATE pending_signups SET updated_at=now()-interval '2 minutes' WHERE id=$1", [killedId]);
+    assert.equal(await service.recoverStaleActivations({ staleMs: 60_000 }), 1);
+    const restartedWorker = await execFileAsync(process.execPath, [worker], {
+      env: { ...process.env, DATABASE_URL: url, TEST_SIGNUP_ID: killedId,
+        TEST_TELEGRAM_GROUPS: JSON.stringify([...groups.values()]) },
+      timeout: 20_000,
+    });
+    assert.equal(JSON.parse(restartedWorker.stdout).createAttempts, 0);
+    await assertDurable(killedId);
+
     const concurrentId = 'psu_concurrent';
     await seed(concurrentId);
     const [one, two] = await Promise.all([

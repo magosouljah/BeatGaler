@@ -15,7 +15,7 @@ const { createPostgresInstallationClaimCoordinator } = require('../postgres-inst
 async function main() {
   const groups = JSON.parse(process.env.TEST_TELEGRAM_GROUPS || '[]');
   let createAttempts = 0;
-  class CreateChannel {}
+  class CreateChannel { constructor(input) { Object.assign(this, input); } }
   const originalLoad = Module._load;
   Module._load = function(request, parent, isMain) {
     if (request === 'telegram') return { TelegramClient: class {
@@ -27,6 +27,12 @@ async function main() {
       async invoke(requestObject) {
         if (requestObject instanceof CreateChannel) {
           createAttempts += 1;
+          if (process.env.TEST_CRASH_AFTER_TELEGRAM === '1') {
+            const entity = { id: 900001, title: requestObject.title };
+            fs.writeFileSync(process.env.TEST_TELEGRAM_GROUP_FILE,
+              JSON.stringify([...groups, entity]));
+            process.exit(82); // Simulate process death after Telegram accepted CreateChannel.
+          }
           throw new Error('retry attempted a duplicate Telegram CreateChannel');
         }
         return {};
