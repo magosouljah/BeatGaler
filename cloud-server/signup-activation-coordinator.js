@@ -154,8 +154,12 @@ function createSignupActivationCoordinator({
         activeCommitted = true;
         const userId = String(pending.activated_user_id || stableUserId(id));
         const authoritative = await loadAuthoritativeUser(client, userId);
+        if (!authoritative) throw coded('Active signup user is missing from PostgreSQL.', 'AUTH_USER_DURABILITY_FAILED');
         const bridge = getBridge();
-        if (authoritative && bridge) bridge.adoptAuthoritativeUser(authoritativeBridgeInput(authoritative));
+        if (bridge) bridge.adoptAuthoritativeUser(authoritativeBridgeInput(authoritative));
+        markLifecycleEmailVerified(accountLifecycle, userId, pending.email_normalized, {
+          verifiedAt: pending.verified_at ? new Date(pending.verified_at).toISOString() : new Date(now()).toISOString(),
+        });
         return {
           status: 'ACTIVE',
           user_id: userId,

@@ -75,6 +75,7 @@ async function main() {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-activation-pg-'));
   const activeFaults = new Map();
   const counters = new Map();
+  const lifecycleStates = new Map();
 
   try {
     await admin.query(`CREATE DATABASE "${name}"`);
@@ -105,6 +106,7 @@ async function main() {
       let local = null;
       let activeObserved = false;
       const lifecycleState = { email_verified: {} };
+      lifecycleStates.set(signupId, lifecycleState);
       const lifecycle = { _test: {
         stateSnapshot() { return lifecycleState; },
         stateFile: path.join(stateRoot, `${signupId}-${crypto.randomBytes(3).toString('hex')}.json`),
@@ -277,6 +279,10 @@ async function main() {
         : await coordinator(poolB, signupId).activate({ signupId, continuationSecret: continuation });
       assert.equal(recovered.status, 'ACTIVE');
       await assertDurable(signupId, { sessions: fault === 'after-active' ? 0 : 1 });
+      if (fault === 'after-active') {
+        assert.ok(lifecycleStates.get(signupId).email_verified[stableUserId(signupId)],
+          'ACTIVE retry must restore local verified-email projection');
+      }
       if (fault === 'after-installation') {
         assert.equal(counters.get(signupId).binds, 2, 'installation replay must converge to one durable owner');
       }
