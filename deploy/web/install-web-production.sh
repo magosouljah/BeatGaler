@@ -19,10 +19,11 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }
 }
 
-for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp tr readlink realpath mv cp; do
+for command_name in nginx certbot getent tar curl grep awk sort date install ln openssl mktemp tr readlink realpath mv cp timeout sleep; do
   require_command "$command_name"
 done
 source "$(dirname "${BASH_SOURCE[0]}")/release-switch.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/wait-web-tls.sh"
 
 for file_path in "$ARCHIVE" "$BOOTSTRAP_CONF" "$PRODUCTION_CONF"; do
   [ -f "$file_path" ] || { echo "Missing deployment input: $file_path" >&2; exit 3; }
@@ -157,6 +158,10 @@ install -m 0644 "$PRODUCTION_CONF" "$NGINX_CONF"
 nginx -t
 systemctl reload nginx
 
+EXPECTED_TLS_FINGERPRINT="$(openssl x509 -in "$CERT_DIR/fullchain.pem" -noout -fingerprint -sha256 \
+  | awk -F= '/[Ff]ingerprint=/ {print $2}' | tr -d '\r\n')"
+wait_web_tls_fingerprint "$WEB_HOST" "$EXPECTED_TLS_FINGERPRINT" 10000 0.25
+
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/web-health" | grep -Fxq "ok"
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/.well-known/source-sha.txt" | grep -Fxq "$EXPECTED_SOURCE_SHA"
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" "https://$WEB_HOST/beatgaler-api/auth/health" \
@@ -167,7 +172,8 @@ SECURITY_BODY="$(mktemp)"
 curl --noproxy '*' --fail --silent --show-error --resolve "$WEB_HOST:443:127.0.0.1" \
   -D "$SECURITY_HEADERS" -o "$SECURITY_BODY" "https://$WEB_HOST/.well-known/security.txt"
 grep -Eiq '^content-type:[[:space:]]*text/plain;[[:space:]]*charset=utf-8([[:space:]]|$)' "$SECURITY_HEADERS"
-grep -Fxq 'Canonical: https://beatgaler.com/.well-known/security.txt' "$SECURITY_BODY"
+grep -Fxq 'Canonical: https://beatgaler.com/.well-known/security.txt' "$SECURITY_BODY" \
+  || grep -Fxq $'Canonical: https://beatgaler.com/.well-known/security.txt\r' "$SECURITY_BODY"
 if grep -Eiq '<!doctype html|<html[[:space:]>]' "$SECURITY_BODY"; then
   echo "security.txt unexpectedly resolved to HTML/SPA content." >&2
   exit 27
