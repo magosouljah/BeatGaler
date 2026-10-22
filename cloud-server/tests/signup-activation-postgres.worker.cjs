@@ -10,6 +10,7 @@ const { createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createPendingSignupService } = require('../pending-signup-service');
 const { createSignupActivationCoordinator } = require('../signup-activation-coordinator');
 const { issueWelcomeGrant } = require('../access-grant-store');
+const { createPostgresInstallationClaimCoordinator } = require('../postgres-installation-claim-coordinator');
 
 async function main() {
   const groups = JSON.parse(process.env.TEST_TELEGRAM_GROUPS || '[]');
@@ -83,7 +84,8 @@ async function main() {
   }
   try {
     const coordinator = createSignupActivationCoordinator({ pool, service, getBridge: () => bridge,
-      flushAuthority, accountLifecycle, issueWelcome: userId => issueWelcomeGrant(pool, userId), staleMs: 60_000 });
+      flushAuthority, accountLifecycle, issueWelcome: userId => issueWelcomeGrant(pool, userId),
+      installationClaimCoordinator: createPostgresInstallationClaimCoordinator(pool), staleMs: 60_000 });
     const result = await coordinator.activate({ signupId: process.env.TEST_SIGNUP_ID,
       continuationSecret: 'sc_activation_test' });
     if (result.status !== 'ACTIVE' || createAttempts !== 0) throw new Error('restart did not recover the existing Telegram group');

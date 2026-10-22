@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { markLifecycleEmailVerified } = require('./account-lifecycle-verified-email-activation');
+const { COMPAT_STATE_KEY } = require('./postgres-control-plane-runtime');
 
 function coded(message, code, extras = {}) {
   return Object.assign(new Error(message), { code, ...extras });
@@ -51,6 +52,7 @@ function permanentActivationError(error) {
     'AUTH_BRIDGE_EMAIL_CONFLICT',
     'AUTH_BRIDGE_USER_ID_CONFLICT',
     'EMAIL_CONFLICT_DURING_ACTIVATION',
+    'INSTALLATION_CONFLICT',
   ]).has(String(error?.code || ''));
 }
 
@@ -122,6 +124,7 @@ function createSignupActivationCoordinator({
   flushAuthority,
   accountLifecycle,
   issueWelcome,
+  installationClaimCoordinator = null,
   now = () => Date.now(),
   staleMs = 5 * 60_000,
 } = {}) {
@@ -140,6 +143,7 @@ function createSignupActivationCoordinator({
     const client = await pool.connect();
     const lockKey = `signup-activation:${id}`;
     let activeCommitted = false;
+    let releaseInstallationClaim = null;
     try {
       await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
       const stateResult = await client.query('SELECT * FROM pending_signups WHERE id=$1 LIMIT 1', [id]);
@@ -158,6 +162,22 @@ function createSignupActivationCoordinator({
           username: authoritative?.username || null,
           session_required: true,
         };
+      }
+
+      if (pending.installation_id) {
+        if (typeof installationClaimCoordinator?.tryAcquire !== 'function') {
+          throw coded('Installation claim coordination is unavailable.', 'INSTALLATION_CLAIM_UNAVAILABLE');
+        }
+        releaseInstallationClaim = await installationClaimCoordinator.tryAcquire(String(pending.installation_id));
+        if (!releaseInstallationClaim) throw coded('Installation claim is busy.', 'INSTALLATION_CLAIM_BUSY');
+        const binding = await client.query(`
+          SELECT payload->'linkedAccounts'->$2::text AS binding
+          FROM runtime_compat_state WHERE state_key=$1
+        `, [COMPAT_STATE_KEY, String(pending.installation_id)]);
+        const owner = binding.rows[0]?.binding?.beatgalerAccountId;
+        if (binding.rows[0]?.binding && String(owner || '') !== stableUserId(id)) {
+          throw coded('Installation belongs to another account.', 'INSTALLATION_CONFLICT');
+        }
       }
 
       if (['ACTIVATING','PROVISIONING'].includes(String(pending.status))) {
@@ -240,8 +260,22 @@ function createSignupActivationCoordinator({
           bridge.adoptAuthoritativeUser(authoritativeBridgeInput(authoritative));
           bridge.bindInstallation(userId, String(pending.installation_id));
           await flushAuthority();
+          const binding = await client.query(`
+            SELECT payload->'linkedAccounts'->$2::text AS binding
+            FROM runtime_compat_state WHERE state_key=$1
+          `, [COMPAT_STATE_KEY, String(pending.installation_id)]);
+          if (String(binding.rows[0]?.binding?.beatgalerAccountId || '') !== userId) {
+            throw coded('Installation claim was not durable.', 'INSTALLATION_DURABILITY_FAILED');
+          }
           return { user_id: userId, installation_id: String(pending.installation_id) };
         });
+        const durableBinding = await client.query(`
+          SELECT payload->'linkedAccounts'->$2::text AS binding
+          FROM runtime_compat_state WHERE state_key=$1
+        `, [COMPAT_STATE_KEY, String(pending.installation_id)]);
+        if (String(durableBinding.rows[0]?.binding?.beatgalerAccountId || '') !== userId) {
+          throw coded('Installation claim is missing after its ledger step.', 'INSTALLATION_DURABILITY_FAILED');
+        }
       }
 
       await runLedgerStep(client, id, 'welcome', async () => {
@@ -277,6 +311,7 @@ function createSignupActivationCoordinator({
       }
       throw error;
     } finally {
+      if (releaseInstallationClaim) await releaseInstallationClaim().catch(() => {});
       try { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]); } catch {}
       client.release();
     }

@@ -14,6 +14,7 @@ const { createPendingSignupService } = require('../pending-signup-service');
 const { digest, createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createSignupActivationCoordinator, stableUserId } = require('../signup-activation-coordinator');
 const { issueWelcomeGrant } = require('../access-grant-store');
+const { createPostgresInstallationClaimCoordinator } = require('../postgres-installation-claim-coordinator');
 const execFileAsync = promisify(execFile);
 
 function databaseUrl(base, database) {
@@ -87,13 +88,13 @@ async function main() {
     const service = createPendingSignupService({ pool: poolA, runtime,
       env: { BEATGALER_SIGNUP_PEPPER: pepper } });
 
-    async function seed(signupId, { installation = true } = {}) {
+    async function seed(signupId, { installation = true, installationId = null } = {}) {
       await poolA.query(`INSERT INTO pending_signups(
         id,email_normalized,username_base,password_hash,password_salt,installation_id,
         continuation_hash,link_token_hash,manual_code_hash,challenge_expires_at,status,verified_at,expires_at
       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now()+interval '1 hour','VERIFIED',now(),now()+interval '1 day')`, [
         signupId, `${signupId}@example.com`, `user${signupId.slice(-4)}`, 'a'.repeat(64), 'b'.repeat(32),
-        installation ? `install_${signupId}` : null, digest(pepper, 'continuation', continuation),
+        installation ? (installationId || `install_${signupId}`) : null, digest(pepper, 'continuation', continuation),
         'c'.repeat(64), 'd'.repeat(64),
       ]);
     }
@@ -197,6 +198,7 @@ async function main() {
       return createSignupActivationCoordinator({
         pool, service: wrappedService, getBridge: () => bridge, flushAuthority,
         accountLifecycle: lifecycle, issueWelcome: userId => issueWelcomeGrant(pool, userId),
+        installationClaimCoordinator: createPostgresInstallationClaimCoordinator(pool),
         staleMs: 60_000,
       });
     }
@@ -291,6 +293,21 @@ async function main() {
     assert.equal(one.user_id, two.user_id);
     await assertDurable(concurrentId);
     assert.equal(counters.get(concurrentId).sessions, 1);
+
+    const ownerId = 'psu_install_owner';
+    const rejectedId = 'psu_install_conflict';
+    await seed(ownerId, { installationId: 'install_shared_activation' });
+    await seed(rejectedId, { installationId: 'install_shared_activation' });
+    assert.equal((await coordinator(poolA, ownerId).activate({ signupId: ownerId,
+      continuationSecret: continuation })).status, 'ACTIVE');
+    await assert.rejects(coordinator(poolB, rejectedId).activate({ signupId: rejectedId,
+      continuationSecret: continuation }), error => error?.code === 'INSTALLATION_CONFLICT');
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM users WHERE id=$1',
+      [stableUserId(rejectedId)])).rows[0].n, 0, 'conflicting installation must fail before user creation');
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1',
+      [stableUserId(rejectedId)])).rows[0].n, 0, 'conflicting installation must fail before Telegram');
+    assert.equal((await poolA.query('SELECT status FROM pending_signups WHERE id=$1', [rejectedId])).rows[0].status,
+      'CANCELLED');
     console.log('signup activation PostgreSQL fault injection: PASS');
   } finally {
     Module._load = originalLoad;
