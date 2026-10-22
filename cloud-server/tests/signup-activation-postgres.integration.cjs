@@ -218,6 +218,29 @@ async function main() {
       assert.equal(persistent.rows[0]?.linked?.beatgalerAccountId, id);
     }
 
+    // Exercise the real pending runtime and verification transition without
+    // SES. Neither the pending row nor a verified code creates a user or vault.
+    const begun = await service.begin({ email: 'flow@example.com', usernameBase: 'flowuser',
+      password: 'password-123', installationId: 'install_flow' });
+    assert.equal(begun.created, true);
+    const flowUserId = stableUserId(begun.signup_id);
+    const beforeVerify = await poolA.query('SELECT count(*)::int AS n FROM users WHERE id=$1', [flowUserId]);
+    assert.equal(beforeVerify.rows[0].n, 0);
+    const delivery = await runtime.claimDelivery();
+    assert.equal(delivery.row.signup_id, begun.signup_id);
+    await runtime.completeDelivery(delivery.row.id, { ok: true });
+    const verified = await service.verify({ signupId: begun.signup_id,
+      continuationSecret: begun.continuation_secret, challenge: delivery.secret.manual_code });
+    assert.equal(verified.status, 'VERIFIED');
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM users WHERE id=$1', [flowUserId])).rows[0].n, 0);
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1', [flowUserId])).rows[0].n, 0);
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM auth_sessions WHERE user_id=$1', [flowUserId])).rows[0].n, 0);
+    const flowActive = await coordinator(poolA, begun.signup_id).activate({ signupId: begun.signup_id,
+      continuationSecret: begun.continuation_secret });
+    assert.equal(flowActive.status, 'ACTIVE');
+    assert.equal(flowActive.user_id, flowUserId);
+    assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1', [flowUserId])).rows[0].n, 1);
+
     const cases = [
       ['psu_before_vault', 'before-vault'],
       ['psu_during_telegram', 'during-telegram'],
