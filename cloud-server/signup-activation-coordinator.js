@@ -206,11 +206,17 @@ function createSignupActivationCoordinator({
         } else {
           bridge.adoptAuthoritativeUser(authoritativeBridgeInput(authoritative));
         }
-        markLifecycleEmailVerified(accountLifecycle, userId, pending.email_normalized, {
-          verifiedAt: pending.verified_at ? new Date(pending.verified_at).toISOString() : new Date(now()).toISOString(),
-        });
         return { user_id: userId, username: authoritative.username };
       });
+
+      // Lifecycle state is process local. A crash after the durable user ledger
+      // commit must not skip this idempotent projection on the next attempt.
+      markLifecycleEmailVerified(accountLifecycle, userId, pending.email_normalized, {
+        verifiedAt: pending.verified_at ? new Date(pending.verified_at).toISOString() : new Date(now()).toISOString(),
+      });
+      const durableUser = await loadAuthoritativeUser(client, userId);
+      if (!durableUser) throw coded('Activation user is missing after its ledger step.', 'AUTH_USER_DURABILITY_FAILED');
+      bridge.adoptAuthoritativeUser(authoritativeBridgeInput(durableUser));
 
       const vaultRef = await runLedgerStep(client, id, 'vault', async () => {
         const authoritative = await loadAuthoritativeUser(client, userId);
@@ -222,6 +228,11 @@ function createSignupActivationCoordinator({
         if (!durable?.telegram_chat_id) throw coded('Vault was not durable after control-plane flush.', 'AUTH_VAULT_DURABILITY_FAILED');
         return { user_id: userId, telegram_chat_id: String(durable.telegram_chat_id) };
       });
+      // A DONE ledger row skips its work after restart. Reload the durable
+      // assignment so installation binding and session issuance have a user.
+      const durableVault = await loadAuthoritativeUser(client, userId);
+      if (!durableVault?.telegram_chat_id) throw coded('Vault is missing after its ledger step.', 'AUTH_VAULT_DURABILITY_FAILED');
+      bridge.adoptAuthoritativeUser(authoritativeBridgeInput(durableVault));
 
       if (pending.installation_id) {
         await runLedgerStep(client, id, 'installation', async () => {

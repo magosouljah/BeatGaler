@@ -217,6 +217,31 @@ assert.equal(retryDelay(100), 3_600_000);
 
 {
   const routes = new Map();
+  const app = { post(route, ...handlers) { routes.set(route, handlers); return this; } };
+  let current = 'PROVISIONING';
+  const calls = [];
+  installPendingSignupBoundary({ application: app }, {
+    service: { async status() { return { status: current }; } },
+    activation: async () => { calls.push(current); return current === 'PROVISIONING'
+      ? { status: 'PROVISIONING', signup_pending: true }
+      : { status: 'ACTIVE', session_required: true }; },
+    env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
+  });
+  app.post('/auth/register', () => {});
+  async function poll() {
+    return new Promise(resolve => {
+      const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { resolve(body); } };
+      routes.get('/auth/signup/status')[0]({ body: { signup_id: 'psu_1', continuation_secret: 'secret' } }, res);
+    });
+  }
+  assert.equal((await poll()).signup_pending, true);
+  current = 'RETRYABLE';
+  assert.equal((await poll()).status, 'ACTIVE');
+  assert.deepEqual(calls, ['PROVISIONING', 'RETRYABLE'], 'polling must reach activation after a stale crash');
+}
+
+{
+  const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let statusInput = null;
   installPendingSignupBoundary({ application: app }, {

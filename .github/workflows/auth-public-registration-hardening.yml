@@ -54,6 +54,7 @@ jobs:
           node --check cloud-server/tests/account-email-ses-staged.test.cjs
           node --check cloud-server/tests/auth-identity-postgres.integration.cjs
           node --check cloud-server/tests/auth-identity-postgres.worker.cjs
+          node --check cloud-server/tests/signup-activation-postgres.integration.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
@@ -89,3 +90,5 @@ jobs:
         run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
       - name: Verify X claim, rollback, two-process concurrency and first-email migration in PostgreSQL
         run: node cloud-server/tests/auth-identity-postgres.integration.cjs
+      - name: Inject activation and Telegram provisioning failures in PostgreSQL
+        run: node cloud-server/tests/signup-activation-postgres.integration.cjs

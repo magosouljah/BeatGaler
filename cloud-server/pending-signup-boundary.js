@@ -259,7 +259,9 @@ function installPendingSignupBoundary(express, {
       const { signupId, continuationSecret } = signupInput(req);
       const result = await service.status({ signupId, continuationSecret });
       if (!result) return res.status(404).json({ error: 'Signup session was not found.', code: 'SIGNUP_NOT_FOUND' });
-      const retryable = result.status === 'VERIFIED' || result.status === 'RETRYABLE';
+      // The coordinator decides whether an in-progress claim is still fresh or
+      // stale enough to recover. Polling must reach it after a process crash.
+      const retryable = ['VERIFIED', 'RETRYABLE', 'ACTIVATING', 'PROVISIONING'].includes(result.status);
       const activationResult = retryable && typeof activation === 'function'
         ? await activation({ signupId, continuationSecret })
         : null;
