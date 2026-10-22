@@ -241,6 +241,10 @@ assert.equal(retryDelay(100), 3_600_000);
   let randomCalls = 0;
   const { pool } = poolWithClient(async (sql, params) => {
     if (sql.startsWith('SELECT * FROM pending_signups')) return { rows: [row] };
+    if (sql.includes('FROM auth_delivery_outbox WHERE signup_id=')) return { rows: [{
+      id: outboxParams[0], secret_ciphertext: outboxParams[5], secret_nonce: outboxParams[6],
+      secret_key_version: outboxParams[7],
+    }] };
     if (sql.includes('link_token_hash=$2,manual_code_hash=$3')) {
       row = {
         ...row,
@@ -266,7 +270,7 @@ assert.equal(retryDelay(100), 3_600_000);
   const runtime = createPendingSignupRuntime({
     pool,
     keyring: { key: Buffer.alloc(32, 8), keyVersion: 1 },
-    env: { BEATGALER_SIGNUP_PEPPER: pepper },
+    env: { BEATGALER_SIGNUP_PEPPER: pepper, BEATGALER_SIGNUP_DIAGNOSTICS: '1' },
     now: () => now,
     randomBytes: size => Buffer.alloc(size, ++randomCalls),
   });
@@ -290,11 +294,19 @@ assert.equal(retryDelay(100), 3_600_000);
   assert.equal(row.manual_code_hash, digest(pepper, 'code', canonical), 'only canonical digits are hashed');
   assert.equal(JSON.parse(outboxParams[4]).manual_code, undefined, 'the public outbox payload must not contain the code');
 
-  await assert.rejects(
-    runtime.verify({ signupId: row.id, continuationSecret: 'sc_good', challenge: '654-321' }),
-    error => error?.code === 'SIGNUP_CHALLENGE_INVALID',
-    'the challenge replaced by resend must no longer verify',
-  );
+  const audit = [];
+  const previousWarn = console.warn;
+  console.warn = (...args) => audit.push(args);
+  try {
+    await assert.rejects(
+      runtime.verify({ signupId: row.id, continuationSecret: 'sc_good', challenge: '654-321' }),
+      error => error?.code === 'SIGNUP_CHALLENGE_INVALID',
+      'the challenge replaced by resend must no longer verify',
+    );
+  } finally { console.warn = previousWarn; }
+  assert.equal(audit[0]?.[0], '[signup-verify-audit]');
+  assert.deepEqual(audit[0]?.[1]?.delivery_matches_newest_first, [false]);
+  assert.equal(JSON.stringify(audit).includes('654-321'), false, 'the audit must never log a code');
   const verified = await runtime.verify({
     signupId: row.id,
     continuationSecret: 'sc_good',

@@ -260,6 +260,27 @@ function createPendingSignupRuntime({
       const matched = safeEqualHex(row.link_token_hash, digest(pepper, 'link', raw)) ||
         (canonicalManualCode !== null && safeEqualHex(row.manual_code_hash, digest(pepper, 'code', canonicalManualCode)));
       if (!matched) {
+        if (String(env.BEATGALER_SIGNUP_DIAGNOSTICS || '') === '1') {
+          try {
+            const deliveries = await client.query(`SELECT id,secret_ciphertext,secret_nonce,secret_key_version,sent_at
+              FROM auth_delivery_outbox WHERE signup_id=$1 AND kind='signup_verification'
+              ORDER BY created_at DESC LIMIT 5`, [row.id]);
+            const candidateHash = canonicalManualCode === null ? '' : digest(pepper, 'code', canonicalManualCode);
+            const deliveryMatches = deliveries.rows.map(delivery => {
+              const sentCode = normalizeManualCode(decryptDelivery(delivery).manual_code);
+              return sentCode !== null && safeEqualHex(candidateHash, digest(pepper, 'code', sentCode));
+            });
+            console.warn('[signup-verify-audit]', {
+              format_valid: canonicalManualCode !== null,
+              challenge_failures_before: Number(row.challenge_failures || 0),
+              resend_count: Number(row.resend_count || 0),
+              challenge_expires_at: new Date(row.challenge_expires_at).toISOString(),
+              delivery_matches_newest_first: deliveryMatches,
+            });
+          } catch (auditError) {
+            console.warn('[signup-verify-audit]', { audit_error: String(auditError?.code || 'UNAVAILABLE') });
+          }
+        }
         const failures = Number(row.challenge_failures || 0) + 1;
         await client.query('UPDATE pending_signups SET challenge_failures=$2,updated_at=now() WHERE id=$1', [row.id, failures]);
         await client.query('COMMIT');
