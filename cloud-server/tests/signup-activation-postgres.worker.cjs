@@ -51,11 +51,6 @@ async function main() {
     env: { BEATGALER_SIGNUP_PEPPER: pepper } });
   const service = createPendingSignupService({ pool, runtime, env: { BEATGALER_SIGNUP_PEPPER: pepper } });
   let local = null;
-  const lifecycleState = { email_verified: {} };
-  const accountLifecycle = { _test: {
-    stateSnapshot() { return lifecycleState; },
-    stateFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-activation-worker-')), 'lifecycle.json'),
-  } };
   const bridge = {
     adoptOrCreatePasswordUser() { throw new Error('durable user was not found after restart'); },
     adoptAuthoritativeUser(input) {
@@ -90,7 +85,7 @@ async function main() {
   }
   try {
     const coordinator = createSignupActivationCoordinator({ pool, service, getBridge: () => bridge,
-      flushAuthority, accountLifecycle, issueWelcome: userId => issueWelcomeGrant(pool, userId),
+      flushAuthority, issueWelcome: userId => issueWelcomeGrant(pool, userId),
       installationClaimCoordinator: createPostgresInstallationClaimCoordinator(pool), staleMs: 60_000 });
     const result = await coordinator.activate({ signupId: process.env.TEST_SIGNUP_ID,
       continuationSecret: 'sc_activation_test' });

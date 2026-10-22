@@ -175,14 +175,15 @@ assert.equal(authErrorLooksInternal('ECONNREFUSED 127.0.0.1:5432'), true);
 assert.equal(authErrorLooksInternal('Invalid email or password.'), false);
 assert.equal(authErrorLooksInternal('That Google account is already connected to another BeatGaler account.'), false);
 
-{
+const passwordChecks = (async () => {
   // A password by itself is no longer a usable sign-in method. It only becomes
   // usable once the account also has one unique verified email address.
   const runtime = { passwordOverrideForUser: () => null };
-  assert.equal(hasUsablePassword(runtime, { userId: 'u1', user: { passwordHash: 'abc' } }), false);
-  assert.equal(hasUsablePassword(runtime, { userId: 'u1', user: {} }), false);
-  assert.equal(hasUsablePassword({ passwordOverrideForUser: () => ({ passwordHash: 'override' }) }, { userId: 'u1', user: {} }), false);
-}
+  const pool = { async query() { return { rows: [] }; } };
+  assert.equal(await hasUsablePassword(runtime, { userId: 'u1', user: { passwordHash: 'abc' } }, pool), false);
+  assert.equal(await hasUsablePassword(runtime, { userId: 'u1', user: {} }, pool), false);
+  assert.equal(await hasUsablePassword({ passwordOverrideForUser: () => ({ passwordHash: 'override' }) }, { userId: 'u1', user: {} }, pool), false);
+})();
 
 {
   const login = routePolicy('/auth/login', {});
@@ -250,6 +251,7 @@ assert.equal(authErrorLooksInternal('That Google account is already connected to
 }
 
 (async () => {
+  await passwordChecks;
   const routes = new Map();
   const app = {
     post(path, ...handlers) { routes.set(path, handlers); },

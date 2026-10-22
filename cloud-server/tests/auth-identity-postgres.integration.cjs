@@ -9,6 +9,10 @@ const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations');
 const { createProviderIdentityAuthority } = require('../provider-identity-authority');
 const { hasVerifiedEmailShared } = require('../sensitive-auth-containment');
+const { emailHash } = require('../email-verification-authority');
+const { importLegacyEmailVerifications } = require('../scripts/import-legacy-email-verifications.cjs');
+const { loadIdentityRows } = require('../scripts/auth-identity-preflight.cjs');
+const { analyzeIdentityPreflight } = require('../auth-identity-preflight');
 const execFileAsync = promisify(execFile);
 
 function databaseUrl(base, database) {
@@ -98,18 +102,35 @@ async function main() {
     assert.equal((await poolA.query("SELECT count(*)::int AS n FROM provider_identities WHERE provider='x' AND provider_subject='x-c'")).rows[0].n, 1);
     assert.equal((await poolA.query("SELECT count(*)::int AS n FROM users WHERE lower(username)='juanito'")).rows[0].n, 1);
 
-    // The second process can authorize password bootstrap from the committed
-    // email proof even while its local lifecycle snapshot remains stale.
+    // Every process uses the committed verification row, even when its local
+    // lifecycle snapshot is stale.
     await poolA.query("UPDATE users SET email='verified@example.com' WHERE id='usr_x_a'");
-    await poolA.query(`INSERT INTO auth_email_changes(
-      user_id,request_id,old_email,new_email,token_hash,state,expires_at,confirmed_at
-    ) VALUES('usr_x_a','emc_live_test',NULL,'verified@example.com',$1,'CONFIRMED',now()+interval '1 hour',now())`,
-    ['a'.repeat(64)]);
+    await poolA.query(`INSERT INTO user_email_verifications(user_id,email_hash,verified_at)
+      VALUES('usr_x_a',$1,now())`, [emailHash('verified@example.com')]);
     const staleRuntime = { _test: { publicStatusForUser() { return { email_verified: false }; } } };
     const info = { userId: 'usr_x_a', user: { id: 'usr_x_a', email: 'verified@example.com' } };
     assert.equal(await hasVerifiedEmailShared(staleRuntime, info, poolB), true);
     await poolA.query("UPDATE users SET email='changed-again@example.com' WHERE id='usr_x_a'");
     assert.equal(await hasVerifiedEmailShared(staleRuntime, info, poolB), false);
+    assert.equal((await poolA.query("SELECT count(*)::int AS n FROM user_email_verifications WHERE user_id='usr_x_a'")).rows[0].n, 0,
+      'the email change trigger must invalidate the old verification row');
+
+    const legacyState = { email_verified: {
+      usr_x_a: { email_hash: emailHash('changed-again@example.com'), verified_at: '2026-10-21T12:00:00Z' },
+    }, password_overrides: { usr_x_a: { passwordHash: 'test-only' } } };
+    let report = analyzeIdentityPreflight({ ...await loadIdentityRows(poolB), lifecycleState: legacyState });
+    assert.equal(report.blockers.some(row => row.code === 'PASSWORD_EMAIL_UNVERIFIED' && row.user_ids[0] === 'usr_x_a'), true,
+      'legacy JSON alone cannot satisfy the PostgreSQL preflight');
+    const dryRun = await importLegacyEmailVerifications(poolA, legacyState, { dryRun: true });
+    assert.equal(dryRun.IMPORTED, 0);
+    assert.equal((await poolA.query("SELECT count(*)::int AS n FROM user_email_verifications WHERE user_id='usr_x_a'")).rows[0].n, 0);
+    const imported = await importLegacyEmailVerifications(poolA, legacyState);
+    assert.equal(imported.IMPORTED, 1);
+    assert.equal((await importLegacyEmailVerifications(poolA, legacyState)).IMPORTED, 0);
+    report = analyzeIdentityPreflight({ ...await loadIdentityRows(poolB),
+      lifecycleState: { password_overrides: legacyState.password_overrides } });
+    assert.equal(report.blockers.some(row => row.code === 'PASSWORD_EMAIL_UNVERIFIED' && row.user_ids[0] === 'usr_x_a'), false,
+      'the PostgreSQL row must satisfy the preflight without legacy JSON');
     console.log('auth identity PostgreSQL integration: PASS');
   } finally {
     if (poolA) await poolA.end();

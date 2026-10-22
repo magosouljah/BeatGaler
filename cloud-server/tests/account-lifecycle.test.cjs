@@ -8,6 +8,7 @@ const path = require('node:path');
 const passwordKdf = require('../password-kdf');
 const { createAccountLifecycleRuntime, RECOVERY_PREFIX } = require('../account-lifecycle');
 const { installLifecyclePasswordAuthority } = require('../account-lifecycle-password-authority');
+const { createEmailVerificationFakePool } = require('./email-verification-fake-pool.cjs');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
@@ -63,6 +64,7 @@ async function main() {
       },
     },
   };
+  const emailPool = createEmailVerificationFakePool([{ id: userId, email: user.email }]);
   fs.writeFileSync(path.join(dir, 'accounts-data.json'), JSON.stringify({
     users: [user],
     sessions: {
@@ -88,6 +90,7 @@ async function main() {
   };
   const runtime = createAccountLifecycleRuntime({
     dataDir: dir,
+    pool: emailPool,
     now: () => clock,
     randomBytes: deterministicRandom,
     env: {
@@ -154,7 +157,8 @@ async function main() {
     const again = makeRes();
     await runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), again);
     assert.equal(again.statusCode, 400);
-    assert.equal(runtime._test.publicStatusForUser(user).email_verified, true);
+    assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, true);
+    assert.equal(runtime._test.stateSnapshot().email_verified, undefined);
 
     const expired = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
     clock += 11 * 60 * 1000;
@@ -199,7 +203,7 @@ async function main() {
 
   {
     const exportRes = makeRes();
-    runtime._test.exportAccount(req({ token: sessionOne, body: { reauthToken }, pathName: '/auth/account/export' }), exportRes);
+    await runtime._test.exportAccount(req({ token: sessionOne, body: { reauthToken }, pathName: '/auth/account/export' }), exportRes);
     assert.equal(exportRes.statusCode, 200);
     const serialized = JSON.stringify(exportRes.body);
     assert.equal(serialized.includes(passwordHash), false);
@@ -210,7 +214,7 @@ async function main() {
 
   {
     const replayRes = makeRes();
-    runtime._test.exportAccount(req({ token: sessionOne, body: { reauthToken } }), replayRes);
+    await runtime._test.exportAccount(req({ token: sessionOne, body: { reauthToken } }), replayRes);
     assert.equal(replayRes.statusCode, 401);
     assert.equal(replayRes.body.code, 'REAUTH_REQUIRED');
   }

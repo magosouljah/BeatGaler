@@ -48,10 +48,10 @@ function installImmediateAccountDeletion(runtime, { randomBytes = size => crypto
 
     const deletedAt = now();
     const receiptId = `delete_${randomBytes(12).toString('hex')}`;
+    await runtime._test.clearEmailVerificationForUser(userId);
     runtime._test.deletedUserIds.add(userId);
     const state = runtime._test.stateSnapshot();
     delete state.tombstones[userId];
-    delete state.email_verified[userId];
     delete state.recovery[userId];
     delete state.password_overrides[userId];
     delete state.notifications[userId];

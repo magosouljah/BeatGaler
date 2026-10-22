@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const passwordKdf = require('./password-kdf');
+const { statusForUser, markVerifiedEmail, clearVerifiedEmail } = require('./email-verification-authority');
 
 const STATE_VERSION = 1;
 const STATE_FILE_NAME = 'account-lifecycle-state.json';
@@ -136,7 +137,6 @@ function normalizeState(input) {
   return {
     version: STATE_VERSION,
     tokens: state.tokens && typeof state.tokens === 'object' && !Array.isArray(state.tokens) ? state.tokens : {},
-    email_verified: state.email_verified && typeof state.email_verified === 'object' && !Array.isArray(state.email_verified) ? state.email_verified : {},
     recovery: state.recovery && typeof state.recovery === 'object' && !Array.isArray(state.recovery) ? state.recovery : {},
     reauth: state.reauth && typeof state.reauth === 'object' && !Array.isArray(state.reauth) ? state.reauth : {},
     password_overrides: state.password_overrides && typeof state.password_overrides === 'object' && !Array.isArray(state.password_overrides) ? state.password_overrides : {},
@@ -222,13 +222,13 @@ function createAccountLifecycleRuntime({
     return { token, sessionHash, session, user, userId };
   }
 
-  function publicStatusForUser(user) {
+  async function publicStatusForUser(user) {
     const userId = String(user?.id || '');
-    const verified = persisted.email_verified[userId];
-    const currentEmailHash = sha256(normalizeEmail(user?.email));
+    const verification = pool
+      ? await statusForUser(pool, userId)
+      : { email_verified: false, email_verified_at: null };
     return {
-      email_verified: Boolean(verified && verified.email_hash === currentEmailHash),
-      email_verified_at: verified?.email_hash === currentEmailHash ? verified.verified_at || null : null,
+      ...verification,
       email_delivery_configured: deliveryConfigured,
       mfa_recovery_remaining: Array.isArray(persisted.recovery[userId]?.code_hashes) ? persisted.recovery[userId].code_hashes.length : 0,
       retention_policy_configured: retentionConfigured,
@@ -487,9 +487,9 @@ function createAccountLifecycleRuntime({
     };
   }
 
-  function decorateUserPayload(payload) {
+  async function decorateUserPayload(payload) {
     if (!payload?.user?.id) return payload;
-    return { ...payload, user: { ...payload.user, ...publicStatusForUser(payload.user) } };
+    return { ...payload, user: { ...payload.user, ...await publicStatusForUser(payload.user) } };
   }
 
   async function requestEmailVerification(req, res) {
@@ -516,9 +516,8 @@ function createAccountLifecycleRuntime({
     if (!user || sha256(normalizeEmail(user.email)) !== record.email_hash || deletedUserIds.has(String(user.id))) {
       return res.status(400).json({ error: 'Verification link is invalid or expired.', code: 'EMAIL_VERIFICATION_INVALID' });
     }
-    persisted.email_verified[String(user.id)] = { email_hash: record.email_hash, verified_at: new Date(now()).toISOString() };
-    saveState();
     try {
+      await markVerifiedEmail(pool, String(user.id), user.email, { verifiedAt: new Date(now()) });
       if (typeof onEmailVerified === 'function') await onEmailVerified(String(user.id));
     } catch {
       // The token remains usable if Access could not durably issue welcome.
@@ -603,10 +602,10 @@ function createAccountLifecycleRuntime({
     return res.json({ ok: true, notifications: rows.slice(-50).reverse() });
   }
 
-  function lifecycleStatus(req, res) {
+  async function lifecycleStatus(req, res) {
     const info = sessionInfoFromRequest(req);
     if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
-    return res.json({ ok: true, ...publicStatusForUser(info.user) });
+    return res.json({ ok: true, ...await publicStatusForUser(info.user) });
   }
 
   function sanitizedProvider(provider, value) {
@@ -616,7 +615,7 @@ function createAccountLifecycleRuntime({
     return out;
   }
 
-  function exportAccount(req, res) {
+  async function exportAccount(req, res) {
     const result = consumeReauth(req, String(req?.body?.reauthToken || req?.headers?.['x-beatgaler-reauth'] || ''));
     if (!result.ok) return res.status(401).json({ error: 'Recent reauthentication is required.', code: result.code });
     const user = result.info.user;
@@ -641,7 +640,7 @@ function createAccountLifecycleRuntime({
           username: user.username,
           email: user.email ?? null,
           created_at: user.createdAt ?? null,
-          email_verified: publicStatusForUser(user).email_verified,
+          email_verified: (await publicStatusForUser(user)).email_verified,
           mfa_enabled: Boolean(user.mfaSecret),
         },
         providers,
@@ -663,6 +662,7 @@ function createAccountLifecycleRuntime({
     const receiptId = `delete_${randomBytes(12).toString('hex')}`;
     const deletedAt = now();
     const purgeAt = deletedAt + retentionDays * 24 * 60 * 60 * 1000;
+    await clearVerifiedEmail(pool, userId);
     deletedUserIds.add(userId);
     persisted.tombstones[userId] = {
       receipt_id: receiptId,
@@ -671,7 +671,6 @@ function createAccountLifecycleRuntime({
       purge_at: new Date(purgeAt).toISOString(),
       retention_days: retentionDays,
     };
-    delete persisted.email_verified[userId];
     delete persisted.recovery[userId];
     delete persisted.password_overrides[userId];
     delete persisted.notifications[userId];
@@ -720,48 +719,49 @@ function createAccountLifecycleRuntime({
   function responseDecorator(routePath, req, res, next) {
     const originalJson = res.json.bind(res);
     res.json = payload => {
-      const success = Number(res.statusCode || 200) >= 200 && Number(res.statusCode || 200) < 300;
-      let nextPayload = payload;
-      if (success && req.beatgalerLifecycleRecoveryCode) {
-        const info = routePath === '/auth/login'
-          ? userByEmail(String(req?.body?.email || req?.body?.identifier || ''))
-          : sessionInfoFromRequest(req)?.user;
-        if (info?.id) validateRecoveryCode(String(info.id), req.beatgalerLifecycleRecoveryCode, { consume: true });
-      }
-      if (success && USER_DECORATION_ROUTES.has(routePath)) nextPayload = decorateUserPayload(nextPayload);
-      if (success && routePath === '/auth/mfa/enable') {
-        const info = sessionInfoFromRequest(req);
-        if (info) nextPayload = { ...(nextPayload || {}), recovery_codes: generateRecoveryCodes(info.userId) };
-      }
-      if (success && routePath === '/auth/password/change') {
-        const info = sessionInfoFromRequest(req);
-        if (info) {
-          delete persisted.password_overrides[info.userId];
-          saveState();
+      void (async () => {
+        const success = Number(res.statusCode || 200) >= 200 && Number(res.statusCode || 200) < 300;
+        let nextPayload = payload;
+        if (success && req.beatgalerLifecycleRecoveryCode) {
+          const info = routePath === '/auth/login'
+            ? userByEmail(String(req?.body?.email || req?.body?.identifier || ''))
+            : sessionInfoFromRequest(req)?.user;
+          if (info?.id) validateRecoveryCode(String(info.id), req.beatgalerLifecycleRecoveryCode, { consume: true });
         }
-      }
-      if (success && routePath === '/auth/email/change') {
-        const info = sessionInfoFromRequest(req);
-        if (info) {
-          delete persisted.email_verified[info.userId];
-          saveState();
-          void issueEmailToken({ kind: 'email_verification', user: { ...info.user, email: req.body?.email }, email: req.body?.email })
-            .then(() => addNotification(info.userId, 'email_verification_requested', { delivery_configured: deliveryConfigured }));
+        if (success && USER_DECORATION_ROUTES.has(routePath)) nextPayload = await decorateUserPayload(nextPayload);
+        if (success && routePath === '/auth/mfa/enable') {
+          const info = sessionInfoFromRequest(req);
+          if (info) nextPayload = { ...(nextPayload || {}), recovery_codes: generateRecoveryCodes(info.userId) };
         }
-      }
-      const notice = NOTIFICATION_ROUTES.get(routePath);
-      if (success && notice) {
-        const info = sessionInfoFromRequest(req);
-        if (info) addNotification(info.userId, notice);
-      }
-      if (success && routePath === '/auth/register' && nextPayload?.user?.id) {
-        const snapshotUser = userById(nextPayload.user.id);
-        if (snapshotUser?.email) {
-          void issueEmailToken({ kind: 'email_verification', user: snapshotUser, email: snapshotUser.email })
-            .then(() => addNotification(String(snapshotUser.id), 'email_verification_requested', { delivery_configured: deliveryConfigured }));
+        if (success && routePath === '/auth/password/change') {
+          const info = sessionInfoFromRequest(req);
+          if (info) {
+            delete persisted.password_overrides[info.userId];
+            saveState();
+          }
         }
-      }
-      return originalJson(nextPayload);
+        if (success && routePath === '/auth/email/change') {
+          const info = sessionInfoFromRequest(req);
+          if (info) {
+            void issueEmailToken({ kind: 'email_verification', user: { ...info.user, email: req.body?.email }, email: req.body?.email })
+              .then(() => addNotification(info.userId, 'email_verification_requested', { delivery_configured: deliveryConfigured }));
+          }
+        }
+        const notice = NOTIFICATION_ROUTES.get(routePath);
+        if (success && notice) {
+          const info = sessionInfoFromRequest(req);
+          if (info) addNotification(info.userId, notice);
+        }
+        if (success && routePath === '/auth/register' && nextPayload?.user?.id) {
+          const snapshotUser = userById(nextPayload.user.id);
+          if (snapshotUser?.email) {
+            void issueEmailToken({ kind: 'email_verification', user: snapshotUser, email: snapshotUser.email })
+              .then(() => addNotification(String(snapshotUser.id), 'email_verification_requested', { delivery_configured: deliveryConfigured }));
+          }
+        }
+        originalJson(nextPayload);
+      })().catch(next);
+      return res;
     };
     next();
   }
@@ -780,6 +780,7 @@ function createAccountLifecycleRuntime({
       userByIdentifier,
       sessionInfoFromRequest,
       publicStatusForUser,
+      clearEmailVerificationForUser: userId => clearVerifiedEmail(pool, userId),
       issueTestToken,
       consumeToken,
       generateRecoveryCodes,
@@ -839,13 +840,13 @@ function installAccountLifecycle(express, options = {}) {
         const rows = Array.isArray(state.notifications[info.userId]) ? state.notifications[info.userId] : [];
         return res.json({ ok: true, notifications: rows.slice(-50).reverse() });
       });
-      app.post('/auth/lifecycle/status', (req, res) => {
+      app.post('/auth/lifecycle/status', (req, res, next) => {
         const info = runtime._test.sessionInfoFromRequest(req);
         if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
-        return res.json({ ok: true, ...runtime._test.publicStatusForUser(info.user) });
+        void runtime._test.lifecycleStatus(req, res).catch(next);
       });
-      app.post('/auth/account/export', runtime._test.exportAccount);
-      app.post('/auth/account/delete', (req, res) => { void runtime._test.deleteAccount(req, res); });
+      app.post('/auth/account/export', (req, res, next) => { void runtime._test.exportAccount(req, res).catch(next); });
+      app.post('/auth/account/delete', (req, res, next) => { void runtime._test.deleteAccount(req, res).catch(next); });
       app.__beatgalerAccountLifecycleRoutesInstalled = true;
     } finally {
       app.__beatgalerAccountLifecycleRoutesInstalling = false;

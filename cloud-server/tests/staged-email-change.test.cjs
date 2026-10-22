@@ -18,6 +18,7 @@ function fakeDatabase(now = () => Date.now()) {
     user: { id: 'usr_1', email: 'old@example.com', username: 'tester#0001', username_source: 'beatgaler' },
     change: null,
     conflictEmail: null,
+    verification: null,
   };
   const events = [];
   let txSnapshot = null;
@@ -26,6 +27,7 @@ function fakeDatabase(now = () => Date.now()) {
     state.user = snapshot.user;
     state.change = snapshot.change;
     state.conflictEmail = snapshot.conflictEmail;
+    state.verification = snapshot.verification;
   }
 
   async function query(sql, params = []) {
@@ -107,6 +109,13 @@ function fakeDatabase(now = () => Date.now()) {
       state.user.email = String(params[1]);
       return { rows: [] };
     }
+    if (text === 'SELECT email FROM users WHERE id=$1 FOR UPDATE') {
+      return { rows: String(params[0]) === state.user.id ? [{ email: state.user.email }] : [] };
+    }
+    if (text.startsWith('INSERT INTO user_email_verifications(')) {
+      state.verification = { user_id: String(params[0]), email_hash: String(params[1]), verified_at: new Date(params[2]).toISOString() };
+      return { rows: [{ user_id: String(params[0]) }], rowCount: 1 };
+    }
     if (text.startsWith("UPDATE auth_email_changes SET state='CONFIRMED',confirmed_at=now()")) {
       state.change.state = 'CONFIRMED';
       state.change.confirmed_at = new Date().toISOString();
@@ -127,9 +136,9 @@ function fakeDatabase(now = () => Date.now()) {
       const eligible = state.change?.state === 'CONFIRMED' && state.change.old_email && !state.change.old_notice_sent_at && state.change.old_notice_attempts < 10;
       return { rows: eligible ? [{ user_id: state.change.user_id, old_email: state.change.old_email }] : [] };
     }
-    if (text.startsWith('SELECT c.user_id,c.new_email,u.username,u.username_source FROM auth_email_changes c JOIN users u')) {
+    if (text.startsWith('SELECT c.user_id,c.new_email,c.confirmed_at,u.username,u.username_source FROM auth_email_changes c JOIN users u')) {
       const eligible = state.change?.state === 'CONFIRMED' && state.user.email === state.change.new_email && String(params[0]) === state.user.id;
-      return { rows: eligible ? [{ user_id: state.user.id, new_email: state.user.email, username: state.user.username, username_source: state.user.username_source }] : [] };
+      return { rows: eligible ? [{ user_id: state.user.id, new_email: state.user.email, confirmed_at: state.change.confirmed_at, username: state.user.username, username_source: state.user.username_source }] : [] };
     }
     if (text.startsWith('SELECT c.user_id FROM auth_email_changes c JOIN users u')) {
       const eligible = state.change?.state === 'CONFIRMED' && state.user.email === state.change.new_email;
@@ -367,9 +376,9 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     assert.equal(h.db.events.some(event => event[1]?.startsWith("UPDATE direct_capabilities SET status='REVOKED'")), true);
     assert.equal(h.deliveries.at(-1).kind, 'email_changed_notice');
     assert.equal(h.deliveries.at(-1).to, 'old@example.com');
-    assert.equal(h.lifecycleState.email_verified.usr_1.email_hash, sha256('new@example.com'));
+    assert.equal(h.db.state.verification.email_hash, sha256('new@example.com'));
     const persisted = JSON.parse(fs.readFileSync(h.stateFile, 'utf8'));
-    assert.equal(persisted.email_verified.usr_1.email_hash, sha256('new@example.com'));
+    assert.equal(persisted.email_verified.usr_1, undefined);
   }
 
   // Failure to notify the old email must not roll back a confirmed identity;
@@ -405,7 +414,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     h.allowLocalCommit();
     assert.equal(await h.service.reconcileConfirmed(), 1);
     assert.deepEqual(h.localCommits, [['usr_1', 'new@example.com']]);
-    assert.equal(h.lifecycleState.email_verified.usr_1.email_hash, sha256('new@example.com'));
+    assert.equal(h.db.state.verification.email_hash, sha256('new@example.com'));
   }
 
   console.log('staged-email-change tests: PASS');

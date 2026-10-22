@@ -24,11 +24,10 @@ function usablePassword(user, lifecycleState = {}) {
   return Boolean(direct || String(override?.passwordHash || override?.password_hash || '').trim());
 }
 
-function verifiedEmail(user, lifecycleState = {}) {
+function verifiedEmail(user) {
   const email = normalizeEmail(user?.email);
   if (!email) return false;
-  const record = lifecycleState?.email_verified?.[String(user?.id || '')];
-  return Boolean(record?.email_hash && record.email_hash === sha256(email));
+  return Boolean(user?.verified_email_hash && user.verified_email_hash === sha256(email));
 }
 
 function groupDuplicates(rows, keyFn) {
@@ -61,7 +60,7 @@ function analyzeIdentityPreflight({ users = [], providers = [], lifecycleState =
 
   const passwordUsers = liveUsers.filter(user => usablePassword(user, lifecycleState));
   const passwordWithoutEmail = passwordUsers.filter(user => !normalizeEmail(user.email));
-  const passwordUnverifiedEmail = passwordUsers.filter(user => normalizeEmail(user.email) && !verifiedEmail(user, lifecycleState));
+  const passwordUnverifiedEmail = passwordUsers.filter(user => normalizeEmail(user.email) && !verifiedEmail(user));
   const xTokenRows = identities.filter(row => String(row?.provider || '').toLowerCase() === 'x'
     && (row?.access_token_ciphertext != null || row?.refresh_token_ciphertext != null));
 

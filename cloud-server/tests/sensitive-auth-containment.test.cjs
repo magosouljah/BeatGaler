@@ -7,6 +7,8 @@ const {
   hasVerifiedEmailShared,
   installSensitiveAuthContainment,
 } = require('../sensitive-auth-containment');
+const { emailHash } = require('../email-verification-authority');
+const { createEmailVerificationFakePool } = require('./email-verification-fake-pool.cjs');
 
 function runtimeFor({
   userId = 'usr_1',
@@ -20,7 +22,10 @@ function runtimeFor({
 } = {}) {
   const user = { id: userId, email, passwordHash, providers };
   const users = [user, ...(duplicateEmail ? [{ id: 'usr_2', email }] : [])];
+  const pool = createEmailVerificationFakePool(users);
+  if (verified) pool.verifications.set(userId, { email_hash: emailHash(email), verified_at: new Date() });
   return {
+    pool,
     passwordOverrideForUser() { return overrideHash ? { passwordHash: overrideHash } : null; },
     _test: {
       sessionInfoFromRequest() { return { userId, user, sessionHash: 'session_hash' }; },
@@ -68,27 +73,23 @@ async function runFirst(express, route, req = {}) {
   {
     const runtime = runtimeFor({ passwordHash: 'hash', verified: true });
     const info = runtime._test.sessionInfoFromRequest({});
-    assert.equal(hasVerifiedUniqueEmail(runtime, info), true);
-    assert.equal(hasUsablePassword(runtime, info), true);
+    assert.equal(await hasVerifiedUniqueEmail(runtime, info, runtime.pool), true);
+    assert.equal(await hasUsablePassword(runtime, info, runtime.pool), true);
   }
 
   {
     const runtime = runtimeFor({ passwordHash: 'hash', verified: false });
     const info = runtime._test.sessionInfoFromRequest({});
-    assert.equal(hasVerifiedUniqueEmail(runtime, info), false);
-    assert.equal(hasUsablePassword(runtime, info), false);
+    assert.equal(await hasVerifiedUniqueEmail(runtime, info, runtime.pool), false);
+    assert.equal(await hasUsablePassword(runtime, info, runtime.pool), false);
   }
 
   {
     const runtime = runtimeFor({ verified: false, reauthOk: true });
-    const pool = { async query(sql, params) {
-      assert.match(sql, /auth_email_changes c/);
-      assert.deepEqual(params, ['usr_1']);
-      return { rows: [{ '?column?': 1 }] };
-    } };
-    assert.equal(await hasVerifiedEmailShared(runtime, runtime._test.sessionInfoFromRequest({}), pool), true);
+    runtime.pool.verifications.set('usr_1', { email_hash: emailHash('one@example.com'), verified_at: new Date() });
+    assert.equal(await hasVerifiedEmailShared(runtime, runtime._test.sessionInfoFromRequest({}), runtime.pool), true);
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtime, { pool });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/password/change', () => {});
     const { nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'reauth_good' },
@@ -99,13 +100,14 @@ async function runFirst(express, route, req = {}) {
   {
     const runtime = runtimeFor({ passwordHash: 'hash', verified: true, duplicateEmail: true });
     const info = runtime._test.sessionInfoFromRequest({});
-    assert.equal(hasVerifiedUniqueEmail(runtime, info), false);
-    assert.equal(hasUsablePassword(runtime, info), false);
+    assert.equal(await hasVerifiedUniqueEmail(runtime, info, runtime.pool), false);
+    assert.equal(await hasUsablePassword(runtime, info, runtime.pool), false);
   }
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({ verified: true, reauthOk: false }));
+    const runtime = runtimeFor({ verified: true, reauthOk: false });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/password/change', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'bad' },
@@ -117,7 +119,8 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({ verified: true, reauthOk: true }));
+    const runtime = runtimeFor({ verified: true, reauthOk: true });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/password/change', () => {});
     const { nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'reauth_good' },
@@ -127,7 +130,8 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({ verified: false, reauthOk: true }));
+    const runtime = runtimeFor({ verified: false, reauthOk: true });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/password/change', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'reauth_good' },
@@ -139,12 +143,13 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({
+    const runtime = runtimeFor({
       verified: true,
       passwordHash: 'hash',
       providers: { x: { id: 'x-1' } },
       reauthOk: true,
-    }));
+    });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/oauth/disconnect', () => {});
     const { nextCalled } = await runFirst(express, '/auth/oauth/disconnect', {
       body: { provider: 'x', reauthToken: 'reauth_good' },
@@ -154,11 +159,12 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({
+    const runtime = runtimeFor({
       verified: false,
       providers: { x: { id: 'x-1' } },
       reauthOk: true,
-    }));
+    });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/oauth/disconnect', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/disconnect', {
       body: { provider: 'x', reauthToken: 'reauth_good' },
@@ -170,11 +176,12 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({
+    const runtime = runtimeFor({
       verified: true,
       providers: { google: { id: 'g-1' } },
       reauthOk: false,
-    }));
+    });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/oauth/disconnect', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/disconnect', { body: { provider: 'x' } });
     assert.equal(nextCalled, false, 'a stale local snapshot cannot bypass provider unlink reauthentication');
@@ -183,7 +190,8 @@ async function runFirst(express, route, req = {}) {
 
   {
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtimeFor({ verified: true, reauthOk: false }));
+    const runtime = runtimeFor({ verified: true, reauthOk: false });
+    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     express.application.post('/auth/oauth/start', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/start', {
       body: { provider: 'google' },

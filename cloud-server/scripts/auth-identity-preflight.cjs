@@ -31,12 +31,14 @@ async function loadIdentityRows(pool) {
   const [usersResult, providersResult] = await Promise.all([
     pool.query(`
       SELECT
-        id,
-        email,
-        username,
-        CASE WHEN password_hash IS NULL THEN NULL ELSE 'present' END AS password_hash
-      FROM users
-      ORDER BY id
+        u.id,
+        u.email,
+        u.username,
+        CASE WHEN u.password_hash IS NULL THEN NULL ELSE 'present' END AS password_hash,
+        v.email_hash AS verified_email_hash
+      FROM users u
+      LEFT JOIN user_email_verifications v ON v.user_id=u.id
+      ORDER BY u.id
     `),
     pool.query(`
       SELECT

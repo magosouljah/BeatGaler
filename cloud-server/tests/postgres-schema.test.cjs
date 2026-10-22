@@ -13,6 +13,12 @@ const persistentAssignmentMigration = migrations.find(item => item.version === '
 assert(persistentAssignmentMigration, 'persistent transport assignment migration 0010 is required');
 assert(persistentAssignmentMigration.sql.includes('DROP TRIGGER IF EXISTS direct_leases_active_cap_trigger ON direct_leases'), 'migration 0010 must retire the old direct lease cap trigger');
 assert(persistentAssignmentMigration.sql.includes('DROP FUNCTION IF EXISTS enforce_transport_bot_active_lease_cap()'), 'migration 0010 must retire the old direct lease cap function');
+const emailVerificationMigration = migrations.find(item => item.name === '0024_user_email_verifications.sql');
+assert(emailVerificationMigration, 'durable email verification migration is required');
+assert.match(emailVerificationMigration.sql, /user_id text PRIMARY KEY REFERENCES users\(id\) ON DELETE CASCADE/i);
+assert.match(emailVerificationMigration.sql, /email_hash text NOT NULL/i);
+assert.match(emailVerificationMigration.sql, /verified_at timestamptz NOT NULL/i);
+assert.match(emailVerificationMigration.sql, /AFTER UPDATE OF email ON users/i);
 
 const sql = migrations.map(item => item.sql).join('\n');
 

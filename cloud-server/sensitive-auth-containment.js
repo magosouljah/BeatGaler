@@ -1,5 +1,7 @@
 'use strict';
 
+const { statusForUser } = require('./email-verification-authority');
+
 function normalizedEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -11,44 +13,21 @@ function passwordMaterial(runtime, info) {
   catch { return null; }
 }
 
-function hasVerifiedUniqueEmail(runtime, info) {
+async function hasVerifiedUniqueEmail(_runtime, info, pool) {
   if (!info?.userId || !info?.user) return false;
-  const email = normalizedEmail(info.user.email);
-  if (!email) return false;
-  let verified = false;
-  try { verified = runtime?._test?.publicStatusForUser?.(info.user)?.email_verified === true; }
-  catch { return false; }
-  if (!verified) return false;
-  try {
-    const users = runtime?._test?.accountsSnapshot?.()?.users || [];
-    const owners = users.filter(user => normalizedEmail(user?.email) === email);
-    return owners.length === 1 && String(owners[0]?.id || '') === String(info.userId);
-  } catch {
-    return false;
-  }
+  return (await statusForUser(pool, info.userId)).email_verified;
 }
 
-function hasUsablePassword(runtime, info) {
-  return Boolean(passwordMaterial(runtime, info)) && hasVerifiedUniqueEmail(runtime, info);
+async function hasUsablePassword(runtime, info, pool) {
+  return Boolean(passwordMaterial(runtime, info)) && await hasVerifiedUniqueEmail(runtime, info, pool);
 }
 
 async function hasVerifiedEmailShared(runtime, info, pool) {
-  if (hasVerifiedUniqueEmail(runtime, info)) return true;
-  if (!info?.userId || !pool?.query) return false;
-  // A staged confirmation is committed with users.email in PostgreSQL. A
-  // different process may not yet have refreshed its local lifecycle file.
-  const result = await pool.query(`
-    SELECT 1 FROM users u JOIN auth_email_changes c ON c.user_id=u.id
-    WHERE u.id=$1 AND c.state='CONFIRMED' AND lower(u.email)=lower(c.new_email)
-      AND NOT EXISTS (
-        SELECT 1 FROM users other WHERE other.id<>u.id AND lower(other.email)=lower(u.email)
-      ) LIMIT 1
-  `, [String(info.userId)]);
-  return result.rows.length === 1;
+  return hasVerifiedUniqueEmail(runtime, info, pool);
 }
 
 async function hasUsablePasswordShared(runtime, info, pool) {
-  return Boolean(passwordMaterial(runtime, info)) && await hasVerifiedEmailShared(runtime, info, pool);
+  return hasUsablePassword(runtime, info, pool);
 }
 
 function reauthToken(req) {

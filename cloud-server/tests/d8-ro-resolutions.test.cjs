@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { createAccountLifecycleRuntime } = require('../account-lifecycle');
+const { createEmailVerificationFakePool } = require('./email-verification-fake-pool.cjs');
 const {
   EMAIL_TEMPLATES,
   renderAccountEmail,
@@ -164,6 +165,7 @@ async function main() {
   const capabilityRevokes = [];
   const runtime = createAccountLifecycleRuntime({
     dataDir: dir,
+    pool: createEmailVerificationFakePool([{ id: userId, email: 'provider@example.com' }]),
     env: d8LifecycleEnv({}),
     now: () => clock,
     getCapabilityStore: () => ({

@@ -9,12 +9,10 @@ const {
   verifiedEmail,
   analyzeIdentityPreflight,
 } = require('../auth-identity-preflight');
+const { loadIdentityRows } = require('../scripts/auth-identity-preflight.cjs');
 
 function verifiedState(userId, email, extra = {}) {
   return {
-    email_verified: {
-      [userId]: { email_hash: sha256(String(email).trim().toLowerCase()), verified_at: '2026-10-21T00:00:00.000Z' },
-    },
     password_overrides: {},
     ...extra,
   };
@@ -22,23 +20,24 @@ function verifiedState(userId, email, extra = {}) {
 
 {
   const state = verifiedState('u1', 'person@example.com');
-  assert.equal(verifiedEmail({ id: 'u1', email: ' Person@Example.com ' }, state), true);
-  assert.equal(verifiedEmail({ id: 'u1', email: 'other@example.com' }, state), false);
+  assert.equal(verifiedEmail({ id: 'u1', email: ' Person@Example.com ', verified_email_hash: sha256('person@example.com') }), true);
+  assert.equal(verifiedEmail({ id: 'u1', email: 'other@example.com', verified_email_hash: sha256('person@example.com') }), false);
+  assert.equal(verifiedEmail({ id: 'u1', email: 'person@example.com' }, verifiedState('u1', 'person@example.com', {
+    email_verified: { u1: { email_hash: sha256('person@example.com') } },
+  })), false);
   assert.equal(usablePassword({ id: 'u1', password_hash: 'present' }, state), true);
   assert.equal(usablePassword({ id: 'u2' }, { password_overrides: { u2: { passwordHash: 'present' } } }), true);
 }
 
 {
   const users = [
-    { id: 'u1', username: 'Pepito', email: 'One@example.com', password_hash: 'present' },
+    { id: 'u1', username: 'Pepito', email: 'One@example.com', password_hash: 'present', verified_email_hash: sha256('one@example.com') },
     { id: 'u2', username: 'pepito', email: 'one@EXAMPLE.com', password_hash: null },
     { id: 'u3', username: 'safe#1234', email: null, password_hash: 'present' },
     { id: 'u4', username: 'other#4321', email: 'unverified@example.com', password_hash: null },
   ];
   const lifecycleState = {
-    email_verified: {
-      u1: { email_hash: sha256('one@example.com'), verified_at: '2026-10-21T00:00:00.000Z' },
-    },
+    email_verified: { u4: { email_hash: sha256('unverified@example.com') } },
     password_overrides: {
       u4: { passwordHash: 'present' },
     },
@@ -70,7 +69,7 @@ function verifiedState(userId, email, extra = {}) {
 {
   const email = 'ready@example.com';
   const report = analyzeIdentityPreflight({
-    users: [{ id: 'ready', username: 'ready#1234', email, password_hash: 'present' }],
+    users: [{ id: 'ready', username: 'ready#1234', email, password_hash: 'present', verified_email_hash: sha256(email) }],
     providers: [{ id: 'g', user_id: 'ready', provider: 'google', provider_subject: 'sub-ready' }],
     lifecycleState: verifiedState('ready', email),
   });
@@ -83,4 +82,14 @@ const casefoldMigration = fs.readFileSync(path.join(__dirname, '..', 'migrations
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(username\)/s);
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(email\)/s);
 
-console.log('auth-identity-preflight tests: PASS');
+(async () => {
+  const statements = [];
+  await loadIdentityRows({ query: async sql => {
+    statements.push(sql);
+    return { rows: [] };
+  } });
+  assert.match(statements[0], /LEFT JOIN user_email_verifications/);
+  assert.match(statements[0], /verified_email_hash/);
+  assert.doesNotMatch(statements[0], /account-lifecycle-state/);
+  console.log('auth-identity-preflight tests: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });

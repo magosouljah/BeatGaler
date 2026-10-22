@@ -13,6 +13,7 @@ const { applyMigrations } = require('../postgres-migrations');
 const { createPendingSignupService } = require('../pending-signup-service');
 const { digest, createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createSignupActivationCoordinator, stableUserId } = require('../signup-activation-coordinator');
+const { statusForUser } = require('../email-verification-authority');
 const { issueWelcomeGrant } = require('../access-grant-store');
 const { createPostgresInstallationClaimCoordinator } = require('../postgres-installation-claim-coordinator');
 const execFileAsync = promisify(execFile);
@@ -75,7 +76,6 @@ async function main() {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-activation-pg-'));
   const activeFaults = new Map();
   const counters = new Map();
-  const lifecycleStates = new Map();
 
   try {
     await admin.query(`CREATE DATABASE "${name}"`);
@@ -105,12 +105,6 @@ async function main() {
       counters.set(signupId, counts);
       let local = null;
       let activeObserved = false;
-      const lifecycleState = { email_verified: {} };
-      lifecycleStates.set(signupId, lifecycleState);
-      const lifecycle = { _test: {
-        stateSnapshot() { return lifecycleState; },
-        stateFile: path.join(stateRoot, `${signupId}-${crypto.randomBytes(3).toString('hex')}.json`),
-      } };
       const bridge = {
         adoptOrCreatePasswordUser(input) {
           local = { id: input.id, username: input.username, email: input.email,
@@ -199,7 +193,7 @@ async function main() {
       };
       return createSignupActivationCoordinator({
         pool, service: wrappedService, getBridge: () => bridge, flushAuthority,
-        accountLifecycle: lifecycle, issueWelcome: userId => issueWelcomeGrant(pool, userId),
+        issueWelcome: userId => issueWelcomeGrant(pool, userId),
         installationClaimCoordinator: createPostgresInstallationClaimCoordinator(pool),
         staleMs: 60_000,
       });
@@ -208,6 +202,7 @@ async function main() {
     async function assertDurable(signupId, { sessions = 1 } = {}) {
       const id = stableUserId(signupId);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM users WHERE id=$1', [id])).rows[0].n, 1);
+      assert.equal((await statusForUser(poolA, id)).email_verified, true);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM users WHERE lower(email)=lower($1)',
         [`${signupId}@example.com`])).rows[0].n, 1);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1', [id])).rows[0].n, 1);
@@ -280,8 +275,8 @@ async function main() {
       assert.equal(recovered.status, 'ACTIVE');
       await assertDurable(signupId, { sessions: fault === 'after-active' ? 0 : 1 });
       if (fault === 'after-active') {
-        assert.ok(lifecycleStates.get(signupId).email_verified[stableUserId(signupId)],
-          'ACTIVE retry must restore local verified-email projection');
+        assert.equal((await statusForUser(poolB, stableUserId(signupId))).email_verified, true,
+          'ACTIVE retry must retain durable PostgreSQL verification');
       }
       if (fault === 'after-installation') {
         assert.equal(counters.get(signupId).binds, 2, 'installation replay must converge to one durable owner');

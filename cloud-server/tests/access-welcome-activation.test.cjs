@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createAccountLifecycleRuntime } = require('../account-lifecycle');
+const { createEmailVerificationFakePool } = require('./email-verification-fake-pool.cjs');
 
 function response() {
   return {
@@ -20,10 +21,12 @@ test('verified email activates Access once and a failed durable issue can retry'
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-welcome-activation-'));
   try {
     const user = { id: 'usr_verified', username: 'verified#0001', email: 'verified@example.com' };
+    const pool = createEmailVerificationFakePool([user]);
     fs.writeFileSync(path.join(dir, 'accounts-data.json'), JSON.stringify({ users: [user], sessions: {} }));
     let calls = 0;
     const runtime = createAccountLifecycleRuntime({
       dataDir: dir,
+      pool,
       now: () => Date.parse('2026-10-08T12:00:00Z'),
       onEmailVerified: async userId => {
         assert.equal(userId, user.id);
@@ -36,7 +39,7 @@ test('verified email activates Access once and a failed durable issue can retry'
     await runtime._test.confirmEmailVerification({ body: { token } }, first);
     assert.equal(first.statusCode, 503);
     assert.equal(first.body.code, 'EMAIL_VERIFICATION_RETRY');
-    assert.equal(runtime._test.publicStatusForUser(user).email_verified, true);
+    assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, true);
 
     const retry = response();
     await runtime._test.confirmEmailVerification({ body: { token } }, retry);

@@ -22,10 +22,7 @@ const {
   validateCoreSource,
   bridgeSuffix,
 } = require('../server-core-auth-bridge-loader');
-const {
-  sha256,
-  markLifecycleEmailVerified,
-} = require('../account-lifecycle-verified-email-activation');
+const { emailHash } = require('../email-verification-authority');
 
 async function main() {
   assert.equal(stableUserId('psu_abc'), stableUserId('psu_abc'));
@@ -53,17 +50,6 @@ async function main() {
     assert.equal(suffix.includes('__beatgalerAuthBridge'), true);
     assert.equal(suffix.includes('app.post('), false, 'activation bridge must not create a hidden HTTP route');
     assert.equal(suffix.includes('invokeLegacy'), false, 'activation bridge must not call legacy auth handlers');
-  }
-
-  {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-email-activation-'));
-    const stateFile = path.join(dir, 'account-lifecycle-state.json');
-    const state = { email_verified: {}, password_overrides: {} };
-    const runtime = { _test: { stateSnapshot: () => state, stateFile } };
-    const result = markLifecycleEmailVerified(runtime, 'usr_1', ' Person@Example.com ', { verifiedAt: '2026-10-21T00:00:00.000Z' });
-    assert.equal(result.emailHash, sha256('person@example.com'));
-    const disk = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    assert.equal(disk.email_verified.usr_1.email_hash, sha256('person@example.com'));
   }
 
   {
@@ -100,10 +86,6 @@ async function main() {
   }
 
   {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-activation-'));
-    const stateFile = path.join(tmp, 'account-lifecycle-state.json');
-    const lifecycleState = { email_verified: {}, password_overrides: {} };
-    const accountLifecycle = { _test: { stateSnapshot: () => lifecycleState, stateFile } };
     const pending = {
       id: 'psu_fault',
       status: 'VERIFIED',
@@ -124,6 +106,7 @@ async function main() {
     let vaultCreates = 0;
     let userCreates = 0;
     let welcomeCalls = 0;
+    let verification = null;
     const serviceStates = [];
 
     const client = {
@@ -131,6 +114,7 @@ async function main() {
       async query(sql, params = []) {
         const text = String(sql).replace(/\s+/g, ' ').trim();
         if (text.includes('pg_advisory_lock') || text.includes('pg_advisory_unlock')) return { rows: [] };
+        if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text)) return { rows: [] };
         if (text.startsWith('SELECT * FROM pending_signups')) return { rows: [{ ...pending }] };
         if (text.startsWith('SELECT state,external_ref FROM auth_provisioning_ledger')) {
           const key = `${params[0]}:${params[1]}`;
@@ -149,6 +133,13 @@ async function main() {
         if (text.startsWith('SELECT u.id,u.username')) return { rows: durableUser ? [{ ...durableUser }] : [] };
         if (text.startsWith('SELECT id FROM users WHERE lower(email)')) return { rows: [] };
         if (text.startsWith('SELECT id FROM users WHERE lower(username)')) return { rows: [] };
+        if (text === 'SELECT email FROM users WHERE id=$1 FOR UPDATE') {
+          return { rows: durableUser && params[0] === durableUser.id ? [{ email: durableUser.email }] : [] };
+        }
+        if (text.startsWith('INSERT INTO user_email_verifications(')) {
+          verification = { userId: String(params[0]), emailHash: String(params[1]), verifiedAt: new Date(params[2]).toISOString() };
+          return { rows: [{ user_id: params[0] }], rowCount: 1 };
+        }
         throw new Error(`unexpected activation query: ${text}`);
       },
       release() { this.released = true; },
@@ -221,7 +212,6 @@ async function main() {
       service,
       getBridge: () => bridge,
       flushAuthority,
-      accountLifecycle,
       issueWelcome: async id => { welcomeCalls += 1; return { id: `welcome:${id}` }; },
       now: () => Date.parse('2026-10-21T00:10:00.000Z'),
     });
@@ -236,7 +226,8 @@ async function main() {
     assert.equal(serviceStates.some(([status]) => status === 'ACTIVE'), true);
     assert.equal(serviceStates.some(([status]) => status === 'RETRYABLE'), false, 'post-ACTIVE session failure must not downgrade activation');
     assert.equal(pending.activated_user_id, userId);
-    assert.equal(lifecycleState.email_verified[userId].email_hash, sha256('fault@example.com'));
+    assert.equal(verification.userId, userId);
+    assert.equal(verification.emailHash, emailHash('fault@example.com'));
     assert.equal(client.released, true);
   }
 

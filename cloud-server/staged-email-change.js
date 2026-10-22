@@ -1,8 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
+const { markVerifiedEmail } = require('./email-verification-authority');
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -34,27 +33,6 @@ function sameHash(a, b) {
 
 function reauthToken(req) {
   return String(req?.body?.reauthToken || req?.body?.reauth_token || req?.headers?.['x-beatgaler-reauth'] || '');
-}
-
-function atomicWriteJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tmp, file);
-}
-
-function markLifecycleEmailVerified(runtime, userId, email, now = () => Date.now()) {
-  const state = runtime?._test?.stateSnapshot?.();
-  const stateFile = runtime?._test?.stateFile;
-  if (!state || !stateFile) throw coded('Email verification authority is unavailable.', 'EMAIL_VERIFICATION_AUTHORITY_UNAVAILABLE');
-  state.email_verified = state.email_verified && typeof state.email_verified === 'object' ? state.email_verified : {};
-  const emailHash = sha256(normalizeEmail(email));
-  if (state.email_verified[String(userId)]?.email_hash === emailHash) return;
-  state.email_verified[String(userId)] = {
-    email_hash: emailHash,
-    verified_at: new Date(now()).toISOString(),
-  };
-  atomicWriteJson(stateFile, state);
 }
 
 function createStagedEmailChange({
@@ -315,6 +293,7 @@ function createStagedEmailChange({
         throw error;
       }
       await client.query('UPDATE users SET email=$2,updated_at=now() WHERE id=$1', [String(info.userId), normalizeEmail(row.new_email)]);
+      await markVerifiedEmail(pool, String(info.userId), row.new_email, { verifiedAt: new Date(now()), client });
       await client.query(`
         UPDATE auth_email_changes
         SET state='CONFIRMED',confirmed_at=now(),updated_at=now()
@@ -363,14 +342,14 @@ function createStagedEmailChange({
 
   async function reconcileConfirmedUser(userId) {
     const result = await pool.query(`
-      SELECT c.user_id,c.new_email,u.username,u.username_source
+      SELECT c.user_id,c.new_email,c.confirmed_at,u.username,u.username_source
       FROM auth_email_changes c JOIN users u ON u.id=c.user_id
       WHERE c.user_id=$1 AND c.state='CONFIRMED' AND lower(u.email)=lower(c.new_email)
     `, [String(userId)]);
     const row = result.rows[0];
     if (!row) return false;
+    await markVerifiedEmail(pool, row.user_id, row.new_email, { verifiedAt: row.confirmed_at || new Date(now()) });
     await commitLocalEmail(String(row.user_id), normalizeEmail(row.new_email), row);
-    markLifecycleEmailVerified(runtime, row.user_id, row.new_email, now);
     return true;
   }
 
@@ -495,7 +474,6 @@ module.exports = {
   sha256,
   sameHash,
   reauthToken,
-  markLifecycleEmailVerified,
   createStagedEmailChange,
   installStagedEmailChange,
   createStagedEmailChangeNoticeWorker,

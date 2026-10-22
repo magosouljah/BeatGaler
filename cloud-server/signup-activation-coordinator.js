@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { markLifecycleEmailVerified } = require('./account-lifecycle-verified-email-activation');
+const { markVerifiedEmail } = require('./email-verification-authority');
 const { COMPAT_STATE_KEY } = require('./postgres-control-plane-runtime');
 
 function coded(message, code, extras = {}) {
@@ -122,7 +122,6 @@ function createSignupActivationCoordinator({
   service,
   getBridge,
   flushAuthority,
-  accountLifecycle,
   issueWelcome,
   installationClaimCoordinator = null,
   now = () => Date.now(),
@@ -157,7 +156,7 @@ function createSignupActivationCoordinator({
         if (!authoritative) throw coded('Active signup user is missing from PostgreSQL.', 'AUTH_USER_DURABILITY_FAILED');
         const bridge = getBridge();
         if (bridge) bridge.adoptAuthoritativeUser(authoritativeBridgeInput(authoritative));
-        markLifecycleEmailVerified(accountLifecycle, userId, pending.email_normalized, {
+        await markVerifiedEmail(pool, userId, pending.email_normalized, {
           verifiedAt: pending.verified_at ? new Date(pending.verified_at).toISOString() : new Date(now()).toISOString(),
         });
         return {
@@ -233,9 +232,9 @@ function createSignupActivationCoordinator({
         return { user_id: userId, username: authoritative.username };
       });
 
-      // Lifecycle state is process local. A crash after the durable user ledger
-      // commit must not skip this idempotent projection on the next attempt.
-      markLifecycleEmailVerified(accountLifecycle, userId, pending.email_normalized, {
+      // A crash after the durable user ledger commit must not skip this
+      // idempotent verification write on the next activation attempt.
+      await markVerifiedEmail(pool, userId, pending.email_normalized, {
         verifiedAt: pending.verified_at ? new Date(pending.verified_at).toISOString() : new Date(now()).toISOString(),
       });
       const durableUser = await loadAuthoritativeUser(client, userId);

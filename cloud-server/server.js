@@ -250,7 +250,6 @@ async function start() {
       service: pendingSignupService,
       getBridge: getServerCoreAuthBridge,
       flushAuthority: () => cutover.runtime.flush(),
-      accountLifecycle,
       issueWelcome: userId => accessGrants.issueWelcomeAfterActivation(userId),
       installationClaimCoordinator,
       staleMs: Number(process.env.BEATGALER_SIGNUP_ACTIVATION_STALE_MS || 5 * 60_000),
