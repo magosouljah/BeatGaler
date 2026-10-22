@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { platform } from "../platform";
 import { hasRememberedWebSessionMarker } from "../features/auth/webSessionBootstrap";
+import { formatSignupVerificationCode } from "../features/auth/signupVerificationCode";
 import { UiButton, UiFeedback, UiField, UiSpinner } from "./ui/DesignPrimitives";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
@@ -790,7 +791,7 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     {pendingSignup ? <form className="bg-account-card" onSubmit={confirmPendingSignup}>
       <h1 className="bg-account-title">Check your email</h1>
       <p className="bg-account-subtitle">Enter the verification code to finish creating your account.</p>
-      <UiField id="beatgaler-signup-code" label="VERIFICATION CODE" autoFocus value={signupCode} onChange={e => setSignupCode(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" autoComplete="one-time-code" maxLength={8} required />
+      <UiField id="beatgaler-signup-code" label="VERIFICATION CODE" autoFocus value={signupCode} onChange={e => setSignupCode(formatSignupVerificationCode(e.target.value))} inputMode="numeric" autoComplete="one-time-code" maxLength={7} pattern="[0-9]{3}-[0-9]{3}" placeholder="123-123" required />
       {notice && <UiFeedback tone="info">{notice}</UiFeedback>}
       {error && <UiFeedback tone="error" role="alert">{sanitizeUserVisibleText(error)}</UiFeedback>}
       <UiButton variant="primary" fullWidth loading={busy} type="submit">Verify and create account</UiButton>

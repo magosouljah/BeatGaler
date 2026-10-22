@@ -16,6 +16,7 @@ import { UiButton, UiFeedback, UiField, UiSpinner } from "../../components/ui/De
 import { sanitizeUserVisibleText } from "../../lib/userVisibleError";
 import { platform } from "../../platform";
 import { hasRememberedWebSessionMarker } from "./webSessionBootstrap";
+import { formatSignupVerificationCode } from "./signupVerificationCode";
 
 const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
 const TOKEN_KEY = "beatgaler:account-session:v1";
@@ -505,7 +506,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
       </form>}
 
       {phase === "signup-verify" && <form className="bg-auth-form" onSubmit={confirmSignup}>
-        <UiField id="auth-signup-code" label="Verification code" autoFocus value={signupCode} onChange={event => setSignupCode(event.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" autoComplete="one-time-code" maxLength={8} required />
+        <UiField id="auth-signup-code" label="Verification code" autoFocus value={signupCode} onChange={event => setSignupCode(formatSignupVerificationCode(event.target.value))} inputMode="numeric" autoComplete="one-time-code" maxLength={7} pattern="[0-9]{3}-[0-9]{3}" placeholder="123-123" required />
         <UiButton type="submit" variant="primary" fullWidth loading={busy}>Verify and create account</UiButton>
         <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void resendSignup()}>Resend code</UiButton>
         <UiButton type="button" variant="ghost" fullWidth disabled={busy} onClick={() => void retrySignup()}>Check setup status</UiButton>
