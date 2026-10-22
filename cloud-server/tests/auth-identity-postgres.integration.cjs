@@ -2,9 +2,13 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations');
 const { createProviderIdentityAuthority } = require('../provider-identity-authority');
+const execFileAsync = promisify(execFile);
 
 function databaseUrl(base, database) {
   const url = new URL(base);
@@ -60,7 +64,6 @@ async function main() {
 
     await poolA.query("INSERT INTO users(id,username,username_source) VALUES('usr_x_a','pepito','x')");
     await poolA.query("INSERT INTO provider_identities(id,user_id,provider,provider_subject,profile) VALUES('prv_x_a','usr_x_a','x','x-a','{}'::jsonb)");
-    const authorityA = createProviderIdentityAuthority({ pool: poolA, getBridge: bridge });
     const authorityB = createProviderIdentityAuthority({ pool: poolB, getBridge: bridge });
     const faulty = createProviderIdentityAuthority({ pool: faultingPool(poolB), getBridge: bridge });
 
@@ -83,12 +86,14 @@ async function main() {
     assert.equal((await poolA.query("SELECT user_id FROM provider_identities WHERE provider='x' AND provider_subject='x-a'")).rows[0].user_id, 'usr_x_a');
     assert.equal((await poolA.query("SELECT user_id FROM provider_identities WHERE provider='x' AND provider_subject='x-b'")).rows[0].user_id, claimed.existingUserId);
 
-    // Separate pools race for one new subject and still return one stable user.
-    const [first, second] = await Promise.all([
-      authorityA.prepareX({ identity: { id: 'x-c', username: 'juanito' }, registrationOpen: true }),
-      authorityB.prepareX({ identity: { id: 'x-c', username: 'juanito' }, registrationOpen: true }),
-    ]);
-    assert.equal(first.existingUserId, second.existingUserId);
+    // Separate Node processes race for one new subject and return one stable user.
+    const worker = path.join(__dirname, 'auth-identity-postgres.worker.cjs');
+    const spawnClaim = () => execFileAsync(process.execPath, [worker], {
+      env: { ...process.env, DATABASE_URL: url, TEST_X_SUBJECT: 'x-c', TEST_X_HANDLE: 'juanito' },
+      timeout: 15_000,
+    });
+    const [first, second] = await Promise.all([spawnClaim(), spawnClaim()]);
+    assert.equal(JSON.parse(first.stdout).userId, JSON.parse(second.stdout).userId);
     assert.equal((await poolA.query("SELECT count(*)::int AS n FROM provider_identities WHERE provider='x' AND provider_subject='x-c'")).rows[0].n, 1);
     assert.equal((await poolA.query("SELECT count(*)::int AS n FROM users WHERE lower(username)='juanito'")).rows[0].n, 1);
     console.log('auth identity PostgreSQL integration: PASS');

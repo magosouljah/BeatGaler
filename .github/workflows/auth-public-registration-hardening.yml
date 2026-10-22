@@ -52,6 +52,8 @@ jobs:
           node --check cloud-server/tests/staged-email-change.test.cjs
           node --check cloud-server/tests/staged-email-change-routes.test.cjs
           node --check cloud-server/tests/account-email-ses-staged.test.cjs
+          node --check cloud-server/tests/auth-identity-postgres.integration.cjs
+          node --check cloud-server/tests/auth-identity-postgres.worker.cjs
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
@@ -85,5 +87,5 @@ jobs:
           node-version-file: .node-version
       - name: Install locked cloud-server graph
         run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
-      - name: Verify X claim, rollback, concurrency and first-email migration in PostgreSQL
+      - name: Verify X claim, rollback, two-process concurrency and first-email migration in PostgreSQL
         run: node cloud-server/tests/auth-identity-postgres.integration.cjs
