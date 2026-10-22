@@ -102,6 +102,7 @@ async function main() {
       const counts = counters.get(signupId) || { sessions: 0, binds: 0 };
       counters.set(signupId, counts);
       let local = null;
+      let activeObserved = false;
       const lifecycleState = { email_verified: {} };
       const lifecycle = { _test: {
         stateSnapshot() { return lifecycleState; },
@@ -137,6 +138,7 @@ async function main() {
           local.installationId = installationId;
         },
         createSession(userId) {
+          assert.equal(activeObserved, true, 'a session must never be created before durable ACTIVE');
           if (activeFaults.get(signupId) === 'after-active') {
             activeFaults.delete(signupId);
             throw new Error('injected crash after ACTIVE before session');
@@ -179,7 +181,9 @@ async function main() {
             activeFaults.delete(signupId);
             throw new Error('injected crash after provisioning before ACTIVE');
           }
-          return service.setActivationState(id, status, options);
+          const result = await service.setActivationState(id, status, options);
+          if (status === 'ACTIVE') activeObserved = true;
+          return result;
         },
       };
       return createSignupActivationCoordinator({
@@ -192,11 +196,16 @@ async function main() {
     async function assertDurable(signupId, { sessions = 1 } = {}) {
       const id = stableUserId(signupId);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM users WHERE id=$1', [id])).rows[0].n, 1);
+      assert.equal((await poolA.query('SELECT count(*)::int AS n FROM users WHERE lower(email)=lower($1)',
+        [`${signupId}@example.com`])).rows[0].n, 1);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1', [id])).rows[0].n, 1);
       assert.equal([...groups.values()].filter(group => group.title.endsWith(`[BG:${id}]`)).length, 1);
       assert.equal((await poolA.query("SELECT count(*)::int AS n FROM entitlements WHERE user_id=$1 AND source='welcome'", [id])).rows[0].n, 1);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM auth_sessions WHERE user_id=$1', [id])).rows[0].n, sessions);
       assert.equal((await poolA.query('SELECT status FROM pending_signups WHERE id=$1', [signupId])).rows[0].status, 'ACTIVE');
+      const ledger = await poolA.query("SELECT step,state FROM auth_provisioning_ledger WHERE signup_id=$1 AND step IN ('user','vault','installation','welcome')", [signupId]);
+      assert.deepEqual(ledger.rows.map(row => `${row.step}:${row.state}`).sort(),
+        ['installation:DONE', 'user:DONE', 'vault:DONE', 'welcome:DONE']);
       const persistent = await poolA.query("SELECT payload->'linkedAccounts'->$1 AS linked FROM runtime_compat_state WHERE state_key='legacy-cloud-data-v1'", [`install_${signupId}`]);
       assert.equal(persistent.rows[0]?.linked?.beatgalerAccountId, id);
     }
