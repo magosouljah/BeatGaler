@@ -8,8 +8,8 @@ const SES_API_PATH = '/v2/email/outbound-emails';
 const EMAIL_TEMPLATES = Object.freeze({
   email_verification: Object.freeze({
     name: 'VERIFY_EMAIL',
-    subject: 'Verify your BeatGaler email',
-    intro: 'Use this one-time verification code to verify your BeatGaler email:',
+    subject: 'Your BeatGaler verification code',
+    intro: 'Use this verification code to continue:',
     requiresToken: true,
   }),
   password_reset: Object.freeze({
@@ -53,6 +53,54 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function renderVerificationEmail(template, rawToken) {
+  const safeToken = escapeHtml(rawToken);
+  return {
+    template_name: template.name,
+    subject: template.subject,
+    text: [
+      'BeatGaler',
+      '',
+      'Confirm your email address',
+      '',
+      template.intro,
+      '',
+      rawToken,
+      '',
+      'This code expires in 10 minutes.',
+      '',
+      'If you didn’t request this, you can ignore this email.',
+      '',
+      'Thanks,',
+      'BeatGaler',
+    ].join('\n'),
+    html: `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background-color:#ffffff;color:#111111;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#ffffff;">
+    <tr>
+      <td align="center" style="padding:48px 20px;text-align:center;">
+        <table role="presentation" width="460" cellspacing="0" cellpadding="0" border="0" align="center" style="width:100%;max-width:460px;margin:0 auto;">
+          <tr>
+            <td align="center" style="padding:0;text-align:center;">
+              <div style="margin:0 0 42px;font-size:20px;line-height:28px;font-weight:700;color:#111111;">BeatGaler</div>
+              <h1 style="margin:0 0 24px;font-size:30px;line-height:38px;font-weight:700;color:#111111;">Confirm your email address</h1>
+              <p style="margin:0 0 22px;font-size:16px;line-height:24px;color:#5f6368;">${escapeHtml(template.intro)}</p>
+              <div style="margin:0 0 30px;font-size:42px;line-height:50px;font-weight:700;letter-spacing:6px;color:#111111;white-space:nowrap;">${safeToken}</div>
+              <p style="margin:0 0 38px;font-size:15px;line-height:23px;color:#6b7280;">This code expires in 10 minutes.</p>
+              <p style="margin:0 0 38px;font-size:14px;line-height:22px;color:#8a8f98;">If you didn’t request this, you can ignore this email.</p>
+              <p style="margin:0;font-size:15px;line-height:23px;color:#6b7280;">Thanks,<br>BeatGaler</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
+  };
+}
+
 function renderAccountEmail(kind, token, expiresAt) {
   const template = EMAIL_TEMPLATES[String(kind || '')];
   if (!template) {
@@ -75,6 +123,7 @@ function renderAccountEmail(kind, token, expiresAt) {
       html: `<p>${escapeHtml(template.intro)}</p><p>If you made this change, no action is required.</p>`,
     };
   }
+  if (kind === 'email_verification') return renderVerificationEmail(template, rawToken);
   const safeToken = escapeHtml(rawToken);
   const safeExpiry = escapeHtml(expiry);
   return {
