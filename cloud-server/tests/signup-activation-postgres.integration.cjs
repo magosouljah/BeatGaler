@@ -6,12 +6,15 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations');
 const { createPendingSignupService } = require('../pending-signup-service');
 const { digest, createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createSignupActivationCoordinator, stableUserId } = require('../signup-activation-coordinator');
 const { issueWelcomeGrant } = require('../access-grant-store');
+const execFileAsync = promisify(execFile);
 
 function databaseUrl(base, database) {
   const url = new URL(base);
@@ -215,8 +218,19 @@ async function main() {
       const afterFailure = await poolA.query('SELECT status FROM pending_signups WHERE id=$1', [signupId]);
       assert.equal(afterFailure.rows[0].status, fault === 'after-active' ? 'ACTIVE' : 'RETRYABLE');
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM auth_sessions WHERE user_id=$1', [stableUserId(signupId)])).rows[0].n, 0);
-      const restarted = coordinator(poolB, signupId);
-      const recovered = await restarted.activate({ signupId, continuationSecret: continuation });
+      const recovered = fault === 'after-telegram'
+        ? await (async () => {
+          const worker = path.join(__dirname, 'signup-activation-postgres.worker.cjs');
+          const result = await execFileAsync(process.execPath, [worker], {
+            env: { ...process.env, DATABASE_URL: url, TEST_SIGNUP_ID: signupId,
+              TEST_TELEGRAM_GROUPS: JSON.stringify([...groups.values()]) },
+            timeout: 20_000,
+          });
+          const output = JSON.parse(result.stdout);
+          assert.equal(output.createAttempts, 0, 'restart must reuse the Telegram group created before the crash');
+          return { status: output.status, user_id: output.userId };
+        })()
+        : await coordinator(poolB, signupId).activate({ signupId, continuationSecret: continuation });
       assert.equal(recovered.status, 'ACTIVE');
       await assertDurable(signupId, { sessions: fault === 'after-active' ? 0 : 1 });
     }
