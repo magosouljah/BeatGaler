@@ -69,7 +69,7 @@ async function main() {
       local.storageChatTitle = created.title;
     },
     bindInstallation(_userId, installationId) { local.installationId = installationId; },
-    createSession() { local.sessionToken = 'session_restart_test'; return local.sessionToken; },
+    createSession() { local.sessionToken = `session_restart_${process.env.TEST_SIGNUP_ID}`; return local.sessionToken; },
     async publicPayload(_userId, token) { return { token }; },
   };
   async function flushAuthority() {
