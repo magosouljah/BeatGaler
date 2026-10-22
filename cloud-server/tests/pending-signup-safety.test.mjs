@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { createPendingSignupService } = require('../pending-signup-service');
+const { hashPassword } = require('../password-kdf');
 const {
   createPendingSignupRuntime,
   digest,
@@ -75,6 +76,42 @@ assert.equal(publicError({ code: 'DATABASE_PASSWORD=secret', message: 'postgres:
   const result = await service.begin({ email: 'same@example.com', usernameBase: 'same', password: 'password-123' });
   assert.equal(result.created, false);
   assert.equal(result.reason, 'pending_exists');
+  assert.equal(createCalls, 0);
+}
+
+{
+  const pepper = 'p'.repeat(32);
+  const salt = 'ab'.repeat(16);
+  const future = new Date(Date.now() + 60_000);
+  const hash = await hashPassword('original-password', salt);
+  const row = { id: 'psu_reclaim', status: 'CODE_SENT', expires_at: future,
+    challenge_expires_at: future, password_hash: hash, password_salt: salt, resend_count: 2 };
+  let createCalls = 0;
+  let updateCalls = 0;
+  const { pool } = poolWithClient(async (sql, params) => {
+    if (sql.includes('FROM users')) return { rows: [] };
+    if (sql.includes('FROM pending_signups')) return { rows: [row] };
+    if (sql.includes('SET continuation_hash=')) {
+      updateCalls += 1;
+      assert.equal(params[0], row.id);
+      assert.notEqual(params[1], digest(pepper, 'continuation', 'old-secret'));
+      assert.equal(sql.includes('resend_count='), false, 'reclaim must preserve resend limits');
+      return { rows: [row] };
+    }
+    return { rows: [] };
+  });
+  const runtime = { async create() { createCalls += 1; throw new Error('must not create a duplicate'); } };
+  const service = createPendingSignupService({ pool, runtime, env: { BEATGALER_SIGNUP_PEPPER: pepper } });
+  const wrong = await service.begin({ email: 'same@example.com', password: 'wrong-password' });
+  assert.equal(wrong.created, false);
+  assert.equal(updateCalls, 0);
+  const recovered = await service.begin({ email: 'same@example.com', password: 'original-password' });
+  assert.equal(recovered.created, true);
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.signup_id, row.id);
+  assert.match(recovered.continuation_secret, /^sc_/);
+  assert.equal(recovered.status, 'CODE_SENT');
+  assert.equal(updateCalls, 1);
   assert.equal(createCalls, 0);
 }
 
@@ -390,6 +427,29 @@ assert.equal(retryDelay(100), 3_600_000);
   await routes.get('/auth/signup/status')[0]({ headers: { 'x-beatgaler-client': 'web', cookie: cookie.split(';')[0] }, body: {} }, checked);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(statusInput, { signupId: 'psu_web', continuationSecret: 'private-secret' });
+}
+
+{
+  const routes = new Map();
+  const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
+  installPendingSignupBoundary({ application: app }, {
+    service: { async begin() { return { created: true, recovered: true, signup_id: 'psu_existing',
+      continuation_secret: 'replacement-secret', status: 'CODE_SENT',
+      expires_at: new Date(Date.now() + 60_000).toISOString() }; } },
+    env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
+  });
+  app.post('/auth/register', () => {});
+  const headers = new Map();
+  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; },
+    setHeader(name, value) { headers.set(String(name).toLowerCase(), value); },
+    getHeader(name) { return headers.get(String(name).toLowerCase()); },
+    json(body) { this.body = body; return this; } };
+  await routes.get('/auth/register')[0]({ headers: { 'x-beatgaler-client': 'web' }, body: {} }, res);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(res.body.signup_id, 'psu_existing');
+  assert.equal(res.body.recovered, true);
+  assert.equal(res.body.continuation_secret, undefined);
+  assert.match(res.getHeader('Set-Cookie')[0], /HttpOnly; Secure; SameSite=Lax/);
 }
 
 {

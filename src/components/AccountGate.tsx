@@ -259,6 +259,7 @@ async function storeSession(result: AuthResponse) {
 export type PendingBeatGalerSignup = {
   signup_pending: boolean;
   signup_id?: string;
+  recovered?: boolean;
   continuation_secret?: string;
   status: string;
   expires_at?: string;

@@ -190,6 +190,7 @@ function installPendingSignupBoundary(express, {
         ok: true,
         signup_pending: true,
         signup_id: result.signup_id,
+        ...(result.recovered ? { recovered: true } : {}),
         ...(!webSignupRequest(req) ? { continuation_secret: result.continuation_secret } : {}),
         status: result.status,
         expires_at: result.expires_at,

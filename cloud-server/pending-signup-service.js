@@ -1,5 +1,8 @@
 'use strict';
 
+const crypto = require('node:crypto');
+const { hashPassword } = require('./password-kdf');
+
 const {
   ACTIVE_PENDING_STATES,
   normalizeEmail,
@@ -42,10 +45,30 @@ function createPendingSignupService({
       if (existingUser.rows.length) {
         return { accepted: true, created: false, reason: 'existing_account' };
       }
-      const existing = await client.query('SELECT id,status,expires_at FROM pending_signups WHERE email_normalized=$1 LIMIT 1', [email]);
+      const existing = await client.query('SELECT id,status,expires_at,password_hash,password_salt,challenge_expires_at FROM pending_signups WHERE email_normalized=$1 LIMIT 1', [email]);
       const row = existing.rows[0] || null;
       const active = row && ACTIVE_PENDING_STATES.has(String(row.status)) && new Date(row.expires_at).getTime() > now();
       if (active) {
+        // A user who left the verification screen can reclaim their own pending
+        // signup with its password. Keep the challenge and resend counters intact.
+        if (['NEW', 'DELIVERY_PENDING', 'CODE_SENT'].includes(String(row.status))
+          && row.password_hash && row.password_salt && typeof input.password === 'string') {
+          const suppliedHash = await hashPassword(input.password, row.password_salt);
+          if (safeEqualHex(row.password_hash, suppliedHash)) {
+            const continuation = `sc_${crypto.randomBytes(18).toString('base64url')}`;
+            const updated = await client.query(`UPDATE pending_signups SET continuation_hash=$2,updated_at=now()
+              WHERE id=$1 AND status IN ('NEW','DELIVERY_PENDING','CODE_SENT') AND expires_at>now()
+              RETURNING id,status,expires_at,challenge_expires_at`,
+            [row.id, digest(pepper, 'continuation', continuation)]);
+            if (updated.rows[0]) {
+              const recovered = updated.rows[0];
+              return { accepted: true, created: true, recovered: true,
+                signup_id: String(recovered.id), continuation_secret: continuation,
+                status: String(recovered.status), expires_at: new Date(recovered.expires_at).toISOString(),
+                challenge_expires_at: recovered.challenge_expires_at ? new Date(recovered.challenge_expires_at).toISOString() : null };
+            }
+          }
+        }
         return { accepted: true, created: false, reason: 'pending_exists' };
       }
       const created = await runtime.create(input);

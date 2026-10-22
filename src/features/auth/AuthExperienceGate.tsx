@@ -268,7 +268,9 @@ export default function AuthExperienceGate({ children }: { children: React.React
         if (result.signup_id) {
           setSignupId(result.signup_id);
           setPhase("signup-verify");
-          setNotice("If this address is eligible, a verification code will arrive shortly.");
+          setNotice(result.recovered
+            ? "Your signup is ready to continue. Enter the code from your email, or select Resend code for a new one."
+            : "If this address is eligible, a verification code will arrive shortly.");
         } else {
           setPhase("login");
           setNotice("If this address is eligible, verification instructions will arrive shortly.");
