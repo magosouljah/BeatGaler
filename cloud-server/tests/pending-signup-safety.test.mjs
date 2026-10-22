@@ -3,7 +3,11 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { createPendingSignupService } = require('../pending-signup-service');
-const { digest } = require('../pending-signup-runtime');
+const {
+  createPendingSignupRuntime,
+  digest,
+  normalizeManualCode,
+} = require('../pending-signup-runtime');
 const { retryDelay, createAuthDeliveryWorker } = require('../auth-delivery-worker');
 const { statusForError, publicError, shouldOwnRegister, installPendingSignupBoundary } = require('../pending-signup-boundary');
 
@@ -144,6 +148,125 @@ assert.equal(retryDelay(7), 3_600_000);
 assert.equal(retryDelay(100), 3_600_000);
 
 {
+  const pepper = 'p'.repeat(32);
+  const now = 1_000_000;
+  for (const challenge of ['123-456', '123456', '123 456']) {
+    const row = {
+      id: `psu_verify_${challenge.replace(/\D/g, '_')}`,
+      status: 'CODE_SENT',
+      continuation_hash: digest(pepper, 'continuation', 'sc_good'),
+      link_token_hash: digest(pepper, 'link', 'sv_unrelated'),
+      manual_code_hash: digest(pepper, 'code', '123456'),
+      challenge_failures: 0,
+      challenge_expires_at: new Date(now + 60_000),
+      expires_at: new Date(now + 120_000),
+    };
+    let failureUpdates = 0;
+    const { pool } = poolWithClient(async sql => {
+      if (sql.startsWith('SELECT * FROM pending_signups')) return { rows: [row] };
+      if (sql.includes('SET challenge_failures=')) failureUpdates += 1;
+      if (sql.includes("SET status='VERIFIED'")) {
+        return { rows: [{ ...row, status: 'VERIFIED', verified_at: new Date(now) }] };
+      }
+      return { rows: [] };
+    });
+    const runtime = createPendingSignupRuntime({
+      pool,
+      keyring: { key: Buffer.alloc(32, 7), keyVersion: 1 },
+      env: { BEATGALER_SIGNUP_PEPPER: pepper },
+      now: () => now,
+    });
+    const verified = await runtime.verify({ signupId: row.id, continuationSecret: 'sc_good', challenge });
+    assert.equal(verified.status, 'VERIFIED');
+    assert.equal(failureUpdates, 0, `${challenge} must verify against the canonical six digits`);
+  }
+}
+
+{
+  const pepper = 'p'.repeat(32);
+  const now = 2_000_000;
+  const oldLinkHash = digest(pepper, 'link', 'sv_old');
+  const oldCodeHash = digest(pepper, 'code', '654321');
+  let row = {
+    id: 'psu_resend',
+    email_normalized: 'person@example.com',
+    status: 'CODE_SENT',
+    continuation_hash: digest(pepper, 'continuation', 'sc_good'),
+    link_token_hash: oldLinkHash,
+    manual_code_hash: oldCodeHash,
+    challenge_failures: 0,
+    challenge_expires_at: new Date(now + 60_000),
+    resend_count: 0,
+    last_sent_at: null,
+    expires_at: new Date(now + 24 * 60 * 60_000),
+  };
+  let outboxParams;
+  let randomCalls = 0;
+  const { pool } = poolWithClient(async (sql, params) => {
+    if (sql.startsWith('SELECT * FROM pending_signups')) return { rows: [row] };
+    if (sql.includes('link_token_hash=$2,manual_code_hash=$3')) {
+      row = {
+        ...row,
+        link_token_hash: params[1],
+        manual_code_hash: params[2],
+        challenge_expires_at: params[3],
+        challenge_failures: 0,
+        resend_count: row.resend_count + 1,
+        status: 'DELIVERY_PENDING',
+      };
+      return { rows: [row] };
+    }
+    if (sql.startsWith('INSERT INTO auth_delivery_outbox')) outboxParams = params;
+    if (sql.startsWith('UPDATE pending_signups SET challenge_failures=')) {
+      row = { ...row, challenge_failures: params[1] };
+    }
+    if (sql.includes("SET status='VERIFIED'")) {
+      row = { ...row, status: 'VERIFIED', verified_at: new Date(now) };
+      return { rows: [row] };
+    }
+    return { rows: [] };
+  });
+  const runtime = createPendingSignupRuntime({
+    pool,
+    keyring: { key: Buffer.alloc(32, 8), keyVersion: 1 },
+    env: { BEATGALER_SIGNUP_PEPPER: pepper },
+    now: () => now,
+    randomBytes: size => Buffer.alloc(size, ++randomCalls),
+  });
+  assert.equal(runtime.constants.challengeTtlMs, 10 * 60_000);
+  assert.equal(runtime.constants.maxFailures, 5);
+
+  await runtime.resend({ signupId: row.id, continuationSecret: 'sc_good' });
+  assert.notEqual(row.link_token_hash, oldLinkHash, 'resend must replace the link-token challenge hash');
+  assert.notEqual(row.manual_code_hash, oldCodeHash, 'resend must replace the manual-code challenge hash');
+  assert.equal(row.challenge_expires_at.toISOString(), new Date(now + 10 * 60_000).toISOString());
+
+  assert.ok(outboxParams, 'resend must enqueue a replacement delivery');
+  const secret = runtime.decryptDelivery({
+    id: outboxParams[0],
+    secret_ciphertext: outboxParams[5],
+    secret_nonce: outboxParams[6],
+    secret_key_version: outboxParams[7],
+  });
+  assert.match(secret.manual_code, /^[0-9]{3}-[0-9]{3}$/);
+  const canonical = normalizeManualCode(secret.manual_code);
+  assert.equal(row.manual_code_hash, digest(pepper, 'code', canonical), 'only canonical digits are hashed');
+  assert.equal(JSON.parse(outboxParams[4]).manual_code, undefined, 'the public outbox payload must not contain the code');
+
+  await assert.rejects(
+    runtime.verify({ signupId: row.id, continuationSecret: 'sc_good', challenge: '654-321' }),
+    error => error?.code === 'SIGNUP_CHALLENGE_INVALID',
+    'the challenge replaced by resend must no longer verify',
+  );
+  const verified = await runtime.verify({
+    signupId: row.id,
+    continuationSecret: 'sc_good',
+    challenge: `${canonical.slice(0, 3)} ${canonical.slice(3)}`,
+  });
+  assert.equal(verified.status, 'VERIFIED');
+}
+
+{
   const calls = [];
   const service = {
     async requeueStaleDeliveries() { calls.push(['requeue']); return 0; },
@@ -151,7 +274,7 @@ assert.equal(retryDelay(100), 3_600_000);
       calls.push(['claim']);
       return {
         row: { id: 'out_1', kind: 'signup_verification', attempt_count: 1 },
-        secret: { email: 'person@example.com', manual_code: '12345678', expires_at: '2026-10-21T22:00:00.000Z' },
+        secret: { email: 'person@example.com', manual_code: '123-456', expires_at: '2026-10-21T22:00:00.000Z' },
       };
     },
     async completeDelivery(id, result) { calls.push(['complete', id, result]); },
@@ -166,7 +289,7 @@ assert.equal(retryDelay(100), 3_600_000);
   assert.equal(calls[0][0], 'requeue');
   assert.equal(calls[1][0], 'claim');
   assert.equal(calls[2][0], 'email');
-  assert.equal(calls[2][1].token, '12345678');
+  assert.equal(calls[2][1].token, '123-456');
   assert.deepEqual(calls[3], ['complete', 'out_1', { ok: true }]);
 }
 
@@ -177,7 +300,7 @@ assert.equal(retryDelay(100), 3_600_000);
     async claimDelivery() {
       return {
         row: { id: 'out_fail', kind: 'signup_verification', attempt_count: 2 },
-        secret: { email: 'person@example.com', manual_code: '12345678', expires_at: '2026-10-21T22:00:00.000Z' },
+        secret: { email: 'person@example.com', manual_code: '123-456', expires_at: '2026-10-21T22:00:00.000Z' },
       };
     },
     async completeDelivery(id, result) { completions.push([id, result]); },

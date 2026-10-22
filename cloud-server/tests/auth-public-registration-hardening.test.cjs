@@ -25,6 +25,8 @@ const {
   digest,
   safeEqualHex,
   randomManualCode,
+  normalizeManualCode,
+  formatManualCode,
 } = require('../pending-signup-runtime');
 
 function user({ id, username, email = null, x = null, google = null }) {
@@ -228,7 +230,23 @@ assert.equal(authErrorLooksInternal('That Google account is already connected to
   assert.equal(safeEqualHex(linkHash, codeHash), false);
 
   const zeroRandom = size => Buffer.alloc(size);
-  assert.equal(randomManualCode(zeroRandom), '00000000');
+  assert.equal(randomManualCode(zeroRandom), '000000');
+  assert.match(randomManualCode(() => Buffer.from([0, 0, 0, 42])), /^[0-9]{6}$/);
+
+  let randomCalls = 0;
+  const rejectionSample = () => (++randomCalls === 1
+    ? Buffer.from([0xff, 0xff, 0xff, 0xff])
+    : Buffer.from([0, 0, 0, 123]));
+  assert.equal(randomManualCode(rejectionSample), '000123', 'out-of-range samples must be rejected to avoid modulo bias');
+  assert.equal(randomCalls, 2);
+
+  assert.equal(normalizeManualCode('123-456'), '123456');
+  assert.equal(normalizeManualCode('123456'), '123456');
+  assert.equal(normalizeManualCode('123 456'), '123456');
+  assert.equal(formatManualCode('000123'), '000-123');
+  for (const invalid of ['', '12345', '1234567', '12-3456', '123_456', '123  456', '123-45a']) {
+    assert.equal(normalizeManualCode(invalid), null, `${JSON.stringify(invalid)} must not normalize as a manual code`);
+  }
 }
 
 (async () => {

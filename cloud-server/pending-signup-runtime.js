@@ -62,12 +62,23 @@ function safeEqualHex(left, right) {
 }
 
 function randomManualCode(randomBytes = crypto.randomBytes) {
-  const max = 100_000_000;
+  const max = 1_000_000;
   const limit = Math.floor(0x1_0000_0000 / max) * max;
   while (true) {
     const value = randomBytes(4).readUInt32BE(0);
-    if (value < limit) return String(value % max).padStart(8, '0');
+    if (value < limit) return String(value % max).padStart(6, '0');
   }
+}
+
+function normalizeManualCode(value) {
+  const match = String(value ?? '').trim().match(/^([0-9]{3})(?:[ -]?)([0-9]{3})$/);
+  return match ? `${match[1]}${match[2]}` : null;
+}
+
+function formatManualCode(value) {
+  const canonical = normalizeManualCode(value);
+  if (!canonical) throw new TypeError('Manual verification code must contain exactly 6 digits.');
+  return `${canonical.slice(0, 3)}-${canonical.slice(3)}`;
 }
 
 function randomId(prefix, randomBytes = crypto.randomBytes) {
@@ -135,7 +146,7 @@ function createPendingSignupRuntime({
     const encrypted = encryptDelivery(outboxId, {
       email,
       link_token: linkToken,
-      manual_code: manualCode,
+      manual_code: formatManualCode(manualCode),
       expires_at: expiresAt.toISOString(),
     });
     return {
@@ -245,8 +256,9 @@ function createPendingSignupRuntime({
         throw Object.assign(new Error('Verification challenge expired.'), { code: 'SIGNUP_CHALLENGE_EXPIRED' });
       }
       const raw = String(challenge || '').trim();
+      const canonicalManualCode = normalizeManualCode(raw);
       const matched = safeEqualHex(row.link_token_hash, digest(pepper, 'link', raw)) ||
-        safeEqualHex(row.manual_code_hash, digest(pepper, 'code', raw));
+        (canonicalManualCode !== null && safeEqualHex(row.manual_code_hash, digest(pepper, 'code', canonicalManualCode)));
       if (!matched) {
         const failures = Number(row.challenge_failures || 0) + 1;
         await client.query('UPDATE pending_signups SET challenge_failures=$2,updated_at=now() WHERE id=$1', [row.id, failures]);
@@ -406,6 +418,8 @@ module.exports = {
   digest,
   safeEqualHex,
   randomManualCode,
+  normalizeManualCode,
+  formatManualCode,
   pendingPublic,
   createPendingSignupRuntime,
 };
