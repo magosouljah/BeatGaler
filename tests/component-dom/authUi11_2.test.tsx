@@ -59,6 +59,9 @@ describe("F2 11.2 complete Auth UI", () => {
       if (String(input) === `${SAME_ORIGIN_API}/auth/register`) {
         return new Response(JSON.stringify({ signup_pending: true, signup_id: "signup-1", status: "PENDING_VERIFICATION" }), { status: 202 });
       }
+      if (String(input) === `${SAME_ORIGIN_API}/auth/signup/resend`) {
+        return new Response(JSON.stringify({ signup_pending: true, status: "DELIVERY_PENDING" }), { status: 202 });
+      }
       throw new Error(`Unexpected request: ${String(input)}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -76,6 +79,15 @@ describe("F2 11.2 complete Auth UI", () => {
     expect(button(host, "Verify and create account")).toBeTruthy();
     expect(button(host, "Verify email")).toBeUndefined();
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === `${SAME_ORIGIN_API}/auth/register`)).toHaveLength(1);
+
+    const code = host.querySelector<HTMLInputElement>("#auth-signup-code")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(code, "123-123");
+      code.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(code.value).toBe("123-123");
+    await act(async () => { button(host, "Resend code")?.click(); await Promise.resolve(); });
+    expect(code.value).toBe("", "a resend must clear the previous OTP before the next one is pasted");
 
     await act(async () => root.unmount());
     host.remove();

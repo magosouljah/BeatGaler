@@ -267,6 +267,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
         setPassword(""); setConfirmPassword("");
         if (result.signup_id) {
           setSignupId(result.signup_id);
+          setSignupCode("");
           setPhase("signup-verify");
           setNotice(result.recovered
             ? "Your signup is ready to continue. Enter the code from your email, or select Resend code for a new one."
@@ -299,7 +300,11 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const resendSignup = async () => {
     if (busy) return;
     setBusy(true); setError(null); setNotice(null);
-    try { await resendBeatGalerSignup(signupId); setNotice("If this signup is active, a new code will arrive shortly."); }
+    try {
+      await resendBeatGalerSignup(signupId);
+      setSignupCode("");
+      setNotice("A new code will arrive shortly. Enter the code from the newest email.");
+    }
     catch (errorValue) { setError(humanError(errorValue)); }
     finally { setBusy(false); }
   };
