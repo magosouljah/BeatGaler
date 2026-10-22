@@ -55,12 +55,15 @@ describe("F2 11.2 complete Auth UI", () => {
   });
 
   it("moves a pending signup to the six digit OTP form", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input) === `${SAME_ORIGIN_API}/auth/register`) {
         return new Response(JSON.stringify({ signup_pending: true, signup_id: "signup-1", status: "PENDING_VERIFICATION" }), { status: 202 });
       }
       if (String(input) === `${SAME_ORIGIN_API}/auth/signup/resend`) {
         return new Response(JSON.stringify({ signup_pending: true, status: "DELIVERY_PENDING" }), { status: 202 });
+      }
+      if (String(input) === `${SAME_ORIGIN_API}/auth/signup/verify`) {
+        return new Response(JSON.stringify({ error: "That verification code is not valid.", code: "SIGNUP_CHALLENGE_INVALID" }), { status: 400 });
       }
       throw new Error(`Unexpected request: ${String(input)}`);
     });
@@ -88,6 +91,16 @@ describe("F2 11.2 complete Auth UI", () => {
     expect(code.value).toBe("123-123");
     await act(async () => { button(host, "Resend code")?.click(); await Promise.resolve(); });
     expect(code.value).toBe("", "a resend must clear the previous OTP before the next one is pasted");
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(code, "987-654");
+      code.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    const verifyCall = fetchMock.mock.calls.find(([input]) => String(input) === `${SAME_ORIGIN_API}/auth/signup/verify`);
+    expect(verifyCall).toBeTruthy();
+    expect(JSON.parse(String(verifyCall![1]?.body)).code).toBe("987-654",
+      "the visible code must be sent even if browser paste/autofill did not update React state");
 
     await act(async () => root.unmount());
     host.remove();

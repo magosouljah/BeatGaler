@@ -285,9 +285,18 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const confirmSignup = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy) return;
+    const codeInput = event.currentTarget instanceof HTMLFormElement
+      ? event.currentTarget.elements.namedItem("code") as HTMLInputElement | null
+      : null;
+    const submittedCode = formatSignupVerificationCode(codeInput?.value || "");
+    if (!/^[0-9]{3}-[0-9]{3}$/.test(submittedCode)) {
+      setError("Enter the six-digit code from the newest email.");
+      return;
+    }
+    setSignupCode(submittedCode);
     setBusy(true); setError(null); setNotice(null);
     try {
-      const result = await verifyBeatGalerSignup(signupId, signupCode.trim());
+      const result = await verifyBeatGalerSignup(signupId, submittedCode);
       if ('signup_pending' in result) {
         if (result.status === "ACTIVE") { setPhase("login"); setNotice("Your account is ready. Sign in with your email."); }
         else setNotice("Account setup is still in progress. Retry status shortly.");
@@ -485,7 +494,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
       </form>}
 
       {phase === "signup-verify" && <form className="bg-auth-form" onSubmit={confirmSignup}>
-        <UiField id="auth-signup-code" label="Verification code" autoFocus value={signupCode} onChange={event => setSignupCode(formatSignupVerificationCode(event.target.value))} inputMode="numeric" autoComplete="one-time-code" maxLength={7} pattern="[0-9]{3}-[0-9]{3}" placeholder="123-123" required />
+        <UiField id="auth-signup-code" name="code" label="Verification code" autoFocus value={signupCode} onChange={event => setSignupCode(formatSignupVerificationCode(event.target.value))} inputMode="numeric" autoComplete="one-time-code" maxLength={7} pattern="[0-9]{3}-[0-9]{3}" placeholder="123-123" required />
         <UiButton type="submit" variant="primary" fullWidth loading={busy}>Verify and create account</UiButton>
         <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void resendSignup()}>Resend code</UiButton>
         <UiButton type="button" variant="ghost" fullWidth disabled={busy} onClick={() => void retrySignup()}>Check setup status</UiButton>
