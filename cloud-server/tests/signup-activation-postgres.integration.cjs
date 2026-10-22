@@ -9,7 +9,7 @@ const Module = require('node:module');
 const { Pool } = require('pg');
 const { applyMigrations } = require('../postgres-migrations');
 const { createPendingSignupService } = require('../pending-signup-service');
-const { digest } = require('../pending-signup-runtime');
+const { digest, createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createSignupActivationCoordinator, stableUserId } = require('../signup-activation-coordinator');
 const { issueWelcomeGrant } = require('../access-grant-store');
 
@@ -78,7 +78,9 @@ async function main() {
     poolA = new Pool({ connectionString: url, ssl: false, max: 8 });
     poolB = new Pool({ connectionString: url, ssl: false, max: 8 });
     await applyMigrations(poolA);
-    const runtime = { create() {} };
+    const runtime = createPendingSignupRuntime({ pool: poolA,
+      keyring: { key: Buffer.alloc(32, 7), keyVersion: 1 },
+      env: { BEATGALER_SIGNUP_PEPPER: pepper } });
     const service = createPendingSignupService({ pool: poolA, runtime,
       env: { BEATGALER_SIGNUP_PEPPER: pepper } });
 
