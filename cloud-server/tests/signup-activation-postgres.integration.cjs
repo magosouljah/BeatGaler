@@ -159,6 +159,10 @@ async function main() {
           await pool.query(`INSERT INTO vaults(id,user_id,telegram_chat_id,title)
             VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO NOTHING`,
           [`vault_${local.id}`, local.id, local.storageChatId, local.storageChatTitle]);
+          if (!local.installationId && activeFaults.get(signupId) === 'after-vault-flush') {
+            activeFaults.delete(signupId);
+            throw new Error('injected crash after vault persistence before ledger DONE');
+          }
         }
         if (local.installationId) {
           await pool.query(`INSERT INTO runtime_compat_state(state_key,payload)
@@ -168,6 +172,10 @@ async function main() {
             JSON.stringify({ linkedAccounts: { [local.installationId]: { beatgalerAccountId: local.id } } }),
             local.installationId, JSON.stringify({ beatgalerAccountId: local.id }),
           ]);
+          if (activeFaults.get(signupId) === 'after-installation') {
+            activeFaults.delete(signupId);
+            throw new Error('injected crash after installation persistence before ledger DONE');
+          }
         }
         if (local.sessionToken) {
           await pool.query(`INSERT INTO auth_sessions(session_key_hash,user_id,created_at,expires_at)
@@ -214,6 +222,8 @@ async function main() {
       ['psu_before_vault', 'before-vault'],
       ['psu_during_telegram', 'during-telegram'],
       ['psu_after_telegram', 'after-telegram'],
+      ['psu_after_vault_flush', 'after-vault-flush'],
+      ['psu_after_installation', 'after-installation'],
       ['psu_before_active', 'before-active'],
       ['psu_after_active', 'after-active'],
     ];
@@ -242,6 +252,9 @@ async function main() {
         : await coordinator(poolB, signupId).activate({ signupId, continuationSecret: continuation });
       assert.equal(recovered.status, 'ACTIVE');
       await assertDurable(signupId, { sessions: fault === 'after-active' ? 0 : 1 });
+      if (fault === 'after-installation') {
+        assert.equal(counters.get(signupId).binds, 2, 'installation replay must converge to one durable owner');
+      }
     }
 
     const concurrentId = 'psu_concurrent';
