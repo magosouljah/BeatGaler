@@ -23,6 +23,7 @@ const RESPONSE_AUTH_ROUTES = new Set([
   '/auth/session',
   '/auth/account',
   '/auth/email/change',
+  '/auth/email/change/confirm',
   '/auth/password/change',
   '/auth/mfa/setup',
   '/auth/mfa/enable',
@@ -34,7 +35,7 @@ const RESPONSE_AUTH_ROUTES = new Set([
   '/auth/account/delete',
 ]);
 const SENSITIVE_ROTATION_ROUTES = new Set(['/auth/password/change']);
-const CLEAR_SESSION_ROUTES = new Set(['/auth/logout', '/auth/account/delete']);
+const CLEAR_SESSION_ROUTES = new Set(['/auth/logout', '/auth/account/delete', '/auth/email/change/confirm']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function sha256(value) {

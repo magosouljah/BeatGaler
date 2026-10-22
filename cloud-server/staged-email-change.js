@@ -6,6 +6,8 @@ const path = require('node:path');
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
+const RESEND_COOLDOWN_MS = 60_000;
+const MAX_DELIVERIES = 5;
 
 function coded(message, code, extras = {}) {
   return Object.assign(new Error(message), { code, ...extras });
@@ -99,7 +101,7 @@ function createStagedEmailChange({
     return { token, tokenHash: sha256(token), requestId: `emc_${randomBytes(12).toString('hex')}` };
   }
 
-  async function deliverConfirmation(row, token) {
+  async function deliverConfirmation(row, token, { reserved = false } = {}) {
     if (typeof emailNotifier !== 'function') throw coded('Email delivery is unavailable.', 'EMAIL_CHANGE_DELIVERY_UNAVAILABLE');
     await emailNotifier({
       kind: 'email_change_confirmation',
@@ -107,16 +109,18 @@ function createStagedEmailChange({
       token,
       expires_at: new Date(row.expires_at).toISOString(),
     });
-    await pool.query(`
-      UPDATE auth_email_changes
-      SET delivery_count=delivery_count+1,last_delivery_at=now(),updated_at=now()
-      WHERE user_id=$1 AND request_id=$2
-    `, [String(row.user_id), String(row.request_id)]);
+    if (!reserved) {
+      await pool.query(`
+        UPDATE auth_email_changes
+        SET delivery_count=delivery_count+1,last_delivery_at=now(),updated_at=now()
+        WHERE user_id=$1 AND request_id=$2
+      `, [String(row.user_id), String(row.request_id)]);
+    }
   }
 
   async function start(req, newEmailInput) {
     const info = session(req);
-    consumeReauth(req);
+    const proof = consumeReauth(req);
     const newEmail = normalizeEmail(newEmailInput);
     if (!validEmail(newEmail)) throw coded('Enter a valid email address.', 'EMAIL_INVALID');
 
@@ -127,12 +131,24 @@ function createStagedEmailChange({
       await client.query('BEGIN');
       const user = await currentDbUser(client, info.userId, { lock: true });
       if (!user) throw coded('BeatGaler account not found.', 'ACCOUNT_NOT_FOUND');
-      const priorChange = await client.query('SELECT state,old_notice_sent_at FROM auth_email_changes WHERE user_id=$1 FOR UPDATE', [String(info.userId)]);
-      if (priorChange.rows[0]?.state === 'CONFIRMED' && !priorChange.rows[0]?.old_notice_sent_at) {
+      const priorChange = await client.query('SELECT * FROM auth_email_changes WHERE user_id=$1 FOR UPDATE', [String(info.userId)]);
+      const prior = priorChange.rows[0];
+      if (prior?.state === 'CONFIRMED' && prior.old_email && !prior.old_notice_sent_at) {
         throw coded('The previous email-change notice is still pending delivery.', 'EMAIL_CHANGE_NOTICE_PENDING');
       }
+      const activePrior = prior?.state === 'PENDING' && new Date(prior.expires_at).getTime() > now();
+      if (activePrior && Number(prior.delivery_count || 0) >= MAX_DELIVERIES) {
+        throw coded('Email-change delivery limit reached. Start again later.', 'EMAIL_CHANGE_RESEND_LIMIT');
+      }
+      const lastDelivery = activePrior && prior.last_delivery_at ? new Date(prior.last_delivery_at).getTime() : 0;
+      if (lastDelivery && now() - lastDelivery < RESEND_COOLDOWN_MS) {
+        throw coded('Wait before requesting another email-change message.', 'EMAIL_CHANGE_RESEND_COOLDOWN',
+          { retryAfterMs: RESEND_COOLDOWN_MS - (now() - lastDelivery) });
+      }
       const oldEmail = normalizeEmail(user.email);
-      if (!oldEmail) throw coded('This account needs a verified sign-in email before it can be changed.', 'EMAIL_CHANGE_OLD_EMAIL_REQUIRED');
+      if (!oldEmail && !String(proof?.method || '').startsWith('oauth:')) {
+        throw coded('Provider reauthentication is required to add the first sign-in email.', 'EMAIL_CHANGE_PROVIDER_REAUTH_REQUIRED');
+      }
       if (oldEmail === newEmail) throw coded('The new email must be different from the current email.', 'EMAIL_CHANGE_SAME_EMAIL');
       await assertEmailAvailable(client, newEmail, info.userId);
 
@@ -141,8 +157,8 @@ function createStagedEmailChange({
       const expiresAt = new Date(now() + ttlMs);
       const result = await client.query(`
         INSERT INTO auth_email_changes(
-          user_id,request_id,old_email,new_email,token_hash,state,attempt_count,delivery_count,expires_at,created_at,updated_at
-        ) VALUES($1,$2,$3,$4,$5,'PENDING',0,0,$6,now(),now())
+          user_id,request_id,old_email,new_email,token_hash,state,attempt_count,delivery_count,last_delivery_at,expires_at,created_at,updated_at
+        ) VALUES($1,$2,$3,$4,$5,'PENDING',0,$7,now(),$6,now(),now())
         ON CONFLICT(user_id) DO UPDATE SET
           request_id=EXCLUDED.request_id,
           old_email=EXCLUDED.old_email,
@@ -150,8 +166,8 @@ function createStagedEmailChange({
           token_hash=EXCLUDED.token_hash,
           state='PENDING',
           attempt_count=0,
-          delivery_count=0,
-          last_delivery_at=NULL,
+          delivery_count=EXCLUDED.delivery_count,
+          last_delivery_at=now(),
           old_notice_attempts=0,
           old_notice_sent_at=NULL,
           expires_at=EXCLUDED.expires_at,
@@ -159,7 +175,8 @@ function createStagedEmailChange({
           created_at=now(),
           updated_at=now()
         RETURNING *
-      `, [String(info.userId), challenge.requestId, oldEmail, newEmail, challenge.tokenHash, expiresAt]);
+      `, [String(info.userId), challenge.requestId, oldEmail || null, newEmail, challenge.tokenHash, expiresAt,
+        activePrior ? Number(prior.delivery_count || 0) + 1 : 1]);
       row = result.rows[0];
       await client.query('COMMIT');
     } catch (error) {
@@ -170,9 +187,10 @@ function createStagedEmailChange({
     }
 
     try {
-      await deliverConfirmation(row, token);
+      await deliverConfirmation(row, token, { reserved: true });
     } catch (error) {
-      throw coded('The email change was saved but the verification message could not be delivered. Retry the change safely.', error?.code || 'EMAIL_CHANGE_DELIVERY_FAILED', { requestId: row?.request_id });
+      throw coded('The email change was saved but the verification message could not be delivered. Retry the change safely.',
+        'EMAIL_CHANGE_DELIVERY_FAILED');
     }
     return {
       ok: true,
@@ -194,14 +212,24 @@ function createStagedEmailChange({
       if (!row || row.state !== 'PENDING') throw coded('No email change is waiting for confirmation.', 'EMAIL_CHANGE_NOT_PENDING');
       if (new Date(row.expires_at).getTime() <= now()) {
         await client.query("UPDATE auth_email_changes SET state='EXPIRED',updated_at=now() WHERE user_id=$1", [String(info.userId)]);
+        await client.query('COMMIT');
         throw coded('This email-change request expired. Start again.', 'EMAIL_CHANGE_EXPIRED');
+      }
+      if (Number(row.delivery_count || 0) >= MAX_DELIVERIES) {
+        throw coded('Email-change delivery limit reached. Start again later.', 'EMAIL_CHANGE_RESEND_LIMIT');
+      }
+      const lastDelivery = row.last_delivery_at ? new Date(row.last_delivery_at).getTime() : 0;
+      if (lastDelivery && now() - lastDelivery < RESEND_COOLDOWN_MS) {
+        throw coded('Wait before requesting another email-change message.', 'EMAIL_CHANGE_RESEND_COOLDOWN',
+          { retryAfterMs: RESEND_COOLDOWN_MS - (now() - lastDelivery) });
       }
       const challenge = newChallenge();
       token = challenge.token;
       const expiresAt = new Date(now() + ttlMs);
       const updated = await client.query(`
         UPDATE auth_email_changes
-        SET request_id=$2,token_hash=$3,attempt_count=0,expires_at=$4,updated_at=now()
+        SET request_id=$2,token_hash=$3,attempt_count=0,expires_at=$4,
+            delivery_count=delivery_count+1,last_delivery_at=now(),updated_at=now()
         WHERE user_id=$1
         RETURNING *
       `, [String(info.userId), challenge.requestId, challenge.tokenHash, expiresAt]);
@@ -213,7 +241,11 @@ function createStagedEmailChange({
     } finally {
       client.release();
     }
-    await deliverConfirmation(row, token);
+    try {
+      await deliverConfirmation(row, token, { reserved: true });
+    } catch {
+      throw coded('The verification message could not be delivered. Try again later.', 'EMAIL_CHANGE_DELIVERY_FAILED');
+    }
     return { ok: true, pending: true, request_id: row.request_id, expires_at: new Date(row.expires_at).toISOString() };
   }
 
@@ -357,7 +389,7 @@ function createStagedEmailChange({
     const result = await pool.query(`
       SELECT user_id,old_email
       FROM auth_email_changes
-      WHERE state='CONFIRMED' AND old_notice_sent_at IS NULL AND old_notice_attempts < 10
+      WHERE state='CONFIRMED' AND old_email IS NOT NULL AND old_notice_sent_at IS NULL AND old_notice_attempts < 10
       ORDER BY confirmed_at ASC
       LIMIT $1
     `, [Math.max(1, Math.min(100, Number(limit) || 20))]);
@@ -390,7 +422,7 @@ function createStagedEmailChange({
     reconcileConfirmed,
     reconcileConfirmedUser,
     deliverPendingOldNotices,
-    constants: { ttlMs, maxAttempts: MAX_ATTEMPTS },
+    constants: { ttlMs, maxAttempts: MAX_ATTEMPTS, resendCooldownMs: RESEND_COOLDOWN_MS, maxDeliveries: MAX_DELIVERIES },
   };
 }
 

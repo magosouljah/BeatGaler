@@ -1,7 +1,12 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { installStagedEmailChangeRoutes } = require('../staged-email-change-routes');
+const { installStagedEmailChangeRoutes, statusForEmailChangeError, publicEmailChangeError } = require('../staged-email-change-routes');
+
+assert.equal(statusForEmailChangeError({ code: 'EMAIL_CHANGE_RESEND_COOLDOWN' }), 429);
+assert.equal(statusForEmailChangeError({ code: 'EMAIL_CHANGE_RESEND_LIMIT' }), 429);
+assert.equal(publicEmailChangeError({ code: 'EMAIL_CHANGE_RESEND_COOLDOWN' }).error,
+  'Wait before requesting another confirmation message.');
 
 function fakeExpress() {
   const routes = new Map();

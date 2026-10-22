@@ -2,6 +2,7 @@
 
 function statusForEmailChangeError(error) {
   const code = String(error?.code || 'EMAIL_CHANGE_UNAVAILABLE');
+  if (code === 'EMAIL_CHANGE_RESEND_COOLDOWN' || code === 'EMAIL_CHANGE_RESEND_LIMIT') return 429;
   if (code === 'SESSION_REQUIRED' || code.startsWith('REAUTH_')) return 401;
   if (code === 'EMAIL_CHANGE_CONFLICT' || code === 'EMAIL_CHANGE_STALE') return 409;
   if (code === 'EMAIL_CHANGE_DELIVERY_UNAVAILABLE' || code === 'EMAIL_CHANGE_DELIVERY_FAILED'
@@ -17,7 +18,7 @@ function publicEmailChangeError(error) {
     ['REAUTH_REQUIRED', 'Recent reauthentication is required.'],
     ['REAUTH_SCOPE_DENIED', 'Recent reauthentication belongs to a different session.'],
     ['EMAIL_INVALID', 'Enter a valid email address.'],
-    ['EMAIL_CHANGE_OLD_EMAIL_REQUIRED', 'This account needs a sign-in email before it can be changed.'],
+    ['EMAIL_CHANGE_PROVIDER_REAUTH_REQUIRED', 'Confirm with a connected provider before adding a sign-in email.'],
     ['EMAIL_CHANGE_SAME_EMAIL', 'The new email must be different from the current email.'],
     ['EMAIL_CHANGE_CONFLICT', 'That email is already attached to another BeatGaler account.'],
     ['EMAIL_CHANGE_NOT_PENDING', 'No email change is waiting for confirmation.'],
@@ -28,6 +29,8 @@ function publicEmailChangeError(error) {
     ['EMAIL_CHANGE_DELIVERY_UNAVAILABLE', 'Email delivery is temporarily unavailable.'],
     ['EMAIL_CHANGE_DELIVERY_FAILED', 'The verification message could not be delivered. Retry safely.'],
     ['EMAIL_CHANGE_NOTICE_PENDING', 'The previous email-change notice is still being delivered. Try again shortly.'],
+    ['EMAIL_CHANGE_RESEND_COOLDOWN', 'Wait before requesting another confirmation message.'],
+    ['EMAIL_CHANGE_RESEND_LIMIT', 'Confirmation message limit reached. Start again later.'],
   ]);
   return { error: safe.get(code) || 'Email change is temporarily unavailable.', code };
 }
@@ -41,6 +44,9 @@ function installStagedEmailChangeRoutes(express, service) {
   let routesInstalling = false;
 
   function fail(res, error) {
+    if (Number(error?.retryAfterMs) > 0) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil(Number(error.retryAfterMs) / 1000))));
+    }
     return res.status(statusForEmailChangeError(error)).json(publicEmailChangeError(error));
   }
 

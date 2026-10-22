@@ -429,18 +429,54 @@ export async function startBeatGalerCheckout(offerId: string, requestId: string)
   return { url, recovered: Boolean(result.checkout.recovered) };
 }
 
-export async function changeBeatGalerEmail(email: string, confirmEmail: string): Promise<BeatGalerAccount> {
+export async function reauthenticateBeatGalerPassword(password: string, mfaCode = ""): Promise<string> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
-  const result = await authRequest("/auth/email/change", { email, confirmEmail }, token);
-  window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
-  return result.user;
+  const result = await authRequest("/auth/reauth", { password, mfaCode }, token);
+  return String(result.reauth_token || "");
 }
 
-export async function changeBeatGalerPassword(currentPassword: string, newPassword: string): Promise<void> {
+export async function reauthenticateBeatGalerProvider(provider: OAuthProvider): Promise<string> {
   const token = getBeatGalerAuthToken();
   if (!token) throw new Error("Session expired. Sign in again.");
-  const result = await authRequest("/auth/password/change", { currentPassword, newPassword }, token);
+  const started = await authRequest("/auth/oauth/start", { provider, purpose: "reauth" }, token);
+  await platform.external.openUrl(started.authorization_url);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 10 * 60 * 1000) {
+    await new Promise(resolve => window.setTimeout(resolve, 900));
+    const result = await authRequest("/auth/oauth/poll", { flowId: started.flow_id }, token);
+    if (result.pending) continue;
+    if (!result.reauth_token) throw new Error("Provider reauthentication did not complete.");
+    return String(result.reauth_token);
+  }
+  throw new Error("Provider reauthentication timed out. Try again.");
+}
+
+export async function startBeatGalerEmailChange(email: string, reauthToken: string): Promise<void> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  await authRequest("/auth/email/change/start", { email, reauthToken }, token);
+}
+
+export async function resendBeatGalerEmailChange(): Promise<void> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  await authRequest("/auth/email/change/resend", {}, token);
+}
+
+export async function confirmBeatGalerEmailChange(code: string): Promise<void> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  await authRequest("/auth/email/change/confirm", { code }, token);
+  clearLocalSessionState();
+  try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+  window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+}
+
+export async function changeBeatGalerPassword(currentPassword: string, newPassword: string, reauthToken = ""): Promise<void> {
+  const token = getBeatGalerAuthToken();
+  if (!token) throw new Error("Session expired. Sign in again.");
+  const result = await authRequest("/auth/password/change", { currentPassword, newPassword, reauthToken }, token);
   if (platform.kind !== "web" && result?.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
     await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
@@ -461,11 +497,11 @@ export async function disableMfa(code: string): Promise<void> {
   await authRequest("/auth/mfa/disable", { code }, token);
 }
 
-export async function oauthBeatGalerAccount(provider: OAuthProvider, linkExisting: boolean): Promise<BeatGalerAccount> {
+export async function oauthBeatGalerAccount(provider: OAuthProvider, linkExisting: boolean, reauthToken = ""): Promise<BeatGalerAccount> {
   const beatgalerUserId = await getBeatGalerInstallationId();
   const token = linkExisting ? getBeatGalerAuthToken() || undefined : undefined;
   const before = linkExisting ? await getBeatGalerAccountInfo().catch(() => null) : null;
-  const started = await authRequest("/auth/oauth/start", { provider, beatgalerUserId }, token);
+  const started = await authRequest("/auth/oauth/start", { provider, beatgalerUserId, reauthToken }, token);
   await platform.external.openUrl(started.authorization_url);
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60 * 1000) {
@@ -483,9 +519,9 @@ export async function oauthBeatGalerAccount(provider: OAuthProvider, linkExistin
   throw new Error("Sign-in timed out. Try again.");
 }
 
-export async function disconnectOAuthProvider(provider: OAuthProvider): Promise<void> {
+export async function disconnectOAuthProvider(provider: OAuthProvider, reauthToken = ""): Promise<void> {
   const token = getBeatGalerAuthToken(); if (!token) throw new Error("Session expired. Sign in again.");
-  await authRequest("/auth/oauth/disconnect", { provider }, token);
+  await authRequest("/auth/oauth/disconnect", { provider, reauthToken }, token);
   window.dispatchEvent(new Event("beatgaler:account-updated"));
 }
 

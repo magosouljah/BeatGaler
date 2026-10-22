@@ -13,7 +13,7 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function fakeDatabase() {
+function fakeDatabase(now = () => Date.now()) {
   const state = {
     user: { id: 'usr_1', email: 'old@example.com', username: 'tester#0001', username_source: 'beatgaler' },
     change: null,
@@ -47,9 +47,6 @@ function fakeDatabase() {
     if (text.startsWith('SELECT id,email,username,username_source FROM users WHERE id=$1')) {
       return { rows: String(params[0]) === state.user.id ? [clone(state.user)] : [] };
     }
-    if (text.startsWith('SELECT state,old_notice_sent_at FROM auth_email_changes WHERE user_id=$1 FOR UPDATE')) {
-      return { rows: state.change ? [{ state: state.change.state, old_notice_sent_at: state.change.old_notice_sent_at }] : [] };
-    }
     if (text.startsWith('SELECT id FROM users WHERE lower(email)=lower($1) AND id<>$2')) {
       const target = String(params[0] || '').toLowerCase();
       const conflict = state.conflictEmail && String(state.conflictEmail).toLowerCase() === target;
@@ -59,13 +56,13 @@ function fakeDatabase() {
       state.change = {
         user_id: String(params[0]),
         request_id: String(params[1]),
-        old_email: String(params[2]),
+        old_email: params[2] == null ? null : String(params[2]),
         new_email: String(params[3]),
         token_hash: String(params[4]),
         state: 'PENDING',
         attempt_count: 0,
-        delivery_count: 0,
-        last_delivery_at: null,
+        delivery_count: Number(params[6]),
+        last_delivery_at: new Date(now()).toISOString(),
         old_notice_attempts: 0,
         old_notice_sent_at: null,
         expires_at: new Date(params[5]).toISOString(),
@@ -76,7 +73,7 @@ function fakeDatabase() {
     if (text.startsWith('UPDATE auth_email_changes SET delivery_count=delivery_count+1')) {
       if (state.change) {
         state.change.delivery_count += 1;
-        state.change.last_delivery_at = new Date().toISOString();
+        state.change.last_delivery_at = new Date(now()).toISOString();
       }
       return { rows: [] };
     }
@@ -92,6 +89,8 @@ function fakeDatabase() {
       state.change.token_hash = String(params[2]);
       state.change.attempt_count = 0;
       state.change.expires_at = new Date(params[3]).toISOString();
+      state.change.delivery_count += 1;
+      state.change.last_delivery_at = new Date(now()).toISOString();
       return { rows: [clone(state.change)] };
     }
     if (text.startsWith('UPDATE auth_email_changes SET attempt_count=$2,state=CASE WHEN $2 >= $3')) {
@@ -125,7 +124,7 @@ function fakeDatabase() {
       return { rows: [] };
     }
     if (text.startsWith('SELECT user_id,old_email FROM auth_email_changes WHERE state=')) {
-      const eligible = state.change?.state === 'CONFIRMED' && !state.change.old_notice_sent_at && state.change.old_notice_attempts < 10;
+      const eligible = state.change?.state === 'CONFIRMED' && state.change.old_email && !state.change.old_notice_sent_at && state.change.old_notice_attempts < 10;
       return { rows: eligible ? [{ user_id: state.change.user_id, old_email: state.change.old_email }] : [] };
     }
     if (text.startsWith('SELECT c.user_id,c.new_email,u.username,u.username_source FROM auth_email_changes c JOIN users u')) {
@@ -150,9 +149,11 @@ function fakeDatabase() {
   };
 }
 
-function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = false, localCommitFails = false } = {}) {
-  const db = fakeDatabase();
+function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = false, localCommitFails = false,
+  withoutEmail = false, providerReauth = false } = {}) {
   let clock = nowMs;
+  const db = fakeDatabase(() => clock);
+  if (withoutEmail) db.state.user.email = null;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-email-change-'));
   const lifecycleState = { email_verified: {} };
   const stateFile = path.join(tmp, 'account-lifecycle-state.json');
@@ -164,7 +165,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
   let failOldNotice = noticeFails;
   let failLocalCommit = localCommitFails;
 
-  const user = { id: 'usr_1', email: 'old@example.com', username: 'tester#0001', usernameSource: 'beatgaler' };
+  const user = { id: 'usr_1', email: withoutEmail ? null : 'old@example.com', username: 'tester#0001', usernameSource: 'beatgaler' };
   const runtime = {
     _test: {
       sessionInfoFromRequest(req) {
@@ -172,7 +173,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
       },
       consumeReauth(_req, token) {
         return token === 'reauth_good'
-          ? { ok: true, info: { userId: user.id, user }, method: 'password' }
+          ? { ok: true, info: { userId: user.id, user }, method: providerReauth ? 'oauth:x' : 'password' }
           : { ok: false, code: 'REAUTH_REQUIRED' };
       },
       async revokeUserSessions(userId, reason) {
@@ -238,6 +239,27 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     assert.equal(h.deliveries.length, 0);
   }
 
+  // An X-only account may establish its first sign-in email only after fresh
+  // provider proof and confirmation of the destination inbox.
+  {
+    const passwordProof = harness({ withoutEmail: true });
+    await assert.rejects(passwordProof.service.start(passwordProof.req(), 'first@example.com'),
+      error => error?.code === 'EMAIL_CHANGE_PROVIDER_REAUTH_REQUIRED');
+    assert.equal(passwordProof.db.state.user.email, null);
+
+    const h = harness({ withoutEmail: true, providerReauth: true });
+    await h.service.start(h.req(), 'first@example.com');
+    assert.equal(h.db.state.change.old_email, null);
+    assert.equal(h.db.state.user.email, null);
+    const token = h.deliveries[0].token;
+    const result = await h.service.confirm(h.req(), token);
+    assert.equal(result.email, 'first@example.com');
+    assert.equal(h.db.state.user.email, 'first@example.com');
+    assert.equal(result.old_email_notified, false);
+    assert.equal(await h.service.deliverPendingOldNotices(), 0);
+    await h.service.start(h.req(), 'next@example.com');
+  }
+
   // Start keeps the old email authoritative and stores only a token hash.
   {
     const h = harness();
@@ -281,12 +303,34 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     const h = harness();
     await h.service.start(h.req(), 'first@example.com');
     const first = h.deliveries.at(-1).token;
+    await assert.rejects(h.service.start(h.req(), 'second@example.com'),
+      error => error?.code === 'EMAIL_CHANGE_RESEND_COOLDOWN');
+    h.advance(60_000);
     await h.service.start(h.req(), 'second@example.com');
     const second = h.deliveries.at(-1).token;
     assert.notEqual(first, second);
     assert.equal(h.db.state.user.email, 'old@example.com');
     await assert.rejects(h.service.confirm(h.req(), first), error => error?.code === 'EMAIL_CHANGE_INVALID');
     assert.equal(h.db.state.user.email, 'old@example.com');
+  }
+
+  // Resends share the locked PostgreSQL row and obey a cooldown and delivery
+  // budget even if the caller switches processes between requests.
+  {
+    const h = harness();
+    const base = Date.parse('2026-10-21T22:30:00Z');
+    await h.service.start(h.req(), 'new@example.com');
+    h.db.state.change.last_delivery_at = new Date(base).toISOString();
+    await assert.rejects(h.service.resend(h.req()), error => error?.code === 'EMAIL_CHANGE_RESEND_COOLDOWN');
+    assert.equal(h.deliveries.length, 1);
+    for (let count = 1; count < 5; count += 1) {
+      h.advance(60_000);
+      h.db.state.change.last_delivery_at = new Date(base + (count - 1) * 60_000).toISOString();
+      await h.service.resend(h.req());
+    }
+    assert.equal(h.db.state.change.delivery_count, 5);
+    await assert.rejects(h.service.resend(h.req()), error => error?.code === 'EMAIL_CHANGE_RESEND_LIMIT');
+    assert.equal(h.deliveries.length, 5);
   }
 
   // A live uniqueness conflict appearing after start must not swap email.

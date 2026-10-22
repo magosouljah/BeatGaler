@@ -8,8 +8,9 @@ import type {
 } from "../platform/contracts";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import {
-  beginMfaSetup, changeBeatGalerEmail, changeBeatGalerPassword, disableMfa, disconnectOAuthProvider,
+  beginMfaSetup, changeBeatGalerPassword, confirmBeatGalerEmailChange, disableMfa, disconnectOAuthProvider,
   enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, startBeatGalerCheckout, oauthBeatGalerAccount,
+  reauthenticateBeatGalerPassword, reauthenticateBeatGalerProvider, resendBeatGalerEmailChange, startBeatGalerEmailChange,
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
 } from "./AccountGate";
 import { planFeatures, planPrice, planStatus } from "./billingPresentation";
@@ -38,13 +39,13 @@ const LEGAL_UPDATED = "August 11, 2026";
 const PRIVACY_SECTIONS: LegalSection[] = [
   { heading: "1. Who we are", paragraphs: ["Beat Galer is an application for discovering, organizing, and playing music beats (\"Beat Vault\"), with optional cloud account features and syncing."], bullets: ["Data controller: [Developer or company name]", "Contact email: [your-email@example.com]", "Country of operation: Mexico (this policy is governed by Mexican law, including the Federal Law on Protection of Personal Data Held by Private Parties)"] },
   { heading: "2. Information we collect", paragraphs: ["The information we may collect depends on the Beat Galer features you choose to use."] },
-  { heading: "2.1 Account information", paragraphs: ["If you create a Beat Galer account, we may collect:"], bullets: ["Username and password (stored encrypted via salted hashing; we never store your password in plain text)", "Email address (if provided)"] },
+  { heading: "2.1 Account information", paragraphs: ["If you create a Beat Galer account, we may collect:"], bullets: ["Public username and a password stored as a salted hash; we never store your password in plain text", "Email address used for password sign-in"] },
   { heading: "2.2 Third-party sign-in (Google and X)", paragraphs: ["If you choose to sign in with Google or X (formerly Twitter), we receive the following from those providers:"], bullets: ["A unique identifier for your account", "Your public name and, for Google, your email address", "For X, your username", "We do not receive or store your Google or X password. Authentication is handled through the standard OAuth 2.0 protocol, and we only receive the data the provider authorizes to share."] },
   { heading: "2.3 Cloud services", paragraphs: ["Beat Galer uses private cloud infrastructure to sync and store supported account data and content. Infrastructure credentials are kept server-side and are never exposed to the app interface."] },
   { heading: "2.4 Content you upload (beats and audio files)", paragraphs: ["If you use the cloud storage features (\"Beat Vault\"), the audio files and related metadata (name, cover art, beat info) you upload are stored on our servers so you can access them across your devices."] },
   { heading: "2.5 Technical information", paragraphs: ["We may automatically collect:"], bullets: ["IP address", "Device type and operating system", "Usage and diagnostic logs, which do not include your file contents or sensitive tokens"] },
   { heading: "2.6 Payment information", paragraphs: ["If you subscribe to a paid plan, payment processing is handled by a third-party payment provider. Beat Galer does not store your full credit or debit card details."] },
-  { heading: "3. How we use your information", paragraphs: ["We use the information we collect to:"], bullets: ["Create and manage your account", "Let you sign in via Google, X, or username/password", "Sync and store your beats in the cloud", "Process payments and manage your subscription (free or paid plan)", "Improve the performance, security, and stability of the Service", "Comply with legal obligations", "We do not sell your personal information to third parties."] },
+  { heading: "3. How we use your information", paragraphs: ["We use the information we collect to:"], bullets: ["Create and manage your account", "Let you sign in via Google, X, or email/password", "Sync and store your beats in the cloud", "Process payments and manage your subscription (free or paid plan)", "Improve the performance, security, and stability of the Service", "Comply with legal obligations", "We do not sell your personal information to third parties."] },
   { heading: "4. Who we share information with", paragraphs: ["We may share information only in these cases:"], bullets: ["Service providers: companies that help us operate the Service (e.g., cloud hosting, payment processing), under confidentiality obligations.", "Google and X: solely in the sense that these providers process your authentication under their own privacy policies.", "Legal requirements: if required by law, or to protect our rights, user safety, or prevent fraud.", "Business transfers: in the event of a merger, acquisition, or sale of assets."] },
   { heading: "5. Storage and security", bullets: ["Passwords are stored using secure hashing (scrypt) with a unique salt per user; never in plain text.", "Login sessions use random, single-use tokens with defined expiration.", "We apply reasonable technical and organizational security measures to protect your information, although no system is completely infallible.", "We retain your information while your account is active, or as long as necessary for legal, accounting, or security purposes."] },
   { heading: "6. Your rights", paragraphs: ["Depending on your location, you may have rights to:"], bullets: ["Access the personal data we hold about you", "Correct inaccurate or incomplete information", "Delete your data when no longer necessary", "Object to certain uses of your data"], },
@@ -55,7 +56,7 @@ const PRIVACY_SECTIONS: LegalSection[] = [
 ];
 
 const TERMS_SECTIONS: LegalSection[] = [
-  { heading: "1. Description of the Service", paragraphs: ["Beat Galer is an application that lets you discover, organize, play, and store music beats. It includes:"], bullets: ["A local beat library (\"Beat Vault\")", "Optional account and cloud storage features", "Sign-in via username/password, Google, or X", "Free and paid (freemium) plans", "We may modify, add, or remove features of the Service at any time, with or without notice, particularly during beta phases."] },
+  { heading: "1. Description of the Service", paragraphs: ["Beat Galer is an application that lets you discover, organize, play, and store music beats. It includes:"], bullets: ["A local beat library (\"Beat Vault\")", "Optional account and cloud storage features", "Sign-in via email/password, Google, or X", "Free and paid (freemium) plans", "We may modify, add, or remove features of the Service at any time, with or without notice, particularly during beta phases."] },
   { heading: "2. Eligibility and accounts", bullets: ["You must be at least 13 years old (or the applicable minimum age in your country) to use the Service.", "You are responsible for keeping your password confidential and for all activity that occurs under your account.", "If you sign in via Google or X, you must also comply with those providers' terms.", "You must provide accurate information when creating your account.", "We reserve the right to suspend or delete accounts that violate these Terms."] },
   { heading: "3. Free and paid plans", bullets: ["Beat Galer offers a free plan with basic features and paid (subscription) plans with additional features, more cloud storage, or other benefits.", "Pricing, features, and terms for each plan are shown within the app or on our website before purchase.", "Payments are processed through third-party payment providers; by subscribing, you also agree to that provider's terms.", "Subscriptions may renew automatically unless canceled before the next billing cycle, as indicated at the time of purchase.", "We reserve the right to change prices with reasonable prior notice to affected users."] },
   { heading: "4. User content (beats and uploaded files)", bullets: ["You retain all rights to the audio files and content you upload to your Beat Vault.", "By uploading content to our cloud servers, you grant us a limited, non-exclusive license to store, process, and transmit that content solely to provide you the Service (for example, syncing it across your devices).", "You are solely responsible for ensuring you have the necessary rights to any beat, track, or file you upload or share through the Service.", "We reserve the right to remove content that infringes intellectual property rights, is unlawful, or violates these Terms."] },
@@ -102,7 +103,13 @@ export default function SettingsPanel(props: Props) {
   const [planSwitching, setPlanSwitching] = useState<BeatGalerPlanId | null>(null);
   const [email, setEmail] = useState("");
   const [confirmEmail, setConfirmEmail] = useState("");
+  const [emailChangePending, setEmailChangePending] = useState(false);
+  const [emailChangeCode, setEmailChangeCode] = useState("");
+  const [emailReauthPassword, setEmailReauthPassword] = useState("");
+  const [emailReauthMfa, setEmailReauthMfa] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
+  const [sensitivePassword, setSensitivePassword] = useState("");
+  const [sensitiveMfa, setSensitiveMfa] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [mfaSecret, setMfaSecret] = useState<string | null>(null);
@@ -316,7 +323,39 @@ export default function SettingsPanel(props: Props) {
     if (!email.trim()) return setAccountStatus(null, "Enter your new email address.");
     if (email.trim().toLowerCase() !== confirmEmail.trim().toLowerCase()) return setAccountStatus(null, "Email addresses do not match.");
     setAccountBusy(true); setAccountStatus(null);
-    try { const updated = await changeBeatGalerEmail(email, confirmEmail); setAccount(updated); setEmail(""); setConfirmEmail(""); setAccountStatus("Email updated."); }
+    try {
+      const reauth = account?.has_password
+        ? await reauthenticateBeatGalerPassword(emailReauthPassword, emailReauthMfa)
+        : await reauthenticateBeatGalerProvider(account?.providers?.google?.connected ? "google" : "x");
+      await startBeatGalerEmailChange(email, reauth);
+      setEmailReauthPassword(""); setEmailReauthMfa("");
+      setEmailChangePending(true);
+      setAccountStatus("Check the new address for a confirmation code. Your current email remains active until confirmation.");
+    }
+    catch (e: any) {
+      if (["EMAIL_CHANGE_DELIVERY_FAILED", "EMAIL_CHANGE_DELIVERY_UNAVAILABLE"].includes(String(e?.code || ""))) {
+        setEmailChangePending(true);
+        setAccountStatus(null, "The change is pending, but the message was not delivered. Retry the confirmation message shortly.");
+      } else setAccountStatus(null, String(e?.message || e));
+    }
+    finally { setAccountBusy(false); }
+  };
+
+  const confirmEmailChange = async () => {
+    if (!emailChangeCode.trim()) return setAccountStatus(null, "Enter the email confirmation code.");
+    setAccountBusy(true); setAccountStatus(null);
+    try {
+      await confirmBeatGalerEmailChange(emailChangeCode.trim());
+      setEmailChangePending(false); setEmailChangeCode(""); setEmail(""); setConfirmEmail("");
+      setAccount(null);
+      setAccountStatus("Email updated. Sign in again with the new address.");
+    } catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const resendEmailChange = async () => {
+    setAccountBusy(true); setAccountStatus(null);
+    try { await resendBeatGalerEmailChange(); setAccountStatus("A new confirmation message was requested."); }
     catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
     finally { setAccountBusy(false); }
   };
@@ -325,20 +364,43 @@ export default function SettingsPanel(props: Props) {
     if (newPassword.length < 8) return setAccountStatus(null, "New password must be at least 8 characters.");
     if (newPassword !== confirmPassword) return setAccountStatus(null, "New passwords do not match.");
     setAccountBusy(true); setAccountStatus(null);
-    try { await changeBeatGalerPassword(currentPassword, newPassword); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); await refreshAccount(); setAccountStatus("Password updated."); }
+    try {
+      const reauth = account?.has_password ? "" : await reauthenticateBeatGalerProvider(account?.providers?.x?.connected ? "x" : "google");
+      await changeBeatGalerPassword(currentPassword, newPassword, reauth);
+      setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      await refreshAccount(); setAccountStatus("Password updated.");
+    }
     catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
     finally { setAccountBusy(false); }
   };
 
+  const reauthForProviderAction = async (): Promise<string> => {
+    if (account?.has_password) return reauthenticateBeatGalerPassword(sensitivePassword, sensitiveMfa);
+    const connected: OAuthProvider | null = account?.providers?.x?.connected ? "x"
+      : account?.providers?.google?.connected ? "google" : null;
+    if (!connected) throw new Error("Add a usable sign-in method before changing providers.");
+    return reauthenticateBeatGalerProvider(connected);
+  };
+
   const connectProvider = async (provider: OAuthProvider) => {
     setAccountBusy(true); setAccountStatus(null);
-    try { await oauthBeatGalerAccount(provider, true); await refreshAccount(); setAccountStatus(`${provider === "x" ? "X" : "Google"} connected.`); }
+    try {
+      const reauth = await reauthForProviderAction();
+      await oauthBeatGalerAccount(provider, true, reauth);
+      setSensitivePassword(""); setSensitiveMfa("");
+      await refreshAccount(); setAccountStatus(`${provider === "x" ? "X" : "Google"} connected.`);
+    }
     catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
     finally { setAccountBusy(false); }
   };
   const disconnectProvider = async (provider: OAuthProvider) => {
     setAccountBusy(true); setAccountStatus(null);
-    try { await disconnectOAuthProvider(provider); await refreshAccount(); setAccountStatus(`${provider === "x" ? "X" : "Google"} disconnected.`); }
+    try {
+      const reauth = await reauthForProviderAction();
+      await disconnectOAuthProvider(provider, reauth);
+      setSensitivePassword(""); setSensitiveMfa("");
+      await refreshAccount(); setAccountStatus(`${provider === "x" ? "X" : "Google"} disconnected.`);
+    }
     catch (e: any) { setAccountStatus(null, String(e?.message || e)); }
     finally { setAccountBusy(false); }
   };
@@ -410,11 +472,39 @@ export default function SettingsPanel(props: Props) {
             {account?.providers?.x?.connected && <div style={{ marginTop: 14, paddingTop: 13, borderTop: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}><div style={{ color: "#777", fontSize: 10 }}>Connected to X as @{account.providers.x.username || account.username}. BeatGaler keeps this username synced.</div><button disabled={accountBusy} onClick={() => void disconnectProvider("x")} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Disconnect X</button></div>}
           </>)}
 
-          {card(<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Sign-in methods</div><div style={{ color: "#5d5d5d", fontSize: 11, marginBottom: 8 }}>Connect Google as an additional sign-in method. X is managed from your official username card above.</div>{providerRow("google", !!account?.providers?.google?.connected, account?.providers?.google?.email || account?.providers?.google?.name)}</>)}
+          {card(<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Sign-in methods</div>
+            <div style={{ color: "#5d5d5d", fontSize: 11, marginBottom: 8 }}>Connecting or disconnecting a provider requires a fresh identity check. X is managed from the username card above.</div>
+            {account?.has_password ? <>
+              <input type="password" placeholder="Current password for provider changes" value={sensitivePassword} onChange={e => setSensitivePassword(e.target.value)} autoComplete="current-password" style={fieldStyle}/>
+              {account.mfa_enabled && <input placeholder="Authenticator or recovery code" value={sensitiveMfa} onChange={e => setSensitiveMfa(e.target.value.trim())} autoComplete="one-time-code" style={{ ...fieldStyle, marginTop: 8 }}/>}
+            </> : <div style={{ color: "#777", fontSize: 11, marginBottom: 8 }}>You will confirm with a connected provider.</div>}
+            {providerRow("google", !!account?.providers?.google?.connected, account?.providers?.google?.email || account?.providers?.google?.name)}
+          </>)}
 
-          {card(<><div style={{ fontSize: 14, fontWeight: 600 }}>Email</div><div style={{ marginTop: 8, color: "#555", fontSize: 10 }}>Current sign-in email</div><div style={{ marginTop: 4, marginBottom: 5, color: "#d0d0d0", fontSize: 12, fontWeight: 600, userSelect: "text" }}>{account?.email || "No email connected"}</div><div style={{ color: "#5d5d5d", fontSize: 11, marginTop: 4, marginBottom: 14 }}>To change it, type the new email twice.</div><input type="email" placeholder="New email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="off" style={fieldStyle}/><input type="email" placeholder="Type new email again" value={confirmEmail} onChange={e => setConfirmEmail(e.target.value)} autoComplete="off" style={{ ...fieldStyle, marginTop: 8 }}/><button disabled={accountBusy} onClick={() => void changeEmail()} style={{ ...buttonStyle, marginTop: 10 }}>Change email</button></>)}
+          {card(<>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Email</div>
+            <div style={{ marginTop: 8, color: "#555", fontSize: 10 }}>Current sign-in email</div>
+            <div style={{ marginTop: 4, marginBottom: 5, color: "#d0d0d0", fontSize: 12, fontWeight: 600, userSelect: "text" }}>{account?.email || "No email connected"}</div>
+            <div style={{ color: "#5d5d5d", fontSize: 11, marginTop: 4, marginBottom: 14 }}>{account?.email ? "Your current email stays active until you confirm the new address." : "Confirm a new address before using email and password to sign in."}</div>
+            {!emailChangePending ? <>
+              <input type="email" placeholder="New email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="off" style={fieldStyle}/>
+              <input type="email" placeholder="Type new email again" value={confirmEmail} onChange={e => setConfirmEmail(e.target.value)} autoComplete="off" style={{ ...fieldStyle, marginTop: 8 }}/>
+              {account?.has_password ? <>
+                <input type="password" placeholder="Current password to confirm identity" value={emailReauthPassword} onChange={e => setEmailReauthPassword(e.target.value)} autoComplete="current-password" style={{ ...fieldStyle, marginTop: 8 }}/>
+                {account.mfa_enabled && <input placeholder="Authenticator or recovery code" value={emailReauthMfa} onChange={e => setEmailReauthMfa(e.target.value.trim())} autoComplete="one-time-code" style={{ ...fieldStyle, marginTop: 8 }}/>}
+              </> : <div style={{ color: "#777", fontSize: 11, marginTop: 9 }}>You will confirm your identity with {account?.providers?.google?.connected ? "Google" : "X"} before the request starts.</div>}
+              <button disabled={accountBusy || (!account?.has_password && !account?.providers?.google?.connected && !account?.providers?.x?.connected)} onClick={() => void changeEmail()} style={{ ...buttonStyle, marginTop: 10 }}>Send confirmation to new email</button>
+            </> : <>
+              <div style={{ color: "#aaa", fontSize: 11, marginBottom: 8 }}>Confirmation was requested for {email}. Check that inbox and enter the code.</div>
+              <input placeholder="Email confirmation code" value={emailChangeCode} onChange={e => setEmailChangeCode(e.target.value.trim())} autoComplete="one-time-code" style={fieldStyle}/>
+              <button disabled={accountBusy} onClick={() => void confirmEmailChange()} style={{ ...buttonStyle, marginTop: 10 }}>Confirm new email</button>
+              <button disabled={accountBusy} onClick={() => void resendEmailChange()} style={{ ...buttonStyle, marginTop: 10, marginLeft: 8 }}>Resend code</button>
+              <button disabled={accountBusy} onClick={() => { setEmailChangePending(false); setEmailChangeCode(""); }} style={{ ...buttonStyle, marginTop: 10, marginLeft: 8 }}>Start over</button>
+            </>}
+          </>)}
 
-          {card(<><div style={{ fontSize: 14, fontWeight: 600 }}>Password</div><div style={{ color: "#5d5d5d", fontSize: 11, marginTop: 4, marginBottom: 14 }}>{account?.has_password ? "Change your BeatGaler password." : "Add a password so you can also sign in without Google or X."}</div>{account?.has_password && <input type="password" placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} style={fieldStyle}/>}<input type="password" placeholder="New password" value={newPassword} onChange={e => setNewPassword(e.target.value)} style={{ ...fieldStyle, marginTop: account?.has_password ? 8 : 0 }}/><input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} style={{ ...fieldStyle, marginTop: 8 }}/><button disabled={accountBusy} onClick={() => void changePassword()} style={{ ...buttonStyle, marginTop: 10 }}>{account?.has_password ? "Change password" : "Set password"}</button></>)}
+          {card(<><div style={{ fontSize: 14, fontWeight: 600 }}>Password</div><div style={{ color: "#5d5d5d", fontSize: 11, marginTop: 4, marginBottom: 14 }}>{account?.has_password ? "Change your BeatGaler password." : "A unique verified email and fresh provider confirmation are required before adding password sign-in."}</div>{account?.has_password && <input type="password" placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} style={fieldStyle}/>}<input type="password" placeholder="New password" value={newPassword} onChange={e => setNewPassword(e.target.value)} style={{ ...fieldStyle, marginTop: account?.has_password ? 8 : 0 }}/><input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} style={{ ...fieldStyle, marginTop: 8 }}/><button disabled={accountBusy || (!account?.has_password && !account?.providers?.google?.connected && !account?.providers?.x?.connected)} onClick={() => void changePassword()} style={{ ...buttonStyle, marginTop: 10 }}>{account?.has_password ? "Change password" : "Set password"}</button></>)}
 
           {card(<><div style={{ fontSize: 14, fontWeight: 600 }}>Multi-factor authentication</div><div style={{ color: "#5d5d5d", fontSize: 11, marginTop: 4, lineHeight: 1.5 }}>Use a 6-digit code from an authenticator app when signing in with your BeatGaler password.</div>{!account?.mfa_enabled && !mfaSecret && <button disabled={accountBusy} onClick={() => void beginMfa()} style={{ ...buttonStyle, marginTop: 12 }}>Enable MFA</button>}{mfaSecret && <div style={{ marginTop: 14, padding: 14, borderRadius: 9, background: "#181818", border: "1px solid #242424" }}><div style={{ color: "#aaa", fontSize: 11 }}>Add this secret to your authenticator app:</div><div style={{ marginTop: 8, padding: 9, borderRadius: 6, background: "#0d0d0d", color: "#eee", fontFamily: "monospace", wordBreak: "break-all", userSelect: "text" }}>{mfaSecret}</div><input inputMode="numeric" maxLength={6} placeholder="6-digit code" value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={{ ...fieldStyle, marginTop: 9 }}/><button disabled={accountBusy || mfaCode.length !== 6} onClick={() => void confirmMfa()} style={{ ...buttonStyle, marginTop: 9 }}>Confirm and enable</button></div>}{account?.mfa_enabled && <div style={{ marginTop: 12 }}><div style={{ color: "#7b9b7b", fontSize: 11 }}>MFA is enabled.</div>{!showDisableMfaConfirm ? <button disabled={accountBusy} onClick={() => { setMfaCode(""); setShowDisableMfaConfirm(true); }} style={{ ...buttonStyle, marginTop: 10, color: "#c98787" }}>Disable MFA</button> : <div style={{ marginTop: 10, padding: 12, border: "1px solid #2a2222", background: "#151111", borderRadius: 8 }}><div style={{ color: "#777", fontSize: 10, lineHeight: 1.45, marginBottom: 8 }}>Confirm disabling MFA with one current authenticator code.</div><input autoFocus inputMode="numeric" maxLength={6} placeholder="6-digit authenticator code" value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={fieldStyle}/><div style={{ display: "flex", gap: 8, marginTop: 8 }}><button disabled={accountBusy || mfaCode.length !== 6} onClick={() => void turnOffMfa()} style={{ ...buttonStyle, color: "#c98787" }}>Confirm disable</button><button disabled={accountBusy} onClick={() => { setMfaCode(""); setShowDisableMfaConfirm(false); }} style={buttonStyle}>Cancel</button></div></div>}</div>}</>)}
 

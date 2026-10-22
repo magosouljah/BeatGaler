@@ -120,6 +120,20 @@ async function main() {
   }
 
   {
+    const emailDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-email-confirm-cookie-'));
+    writeAccounts(emailDir, { [hashOne]: { userId: 'usr_1', createdAt: now - 10_000, expiresAt: now + 100_000 } });
+    const emailRuntime = createSessionSecurityRuntime({ dataDir: emailDir, now: () => now });
+    const req = baseReq({ pathName: '/auth/email/change/confirm', web: true });
+    req.beatgalerSessionSecurity = { ok: true, innerHash: hashOne, presentedHash: hashOne };
+    const res = makeRes();
+    emailRuntime.decorateResponse('/auth/email/change/confirm', req, res, () => {});
+    res.json({ ok: true, sessions_revoked: true });
+    const cookies = res.getHeader('Set-Cookie');
+    assert.equal(cookies.filter(value => value.includes('Max-Age=0')).length, 2);
+    fs.rmSync(emailDir, { recursive: true, force: true });
+  }
+
+  {
     const req = baseReq({ token: tokenOne, pathName: '/auth/sessions', body: { beatgalerUserId: 'desktop-a' } });
     const res = makeRes();
     runtime.requestMiddleware(req, res, () => {});
