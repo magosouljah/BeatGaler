@@ -33,6 +33,8 @@ assert.equal(shouldOwnRegister({ NODE_ENV: 'development', BEATGALER_PENDING_SIGN
 assert.equal(shouldOwnRegister({ NODE_ENV: 'development', BEATGALER_PUBLIC_REGISTRATION: '1' }), true);
 assert.equal(statusForError({ code: 'SIGNUP_RESEND_COOLDOWN' }), 429);
 assert.equal(statusForError({ code: 'SIGNUP_CHALLENGE_INVALID' }), 400);
+assert.equal(statusForError({ code: 'SIGNUP_CODE_FORMAT_INVALID' }), 400);
+assert.match(publicError({ code: 'SIGNUP_CODE_FORMAT_INVALID' }).error, /six-digit code/);
 assert.equal(statusForError({ code: 'SIGNUP_EXPIRED' }), 410);
 assert.equal(statusForError({ code: 'DATABASE_PASSWORD=secret' }), 503);
 assert.equal(publicError({ code: 'DATABASE_PASSWORD=secret', message: 'postgres://secret' }).error, 'Account creation is temporarily unavailable.');
@@ -299,13 +301,21 @@ assert.equal(retryDelay(100), 3_600_000);
   console.warn = (...args) => audit.push(args);
   try {
     await assert.rejects(
+      runtime.verify({ signupId: row.id, continuationSecret: 'sc_good', challenge: '' }),
+      error => error?.code === 'SIGNUP_CODE_FORMAT_INVALID',
+      'an empty browser submission must be identified without consuming an OTP attempt',
+    );
+    assert.equal(row.challenge_failures, 0);
+    assert.equal(audit[0]?.[1]?.input_length, 0);
+    assert.equal(audit[0]?.[1]?.digit_count, 0);
+    await assert.rejects(
       runtime.verify({ signupId: row.id, continuationSecret: 'sc_good', challenge: '654-321' }),
       error => error?.code === 'SIGNUP_CHALLENGE_INVALID',
       'the challenge replaced by resend must no longer verify',
     );
   } finally { console.warn = previousWarn; }
   assert.equal(audit[0]?.[0], '[signup-verify-audit]');
-  assert.deepEqual(audit[0]?.[1]?.delivery_matches_newest_first, [false]);
+  assert.deepEqual(audit[1]?.[1]?.delivery_matches_newest_first, [false]);
   assert.equal(JSON.stringify(audit).includes('654-321'), false, 'the audit must never log a code');
   const verified = await runtime.verify({
     signupId: row.id,

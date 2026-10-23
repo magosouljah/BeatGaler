@@ -52,7 +52,7 @@ function statusForError(error) {
   const code = String(error?.code || '');
   if (code === 'SIGNUP_RESEND_COOLDOWN' || code === 'SIGNUP_RESEND_LIMIT' || code === 'SIGNUP_CHALLENGE_LOCKED') return 429;
   if (code === 'EMAIL_INVALID' || code === 'USERNAME_BASE_INVALID' || code === 'PASSWORD_POLICY'
-    || code === 'SIGNUP_CONTINUATION_INVALID' || code === 'SIGNUP_CHALLENGE_INVALID'
+    || code === 'SIGNUP_CONTINUATION_INVALID' || code === 'SIGNUP_CHALLENGE_INVALID' || code === 'SIGNUP_CODE_FORMAT_INVALID'
     || code === 'SIGNUP_CHALLENGE_EXPIRED' || code === 'SIGNUP_NOT_ACTIVE' || code === 'SIGNUP_RESEND_NOT_ALLOWED'
     || code === 'INSTALLATION_REQUIRED') return 400;
   if (code === 'INSTALLATION_CONFLICT' || code === 'INSTALLATION_CLAIM_BUSY'
@@ -69,6 +69,7 @@ function publicError(error) {
     ['PASSWORD_POLICY', 'Password must be between 8 and 200 characters.'],
     ['SIGNUP_CONTINUATION_INVALID', 'This signup session is no longer valid. Start again.'],
     ['SIGNUP_CHALLENGE_INVALID', 'That verification code is not valid.'],
+    ['SIGNUP_CODE_FORMAT_INVALID', 'Enter the six-digit code from the newest email. Refresh this page if it is already filled in.'],
     ['SIGNUP_CHALLENGE_EXPIRED', 'That verification challenge expired. Request a new code.'],
     ['SIGNUP_CHALLENGE_LOCKED', 'Too many verification attempts. Request a new code later.'],
     ['SIGNUP_RESEND_COOLDOWN', 'Please wait before requesting another verification email.'],

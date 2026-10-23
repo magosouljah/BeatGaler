@@ -272,6 +272,9 @@ function createPendingSignupRuntime({
             });
             console.warn('[signup-verify-audit]', {
               format_valid: canonicalManualCode !== null,
+              input_type: typeof challenge,
+              input_length: raw.length,
+              digit_count: (raw.match(/[0-9]/g) || []).length,
               challenge_failures_before: Number(row.challenge_failures || 0),
               resend_count: Number(row.resend_count || 0),
               challenge_expires_at: new Date(row.challenge_expires_at).toISOString(),
@@ -280,6 +283,11 @@ function createPendingSignupRuntime({
           } catch (auditError) {
             console.warn('[signup-verify-audit]', { audit_error: String(auditError?.code || 'UNAVAILABLE') });
           }
+        }
+        // A malformed browser submission is a client error, not an OTP guess.
+        // Keep the challenge usable while the user refreshes the Web client.
+        if (canonicalManualCode === null && !raw.startsWith('sv_')) {
+          throw Object.assign(new Error('Verification code format is invalid.'), { code: 'SIGNUP_CODE_FORMAT_INVALID' });
         }
         const failures = Number(row.challenge_failures || 0) + 1;
         await client.query('UPDATE pending_signups SET challenge_failures=$2,updated_at=now() WHERE id=$1', [row.id, failures]);
