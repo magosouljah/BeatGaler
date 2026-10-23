@@ -156,7 +156,36 @@ try {
     const res = responseRecorder(); let nextCalled = false;
     containment.logoutSession(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
-    assert.equal("beatgalerUserId" in req.body, false, "legacy unbound logout must invalidate token without trusting body installation id");
+    assert.equal("beatgalerUserId" in req.body, false, "unbound logout cannot release another user's installation");
+  }
+  {
+    const req = request({ token: unboundToken, body: { beatgalerUserId: installationId } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.logoutSession(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+    assert.equal(req.body.beatgalerUserId, installationId, "signup-style unbound logout can release its own installation");
+  }
+  {
+    const req = request({ token: unboundToken, headers: { "x-beatgaler-installation-id": installationId } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.logoutSession(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+    assert.equal(req.body.beatgalerUserId, installationId, "unbound logout accepts an owned installation from the header");
+  }
+  {
+    const req = request({ token: unboundToken, headers: { "x-beatgaler-installation-id": "other_install" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.logoutSession(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+    assert.equal("beatgalerUserId" in req.body, false, "unbound logout cannot release another user's installation from the header");
+  }
+  {
+    assert.equal(containment.bindSessionInstallation(token, installationId, userId), true);
+    const req = request({ token, body: { beatgalerUserId: "other_install" } });
+    const res = responseRecorder(); let nextCalled = false;
+    containment.logoutSession(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+    assert.equal(req.body.beatgalerUserId, installationId, "server-side binding takes priority over a foreign body installation");
   }
   {
     const req = request({ token, headers: { "content-length": String(FILE_UPLOAD_LIMIT_BYTES + 1) } });

@@ -314,7 +314,11 @@ function createHttpContainment(options = {}) {
     const binding = authzData()?.[auth.key] || null;
     req.body = req.body || {};
     if (binding?.installationId && String(binding.tenantId || auth.user.id) === String(auth.user.id)) req.body.beatgalerUserId = String(binding.installationId);
-    else delete req.body.beatgalerUserId;
+    else {
+      const requestedInstallation = String(req.body.beatgalerUserId || req.headers?.["x-beatgaler-installation-id"] || "").trim();
+      if (requestedInstallation && String(linkedAccount(requestedInstallation)?.beatgalerAccountId || "") === String(auth.user.id)) req.body.beatgalerUserId = requestedInstallation;
+      else delete req.body.beatgalerUserId;
+    }
     next();
   }
 
