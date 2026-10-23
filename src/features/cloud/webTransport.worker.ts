@@ -2305,7 +2305,7 @@ function assertIndexNotCancelled(requestId: string | null): void {
   }
 }
 
-async function getLibraryIndex(requestId: string | null = null, allowMissing = false): Promise<WebTransportLibraryIndexResult> {
+async function getLibraryIndex(requestId: string | null = null, allowMissing = false, recoveryMessageId: number | null = null): Promise<WebTransportLibraryIndexResult> {
   const active = requireReady();
   const started = Date.now();
   // Startup warming is speculative. A library read is the authoritative
@@ -2422,6 +2422,15 @@ async function getLibraryIndex(requestId: string | null = null, allowMissing = f
           assertIndexNotCancelled(requestId);
           if (loaded) return finish(pointerId, loaded);
           if (requestId) stage1Trace(requestId, "WORKER_INDEX_POINTER_INVALID", { message_id: pointerId });
+        }
+
+        // Cloud obtained this id from Telegram's current pin. Validate its
+        // document through Direct before repairing the PostgreSQL shortcut.
+        if (recoveryMessageId) {
+          if (!Number.isSafeInteger(recoveryMessageId) || recoveryMessageId <= 0) throw new Error("Invalid INDEX recovery message id.");
+          const loaded = await readCandidate(recoveryMessageId);
+          if (!loaded) throw new Error("Pinned Telegram message is not a valid library INDEX.");
+          return finish(recoveryMessageId, loaded, { expectedMessageId: pointerId || null, source: "pin_recovery" });
         }
 
         // Pin lookup is recovery only. It repairs a missing/stale PostgreSQL
@@ -3287,7 +3296,7 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "initialize": await initialize(command); return { ready: true };
     case "verify_identity": await verifyIdentity(command.requestId); return { verified: true };
     case "verify": return verifyReady(command.requestId, command.membership || null);
-    case "get_index": return getLibraryIndex(command.requestId);
+    case "get_index": return getLibraryIndex(command.requestId, false, command.recoveryMessageId || null);
     case "cancel_index": return cancelIndex(command.targetRequestId);
     case "replace_index": return replaceLibraryIndex(command.input);
     case "delete_messages": return deleteMessages(command.input);

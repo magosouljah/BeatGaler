@@ -9,6 +9,11 @@ export function isMissingWebLibraryIndexError(error: unknown): boolean {
   return /library index (?:is still synchronizing|is not available)/i.test(message);
 }
 
+export function isWebLibraryPinRecoveryUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /\bBOT_METHOD_INVALID\b/.test(message);
+}
+
 export async function ensureWebLibraryIndex(transport: {
   ensureLibraryIndex?: () => Promise<WebLibraryBootstrapResult>;
 }): Promise<WebLibraryBootstrapResult> {

@@ -26,16 +26,19 @@ function createVaultIndexPointerStore(pool) {
 
   async function getForChat(telegramChatId) {
     const result = await pool.query(`
-      SELECT v.id AS vault_id, p.index_message_id, p.predecessor_message_id,
+      SELECT v.id AS vault_id, v.index_bootstrap_pending, s.user_id AS quota_user_id,
+             p.index_message_id, p.predecessor_message_id,
              p.revision, p.source, p.verified_at, p.updated_at
         FROM vaults v
         LEFT JOIN vault_index_pointers p ON p.vault_id = v.id
+        LEFT JOIN library_quota_state s ON s.user_id = v.user_id
        WHERE v.telegram_chat_id = $1
     `, [String(telegramChatId || '').trim()]);
     const row = result.rows[0] || null;
     if (!row) return null;
     return {
       vault_id: String(row.vault_id),
+      bootstrap_pending: row.index_bootstrap_pending === true && !row.quota_user_id && !positiveMessageId(row.index_message_id),
       message_id: positiveMessageId(row.index_message_id),
       predecessor_message_id: nullableMessageId(row.predecessor_message_id),
       revision: Number(row.revision || 0) || null,

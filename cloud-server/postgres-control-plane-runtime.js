@@ -205,7 +205,7 @@ async function replaceAuthSnapshot(pool, authData, cryptoConfig) {
     }
 
     for (const row of rows.vaults) {
-      await client.query(`INSERT INTO vaults(id,user_id,telegram_chat_id,title,created_at,updated_at) VALUES($1,$2,$3,$4,$5,now())
+      await client.query(`INSERT INTO vaults(id,user_id,telegram_chat_id,title,created_at,updated_at,index_bootstrap_pending) VALUES($1,$2,$3,$4,$5,now(),true)
         ON CONFLICT(user_id) DO UPDATE SET telegram_chat_id=EXCLUDED.telegram_chat_id,title=EXCLUDED.title,updated_at=now()`,
       [row.id,row.user_id,row.telegram_chat_id,row.title,row.created_at]);
     }

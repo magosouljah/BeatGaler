@@ -543,4 +543,38 @@ describe("Galer Cloud single-file Web Worker", () => {
     expect((await send({ requestId: "peer-index-replacement", op: "get_index" })).find(message => message.ok === true)?.result.messageId).toBe(501);
     expect(replacement.getFullChat).not.toHaveBeenCalled();
   });
+
+  it("recovers a validated INDEX by Telegram pin id when getFullChat is BOT_METHOD_INVALID", async () => {
+    await send({ requestId: "pin-recovery-shutdown", op: "shutdown" });
+    await send({
+      requestId: "pin-recovery-init", op: "initialize", startupMessageIds: [],
+      session: {
+        chat_id: "-1001234567890", transport_user_id: "4242", expected_bot_id: "4242",
+        temp_api_id: 12345, temp_auth_key: new Uint8Array(256).fill(7),
+        temp_session_id: { low: 123456, high: 789, unsigned: false },
+        temp_session_state: {
+          seqNo: 2, lastMessageId: { low: 333, high: 444, unsigned: false }, timeOffset: 5,
+          serverSalt: { low: 55, high: 66, unsigned: false }, queuedAcks: [],
+          bindMsgId: { low: 111, high: 222, unsigned: false },
+          lastSessionCreatedUid: { low: 0, high: 0, unsigned: false },
+        },
+        temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
+        index_pointer: null,
+      },
+    });
+    await send({ requestId: "pin-recovery-verify", op: "verify" });
+    const active = transport.getLastClient();
+    active.getFullChat.mockRejectedValue(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+    const failed = await send({ requestId: "pin-recovery-failed", op: "get_index" }, 4000);
+    expect(failed.find(message => message.ok === false)?.error).toContain("BOT_METHOD_INVALID");
+    const recovered = await send({ requestId: "pin-recovery-by-id", op: "get_index", recoveryMessageId: 501 });
+    expect(recovered.find(message => message.ok === true)?.result).toMatchObject({
+      messageId: 501,
+      manifest: { beats: [{ id: "beat-from-index" }] },
+      pointerRepair: { expectedMessageId: null, source: "pin_recovery" },
+    });
+    const immediateRead = await send({ requestId: "pin-recovery-immediate-read", op: "get_index" });
+    expect(immediateRead.find(message => message.ok === true)?.result.messageId).toBe(501);
+    expect(active.getFullChat).toHaveBeenCalledTimes(5);
+  });
 });

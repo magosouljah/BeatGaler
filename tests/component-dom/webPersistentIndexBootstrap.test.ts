@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const session = vi.hoisted(() => ({
   publishWebTransportIndex: vi.fn(),
   commitWebTransportIndexPointer: vi.fn(async () => undefined),
+  readWebTransportIndexBootstrapState: vi.fn(async () => ({ pinned_message_id: null, bootstrap_pending: true })),
   reserveWebTransportBeat: vi.fn(async () => undefined),
   renewWebTransportBeat: vi.fn(async () => undefined),
   cancelWebTransportBeat: vi.fn(async () => undefined),
@@ -29,8 +30,10 @@ import { WebGalerCloudTransport } from "../../src/features/cloud/webGalerCloudTr
 import {
   commitWebTransportIndexPointer,
   publishWebTransportIndex,
+  readWebTransportIndexBootstrapState,
   reserveWebTransportBeat,
 } from "../../src/features/cloud/webTransportSession";
+import { loadWebLibraryPage } from "../../src/features/library/webLibrary";
 
 function harness(initial: {
   messageId: number;
@@ -92,6 +95,7 @@ describe("Web initial INDEX through existing serialized operation", () => {
     expect(results.map(row => row.messageId)).toEqual([100, 100]);
     expect(publishWebTransportIndex).toHaveBeenCalledOnce();
     expect(h.worker.replaceLibraryIndex).toHaveBeenCalledOnce();
+    expect(h.worker.getLibraryIndex).toHaveBeenCalledWith(100);
     expect(commitWebTransportIndexPointer).toHaveBeenCalledWith({
       messageId: 100,
       expectedMessageId: 0,
@@ -107,6 +111,7 @@ describe("Web initial INDEX through existing serialized operation", () => {
 
     expect(await h.create().ensureLibraryIndex()).toEqual({ status: "existing", messageId: 42, manifest });
     expect(publishWebTransportIndex).not.toHaveBeenCalled();
+    expect(readWebTransportIndexBootstrapState).not.toHaveBeenCalled();
   });
 
   it("does not create an empty INDEX after a network error", async () => {
@@ -139,5 +144,75 @@ describe("Web initial INDEX through existing serialized operation", () => {
     await h.create().commitImportedBeat({ id: "first" } as never, { master: file }, "test");
 
     expect(events).toEqual(["master-index", "commit-operation", "reserve", "media-commit"]);
+  });
+
+  it("bootstraps a fresh vault after pinned recovery returns BOT_METHOD_INVALID", async () => {
+    vi.mocked(readWebTransportIndexBootstrapState).mockResolvedValueOnce({ pinned_message_id: null, bootstrap_pending: true });
+    const h = harness();
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+    vi.mocked(publishWebTransportIndex).mockImplementationOnce(async ({ manifest, expectedMessageId }) => {
+      await h.worker.replaceLibraryIndex({ manifest, expectedMessageId });
+      return { messageId: 100, previousMessageId: 0, beatCount: 0 };
+    });
+
+    const observations: string[] = [];
+    const page = await loadWebLibraryPage({
+      getLibraryIndex: () => h.worker.getLibraryIndex(),
+      ensureLibraryIndex: () => h.create().ensureLibraryIndex(),
+    }, { onObservation: result => observations.push(result.state) });
+
+    expect(page.beats).toEqual([]);
+    expect(page.totalVisible).toBe(0);
+    expect(observations).toEqual(["empty"]);
+    expect(publishWebTransportIndex).toHaveBeenCalledOnce();
+    expect(h.worker.replaceLibraryIndex).toHaveBeenCalledOnce();
+    expect(h.worker.getLibraryIndex).toHaveBeenCalledWith(100);
+    expect(commitWebTransportIndexPointer).toHaveBeenCalledWith({
+      messageId: 100,
+      expectedMessageId: 0,
+      pointerSource: "publish",
+      sourceId: "direct-bootstrap",
+      beatCount: 0,
+    });
+  });
+
+  it("fails closed for an existing vault with no pointer and no recoverable pin", async () => {
+    vi.mocked(readWebTransportIndexBootstrapState).mockResolvedValueOnce({ pinned_message_id: null, bootstrap_pending: false });
+    const h = harness();
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+
+    await expect(h.create().ensureLibraryIndex()).rejects.toThrow("BOT_METHOD_INVALID");
+    expect(publishWebTransportIndex).not.toHaveBeenCalled();
+  });
+
+  it("recovers an existing INDEX from Telegram's pin without publishing an empty one", async () => {
+    const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [{ id: "survives" }], trash: [], deleted: [] };
+    vi.mocked(readWebTransportIndexBootstrapState).mockResolvedValueOnce({ pinned_message_id: 42, bootstrap_pending: false });
+    const h = harness({ messageId: 42, manifest, pointerRepair: { expectedMessageId: null, source: "pin_recovery" } });
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+
+    expect(await h.create().ensureLibraryIndex()).toEqual({ status: "existing", messageId: 42, manifest });
+    expect(h.worker.getLibraryIndex).toHaveBeenLastCalledWith(42);
+    expect(publishWebTransportIndex).not.toHaveBeenCalled();
+    expect(commitWebTransportIndexPointer).toHaveBeenCalledWith({
+      messageId: 42,
+      expectedMessageId: null,
+      pointerSource: "pin_recovery",
+      sourceId: "direct-index-recovery",
+      beatCount: 1,
+    });
+  });
+
+  it("does not bootstrap when Telegram's pinned message fails INDEX validation", async () => {
+    vi.mocked(readWebTransportIndexBootstrapState).mockResolvedValueOnce({ pinned_message_id: 42, bootstrap_pending: false });
+    const h = harness();
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
+    h.worker.getLibraryIndex.mockRejectedValueOnce(new Error("Pinned Telegram message is not a valid library INDEX."));
+
+    await expect(h.create().ensureLibraryIndex()).rejects.toThrow("not a valid library INDEX");
+    expect(h.worker.getLibraryIndex).toHaveBeenLastCalledWith(42);
+    expect(publishWebTransportIndex).not.toHaveBeenCalled();
   });
 });
