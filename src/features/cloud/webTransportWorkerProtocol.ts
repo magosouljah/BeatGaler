@@ -124,7 +124,7 @@ export type WebTransportWorkerCommand = (
     }
   | { requestId: string; op: "verify_identity" }
   | { requestId: string; op: "verify"; membership?: WebTransportMembershipProof | null }
-  | { requestId: string; op: "get_index" }
+  | { requestId: string; op: "get_index"; recoveryMessageId?: number }
   | { requestId: string; op: "cancel_index"; targetRequestId: string }
   | { requestId: string; op: "replace_index"; input: WebTransportReplaceIndexInput }
   | { requestId: string; op: "delete_messages"; input: WebTransportDeleteMessagesInput }

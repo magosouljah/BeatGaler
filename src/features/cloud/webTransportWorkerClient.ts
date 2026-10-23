@@ -478,11 +478,11 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     }
   }
 
-  getLibraryIndex(): Promise<WebTransportLibraryIndexResult> {
+  getLibraryIndex(recoveryMessageId?: number): Promise<WebTransportLibraryIndexResult> {
     const requestId = crypto.randomUUID();
     const finish = playTraceSpan("WORKER_INDEX", { request_id: requestId });
     return this.request<WebTransportLibraryIndexResult>(
-      { op: "get_index" },
+      { op: "get_index", ...(recoveryMessageId ? { recoveryMessageId } : {}) },
       undefined,
       undefined,
       requestId,

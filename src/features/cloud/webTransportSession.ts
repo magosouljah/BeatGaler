@@ -618,6 +618,14 @@ export async function publishWebTransportIndex(
   return result;
 }
 
+/** Telegram pin metadata for a guarded initial bootstrap or pointer recovery. */
+export function readWebTransportIndexBootstrapState(): Promise<{
+  pinned_message_id: number | null;
+  bootstrap_pending: boolean;
+}> {
+  return transportRequest('/transport/index/bootstrap-state', {});
+}
+
 export async function purgeWebTransportTrash(beatIds: string[], lease: IndexPublicationLease): Promise<{
   deleted: number; messageId?: number; previousMessageId?: number; beatCount?: number;
 }> {

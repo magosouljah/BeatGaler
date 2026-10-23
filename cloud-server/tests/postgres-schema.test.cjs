@@ -33,6 +33,7 @@ for (const token of [
   "transport_membership_state IN ('pending', 'ready', 'repair')",
   'transport_membership_updated_at timestamptz',
   'vaults_transport_bot_id_idx',
+  'index_bootstrap_pending boolean NOT NULL DEFAULT false',
 ]) {
   assert(sql.includes(token), `missing PostgreSQL contract token: ${token}`);
 }

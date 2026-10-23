@@ -198,13 +198,19 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     let previousId = 0;
     try {
       await client.query('BEGIN');
-      const owner = (await client.query('SELECT id,telegram_chat_id FROM vaults WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
+      const owner = (await client.query('SELECT id,telegram_chat_id,index_bootstrap_pending FROM vaults WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
       if (!owner || String(owner.telegram_chat_id) !== String(chatId)) {
         fail('Vault ownership could not be verified.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
       }
       const state = (await client.query('SELECT * FROM library_quota_state WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
       const current = await pinned(chatId);
       const currentId = current?.messageId || 0;
+      if (!state && !owner.index_bootstrap_pending) {
+        fail('Initial INDEX bootstrap is not authorized for this vault.', 'LIBRARY_QUOTA_UNINITIALIZED');
+      }
+      if (!state && (await client.query('SELECT 1 FROM vault_index_pointers WHERE vault_id=$1', [owner.id])).rows[0]) {
+        fail('Existing INDEX pointer requires recovery before publication.', 'LIBRARY_QUOTA_INDEX_CHANGED');
+      }
       if (state && state.index_sha256 === candidate.sha256 && Number(state.index_message_id) === currentId) {
         const prior = (await client.query('SELECT predecessor_message_id FROM vault_index_pointers WHERE vault_id=$1',
           [owner.id])).rows[0];
@@ -389,6 +395,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
         VALUES($1,$2,$3,1,'publish') ON CONFLICT(vault_id) DO UPDATE SET
         index_message_id=$2,predecessor_message_id=$3,revision=vault_index_pointers.revision+1,
         source='publish',verified_at=now(),updated_at=now()`, [owner.id, publishedId, expected || null]);
+      await client.query('UPDATE vaults SET index_bootstrap_pending=false WHERE id=$1', [owner.id]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});

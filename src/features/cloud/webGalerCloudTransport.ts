@@ -6,13 +6,14 @@ import {
   reserveWebTransportBeat,
   renewWebTransportBeat,
   publishWebTransportIndex,
+  readWebTransportIndexBootstrapState,
   purgeWebTransportTrash,
   authorizeWebTransportProject,
   cancelWebTransportBeat,
   uploadWebTransportProject,
 } from "./webTransportSession";
 import { WebTransportWorkerClient } from "./webTransportWorkerClient";
-import { isMissingWebLibraryIndexError, type WebLibraryBootstrapResult } from "./webLibraryBootstrap";
+import { isMissingWebLibraryIndexError, isWebLibraryPinRecoveryUnavailable, type WebLibraryBootstrapResult } from "./webLibraryBootstrap";
 import type { Beat } from "../../types";
 import { commitWebImportedBeat, type WebImportCommitProgress, type WebImportFiles } from "../import/webImportCommit";
 import { commitWebBeatEdit, type WebBeatEditProgress } from "../edit/webBeatEdit";
@@ -261,17 +262,35 @@ export class WebGalerCloudTransport {
     return this.controller.withOperation("replace_index", { objectType: "index", objectIds: ["pinned"] }, async lease => {
       // Re-read after acquiring the existing per-vault INDEX operation. A second
       // installation must reuse the first winner, including its real manifest.
+      let readError: unknown;
       try {
         const current = await this.worker.getLibraryIndex();
         if (!current.messageId) throw new Error("Direct INDEX returned no message id.");
         return { ...current, messageId: current.messageId, status: "existing" };
       } catch (error) {
-        if (!isMissingWebLibraryIndexError(error)) throw error;
+        if (!isMissingWebLibraryIndexError(error) && !isWebLibraryPinRecoveryUnavailable(error)) throw error;
+        readError = error;
       }
+      const state = await readWebTransportIndexBootstrapState();
+      if (state.pinned_message_id) {
+        const current = await this.worker.getLibraryIndex(state.pinned_message_id);
+        if (!current.messageId || current.messageId !== state.pinned_message_id) throw new Error("Pinned INDEX recovery did not match Telegram.");
+        await commitWebTransportIndexPointer({
+          messageId: current.messageId,
+          expectedMessageId: current.pointerRepair?.expectedMessageId ?? null,
+          pointerSource: "pin_recovery",
+          sourceId: "direct-index-recovery",
+          beatCount: Array.isArray((current.manifest as { beats?: unknown[] })?.beats) ? (current.manifest as { beats: unknown[] }).beats.length : 0,
+        });
+        return { status: "existing", messageId: current.messageId, manifest: current.manifest };
+      }
+      if (!state.bootstrap_pending) throw readError;
       const manifest = { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] };
       const result = await this.publishLibraryIndex({ manifest, expectedMessageId: 0 }, lease);
+      const created = await this.worker.getLibraryIndex(result.messageId);
+      if (created.messageId !== result.messageId) throw new Error("Published INDEX could not be verified through Direct.");
       await commitWebTransportIndexPointer({ messageId: result.messageId, expectedMessageId: result.previousMessageId, pointerSource: "publish", sourceId: "direct-bootstrap", beatCount: 0 });
-      return { status: "created", messageId: result.messageId, manifest };
+      return { status: "created", messageId: result.messageId, manifest: created.manifest };
     });
   }
 

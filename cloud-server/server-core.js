@@ -2158,6 +2158,28 @@ app.post("/transport/operation/renew", async (req, res) => {
   }
 });
 
+app.post("/transport/index/bootstrap-state", async (req, res) => {
+  const auth = authenticatedTransportAccount(req, res);
+  if (!auth) return;
+  try {
+    const vaultChatId = storageChatId(auth.account);
+    const pointer = await vaultIndexPointers.getForChat(vaultChatId);
+    if (!pointer) throw new Error('Vault INDEX metadata is unavailable.');
+    // MASTER reads only Telegram pin metadata here. The Web Worker still reads
+    // and validates the INDEX document through its authorized Direct session.
+    const pinned = await directTransport.getPinnedMessage(vaultChatId);
+    const pinnedMessageId = Number(pinned?.message_id || 0);
+    res.json({
+      ok: true,
+      pinned_message_id: Number.isSafeInteger(pinnedMessageId) && pinnedMessageId > 0 ? pinnedMessageId : null,
+      bootstrap_pending: pointer.bootstrap_pending === true && !pinnedMessageId,
+    });
+  } catch (error) {
+    console.warn('[direct] INDEX bootstrap state unavailable:', error?.message || error);
+    res.status(503).json({ error: 'Galer Cloud could not verify the library INDEX state.' });
+  }
+});
+
 app.post("/transport/index/commit", async (req, res) => {
   const auth = authenticatedTransportAccount(req, res);
   if (!auth) return;

@@ -10,7 +10,7 @@ function memoryPool() {
   const query = async (sql, values = []) => {
     if (/FROM vaults v\s+LEFT JOIN vault_index_pointers/i.test(sql)) {
       const vaultId = vaults.get(values[0]);
-      const row = vaultId ? { vault_id: vaultId, ...(pointers.get(vaultId) || {}) } : null;
+      const row = vaultId ? { vault_id: vaultId, index_bootstrap_pending: vaultId === 'vault-empty', quota_user_id: null, ...(pointers.get(vaultId) || {}) } : null;
       return { rows: row ? [row] : [] };
     }
     if (/SELECT id FROM vaults WHERE telegram_chat_id/i.test(sql)) {
@@ -81,8 +81,11 @@ test('a published replacement advances the pointer and the next reload observes 
 test('a truly empty vault has no pointer until the guarded initial publication succeeds', async () => {
   const store = createVaultIndexPointerStore(memoryPool());
   assert.equal((await store.getForChat('chat-empty')).message_id, null);
+  assert.equal((await store.getForChat('chat-empty')).bootstrap_pending, true);
+  assert.equal((await store.getForChat('chat-a')).bootstrap_pending, false);
   await store.compareAndSetForChat({ telegramChatId: 'chat-empty', messageId: 107, expectedMessageId: null, source: 'publish' });
   assert.equal((await store.getForChat('chat-empty')).message_id, 107);
+  assert.equal((await store.getForChat('chat-empty')).bootstrap_pending, false);
 });
 
 test('vault pointers are isolated and a stale writer cannot roll one back after a crash/race', async () => {
