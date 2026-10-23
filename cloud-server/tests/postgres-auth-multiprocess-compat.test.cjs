@@ -88,5 +88,50 @@ const {
   await mergeAuthSnapshotDelta({ async connect() { return client; } }, adopted,
     { key: Buffer.alloc(32, 7), keyVersion: 1 }, current);
   assert.equal(statements.some(sql => /INSERT INTO users\b[\s\S]*ON CONFLICT\(id\) DO NOTHING/.test(sql)), true);
+
+  // A new storage chat must opt in to the first INDEX publication.
+  const previousAuth = { users: [{ id: 'u1', username: 'alpha#0001' }], sessions: {} };
+  const currentAuth = {
+    users: [...previousAuth.users, { id: 'u2', username: 'beta#0001', storageChatId: '-100200' }],
+    sessions: {},
+  };
+  const queries = [];
+  const vaultClient = {
+    async query(sql, params) { queries.push({ sql: String(sql), params }); return { rows: [], rowCount: 0 }; },
+    release() {},
+  };
+  await mergeAuthSnapshotDelta({ async connect() { return vaultClient; } }, currentAuth,
+    { key: Buffer.alloc(32, 7), keyVersion: 1 }, previousAuth);
+  const newVault = queries.find(({ sql }) => /INSERT INTO vaults\s*\(/i.test(sql));
+  assert.ok(newVault, 'new u2 storage chat must insert a vault');
+  assert.equal(newVault.params[1], 'u2');
+  assert.equal(newVault.params[2], '-100200');
+  const insert = newVault.sql.match(/INSERT INTO vaults\s*\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)/i);
+  assert.ok(insert, 'vault INSERT must have explicit columns and values');
+  const columns = insert[1].split(',').map(value => value.trim().toLowerCase());
+  const values = insert[2].split(',').map(value => value.trim().toLowerCase());
+  assert.equal(columns.length, values.length);
+  const bootstrapColumn = columns.indexOf('index_bootstrap_pending');
+  assert.notEqual(bootstrapColumn, -1, 'vault INSERT must specify index_bootstrap_pending');
+  assert.equal(values[bootstrapColumn], 'true', 'new vault must opt in to INDEX bootstrap');
+
+  // Updating an existing vault must preserve its persisted bootstrap state.
+  const existingAuth = {
+    users: [{ id: 'u2', username: 'beta#0001', storageChatId: '-100200', storageChatTitle: 'Old title' }],
+    sessions: {},
+  };
+  const renamedAuth = {
+    users: [{ ...existingAuth.users[0], storageChatTitle: 'New title' }],
+    sessions: {},
+  };
+  queries.length = 0;
+  await mergeAuthSnapshotDelta({ async connect() { return vaultClient; } }, renamedAuth,
+    { key: Buffer.alloc(32, 7), keyVersion: 1 }, existingAuth);
+  const existingVault = queries.find(({ sql }) => /INSERT INTO vaults\s*\(/i.test(sql));
+  assert.ok(existingVault, 'changed existing vault must reach the upsert');
+  const update = existingVault.sql.match(/ON CONFLICT\s*\(user_id\)\s*DO UPDATE SET\s*([\s\S]*)/i);
+  assert.ok(update, 'existing vault must use the conflict update');
+  assert.doesNotMatch(update[1], /\bindex_bootstrap_pending\b/i,
+    'conflict update must preserve the existing bootstrap state');
   console.log('postgres-auth-multiprocess-compat tests: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });
