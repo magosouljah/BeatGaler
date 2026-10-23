@@ -381,7 +381,7 @@ assert.equal(retryDelay(100), 3_600_000);
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let activations = 0;
-  installPendingSignupBoundary({ application: app }, {
+  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
     service: { async status() { return { status: 'VERIFIED' }; } },
     activation: async () => { activations += 1; return { status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }; },
     env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
@@ -389,7 +389,7 @@ assert.equal(retryDelay(100), 3_600_000);
   app.post('/auth/register', () => {});
   const result = await new Promise(resolve => {
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { resolve(body); } };
-    routes.get('/auth/signup/status')[0]({ body: { signup_id: 'psu_1', continuation_secret: 'secret' } }, res);
+    routes.get('/auth/signup/status')[1]({ body: { signup_id: 'psu_1', continuation_secret: 'secret' } }, res);
   });
   assert.equal(activations, 1);
   assert.equal(result.signup_pending, false);
@@ -402,7 +402,7 @@ assert.equal(retryDelay(100), 3_600_000);
   const app = { post(route, ...handlers) { routes.set(route, handlers); return this; } };
   let current = 'PROVISIONING';
   const calls = [];
-  installPendingSignupBoundary({ application: app }, {
+  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
     service: { async status() { return { status: current }; } },
     activation: async () => { calls.push(current); return current === 'PROVISIONING'
       ? { status: 'PROVISIONING', signup_pending: true }
@@ -413,7 +413,7 @@ assert.equal(retryDelay(100), 3_600_000);
   async function poll() {
     return new Promise(resolve => {
       const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { resolve(body); } };
-      routes.get('/auth/signup/status')[0]({ body: { signup_id: 'psu_1', continuation_secret: 'secret' } }, res);
+      routes.get('/auth/signup/status')[1]({ body: { signup_id: 'psu_1', continuation_secret: 'secret' } }, res);
     });
   }
   assert.equal((await poll()).signup_pending, true);
@@ -426,7 +426,7 @@ assert.equal(retryDelay(100), 3_600_000);
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let statusInput = null;
-  installPendingSignupBoundary({ application: app }, {
+  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
     service: {
       async begin() { return { created: true, signup_id: 'psu_web', continuation_secret: 'private-secret', status: 'CODE_SENT', expires_at: new Date(Date.now() + 60_000).toISOString() }; },
       async status(input) { statusInput = input; return { status: 'CODE_SENT' }; },
@@ -446,7 +446,7 @@ assert.equal(retryDelay(100), 3_600_000);
   const cookie = headers.get('set-cookie')[0];
   assert.match(cookie, /HttpOnly; Secure; SameSite=Lax/);
   const checked = response();
-  await routes.get('/auth/signup/status')[0]({ headers: { 'x-beatgaler-client': 'web', cookie: cookie.split(';')[0] }, body: {} }, checked);
+  await routes.get('/auth/signup/status')[1]({ headers: { 'x-beatgaler-client': 'web', cookie: cookie.split(';')[0] }, body: {} }, checked);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(statusInput, { signupId: 'psu_web', continuationSecret: 'private-secret' });
 }
@@ -454,7 +454,7 @@ assert.equal(retryDelay(100), 3_600_000);
 {
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
-  installPendingSignupBoundary({ application: app }, {
+  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
     service: { async begin() { return { created: true, recovered: true, signup_id: 'psu_existing',
       continuation_secret: 'replacement-secret', status: 'CODE_SENT',
       expires_at: new Date(Date.now() + 60_000).toISOString() }; } },
@@ -478,7 +478,7 @@ assert.equal(retryDelay(100), 3_600_000);
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let verifiedInput;
-  installPendingSignupBoundary({ application: app }, {
+  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
     service: {
       async begin() { return { created: true, signup_id: 'psu_web', continuation_secret: 'private-secret',
         status: 'CODE_SENT', expires_at: new Date(Date.now() + 60_000).toISOString() }; },
@@ -500,12 +500,40 @@ assert.equal(retryDelay(100), 3_600_000);
   await new Promise(resolve => setImmediate(resolve));
   const cookie = registered.getHeader('Set-Cookie')[0].split(';')[0];
   const activated = response();
-  await routes.get('/auth/signup/verify')[0]({ headers: { 'x-beatgaler-client': 'web', cookie }, body: { code: '123-456' } }, activated);
+  await routes.get('/auth/signup/verify')[1]({ headers: { 'x-beatgaler-client': 'web', cookie }, body: { code: '123-456' } }, activated);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(verifiedInput, { signupId: 'psu_web', continuationSecret: 'private-secret', challenge: '123-456' });
   assert.equal(activated.body.user.id, 'usr_1');
   assert.equal(activated.body.continuation_secret, undefined);
   assert.match(activated.getHeader('Set-Cookie')[0], /Max-Age=0/);
+}
+
+{
+  // Reproduce production's registration order: a webhook app.post() installs
+  // signup routes before the app-wide JSON parser is added.
+  const express = require('../node_modules/express');
+  let received = null;
+  installPendingSignupBoundary(express, {
+    service: { async verify(input) { received = input; return { status: 'VERIFIED', verified: false }; } },
+    env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
+  });
+  const app = express();
+  app.post('/webhooks/polar', (_req, res) => res.sendStatus(204));
+  app.use(express.json({ limit: '256kb' }));
+  const server = app.listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    const url = `http://127.0.0.1:${server.address().port}/auth/signup/verify`;
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signup_id: 'psu_1', continuation_secret: 'sc_1', code: '123-456' }) });
+    assert.equal(response.status, 202);
+    assert.deepEqual(received, { signupId: 'psu_1', continuationSecret: 'sc_1', challenge: '123-456' });
+    const malformed = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
+    assert.equal(malformed.status, 400);
+    assert.equal((await malformed.json()).code, 'SIGNUP_BODY_INVALID');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 }
 
 console.log('pending-signup-safety tests: PASS');

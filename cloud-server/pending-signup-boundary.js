@@ -285,9 +285,16 @@ function installPendingSignupBoundary(express, {
     if (routesInstalled || routesInstalling) return;
     routesInstalling = true;
     try {
-      app.post('/auth/signup/verify', (req, res) => { void verify(req, res); });
-      app.post('/auth/signup/resend', (req, res) => { void resend(req, res); });
-      app.post('/auth/signup/status', (req, res) => { void signupStatus(req, res); });
+      // These routes are installed by the first app.post(), which can run
+      // before server-core installs its app-wide express.json() middleware.
+      // Parse their bodies on the routes so the verification code reaches the
+      // runtime regardless of that registration order.
+      const signupJson = express.json({ limit: '256kb' });
+      const signupJsonError = (error, _req, res, _next) => res.status(error?.type === 'entity.too.large' ? 413 : 400)
+        .json({ code: 'SIGNUP_BODY_INVALID', error: 'Signup request body is invalid.' });
+      app.post('/auth/signup/verify', signupJson, (req, res) => { void verify(req, res); }, signupJsonError);
+      app.post('/auth/signup/resend', signupJson, (req, res) => { void resend(req, res); }, signupJsonError);
+      app.post('/auth/signup/status', signupJson, (req, res) => { void signupStatus(req, res); }, signupJsonError);
       routesInstalled = true;
     } finally {
       routesInstalling = false;
