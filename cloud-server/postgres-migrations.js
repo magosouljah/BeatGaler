@@ -12,6 +12,14 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function migrationChecksums(sql) {
+  const lfSql = sql.replace(/\r\n/g, '\n');
+  return {
+    canonical: sha256(lfSql),
+    crlf: sha256(lfSql.replace(/\n/g, '\r\n')),
+  };
+}
+
 function listMigrations(dir = MIGRATIONS_DIR) {
   const names = fs.readdirSync(dir)
     .filter(name => name.endsWith('.sql'))
@@ -40,7 +48,7 @@ function listMigrations(dir = MIGRATIONS_DIR) {
       name,
       path: filePath,
       sql,
-      checksumSha256: sha256(sql),
+      checksumSha256: migrationChecksums(sql).canonical,
     });
   });
 }
@@ -110,12 +118,14 @@ async function applyMigrations(pool, migrations = listMigrations()) {
     await ensureMigrationLedger(client);
 
     for (const migration of migrations) {
+      const checksums = migrationChecksums(migration.sql);
       const existing = await client.query(
         'SELECT checksum_sha256 FROM schema_migrations WHERE version = $1',
         [migration.version],
       );
       if (existing.rows.length) {
-        if (existing.rows[0].checksum_sha256 !== migration.checksumSha256) {
+        if (existing.rows[0].checksum_sha256 !== checksums.canonical
+          && existing.rows[0].checksum_sha256 !== checksums.crlf) {
           throw new Error(`Applied migration ${migration.version} checksum mismatch.`);
         }
         skipped.push(migration.version);
@@ -127,7 +137,7 @@ async function applyMigrations(pool, migrations = listMigrations()) {
         await client.query(migrationBody(migration.sql));
         await client.query(
           'INSERT INTO schema_migrations(version, checksum_sha256) VALUES ($1, $2)',
-          [migration.version, migration.checksumSha256],
+          [migration.version, checksums.canonical],
         );
         await client.query('COMMIT');
         applied.push(migration.version);

@@ -1,7 +1,15 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { listMigrations, applyMigrations, MIGRATION_LOCK_KEY } = require('../postgres-migrations.js');
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
 
 function makePool(seed = {}) {
   const ledger = new Map(Object.entries(seed));
@@ -32,6 +40,50 @@ function makePool(seed = {}) {
 }
 
 (async () => {
+  const lfSql = 'BEGIN;\nSELECT 1;\nCOMMIT;\n';
+  const crlfSql = lfSql.replace(/\n/g, '\r\n');
+  const canonicalChecksum = sha256(lfSql);
+  const crlfChecksum = sha256(crlfSql);
+  assert.notEqual(canonicalChecksum, crlfChecksum);
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgres-migration-runner-'));
+  let lfMigration;
+  let crlfMigration;
+  try {
+    const filePath = path.join(tempDir, '0001_example.sql');
+    fs.writeFileSync(filePath, lfSql);
+    [lfMigration] = listMigrations(tempDir);
+    fs.writeFileSync(filePath, crlfSql);
+    [crlfMigration] = listMigrations(tempDir);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+  assert.equal(lfMigration.checksumSha256, canonicalChecksum);
+  assert.equal(crlfMigration.checksumSha256, canonicalChecksum);
+
+  const historicalCrlf = makePool({ '0001': crlfChecksum });
+  assert.deepEqual(await applyMigrations(historicalCrlf.pool, [lfMigration]), {
+    applied: [], skipped: ['0001'],
+  });
+  const historicalLf = makePool({ '0001': canonicalChecksum });
+  assert.deepEqual(await applyMigrations(historicalLf.pool, [crlfMigration]), {
+    applied: [], skipped: ['0001'],
+  });
+
+  const changedSql = 'BEGIN;\nSELECT 2;\nCOMMIT;\n';
+  const changed = makePool({ '0001': canonicalChecksum });
+  await assert.rejects(
+    () => applyMigrations(changed.pool, [{ ...lfMigration, sql: changedSql }]),
+    /checksum mismatch/,
+  );
+  assert.equal(changed.released, true);
+
+  const fresh = makePool();
+  assert.deepEqual(await applyMigrations(fresh.pool, [crlfMigration]), {
+    applied: ['0001'], skipped: [],
+  });
+  assert.equal(fresh.ledger.get('0001'), canonicalChecksum);
+
   const migrations = listMigrations();
   const first = makePool();
   const result1 = await applyMigrations(first.pool, migrations);

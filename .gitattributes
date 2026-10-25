@@ -8,4 +8,5 @@
 *.json text eol=lf
 *.toml text eol=lf
 *.sh text eol=lf
+*.sql text eol=lf
 VERSION text eol=lf
