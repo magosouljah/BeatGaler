@@ -45,15 +45,15 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const viewState = app.indexOf("const { search, setSearch, sortBy, setSortBy } = useLibraryViewState();");
     const sortRouting = app.indexOf('useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");', viewState);
     const reconcileCallback = app.indexOf("const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {", sortRouting);
-    const preserveArtwork = app.indexOf("const next = preserveLoadedArtwork(incoming, current);", reconcileCallback);
-    const updateLatest = app.indexOf("beatsLatestRef.current = next;", preserveArtwork);
+    const mergeUploads = app.indexOf("const next = mergeActiveUploads(incoming, current, getActiveUploadIds());", reconcileCallback);
+    const updateLatest = app.indexOf("beatsLatestRef.current = next;", mergeUploads);
     const reconcileHook = app.indexOf('useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);', updateLatest);
 
     expect(viewState).toBeGreaterThanOrEqual(0);
     expect(sortRouting).toBeGreaterThan(viewState);
     expect(reconcileCallback).toBeGreaterThan(sortRouting);
-    expect(preserveArtwork).toBeGreaterThan(reconcileCallback);
-    expect(updateLatest).toBeGreaterThan(preserveArtwork);
+    expect(mergeUploads).toBeGreaterThan(reconcileCallback);
+    expect(updateLatest).toBeGreaterThan(mergeUploads);
     expect(reconcileHook).toBeGreaterThan(updateLatest);
   });
 

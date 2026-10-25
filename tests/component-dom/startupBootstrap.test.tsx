@@ -70,6 +70,7 @@ let latestLoading = true;
 let latestRevealed = new Set<string>();
 let saveOptimistic: ((beat: Beat) => void) | null = null;
 let activeUploadIds: (() => ReadonlySet<string>) | null = null;
+let renderHistory: string[][] = [];
 
 function beat(id: string, cloud = true): Beat {
   return { id, name: id, tags: [], other_files: [], telegram_file_id: cloud ? `cloud-${id}` : undefined } as unknown as Beat;
@@ -142,6 +143,7 @@ function Harness({ initial }: { initial: Beat[] }) {
   });
 
   latestBeats = beats;
+  renderHistory.push(beats.map(item => item.id));
   latestConnection = connection;
   latestVerified = verified;
   latestSetupDone = setupDone;
@@ -175,6 +177,7 @@ async function flushAsync(rounds = 20) {
 beforeEach(() => {
   saveOptimistic = null;
   activeUploadIds = null;
+  renderHistory = [];
   mocks.getSettings.mockReset().mockResolvedValue(settings);
   mocks.loadOfflineLibrary.mockReset().mockResolvedValue([]);
   mocks.pollTelegramCloudStatus.mockReset().mockResolvedValue({ connected: true, reachable: true, username: "user" });
@@ -201,21 +204,27 @@ describe("useStartupBootstrap", () => {
   it("keeps a visible import through the old startup INDEX before MASTER and applies remote changes", async () => {
     let resolveIndex!: (beats: Beat[]) => void;
     let resolveCommit!: (beat: Beat) => void;
-    mocks.reloadAuthoritative.mockReturnValueOnce(new Promise<Beat[]>(resolve => { resolveIndex = resolve; }));
+    mocks.reloadAuthoritative.mockReturnValueOnce(new Promise<Beat[]>(resolve => { resolveIndex = resolve; }))
+      .mockResolvedValueOnce([remote, beat("A")]);
     vi.spyOn(platform.cloudData, "commitImportedBeat").mockReturnValue(new Promise<Beat>(resolve => { resolveCommit = resolve; }));
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await renderHarness([]);
+    await renderHarness([beat("A")]);
+    expect(mocks.reloadAuthoritative).toHaveBeenCalledTimes(1);
+    expect(activeUploadIds!().size).toBe(0);
     const local = beat("local", false);
     await act(async () => { saveOptimistic!(local); });
-    expect(latestBeats.map(item => item.id)).toEqual(["local"]);
+    expect(latestBeats.map(item => item.id)).toEqual(["local", "A"]);
     expect(activeUploadIds!().has("local")).toBe(true);
     // The physical MASTER has not started; startup now resolves its old INDEX.
-    await act(async () => { resolveIndex([remote]); });
+    await act(async () => { resolveIndex([remote, beat("A")]); });
     await flushAsync();
-    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote"]);
+    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote", "A"]);
+    expect(renderHistory).not.toContainEqual(["remote", "A"]);
+    expect(mocks.reloadAuthoritative).toHaveBeenCalledTimes(2);
     await act(async () => { resolveCommit(beat("local")); });
     await flushAsync();
-    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote"]);
+    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote", "A"]);
+    expect(latestBeats.filter(item => item.id === "local")).toHaveLength(1);
     expect(latestBeats[0].telegram_file_id).toBeTruthy();
     expect(activeUploadIds!().has("local")).toBe(false);
     expect(warnings.mock.calls.some(args => String(args[0]).includes("Beat runtime transition rejected"))).toBe(false);

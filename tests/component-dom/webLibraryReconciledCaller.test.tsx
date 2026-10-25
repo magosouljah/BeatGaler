@@ -1,9 +1,11 @@
-import React from "react";
+import React, { useState } from "react";
 import { act } from "react-dom/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
 import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
+import { mergeActiveUploads } from "../../src/features/library/mergeActiveUploads";
+import { upsertConfirmedBeat } from "../../src/features/cloud/useCloudUploadQueue";
 import {
   useWebLibraryReconciled,
   WEB_LIBRARY_RECONCILED_EVENT,
@@ -79,5 +81,44 @@ describe("Web reconciled library caller", () => {
       detail: { beats: [beat("beat-1")] },
     }));
     expect(onReconciled).not.toHaveBeenCalled();
+  });
+
+  it("keeps an import through a stale playback reconciliation while applying remote beats", async () => {
+    const durable = beat("A");
+    const imported = { ...beat("B"), telegram_file_id: undefined, cloud_status: "UPLOADING" } as Beat;
+    const remote = beat("remote");
+    const renders: string[][] = [];
+    let addImport!: () => void;
+    let finishImport!: () => void;
+    const active = new Set<string>();
+
+    function Caller() {
+      const [beats, setBeats] = useState<Beat[]>([durable]);
+      renders.push(beats.map(item => item.id));
+      addImport = () => {
+        active.add(imported.id);
+        setBeats(current => [imported, ...current]);
+      };
+      finishImport = () => {
+        setBeats(current => upsertConfirmedBeat(current, beat("B")));
+        active.delete(imported.id);
+      };
+      useWebLibraryReconciled(true, incoming => {
+        setBeats(current => mergeActiveUploads(incoming, current, active));
+      });
+      return <div>{beats.map(item => item.id).join(",")}</div>;
+    }
+
+    await act(async () => root.render(<Caller />));
+    await act(async () => addImport());
+    expect(host.textContent).toBe("B,A");
+    await act(async () => window.dispatchEvent(new CustomEvent(WEB_LIBRARY_RECONCILED_EVENT, {
+      detail: { beats: [remote, durable] },
+    })));
+    expect(host.textContent).toBe("B,remote,A");
+    expect(renders).not.toContainEqual(["remote", "A"]);
+    await act(async () => finishImport());
+    expect(host.textContent).toBe("B,remote,A");
+    expect(renders.at(-1)?.filter(id => id === "B")).toHaveLength(1);
   });
 });

@@ -17,7 +17,7 @@ import { useBrowserImport } from "../features/import/useBrowserImport";
 import { useHtmlLibraryDrop } from "../features/dragdrop/useHtmlLibraryDrop";
 import { useNativeLibraryDrop } from "../features/dragdrop/useNativeLibraryDrop";
 import { cloudBeatFingerprint, libraryViewFingerprint } from "../features/library/libraryFingerprints";
-import { preserveLoadedArtwork } from "../features/library/libraryPresentationCache";
+import { mergeActiveUploads } from "../features/library/mergeActiveUploads";
 import { selectFilteredAndSortedBeats } from "../features/library/librarySelectors";
 import { useLibraryViewState } from "../features/library/useLibraryViewState";
 import { useLibraryReorder } from "../features/library/useLibraryReorder";
@@ -124,14 +124,6 @@ export function useBeatGalerComposition() {
     cancelTagRename, confirmTagRename,
   } = useTagRename({ beats, setBeats, replaceTagFilter });
   useWebPlaybackSortRouting(sortBy, beats, platform.kind === "web");
-  const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {
-    setBeats(current => {
-      const next = preserveLoadedArtwork(incoming, current);
-      beatsLatestRef.current = next;
-      return next;
-    });
-  }, []);
-  useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);
   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -286,6 +278,14 @@ export function useBeatGalerComposition() {
     hasProtectedStaging: () => stagedImportPathsRef.current.size > 0,
   });
 
+  const onWebLibraryReconciled = useCallback((incoming: Beat[]) => {
+    setBeats(current => {
+      const next = mergeActiveUploads(incoming, current, getActiveUploadIds());
+      beatsLatestRef.current = next;
+      return next;
+    });
+  }, [getActiveUploadIds, setBeats, beatsLatestRef]);
+  useWebLibraryReconciled(platform.kind === "web", onWebLibraryReconciled);
 
   const { libraryRefreshing, reloadLibrary } = useLibraryReload({
     telegramCloudConnected: Boolean(settings?.telegram_cloud_connected),
