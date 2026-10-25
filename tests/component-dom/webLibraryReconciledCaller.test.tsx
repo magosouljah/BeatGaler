@@ -3,7 +3,7 @@ import { act } from "react-dom/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
-import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
+import { getActiveWebAccountId, setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import { mergeActiveUploads } from "../../src/features/library/mergeActiveUploads";
 import { upsertConfirmedBeat } from "../../src/features/cloud/useCloudUploadQueue";
 import {
@@ -113,7 +113,7 @@ describe("Web reconciled library caller", () => {
     await act(async () => addImport());
     expect(host.textContent).toBe("B,A");
     await act(async () => window.dispatchEvent(new CustomEvent(WEB_LIBRARY_RECONCILED_EVENT, {
-      detail: { beats: [remote, durable] },
+      detail: { beats: [remote, durable], accountId: getActiveWebAccountId() },
     })));
     expect(host.textContent).toBe("B,remote,A");
     expect(renders).not.toContainEqual(["remote", "A"]);
