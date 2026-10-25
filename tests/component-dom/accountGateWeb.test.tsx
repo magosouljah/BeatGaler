@@ -58,9 +58,9 @@ describe("AccountGate Web adapter", () => {
     const { host, root } = await renderSignedOutGate();
     const identifier = host.querySelector<HTMLInputElement>("#beatgaler-login-identifier");
     const password = host.querySelector<HTMLInputElement>("#beatgaler-login-password");
-    expect(identifier?.getAttribute("autocomplete")).toBe("username");
+    expect(identifier?.getAttribute("autocomplete")).toBe("email");
     expect(password?.getAttribute("autocomplete")).toBe("current-password");
-    expect(host.querySelector('label[for="beatgaler-login-identifier"]')?.textContent).toBe("USERNAME OR EMAIL");
+    expect(host.querySelector('label[for="beatgaler-login-identifier"]')?.textContent).toBe("EMAIL");
     expect(host.querySelector('label[for="beatgaler-login-password"]')?.textContent).toBe("PASSWORD");
     await act(async () => root.unmount());
     host.remove();
