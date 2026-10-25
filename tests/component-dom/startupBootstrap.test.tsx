@@ -4,6 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, Beat } from "../../src/types";
 import type { ConnectionState } from "../../src/features/session/useSessionState";
+import { platform } from "../../src/platform";
+import { useCloudUploadQueue, upsertConfirmedBeat } from "../../src/features/cloud/useCloudUploadQueue";
+import { useBeatRuntimeRegistry } from "../../src/features/state/useBeatRuntimeRegistry";
 
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
@@ -17,6 +20,11 @@ const mocks = vi.hoisted(() => ({
   rollbackInterruptedCloudUploads: vi.fn(),
   cleanupOrphanedDropStaging: vi.fn(),
   preserveLoadedArtwork: vi.fn(),
+  commitImportedBeat: vi.fn(),
+}));
+
+vi.mock("../../src/platform", () => ({
+  platform: { kind: "web", capabilities: { reviewBeatCloudCommit: true }, cloudData: { commitImportedBeat: mocks.commitImportedBeat } },
 }));
 
 vi.mock("../../src/components/AccountGate", () => ({
@@ -60,6 +68,8 @@ let latestVerified = false;
 let latestSetupDone = false;
 let latestLoading = true;
 let latestRevealed = new Set<string>();
+let saveOptimistic: ((beat: Beat) => void) | null = null;
+let activeUploadIds: (() => ReadonlySet<string>) | null = null;
 
 function beat(id: string, cloud = true): Beat {
   return { id, name: id, tags: [], other_files: [], telegram_file_id: cloud ? `cloud-${id}` : undefined } as unknown as Beat;
@@ -92,8 +102,26 @@ function Harness({ initial }: { initial: Beat[] }) {
   const startupPipelineStartedRef = useRef(false);
   const startupEnginePrimeReadyRef = useRef(false);
   const progressiveRevealRunRef = useRef(0);
+  const beatsLatestRef = useRef<Beat[]>(initial);
+  const runtime = useBeatRuntimeRegistry(beats, beatsLatestRef);
+  const uploads = useCloudUploadQueue({
+    settings: currentSettings,
+    setSettings,
+    setConnectionState,
+    setBeats,
+    beatsLatestRef,
+    beatRuntimeStatesRef: runtime.beatRuntimeStatesRef,
+    transitionRuntime: runtime.transitionRuntime,
+    cloudLibrarySnapshotRef,
+    waitForUploadedBeatPlaybackReady: async () => true,
+    rejectOfflineMutation: () => false,
+    isReviewActive: () => false,
+    hasProtectedStaging: () => false,
+  });
 
   useStartupBootstrap({
+    getActiveUploadIds: uploads.getActiveUploadIds,
+    getUploadRevision: uploads.getUploadRevision,
     startupCachedBeatsRef,
     cloudMetaSnapshotRef,
     cloudLibrarySnapshotRef,
@@ -119,6 +147,11 @@ function Harness({ initial }: { initial: Beat[] }) {
   latestSetupDone = setupDone;
   latestLoading = loading;
   latestRevealed = revealed;
+  saveOptimistic = optimistic => {
+    setBeats(current => upsertConfirmedBeat(current, optimistic));
+    uploads.cloudifyImportedBeats([optimistic]);
+  };
+  activeUploadIds = uploads.getActiveUploadIds;
   void currentSettings;
   void startupGate;
   return <div>{beats.map(item => item.id).join(",")}</div>;
@@ -140,6 +173,8 @@ async function flushAsync(rounds = 20) {
 }
 
 beforeEach(() => {
+  saveOptimistic = null;
+  activeUploadIds = null;
   mocks.getSettings.mockReset().mockResolvedValue(settings);
   mocks.loadOfflineLibrary.mockReset().mockResolvedValue([]);
   mocks.pollTelegramCloudStatus.mockReset().mockResolvedValue({ connected: true, reachable: true, username: "user" });
@@ -163,6 +198,63 @@ afterEach(async () => {
 });
 
 describe("useStartupBootstrap", () => {
+  it("keeps a visible import through the old startup INDEX before MASTER and applies remote changes", async () => {
+    let resolveIndex!: (beats: Beat[]) => void;
+    let resolveCommit!: (beat: Beat) => void;
+    mocks.reloadAuthoritative.mockReturnValueOnce(new Promise<Beat[]>(resolve => { resolveIndex = resolve; }));
+    vi.spyOn(platform.cloudData, "commitImportedBeat").mockReturnValue(new Promise<Beat>(resolve => { resolveCommit = resolve; }));
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await renderHarness([]);
+    const local = beat("local", false);
+    await act(async () => { saveOptimistic!(local); });
+    expect(latestBeats.map(item => item.id)).toEqual(["local"]);
+    expect(activeUploadIds!().has("local")).toBe(true);
+    // The physical MASTER has not started; startup now resolves its old INDEX.
+    await act(async () => { resolveIndex([remote]); });
+    await flushAsync();
+    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote"]);
+    await act(async () => { resolveCommit(beat("local")); });
+    await flushAsync();
+    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote"]);
+    expect(latestBeats[0].telegram_file_id).toBeTruthy();
+    expect(activeUploadIds!().has("local")).toBe(false);
+    expect(warnings.mock.calls.some(args => String(args[0]).includes("Beat runtime transition rejected"))).toBe(false);
+  });
+
+  it("re-reads when the startup INDEX response arrives after upload completion", async () => {
+    let resolveOld!: (beats: Beat[]) => void;
+    let resolveCommit!: (beat: Beat) => void;
+    mocks.reloadAuthoritative.mockReturnValueOnce(new Promise<Beat[]>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce([beat("local"), remote]);
+    vi.spyOn(platform.cloudData, "commitImportedBeat").mockReturnValue(new Promise<Beat>(resolve => { resolveCommit = resolve; }));
+    await renderHarness([]);
+    await act(async () => { saveOptimistic!(beat("local", false)); });
+    await act(async () => { resolveCommit(beat("local")); });
+    await flushAsync();
+    await act(async () => { resolveOld([]); });
+    await flushAsync();
+    expect(mocks.reloadAuthoritative).toHaveBeenCalledTimes(2);
+    expect(latestBeats.map(item => item.id)).toEqual(["local", "remote"]);
+    expect(latestBeats.filter(item => item.id === "local")).toHaveLength(1);
+  });
+
+  it("releases optimistic ownership on conflict so authority can remove the beat", async () => {
+    let resolveOld!: (beats: Beat[]) => void;
+    let rejectCommit!: (error: Error) => void;
+    mocks.reloadAuthoritative.mockReturnValueOnce(new Promise<Beat[]>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce([]);
+    vi.spyOn(platform.cloudData, "commitImportedBeat").mockReturnValue(new Promise<Beat>((_, reject) => { rejectCommit = reject; }));
+    await renderHarness([]);
+    await act(async () => { saveOptimistic!(beat("local", false)); });
+    expect(activeUploadIds!().has("local")).toBe(true);
+    await act(async () => { rejectCommit(new Error("Your library changed on another device")); });
+    await flushAsync();
+    expect(activeUploadIds!().has("local")).toBe(false);
+    await act(async () => { resolveOld([]); });
+    await flushAsync();
+    expect(latestBeats).toEqual([]);
+  });
+
   it("loads authoritative beats on an online cold start without cache", async () => {
     await renderHarness([]);
     expect(latestBeats.map(item => item.id)).toEqual(["remote"]);

@@ -307,6 +307,8 @@ export function useBeatGalerComposition() {
   });
 
   const { interruptedUploadNotices, dismissInterruptedUploadNotices } = useStartupBootstrap({
+    getActiveUploadIds,
+    getUploadRevision,
     startupCachedBeatsRef,
     cloudMetaSnapshotRef,
     cloudLibrarySnapshotRef,

@@ -13,7 +13,7 @@ import {
 import { readActiveCloudUploads, rollbackInterruptedCloudUploads } from "../cloud/interruptedUploadJournal";
 import { cleanupOrphanedDropStaging } from "../dragdrop/dropStaging";
 import { cloudBeatFingerprint } from "../library/libraryFingerprints";
-import { preserveLoadedArtwork } from "../library/libraryPresentationCache";
+import { mergeActiveUploads, reloadStableLibrary } from "../library/mergeActiveUploads";
 import type { ConnectionState } from "../session/useSessionState";
 
 export type StartupBootstrapOptions = {
@@ -25,6 +25,8 @@ export type StartupBootstrapOptions = {
   startupEnginePrimeReadyRef: MutableRefObject<boolean>;
   progressiveRevealRunRef: MutableRefObject<number>;
   setBeats: Dispatch<SetStateAction<Beat[]>>;
+  getActiveUploadIds: () => ReadonlySet<string>;
+  getUploadRevision: () => number;
   setSettings: Dispatch<SetStateAction<AppSettings | null>>;
   setSetupDone: Dispatch<SetStateAction<boolean>>;
   setLoading: Dispatch<SetStateAction<boolean>>;
@@ -50,6 +52,8 @@ export function useStartupBootstrap({
   startupEnginePrimeReadyRef,
   progressiveRevealRunRef,
   setBeats,
+  getActiveUploadIds,
+  getUploadRevision,
   setSettings,
   setSetupDone,
   setLoading,
@@ -199,11 +203,14 @@ export function useStartupBootstrap({
         const flushedTrashCount = await flushOfflineTrashIntents();
         if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates();
         let restored: Beat[] | null = null;
+        let restoredRevision = getUploadRevision();
         let restoreError: unknown = null;
         // A single Direct INDEX attempt can lose the initial socket handoff.
         for (let attempt = 0; attempt < 3 && restored === null; attempt += 1) {
           try {
-            restored = await libraryStateManager.reloadAuthoritative();
+            const result = await reloadStableLibrary(getUploadRevision);
+            restored = result.beats;
+            restoredRevision = result.revision;
           } catch (error) {
             restoreError = error;
             if (attempt < 2) {
@@ -224,7 +231,9 @@ export function useStartupBootstrap({
           const repaired = await repairStaleCloudLibraryRefs();
           if (repaired > 0) {
             console.warn(`[library-integrity] repaired_stale_master_refs=${repaired}`);
-            restored = await libraryStateManager.reloadAuthoritative();
+            const result = await reloadStableLibrary(getUploadRevision);
+            restored = result.beats;
+            restoredRevision = result.revision;
             if (cancelled) return;
           }
         } catch (error) {
@@ -238,10 +247,17 @@ export function useStartupBootstrap({
           .filter(beat => !!beat.telegram_file_id)
           .map(cloudBeatFingerprint)
           .join("\u001c");
-        setBeats(current => preserveLoadedArtwork(
-          restored,
-          current.length > 0 ? current : (startupCachedBeatsRef.current ?? [])
-        ));
+        setBeats(current => {
+          if (restoredRevision !== getUploadRevision()) {
+            queueMicrotask(() => window.dispatchEvent(new Event("beatgaler:deferred-library-reload")));
+            return current;
+          }
+          return mergeActiveUploads(
+            restored,
+            current.length > 0 ? current : (startupCachedBeatsRef.current ?? []),
+            getActiveUploadIds(),
+          );
+        });
         startupCachedBeatsRef.current = [];
         void cleanupOrphanedDropStaging(restored);
         setCloudSessionVerified(true);

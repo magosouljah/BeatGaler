@@ -38,9 +38,9 @@ describe("task 9.3 startup bootstrap extraction", () => {
       "readActiveCloudUploads().length > 0",
       "rollbackInterruptedCloudUploads({",
       "const flushedTrashCount = await flushOfflineTrashIntents()",
-      "restored = await libraryStateManager.reloadAuthoritative()",
+      "const result = await reloadStableLibrary(getUploadRevision)",
       "const repaired = await repairStaleCloudLibraryRefs()",
-      "setBeats(current => preserveLoadedArtwork(",
+      "return mergeActiveUploads(",
       "setCloudSessionVerified(true)",
     ]);
     expect(startup).toContain("Authority is temporarily unknown, not empty.");
