@@ -1,4 +1,5 @@
 import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
+import { getActiveWebAccountId } from "../features/auth/activeWebAccount";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 import type { Beat } from "../types";
 import { getWebClientId } from "./webClientId";
@@ -41,14 +42,19 @@ function playbackErrorCode(error: unknown): string | null { const code = String(
 function isRecoverablePlaybackRouteError(error: unknown): boolean { const code = playbackErrorCode(error); return code === "ROUTE_MISSING" || code === "MEDIA_UNAVAILABLE"; }
 function prewarmAuthenticatedWebTransport(): void {
   if (typeof window === "undefined" || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
-  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN"); void resolveWebCoordinator().then(coordinator => coordinator.start()).then(() => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"), error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", { error_name: error instanceof Error ? error.name : "unknown" }));
+  if (!getActiveWebAccountId()) return;
+  playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
+  void resolveWebCoordinator().then(coordinator => coordinator.start()).then(() => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"), error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", { error_name: error instanceof Error ? error.name : "unknown" }));
 }
 async function resolveWebLibraryWindow(): Promise<WebLibraryWindowConsumer> { if (!webLibraryWindow) webLibraryWindow = new WebLibraryWindowConsumer(await resolveWebCloudTransport()); return webLibraryWindow; }
 async function recoverPlaybackRoute(beatId: string, failedMessageId: number): Promise<number | null> {
   const existing = playbackRouteRecoveries.get(beatId); if (existing) return existing; let recovery!: Promise<number | null>;
+  const accountId = getActiveWebAccountId();
   recovery = (async () => {
-    playTrace("PLAY_ROUTE_SUSPECT", { beat_id: beatId, message_id: failedMessageId }); const windowConsumer = await resolveWebLibraryWindow(); const page = await windowConsumer.refresh(); reportLibraryWindow(page, "playback-route-recovery");
-    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("beatgaler:web-library-reconciled", { detail: { beats: page.beats } }));
+    playTrace("PLAY_ROUTE_SUSPECT", { beat_id: beatId, message_id: failedMessageId }); const windowConsumer = await resolveWebLibraryWindow(); const page = await windowConsumer.refresh();
+    if (accountId !== getActiveWebAccountId()) return null;
+    reportLibraryWindow(page, "playback-route-recovery");
+    if (typeof window !== "undefined" && accountId) window.dispatchEvent(new CustomEvent("beatgaler:web-library-reconciled", { detail: { beats: page.beats, accountId } }));
     const repaired = readWebPlaybackRoutingCache().routes[beatId]?.messageId || null;
     if (!repaired || repaired === failedMessageId) { playTrace("PLAY_ROUTE_RECOVERY_FAILED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return null; }
     playTrace("PLAY_ROUTE_RECOVERED", { beat_id: beatId, failed_message_id: failedMessageId, repaired_message_id: repaired }); return repaired;
@@ -78,22 +84,25 @@ function readBooleanPreference(key: string, fallback: boolean): boolean { try { 
 function writeBooleanPreference(key: string, value: boolean): void { try { window.localStorage.setItem(key, String(value)); } catch {} }
 function unavailable(feature: string): never { throw new Error(`${feature} is not available in BeatGaler Web yet.`); }
 function isAbortError(error: unknown): boolean { return error instanceof DOMException && error.name === "AbortError" || error instanceof Error && error.name === "AbortError"; }
+function assertAccountStillActive(accountId: string | null): void {
+  if (accountId && accountId !== getActiveWebAccountId()) throw new Error("Account changed while Web work was in flight.");
+}
 const webClientId = getWebClientId();
 
 export const webAdapter: PlatformAdapter = {
   kind: "web", capabilities: WEB_FOUNDATION_CAPABILITIES, clientId: webClientId,
   library: {
-    async load() { try { const windowConsumer = await resolveWebLibraryWindow(); const requestedOffset = readRequestedWebLibraryOffset(); const page = requestedOffset > 0 ? await windowConsumer.at(requestedOffset) : await windowConsumer.currentOrFirst(); reportLibraryWindow(page, requestedOffset > 0 ? "cursor" : "load"); return page.beats; } catch (error) { console.error("[web/library] authoritative load failed", error); throw new Error("Galer Cloud could not load your library. Please retry."); } },
-    async loadOffline() { return []; }, async restoreAuthoritative() { const windowConsumer = await resolveWebLibraryWindow(); const page = await windowConsumer.refresh(); reportLibraryWindow(page, "refresh"); }, async commitSnapshot() { return unavailable("Galer Cloud library writes"); }, async flushOfflineTrashIntents() { return 0; },
+    async load() { const accountId = getActiveWebAccountId(); try { const windowConsumer = await resolveWebLibraryWindow(); const requestedOffset = readRequestedWebLibraryOffset(); const page = requestedOffset > 0 ? await windowConsumer.at(requestedOffset) : await windowConsumer.currentOrFirst(); assertAccountStillActive(accountId); reportLibraryWindow(page, requestedOffset > 0 ? "cursor" : "load"); return page.beats; } catch (error) { console.error("[web/library] authoritative load failed", error); throw new Error("Galer Cloud could not load your library. Please retry."); } },
+    async loadOffline() { return []; }, async restoreAuthoritative() { const accountId = getActiveWebAccountId(); const windowConsumer = await resolveWebLibraryWindow(); const page = await windowConsumer.refresh(); assertAccountStillActive(accountId); reportLibraryWindow(page, "refresh"); }, async commitSnapshot() { return unavailable("Galer Cloud library writes"); }, async flushOfflineTrashIntents() { return 0; },
   },
   preferences: {
     async load() { return { beats_folder: null, incomplete_warnings_enabled: readBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, true), custom_cursor_enabled: readBooleanPreference(WEB_CUSTOM_CURSOR_KEY, true), beatgaler_user_id: webClientId, telegram_cloud_connected: true, telegram_cloud_username: null }; },
     async setIncompleteWarnings(enabled) { writeBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, enabled); }, async setCustomCursor(enabled) { writeBooleanPreference(WEB_CUSTOM_CURSOR_KEY, enabled); },
   },
   trash: {
-    async moveBeats(ids) { const transport = await resolveWebCloudTransport(); const moved = await transport.moveBeatsToTrash(ids, webClientId); forgetWebBeats(moved); return moved; },
+    async moveBeats(ids) { const accountId = getActiveWebAccountId(); const transport = await resolveWebCloudTransport(); const moved = await transport.moveBeatsToTrash(ids, webClientId); assertAccountStillActive(accountId); forgetWebBeats(moved); return moved; },
     async listBeats() { return (await resolveWebCloudTransport()).listTrashItems(); },
-    async restoreBeat(id) { const transport = await resolveWebCloudTransport(); const restored = await transport.restoreBeatFromTrash(id, webClientId); upsertPlaybackRouteFromBeat(restored); rememberWebBeats([restored]); return restored; },
+    async restoreBeat(id) { const accountId = getActiveWebAccountId(); const transport = await resolveWebCloudTransport(); const restored = await transport.restoreBeatFromTrash(id, webClientId); assertAccountStillActive(accountId); upsertPlaybackRouteFromBeat(restored); rememberWebBeats([restored]); return restored; },
     async purgeBeats() { return (await resolveWebCloudTransport()).purgeTrash(webClientId); }, async listPresets() { return []; }, async restorePreset(id) { void id; return unavailable("Preset restore"); }, async purgePresets() { return unavailable("Preset deletion"); },
   },
   playbackCache: { async status() { return webPlaybackSources?.cacheStatus() ?? { used_bytes: 0, limit_mb: 100 }; }, async setLimitMb(limitMb) { if (!webPlaybackSources) return { used_bytes: 0, limit_mb: Math.max(0, Math.round(limitMb)) }; return webPlaybackSources.setCacheLimitMb(limitMb); }, async clear() { return webPlaybackSources?.clearCache() ?? { used_bytes: 0, limit_mb: 100 }; } },
@@ -155,7 +164,7 @@ export const webAdapter: PlatformAdapter = {
       if (beat.playback_path.startsWith("blob:")) { playTrace("ADAPTER_LOCAL_BLOB", { beat_id: beat.id, intent_id: intent.id }); rememberPreparedWebPlaybackUrl(beat.playback_path, intent); return { url: beat.playback_path, completed: Promise.resolve() }; }
       throw new Error("This MASTER must be migrated before it can play on Web.");
     },
-    async loadArtwork(beat) { const artwork = beat.assets?.artwork; const messageId = directMessageId(artwork?.object_id); if (!messageId) return null; const [result] = await (await resolveWebCloudTransport()).downloadFiles([{ messageId, mimeType: artwork?.mime_type || "image/jpeg", purpose: "artwork" }]); return result?.dataUrl ?? null; },
+    async loadArtwork(beat) { const accountId = getActiveWebAccountId(); const artwork = beat.assets?.artwork; const messageId = directMessageId(artwork?.object_id); if (!messageId || !accountId) return null; const [result] = await (await resolveWebCloudTransport()).downloadFiles([{ messageId, mimeType: artwork?.mime_type || "image/jpeg", purpose: "artwork" }]); return accountId === getActiveWebAccountId() ? result?.dataUrl ?? null : null; },
     releasePlayback(beatId) { invalidateWebPlaybackIntentForBeat(beatId); webPlaybackSources?.release(beatId); },
   },
   events: { async listen<T>(event: string, handler: PlatformEventHandler<T>): Promise<PlatformUnlisten> { const listener = (message: Event) => handler((message as CustomEvent<T>).detail); window.addEventListener(event, listener); return () => window.removeEventListener(event, listener); } },
@@ -164,10 +173,10 @@ export const webAdapter: PlatformAdapter = {
   cloud: { async status() { const reachable = typeof navigator === "undefined" || navigator.onLine !== false; return { connected: true, reachable, username: null }; } },
   cloudData: {
     async upload(input, onProgress) { return (await resolveWebCloudTransport()).upload(input, onProgress); },
-    async commitImportedBeat(beat, onProgress) { const slots = await waitForWebImportFiles(beat.id); const master = slots.MASTER; if (!master) throw new Error("Add a MASTER MP3 before saving this beat."); const transport = await resolveWebCloudTransport(); try { const committed = await transport.commitImportedBeat(beat, { master, wav: slots.WAV, project: slots.PROJECT }, webClientId, onProgress); upsertPlaybackRouteFromBeat(committed); rememberWebBeats([committed]); webImportPort.releaseBeat(beat.id); return committed; } catch (error) { console.error("[web/import] durable commit failed", error); const message = error instanceof Error ? error.message : String(error); if (message.includes("changed on another device") || message.includes("Beat quota exceeded") || message.includes("PROJECT")) throw new Error(message); throw new Error("Galer Cloud could not save this beat. Your file is still available for retry."); } },
+    async commitImportedBeat(beat, onProgress) { const accountId = getActiveWebAccountId(); const slots = await waitForWebImportFiles(beat.id); const master = slots.MASTER; if (!master) throw new Error("Add a MASTER MP3 before saving this beat."); const transport = await resolveWebCloudTransport(); try { const committed = await transport.commitImportedBeat(beat, { master, wav: slots.WAV, project: slots.PROJECT }, webClientId, onProgress); assertAccountStillActive(accountId); upsertPlaybackRouteFromBeat(committed); rememberWebBeats([committed]); webImportPort.releaseBeat(beat.id); return committed; } catch (error) { console.error("[web/import] durable commit failed", error); const message = error instanceof Error ? error.message : String(error); if (message.includes("changed on another device") || message.includes("Beat quota exceeded") || message.includes("PROJECT")) throw new Error(message); throw new Error("Galer Cloud could not save this beat. Your file is still available for retry."); } },
     async disconnect() { invalidateAllWebPlaybackIntents(); playbackRouteRecoveries.clear(); resetVisiblePlaybackPrefetch(); webPlaybackSources?.releaseAll(); webPlaybackSources = null; webDownloads?.cancelAll(); webDownloads = null; webLibraryWindow = null; clearWebLibraryNavigationState(); const module = await import("../features/playback/webStartupPlaybackCoordinator"); await module.disconnectWebStartupPlaybackCoordinator(); webCoordinator = null; webCloudTransport = null; },
   },
   downloads: { start(beat, kind, onProgress) { return resolveWebDownloads().start(beat, kind, onProgress); }, cancelAll() { webDownloads?.cancelAll(); } },
-  editor: { pickFile: pickWebSlotFile, async commit(original, updated, files, onProgress) { const transport = await resolveWebCloudTransport(); try { const committed = await transport.commitBeatEdit(original, updated, files, webClientId, onProgress); upsertPlaybackRouteFromBeat(committed); rememberWebBeats([committed]); return committed; } catch (error) { console.error("[web/edit] durable commit failed", error); const message = error instanceof Error ? error.message : String(error); if (message.includes("changed on another device") || message.includes("no longer in your")) throw new Error(message); throw new Error("Galer Cloud could not save these changes. Your selections are still available for retry."); } } },
+  editor: { pickFile: pickWebSlotFile, async commit(original, updated, files, onProgress) { const accountId = getActiveWebAccountId(); const transport = await resolveWebCloudTransport(); try { const committed = await transport.commitBeatEdit(original, updated, files, webClientId, onProgress); assertAccountStillActive(accountId); upsertPlaybackRouteFromBeat(committed); rememberWebBeats([committed]); return committed; } catch (error) { console.error("[web/edit] durable commit failed", error); const message = error instanceof Error ? error.message : String(error); if (message.includes("changed on another device") || message.includes("no longer in your")) throw new Error(message); throw new Error("Galer Cloud could not save these changes. Your selections are still available for retry."); } } },
   cloudAuth: { async syncSession() { prewarmAuthenticatedWebTransport(); } }, diagnostics: { reviewPerformance() {}, async audioEvent() {} }, importer: webImportPort,
 };

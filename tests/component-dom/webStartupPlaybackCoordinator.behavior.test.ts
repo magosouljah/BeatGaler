@@ -29,7 +29,7 @@ const harness = vi.hoisted(() => {
     streamFile = vi.fn();
     disconnect = vi.fn(async () => {});
 
-    constructor(candidates: Candidate[]) {
+    constructor(candidates: Candidate[] = []) {
       this.candidates = candidates;
       transports.push(this);
     }
@@ -67,6 +67,9 @@ vi.mock("../../src/features/playback/webPlaybackSource", () => ({
 import { WebStartupPlaybackCoordinator } from "../../src/features/playback/webStartupPlaybackCoordinator";
 import { updatePlaybackRoutingCacheFromManifest, updatePlaybackRoutingSort } from "../../src/features/playback/webPlaybackRoutingCache";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../../src/features/cloud/webTransportEvents";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
+import { saveCachedBeats } from "../../src/features/library/libraryPresentationCache";
+import type { Beat } from "../../src/types";
 
 function manifestBeat(index: number) {
   return {
@@ -82,8 +85,13 @@ function manifestBeat(index: number) {
   };
 }
 
+function sourceCandidateIds(source: { prefetch: ReturnType<typeof vi.fn> }): number[] {
+  return source.prefetch.mock.calls.map(call => Number(call[1]));
+}
+
 describe("WebStartupPlaybackCoordinator behavior", () => {
   beforeEach(() => {
+    setActiveWebAccountId("user-A");
     localStorage.clear();
     harness.transports.length = 0;
     harness.sources.length = 0;
@@ -93,6 +101,7 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
   });
 
   afterEach(() => {
+    setActiveWebAccountId(null);
     vi.restoreAllMocks();
   });
 
@@ -130,6 +139,35 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
     coordinator.dispose();
   });
 
+  it("never prefetches A's route for empty B and reuses A's owned cache after return", async () => {
+    saveCachedBeats([{ id: "beat-1", name: "A beat", telegram_message_id: 1001, tags: [], other_files: [] } as unknown as Beat]);
+    updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(1)], deleted: [], trash: [] });
+    harness.deferred(1001).resolve();
+    const firstA = new WebStartupPlaybackCoordinator();
+    await firstA.start();
+    expect(sourceCandidateIds(harness.sources[0])).toEqual([1001]);
+    firstA.dispose();
+
+    // Simulate logout and a B key polluted with A's otherwise valid entries.
+    setActiveWebAccountId(null);
+    const aLibrary = localStorage.getItem("beatvault:library:v2:user-A")!;
+    const aRouting = localStorage.getItem("beatgaler:web-playback-routing:v2:user-A")!;
+    setActiveWebAccountId("user-B");
+    localStorage.setItem("beatvault:library:v2:user-B", aLibrary);
+    localStorage.setItem("beatgaler:web-playback-routing:v2:user-B", aRouting);
+    const emptyB = new WebStartupPlaybackCoordinator();
+    await emptyB.start();
+    expect(sourceCandidateIds(harness.sources[1])).toEqual([]);
+    emptyB.dispose();
+
+    setActiveWebAccountId(null);
+    setActiveWebAccountId("user-A");
+    const returnedA = new WebStartupPlaybackCoordinator();
+    await returnedA.start();
+    expect(sourceCandidateIds(harness.sources[2])).toEqual([1001]);
+    returnedA.dispose();
+  });
+
   it("captures fourteen local candidates once but opens INDEX as soon as Direct is connected", async () => {
     localStorage.setItem("beatvault:sort:v2", "manual");
     updatePlaybackRoutingCacheFromManifest({
@@ -144,16 +182,14 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
     const transport = harness.transports[0];
     const source = harness.sources[0];
 
-    expect(transport.candidates).toHaveLength(14);
-    expect(transport.candidates.map((candidate: any) => candidate.messageId)).toEqual(
-      Array.from({ length: 14 }, (_, index) => 1001 + index),
-    );
+    expect(transport.candidates).toEqual([]);
 
     const startup = coordinator.start();
     let startupSettled = false;
     void startup.then(() => { startupSettled = true; });
 
     await vi.waitFor(() => expect(source.prefetch).toHaveBeenCalledTimes(14));
+    expect(source.prefetch.mock.calls.map((call: any[]) => call[1])).toEqual(Array.from({ length: 14 }, (_, index) => 1001 + index));
     await expect(coordinator.waitUntilIndexAllowed()).resolves.toBeUndefined();
     expect(startupSettled).toBe(false);
     expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce();
@@ -177,7 +213,45 @@ describe("WebStartupPlaybackCoordinator behavior", () => {
     await expect(coordinator.start()).rejects.toThrow("temporary transport failure");
     await expect(coordinator.start()).resolves.toBeUndefined();
     expect(transport.connectPlaybackDataPlane).toHaveBeenCalledTimes(2);
-    expect(transport.candidates.map((candidate: any) => candidate.messageId)).toEqual([1001]);
+    expect(sourceCandidateIds(harness.sources[0])).toEqual([1001]);
+    coordinator.dispose();
+  });
+
+  it("connects before identity and warms only confirmed account routes without a second connection", async () => {
+    setActiveWebAccountId("user-A");
+    updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(1)], trash: [], deleted: [] });
+    setActiveWebAccountId(null);
+    const coordinator = new WebStartupPlaybackCoordinator();
+    const transport = harness.transports[0];
+    const source = harness.sources[0];
+    await coordinator.prepareConnection();
+    expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce();
+    expect(source.prefetch).not.toHaveBeenCalled();
+
+    setActiveWebAccountId("user-A");
+    harness.deferred(1001).resolve();
+    await coordinator.start();
+    expect(sourceCandidateIds(source)).toEqual([1001]);
+    expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce();
+    coordinator.dispose();
+  });
+
+  it("does not prefetch A media when its connection finishes after switching to B", async () => {
+    updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(1)], trash: [], deleted: [] });
+    const coordinator = new WebStartupPlaybackCoordinator();
+    const transport = harness.transports[0];
+    const source = harness.sources[0];
+    let finishConnection!: () => void;
+    transport.connectPlaybackDataPlane.mockImplementationOnce(() => new Promise<void>(resolve => { finishConnection = resolve; }));
+
+    const startup = coordinator.start();
+    await vi.waitFor(() => expect(transport.connectPlaybackDataPlane).toHaveBeenCalledOnce());
+    setActiveWebAccountId(null);
+    setActiveWebAccountId("user-B");
+    finishConnection();
+
+    await expect(startup).rejects.toThrow("Account changed before playback prefetch.");
+    expect(source.prefetch).not.toHaveBeenCalled();
     coordinator.dispose();
   });
 

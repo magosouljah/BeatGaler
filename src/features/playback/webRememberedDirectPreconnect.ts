@@ -24,14 +24,24 @@ export function preconnectRememberedWebDirect(): void {
   }
 
   playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
-  // getWebStartupPlaybackCoordinator() and start() are invoked synchronously by
-  // the entrypoint. Network completion remains fire-and-forget so React render
-  // never waits for Direct.
+  playTrace("PREFETCH_START", { phase: "transport" });
+  // The cookie may establish a Direct session, but no local beat or route is
+  // selected until /auth/session confirms user.id.
   const coordinator = getWebStartupPlaybackCoordinator();
-  const startup = coordinator.start();
+  const startup = coordinator.prepareConnection();
   playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
   void startup.catch(error => playTrace("DIRECT_REMEMBERED_PRECONNECT_DEFERRED", {
     reason: "dispatch_failed",
+    error_name: error instanceof Error ? error.name : "unknown",
+  }));
+}
+
+/** Prepare the client and API origin while /auth/login establishes its cookie. */
+export function prepareWebDirectForSignIn(): void {
+  if (typeof window === "undefined" || Boolean((window as any).__TAURI_INTERNALS__)) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  playTrace("DIRECT_SIGN_IN_PRECONNECT_BEGIN");
+  void getWebStartupPlaybackCoordinator().prepareSignIn().catch(error => playTrace("DIRECT_SIGN_IN_PRECONNECT_DEFERRED", {
     error_name: error instanceof Error ? error.name : "unknown",
   }));
 }

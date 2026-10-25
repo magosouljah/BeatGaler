@@ -189,7 +189,7 @@ describe("App migration characterization contracts", () => {
       "if (authoritativeBeatIds === null)",
       "const response = await fetchImpl(`${cloudApiBase}/beats/delete-topic`",
       "await purgeLocal(item.beatId, item.stagingPaths)",
-      "writeActiveCloudUploads(remaining)",
+      "writeActiveCloudUploads(remaining, accountId)",
     ]);
     expect(interruptedUploadJournal).toContain("remaining.push(item)");
     expect(startupBootstrap).toContain("rollbackInterruptedCloudUploads({");

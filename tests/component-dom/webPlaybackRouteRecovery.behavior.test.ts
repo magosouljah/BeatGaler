@@ -127,6 +127,7 @@ function routeError(code: string): Error & { code: string } {
 describe("Web stale playback route recovery", () => {
   beforeEach(async () => {
     vi.resetModules();
+    (await import("../../src/features/auth/activeWebAccount")).setActiveWebAccountId("user-A");
     localStorage.clear();
     harness.prepare.mockReset();
     harness.prefetch.mockClear();
@@ -136,6 +137,7 @@ describe("Web stale playback route recovery", () => {
   });
 
   afterEach(() => {
+    // resetModules in the next test creates a fresh in-memory account authority.
     localStorage.clear();
   });
 

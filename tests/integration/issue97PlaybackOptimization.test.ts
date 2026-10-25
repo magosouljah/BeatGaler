@@ -23,7 +23,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
   it("persists an all-beat playback routing cache plus at most fourteen startup routes", () => {
     const routing = source("src/features/playback/webPlaybackRoutingCache.ts");
 
-    expect(routing).toContain('WEB_PLAYBACK_ROUTING_CACHE_KEY = "beatgaler:web-playback-routing:v1"');
+    expect(routing).toContain('WEB_PLAYBACK_ROUTING_CACHE_PREFIX = "beatgaler:web-playback-routing:v2:"');
     expect(routing).toContain("WEB_STARTUP_PLAYBACK_ROUTE_LIMIT = 14");
     expect(routing).toContain('type WebPlaybackSort = "rating" | "manual" | "bpm" | "name"');
     expect(routing).toContain("routes: Record<string, CachedPlaybackRoute>");
@@ -96,7 +96,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
     const coordinatorAcquire = rememberedPreconnect.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
-    const coordinatorStart = rememberedPreconnect.indexOf("const startup = coordinator.start();", coordinatorAcquire);
+    const coordinatorStart = rememberedPreconnect.indexOf("const startup = coordinator.prepareConnection();", coordinatorAcquire);
     const dispatched = rememberedPreconnect.indexOf('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")', coordinatorStart);
     expect(coordinatorAcquire).toBeGreaterThanOrEqual(0);
     expect(coordinatorStart).toBeGreaterThan(coordinatorAcquire);

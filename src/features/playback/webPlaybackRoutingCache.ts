@@ -1,6 +1,8 @@
 import type { Beat } from "../../types";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
+import { traceCacheOwner } from "../auth/cacheOwnerTrace";
 
-export const WEB_PLAYBACK_ROUTING_CACHE_KEY = "beatgaler:web-playback-routing:v1";
+export const WEB_PLAYBACK_ROUTING_CACHE_PREFIX = "beatgaler:web-playback-routing:v2:";
 export const WEB_STARTUP_PLAYBACK_ROUTE_LIMIT = 14;
 const PRESENTATION_SORT_CACHE_KEY = "beatvault:sort:v2";
 
@@ -47,6 +49,12 @@ type JsonRecord = Record<string, unknown>;
 
 let lastAuthoritativeManifestFingerprint: string | null = null;
 let lastAuthoritativeCache: WebPlaybackRoutingCacheV1 | null = null;
+let lastAuthoritativeUserId: string | null = null;
+
+function scopedRoutingKey(): string | null {
+  const userId = getActiveWebAccountId();
+  return userId ? `${WEB_PLAYBACK_ROUTING_CACHE_PREFIX}${encodeURIComponent(userId)}` : null;
+}
 
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -157,12 +165,24 @@ function normalizedSuspects(value: unknown): Record<string, CachedPlaybackRouteS
 
 export function readWebPlaybackRoutingCache(): WebPlaybackRoutingCacheV1 {
   const storage = browserStorage();
-  if (!storage) return emptyCache();
+  const confirmedUserId = getActiveWebAccountId();
+  const key = scopedRoutingKey();
+  if (!storage || !key) return emptyCache();
   try {
-    const raw = storage.getItem(WEB_PLAYBACK_ROUTING_CACHE_KEY);
-    if (!raw) return emptyCache();
+    const raw = storage.getItem(key);
+    if (!raw) {
+      traceCacheOwner("CACHE_OWNER_READ", "playback_routing", null, confirmedUserId, "missing");
+      return emptyCache();
+    }
     const parsed = record(JSON.parse(raw));
-    if (!parsed || Number(parsed.version) !== 1) return emptyCache();
+    const ownerUserId = text(parsed?.owner_user_id) || null;
+    traceCacheOwner("CACHE_OWNER_READ", "playback_routing", ownerUserId, confirmedUserId);
+    if (!parsed || ownerUserId !== confirmedUserId || Number(parsed.version) !== 1) {
+      traceCacheOwner("CACHE_OWNER_REJECT", "playback_routing", ownerUserId, confirmedUserId,
+        ownerUserId === null ? "unowned" : "owner_mismatch_or_invalid");
+      return emptyCache();
+    }
+    traceCacheOwner("CACHE_OWNER_ACCEPT", "playback_routing", ownerUserId, confirmedUserId);
     const routes: Record<string, CachedPlaybackRoute> = {};
     const rawRoutes = record(parsed.routes) || {};
     for (const [beatId, value] of Object.entries(rawRoutes)) {
@@ -192,16 +212,20 @@ export function readWebPlaybackRoutingCache(): WebPlaybackRoutingCacheV1 {
       suspect: normalizedSuspects(parsed.suspect),
     };
   } catch {
+    traceCacheOwner("CACHE_OWNER_REJECT", "playback_routing", null, getActiveWebAccountId(), "unavailable_or_invalid");
     return emptyCache();
   }
 }
 
 export function writeWebPlaybackRoutingCache(cache: WebPlaybackRoutingCacheV1): void {
   const storage = browserStorage();
-  if (!storage) return;
+  const confirmedUserId = getActiveWebAccountId();
+  const key = scopedRoutingKey();
+  if (!storage || !key || !confirmedUserId) return;
   try {
-    storage.setItem(WEB_PLAYBACK_ROUTING_CACHE_KEY, JSON.stringify({
+    storage.setItem(key, JSON.stringify({
       version: 1,
+      owner_user_id: confirmedUserId,
       routes: cache.routes,
       startup: cache.startup.slice(0, WEB_STARTUP_PLAYBACK_ROUTE_LIMIT),
       sortBy: normalizeSort(cache.sortBy),
@@ -209,7 +233,7 @@ export function writeWebPlaybackRoutingCache(cache: WebPlaybackRoutingCacheV1): 
       authoritative: cache.authoritative === true,
       order: cache.order || [],
       suspect: cache.suspect || {},
-    } satisfies WebPlaybackRoutingCacheV1));
+    }));
   } catch {}
 }
 
@@ -362,10 +386,11 @@ function manifestRoutingFingerprint(manifest: JsonRecord): string {
 
 function hasPersistedPlaybackRoutingCache(): boolean {
   const storage = browserStorage();
-  if (!storage) return false;
+  const key = scopedRoutingKey();
+  if (!storage || !key) return false;
   try {
     for (let index = 0; index < storage.length; index += 1) {
-      if (storage.key(index) === WEB_PLAYBACK_ROUTING_CACHE_KEY) return true;
+      if (storage.key(index) === key) return true;
     }
   } catch {}
   return false;
@@ -373,11 +398,13 @@ function hasPersistedPlaybackRoutingCache(): boolean {
 
 export function updatePlaybackRoutingCacheFromManifest(value: unknown): WebPlaybackRoutingCacheV1 {
   const manifest = record(value);
-  if (!manifest) return readWebPlaybackRoutingCache();
+  const userId = getActiveWebAccountId();
+  if (!manifest || !userId) return readWebPlaybackRoutingCache();
 
   const fingerprint = manifestRoutingFingerprint(manifest);
   if (
     fingerprint === lastAuthoritativeManifestFingerprint
+    && userId === lastAuthoritativeUserId
     && lastAuthoritativeCache
     && hasPersistedPlaybackRoutingCache()
   ) {
@@ -408,6 +435,7 @@ export function updatePlaybackRoutingCacheFromManifest(value: unknown): WebPlayb
   writeWebPlaybackRoutingCache(cache);
   lastAuthoritativeManifestFingerprint = fingerprint;
   lastAuthoritativeCache = cache;
+  lastAuthoritativeUserId = userId;
   return cache;
 }
 
@@ -522,7 +550,7 @@ export function updatePlaybackRoutingStartupFromBeats(
 
   cache.updatedAt = Date.now();
   writeWebPlaybackRoutingCache(cache);
-  if (cache.authoritative && lastAuthoritativeManifestFingerprint) lastAuthoritativeCache = cache;
+  if (cache.authoritative && lastAuthoritativeManifestFingerprint && lastAuthoritativeUserId === getActiveWebAccountId()) lastAuthoritativeCache = cache;
   return cache;
 }
 
@@ -534,7 +562,7 @@ export function updatePlaybackRoutingSort(sortBy: WebPlaybackSort, beats?: reado
     cache.startup = startupFromOrder(cache.order || [], cache.routes, normalized, cache.suspect || {});
     cache.updatedAt = Date.now();
     writeWebPlaybackRoutingCache(cache);
-    if (lastAuthoritativeManifestFingerprint) lastAuthoritativeCache = cache;
+    if (lastAuthoritativeManifestFingerprint && lastAuthoritativeUserId === getActiveWebAccountId()) lastAuthoritativeCache = cache;
     return;
   }
   if (beats) {

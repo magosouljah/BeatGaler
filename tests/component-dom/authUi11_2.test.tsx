@@ -207,15 +207,14 @@ describe("F2 11.2 complete Auth UI", () => {
     host.remove();
   });
 
-  it("keeps a remembered local shell visible when auth restore is transiently offline", async () => {
+  it("keeps private content hidden when remembered-session restore is offline", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     localStorage.setItem("beatgaler:web-session-present:v1", "1");
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("network unavailable"); }));
 
     const { host, root } = await renderGate();
-    expect(host.querySelector('[data-testid="app"]')?.textContent).toBe("Authenticated application");
-    expect(host.querySelector("#beatgaler-auth-title")).toBeNull();
-    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[data-testid="app"]')).toBeNull();
+    expect(host.querySelector(".bg-auth-shell")).not.toBeNull();
 
     await act(async () => root.unmount());
     host.remove();

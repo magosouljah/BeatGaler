@@ -1,5 +1,6 @@
 import { playTrace, playTraceSpan } from "../playback/playTrace";
 import React, { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   getBeatGalerInstallationId,
   loginBeatGalerAccount,
@@ -15,7 +16,7 @@ import {
 import { UiButton, UiFeedback, UiField, UiSpinner } from "../../components/ui/DesignPrimitives";
 import { sanitizeUserVisibleText } from "../../lib/userVisibleError";
 import { platform } from "../../platform";
-import { hasRememberedWebSessionMarker } from "./webSessionBootstrap";
+import { getWebAccountGeneration, setActiveWebAccountId } from "./activeWebAccount";
 import { formatSignupVerificationCode } from "./signupVerificationCode";
 
 const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
@@ -66,12 +67,16 @@ async function publicAuthRequest(path: string, body: Record<string, unknown>) {
 }
 
 async function storeWebCookieSession(result: any): Promise<BeatGalerAccount> {
+  const user = result?.user as BeatGalerAccount;
+  if (!user?.id) throw new Error("Cloud did not confirm an account identity.");
+  setActiveWebAccountId(user.id);
+  const confirmedGeneration = getWebAccountGeneration();
   localStorage.removeItem(TOKEN_KEY);
   localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
   if (result?.csrf_token) sessionStorage.setItem(CSRF_KEY, String(result.csrf_token));
   const base = await resolveBeatGalerCloudApi();
   await platform.cloudAuth.syncSession(null, base);
-  const user = result?.user as BeatGalerAccount;
+  if (confirmedGeneration !== getWebAccountGeneration()) throw new Error("Sign-in was cancelled by an account change.");
   window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: user }));
   return user;
 }
@@ -90,13 +95,7 @@ async function startWebOAuth(provider: OAuthProvider) {
 
 export default function AuthExperienceGate({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<BeatGalerAccount | null>(null);
-  // Product policy for Situation 2: a remembered browser session may reveal the
-  // local presentation cache immediately. Cloud authority still resolves in the
-  // background and can revoke this optimistic shell if the cookie session is no
-  // longer valid.
-  const [optimisticRememberedSession, setOptimisticRememberedSession] = useState(
-    () => platform.kind === "web" && hasRememberedWebSessionMarker(),
-  );
+  const authRunRef = useRef(0);
   const [checking, setChecking] = useState(platform.kind === "web");
   const [phase, setPhase] = useState<Phase>("login");
   const [busy, setBusy] = useState(false);
@@ -125,18 +124,19 @@ export default function AuthExperienceGate({ children }: { children: React.React
   useEffect(() => {
     if (platform.kind !== "web") return;
     let cancelled = false;
+    const run = ++authRunRef.current;
+    playTrace("AUTH_SESSION_START");
     const endRestore = playTraceSpan("AUTH_RESTORE");
     void restoreBeatGalerSession()
       .then(value => {
         endRestore("done", { auth_session: value ? "restored" : "signed_out", cancelled });
-        if (!cancelled) {
+        if (!cancelled && run === authRunRef.current) {
           setAccount(value);
-          if (!value) setOptimisticRememberedSession(false);
         }
       })
       .catch(errorValue => {
         endRestore("error", { auth_session: "unknown", cancelled });
-        if (cancelled) return;
+        if (cancelled || run !== authRunRef.current) return;
         const code = String((errorValue as { code?: string })?.code || "");
         if (["CLOUD_OFFLINE", "CLOUD_UNREACHABLE", "CLOUD_TIMEOUT"].includes(code)) {
           setPhase("offline");
@@ -145,7 +145,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
           setError(humanError(errorValue));
         }
       })
-      .finally(() => { if (!cancelled) setChecking(false); });
+      .finally(() => { if (!cancelled && run === authRunRef.current) setChecking(false); });
     return () => { cancelled = true; };
   }, []);
 
@@ -164,20 +164,11 @@ export default function AuthExperienceGate({ children }: { children: React.React
   }, [checking, account, phase]);
 
   useEffect(() => {
-    if (platform.kind === "web" && optimisticRememberedSession && !account) {
-      playTrace("AUTH_CACHE_REVEAL_OPTIMISTIC");
-    }
-  }, [optimisticRememberedSession, account]);
-
-  useEffect(() => {
-    if (platform.kind === "web" && account) playTrace("AUTH_SESSION_CONFIRMED");
-  }, [account]);
-
-  useEffect(() => {
     if (platform.kind !== "web") return;
     const handleLoggedOut = () => {
-      setAccount(null);
-      setOptimisticRememberedSession(false);
+      authRunRef.current += 1;
+      setActiveWebAccountId(null);
+      flushSync(() => setAccount(null));
       setChecking(false);
       setPhase("login");
       setBusy(false);
@@ -188,8 +179,20 @@ export default function AuthExperienceGate({ children }: { children: React.React
       setMfaCode("");
       setUseRecoveryCode(false);
     };
+    const handleUpdated = (event: Event) => {
+      const user = (event as CustomEvent<BeatGalerAccount>).detail;
+      if (!user?.id) return;
+      authRunRef.current += 1;
+      setActiveWebAccountId(user.id);
+      setAccount(user);
+      setChecking(false);
+    };
     window.addEventListener("beatgaler:account-logged-out", handleLoggedOut);
-    return () => window.removeEventListener("beatgaler:account-logged-out", handleLoggedOut);
+    window.addEventListener("beatgaler:account-updated", handleUpdated);
+    return () => {
+      window.removeEventListener("beatgaler:account-logged-out", handleLoggedOut);
+      window.removeEventListener("beatgaler:account-updated", handleUpdated);
+    };
   }, []);
 
   useEffect(() => {
@@ -216,7 +219,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
   }, [phase]);
 
   if (platform.kind !== "web") return <>{children}</>;
-  if (account || optimisticRememberedSession) return <>{children}</>;
+  if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;
   if (checking) return <main className="bg-auth-shell" aria-busy="true"><div className="bg-auth-card bg-auth-card--loading"><UiSpinner label="Loading account"/><span>Loading your account…</span></div></main>;
 
   const go = (next: Phase) => {
@@ -229,6 +232,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy) return;
+    playTrace("AUTH_SESSION_START", { flow: "login" });
     setBusy(true); setError(null); setNotice(null);
     try {
       const user = await loginBeatGalerAccount(identifier, password, "");
@@ -247,6 +251,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
   const handleMfa = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy) return;
+    playTrace("AUTH_SESSION_START", { flow: "mfa" });
     setBusy(true); setError(null);
     try {
       const user = await loginBeatGalerAccount(identifier, password, mfaCode.trim());
@@ -424,7 +429,6 @@ export default function AuthExperienceGate({ children }: { children: React.React
       const restored = await restoreBeatGalerSession();
       if (restored) setAccount(restored);
       else {
-        setOptimisticRememberedSession(false);
         setPhase("login");
       }
     } catch (errorValue) {

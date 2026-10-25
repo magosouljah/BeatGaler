@@ -3,6 +3,7 @@ import type { BeatAssets, GalerCloudObjectRef } from "../../domain/beat";
 import { ensureWebLibraryIndex, isMissingWebLibraryIndexError, isWebLibraryPinRecoveryUnavailable, type WebLibraryBootstrapResult } from "../cloud/webLibraryBootstrap";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
 import { playTrace } from "../playback/playTrace";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
 
 export interface WebTransportDownloadInput { messageId: number; mimeType?: string | null; }
 export interface WebTransportDownloadResult { messageId: number; dataUrl: string; }
@@ -266,8 +267,10 @@ export async function loadWebLibraryPage(
 ): Promise<WebLibraryPage> {
   const now = options.now || (() => typeof performance !== "undefined" ? performance.now() : Date.now());
   const startedAt = now();
+  const accountId = getActiveWebAccountId();
   try {
     const index = await getOrBootstrapLibraryIndex(transport);
+    if (accountId && accountId !== getActiveWebAccountId()) throw new Error("Account changed during library load.");
     playTrace("WEB_LIBRARY_GET_INDEX_RECEIVED");
     const processStartedAt = now();
     playTrace("WEB_LIBRARY_INDEX_PROCESS_BEGIN");

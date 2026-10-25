@@ -1,6 +1,15 @@
 import type { Beat } from "../../types";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
 
 const INTERRUPTED_UPLOADS_KEY = "beatgaler:active-cloud-uploads:v1";
+const WEB_INTERRUPTED_UPLOADS_PREFIX = "beatgaler:active-cloud-uploads:v2:";
+
+function uploadJournalKey(accountId = getActiveWebAccountId()): string | null {
+  if (typeof window !== "undefined" && !(window as any).__TAURI_INTERNALS__) {
+    return accountId ? `${WEB_INTERRUPTED_UPLOADS_PREFIX}${encodeURIComponent(accountId)}` : null;
+  }
+  return INTERRUPTED_UPLOADS_KEY;
+}
 
 export type ActiveCloudUpload = {
   beatId: string;
@@ -25,9 +34,11 @@ function activeUploadStagingPaths(beat: Beat): string[] {
   ].filter((value): value is string => !!value);
 }
 
-export function readActiveCloudUploads(): ActiveCloudUpload[] {
+export function readActiveCloudUploads(accountId?: string | null): ActiveCloudUpload[] {
   try {
-    const raw = localStorage.getItem(INTERRUPTED_UPLOADS_KEY);
+    const key = uploadJournalKey(accountId);
+    if (!key) return [];
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter(item => item?.beatId && item?.beatName) : [];
@@ -36,21 +47,25 @@ export function readActiveCloudUploads(): ActiveCloudUpload[] {
   }
 }
 
-export function writeActiveCloudUploads(items: ActiveCloudUpload[]): void {
+export function writeActiveCloudUploads(items: ActiveCloudUpload[], accountId?: string | null): void {
   try {
-    if (items.length === 0) localStorage.removeItem(INTERRUPTED_UPLOADS_KEY);
-    else localStorage.setItem(INTERRUPTED_UPLOADS_KEY, JSON.stringify(items));
+    const key = uploadJournalKey(accountId);
+    if (!key) return;
+    if (items.length === 0) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(items));
   } catch {}
 }
 
 export function markCloudUploadActive(beat: Beat): void {
-  const current = readActiveCloudUploads().filter(item => item.beatId !== beat.id);
+  const accountId = getActiveWebAccountId();
+  const current = readActiveCloudUploads(accountId).filter(item => item.beatId !== beat.id);
   current.push({ beatId: beat.id, beatName: beat.name, stagingPaths: activeUploadStagingPaths(beat) });
-  writeActiveCloudUploads(current);
+  writeActiveCloudUploads(current, accountId);
 }
 
 export function clearCloudUploadActive(beatId: string): void {
-  writeActiveCloudUploads(readActiveCloudUploads().filter(item => item.beatId !== beatId));
+  const accountId = getActiveWebAccountId();
+  writeActiveCloudUploads(readActiveCloudUploads(accountId).filter(item => item.beatId !== beatId), accountId);
 }
 
 export async function rollbackInterruptedCloudUploads({
@@ -61,13 +76,15 @@ export async function rollbackInterruptedCloudUploads({
   purgeLocal,
   fetchImpl = fetch,
 }: InterruptedUploadRecoveryOptions): Promise<string[]> {
-  const pending = readActiveCloudUploads();
+  const accountId = getActiveWebAccountId();
+  const pending = readActiveCloudUploads(accountId);
   if (pending.length === 0) return [];
 
   const rolledBack: string[] = [];
   const remaining: ActiveCloudUpload[] = [];
 
   for (const item of pending) {
+    if (accountId && accountId !== getActiveWebAccountId()) return rolledBack;
     // A recovery marker only proves that the process died mid-flow. The cloud
     // INDEX remains authoritative: a committed beat must never be purged.
     if (authoritativeBeatIds?.has(item.beatId)) {
@@ -96,6 +113,7 @@ export async function rollbackInterruptedCloudUploads({
         throw new Error(text || `HTTP ${response.status}`);
       }
 
+      if (accountId && accountId !== getActiveWebAccountId()) return rolledBack;
       await purgeLocal(item.beatId, item.stagingPaths);
       rolledBack.push(item.beatName);
     } catch (error) {
@@ -104,6 +122,6 @@ export async function rollbackInterruptedCloudUploads({
     }
   }
 
-  writeActiveCloudUploads(remaining);
+  writeActiveCloudUploads(remaining, accountId);
   return rolledBack;
 }

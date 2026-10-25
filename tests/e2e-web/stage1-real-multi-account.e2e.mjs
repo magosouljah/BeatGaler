@@ -2877,8 +2877,8 @@ async function runPhase2PeerPlayRace(client, account, beat) {
   const correlationId = `peer-play-${randomUUID().slice(0, 12)}`;
   await client.waitUntil(() => client.execute(beatId => {
     try {
-      return JSON.parse(localStorage.getItem("beatvault:library:v1") || "[]")
-        .some(item => item.id === beatId);
+      return Object.keys(localStorage).filter(key => key.startsWith("beatvault:library:v2:"))
+        .some(key => JSON.parse(localStorage.getItem(key) || "[]").some(item => item.id === beatId));
     } catch { return false; }
   }, beat.beat_id), {
     timeout: 10_000, interval: 100,
@@ -2902,7 +2902,7 @@ async function runPhase2PeerPlayRace(client, account, beat) {
       const diagnostic = await client.execute(() => ({
         race: window.__phase2PeerPlayRace || null,
         page_text: String(document.body?.innerText || "").slice(0, 1800),
-        cached_ids: (() => { try { return JSON.parse(localStorage.getItem("beatvault:library:v1") || "[]").map(item => item.id); } catch { return []; } })(),
+        cached_ids: (() => { try { return Object.keys(localStorage).filter(key => key.startsWith("beatvault:library:v2:")).flatMap(key => JSON.parse(localStorage.getItem(key) || "[]").map(item => item.id)); } catch { return []; } })(),
       })).catch(() => null);
       throw new Error(`Cached card did not render while session start was held: ${JSON.stringify(diagnostic)}`, { cause: error });
     }
@@ -4097,11 +4097,11 @@ async function isolationApiPost(
   }, { route, body, transportAuth });
 }
 
-async function playbackRouteSnapshot(client, beatId) {
-  return client.execute(id => {
+async function playbackRouteSnapshot(client, beatId, userId) {
+  return client.execute(({ id, userId }) => {
     try {
       const parsed = JSON.parse(
-        window.localStorage.getItem("beatgaler:web-playback-routing:v1") || "{}",
+        window.localStorage.getItem(`beatgaler:web-playback-routing:v2:${encodeURIComponent(userId)}`) || "{}",
       );
       const route = parsed?.routes?.[id] || null;
       return {
@@ -4118,7 +4118,7 @@ async function playbackRouteSnapshot(client, beatId) {
         route_present: false,
       };
     }
-  }, beatId);
+  }, { id: beatId, userId });
 }
 
 
@@ -4505,13 +4505,14 @@ async function sameProfileVisibleState(
   client,
   ownFixture,
   foreignFixture,
+  userId,
 ) {
   return client.execute(input => {
     const cards = Array.from(document.querySelectorAll("[data-beat-card-id]"));
     let routing = {};
     try {
       routing = JSON.parse(
-        window.localStorage.getItem("beatgaler:web-playback-routing:v1") || "{}",
+        window.localStorage.getItem(`beatgaler:web-playback-routing:v2:${encodeURIComponent(input.userId)}`) || "{}",
       );
     } catch {}
     const bodyText = String(document.body?.innerText || "");
@@ -4532,6 +4533,7 @@ async function sameProfileVisibleState(
     ownName: ownFixture.beat_name,
     foreignId: foreignFixture.beat_id,
     foreignName: foreignFixture.beat_name,
+    userId,
   });
 }
 
@@ -4571,8 +4573,9 @@ async function runFocusedOffensiveIsolation(
   const routeA = await playbackRouteSnapshot(
     clientA,
     isolationSecretA.beat_id,
+    runtimeA.user_id,
   );
-  const routeB = await playbackRouteSnapshot(clientB, fixtureB.beat_id);
+  const routeB = await playbackRouteSnapshot(clientB, fixtureB.beat_id, runtimeB.user_id);
 
   if (
     !routeA.authoritative ||
@@ -4982,6 +4985,7 @@ async function runFocusedOffensiveIsolation(
     clientA,
     fixtureB,
     fixtureA,
+    bOnAProfile.runtime.user_id,
   );
   assert.ok(
     bVisible.beat_ids.includes(fixtureB.beat_id),
@@ -5055,11 +5059,13 @@ async function runFocusedOffensiveIsolation(
     clientA,
     fixtureA,
     fixtureB,
+    aRestored.runtime.user_id,
   );
   const bRestoredVisible = await sameProfileVisibleState(
     clientB,
     fixtureB,
     fixtureA,
+    bRestored.runtime.user_id,
   );
   assert.equal(aVisible.foreign_name_visible, false);
   assert.equal(aVisible.foreign_route_present, false);

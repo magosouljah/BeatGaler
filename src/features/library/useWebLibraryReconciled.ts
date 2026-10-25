@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import type { Beat } from "../../types";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
 
 export const WEB_LIBRARY_RECONCILED_EVENT = "beatgaler:web-library-reconciled";
 
 export interface WebLibraryReconciledDetail {
   beats: Beat[];
+  accountId: string;
 }
 
 export function useWebLibraryReconciled(
@@ -17,7 +19,9 @@ export function useWebLibraryReconciled(
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
     const listener = (event: Event) => {
-      const beats = (event as CustomEvent<WebLibraryReconciledDetail>).detail?.beats;
+      const detail = (event as CustomEvent<WebLibraryReconciledDetail>).detail;
+      if (!detail?.accountId || detail.accountId !== getActiveWebAccountId()) return;
+      const beats = detail.beats;
       if (!Array.isArray(beats)) return;
       callbackRef.current(beats);
     };

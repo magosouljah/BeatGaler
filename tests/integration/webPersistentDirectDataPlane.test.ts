@@ -8,8 +8,9 @@ vi.mock("../../src/platform/webClientId", () => ({ getWebClientId: () => "persis
 
 import { loadWebLibrary } from "../../src/features/library/webLibrary";
 import { reconcileWebTransportRouting } from "../../src/features/cloud/webTransportSession";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { setActiveWebAccountId(null); vi.unstubAllGlobals(); });
 
 describe("persistent Direct data-plane boundary", () => {
   it("bootstraps missing Web INDEX through the active transport, with no Cloud upload", async () => {
@@ -26,6 +27,7 @@ describe("persistent Direct data-plane boundary", () => {
   });
 
   it("sends only message routing metadata to Cloud, never the authoritative INDEX", async () => {
+    setActiveWebAccountId("user-A");
     const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }));
     vi.stubGlobal("fetch", fetch);
     await reconcileWebTransportRouting({

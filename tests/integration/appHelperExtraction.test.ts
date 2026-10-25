@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import type { Beat } from "../../src/types";
 import {
   cloudBeatFingerprint,
@@ -54,7 +55,8 @@ function beat(overrides: Partial<Beat> = {}): Beat {
 }
 
 describe("App 2.3 helper extraction", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => { setActiveWebAccountId("user-A"); localStorage.clear(); });
+  afterEach(() => setActiveWebAccountId(null));
 
   it("moves the requested helper ownership out of App without leaving duplicate implementations", () => {
     for (const importPath of [
@@ -143,7 +145,7 @@ describe("App 2.3 helper extraction", () => {
 
     clearCloudUploadActive(source.id);
     expect(readActiveCloudUploads()).toEqual([]);
-    expect(localStorage.getItem("beatgaler:active-cloud-uploads:v1")).toBeNull();
+    expect(localStorage.getItem("beatgaler:active-cloud-uploads:v2:user-A")).toBeNull();
   });
 
   it("preserves Windows/POSIX path naming, extensions and Backup filtering", () => {

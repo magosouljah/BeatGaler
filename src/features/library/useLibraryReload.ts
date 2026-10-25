@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { Beat } from "../../types";
 import { loadOfflineLibrary, repairStaleCloudLibraryRefs } from "../../lib/tauri";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
 import { libraryStateManager } from "../../lib/libraryStateManager";
 import { cloudBeatFingerprint } from "./libraryFingerprints";
 import {
@@ -75,7 +76,7 @@ export function useLibraryReload({
       // The queue will emit beatgaler:deferred-library-reload after it drains.
       if (deferLibraryReloadIfUploading()) return;
 
-      clearCachedBeats();
+      clearCachedBeats(getActiveWebAccountId());
       const browserOffline =
         typeof navigator !== "undefined" && navigator.onLine === false;
 

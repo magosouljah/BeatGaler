@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { platform } from "../platform";
-import { hasRememberedWebSessionMarker } from "../features/auth/webSessionBootstrap";
+import { getWebAccountGeneration, setActiveWebAccountId } from "../features/auth/activeWebAccount";
+import { playTrace } from "../features/playback/playTrace";
 import { formatSignupVerificationCode } from "../features/auth/signupVerificationCode";
 import { UiButton, UiFeedback, UiField, UiSpinner } from "./ui/DesignPrimitives";
 
@@ -243,7 +244,12 @@ async function authRequest(path: string, body: Record<string, unknown> = {}, tok
 }
 
 async function storeSession(result: AuthResponse) {
+  let confirmedGeneration: number | null = null;
   if (platform.kind === "web") {
+    if (!result.user?.id) throw new Error("Cloud did not confirm an account identity.");
+    playTrace("AUTH_SESSION_CONFIRMED");
+    setActiveWebAccountId(result.user.id);
+    confirmedGeneration = getWebAccountGeneration();
     localStorage.removeItem(TOKEN_KEY);
     localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
     if (result.csrf_token) sessionStorage.setItem(CSRF_KEY, result.csrf_token);
@@ -251,6 +257,9 @@ async function storeSession(result: AuthResponse) {
   } else if (result.token) {
     localStorage.setItem(TOKEN_KEY, result.token);
     await platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase());
+  }
+  if (confirmedGeneration !== null && confirmedGeneration !== getWebAccountGeneration()) {
+    throw new Error("Sign-in was cancelled by an account change.");
   }
   window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: result.user }));
   return result.user;
@@ -323,7 +332,15 @@ export async function resumeBeatGalerSignup(signupId = "", continuationSecret = 
 }
 
 export async function loginBeatGalerAccount(email: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
+  if (logoutBeatGalerAccountInFlight) await logoutBeatGalerAccountInFlight;
+  if (platform.kind === "web") {
+    void import("../features/playback/webRememberedDirectPreconnect")
+      .then(({ prepareWebDirectForSignIn }) => prepareWebDirectForSignIn())
+      .catch(() => {});
+  }
+  const generation = getWebAccountGeneration();
   const result = await authRequest("/auth/login", { email, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() });
+  if (platform.kind === "web" && generation !== getWebAccountGeneration()) throw new Error("Sign-in was cancelled by an account change.");
   return await storeSession(result);
 }
 
@@ -336,16 +353,23 @@ export function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
   if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;
 
   const pending = (async (): Promise<BeatGalerAccount | null> => {
+    const generation = getWebAccountGeneration();
     const legacyToken = localStorage.getItem(TOKEN_KEY);
     const hasWebMarker = platform.kind === "web" && localStorage.getItem(WEB_SESSION_MARKER_KEY) === "1";
     const token = platform.kind === "web" ? (legacyToken || (hasWebMarker ? BROWSER_SESSION_SENTINEL : null)) : legacyToken;
     if (!token) return null;
     try {
       const result = await authRequest("/auth/session", { beatgalerUserId: await getBeatGalerInstallationId() }, token);
+      if (platform.kind === "web" && generation !== getWebAccountGeneration()) return null;
       if (platform.kind === "web") {
+        if (!result.user?.id) throw new Error("Cloud did not confirm an account identity.");
+        playTrace("AUTH_SESSION_CONFIRMED");
+        setActiveWebAccountId(result.user.id);
+        const confirmedGeneration = getWebAccountGeneration();
         localStorage.removeItem(TOKEN_KEY);
         localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
         await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());
+        if (confirmedGeneration !== getWebAccountGeneration()) return null;
       } else {
         const activeToken = result?.token || token;
         if (result?.token) localStorage.setItem(TOKEN_KEY, result.token);
@@ -353,8 +377,13 @@ export function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
       }
       return result.user;
     } catch (error) {
+      if (platform.kind === "web" && generation !== getWebAccountGeneration()) return null;
       if (!isBeatGalerSessionExpiryError(error)) throw error;
       clearLocalSessionState();
+      if (platform.kind === "web") setActiveWebAccountId(null);
+      if (platform.kind === "web") {
+        void platform.cloudData.disconnect().catch(() => {});
+      }
       try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
       return null;
     }
@@ -527,12 +556,28 @@ export async function disconnectOAuthProvider(provider: OAuthProvider, reauthTok
   window.dispatchEvent(new Event("beatgaler:account-updated"));
 }
 
-export async function logoutBeatGalerAccount(): Promise<void> {
+let logoutBeatGalerAccountInFlight: Promise<void> | null = null;
+
+export function logoutBeatGalerAccount(): Promise<void> {
+  if (logoutBeatGalerAccountInFlight) return logoutBeatGalerAccountInFlight;
   const token = getBeatGalerAuthToken();
-  try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getBeatGalerInstallationId() }, token); } catch {}
-  clearLocalSessionState();
-  try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+  // Hide and invalidate the old account before the logout round trip begins.
+  setActiveWebAccountId(null);
   window.dispatchEvent(new Event("beatgaler:account-logged-out"));
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(WEB_SESSION_MARKER_KEY);
+  const pending = (async () => {
+    const remote = (async () => {
+      try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getBeatGalerInstallationId() }, token); } catch {}
+    })();
+    const disconnect = platform.cloudData.disconnect().catch(() => {});
+    await Promise.all([remote, disconnect]);
+    clearLocalSessionState();
+    try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
+  })();
+  logoutBeatGalerAccountInFlight = pending;
+  void pending.finally(() => { if (logoutBeatGalerAccountInFlight === pending) logoutBeatGalerAccountInFlight = null; });
+  return pending;
 }
 
 function XUnlockOverlay({ username, onDone }: { username: string; onDone: () => void }) {
@@ -633,11 +678,7 @@ function XUnlockOverlay({ username, onDone }: { username: string; onDone: () => 
 
 export default function AccountGate({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<BeatGalerAccount | null>(null);
-  // A remembered Web profile owns its local presentation cache. Reveal that
-  // shell immediately while the shared session restore verifies cloud authority.
-  const [optimisticRememberedSession, setOptimisticRememberedSession] = useState(
-    () => platform.kind === "web" && hasRememberedWebSessionMarker(),
-  );
+  const authRunRef = useRef(0);
   const [checking, setChecking] = useState(true);
   const [registerMode, setRegisterMode] = useState(false);
   const [identifier, setIdentifier] = useState("");
@@ -658,12 +699,12 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     document.getElementById("beatgaler-startup-loader")?.remove();
 
     let cancelled = false;
+    const restoreRun = ++authRunRef.current;
     void restoreBeatGalerSession()
       .then(async value => {
-        if (cancelled) return;
+        if (cancelled || restoreRun !== authRunRef.current) return;
         setAccount(value);
         if (!value) {
-          setOptimisticRememberedSession(false);
           if (platform.kind !== "web" && rememberedDesktopSignup()) {
             try {
               const result = await resumeBeatGalerSignup();
@@ -680,18 +721,21 @@ export default function AccountGate({ children }: { children: React.ReactNode })
           }
         }
       })
-      .catch(e => { if (!cancelled) setError(String((e as Error)?.message || e)); })
-      .finally(() => { if (!cancelled) setChecking(false); });
+      .catch(e => { if (!cancelled && restoreRun === authRunRef.current) setError(String((e as Error)?.message || e)); })
+      .finally(() => { if (!cancelled && restoreRun === authRunRef.current) setChecking(false); });
     const logout = () => {
+      authRunRef.current += 1;
       setAccount(null);
-      setOptimisticRememberedSession(false);
+      setChecking(false);
     };
     const updated = (event: Event) => {
       const detail = (event as CustomEvent<BeatGalerAccount>).detail;
-      if (detail) setAccount(detail);
+      const run = ++authRunRef.current;
+      if (detail?.id) { setAccount(detail); setChecking(false); }
       else void restoreBeatGalerSession().then(value => {
+        if (cancelled || run !== authRunRef.current) return;
         if (value) setAccount(value);
-        else setOptimisticRememberedSession(false);
+        setChecking(false);
       }).catch(() => {});
     };
     const unlocked = (event: Event) => {
@@ -722,7 +766,7 @@ export default function AccountGate({ children }: { children: React.ReactNode })
     return () => window.clearInterval(timer);
   }, [account?.id, account?.username, account?.email, account?.providers?.x?.connected]);
 
-  if (account || optimisticRememberedSession) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
+  if (account?.id) return <>{children}{unlockUsername && <XUnlockOverlay username={unlockUsername} onDone={() => setUnlockUsername(null)}/>}</>;
   if (checking) return <div className="bg-account-loading" aria-live="polite"><div className="bg-account-loading__inner"><UiSpinner label="Loading BeatGaler"/><span>Loading BeatGaler…</span></div></div>;
 
   const submit = async (event: React.FormEvent) => {

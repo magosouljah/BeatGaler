@@ -47,7 +47,7 @@ describe("task 9.2 library Reload extraction", () => {
   it("keeps upload deferral before cache clearing and authoritative reload", () => {
     expectOrdered(reload, [
       "if (deferLibraryReloadIfUploading()) return",
-      "clearCachedBeats();",
+      "clearCachedBeats(getActiveWebAccountId());",
       "const restored = await libraryStateManager.reloadAuthoritative()",
     ]);
     expect(queue).toContain("deferLibraryReloadIfUploading");

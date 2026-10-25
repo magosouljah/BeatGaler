@@ -9,6 +9,7 @@ import {
   type WebPlaybackSort,
 } from "../../src/features/playback/webPlaybackRoutingCache";
 import { useWebPlaybackSortRouting } from "../../src/features/playback/useWebPlaybackSortRouting";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 
 function manifestBeat(index: number) {
   return {
@@ -53,6 +54,7 @@ describe("Web playback sort caller", () => {
   let root: Root;
 
   beforeEach(() => {
+    setActiveWebAccountId("user-A");
     localStorage.clear();
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -60,6 +62,7 @@ describe("Web playback sort caller", () => {
   });
 
   afterEach(async () => {
+    setActiveWebAccountId(null);
     await act(async () => root.unmount());
     host.remove();
     localStorage.clear();

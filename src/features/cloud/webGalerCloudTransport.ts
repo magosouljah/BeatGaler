@@ -15,6 +15,7 @@ import {
 import { WebTransportWorkerClient } from "./webTransportWorkerClient";
 import { isMissingWebLibraryIndexError, isWebLibraryPinRecoveryUnavailable, type WebLibraryBootstrapResult } from "./webLibraryBootstrap";
 import type { Beat } from "../../types";
+import { getActiveWebAccountId, getWebAccountGeneration } from "../auth/activeWebAccount";
 import { commitWebImportedBeat, type WebImportCommitProgress, type WebImportFiles } from "../import/webImportCommit";
 import { commitWebBeatEdit, type WebBeatEditProgress } from "../edit/webBeatEdit";
 import type { PlatformBeatEditFiles, PlatformTrashItem } from "../../platform/contracts";
@@ -323,6 +324,13 @@ export class WebGalerCloudTransport {
       playTrace("TRANSPORT_GET_INDEX_JOIN");
       return this.indexReadPromise;
     }
+    const accountId = getActiveWebAccountId();
+    const accountGeneration = getWebAccountGeneration();
+    const assertAccountUnchanged = () => {
+      if (accountId !== getActiveWebAccountId() || accountGeneration !== getWebAccountGeneration()) {
+        throw new Error("Account changed during library INDEX read.");
+      }
+    };
     let pending!: Promise<WebTransportLibraryIndexResult>;
     pending = (async () => {
       const started = Date.now();
@@ -337,6 +345,7 @@ export class WebGalerCloudTransport {
         { objectType: "index", objectIds: ["pinned"] },
         () => this.worker.getLibraryIndex(),
       );
+      assertAccountUnchanged();
       if (result.pointerRepair) {
         await commitWebTransportIndexPointer({
           messageId: Number(result.messageId || 0),
@@ -345,6 +354,7 @@ export class WebGalerCloudTransport {
           sourceId: "direct-index-recovery",
           beatCount: Array.isArray((result.manifest as { beats?: unknown[] })?.beats) ? (result.manifest as { beats: unknown[] }).beats.length : 0,
         });
+        assertAccountUnchanged();
       }
       void reconcileWebTransportRouting(result.manifest).catch(error => {
         playTrace("TRANSPORT_ROUTING_RECONCILE_DEFERRED", {

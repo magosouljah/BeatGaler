@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import {
   readActiveCloudUploads,
   rollbackInterruptedCloudUploads,
@@ -19,8 +20,21 @@ function response(ok: boolean, status = 200, text = ""): Response {
 
 describe("task 6.2 upload recovery extraction", () => {
   beforeEach(() => {
+    setActiveWebAccountId("user-A");
     localStorage.clear();
     vi.restoreAllMocks();
+  });
+  afterEach(() => setActiveWebAccountId(null));
+
+  it("isolates recovery names and staging paths across account switches", () => {
+    writeActiveCloudUploads([interrupted]);
+    setActiveWebAccountId("user-B");
+    expect(readActiveCloudUploads()).toEqual([]);
+    writeActiveCloudUploads([durable]);
+    setActiveWebAccountId("user-A");
+    expect(readActiveCloudUploads()).toEqual([interrupted]);
+    setActiveWebAccountId("user-B");
+    expect(readActiveCloudUploads()).toEqual([durable]);
   });
 
   it("preserves a beat already confirmed by the authoritative INDEX and only rolls back the incomplete beat", async () => {

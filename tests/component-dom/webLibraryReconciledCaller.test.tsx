@@ -3,6 +3,7 @@ import { act } from "react-dom/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import {
   useWebLibraryReconciled,
   WEB_LIBRARY_RECONCILED_EVENT,
@@ -32,12 +33,14 @@ describe("Web reconciled library caller", () => {
   let root: Root;
 
   beforeEach(() => {
+    setActiveWebAccountId("user-A");
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
   });
 
   afterEach(async () => {
+    setActiveWebAccountId(null);
     await act(async () => root.unmount());
     host.remove();
   });
@@ -53,12 +56,16 @@ describe("Web reconciled library caller", () => {
     const reconciled = [beat("beat-2")];
     await act(async () => {
       window.dispatchEvent(new CustomEvent(WEB_LIBRARY_RECONCILED_EVENT, {
-        detail: { beats: reconciled },
+        detail: { beats: reconciled, accountId: "user-A" },
       }));
     });
 
     expect(onReconciled).toHaveBeenCalledTimes(1);
     expect(onReconciled).toHaveBeenCalledWith(reconciled);
+    await act(async () => window.dispatchEvent(new CustomEvent(WEB_LIBRARY_RECONCILED_EVENT, {
+      detail: { beats: [beat("A-old")], accountId: "user-B" },
+    })));
+    expect(onReconciled).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing on Desktop/disabled callers", async () => {

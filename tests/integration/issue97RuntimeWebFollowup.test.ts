@@ -79,27 +79,24 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(card).toContain("onPlay(beat);");
   });
 
-  it("reveals a remembered local cache before auth restore and singleflights the duplicated gate restore", () => {
+  it("keeps a remembered cache hidden until the session confirms user.id", () => {
     const experienceGate = source("src/features/auth/AuthExperienceGate.tsx");
     const accountGate = source("src/components/AccountGate.tsx");
 
-    expect(experienceGate).toContain("hasRememberedWebSessionMarker");
-    expect(experienceGate).toContain("optimisticRememberedSession");
-    expect(experienceGate).toContain('playTrace("AUTH_CACHE_REVEAL_OPTIMISTIC")');
-    expect(experienceGate.indexOf("if (account || optimisticRememberedSession) return <>{children}</>;")).toBeLessThan(
+    expect(experienceGate).not.toContain("optimisticRememberedSession");
+    expect(experienceGate.indexOf("if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;")).toBeLessThan(
       experienceGate.indexOf('if (checking) return <main className="bg-auth-shell"'),
     );
-    expect(experienceGate).toContain("if (!value) setOptimisticRememberedSession(false);");
+    expect(experienceGate).toContain("setActiveWebAccountId(null);");
 
-    expect(accountGate).toContain("hasRememberedWebSessionMarker");
     expect(accountGate).toContain("let restoreBeatGalerSessionInFlight: Promise<BeatGalerAccount | null> | null = null;");
     expect(accountGate).toContain("if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;");
     expect(accountGate).toContain("restoreBeatGalerSessionInFlight = pending;");
     expect(accountGate).toContain("pending.then(clear, clear);");
-    expect(accountGate.indexOf("if (account || optimisticRememberedSession) return <>{children}</>")).toBeLessThan(
+    expect(accountGate.indexOf("if (account?.id) return <>{children}")).toBeLessThan(
       accountGate.indexOf('if (checking) return <div className="bg-account-loading"'),
     );
-    expect(accountGate).toContain("setOptimisticRememberedSession(false);");
+    expect(accountGate).not.toContain("optimisticRememberedSession");
   });
 
   it("returns the first MSE URL before Direct stream admission and dispatches remembered Direct before React mount", () => {
@@ -131,7 +128,7 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
     expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
     expect(rememberedPreconnect).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
-    expect(rememberedPreconnect).toContain("const startup = coordinator.start();");
+    expect(rememberedPreconnect).toContain("const startup = coordinator.prepareConnection();");
     expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")');
     expect(rememberedPreconnect).toContain("void startup.catch(error =>");
 

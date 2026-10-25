@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type
 import type { AppSettings, Beat } from "../../types";
 import { readActiveCloudUploads } from "../cloud/interruptedUploadJournal";
 import { loadCachedBeats, saveCachedBeats } from "./libraryPresentationCache";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
 
 export type LibraryState = {
   beats: Beat[];
@@ -12,12 +13,11 @@ export type LibraryState = {
 };
 
 export function useLibraryState(): LibraryState {
-  // Browser/localStorage library data is an instant-paint presentation cache.
-  // It may render before cloud authority resolves, but remains read-only until
-  // verification and is never allowed to overwrite the authoritative library.
+  // A Web workspace mounts only after auth and captures its cache owner for life.
+  const accountIdRef = useRef(getActiveWebAccountId());
   const startupCachedBeatsRef = useRef<Beat[] | null>(null);
   if (startupCachedBeatsRef.current === null) {
-    const cached = loadCachedBeats() ?? [];
+    const cached = loadCachedBeats(accountIdRef.current) ?? [];
     const interruptedIds = new Set(readActiveCloudUploads().map(item => item.beatId));
     startupCachedBeatsRef.current = interruptedIds.size > 0
       ? cached.filter(beat => !interruptedIds.has(beat.id))
@@ -30,7 +30,7 @@ export function useLibraryState(): LibraryState {
   // decide whether the loading state starts visible. Keep that read one-time.
   const initialLoadingRef = useRef<boolean | null>(null);
   if (initialLoadingRef.current === null) {
-    initialLoadingRef.current = loadCachedBeats() === null;
+    initialLoadingRef.current = loadCachedBeats(accountIdRef.current) === null;
   }
 
   // This ref intentionally starts empty. App preserves the existing update
@@ -53,6 +53,7 @@ export function useLibraryPresentationCache(
   settings: AppSettings | null,
 ): void {
   const cacheSaveTimerRef = useRef<number | null>(null);
+  const accountIdRef = useRef(getActiveWebAccountId());
 
   // localStorage is synchronous and blocks the UI thread. Debounce it and store
   // a lightweight version without full artwork instead of serializing megabytes
@@ -66,7 +67,7 @@ export function useLibraryPresentationCache(
 
     cacheSaveTimerRef.current = window.setTimeout(() => {
       cacheSaveTimerRef.current = null;
-      saveCachedBeats(beats);
+      saveCachedBeats(beats, accountIdRef.current);
     }, 1500);
 
     return () => {

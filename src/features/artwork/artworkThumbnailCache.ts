@@ -1,4 +1,5 @@
 import type { Beat } from "../../types";
+import { getActiveWebAccountId } from "../auth/activeWebAccount";
 
 export const MAX_ARTWORK_THUMBNAIL_BYTES = 250 * 1024;
 const ARTWORK_CACHE_NAME = "beatgaler-artwork-thumbnails-v1";
@@ -8,11 +9,14 @@ type ArtworkIdentity = Pick<Beat, "id" | "assets">;
 
 export function artworkThumbnailCacheKey(beat: ArtworkIdentity): string {
   const objectId = beat.assets?.artwork?.object_id?.trim();
-  return objectId ? `${beat.id}:${objectId}` : `${beat.id}:local`;
+  const artworkId = objectId ? `${beat.id}:${objectId}` : `${beat.id}:local`;
+  const accountId = getActiveWebAccountId();
+  return accountId ? `${encodeURIComponent(accountId)}:${artworkId}` : artworkId;
 }
 
 function cacheSupported(): boolean {
-  return typeof window !== "undefined" && typeof caches !== "undefined" && typeof URL?.createObjectURL === "function";
+  return typeof window !== "undefined" && typeof caches !== "undefined" && typeof URL?.createObjectURL === "function"
+    && (Boolean((window as any).__TAURI_INTERNALS__) || Boolean(getActiveWebAccountId()));
 }
 
 function requestForKey(key: string): Request {

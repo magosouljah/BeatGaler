@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   hasRememberedWebSessionMarker: vi.fn(() => true),
   readWebCsrfCookieToken: vi.fn((): string | null => "csrf-cookie-token"),
-  start: vi.fn(() => Promise.resolve()),
+  prepareConnection: vi.fn(() => Promise.resolve()),
+  prepareSignIn: vi.fn(() => Promise.resolve()),
   getWebStartupPlaybackCoordinator: vi.fn(),
   playTrace: vi.fn(),
 }));
@@ -21,27 +22,28 @@ vi.mock("../../src/features/playback/playTrace", () => ({
   playTrace: mocks.playTrace,
 }));
 
-import { preconnectRememberedWebDirect } from "../../src/features/playback/webRememberedDirectPreconnect";
+import { preconnectRememberedWebDirect, prepareWebDirectForSignIn } from "../../src/features/playback/webRememberedDirectPreconnect";
 
 describe("remembered Web Direct preconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.hasRememberedWebSessionMarker.mockReturnValue(true);
     mocks.readWebCsrfCookieToken.mockReturnValue("csrf-cookie-token");
-    mocks.start.mockReturnValue(Promise.resolve());
-    mocks.getWebStartupPlaybackCoordinator.mockReturnValue({ start: mocks.start } as any);
+    mocks.prepareConnection.mockReturnValue(Promise.resolve());
+    mocks.prepareSignIn.mockReturnValue(Promise.resolve());
+    mocks.getWebStartupPlaybackCoordinator.mockReturnValue({ prepareConnection: mocks.prepareConnection, prepareSignIn: mocks.prepareSignIn } as any);
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     delete (window as any).__TAURI_INTERNALS__;
   });
 
-  it("dispatches coordinator.start and its DISPATCHED trace synchronously when remembered session and current CSRF cookie are available", async () => {
+  it("dispatches route-free connection work synchronously before auth resolves", async () => {
     let resolveStart!: () => void;
-    mocks.start.mockReturnValue(new Promise<void>(resolve => { resolveStart = resolve; }));
+    mocks.prepareConnection.mockReturnValue(new Promise<void>(resolve => { resolveStart = resolve; }));
 
     preconnectRememberedWebDirect();
 
     expect(mocks.getWebStartupPlaybackCoordinator).toHaveBeenCalledTimes(1);
-    expect(mocks.start).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareConnection).toHaveBeenCalledTimes(1);
     expect(mocks.playTrace).toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
     expect(mocks.playTrace).toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
 
@@ -54,7 +56,7 @@ describe("remembered Web Direct preconnect", () => {
   });
 
   it("reports an asynchronous startup failure without moving the original dispatch timestamp", async () => {
-    mocks.start.mockReturnValue(Promise.reject(new Error("network unavailable")));
+    mocks.prepareConnection.mockReturnValue(Promise.reject(new Error("network unavailable")));
 
     preconnectRememberedWebDirect();
     expect(mocks.playTrace).toHaveBeenCalledWith("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED");
@@ -73,7 +75,7 @@ describe("remembered Web Direct preconnect", () => {
     preconnectRememberedWebDirect();
 
     expect(mocks.getWebStartupPlaybackCoordinator).not.toHaveBeenCalled();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.prepareConnection).not.toHaveBeenCalled();
     expect(mocks.playTrace).toHaveBeenCalledWith(
       "DIRECT_REMEMBERED_PRECONNECT_DEFERRED",
       { reason: "csrf_unavailable" },
@@ -86,17 +88,23 @@ describe("remembered Web Direct preconnect", () => {
     preconnectRememberedWebDirect();
 
     expect(mocks.getWebStartupPlaybackCoordinator).not.toHaveBeenCalled();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.prepareConnection).not.toHaveBeenCalled();
   });
 
   it("does not dispatch without a remembered authenticated session or while offline", () => {
     mocks.hasRememberedWebSessionMarker.mockReturnValue(false);
     preconnectRememberedWebDirect();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.prepareConnection).not.toHaveBeenCalled();
 
     mocks.hasRememberedWebSessionMarker.mockReturnValue(true);
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     preconnectRememberedWebDirect();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.prepareConnection).not.toHaveBeenCalled();
+  });
+
+  it("prepares a fresh sign-in without connecting before its cookie exists", () => {
+    prepareWebDirectForSignIn();
+    expect(mocks.prepareSignIn).toHaveBeenCalledOnce();
+    expect(mocks.prepareConnection).not.toHaveBeenCalled();
   });
 });

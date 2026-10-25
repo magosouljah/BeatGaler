@@ -54,6 +54,7 @@ import { useImportEntry } from "../features/import/useImportEntry";
 import { useBeatEditing } from "../features/edit/useBeatEditing";
 import { useBeatFileDropRouting } from "../features/dragdrop/useBeatFileDropRouting";
 import { isBeatCloudUpdateBusy, setBeatCloudUpdateBusy } from "../features/cloud/beatCloudUpdateBusy";
+import { playTrace } from "../features/playback/playTrace";
 
 // Intentionally isolated: if real-world timings prove the skeleton unnecessary,
 // flipping/removing this one constant deletes the visual layer without touching
@@ -613,6 +614,12 @@ const handleTagClick = useCallback((tag: string, e: React.MouseEvent) => {
   const allTags = useMemo(() => selectAllTags(beats, tagFrequency), [beats, tagFrequency]);
   const tagSuggestions = useMemo(() => selectTagSuggestions(beats), [beats]);
   const displayedBeats = filteredBeats.filter(beat => revealedBeatIds.has(beat.id));
+  const firstGalleryRenderTracedRef = useRef(false);
+  useEffect(() => {
+    if (platform.kind !== "web" || firstGalleryRenderTracedRef.current || displayedBeats.length === 0) return;
+    firstGalleryRenderTracedRef.current = true;
+    playTrace("FIRST_CORRECT_GALLERY_RENDER", { count: displayedBeats.length });
+  }, [displayedBeats.length]);
 
   const {
     shuffleEnabled,

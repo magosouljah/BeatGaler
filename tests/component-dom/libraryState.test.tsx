@@ -3,6 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, Beat } from "../../src/types";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 
 const mocks = vi.hoisted(() => ({
   loadCachedBeats: vi.fn(),
@@ -54,6 +55,7 @@ async function render(verified: boolean, settings: AppSettings | null) {
 }
 
 beforeEach(() => {
+  setActiveWebAccountId("user-A");
   mocks.loadCachedBeats.mockReset().mockReturnValue([]);
   mocks.saveCachedBeats.mockReset();
   mocks.readActiveCloudUploads.mockReset().mockReturnValue([]);
@@ -61,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setActiveWebAccountId(null);
   if (root) await act(async () => root!.unmount());
   root = null;
   host?.remove();
@@ -119,6 +122,6 @@ describe("useLibraryState", () => {
       telegram_cloud_connected: true,
     });
     await act(async () => { vi.advanceTimersByTime(1500); });
-    expect(mocks.saveCachedBeats).toHaveBeenLastCalledWith([expect.objectContaining({ id: "fresh" })]);
+    expect(mocks.saveCachedBeats).toHaveBeenLastCalledWith([expect.objectContaining({ id: "fresh" })], "user-A");
   });
 });

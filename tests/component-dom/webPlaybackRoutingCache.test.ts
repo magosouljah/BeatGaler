@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Beat } from "../../src/types";
+import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import {
   deletePlaybackRoutes,
   isPlaybackRouteSuspect,
@@ -48,11 +49,45 @@ function beat(index: number, overrides: Partial<Beat> = {}): Beat {
 
 describe("Web playback routing cache", () => {
   beforeEach(() => {
+    setActiveWebAccountId("user-A");
     localStorage.clear();
   });
 
   afterEach(() => {
+    setActiveWebAccountId(null);
     vi.restoreAllMocks();
+  });
+
+  it("never reads another account's routes or the legacy global routes", () => {
+    localStorage.setItem("beatgaler:web-playback-routing:v1", JSON.stringify({
+      version: 1, routes: { legacy: { messageId: 99, mimeType: "audio/mpeg" } }, startup: [], sortBy: "rating", updatedAt: 1,
+    }));
+    updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(1)], deleted: [], trash: [] });
+    expect(readWebPlaybackRoutingCache().routes["beat-1"]?.messageId).toBe(1001);
+
+    setActiveWebAccountId(null);
+    expect(readWebPlaybackRoutingCache().routes).toEqual({});
+    setActiveWebAccountId("user-B");
+    expect(readWebPlaybackRoutingCache().routes).toEqual({});
+    updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(2)], deleted: [], trash: [] });
+    expect(readWebPlaybackRoutingCache().routes["beat-2"]?.messageId).toBe(1002);
+
+    setActiveWebAccountId("user-A");
+    expect(readWebPlaybackRoutingCache().routes["beat-1"]?.messageId).toBe(1001);
+    expect(readWebPlaybackRoutingCache().routes["beat-2"]).toBeUndefined();
+  });
+
+  it("rejects routing stored under B's key with A or no owner", () => {
+    updatePlaybackRoutingCacheFromManifest({ beats: [manifestBeat(1)], deleted: [], trash: [] });
+    const aPayload = localStorage.getItem("beatgaler:web-playback-routing:v2:user-A")!;
+    setActiveWebAccountId("user-B");
+    const bKey = "beatgaler:web-playback-routing:v2:user-B";
+    localStorage.setItem(bKey, aPayload);
+    expect(readWebPlaybackRoutingCache().startup).toEqual([]);
+    localStorage.setItem(bKey, JSON.stringify({ ...JSON.parse(aPayload), owner_user_id: undefined }));
+    expect(readWebPlaybackRoutingCache().startup).toEqual([]);
+    setActiveWebAccountId("user-A");
+    expect(readWebPlaybackRoutingCache().startup[0]?.beatId).toBe("beat-1");
   });
 
   it("recomputes startup14 for manual, rating, bpm and name without presentation cache", () => {
@@ -85,7 +120,7 @@ describe("Web playback routing cache", () => {
     const first = { beats: [manifestBeat(1), manifestBeat(2), manifestBeat(3)], deleted: [], trash: [] };
 
     updatePlaybackRoutingCacheFromManifest(first);
-    const writesAfterFirst = setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v1").length;
+    const writesAfterFirst = setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v2:user-A").length;
     expect(writesAfterFirst).toBe(1);
 
     updatePlaybackRoutingCacheFromManifest({
@@ -93,7 +128,7 @@ describe("Web playback routing cache", () => {
       deleted: [],
       trash: [],
     });
-    expect(setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v1")).toHaveLength(writesAfterFirst);
+    expect(setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v2:user-A")).toHaveLength(writesAfterFirst);
 
     const changed = manifestBeat(2);
     changed.master.telegram_message_id = 9999;
@@ -103,7 +138,7 @@ describe("Web playback routing cache", () => {
       trash: [],
     });
 
-    expect(setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v1")).toHaveLength(writesAfterFirst + 1);
+    expect(setItem.mock.calls.filter(([key]) => key === "beatgaler:web-playback-routing:v2:user-A")).toHaveLength(writesAfterFirst + 1);
     expect(readWebPlaybackRoutingCache().routes["beat-2"]?.messageId).toBe(9999);
   });
 

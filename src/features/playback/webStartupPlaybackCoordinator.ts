@@ -1,9 +1,11 @@
 import type { Beat } from "../../types";
+import { getActiveWebAccountId, getWebAccountGeneration } from "../auth/activeWebAccount";
 import { resolveBeatGalerCloudApi } from "../../components/AccountGate";
 import { WebGalerCloudTransport, type WebStartupWarmCandidate } from "../cloud/webGalerCloudTransport";
 import { WEB_TRANSPORT_INVALIDATED_EVENT } from "../cloud/webTransportEvents";
 import { WebPlaybackSourceManager, type WebPlaybackTransport } from "./webPlaybackSource";
 import { playTrace } from "./playTrace";
+import { loadCachedBeats } from "../library/libraryPresentationCache";
 import {
   readWebPlaybackRoutingCache,
   updatePlaybackRoutingSort,
@@ -11,19 +13,13 @@ import {
   type WebPlaybackSort,
 } from "./webPlaybackRoutingCache";
 
-const PRESENTATION_LIBRARY_CACHE_KEY = "beatvault:library:v1";
 const PRESENTATION_SORT_CACHE_KEY = "beatvault:sort:v2";
 
 function localPresentationBeats(): Beat[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(PRESENTATION_LIBRARY_CACHE_KEY) || "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is Beat => Boolean(value && typeof value === "object" && String(value.id || "").trim()))
-      : [];
-  } catch {
-    return [];
-  }
+  const userId = getActiveWebAccountId();
+  if (!userId) return [];
+  return (loadCachedBeats(userId) || [])
+    .filter((value): value is Beat => Boolean(value && typeof value === "object" && String(value.id || "").trim()));
 }
 
 function localSort(): WebPlaybackSort {
@@ -57,8 +53,8 @@ function startupCandidates(): WebStartupWarmCandidate[] {
 
 /** Single authority for the remembered-session Web startup path. */
 export class WebStartupPlaybackCoordinator {
-  private readonly candidates = startupCandidates();
-  private readonly transport = new WebGalerCloudTransport(this.candidates);
+  private candidates: WebStartupWarmCandidate[] = [];
+  private readonly transport = new WebGalerCloudTransport();
   private readonly sources: WebPlaybackSourceManager;
   private startPromise: Promise<void> | null = null;
   private connectPromise: Promise<void> | null = null;
@@ -88,7 +84,7 @@ export class WebStartupPlaybackCoordinator {
       window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, this.onTransportInvalidated);
       this.listeningForInvalidation = true;
     }
-    playTrace("STARTUP_LOCAL_ROUTING_READY", { count: this.candidates.length });
+    playTrace("STARTUP_TRANSPORT_PREPARED");
   }
 
   private connect(): Promise<void> {
@@ -109,21 +105,46 @@ export class WebStartupPlaybackCoordinator {
     return pending;
   }
 
+  /** Cookie-bound connection work runs alongside /auth/session; no cached beat is read here. */
+  prepareConnection(): Promise<void> {
+    return this.connect();
+  }
+
+  /** Resolve the API origin and initialize the route-free client before a fresh login has a cookie. */
+  prepareSignIn(): Promise<void> {
+    return resolveBeatGalerCloudApi().then(() => {});
+  }
+
   start(): Promise<void> {
+    const accountId = getActiveWebAccountId();
+    if (!accountId) return this.prepareConnection();
     if (this.startPromise) return this.startPromise;
+    const accountGeneration = getWebAccountGeneration();
+    this.candidates = startupCandidates();
+    playTrace("STARTUP_LOCAL_ROUTING_READY", { count: this.candidates.length });
     playTrace("DIRECT_START_DISPATCHED", { startup_candidate_count: this.candidates.length });
 
     let attempt!: Promise<void>;
     attempt = (async () => {
       await this.connect();
+      if (accountId !== getActiveWebAccountId() || accountGeneration !== getWebAccountGeneration()) {
+        throw new Error("Account changed before playback prefetch.");
+      }
       if (this.candidates.length === 0) {
         this.finishStartupWarm(0, 0);
         return;
       }
 
+      playTrace("PREFETCH_START", { phase: "media", count: this.candidates.length });
       playTrace("WARM_BATCH_BEGIN", { count: this.candidates.length });
+      let firstReady = false;
       const results = await Promise.allSettled(this.candidates.map(candidate =>
-        this.sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible")
+        this.sources.prefetch(candidate.beatId, candidate.messageId, candidate.mimeType, "visible").then(() => {
+          if (!firstReady) {
+            firstReady = true;
+            playTrace("PLAYABLE_READY");
+          }
+        })
       ));
       const failures = results.filter(result => result.status === "rejected").length;
       this.finishStartupWarm(this.candidates.length, failures);
@@ -143,6 +164,7 @@ export class WebStartupPlaybackCoordinator {
     if (this.warmSettled) return;
     this.warmSettled = true;
     playTrace("ADAPTER_STARTUP_WARM_SETTLED", { count, failures });
+    playTrace("PREFETCH_READY", { count, failures });
   }
 
   async waitUntilIndexAllowed(): Promise<void> {

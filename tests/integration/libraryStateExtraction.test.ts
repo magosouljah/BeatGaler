@@ -22,7 +22,7 @@ describe("task 3.1 library-state extraction", () => {
     expect(owner).toContain("const startupCachedBeatsRef = useRef<Beat[] | null>(null)");
     expect(owner).toContain("const beatsLatestRef = useRef<Beat[]>([])");
     expect(app).toContain("useLibraryPresentationCache(");
-    expect(owner).toContain("saveCachedBeats(beats)");
+    expect(owner).toContain("saveCachedBeats(beats, accountIdRef.current)");
   });
 
   it("preserves the old latest-snapshot timing instead of making every setter synchronous", () => {
