@@ -153,7 +153,7 @@ describe("App migration characterization contracts", () => {
     );
     expectOrdered(reload, [
       "if (deferLibraryReloadIfUploading()) return",
-      "const restored = await libraryStateManager.reloadAuthoritative()",
+      "const { beats: restored, revision } = await reloadStableLibrary(getUploadRevision)",
     ]);
     expect(reload).toContain(
       '"beatgaler:deferred-library-reload"'

@@ -2,9 +2,8 @@ import { useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { AppSettings, Beat } from "../../types";
 import { flushOfflineTrashIntents, pollTelegramCloudStatus } from "../../lib/tauri";
-import { libraryStateManager } from "../../lib/libraryStateManager";
 import { cloudBeatFingerprint } from "../library/libraryFingerprints";
-import { preserveLoadedArtwork } from "../library/libraryPresentationCache";
+import { mergeActiveUploads, reloadStableLibrary } from "../library/mergeActiveUploads";
 import type { ConnectionState } from "./useSessionState";
 
 interface UseConnectivityOptions {
@@ -13,6 +12,8 @@ interface UseConnectivityOptions {
   setCloudSessionVerified: Dispatch<SetStateAction<boolean>>;
   setSettings: Dispatch<SetStateAction<AppSettings | null>>;
   setBeats: Dispatch<SetStateAction<Beat[]>>;
+  getActiveUploadIds: () => ReadonlySet<string>;
+  getUploadRevision: () => number;
   cloudMetaSnapshotRef: MutableRefObject<Map<string, string> | null>;
   cloudLibrarySnapshotRef: MutableRefObject<string | null>;
   startupCookingResolvedRef: MutableRefObject<boolean>;
@@ -31,6 +32,8 @@ export function useConnectivity({
   setCloudSessionVerified,
   setSettings,
   setBeats,
+  getActiveUploadIds,
+  getUploadRevision,
   cloudMetaSnapshotRef,
   cloudLibrarySnapshotRef,
   startupCookingResolvedRef,
@@ -51,7 +54,7 @@ export function useConnectivity({
     const restoreOnlineLibrary = async (username: string | null) => {
       const flushedTrashCount = await flushOfflineTrashIntents();
       if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates();
-      const restored = await libraryStateManager.reloadAuthoritative();
+      const { beats: restored, revision } = await reloadStableLibrary(getUploadRevision);
       if (disposed) return;
       cloudMetaSnapshotRef.current = new Map(
         restored.filter(beat => !!beat.telegram_file_id).map(beat => [beat.id, cloudBeatFingerprint(beat)])
@@ -60,7 +63,13 @@ export function useConnectivity({
         .filter(beat => !!beat.telegram_file_id)
         .map(cloudBeatFingerprint)
         .join("\u001c");
-      setBeats(current => preserveLoadedArtwork(restored, current));
+      setBeats(current => {
+        if (revision !== getUploadRevision()) {
+          queueMicrotask(() => window.dispatchEvent(new Event("beatgaler:deferred-library-reload")));
+          return current;
+        }
+        return mergeActiveUploads(restored, current, getActiveUploadIds());
+      });
       setCloudSessionVerified(true);
       setSettings(current => current ? {
         ...current, telegram_cloud_connected: true, telegram_cloud_username: username

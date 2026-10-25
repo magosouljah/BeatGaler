@@ -45,7 +45,7 @@ describe("task 9.4 reconnect/cloud events extraction", () => {
     expectOrdered(connectivity, [
       "const flushedTrashCount = await flushOfflineTrashIntents()",
       "if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates()",
-      "const restored = await libraryStateManager.reloadAuthoritative()",
+      "const { beats: restored, revision } = await reloadStableLibrary(getUploadRevision)",
       "setCloudSessionVerified(true)",
     ]);
     expect(connectivity).toContain("networkReconnectRunRef.current += 1");
@@ -69,11 +69,12 @@ describe("task 9.4 reconnect/cloud events extraction", () => {
     expect(events).toContain("events.onopen = () => { eventReconnectDelayMs = 1000; };");
     expectOrdered(events, [
       "const flushedTrashCount = await flushOfflineTrashIntents()",
-      "const merged = await libraryStateManager.reloadAuthoritative()",
+      "const { beats: merged, revision } = await reloadStableLibrary(getUploadRevision)",
       "const nextFingerprint = libraryViewFingerprint(merged)",
-      "setBeats(current => preserveLoadedArtwork(merged, current))",
+      "return mergeActiveUploads(merged, current, getActiveUploadIds())",
     ]);
-    expect(events).toContain("if (cancelled || cloudPullInFlightRef.current) return");
+    expect(events).toContain("if (cloudPullInFlightRef.current) {");
+    expect(events).toContain("cloudPullPendingRef.current = true");
     expect(events).not.toContain("commitSnapshot(");
     expect(events).not.toContain("syncBeatMetadataToTelegram");
     expect(events).not.toContain("uploadBeatToTelegram");

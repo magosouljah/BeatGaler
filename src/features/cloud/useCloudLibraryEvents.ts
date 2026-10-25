@@ -2,10 +2,10 @@ import { useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { AppSettings, Beat } from "../../types";
 import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "../../components/AccountGate";
-import { flushOfflineTrashIntents, getCloudClientId, pollTelegramCloudStatus } from "../../lib/tauri";
-import { libraryStateManager } from "../../lib/libraryStateManager";
+import { flushOfflineTrashIntents, getCloudClientId, isTauriAvailable, pollTelegramCloudStatus } from "../../lib/tauri";
+import { getWebClientId } from "../../platform/webClientId";
 import { cloudBeatFingerprint, libraryViewFingerprint } from "../library/libraryFingerprints";
-import { preserveLoadedArtwork } from "../library/libraryPresentationCache";
+import { mergeActiveUploads, reloadStableLibrary } from "../library/mergeActiveUploads";
 import type { ConnectionState } from "../session/useSessionState";
 
 interface UseCloudLibraryEventsOptions {
@@ -15,6 +15,8 @@ interface UseCloudLibraryEventsOptions {
   setCloudSessionVerified: Dispatch<SetStateAction<boolean>>;
   setSettings: Dispatch<SetStateAction<AppSettings | null>>;
   setBeats: Dispatch<SetStateAction<Beat[]>>;
+  getActiveUploadIds: () => ReadonlySet<string>;
+  getUploadRevision: () => number;
   cloudMetaSnapshotRef: MutableRefObject<Map<string, string> | null>;
   cloudLibrarySnapshotRef: MutableRefObject<string | null>;
   visibleLibraryFingerprintRef: MutableRefObject<string>;
@@ -28,6 +30,10 @@ interface UseCloudLibraryEventsOptions {
   setStartupCookingGate: Dispatch<SetStateAction<boolean>>;
 }
 
+export function getLibraryEventSourceId(): string {
+  return isTauriAvailable ? getCloudClientId() : getWebClientId();
+}
+
 export function useCloudLibraryEvents({
   setupDone,
   beatgalerUserId,
@@ -35,6 +41,8 @@ export function useCloudLibraryEvents({
   setCloudSessionVerified,
   setSettings,
   setBeats,
+  getActiveUploadIds,
+  getUploadRevision,
   cloudMetaSnapshotRef,
   cloudLibrarySnapshotRef,
   visibleLibraryFingerprintRef,
@@ -48,6 +56,7 @@ export function useCloudLibraryEvents({
   setStartupCookingGate,
 }: UseCloudLibraryEventsOptions): void {
   const cloudPullInFlightRef = useRef(false);
+  const cloudPullPendingRef = useRef(false);
 
   // BeatGaler synchronization is push-based. There is no timer and no
   // focus-triggered full library scan.
@@ -55,19 +64,23 @@ export function useCloudLibraryEvents({
     const userId = beatgalerUserId;
     if (!setupDone || !userId) return;
 
-    const sourceId = getCloudClientId();
+    const sourceId = getLibraryEventSourceId();
     let events: EventSource | null = null;
     let eventReconnectTimer: number | null = null;
     let eventReconnectDelayMs = 1000;
     let cancelled = false;
 
     const applyRemoteLibraryChange = async () => {
-      if (cancelled || cloudPullInFlightRef.current) return;
+      if (cancelled) return;
+      if (cloudPullInFlightRef.current) {
+        cloudPullPendingRef.current = true;
+        return;
+      }
       cloudPullInFlightRef.current = true;
       try {
         const flushedTrashCount = await flushOfflineTrashIntents();
         if (flushedTrashCount > 0) clearReconciledTrashRuntimeStates();
-        const merged = await libraryStateManager.reloadAuthoritative();
+        const { beats: merged, revision } = await reloadStableLibrary(getUploadRevision);
         if (!cancelled) {
           const nextFingerprint = libraryViewFingerprint(merged);
           if (nextFingerprint !== visibleLibraryFingerprintRef.current) {
@@ -79,13 +92,25 @@ export function useCloudLibraryEvents({
               .filter(beat => !!beat.telegram_file_id)
               .map(cloudBeatFingerprint)
               .join("\u001c");
-            setBeats(current => preserveLoadedArtwork(merged, current));
           }
+          // Reconcile even when the authority fingerprint is unchanged: an upload
+          // may have ended since the previous notification.
+          setBeats(current => {
+            if (revision !== getUploadRevision()) {
+              queueMicrotask(() => window.dispatchEvent(new Event("beatgaler:deferred-library-reload")));
+              return current;
+            }
+            return mergeActiveUploads(merged, current, getActiveUploadIds());
+          });
         }
       } catch (error) {
         console.warn("Telegram event sync failed:", error);
       } finally {
         cloudPullInFlightRef.current = false;
+        if (cloudPullPendingRef.current && !cancelled) {
+          cloudPullPendingRef.current = false;
+          queueMicrotask(() => { void applyRemoteLibraryChange(); });
+        }
       }
     };
 

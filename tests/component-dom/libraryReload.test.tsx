@@ -95,6 +95,8 @@ function Harness({ connected = true }: { connected?: boolean }) {
     setStartupCookingGate,
     setLoading,
     deferLibraryReloadIfUploading: mocks.deferLibraryReloadIfUploading,
+    getActiveUploadIds: () => new Set(),
+    getUploadRevision: () => 0,
   });
 
   latestBeats = beats;

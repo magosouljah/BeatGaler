@@ -269,6 +269,8 @@ export function useBeatGalerComposition() {
     getQueuedBeatsSnapshot,
     deferLibraryReloadIfUploading,
     deferredLibraryReloadRef,
+    getActiveUploadIds,
+    getUploadRevision,
   } = useCloudUploadQueue({
     settings,
     setSettings,
@@ -300,6 +302,8 @@ export function useBeatGalerComposition() {
     setStartupCookingGate,
     setLoading,
     deferLibraryReloadIfUploading,
+    getActiveUploadIds,
+    getUploadRevision,
   });
 
   const { interruptedUploadNotices, dismissInterruptedUploadNotices } = useStartupBootstrap({
@@ -325,6 +329,8 @@ export function useBeatGalerComposition() {
 
 useConnectivity({
   setupDone,
+  getActiveUploadIds,
+  getUploadRevision,
   setConnectionState,
   setCloudSessionVerified,
   setSettings,
@@ -349,6 +355,8 @@ useConnectivity({
 // the extracted owner verifies authority before hydrating library state.
 useCloudLibraryEvents({
   setupDone,
+  getActiveUploadIds,
+  getUploadRevision,
   beatgalerUserId: settings?.beatgaler_user_id ?? null,
   setConnectionState,
   setCloudSessionVerified,

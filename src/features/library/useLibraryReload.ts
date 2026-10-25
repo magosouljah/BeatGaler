@@ -9,12 +9,9 @@ import {
 import type { Beat } from "../../types";
 import { loadOfflineLibrary, repairStaleCloudLibraryRefs } from "../../lib/tauri";
 import { getActiveWebAccountId } from "../auth/activeWebAccount";
-import { libraryStateManager } from "../../lib/libraryStateManager";
 import { cloudBeatFingerprint } from "./libraryFingerprints";
-import {
-  clearCachedBeats,
-  preserveLoadedArtwork,
-} from "./libraryPresentationCache";
+import { clearCachedBeats } from "./libraryPresentationCache";
+import { mergeActiveUploads, reloadStableLibrary } from "./mergeActiveUploads";
 
 type ConnectionState = "checking" | "online" | "poor" | "offline";
 
@@ -33,6 +30,8 @@ type UseLibraryReloadInput = {
   setStartupCookingGate: Dispatch<SetStateAction<boolean>>;
   setLoading: Dispatch<SetStateAction<boolean>>;
   deferLibraryReloadIfUploading: () => boolean;
+  getActiveUploadIds: () => ReadonlySet<string>;
+  getUploadRevision: () => number;
 };
 
 export type LibraryReloadController = {
@@ -55,6 +54,8 @@ export function useLibraryReload({
   setStartupCookingGate,
   setLoading,
   deferLibraryReloadIfUploading,
+  getActiveUploadIds,
+  getUploadRevision,
 }: UseLibraryReloadInput): LibraryReloadController {
   const [libraryRefreshing, setLibraryRefreshing] = useState(false);
 
@@ -94,7 +95,7 @@ export function useLibraryReload({
               console.warn(`[library-refresh] stale_refs_repaired=${repaired}`);
             }
 
-            const restored = await libraryStateManager.reloadAuthoritative();
+            const { beats: restored, revision } = await reloadStableLibrary(getUploadRevision);
             cloudMetaSnapshotRef.current = new Map(
               restored
                 .filter(beat => !!beat.telegram_file_id)
@@ -106,11 +107,17 @@ export function useLibraryReload({
               .join("\u001c");
             setConnectionState("online");
 
-            // Replace committed state exactly as before while retaining decoded
-            // artwork already visible in the presentation layer.
-            const visible = preserveLoadedArtwork(restored, beatsLatestRef.current);
-            beatsLatestRef.current = visible;
-            setBeats(visible);
+            // Apply authority and retain decoded artwork plus active local imports.
+            const visible = mergeActiveUploads(restored, beatsLatestRef.current, getActiveUploadIds());
+            setBeats(current => {
+              if (revision !== getUploadRevision()) {
+                queueMicrotask(() => window.dispatchEvent(new Event("beatgaler:deferred-library-reload")));
+                return current;
+              }
+              const next = mergeActiveUploads(restored, current, getActiveUploadIds());
+              beatsLatestRef.current = next;
+              return next;
+            });
 
             startupCookingResolvedRef.current = true;
             startupPipelineStartedRef.current = false;
@@ -179,6 +186,8 @@ export function useLibraryReload({
     cloudLibrarySnapshotRef,
     cloudMetaSnapshotRef,
     deferLibraryReloadIfUploading,
+    getActiveUploadIds,
+    getUploadRevision,
     progressiveRevealRunRef,
     setBeats,
     setCloudSessionVerified,

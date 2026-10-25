@@ -49,7 +49,7 @@ describe("task 9.1 session/settings extraction", () => {
     expect(connectivity).toContain("pollTelegramCloudStatus");
     expect(connectivity).toContain('window.addEventListener("offline", onOffline)');
     expect(cloudEvents).toContain("new EventSource(url)");
-    expect(cloudEvents).toContain("libraryStateManager.reloadAuthoritative()");
+    expect(cloudEvents).toContain("reloadStableLibrary(getUploadRevision)");
     expect(state).not.toContain("pollTelegramCloudStatus");
     expect(actions).not.toContain("EventSource");
   });

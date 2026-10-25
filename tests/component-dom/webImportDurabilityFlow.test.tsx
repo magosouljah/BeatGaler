@@ -36,6 +36,10 @@ vi.mock("../../src/features/cloud/webTransportSession", () => ({
   cancelWebTransportBeat: vi.fn(async () => undefined),
   commitWebTransportIndexPointer: vi.fn(async () => undefined),
   reconcileWebTransportRouting: vi.fn(async () => undefined),
+  reserveWebTransportBeat: vi.fn(async () => undefined),
+  renewWebTransportBeat: vi.fn(async () => undefined),
+  cancelWebTransportBeat: vi.fn(async () => undefined),
+  publishWebTransportIndex: (...args: unknown[]) => network.replaceLibraryIndex(args[0]),
 }));
 
 vi.mock("../../src/features/playback/webStartupPlaybackCoordinator", () => {

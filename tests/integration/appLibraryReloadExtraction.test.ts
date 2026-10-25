@@ -48,7 +48,7 @@ describe("task 9.2 library Reload extraction", () => {
     expectOrdered(reload, [
       "if (deferLibraryReloadIfUploading()) return",
       "clearCachedBeats(getActiveWebAccountId());",
-      "const restored = await libraryStateManager.reloadAuthoritative()",
+      "const { beats: restored, revision } = await reloadStableLibrary(getUploadRevision)",
     ]);
     expect(queue).toContain("deferLibraryReloadIfUploading");
     expect(queue).toContain(
@@ -62,7 +62,7 @@ describe("task 9.2 library Reload extraction", () => {
     );
     expectOrdered(reload, [
       "let lastError: unknown = null",
-      "const restored = await libraryStateManager.reloadAuthoritative()",
+      "const { beats: restored, revision } = await reloadStableLibrary(getUploadRevision)",
       'setConnectionState("poor")',
       "setCloudSessionVerified(false)",
     ]);

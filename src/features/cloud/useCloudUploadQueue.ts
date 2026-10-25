@@ -45,6 +45,12 @@ function runtimeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function upsertConfirmedBeat(current: Beat[], committed: Beat): Beat[] {
+  return current.some(item => item.id === committed.id)
+    ? current.map(item => item.id === committed.id ? committed : item)
+    : [committed, ...current];
+}
+
 export function useCloudUploadQueue({
   settings,
   setSettings,
@@ -60,6 +66,7 @@ export function useCloudUploadQueue({
   hasProtectedStaging,
 }: UseCloudUploadQueueInput) {
   const autoCloudUploadRef = useRef<Set<string>>(new Set());
+  const uploadRevisionRef = useRef(0);
   const backgroundUploadQueueRef = useRef<Beat[]>([]);
   const backgroundUploadRunningRef = useRef(false);
   const deferredLibraryReloadRef = useRef(false);
@@ -118,6 +125,7 @@ export function useCloudUploadQueue({
       for (const beat of newBeats) {
         if (autoCloudUploadRef.current.has(beat.id)) continue;
         autoCloudUploadRef.current.add(beat.id);
+        uploadRevisionRef.current += 1;
         transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPLOAD" }, beat);
         transitionRuntime(beat.id, { type: "SYNC_UPLOAD_STARTED" }, beat);
         setBackgroundUploadErrors(current => {
@@ -141,7 +149,7 @@ export function useCloudUploadQueue({
             return next;
           });
           setBeats(current => {
-            const next = current.map(item => item.id === committed.id ? committed : item);
+            const next = upsertConfirmedBeat(current, committed);
             beatsLatestRef.current = next;
             return next;
           });
@@ -161,6 +169,7 @@ export function useCloudUploadQueue({
           });
         }).finally(() => {
           autoCloudUploadRef.current.delete(beat.id);
+          uploadRevisionRef.current += 1;
           finishDeferredReloadIfIdle();
         });
       }
@@ -172,6 +181,7 @@ export function useCloudUploadQueue({
       const alreadyQueued = backgroundUploadQueueRef.current.some(item => item.id === beat.id);
       if (alreadyQueued || autoCloudUploadRef.current.has(beat.id)) continue;
       markCloudUploadActive(beat);
+      uploadRevisionRef.current += 1;
       backgroundUploadQueueRef.current.push(beat);
       transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPLOAD" }, beat);
       setBackgroundUploadErrors(current => {
@@ -393,6 +403,7 @@ export function useCloudUploadQueue({
               ));
             } finally {
               autoCloudUploadRef.current.delete(original.id);
+              uploadRevisionRef.current += 1;
             }
 
             await new Promise<void>(resolve => window.setTimeout(resolve, 0));
@@ -451,5 +462,7 @@ export function useCloudUploadQueue({
     getQueuedBeatsSnapshot,
     deferLibraryReloadIfUploading,
     deferredLibraryReloadRef,
+    getActiveUploadIds: () => new Set(autoCloudUploadRef.current),
+    getUploadRevision: () => uploadRevisionRef.current,
   };
 }
