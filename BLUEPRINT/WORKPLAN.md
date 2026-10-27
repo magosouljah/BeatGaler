@@ -1,39 +1,46 @@
-# Plan de trabajo — posterior a beta.2
+# BeatGaler — guía flexible hacia V1 Web + Cloud
 
-Prioridad: estabilizar la Web y Cloud publicadas sin modificar el commit estable. El trabajo concreto vive en GitHub Issues y PRs. **Desktop/Tauri suspendido.** Ninguna etapa implica despliegue automático a producción.
+> **Una guía de dirección, no un plan de ejecución ni un calendario.** Cada frente se investigará y tendrá su propio plan cuando el responsable decida trabajarlo. Evitar miles de tareas, documentos de transición, listas duplicadas y compromisos prematuros. Un problema concreto → un diagnóstico → un plan corto → pruebas → PR.
 
-| # | Etapa | Criterio de cierre |
-| --- | --- | --- |
-| 1 | Ordenar GitHub | Revisar ramas/tags/releases, fijar `main` como referencia de desarrollo, resolver PRs pendientes y protecciones de rama |
-| 2 | Preparar desarrollo local | Entorno Web/Cloud aislado, reproducible y sin usar la DB productiva para tests |
-| 3 | Diagnóstico técnico | Auditar código y flujos Web/Cloud; reproducir y priorizar defectos reales |
-| 4 | Corregir bugs | Reproducción, fix mínimo, pruebas de regresión y revisión de cada PR |
-| 5 | Seguridad y dependencias | Verificar auth, aislamiento entre usuarios, Billing, secrets, permisos y CVEs; tratar riesgos confirmados |
-| 6 | Limpiar código | Retirar duplicaciones, paths y compatibilidades muertas solo después de probar dependencias y contratos de datos |
-| 7 | Fortalecer producción | Validar backups, restore/PITR, rollback, alertas, límites y procedimientos de recuperación con autorización separada |
-| 8 | Cerrar estabilización | Matriz real de flujos Web/Cloud, pruebas de candidatos por SHA y riesgos abiertos/aceptados |
-| 9 | Planificar beta.3 | Alcance acotado tras la estabilización, criterios de aceptación y decisión de publicación |
-| 10 | Desarrollo y crecimiento | Entregas pequeñas, pruebas con usuarios, seguimiento y eventual vuelta a Desktop **solo si se autoriza** |
+## Qué queremos conseguir antes de ampliar funcionalidades
 
-## Estado de avance al 27-10-2026
+La V1 de Web + Cloud debe **verse profesional, sentirse profesional y soportar crecimiento real**, sin comprometer archivos ni datos de usuarios.
 
-- **Etapa 1 avanzada:** GitHub y BLUEPRINT reorganizados; `main` ya es la rama predeterminada. No confundir organización con cierre de protección de ramas y revisión de pendientes.
-- **Cambio integrado durante esta actualización:** [PR #145](https://github.com/magosouljah/BeatGaler/pull/145) ya fue fusionado en `main` (junto con el anterior [PR #144](https://github.com/magosouljah/BeatGaler/pull/144)). Se deshabilitó la emisión del regalo de siete días a cuentas nuevas y se retiraron restos obsoletos del emisor; **los beneficios históricos deben conservarse hasta vencer**. **El merge en `main` no implica despliegue:** producción continúa en beta.2.
-- **Riesgo de desarrollo abierto:** [Issue #133](https://github.com/magosouljah/BeatGaler/issues/133), aislar la base de datos de pruebas. Priorizar antes de correr pruebas peligrosas sobre datos persistentes.
-- **Incidente de infraestructura del 27-10-2026:** [registro](OPERATIONS/INCIDENT-2026-10-27-EC2-NETWORK.md). Web/Cloud recuperados mediante stop/start; causa inicial aún no demostrada. **Decisión explícita: diferir / observar; no es tarea activa ni bloquea el siguiente trabajo.** Retomar solo si reaparece o surge evidencia nueva.
-- **Release protegido:** `release/0.9.0-beta.2` @ `a8418223527f88e9d34db8e05abb10216942013c` sigue publicado. Cambios en `main` no equivalen a un despliegue.
+- **Experiencia premium:** landing page pública antes de login, identidad visual coherente, UX sencilla, diseño responsive y feedback claro de cualquier operación.
+- **Velocidad medible:** cargas rápidas de biblioteca, reproducción que empieza pronto, subidas/descargas eficientes y una interfaz fluida. Medir tiempos reales en dispositivos y redes representativos antes de fijar objetivos numéricos o rediseñar.
+- **Fiabilidad:** operaciones recuperables e idempotentes, errores bien manejados, nada de perder datos o dejar al usuario bloqueado; ensayar fallos, reintentos, sesiones, uploads parciales y recuperación.
+- **Presentación limpia:** ningún rastro visible de Telegram como infraestructura interna en la UI, textos o errores públicos; retirar `console.log`/debug ruidoso del cliente de producción, **sin eliminar la observabilidad segura del backend**. No confundir ocultar implementación con sustituir el transporte subyacente.
+- **Código que entendemos:** responsabilidades claras, menos duplicación, nombres consistentes, dependencias conocidas, pruebas que documenten contratos y eliminación de código muerto solo tras comprobar que ya no se usa.
+- **Escala y concurrencia demostradas:** no basta con que funcione para una persona. Diseñar y medir operaciones simultáneas, aislamiento por usuario, límites de Telegram/transporte, Cloud, PostgreSQL, colas, tiempos de espera, coste y puntos únicos de fallo. La actual EC2 `t3.micro` y RDS `db.t4g.micro` **no constituyen prueba** de capacidad para muchos usuarios.
 
-## Secuencia práctica de los próximos trabajos
+## Frentes posibles (sin orden obligatorio ni planes congelados)
 
-1. Terminar la auditoría de flujo GitHub y protecciones de `main`, verificar resultados de integración de los PR #144/#145 y registrar cualquier pendiente; **sin desplegar** el código nuevo.
-2. Crear y verificar un entorno de pruebas aislado de RDS/producción; atender #133 antes de suites con escritura.
-3. Ejecutar revisión técnica Web + Cloud en desarrollo: arranque, autenticación, Free/planes, biblioteca, búsqueda, reproducción, descargas, uploads, PROJECT, edición, Trash, Telegram/INDEX y recuperación.
-4. Clasificar bugs reproducibles (severidad/impacto/riesgo); corregir en PRs pequeños con test previo y test de regresión.
-5. Validar permisos, límites, aislamiento entre cuentas, pagos y suscripciones (sandbox y sin cobros no autorizados), secretos y dependencias.
-6. Hacer limpieza limitada a código obsoleto demostrado; revisar rendimiento y estabilidad sin refactorizar por estética.
-7. En una **etapa posterior autorizada**, revisar capacidad EC2/RDS, alarmas externas, backups restaurables y rollback. El incidente EC2 documentado permanece en observación, sin acción por ahora.
-8. Cerrar un checklist de punta a punta para el mismo SHA candidato y registrar diferencias entre `main`, release y producción.
-9. Decidir qué problemas justifican beta.3 y cuáles quedan fuera; definir gates y pruebas.
-10. Desarrollar, validar en staging, pedir aprobación para publicar y observar el resultado; repetir iterativamente hasta decidir formalmente V1 Web + Cloud. Desktop permanece pausado.
+| Frente | Preguntas a resolver cuando se elija |
+| --- | --- |
+| Landing y marca | ¿Qué verá el visitante antes de iniciar sesión? ¿Cómo explicar BeatGaler y llevarlo con confianza a signup/login? |
+| UX y responsive | ¿Dónde se siente lenta, confusa, inconsistente o frágil la Web? ¿Qué pasa en móvil y pantallas pequeñas? |
+| Upload y playback | ¿Cuánto tarda cada fase desde el click hasta subir/escuchar? ¿Qué parte está en cliente, red, transporte o servidor? |
+| Robustez | ¿Qué ocurre ante mensajes/archivos faltantes, caídas, timeouts, carga parcial, renovaciones y sesiones simultáneas? |
+| INDEX / MASTER / Transport Bot | **Auditar primero la ruta realmente activa de Web + Cloud:** la arquitectura Direct contempla que el transport bot asignado gestione el INDEX desde el cliente y reserva MASTER para aprovisionamiento/recuperación excepcional; existe también código Cloud con operaciones de INDEX vía MASTER. **No decidir aún migración:** medir rutas activas, cargas, permisos, ownership, bloqueo y riesgo de borrado concurrente, sin comprometer integridad del INDEX ni aislamiento. |
+| Escalabilidad | Pruebas graduales de concurrencia y carga en entorno aislado; observar cuellos de botella, throughput, p95/p99, límites de terceros y estrategias de escalado/backpressure. |
+| Seguridad, datos y billing | Autenticación, aislamiento entre cuentas, permisos, quotas, pagos, recuperación, backups y migraciones seguras. |
+| Limpieza de código | Auditoría de módulos, duplicados, dependencias, logs, contratos, nombres y pruebas; refactors mínimos y verificables. |
+| Producción y observabilidad | Alertas, recuperación, rollback, disponibilidad, RDS, costes y capacidad cuando corresponda. |
+| Marketing en paralelo | Empezar investigación, guiones, estilo, assets y pilotos desde el repositorio independiente [MarketingBeatGaler](https://github.com/magosouljah/MarketingBeatGaler). No exagerar características ni lanzar campañas grandes antes de una landing y una experiencia validada. La Fase 0 del sistema de video ya está definida allí. |
 
-Reglas: no mutar producción durante documentación/diagnóstico; no modificar código del release ni hacer force-push; usar rama/PR; probar según riesgo; registrar limitaciones de evidencia; autorización específica para pagos, infraestructura, datos o despliegues productivos.
+**Principio:** estabilidad, rendimiento, claridad y seguridad **antes** de añadir más features. No hacer una reescritura total sin evidencia.
+
+## Cómo se inicia un frente cuando llegue su momento
+
+Solo cuando se elija un tema: (1) observar el comportamiento actual y obtener medidas, (2) definir problema y alcance, (3) escribir **su** plan específico y criterio de aceptación, (4) implementar en cambios pequeños y aislados, (5) probar regressiones/carga donde aplique, y (6) decidir despliegue por separado. Esta guía no asigna fechas ni obliga a seguir un orden fijo.
+
+## Estado y restricciones (27-10-2026)
+
+- **Web + Cloud en producción:** `v0.9.0-beta.2` / `release/0.9.0-beta.2` / `a8418223527f88e9d34db8e05abb10216942013c`; no desplegar cambios de `main` sin autorización explícita.
+- En `main`, PR #144 y #145 quitaron el regalo automático de siete días a nuevas cuentas, preservando los grants históricos hasta su vencimiento. Son cambios **no publicados** mientras no exista despliegue autorizado.
+- **Seguridad de pruebas:** [Issue #133](https://github.com/magosouljah/BeatGaler/issues/133) — aislar la DB de tests; antes de pruebas destructivas o con escrituras, verificar explícitamente el entorno.
+- **Incidente EC2 27-10-2026:** [registro operativo](OPERATIONS/INCIDENT-2026-10-27-EC2-NETWORK.md). Recuperado, causa inicial incierta; **se deja en observación** por decisión del responsable, sin tarea inmediata. Reactivar si se repite.
+- **Desktop/Tauri pausado.** Prioridad exclusiva de ingeniería: Web + Cloud.
+- No tocar datos, infraestructura, credenciales, billing real ni release en producción como consecuencia de esta guía. Cualquier cambio de ese tipo necesita autorización y recuperación/rollback comprobables.
+
+Para el estado real consultar [CURRENT-STATE.md](CURRENT-STATE.md); para la visión completa de producto, [V1.md](V1.md). GitHub Issues/PRs y código/test/runtime prevalecen sobre documentación histórica.
