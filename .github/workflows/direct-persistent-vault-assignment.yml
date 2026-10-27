@@ -1,9 +1,6 @@
 name: Direct - Persistent Vault Assignment
 
 on:
-  push:
-    branches:
-      - direct/persistent-vault-assignment
   pull_request:
     paths:
       - package.json

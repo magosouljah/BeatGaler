@@ -2,9 +2,15 @@ name: D7 - Direct Capability Authorization
 
 on:
   pull_request:
-  push:
-    branches:
-      - integration-v0.8.0-alpha.1
+    paths:
+      - 'cloud-server/direct-**'
+      - 'cloud-server/tests/direct-**'
+      - 'cloud-server/tests/postgres-**'
+      - 'cloud-server/migrations/**'
+      - 'cloud-server/server.js'
+      - 'cloud-server/server-core.js'
+      - 'cloud-server/productive-temp-auth-boundary.js'
+      - '.github/workflows/d7-direct-capabilities.yml'
   workflow_dispatch:
 
 permissions:

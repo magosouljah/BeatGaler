@@ -1,12 +1,31 @@
 name: Auth public registration hardening
 
 on:
-  push:
-    branches:
-      - feat/auth-public-registration-hardening
   pull_request:
     branches:
-      - release/0.9.0-beta.1
+      - main
+    paths:
+      - 'cloud-server/*auth*'
+      - 'cloud-server/*identity*'
+      - 'cloud-server/*signup*'
+      - 'cloud-server/*session*'
+      - 'cloud-server/*email*'
+      - 'cloud-server/*provider*'
+      - 'cloud-server/*pending*'
+      - 'cloud-server/account-lifecycle*'
+      - 'cloud-server/tests/*auth*'
+      - 'cloud-server/tests/*identity*'
+      - 'cloud-server/tests/*signup*'
+      - 'cloud-server/tests/*session*'
+      - 'cloud-server/tests/*email*'
+      - 'cloud-server/tests/*provider*'
+      - 'cloud-server/tests/*pending*'
+      - 'cloud-server/tests/account-lifecycle*'
+      - 'cloud-server/migrations/**'
+      - 'cloud-server/server.js'
+      - 'cloud-server/server-core.js'
+      - '.github/workflows/auth-public-registration-hardening.yml'
+  workflow_dispatch:
 
 jobs:
   auth-hardening:

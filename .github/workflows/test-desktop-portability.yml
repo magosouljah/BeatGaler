@@ -1,11 +1,8 @@
 name: Test - Desktop Portability
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
-      - integration-v0.8.0-alpha.1
+  # Desktop/Tauri paused: run this historical, cross-platform suite only on demand.
+  # Web and Cloud pull requests continue through separate focused workflows.
   workflow_dispatch:
 
 permissions:
