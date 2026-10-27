@@ -75,6 +75,8 @@ jobs:
           node --check cloud-server/tests/auth-identity-postgres.worker.cjs
           node --check cloud-server/tests/signup-activation-postgres.integration.cjs
           node --check cloud-server/tests/signup-activation-postgres.worker.cjs
+      - name: Install locked Cloud dependencies
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening
