@@ -122,7 +122,6 @@ function createSignupActivationCoordinator({
   service,
   getBridge,
   flushAuthority,
-  issueWelcome,
   installationClaimCoordinator = null,
   now = () => Date.now(),
   staleMs = 5 * 60_000,
@@ -131,7 +130,6 @@ function createSignupActivationCoordinator({
   if (!service || typeof service.claimActivation !== 'function') throw new Error('Signup activation requires pending signup service.');
   if (typeof getBridge !== 'function') throw new Error('Signup activation requires a server-core bridge resolver.');
   if (typeof flushAuthority !== 'function') throw new Error('Signup activation requires control-plane flush authority.');
-  if (typeof issueWelcome !== 'function') throw new Error('Signup activation requires welcome grant authority.');
 
   async function activate({ signupId, continuationSecret } = {}) {
     const id = String(signupId || '').trim();
@@ -280,11 +278,6 @@ function createSignupActivationCoordinator({
           throw coded('Installation claim is missing after its ledger step.', 'INSTALLATION_DURABILITY_FAILED');
         }
       }
-
-      await runLedgerStep(client, id, 'welcome', async () => {
-        const grant = await issueWelcome(userId);
-        return { user_id: userId, grant_id: grant?.id || null };
-      });
 
       await service.setActivationState(id, 'ACTIVE', { userId });
       activeCommitted = true;
