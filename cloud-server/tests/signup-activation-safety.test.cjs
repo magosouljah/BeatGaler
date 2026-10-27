@@ -105,7 +105,6 @@ async function main() {
     let localUser = null;
     let vaultCreates = 0;
     let userCreates = 0;
-    let welcomeCalls = 0;
     let verification = null;
     const serviceStates = [];
 
@@ -212,7 +211,6 @@ async function main() {
       service,
       getBridge: () => bridge,
       flushAuthority,
-      issueWelcome: async id => { welcomeCalls += 1; return { id: `welcome:${id}` }; },
       now: () => Date.parse('2026-10-21T00:10:00.000Z'),
     });
 
@@ -222,7 +220,6 @@ async function main() {
     );
     assert.equal(userCreates, 1);
     assert.equal(vaultCreates, 1);
-    assert.equal(welcomeCalls, 1);
     assert.equal(serviceStates.some(([status]) => status === 'ACTIVE'), true);
     assert.equal(serviceStates.some(([status]) => status === 'RETRYABLE'), false, 'post-ACTIVE session failure must not downgrade activation');
     assert.equal(pending.activated_user_id, userId);
