@@ -32,9 +32,18 @@
 - **Default branch:** seguía siendo `integration-v0.9.0-alpha.4` al iniciar la auditoría. Tras verificar CI y repositorio: Settings → General → Default branch → `main`. Requiere acción del propietario porque la conexión actual no expone modificación de configuración del repositorio.
 - **Reglas:** el único ruleset observado (`integration-v0.8.0-alpha.1`) apunta a una rama que ya no existe. Crear ruleset para `main` (PR, prohibir borrado y force-push) y proteger `release/*` y tags `v*` contra movimiento/borrado; mantener posibilidad explícita de crear tags de nuevos releases. Revisar bypass de administradores.
 - **GitHub Releases:** no existía Release publicado al auditar. Crear prerelease `v0.9.0-beta.2` usando el **tag existente**, sin generar otro ni cambiar objetivo. No es un despliegue.
-- **Actions:** se observaron 32 YAML de workflow en la línea beta.2. `Public Operations - Validate` corre semanalmente desde la rama predeterminada (solo validaciones, no despliegue). `Build - Windows`, `Build - macOS` y `Release - Desktop Updater` se lanzan manualmente. Hay triggers obsoletos para `integration-v0.8.0-alpha.1`, `release/0.9.0-beta.1` y ramas de trabajo ya cerradas.
+- **Actions:** se auditaron 32 YAML y se conservan 29 workflows activos después de la limpieza (3 archivados sin borrarlos). `Public Operations - Validate` sigue semanalmente desde `main` y solo valida archivos/scripts. `Build - Windows`, `Build - macOS`, `Release - Desktop Updater` y `Test - Desktop Portability` quedan manuales. Los controles Web/Cloud por PR y el escaneo de secretos siguen vigentes.
 - **Deuda de CI:** PR #142 reportó fallos `Test - Desktop Portability` (`version:check`, Rust/macOS, Windows y supply chain) y `D7 - Direct Capability Authorization`; no atribuirlos automáticamente al cambio documental. La línea beta.2 todavía contiene `VERSION = 0.9.0-beta.1`. Resolver por PR técnico separado, sin alterar la versión ya desplegada durante esta organización.
 - **Protección actual:** las ramas antigua predeterminada y `release/0.9.0-beta.2` reportaban `protected=false`. Configurar protecciones antes de eliminar otras referencias.
 - Tras cambiar la rama predeterminada, verificar el siguiente run programado, los checks en un PR Web/Cloud y la URL del tag/release.
 
 **Seguridad:** no usar este documento como autorización para desplegar, ejecutar migraciones, manipular RDS/EC2 o eliminar ramas/tags.
+
+## Mantenimiento de GitHub Actions — 2026-10-27
+
+- **Sin ejecuciones automáticas Desktop:** `test-desktop-portability.yml` queda disponible solo mediante `workflow_dispatch`. No elimina el historial ni las pruebas de Windows/macOS.
+- **Retirados de Actions, preservados como archivos históricos:** `.github/workflows-archive/f4-25.1-functional-matrix.yml`, `f4-25.1-windows-import.yml` y `upgrade-21.2-staging.yml`. Sus triggers estaban ligados exclusivamente a la desaparecida `integration-v0.8.0-alpha.1`.
+- **Actualizados los triggers de desarrollo:** `auth-public-registration-hardening.yml` escucha PR hacia `main` con cambios de autenticación Cloud y permite ejecución manual; `d7-direct-capabilities.yml` mantiene PR focalizados y ejecución manual; `direct-persistent-vault-assignment.yml` ya no observa pushes a una rama de trabajo eliminada.
+- **Seguridad conservada:** `f0-0.20-secret-scan.yml` sigue en cada PR y ahora en pushes a `main`. `web-production-build.yml`, pruebas específicas de Cloud/billing y el chequeo semanal de operaciones no cambian.
+- **Importante:** los fallos históricos permanecen en el historial Actions; corregir `VERSION=0.9.0-beta.1` y eventuales fallos D7/supply-chain requiere una tarea técnica independiente, no ocultar errores de CI en PRs con código afectado.
+- **No se tocó código funcional, tags, ramas release ni producción.** Los archivos archivados se pueden recuperar de la historia Git y volver a `.github/workflows/` cuando se reanude Desktop.
