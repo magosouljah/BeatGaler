@@ -1,7 +1,6 @@
-// Legacy JSON/rollback plan projection and welcome compatibility.
+// Legacy JSON/rollback plan projection; preserve already-issued grants.
 // PostgreSQL Web commerce and runtime access use billing-access-resolver.js.
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
 
 const PLAN_CATALOG = Object.freeze({
@@ -66,7 +65,6 @@ const PLAN_CATALOG = Object.freeze({
 const CODE_POLICY = Object.freeze({
   code_types: Object.freeze(["time", "unlock"]),
   existing_user_default_days: 3,
-  welcome: Object.freeze({ plan_id: "paid_entry", days: 7 }),
   referral: Object.freeze({
     free: Object.freeze({ rewarded_referrals_per_month: 1, reward_plan_id: "paid_entry", reward_days: 3 }),
     paid_entry: Object.freeze({ rewarded_referrals_per_month: 2, reward_plan_id: "highest_paid", reward_days: 3 }),
@@ -79,20 +77,9 @@ function normalizePlanId(value) {
   return PLAN_CATALOG[id] ? id : "free";
 }
 
-function createWelcomeGrant(now = Date.now()) {
-  return {
-    id: `welcome_${now}`,
-    source: "welcome",
-    planId: CODE_POLICY.welcome.plan_id,
-    startsAt: now,
-    expiresAt: now + CODE_POLICY.welcome.days * DAY_MS,
-  };
-}
-
-function ensurePlanState(user, { newAccount = false, now = Date.now() } = {}) {
+function ensurePlanState(user) {
   if (!user.planState || typeof user.planState !== "object") {
     user.planState = { basePlanId: "free", grants: [] };
-    if (newAccount) user.planState.grants.push(createWelcomeGrant(now));
   }
   user.planState.basePlanId = normalizePlanId(user.planState.basePlanId);
   if (!Array.isArray(user.planState.grants)) user.planState.grants = [];
