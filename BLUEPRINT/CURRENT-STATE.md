@@ -1,23 +1,29 @@
-# BeatGaler — estado vigente
+# Estado — 27 de octubre de 2026
 
-**Corte:** 27 de octubre de 2026. **Producto:** beta.2 Web + Cloud publicada; cercano a V1 en madurez funcional, pero no declarado V1 final.
-
-| Elemento | Estado confirmado por el responsable |
+| Elemento | Hecho documentado |
 | --- | --- |
-| Versión | `0.9.0-beta.2` |
-| Rama | `release/0.9.0-beta.2` |
-| Web + Cloud SHA | `a8418223527f88e9d34db8e05abb10216942013c` |
-| Web | `beatgaler.com`, operativa |
-| API | `api.beatgaler.com`, operativa |
-| PostgreSQL | Ready según validación del despliegue |
-| Pruebas de usuario | Funciones disponibles probadas satisfactoriamente el 26-10-2026 |
-| Carpeta Windows | `E:\777\app\BeatGaler` |
-| Prioridad | Solo Web + Cloud; Desktop/Tauri pausado |
+| Publicación Web + Cloud | **`v0.9.0-beta.2`** |
+| Referencia congelada | `release/0.9.0-beta.2` |
+| SHA publicado | `a8418223527f88e9d34db8e05abb10216942013c` |
+| Sitios | `beatgaler.com` / `api.beatgaler.com` |
+| Desarrollo | `main` (no equivale a producción) |
+| Carpeta local | `E:\777\app\BeatGaler` |
+| Desktop/Tauri | Suspendido |
+| Marketing | `magosouljah/MarketingBeatGaler` (separado) |
 
-La presente edición es documental y **no ejecuta otra comprobación de producción**. No interpretar el feedback funcional como certificación de cada feature futura en [V1.md](V1.md), pagos productivos, PITR o recuperación total.
+El responsable reportó pruebas funcionales satisfactorias de beta.2 el 26-10-2026. **Este documento no verifica el runtime de nuevo ni certifica todas las capacidades, cobros productivos, recuperación o escalabilidad.**
 
-La rama principal de desarrollo es `main`; el despliegue beta.2 conserva su SHA independiente y no debe actualizarse sin autorización. No tocar ni forzar la rama de release.
+## Decisión Free / beneficios históricos
 
-**Política de registro en `main` desde PR #144:** cuentas nuevas en Free, sin regalo automático de 7 días Paid Entry por registro, OAuth ni verificación. La limpieza posterior elimina el emisor y la proyección obsoletos, **sin migrar, borrar ni reiniciar** grants `source='welcome'` ya concedidos. El resolver sigue respetando su vencimiento. Los premios futuros usarán descuentos del 100% de Polar, sujetos a validación de checkout, reglas de uso y renovación; no hay cuponera interna.
+En `main`, PR [#144](https://github.com/magosouljah/BeatGaler/pull/144) y [#145](https://github.com/magosouljah/BeatGaler/pull/145) desactivaron el regalo automático de **7 días Paid Entry** por registro, verificación u OAuth. **Las cuentas nuevas comienzan en Free.** Los grants `source='welcome'` otorgados antes **conservan** fechas y vigencia hasta su expiración: no migrarlos, borrarlos, reiniciarlos ni revocarlos. La compatibilidad histórica del resolver y PostgreSQL se conserva. **Esto es política de `main`; no afirmar que ya está desplegada en beta.2.**
 
-Siguiente trabajo: [WORKPLAN.md](WORKPLAN.md). Evidencias anteriores: [HISTORY/](HISTORY/README.md).
+Promociones futuras con 100% de descuento serán gestionadas por Polar, tras validar condiciones y renovaciones; sin cuponera interna.
+
+## Límites operativos
+
+- **No** cambiar release, tag, producción, EC2/RDS, credenciales, infraestructura, datos de usuario ni cobros sin autorización independiente. No desplegar cambios documentales.
+- [Incidente EC2 27-10-2026](OPERATIONS/INCIDENT-2026-10-27-EC2-NETWORK.md): recuperado, causa inicial no confirmada, **en observación**; no abrir investigación ahora.
+- [Issue #133](https://github.com/magosouljah/BeatGaler/issues/133): comprobar aislamiento de DB de tests **antes** de ensayos destructivos o con escrituras.
+- El código, los tests y los PRs son la prueba del estado de `main`; el SHA desplegado es una referencia distinta.
+
+Para prioridades [DIRECTION.md](DIRECTION.md); reglas financieras [BILLING-V1-POLICY.md](BILLING-V1-POLICY.md).

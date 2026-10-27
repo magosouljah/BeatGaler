@@ -11,7 +11,7 @@ on:
       - 'cloud-server/tests/billing-checkout-persistent.integration.cjs'
       - 'cloud-server/package.json'
       - 'cloud-server/package-lock.json'
-      - 'BLUEPRINT/BILLING-V1-CHECKOUT-IDEMPOTENCY.md'
+      - 'BLUEPRINT/BILLING-V1-POLICY.md'
       - '.github/workflows/billing-v1-persistent-checkout.yml'
 
 permissions:

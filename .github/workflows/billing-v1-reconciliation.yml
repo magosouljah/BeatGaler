@@ -18,7 +18,7 @@ on:
       - 'cloud-server/tests/billing-v1-migrations.integration.cjs'
       - 'cloud-server/package.json'
       - 'cloud-server/package-lock.json'
-      - 'BLUEPRINT/BILLING-V1-RECONCILIATION.md'
+      - 'BLUEPRINT/BILLING-V1-POLICY.md'
       - '.github/workflows/billing-v1-reconciliation.yml'
 
 permissions:
