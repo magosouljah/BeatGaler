@@ -1,25 +1,24 @@
 # BeatGaler — BLUEPRINT
 
-> Documentación vigente desde beta.2. Ya no es un plan para comenzar V1: reúne el estado publicado, el trabajo de estabilización, decisiones de producto y contratos técnicos.
+> **Guía compacta de producto e ingeniería**, no calendario ni plan rígido. Un tema se planifica en detalle **solo cuando decidamos trabajarlo**. Evitar crear documentos nuevos por cada conversación, investigación o microtarea.
 
-## Empezar aquí
+## Leer primero
 
-1. [Estado vigente](CURRENT-STATE.md) — beta.2 Web y Cloud.
-2. [Plan de trabajo](WORKPLAN.md) — diez etapas.
-3. [Método de desarrollo](SYSTEM.md) — cambios seguros.
-4. [Dirección de producto](V1.md) y [roadmap](ROADMAP.md).
-5. [Principios](BRUNO.md).
+- [Estado publicado](CURRENT-STATE.md) — qué release está en producción y qué está pendiente.
+- [Guía flexible hacia V1 Web + Cloud](WORKPLAN.md) — calidad, landing, rendimiento, limpieza, escala, arquitectura INDEX/MASTER y marketing en paralelo.
+- [Visión de producto](V1.md) — destino de BeatGaler, no certificación de funciones publicadas.
+- [Método de cambios](SYSTEM.md) — pruebas, PR y protección de producción.
+- [Roadmap resumido](ROADMAP.md) — dirección general, no fases obligatorias.
 
-## Referencias técnicas
+## Documentación especializada (consultar solo cuando haga falta)
 
-- [Arquitectura](ARCHITECTURE/README.md), incluidas ADR y fuentes técnicas.
-- [Billing](BILLING/README.md): contratos e invariantes financieros.
-- [Operación](OPERATIONS/README.md): AWS, despliegue y recuperación.
-- [Historial](HISTORY/README.md): fases, pruebas y gates pasados.
-- [Gates V1 antiguos](v1-gates/README.md): trazabilidad, no tareas actuales.
+- [Arquitectura](ARCHITECTURE/README.md).
+- [Billing y reglas financieras](BILLING/README.md).
+- [Operación e incidentes](OPERATIONS/README.md).
+- [Historial de pruebas y decisiones](HISTORY/README.md); [gates antiguos](v1-gates/README.md) como **evidencia histórica**, nunca órdenes vigentes.
 
-## Regla
+## Reglas
 
-Runtime, código y tests determinan qué funciona; GitHub registra Issues/PR/CI. Los estados históricos se interpretan en su SHA y fecha; no son certificaciones de beta.2. No repetir comandos antiguos ni tocar producción siguiendo informes históricos.
+Preferir actualizar un documento canónico a multiplicar archivos. GitHub Issues/PRs/CI y el código real determinan el estado; conservar únicamente referencias técnicas/históricas que aporten trazabilidad. No hacer limpieza destructiva sin revisar enlaces, contratos ni evidencias.
 
-Referencia publicada: `release/0.9.0-beta.2` @ `a8418223527f88e9d34db8e05abb10216942013c`.
+**Release protegido:** `release/0.9.0-beta.2` @ `a8418223527f88e9d34db8e05abb10216942013c`. La prioridad es Web + Cloud; Desktop/Tauri está pausado. Marketing se desarrolla en el repositorio separado [MarketingBeatGaler](https://github.com/magosouljah/MarketingBeatGaler).
