@@ -713,20 +713,6 @@ const linkedAccounts = new Map();
 const beatGalerUsers = new Map();       // normalized username -> user record
 const beatGalerUsersById = new Map();   // account id -> same record
 const authSessions = new Map();         // sha256(session token) -> session record
-accessGrants.setLegacyProjectionUpdater((userId, grant) => {
-  const user = beatGalerUsersById.get(userId);
-  if (!user) return;
-  const state = ensurePlanState(user);
-  if (state.grants.some(item => item.id === grant.id)) return;
-  state.grants.push({
-    id: grant.id,
-    planId: grant.plan_id,
-    source: grant.source,
-    startsAt: new Date(grant.starts_at).getTime(),
-    expiresAt: new Date(grant.expires_at).getTime(),
-  });
-});
-
 // telegram_file_id -> { beatgalerUserId, telegramMessageId, filename, createdAt }
 // Esto evita que un usuario descargue un file_id que no le pertenece.
 const uploadedFiles = new Map();

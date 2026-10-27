@@ -53,7 +53,7 @@ jobs:
           node --check cloud-server/auth-delivery-worker.js
           node --check cloud-server/auth-identity-preflight.js
           node --check cloud-server/scripts/auth-identity-preflight.cjs
-          node --check cloud-server/account-lifecycle-verified-email-activation.js
+          node --check cloud-server/account-lifecycle.js
           node --check cloud-server/server-core-auth-bridge-loader.js
           node --check cloud-server/signup-activation-coordinator.js
           node --check cloud-server/postgres-auth-multiprocess-compat.js
@@ -75,6 +75,8 @@ jobs:
           node --check cloud-server/tests/auth-identity-postgres.worker.cjs
           node --check cloud-server/tests/signup-activation-postgres.integration.cjs
           node --check cloud-server/tests/signup-activation-postgres.worker.cjs
+      - name: Install locked Cloud dependencies
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
       - name: Focused auth tests
         working-directory: cloud-server
         run: npm run test:auth-hardening

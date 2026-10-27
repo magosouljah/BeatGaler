@@ -115,35 +115,25 @@ test('Auth persistence never owns commercial entitlements, including after resta
       assert.deepEqual(reloaded.auth.users[0].planState.grants.map(grant => grant.id), ['grant_f3_step1']);
     });
 
-    await t.test('D: Access issues welcome once across retries, restart and concurrent calls', async () => {
-      const { issueWelcomeGrant } = require('../access-grant-store');
-      const accessRuntime = require('../access-grant-runtime');
+    await t.test('D: historic welcome survives Auth restart; issuance API is removed', async () => {
       const at = new Date('2026-10-08T03:00:00Z');
-      const results = await Promise.all(Array.from({ length: 8 }, () => issueWelcomeGrant(pool, 'usr_f3_step1', { now: at })));
-      assert.equal(new Set(results.map(row => row.id)).size, 1);
-      const welcome = (await entitlementRows(pool)).filter(row => row.source === 'welcome');
-      assert.equal(welcome.length, 1);
-      assert.equal(welcome[0].plan_id, 'paid_entry');
-      assert.equal(welcome[0].starts_at, at.toISOString());
-      assert.equal(welcome[0].expires_at, new Date(at.getTime() + 7 * 86400_000).toISOString());
-      await issueWelcomeGrant(pool, 'usr_f3_step1', { now: new Date(at.getTime() + 86400_000) });
-      assert.deepEqual((await entitlementRows(pool)).filter(row => row.source === 'welcome'), welcome);
-      let flushes = 0;
-      let projected = null;
-      accessRuntime.configure({ pool, authRuntime: { async flush() { flushes += 1; } } });
-      accessRuntime.setLegacyProjectionUpdater((_userId, grant) => { projected = grant; });
-      try {
-        await accessRuntime.issueWelcomeAfterActivation('usr_f3_step1');
-        assert.equal(flushes, 0, 'activation must not issue or project a new welcome');
-        assert.equal(projected, null);
-      } finally {
-        accessRuntime.configure();
-      }
+      assert.equal((await entitlementRows(pool)).filter(row => row.source === 'welcome').length, 0);
+      await pool.query(`
+        INSERT INTO entitlements(id,user_id,plan_id,source,source_key,starts_at,expires_at,issued_by_actor)
+        VALUES('welcome_historic_f3','usr_f3_step1','paid_entry','welcome','welcome:v1',$1,$2,'access:welcome')
+      `, [at, new Date(at.getTime() + 7 * 86400_000)]);
+      const historical = (await entitlementRows(pool)).filter(row => row.source === 'welcome');
+      assert.equal(historical.length, 1);
+      assert.equal(historical[0].plan_id, 'paid_entry');
+      assert.equal(historical[0].starts_at, at.toISOString());
+      assert.equal(historical[0].expires_at, new Date(at.getTime() + 7 * 86400_000).toISOString());
+      assert.equal(Object.hasOwn(require('../access-grant-store'), 'issueWelcomeGrant'), false);
+      assert.equal(Object.hasOwn(require('../access-grant-runtime'), 'issueWelcomeAfterActivation'), false);
       const restarted = new PostgresControlPlaneRuntime({ pool, expectedSnapshotSha256: SHA, cryptoConfig });
       const snapshot = (await restarted.initialize()).auth;
       await restarted.saveAuthSnapshot(snapshot);
       await restarted.flush();
-      assert.deepEqual((await entitlementRows(pool)).filter(row => row.source === 'welcome'), welcome);
+      assert.deepEqual((await entitlementRows(pool)).filter(row => row.source === 'welcome'), historical);
     });
 
     await t.test('legacy rollback export cannot reactivate a revoked commercial grant', async () => {

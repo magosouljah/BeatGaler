@@ -1,5 +1,7 @@
 # Fase 3 — estado operativo Billing V1 Web
 
+> **Histórico:** este expediente describe Fase 3 antes de PR #144. Desde el 27-10-2026 no se emiten nuevos welcome; los grants anteriores conservan sus fechas. Política vigente: [BILLING-V1-POLICY.md](BILLING-V1-POLICY.md).
+
 **Base auditada:** `integration-v0.9.0-alpha.4` @ `c8495f2a52cb97278392e15c9f64cddab86b9cc7`; `origin` en el mismo SHA y working tree limpio antes de este documento. Fase 2: **CLOSED**. Fecha: 2026-10-08. Este estado describe el código de esa base, no una promesa de lanzamiento.
 
 ## Alcance y decisiones V1 congeladas

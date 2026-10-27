@@ -16,6 +16,8 @@
 
 La presente edición es documental y **no ejecuta otra comprobación de producción**. No interpretar el feedback funcional como certificación de cada feature futura en [V1.md](V1.md), pagos productivos, PITR o recuperación total.
 
-La rama predeterminada observada al iniciar la auditoría era `integration-v0.9.0-alpha.4`; revisar antes de cambiarla. La API de GitHub no mostró releases registrados en su listado; eso no contradice el despliegue confirmado. No tocar ni forzar la rama de release.
+La rama principal de desarrollo es `main`; el despliegue beta.2 conserva su SHA independiente y no debe actualizarse sin autorización. No tocar ni forzar la rama de release.
+
+**Política de registro en `main` desde PR #144:** cuentas nuevas en Free, sin regalo automático de 7 días Paid Entry por registro, OAuth ni verificación. La limpieza posterior elimina el emisor y la proyección obsoletos, **sin migrar, borrar ni reiniciar** grants `source='welcome'` ya concedidos. El resolver sigue respetando su vencimiento. Los premios futuros usarán descuentos del 100% de Polar, sujetos a validación de checkout, reglas de uso y renovación; no hay cuponera interna.
 
 Siguiente trabajo: [WORKPLAN.md](WORKPLAN.md). Evidencias anteriores: [HISTORY/](HISTORY/README.md).

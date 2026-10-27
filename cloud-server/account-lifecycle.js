@@ -156,7 +156,6 @@ function createAccountLifecycleRuntime({
   emailNotifier = null,
   pool = null,
   getCapabilityStore = () => null,
-  onEmailVerified = null,
 } = {}) {
   const stateFile = path.join(dataDir, STATE_FILE_NAME);
   const accountsFile = path.join(dataDir, ACCOUNTS_FILE_NAME);
@@ -518,10 +517,8 @@ function createAccountLifecycleRuntime({
     }
     try {
       await markVerifiedEmail(pool, String(user.id), user.email, { verifiedAt: new Date(now()) });
-      if (typeof onEmailVerified === 'function') await onEmailVerified(String(user.id));
     } catch {
-      // The token remains usable if Access could not durably issue welcome.
-      // A retry is safe because Access enforces one welcome per user.
+      // A failed durable verification must not consume the token; retry is safe.
       const retry = { ...record };
       delete retry.consumed_at;
       persisted.tokens[sha256(rawToken)] = retry;
