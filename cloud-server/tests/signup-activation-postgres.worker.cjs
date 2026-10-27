@@ -9,7 +9,6 @@ const { Pool } = require('pg');
 const { createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createPendingSignupService } = require('../pending-signup-service');
 const { createSignupActivationCoordinator } = require('../signup-activation-coordinator');
-const { issueWelcomeGrant } = require('../access-grant-store');
 const { createPostgresInstallationClaimCoordinator } = require('../postgres-installation-claim-coordinator');
 
 async function main() {
@@ -85,7 +84,7 @@ async function main() {
   }
   try {
     const coordinator = createSignupActivationCoordinator({ pool, service, getBridge: () => bridge,
-      flushAuthority, issueWelcome: userId => issueWelcomeGrant(pool, userId),
+      flushAuthority,
       installationClaimCoordinator: createPostgresInstallationClaimCoordinator(pool), staleMs: 60_000 });
     const result = await coordinator.activate({ signupId: process.env.TEST_SIGNUP_ID,
       continuationSecret: 'sc_activation_test' });

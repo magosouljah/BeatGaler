@@ -1530,9 +1530,8 @@ app.post("/auth/register", async (req, res) => {
     storageCreatedAt: null,
     providers: {},
   };
-  // PostgreSQL Access issues welcome only after verified email activation.
-  // The JSON legacy mode retains its existing development behavior.
-  ensurePlanState(user, { newAccount: !accessGrants.usesPostgresAccess() });
+  // New accounts start Free; already-issued grants are preserved.
+  ensurePlanState(user);
 
   beatGalerUsers.set(username, user);
   beatGalerUsersById.set(user.id, user);
@@ -1745,7 +1744,7 @@ app.get("/auth/oauth/:provider/callback", async (req, res) => {
           storageCreatedAt: null,
           providers: {},
         };
-        ensurePlanState(user, { newAccount: !accessGrants.usesPostgresAccess() });
+        ensurePlanState(user);
         beatGalerUsers.set(username, user);
         beatGalerUsersById.set(user.id, user);
       }
@@ -1763,9 +1762,7 @@ app.get("/auth/oauth/:provider/callback", async (req, res) => {
     if (provider === "x" && identity.username) setUserUsername(user, identity.username, "x");
     saveAuthData();
     await ensureUserStorage(user);
-    // A verified OAuth identity activates Access. The unique welcome grant is
-    // durable and idempotent across OAuth reconnects and retries.
-    await accessGrants.issueWelcomeAfterActivation(user.id);
+    // OAuth activation does not automatically issue promotional access.
     bindInstallationToBeatGalerUser(user, flow.beatgalerUserId);
     const token = flow.linkUserId ? null : createAuthSession(user.id);
     completedOAuthFlows.set(flow.flowId, { ok: true, userId: user.id, token, expiresAt: Date.now() + OAUTH_FLOW_TTL_MS });

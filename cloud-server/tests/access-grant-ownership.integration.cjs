@@ -134,8 +134,8 @@ test('Auth persistence never owns commercial entitlements, including after resta
       accessRuntime.setLegacyProjectionUpdater((_userId, grant) => { projected = grant; });
       try {
         await accessRuntime.issueWelcomeAfterActivation('usr_f3_step1');
-        assert.equal(flushes, 1);
-        assert.equal(projected.id, welcome[0].id);
+        assert.equal(flushes, 0, 'activation must not issue or project a new welcome');
+        assert.equal(projected, null);
       } finally {
         accessRuntime.configure();
       }
