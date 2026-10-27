@@ -1,191 +1,40 @@
-# BeatGaler Billing V1 Policy
+# Billing V1 — contrato técnico y comercial
 
-Status: **V1 product policy**
+Consolidación **normativa** de reglas, catálogo, checkout, webhook, lifecycle, reconciliación y evidencias Polar. No es un plan de implementación ni autorización de cobros; comprobar código y pruebas en el SHA objetivo. Los nueve expedientes originales siguen consultables en [historial](https://github.com/magosouljah/BeatGaler/tree/748c1de6a309162d2727e4e272098e7d007f3f49/BLUEPRINT).
 
-This document defines the commercial and access rules for Billing V1. It is intentionally provider-agnostic and does **not** connect billing to Auth, Account, Direct, transport, uploads, Settings, bot membership, bot pools, Direct credentials, library index, Trash implementation or Desktop helper behavior.
+## Planes y acceso
 
-The later access resolver must implement these rules as a pure domain policy. Provider facts are projected into PostgreSQL; the provider redirect itself never grants access.
-
-## 1. Plans
-
-| Policy | Free | Paid Entry | Highest Paid |
+| Regla | Free | Paid Entry | Highest Paid |
 | --- | ---: | ---: | ---: |
-| Monthly price | USD 0 | USD 6.99 | USD 11.99 |
-| Beats, including Trash | 20 | 100 | No commercial plan limit |
-| New PROJECT ZIP upload | No | Yes | Yes |
-| PROJECT ZIP maximum | Not available | 1,000,000,000 bytes | 1,900,000,000 bytes |
-| YouTube uploads / UTC day | 3 | 10 | No commercial plan limit |
-| YouTube uploads / UTC month | 31 | 60 | No commercial plan limit |
-| Bulk YouTube | `none` | `limited` | `full` |
-| Early Access | No | No | Yes |
+| Precio USD/mes | 0 | 6.99 | 11.99 |
+| Beats (incluido Trash) | 20 | 100 | Sin límite comercial |
+| Nuevo PROJECT ZIP | No | Sí, hasta 1,000,000,000 bytes | Sí, hasta 1,900,000,000 bytes |
+| Early Access | No | No | Sí |
 
-Additional V1 rules:
+- `free < paid_entry < highest_paid`. Acceso efectivo: **máximo** entre Free, cobertura pagada/gracia válida y grants vigentes no revocados, calculado por el servidor con reloj del servidor. No se suman cuotas.
+- Tras downgrade, cancelación, impago, refund o expiración **jamás borrar beats, PROJECT ni Trash**. Mantener contenido existente y bloquear nuevas identidades cuando se supera cuota; Free no puede cargar ni reemplazar PROJECT.
+- No existen límites **comerciales** V1 de dispositivos/sesiones; controles técnicos y antifraude son independientes. «Sin límite comercial» no significa capacidad técnica ilimitada.
+- Política histórica de YouTube: cuotas UTC diarias/mensuales Free 3/31, Entry 10/60, Highest sin límite comercial; Bulk Free none, Entry limited (cantidad pendiente), Highest full. **No se anuncia como función Web disponible si no está verificada.**
+- Ofertas servidor: `paid_entry_monthly_v1` (699 minor USD), `highest_paid_monthly_v1` (1199); Free no genera checkout. Venta anual deshabilitada hasta definir precio y condiciones; sin precio supuesto.
 
-- Trash consumes beat slots.
-- `No commercial plan limit` does not forbid technical anti-abuse or concurrency controls; those controls are not marketed plan quotas.
-- V1 has **no commercial device limit and no commercial simultaneous-session limit**. Security/session expiry and technical concurrency controls remain independent.
-- Downgrade, cancellation, failed renewal or refund do **not** delete user files.
-- Existing beats remain usable after downgrade even when the account is over the lower plan's beat quota. New beat identities are blocked until usage is back within the effective quota.
-- Existing PROJECT ZIPs remain available after downgrade to Free. Free cannot upload, replace or re-upload PROJECT content.
-- YouTube policy can exist before the Web implementation is ready, but BeatGaler must not advertise an unavailable Web capability as usable.
+## Altas Free y grants anteriores
 
-### Explicitly pending
+**En `main` (PR #144/#145):** el registro, OAuth y verificación no emiten siete días nuevos de Paid Entry; cuentas nuevas en **Free**. Grants `source='welcome'` **ya emitidos** conservan fechas originales y expiración en el resolver y esquema: no eliminarlos, reiniciarlos, migrarlos ni revocarlos. El despliegue beta.2 sigue separado de `main`. Promociones futuras de 100% usan Polar cuando sus reglas de checkout/renovación estén validadas; **no** cupones propios ni concesión automática.
 
-- Annual billing is not sold in initial V1. The catalog may support an `annual` interval later, but **annual price and launch policy are pending**.
-- Paid Entry Bulk YouTube remains `limited`, but the numeric per-batch limit is **pending**. Until a value is approved, that level must not be represented as a finalized purchasable Bulk allowance.
+## Autoridad financiera y reintentos
 
-## 2. Automatic welcome access — disabled
+- El **servidor** define plan, precio, moneda, capacidades, `salesEnabled` y ofertas. Polar provee Products/Prices; IDs y customer binding no vienen del navegador. Mapear `sandbox` y `production` por separado y comprobar `providerConfigured` antes de ofrecer checkout.
+- **Nunca conceder Paid** por redirect, `checkout.created`, `subscription.active`, `current_period_end` o webhook recibido sin procesar. Solo evidencia financiera confirmada de **Order pagado y período válido** puede actualizar `paid_through` en PostgreSQL. Error de proveedor es estado desconocido, no prueba de Free ni Paid.
+- Checkout durable e idempotente por usuario/`request_id`; `AMBIGUOUS` tras posible creación externa bloquea otro checkout hasta reconciliar. No crear pagos/suscripciones duplicadas por timeout o refresh.
+- Webhooks: validar firma sobre raw bytes **antes** de aceptar, identidad durable proveedor+entorno+`webhook-id`, guardar únicamente datos allowlisted; commit del inbox antes del ACK. Dedupe, leases, recuperación/reintento, serialización por usuario y ownership confiable. Un evento viejo no resucita cobertura refundada.
+- Cancelación/downgrade normal mantienen Paid hasta el fin del período pagado. Cambio Paid Entry ↔ Highest se programa para el **siguiente período pagado**; no prorrateo ni upgrade inmediato. Compra fallida no da Paid.
+- Renovación fallida: preservar último plan efectivamente pagado **7 días desde primer `past_due_at` confirmado**, sin que retries reinicien la gracia ni otorguen un upgrade pendiente.
+- Refund **completo confirmado** del período vigente revoca esa fuente comercial y prepara revocación del proveedor con acción durable; refund parcial no revoca por defecto; refund histórico no revoca otro período, y refund pendiente no se trata como confirmado. Una revocación de acceso jamás elimina archivos. Disputas y acciones administrativas explícitas son auditables.
+- Reconciliación descubre cobros/eventos faltantes por cliente verificado y usa las **mismas reglas** de lifecycle sin reescribir grants. Ante incertidumbre conservar estado explícito, sin inventar cobertura.
+- Logs y evidencias: no persistir secretos, PAN, métodos de pago, raw payloads, errores crudos del proveedor ni URLs firmadas completas.
 
-**Beta.3 policy:** new accounts start on **Free**. Registration, email verification and OAuth activation must **not** issue a promotional entitlement, grant Paid Entry, or start a seven-day countdown. The former automatic seven-day Paid Entry welcome promotion is discontinued for new signups.
+## Alcance de evidencia
 
-Already-issued welcome entitlements are **grandfathered**: retain their original start/end dates, do not revoke them or restart them, and let the existing access resolver honor them until expiration. No data or account migration is required to disable issuance. The historic `source='welcome'` database constraint, legacy import/export compatibility, and resolver tests remain; the automatic writer, auth callbacks, and legacy projection are removed.
+El contrato Polar histórico fijó SDK `@polar-sh/sdk@1.0.0-alpha.20`, API `2026-04`; comprobar lockfile/runtime actuales antes de cambiarlo. `subscription.cycled` o adelantar `current_billing_period_end` **no prueban** renovación natural: la evidencia de Sandbox diaria exigía dos Orders y Payments reales, webhook verificado y misma suscripción. Parte del E2E histórico quedó **PARTIAL**, no se hereda un PASS productivo.
 
-Future 100%-discount codes must be created and enforced by Polar, not by a new BeatGaler coupon system, and are a separate opt-in promotion to verify later. They must not be treated as available until provider behavior, validity period, single-use rules, and subscription renewal/charging terms have been specified and tested. No automatic promotional discount is created by signing up.
-
-## 3. Paid access and period authority
-
-Commercial access is based on confirmed financial coverage persisted in PostgreSQL, not merely on a provider status string.
-
-- A checkout redirect never grants Paid access.
-- `checkout.created` or equivalent provider creation events never grant Paid access by themselves.
-- A paid period becomes authoritative only after BeatGaler has sufficient confirmed payment evidence for that period.
-- `current_period_end` is not, by itself, proof that the period was paid.
-- The server clock determines whether a period, grace window or grant is active.
-
-## 4. Cancellation
-
-### Cancel at period end
-
-- Cancellation is scheduled for the end of the already paid period.
-- The user keeps the currently paid plan until the end of that paid coverage.
-- The user may undo the cancellation before the period ends if the provider still permits it.
-- At the end of coverage, the commercial source expires and the effective plan is recalculated from remaining grants and Free.
-- No files, beats, PROJECTs or Trash entries are deleted because of cancellation.
-
-### Immediate administrative termination
-
-An explicit administrative termination may invalidate commercial access immediately. This is separate from a normal customer cancellation and must be auditable. It still does not delete user files.
-
-## 5. Failed payments and grace
-
-### First payment fails
-
-- A failed first purchase does **not** grant commercial access.
-- Any independent valid grants, including welcome, continue under their own dates.
-
-### Renewal fails
-
-- Keep the **last successfully paid plan** during a **7-day grace period**.
-- Grace begins at the first confirmed `past_due_at` for that renewal period.
-- Provider retries do not restart or extend the seven days.
-- A pending upgrade is not granted during grace. Grace preserves only the last paid level.
-- If payment later succeeds, update paid coverage and clear the grace state.
-- If grace expires without successful payment, commercial access ends and the effective plan falls back to valid grants or Free.
-- Provider/API uncertainty must not be converted into either a cancellation or indefinite free Paid access. Ambiguous state remains ambiguous until reconciled.
-
-BeatGaler does not implement its own retry charging schedule; payment retries belong to the billing provider.
-
-## 6. Refunds and disputes
-
-Refund policy is access revocation without destructive data handling.
-
-### Full refund of the current paid period
-
-- After the refund is confirmed, invalidate the commercial access source funded by that payment.
-- Recalculate the effective plan immediately from any other valid subscription coverage, grants and Free.
-- Do not delete beats, PROJECTs, Trash or other user files.
-- If the resulting plan is below current usage, the account becomes over-quota under normal downgrade rules rather than losing stored data.
-- The billing lifecycle must also prevent future unintended renewals when the refund is meant to end service; that provider synchronization belongs to the lifecycle implementation, not to file deletion.
-
-### Partial refund
-
-- A partial refund **does not revoke access by default**.
-- If support intentionally agrees that a partial refund should also terminate service, that is an explicit administrative action and must be recorded separately.
-
-### Historical refund
-
-- A refund for an older paid period must not automatically invalidate a different currently paid period.
-
-### Pending refund or dispute
-
-- A requested/pending refund is not treated as completed.
-- A dispute may place the commercial source into a reversible review/suspension state according to the billing lifecycle, but it must never trigger deletion of user data.
-- An old payment event cannot reactivate a period whose payment was later invalidated by a confirmed refund.
-
-## 7. Plan changes
-
-V1 deliberately avoids immediate prorated changes between paid tiers.
-
-### Free -> Paid Entry / Highest Paid
-
-- Effective immediately **after payment is confirmed**.
-- Redirect alone never changes the plan.
-
-### Paid Entry <-> Highest Paid
-
-- Schedule the change for the **next billing period**.
-- The current paid tier remains effective until the current paid period ends.
-- Store and expose the pending next plan and its effective date.
-- The new tier is granted only when the next period is successfully paid.
-- If that renewal payment fails, grace preserves the previous successfully paid tier; it does not grant a pending upgrade for free.
-- Additional paid-tier changes should be blocked while the financial state is ambiguous.
-
-### Paid -> Free
-
-- Treat as cancellation/downgrade at period end for normal customer flows.
-- Keep the paid tier through existing paid coverage, then recalculate to grants/Free.
-- No destructive cleanup is part of the downgrade.
-
-### Monthly <-> Annual
-
-Unsupported in initial V1 because annual pricing and launch policy are still pending.
-
-## 8. Effective-access rule
-
-Billing V1 uses a hierarchical plan model:
-
-`free < paid_entry < highest_paid`
-
-The effective plan is the highest level among:
-
-1. Free baseline.
-2. Valid current commercial coverage, including valid grace for the last paid tier.
-3. Active, non-revoked grants such as welcome.
-
-Rules:
-
-- Do not add quotas from multiple sources. A Free 20-beat allowance plus a Paid Entry grant is still the Paid Entry 100-beat plan, not 120.
-- A lower grant never reduces a higher valid paid plan.
-- A grant equivalent to the paid tier never shortens paid coverage.
-- Expiration is evaluated at authorization time; no cron is required to flip the account exactly at midnight.
-
-## 9. Data-retention rule across every billing transition
-
-The following billing events change access state only:
-
-- welcome expiration;
-- cancellation;
-- downgrade;
-- failed renewal;
-- grace expiration;
-- refund;
-- dispute handling;
-- paid-tier change.
-
-None of them delete library data. Destructive deletion requires a separate explicit user/admin data-lifecycle action with its own authorization and confirmation.
-
-## 10. Out of scope for this policy task
-
-This document does not yet:
-
-- define provider product/price IDs or configurable offer mappings;
-- create Polar products or call Polar;
-- implement the access resolver;
-- change `plans.js`, Auth, Account or current entitlements readers/writers;
-- change PostgreSQL migrations;
-- mount billing routes;
-- enforce quotas on uploads or YouTube;
-- modify Settings;
-- modify membership, bot pools, Direct credentials, transport sessions, uploads, index behavior, Trash implementation or Desktop helper behavior.
-
-Those are separate tasks. The next billing step is to define the configurable commercial catalog that maps these internal offers to provider products/prices without making the provider the authority for BeatGaler capabilities.
+Probar solamente en entornos aislados y de Sandbox, con SHA y base de datos verificados ([Issue #133](https://github.com/magosouljah/BeatGaler/issues/133)). Referencias de implementación: `cloud-server/billing-*.js`, `cloud-server/migrations/`, `cloud-server/tests/billing-*`; [nueve contratos y runbooks originales](https://github.com/magosouljah/BeatGaler/tree/748c1de6a309162d2727e4e272098e7d007f3f49/BLUEPRINT). Las Actions de Billing se mantienen conectadas a **este** archivo documental.
