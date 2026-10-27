@@ -18,14 +18,14 @@ Prioridad: estabilizar la Web y Cloud publicadas sin modificar el commit estable
 ## Estado de avance al 27-10-2026
 
 - **Etapa 1 avanzada:** GitHub y BLUEPRINT reorganizados; `main` ya es la rama predeterminada. No confundir organización con cierre de protección de ramas y revisión de pendientes.
-- **Pendiente concreto:** [PR #145](https://github.com/magosouljah/BeatGaler/pull/145), limpieza residual del regalo automático de siete días de Paid Entry. En `main`, [PR #144](https://github.com/magosouljah/BeatGaler/pull/144) ya deshabilitó la emisión para cuentas nuevas; la limpieza posterior debe **conservar todos los beneficios históricos hasta el vencimiento**. El PR #145 debe revisarse y pasar sus tests antes de integrarlo; no desplegarlo automáticamente.
+- **Cambio integrado durante esta actualización:** [PR #145](https://github.com/magosouljah/BeatGaler/pull/145) ya fue fusionado en `main` (junto con el anterior [PR #144](https://github.com/magosouljah/BeatGaler/pull/144)). Se deshabilitó la emisión del regalo de siete días a cuentas nuevas y se retiraron restos obsoletos del emisor; **los beneficios históricos deben conservarse hasta vencer**. **El merge en `main` no implica despliegue:** producción continúa en beta.2.
 - **Riesgo de desarrollo abierto:** [Issue #133](https://github.com/magosouljah/BeatGaler/issues/133), aislar la base de datos de pruebas. Priorizar antes de correr pruebas peligrosas sobre datos persistentes.
 - **Incidente de infraestructura del 27-10-2026:** [registro](OPERATIONS/INCIDENT-2026-10-27-EC2-NETWORK.md). Web/Cloud recuperados mediante stop/start; causa inicial aún no demostrada. **Decisión explícita: diferir / observar; no es tarea activa ni bloquea el siguiente trabajo.** Retomar solo si reaparece o surge evidencia nueva.
 - **Release protegido:** `release/0.9.0-beta.2` @ `a8418223527f88e9d34db8e05abb10216942013c` sigue publicado. Cambios en `main` no equivalen a un despliegue.
 
 ## Secuencia práctica de los próximos trabajos
 
-1. Resolver o cerrar con evidencia los PRs y asuntos de GitHub todavía abiertos; comenzar por revisar #145 sin tocar la emisión histórica ni producción.
+1. Terminar la auditoría de flujo GitHub y protecciones de `main`, verificar resultados de integración de los PR #144/#145 y registrar cualquier pendiente; **sin desplegar** el código nuevo.
 2. Crear y verificar un entorno de pruebas aislado de RDS/producción; atender #133 antes de suites con escritura.
 3. Ejecutar revisión técnica Web + Cloud en desarrollo: arranque, autenticación, Free/planes, biblioteca, búsqueda, reproducción, descargas, uploads, PROJECT, edición, Trash, Telegram/INDEX y recuperación.
 4. Clasificar bugs reproducibles (severidad/impacto/riesgo); corregir en PRs pequeños con test previo y test de regresión.
