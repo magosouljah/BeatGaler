@@ -3,15 +3,13 @@
 // Automatic welcome grants are disabled. Historic grants remain in the access resolver.
 
 let postgres = null;
-let updateLegacyProjection = null;
 
 function configure({ pool = null, authRuntime = null } = {}) {
   postgres = pool && authRuntime ? { pool, authRuntime } : null;
-  updateLegacyProjection = null;
 }
 
-function setLegacyProjectionUpdater(update) {
-  updateLegacyProjection = typeof update === 'function' ? update : null;
+function setLegacyProjectionUpdater(_update) {
+  // Kept as a compatibility hook; new automatic grants are discontinued.
 }
 
 function usesPostgresAccess() {
