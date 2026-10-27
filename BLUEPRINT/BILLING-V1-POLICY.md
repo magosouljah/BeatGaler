@@ -34,18 +34,13 @@ Additional V1 rules:
 - Annual billing is not sold in initial V1. The catalog may support an `annual` interval later, but **annual price and launch policy are pending**.
 - Paid Entry Bulk YouTube remains `limited`, but the numeric per-batch limit is **pending**. Until a value is approved, that level must not be represented as a finalized purchasable Bulk allowance.
 
-## 2. Welcome access
+## 2. Automatic welcome access — disabled
 
-The welcome benefit is an internal BeatGaler grant, not a provider trial.
+**Beta.3 policy:** new accounts start on **Free**. Registration, email verification and OAuth activation must **not** issue a promotional entitlement, grant Paid Entry, or start a seven-day countdown. The former automatic seven-day Paid Entry welcome promotion is discontinued for new signups.
 
-- Duration: **7 days**.
-- Effective level: **Paid Entry**.
-- No card or checkout required.
-- Starts once when the account is first activated/verified.
-- Must be issued idempotently and at most once per eligible user.
-- OAuth reconnect, reinstall, email change or repeated login must not restart it.
-- Buying a paid plan during welcome creates a normal subscription immediately after confirmed payment. The welcome grant does not postpone the first charge or extend the paid period.
-- When the welcome grant expires, access falls back to the highest remaining valid source: paid subscription, another valid grant, or Free.
+Already-issued welcome entitlements are **grandfathered**: retain their original start/end dates, do not revoke them or restart them, and let the existing access resolver honor them until expiration. No data or account migration is required to disable issuance.
+
+Future 100%-discount codes are a separate, opt-in promotion to design and implement later. They must not be treated as available until provider behavior, validity period, single-use rules, and subscription renewal/charging terms have been specified and tested. No automatic promotional discount is created by signing up.
 
 ## 3. Paid access and period authority
 
