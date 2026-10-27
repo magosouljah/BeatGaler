@@ -1,5 +1,5 @@
 # BeatGaler Blueprint
 
-El Blueprint define de forma simple y estable qué es BeatGaler V1, qué queremos construir y cómo queremos que funcione.
+El índice canónico ahora es [README.md](README.md). Este archivo queda como enlace de compatibilidad para referencias anteriores.
 
-Su objetivo es que todas las decisiones futuras avancen en la misma dirección usando SYSTEM.md.
+[Estado beta.2](CURRENT-STATE.md) · [Plan de estabilización y evolución](WORKPLAN.md).

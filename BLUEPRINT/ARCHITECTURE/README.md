@@ -1,19 +1,10 @@
-# BeatGaler Architecture
+# Arquitectura — fuentes y decisiones
 
-Esta carpeta contiene únicamente arquitecturas canónicas que Bruno haya decidido conservar como parte de BeatGaler.
+Este directorio contiene índices y arquitecturas canónicas aceptadas. No convertir experimentos en decisiones vigentes sin contrastar código, migraciones y tests.
 
-Una arquitectura explica cómo funciona un subsistema con suficiente precisión para entenderlo y, relativamente, reconstruirlo sin depender de leer el código actual.
+- [Mapa técnico Web/Cloud](OVERVIEW.md).
+- [ADR-0052: persistencia durable](../../docs/ADR-0052-DURABLE-DATA-ARCHITECTURE.md), aprobado históricamente; su estado «implementation not started / NO-GO» es de agosto, no una comprobación actual.
+- [Threat model](../../docs/THREAT-MODEL-0052-DATA-PERSISTENCE.md) y [rollback de migración](../../docs/MIGRATION-0052-POSTGRES-ROLLBACK.md).
+- [Billing V1](../BILLING/README.md) y [evidencias antiguas](../HISTORY/README.md).
 
-Puede incluir:
-
-- flujo completo;
-- responsabilidades de cada componente;
-- datos y estados importantes;
-- operaciones paralelas/secuenciales;
-- contratos con otras arquitecturas;
-- invariantes;
-- comportamiento ante fallos;
-- detalles o nombres de código cuando realmente ayuden a entender el diseño.
-
-No contiene experimentos, planes temporales ni alternativas todavía en evaluación.
-
+Una arquitectura canónica nueva debe especificar autoridades, invariantes, flujos, fallos, recuperación, contratos y pruebas; aprobación explícita antes de adoptarla.
