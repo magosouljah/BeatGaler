@@ -14,7 +14,6 @@ const { createPendingSignupService } = require('../pending-signup-service');
 const { digest, createPendingSignupRuntime } = require('../pending-signup-runtime');
 const { createSignupActivationCoordinator, stableUserId } = require('../signup-activation-coordinator');
 const { statusForUser } = require('../email-verification-authority');
-const { issueWelcomeGrant } = require('../access-grant-store');
 const { createPostgresInstallationClaimCoordinator } = require('../postgres-installation-claim-coordinator');
 const execFileAsync = promisify(execFile);
 
@@ -193,7 +192,6 @@ async function main() {
       };
       return createSignupActivationCoordinator({
         pool, service: wrappedService, getBridge: () => bridge, flushAuthority,
-        issueWelcome: userId => issueWelcomeGrant(pool, userId),
         installationClaimCoordinator: createPostgresInstallationClaimCoordinator(pool),
         staleMs: 60_000,
       });
@@ -207,12 +205,12 @@ async function main() {
         [`${signupId}@example.com`])).rows[0].n, 1);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM vaults WHERE user_id=$1', [id])).rows[0].n, 1);
       assert.equal([...groups.values()].filter(group => group.title.endsWith(`[BG:${id}]`)).length, 1);
-      assert.equal((await poolA.query("SELECT count(*)::int AS n FROM entitlements WHERE user_id=$1 AND source='welcome'", [id])).rows[0].n, 1);
+      assert.equal((await poolA.query("SELECT count(*)::int AS n FROM entitlements WHERE user_id=$1 AND source='welcome'", [id])).rows[0].n, 0);
       assert.equal((await poolA.query('SELECT count(*)::int AS n FROM auth_sessions WHERE user_id=$1', [id])).rows[0].n, sessions);
       assert.equal((await poolA.query('SELECT status FROM pending_signups WHERE id=$1', [signupId])).rows[0].status, 'ACTIVE');
-      const ledger = await poolA.query("SELECT step,state FROM auth_provisioning_ledger WHERE signup_id=$1 AND step IN ('user','vault','installation','welcome')", [signupId]);
+      const ledger = await poolA.query("SELECT step,state FROM auth_provisioning_ledger WHERE signup_id=$1 AND step IN ('user','vault','installation')", [signupId]);
       assert.deepEqual(ledger.rows.map(row => `${row.step}:${row.state}`).sort(),
-        ['installation:DONE', 'user:DONE', 'vault:DONE', 'welcome:DONE']);
+        ['installation:DONE', 'user:DONE', 'vault:DONE']);
       const persistent = await poolA.query("SELECT payload->'linkedAccounts'->$1 AS linked FROM runtime_compat_state WHERE state_key='legacy-cloud-data-v1'", [`install_${signupId}`]);
       assert.equal(persistent.rows[0]?.linked?.beatgalerAccountId, id);
     }
