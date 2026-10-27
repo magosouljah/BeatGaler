@@ -39,13 +39,14 @@ passed += test('unknown plan id cannot become an entitlement escalation', () => 
   assert.equal(state.entitlements.upload_project, false);
 }) ? 1 : 0;
 
-passed += test('new account receives the configured welcome grant', () => {
+passed += test('new account starts Free without an automatic welcome grant', () => {
   const user = {};
   plans.ensurePlanState(user, { newAccount: true, now: 1_000_000 });
   const state = plans.publicPlanState(user, 1_000_001);
   assert.equal(state.base_plan_id, 'free');
-  assert.equal(state.effective_plan_id, 'paid_entry');
-  assert.equal(state.access_source, 'welcome');
+  assert.equal(state.effective_plan_id, 'free');
+  assert.equal(state.access_source, 'base_plan');
+  assert.deepEqual(user.planState.grants, []);
 }) ? 1 : 0;
 
 passed += test('expired temporary grant cannot override base plan', () => {
