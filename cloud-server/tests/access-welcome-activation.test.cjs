@@ -17,43 +17,53 @@ function response() {
   };
 }
 
-test('verified email activates Access once and a failed durable issue can retry', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-welcome-activation-'));
+test('email verification retries a database failure without issuing welcome access', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-email-verification-'));
   try {
     const user = { id: 'usr_verified', username: 'verified#0001', email: 'verified@example.com' };
     const pool = createEmailVerificationFakePool([user]);
+    const originalConnect = pool.connect.bind(pool);
+    let failOnce = true;
+    pool.connect = async () => {
+      const client = await originalConnect();
+      return {
+        ...client,
+        async query(sql, params) {
+          if (failOnce && String(sql).includes('INSERT INTO user_email_verifications')) {
+            failOnce = false;
+            throw new Error('temporary verification database outage');
+          }
+          return client.query(sql, params);
+        },
+      };
+    };
     fs.writeFileSync(path.join(dir, 'accounts-data.json'), JSON.stringify({ users: [user], sessions: {} }));
-    let calls = 0;
     const runtime = createAccountLifecycleRuntime({
       dataDir: dir,
       pool,
       now: () => Date.parse('2026-10-08T12:00:00Z'),
-      onEmailVerified: async userId => {
-        assert.equal(userId, user.id);
-        calls += 1;
-        if (calls === 1) throw new Error('temporary Access outage');
-      },
     });
     const token = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
     const first = response();
     await runtime._test.confirmEmailVerification({ body: { token } }, first);
     assert.equal(first.statusCode, 503);
     assert.equal(first.body.code, 'EMAIL_VERIFICATION_RETRY');
-    assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, true);
+    assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, false);
 
     const retry = response();
     await runtime._test.confirmEmailVerification({ body: { token } }, retry);
     assert.equal(retry.statusCode, 200);
     assert.equal(retry.body.verified, true);
-    assert.equal(calls, 2);
+    assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, true);
+    assert.equal(pool.statements.some(({ text }) => /\bentitlements\b|\bwelcome:v1\b/i.test(text)), false);
 
     const replay = response();
     await runtime._test.confirmEmailVerification({ body: { token } }, replay);
     assert.equal(replay.statusCode, 400);
-    assert.equal(calls, 2);
+    assert.equal(replay.body.code, 'EMAIL_VERIFICATION_INVALID');
   } finally {
     assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir()));
-    assert.match(path.basename(dir), /^beatgaler-welcome-activation-/);
+    assert.match(path.basename(dir), /^beatgaler-email-verification-/);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

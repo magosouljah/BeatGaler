@@ -178,7 +178,6 @@ async function start() {
     emailNotifier: accountEmailNotifier,
     pool: cutover.authority === 'postgres' ? pool : null,
     getCapabilityStore: () => directCapabilities?.store || null,
-    onEmailVerified: userId => accessGrants.issueWelcomeAfterActivation(userId),
   });
   installLifecyclePasswordAuthority(accountLifecycle);
 

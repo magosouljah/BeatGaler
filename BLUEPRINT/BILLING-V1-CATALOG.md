@@ -127,9 +127,9 @@ The frontend cannot choose or override currency. Adding another currency later r
 The commercial catalog does not contain:
 
 - plan quotas or capabilities — those belong to BeatGaler plan policy;
-- welcome duration — that belongs to grant policy;
+- historical welcome grant expiration — that belongs to Access, not the provider catalog;
 - grace/refund/cancellation logic — that belongs to lifecycle/access policy;
-- provider trial days — welcome is not a provider trial;
+- provider trial days — discontinued automatic welcome grants were never provider trials;
 - tax behavior — provider/Merchant-of-Record integration owns that detail;
 - checkout redirect URLs;
 - customer IDs;

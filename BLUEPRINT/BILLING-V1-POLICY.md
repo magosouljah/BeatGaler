@@ -38,9 +38,9 @@ Additional V1 rules:
 
 **Beta.3 policy:** new accounts start on **Free**. Registration, email verification and OAuth activation must **not** issue a promotional entitlement, grant Paid Entry, or start a seven-day countdown. The former automatic seven-day Paid Entry welcome promotion is discontinued for new signups.
 
-Already-issued welcome entitlements are **grandfathered**: retain their original start/end dates, do not revoke them or restart them, and let the existing access resolver honor them until expiration. No data or account migration is required to disable issuance.
+Already-issued welcome entitlements are **grandfathered**: retain their original start/end dates, do not revoke them or restart them, and let the existing access resolver honor them until expiration. No data or account migration is required to disable issuance. The historic `source='welcome'` database constraint, legacy import/export compatibility, and resolver tests remain; the automatic writer, auth callbacks, and legacy projection are removed.
 
-Future 100%-discount codes are a separate, opt-in promotion to design and implement later. They must not be treated as available until provider behavior, validity period, single-use rules, and subscription renewal/charging terms have been specified and tested. No automatic promotional discount is created by signing up.
+Future 100%-discount codes must be created and enforced by Polar, not by a new BeatGaler coupon system, and are a separate opt-in promotion to verify later. They must not be treated as available until provider behavior, validity period, single-use rules, and subscription renewal/charging terms have been specified and tested. No automatic promotional discount is created by signing up.
 
 ## 3. Paid access and period authority
 

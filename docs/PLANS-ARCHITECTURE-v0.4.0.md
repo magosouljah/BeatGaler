@@ -1,6 +1,6 @@
 # BeatGaler Plans Architecture — v0.4.0
 
-Architecture only. Pricing, checkout, payments, real referral generation/redemption and full quota enforcement are intentionally deferred.
+Historical v0.4.0 architecture reference, not the current Web Billing authority. Current new accounts start Free; see `BLUEPRINT/BILLING-V1-POLICY.md`. Pricing/checkout implementation has evolved since this design.
 
 ## Server-side authority
 
@@ -26,7 +26,7 @@ Architecture only. Pricing, checkout, payments, real referral generation/redempt
 
 Plan ownership and temporary access are separate concepts.
 
-- New accounts receive a 7-day Paid Entry welcome grant.
+- New accounts start Free. Only previously issued welcome grants remain valid through their original expiration.
 - Existing users may redeem eligible codes for temporary free days (default architecture: 3 days).
 - `Time Code` and `Unlock Code` both grant temporary plan days. Unlock Code is a special/collectible distribution mechanism, not a permanent feature unlock.
 - Referral reward generation/redemption is deferred, but the current policy reserves 1 rewarded referral/month for Free, 2 for Paid Entry and 5 for Highest Paid.
