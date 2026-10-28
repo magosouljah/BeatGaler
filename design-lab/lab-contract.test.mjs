@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -95,4 +95,16 @@ test("one session-scoped cover mode is wired into landing gallery and MASTER", (
  assert.match(cover,/import\.meta\.glob/);
  assert.match(cover,/getProceduralBeatBackgroundDataUrl\(id\)/);
  assert.doesNotMatch(cover,/https?:\/\/|\bfetch\s*\(/);
+});
+
+test("20–24 real covers are bundled as local JPEG artwork with valid headers", () => {
+  const dir = new URL("./assets/real-covers/", import.meta.url);
+  const covers = readdirSync(dir).filter(name => /^cover-\d{2}\.jpg$/.test(name)).sort();
+  assert.ok(covers.length >= 20 && covers.length <= 24, `Expected 20–24 local covers; got ${covers.length}`);
+  covers.forEach(name => {
+    const bytes = readFileSync(new URL(name, dir));
+    assert.equal(bytes[0], 0xff, name);
+    assert.equal(bytes[1], 0xd8, name);
+    assert.equal(bytes[2], 0xff, name);
+  });
 });
