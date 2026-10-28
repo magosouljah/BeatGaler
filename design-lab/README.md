@@ -1,32 +1,42 @@
-# BeatGaler Design Lab (solo datos ficticios)
+# BeatGaler Design Lab — landing y demo aisladas
 
-Laboratorio **independiente** de Web/Cloud: no importa `src/`, no hay login, API, audio, archivos de usuario ni servicios externos. Nada aquí altera la app productiva.
+**No es producción.** No utiliza cuentas, datos de usuarios, Telegram, Cloud API, audio, servicios externos ni carga archivos. Solo hay fixtures y estado local del navegador.
 
-## Abrirlo (PowerShell, en `E:\777\app\BeatGaler`)
+## Ejecutar en Windows (PowerShell)
 
 ```powershell
+cd E:\\777\\app\\BeatGaler
 git fetch origin
 git switch design/beatgaler-design-system-lab-v1
+git pull --ff-only origin design/beatgaler-design-system-lab-v1
 npm ci
 npx --no-install vite --config design-lab/vite.config.ts
 ```
 
-Abrir **http://127.0.0.1:4173/**. `npm ci` solo es necesario si faltan dependencias; no se añadieron paquetes. Para salir `Ctrl+C`.
+Abrir **http://127.0.0.1:4173/**. Para detener, `Ctrl+C`.
 
-## Qué contiene
+## Navegación
 
-- **Components:** vitrina de primitivas, botones, inputs, estados, tarjetas y reproductor falso.
-- **Landing:** wireframe visual artístico, composición estática de carátulas inventadas.
-- **Gallery:** wireframe de biblioteca, búsqueda y filtros sobre un arreglo local; play/pause solo cambia estado.
-- **Panel de tokens:** edita colores CSS en memoria, con **Restablecer** para volver a la paleta inicial. No guarda nada.
+- **Landing primero:** título BeatGaler, descripción de almacenamiento ilimitado y organización por tags, metadata y cover art; CTA `Create ur Galer`. Se basa en el HTML de referencia de la landing circular.
+- **Create ur Galer:** entra a la galería ficticia. `Log in` también navega a la demo, sin autenticar.
+- **beat galer / ← Landing:** regresa a la primera pantalla.
+- **MASTER:** acceso discreto abajo a la derecha en las pantallas ficticias; abre el catálogo de componentes y tokens editables. Este botón NO formará parte de la landing de producción.
 
-Fuentes de verdad: [DESIGN.md](../BLUEPRINT/DESIGN-SYSTEM/DESIGN.md) describe valores y estado de aprobación; [tokens.css](tokens.css) es la fuente de valores **ejecutables del laboratorio**. Al cambiar tokens propuestos, actualizar ambos o documentar la desviación.
+## Arte original, sin imágenes de muestra aleatorias
 
-## Verificación local
+Las portadas se generan completamente en el navegador con `design-lab/proceduralBeatBackground.ts`, **copia exacta e independiente** de `src/lib/proceduralBeatBackground.ts`. Usa la misma versión `bg-v1`, idéntico algoritmo determinista y fondo **`#0c0c0c`**.
+
+La portada y el canvas de la landing comparten ese negro exacto. Se limitó el cambio de escala de las portadas posteriores de la órbita para que no parezcan diminutas.
+
+La copia del generador se verifica contra el archivo fuente con `lab-contract.test.mjs`; si el generador real cambia, hay que sincronizar ambos conscientemente. No se importa código de `src/` al bundle de laboratorio.
+
+## Comprobaciones seguras y focalizadas
 
 ```powershell
 node --test design-lab/lab-contract.test.mjs
 npx --no-install vite build --config design-lab/vite.config.ts
 ```
 
-El build genera **solo** `design-lab/dist/` (ignorado por Git), nunca el build del producto. Revisar en móvil/desktop, foco de teclado y reduced motion. El laboratorio **no** es una pantalla terminada ni su apariencia está aprobada.
+El build solo genera `design-lab/dist/` (ignorado por Git). No correr suites globales ni desplegar la app. Comprobar manualmente escritorio, móvil, contraste, foco de teclado y reducción de movimiento.
+
+El color `--lab-canvas` está fijado a `#0c0c0c` para coincidir con el generador; no significa que se haya cambiado el `#090909` del diseño actual de la aplicación real. Los demás tokens siguen experimentales. La documentación de producto está en `BLUEPRINT/DESIGN-SYSTEM/DESIGN.md`.
