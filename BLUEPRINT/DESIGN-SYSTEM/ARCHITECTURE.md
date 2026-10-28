@@ -1,20 +1,25 @@
-# Arquitectura del Design Lab — mínima e incremental
+# Arquitectura — laboratorio DESIGN
 
-## Qué corre
+## Aplicación experimental
 
-- `design-lab/App.tsx`: tres vistas de laboratorio; Landing conserva su órbita original y Gallery sus componentes de muestra.
-- `design-lab/playbar/MasterPage.tsx`: navegación de reglas y componentes con ancho editable y botón para ocultar/mostrar, y canvas centrado. Configuración del sidebar aislada en localStorage del navegador.
-- `design-lab/playbar/Player.tsx`: adaptación casi literal del componente real de producción `src/components/Player.tsx`, sin conexiones de backend.
-- `design-lab/playbar/assets/`: catorce PNG originales del reproductor.
-- `design-lab/playbar/fixtures.ts`: conversión de seis beats ficticios a props del reproductor.
-- `design-lab/playbar/bridge.tsx`: Artwork local y dos helpers de etiquetas.
-- `design-lab/playbar/master.css`: estilos mínimos del shell y regla visual de márgenes; usa tokens de espaciado ya existentes en `tokens.css`. La Playbar del Lab usa `preview` en `Player.tsx` para situarse en el flujo del canvas; `ResizeObserver` observa el ancho disponible y la zona de metadatos para calcular la barra de seek. Mantiene 68 px de altura en todas las anchuras. El código de producción y los iconos PNG originales quedan intactos.
-- `design-lab/GalleryPage.tsx`, `components.tsx`, `tokens.css`, `gallery.css`, `lab.css`: demos previas, sin afectar a producción.
+La única entrada es `DESIGN/index.html` → `DESIGN/main.tsx` → `DESIGN/App.tsx`. Vite se configura con `DESIGN/vite.config.ts` y nunca utiliza `src/main.tsx`. El comando es:
 
-No hay catálogo de componentes adelantado, editor global, inspector ni motor de físicas genérico.
+```powershell
+npx --no-install vite --config DESIGN/vite.config.ts --port 4174
+```
 
-## Método para crecer
+## Carpetas
 
-La transcripción de UI Collective explica tokens **brand → alias → mapped**, colecciones, componentes, variantes y estado. Es una **referencia**, no tres niveles obligatorios ni especificaciones de UI aprobadas. Solo abstraer tokens y estados cuando un componente real lo justifique. Cada incorporación se somete a revisión del propietario.
+- `DESIGN/MASTER/`: `MasterPage.tsx` (navegación, estado local, reglas y vista de Playbar), `Player.tsx` (copia adaptada de `src/components/Player.tsx`), `bridge.tsx` (Artwork local y etiquetas), `fixtures.ts` (beats ficticios), `master.css` (márgenes y layout) y `assets/` (14 PNG originales del reproductor).
+- `DESIGN/LANDING/`: `LandingPage.tsx` mantiene la órbita original, CTA y movimiento contrario al puntero. `landing.css` recoge el CSS del laboratorio anterior, incluidos estilos globales del prototipo.
+- `DESIGN/GALLERY/`: `GalleryPage.tsx` y `gallery.css` son el prototipo anterior de galería, con el `LabPlayer` ficticio.
+- `DESIGN/shared/`: `components.tsx`, `data.ts`, `coverSources.ts`, `proceduralBeatBackground.ts` y `tokens.css`. `assets/real-covers/` contiene las 24 portadas locales.
+- `DESIGN/import-real-covers.ps1`: importación local opcional de portadas desde ZIP. `DESIGN/lab-contract.test.mjs`: contratos del laboratorio. `DESIGN/tsconfig.json` y `DESIGN/.gitignore`: configuración aislada.
 
-**Aislamiento:** no importar código de `src/` ni servicios a MASTER. Copiar el mínimo código/arte real necesario en `design-lab/` y validar contra la fuente publicada. Sin audio, endpoints o operaciones de usuarios.
+Las 24 portadas y 14 iconos se trasladaron manteniendo **los mismos blobs Git**, no se regeneraron ni comprimieron. El Lab no importa ni ejecuta código de `src/`, ni usa cuentas, Cloud, API o audio real.
+
+## Cómo se amplía
+
+La transcripción UI Collective explica tokens brand → alias → mapped, colecciones, componentes, variantes y estado. Es una referencia, no una estructura obligatoria prematura. `MASTER.md` define el comportamiento del taller y `DESIGN.md` registra solo las piezas existentes. Primero perfeccionar la Playbar; añadir otros componentes únicamente con autorización del propietario.
+
+El directorio anterior `design-lab/` se eliminó para evitar dos fuentes de verdad. No modificar `src/`, `main` ni producción.

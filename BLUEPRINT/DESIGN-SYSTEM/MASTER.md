@@ -21,7 +21,7 @@ La Playbar conserva el alto **68 px** al reducirse horizontalmente (el reproduct
 
 ## Componentes y subcomponentes
 
-- **Implementado: Playbar.** El código visual en `design-lab/playbar/Player.tsx` proviene del reproductor publicado y conserva sus 14 iconos originales, slider vertical, barra de progreso y controles. MASTER solo sustituye las dependencias de producción con datos ficticios.
+- **Implementado: Playbar.** El código visual en `DESIGN/MASTER/Player.tsx` proviene del reproductor publicado y conserva sus 14 iconos originales, slider vertical, barra de progreso y controles. MASTER solo sustituye las dependencias de producción con datos ficticios.
 - **Botones de Playbar:** se mantienen **dentro del componente** mientras se revisa el conjunto. Cuando el propietario quiera perfeccionar un control individual, se puede añadir el ejemplo *debajo* de la barra y agruparlo en la navegación bajo **Playbar → Controles**. Si un botón demuestra reutilización real fuera de Playbar, entonces se extrae a una categoría general **Botones**. Evitar duplicar prematuramente los iconos o la implementación.
 - **Pendiente:** cualquier componente distinto de Playbar; no crear fichas vacías, placeholders ni bibliotecas ficticias.
 
@@ -29,9 +29,13 @@ La Playbar conserva el alto **68 px** al reducirse horizontalmente (el reproduct
 
 - Primero: decisiones del propietario sobre cada componente.
 - Segundo: código de producción **publicado** para geometría, iconos y comportamiento existente.
-- Tercero: lo implementado y verificable en `design-lab/`. Un documento no obliga a crear funcionalidades no autorizadas.
+- Tercero: lo implementado y verificable en `DESIGN/`. Un documento no obliga a crear funcionalidades no autorizadas.
 - Skills pertinentes en `.agents/skills/` antes de proponer cambios; transcripción completa `UI-COLLECTIVE-TRANSCRIPT-ORIGINAL.txt` como referencia metodológica.
 - `DESIGN.md` es inventario actual; `ARCHITECTURE.md` explica archivos; este `MASTER.md` recoge **cómo debe funcionar el taller**, sin competir con componentes reales.
 - Probar build, TypeScript, estados, navegación colapsada/redimensionada, responsive, foco y popovers. Si no se probó visualmente, decirlo.
 
-**Frontera:** solo `design-lab/` y su documentación. No tocar `src/`, Cloud, API, `main` ni producción sin autorización.
+**Frontera:** solo `DESIGN/` y su documentación. No tocar `src/`, Cloud, API, `main` ni producción sin autorización.
+
+## Ubicación física
+
+El laboratorio se ejecuta exclusivamente desde `DESIGN/`. Componentes y demo de MASTER en `DESIGN/MASTER/`; Landing en `DESIGN/LANDING/`; Gallery en `DESIGN/GALLERY/`; assets y componentes de muestra compartidos en `DESIGN/shared/`. **Este `MASTER.md` especifica la intención**: no constituye una segunda implementación. Instrucciones de ejecución en `DESIGN/README.md`.

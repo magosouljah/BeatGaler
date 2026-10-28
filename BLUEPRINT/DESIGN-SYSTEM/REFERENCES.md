@@ -1,6 +1,6 @@
 # REFERENCES.md — Fuentes de estudio, nunca autoridad de estilos
 
-La **fuente de verdad** del Design System experimental es [Design Lab](../../design-lab/README.md). El procedimiento y la prioridad se definen solo en [README.md](README.md). Este archivo es únicamente un índice de procedencia: **no prescribe colores, tamaños, botones o animaciones**.
+La **fuente de verdad** del Design System experimental es [Design Lab](../../DESIGN/README.md). El procedimiento y la prioridad se definen solo en [README.md](README.md). Este archivo es únicamente un índice de procedencia: **no prescribe colores, tamaños, botones o animaciones**.
 
 ## Guía principal para diseñar: skills de Emil Kowalski
 
@@ -28,6 +28,6 @@ Son **instrucciones y conocimientos de diseño**; no dependencias de ejecución 
 
 ## Fuentes técnicas reales
 
-- Prototipo actual: `design-lab/` (MASTER, Landing, Gallery).
+- Prototipo actual: `DESIGN/` (MASTER, Landing, Gallery).
 - App publicada y desarrollo real: `src/styles/design-foundations.css`, `src/components/`, `src/app/` en `main`.
 - Protección de producción: no llevar cambios del laboratorio a `src/` ni desplegar sin aprobación.
