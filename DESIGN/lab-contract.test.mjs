@@ -144,9 +144,12 @@ test("shared Toolbar has four icon references, five sort modes and anchored acce
 
 test("Toolbar search has no rectangular focus ring, keeps circular glass edge, and selection stays visibly active", () => {
   const css = read("./shared/toolbar.css");
-  assert.match(css,/\.lab-toolbar-search-input:focus-visible\{outline:none;box-shadow:none;\}/);
+  assert.match(css,/\.lab-root \.lab-toolbar-search-input:focus-visible\{outline:none;box-shadow:none;\}/);
   assert.match(css,/\.lab-toolbar-search:focus-within \.lab-toolbar-search-glass\{border-color:/);
   assert.match(css,/\.lab-toolbar-search\.is-open \.lab-toolbar-search-trigger\{/);
+  assert.match(css,/\.lab-toolbar-search-glass\{position:absolute;right:0;top:0;width:44px;height:44px;/);
+  assert.match(css,/\.lab-toolbar-search\.is-open \.lab-toolbar-search-glass\{width:min\(300px,calc\(100vw - 196px\)\);\}/);
   assert.match(css,/\.lab-toolbar-select\.is-selecting\{width:44px;background:rgba\(90,90,90,\.68\);border-color:/);
-  assert.doesNotMatch(css,/\.lab-toolbar-search\.is-open \.lab-toolbar-search-trigger\{background:transparent;border-color:transparent;/);
+  assert.doesNotMatch(css,/\.lab-toolbar-search-glass[^}]*transform:scaleX/);
+  assert.doesNotMatch(css,/\.lab-toolbar-search\.is-open \.lab-toolbar-search-trigger\{[^}]*background:var\(--glass-bg\)/);
 });

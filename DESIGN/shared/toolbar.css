@@ -22,17 +22,22 @@
 .lab-toolbar-select.is-selecting .lab-toolbar-select-text{opacity:0;transform:scale(.9);}
 .lab-toolbar-select.is-selecting .lab-toolbar-select-x{opacity:1;transform:scale(1);}
 .lab-toolbar-search{position:relative;flex:none;width:44px;height:44px;z-index:5;}
-.lab-toolbar-search-glass{position:absolute;right:0;top:0;width:min(300px,calc(100vw - 196px));height:44px;
+.lab-toolbar-search-glass{position:absolute;right:0;top:0;width:44px;height:44px;
   border-radius:999px;border:1px solid var(--glass-border);background:var(--glass-bg);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.19),0 10px 27px rgba(0,0,0,.28);
   backdrop-filter:blur(20px) saturate(1.35);-webkit-backdrop-filter:blur(20px) saturate(1.35);
-  transform-origin:right center;transform:scaleX(.147);opacity:0;transition:transform var(--lab-normal) var(--lab-ease),opacity var(--lab-fast) var(--lab-ease);pointer-events:none;}
-.lab-toolbar-search.is-open .lab-toolbar-search-glass{transform:scaleX(1);opacity:1;}
-.lab-toolbar-search-trigger{position:absolute;top:0;right:0;z-index:3;width:44px;border-radius:50%;}
+  /* One surface morphs from a true circle into a pill; the right edge never moves. */
+  transition:width var(--lab-normal) var(--lab-ease),border-color var(--lab-fast) var(--lab-ease);
+  pointer-events:none;}
+.lab-toolbar-search.is-open .lab-toolbar-search-glass{width:min(300px,calc(100vw - 196px));}
+.lab-toolbar-search-trigger{
+  position:absolute;top:0;right:0;z-index:3;width:44px;border-radius:50%;
+  /* The magnifier is only an icon. The single glass surface lives underneath. */
+  background:none;border-color:transparent;box-shadow:none;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+}
 .lab-toolbar-search.is-open .lab-toolbar-search-trigger{
-  /* The magnifying-glass button remains a circular glass control even when the search pill grows behind it. */
-  background:var(--glass-bg);border-color:rgba(255,255,255,.27);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.19),0 9px 24px rgba(0,0,0,.27);
+  background:none;border-color:transparent;box-shadow:none;
 }
 .lab-toolbar-search-input{position:absolute;top:0;right:52px;z-index:2;height:44px;
   width:calc(min(300px, 100vw - 196px) - 64px);
@@ -66,7 +71,7 @@
 .lab-toolbar button:focus-visible{outline:2px solid #fff;outline-offset:3px;}
 /* A native text-input outline is rectangular and cuts through the round glass pill.
    Keep keyboard focus discoverable on the containing pill rather than the input box. */
-.lab-toolbar-search-input:focus-visible{outline:none;box-shadow:none;}
+.lab-root .lab-toolbar-search-input:focus-visible{outline:none;box-shadow:none;}
 .lab-toolbar-search:focus-within .lab-toolbar-search-glass{border-color:rgba(255,255,255,.34);}
 @media(hover:hover) and (pointer:fine){
   .lab-toolbar-circle:hover,.lab-toolbar-select:hover{background:rgba(90,90,90,.68);border-color:rgba(255,255,255,.32);}
@@ -75,7 +80,7 @@
 .lab-toolbar-circle:active,.lab-toolbar-select:active,.lab-toolbar-search-trigger:active{transform:scale(.97);}
 @media(max-width:590px){
   .lab-toolbar{flex-direction:row-reverse;}
-  .lab-toolbar-search-glass{width:min(300px,calc(100vw - 64px));}
+  .lab-toolbar-search.is-open .lab-toolbar-search-glass{width:min(300px,calc(100vw - 64px));}
   .lab-toolbar-search-input{width:calc(min(300px, 100vw - 64px) - 64px);}
   .lab-toolbar > .lab-toolbar-circle,.lab-toolbar > .lab-toolbar-select{
     transition:opacity var(--lab-fast) var(--lab-ease),background var(--lab-fast) var(--lab-ease),border-color var(--lab-fast) var(--lab-ease);

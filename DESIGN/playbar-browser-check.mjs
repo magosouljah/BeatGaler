@@ -167,6 +167,8 @@ try {
   }
   assert.ok(await evaluate('Boolean(document.querySelector(".lab-master-toolbar-frame .lab-toolbar"))'),"Toolbar not mounted in MASTER");
   await sleep(220);
+  const searchClosedWidth=await evaluate('document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect().width');
+  assert.ok(Math.abs(searchClosedWidth-44)<1,"Closed search must be one true 44px glass circle");
   await screenshot("master-toolbar-default.png");
 
   await evaluate(`document.querySelector('.lab-toolbar-circle[aria-label="Sort beats"]').click()`);
@@ -199,14 +201,19 @@ try {
     const buttonStyle=getComputedStyle(document.querySelector(".lab-toolbar-search-trigger"));
     return {
       glassLeft:glass.left,glassRight:glass.right,buttonLeft:button.left,focused:document.activeElement===field,
-      fieldOutline:fieldStyle.outlineStyle,circleBorderWidth:buttonStyle.borderTopWidth,circleBorderColor:buttonStyle.borderTopColor
+      fieldOutline:fieldStyle.outlineStyle,
+      glassWidth:glass.width,
+      surfaceBorder:getComputedStyle(document.querySelector(".lab-toolbar-search-glass")).borderTopColor,
+      iconBorder:buttonStyle.borderTopColor,iconBackground:buttonStyle.backgroundImage
     };
   })()`);
   assert.ok(searchShape.glassLeft<searchShape.buttonLeft-80,"Search does not extend left");
   assert.ok(searchShape.focused,"Search is not immediately focused");
   assert.equal(searchShape.fieldOutline,"none","Search input displays an unwanted rectangular focus outline");
-  assert.equal(searchShape.circleBorderWidth,"1px","Magnifier loses its circular edge when search opens");
-  assert.notEqual(searchShape.circleBorderColor,"rgba(0, 0, 0, 0)","Magnifier edge becomes transparent");
+  assert.ok(searchShape.glassWidth>180,"The original circle did not morph into a full pill");
+  assert.notEqual(searchShape.surfaceBorder,"rgba(0, 0, 0, 0)","Glass pill edge is not visible");
+  assert.equal(searchShape.iconBorder,"rgba(0, 0, 0, 0)","Magnifier still draws a second circular border");
+  assert.equal(searchShape.iconBackground,"none","Magnifier still draws a separate circular material");
   await screenshot("master-toolbar-search.png");
   await evaluate('document.querySelector(".lab-toolbar-select").click()');
   await sleep(230);
