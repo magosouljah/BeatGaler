@@ -169,9 +169,9 @@ try {
   await sleep(220);
   await screenshot("master-toolbar-default.png");
 
-  await evaluate('document.querySelector(".lab-toolbar-circle[aria-label=\"Sort beats\"]").click()');
+  await evaluate(`document.querySelector('.lab-toolbar-circle[aria-label="Sort beats"]').click()`);
   await sleep(230);
-  const sortOpen=await evaluate('document.querySelector("[role=menu][aria-label=\"Sort beats\"]").classList.contains("is-open")');
+  const sortOpen=await evaluate(`document.querySelector('[role=menu][aria-label="Sort beats"]').classList.contains('is-open')`);
   assert.ok(sortOpen,"Sort menu did not open");
   const anchor=await evaluate(`(() => {
     const rect = (name) => {
@@ -184,9 +184,9 @@ try {
   assert.ok(Math.abs(anchor.sort.right-anchor.profile.right)<1,"Popover right anchors differ");
   await screenshot("master-toolbar-sorting.png");
 
-  await evaluate('document.querySelector(".lab-toolbar-circle[aria-label=\"Profile\"]").click()');
+  await evaluate(`document.querySelector('.lab-toolbar-circle[aria-label="Profile"]').click()`);
   await sleep(230);
-  assert.ok(await evaluate('document.querySelector("[role=menu][aria-label=\"Profile\"]").classList.contains("is-open")'),"Profile menu did not open");
+  assert.ok(await evaluate(`document.querySelector('[role=menu][aria-label="Profile"]').classList.contains('is-open')`),"Profile menu did not open");
   await screenshot("master-toolbar-profile.png");
   await evaluate('document.querySelector(".lab-toolbar-search-trigger").click()');
   await sleep(230);
