@@ -1,8 +1,8 @@
-/* [LAB] Experimental CSS tokens; existing neutral values mirror src/styles/design-foundations.css.
-   Scoped to the standalone lab HTML. Do not import this file into src/ or production. */
+/* [LAB] Experimental CSS tokens; most neutrals mirror src/styles/design-foundations.css.
+   Canvas deliberately matches src/lib/proceduralBeatBackground.ts #0c0c0c instead of product #090909.\n   Scoped to the standalone lab HTML. Do not import this file into src/ or production. */
 :root {
   color-scheme: dark;
-  --lab-canvas: #090909;
+  --lab-canvas: #0c0c0c;
   --lab-surface: #101010;
   --lab-raised: #151515;
   --lab-hover: #1c1c1c;
