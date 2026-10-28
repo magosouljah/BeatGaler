@@ -151,7 +151,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
         {section === "playbar" ? (
           <div className="lab-master-specimens">
             <div className="lab-master-player-frame">
-              <Player
+              <Player preview
                       beat={beat} playing={playing} progress={progress} duration={beat.duration} volume={volume}
                       queue={queue} currentIndex={queue.findIndex(b => b.id === beat.id)}
                       showQueue={showQueue} canShowQueue={queue.length > 0} shuffleEnabled={shuffleEnabled} repeatMode={repeatMode}

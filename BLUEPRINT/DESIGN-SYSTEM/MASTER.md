@@ -15,9 +15,9 @@ MASTER es un **taller funcional** para reunir, evaluar y perfeccionar los compon
 
 Las skills `.agents/skills/emil-design-eng`, `apple-design` y `mobile-native` favorecen **espacio proporcional al contexto, tipografía escalable, gestos directos y adaptabilidad**; **no proporcionan un número obligatorio para un margen universal**.
 
-**Decisión actual (solo el espacio del taller):** margen del área de componentes de `var(--lab-space-6)` en escritorio (24 px) y `var(--lab-space-4)` en móvil (16 px). Ambas medidas **ya existen** en `design-lab/tokens.css`. No publicar estos márgenes como regla oficial para toda BeatGaler sin una decisión posterior. La vista **Reglas → Márgenes** muestra únicamente el espacio aplicado en el taller; no hay editor ni nuevo sistema de tokens.
+**Decisión aprobada:** margen horizontal del área de muestras de MASTER de **32 px**, con el token existente `var(--lab-space-8)` en escritorio y móvil. No convertirlo en margen universal de toda BeatGaler. La vista **Reglas → Márgenes** muestra únicamente el espacio aplicado en el taller; no hay editor ni nuevo sistema de tokens.
 
-La Playbar conserva sus propias medidas de producción. Si una medida del taller la restringe, se revisa el contexto del ejemplo antes de cambiar la Playbar.
+La Playbar conserva el alto **68 px** al reducirse horizontalmente (el reproductor original reducía a 62 px en tamaños estrechos). En el Lab, la portada pasa a 36 px cuando hay poco ancho y la barra de reproducción se mueve, con transición breve, desde debajo del nombre a una fila horizontal inferior que comienza debajo de la portada. Se calcula con el **ancho real disponible** y no con la ventana completa, para responder al cambio de tamaño de la navegación. En anchos extremadamente reducidos se ocultan solo acciones secundarias para conservar play/anterior/siguiente, portada, volumen y seek. Estas decisiones afectan solo la versión de MASTER, no producción.
 
 ## Componentes y subcomponentes
 

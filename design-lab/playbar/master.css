@@ -104,7 +104,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--lab-space-12);
-  padding: var(--lab-space-6); /* existing lab spacing scale: 24px */
+  padding: var(--lab-space-8); /* Approved 32px canvas margin at every width. */
 }
 .lab-master-player-frame {
   position: relative;
@@ -112,19 +112,15 @@
   max-width: 1100px; /* Original production Playbar's desktop max-width. */
   flex: none;
 }
-/* Keep production Player.tsx untouched: only adapt its fixed dock for this canvas. */
-.lab-master-player-frame > div {
-  position: relative !important;
-  inset: auto !important;
-  left: auto !important;
-  bottom: auto !important;
-  transform: none !important;
-  width: 100% !important;
-  margin: 0 auto;
-}
+/* The isolated Playbar's inline preview mode adapts to the available canvas width. */
+.lab-master-player-frame { container-type: inline-size; }
+.lab-playbar-seek--preview { transition: left 210ms ease-out, width 210ms ease-out; }
+.lab-playbar-artwork { transition: width 210ms ease-out, height 210ms ease-out; }
+/* Extreme narrow preview: keep transport, artwork, volume and scrubber reachable. */
+.lab-playbar[data-layout="micro"] .lab-playbar-optional { display: none !important; }
 .lab-master-margin-example {
   width: min(100%, 1100px);
-  padding: var(--lab-space-6);
+  padding: var(--lab-space-8);
   outline: 1px dashed var(--lab-border-strong);
 }
 .lab-master-margin-inner {
@@ -163,7 +159,6 @@
   }
   .lab-master-resize-handle { display: none; }
 }
-@media (max-width: 600px) {
-  .lab-master-specimens { padding: var(--lab-space-4); }
-  .lab-master-margin-example { padding: var(--lab-space-4); }
+@media (prefers-reduced-motion: reduce) {
+  .lab-playbar-seek--preview, .lab-playbar-artwork { transition: none; }
 }

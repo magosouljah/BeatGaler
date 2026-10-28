@@ -8,7 +8,7 @@
 - `design-lab/playbar/assets/`: catorce PNG originales del reproductor.
 - `design-lab/playbar/fixtures.ts`: conversión de seis beats ficticios a props del reproductor.
 - `design-lab/playbar/bridge.tsx`: Artwork local y dos helpers de etiquetas.
-- `design-lab/playbar/master.css`: estilos mínimos del shell y regla visual de márgenes; usa tokens de espaciado ya existentes en `tokens.css`. La Playbar original se coloca en el flujo del canvas mediante CSS sobre el contenedor sin alterar `Player.tsx`.
+- `design-lab/playbar/master.css`: estilos mínimos del shell y regla visual de márgenes; usa tokens de espaciado ya existentes en `tokens.css`. La Playbar del Lab usa `preview` en `Player.tsx` para situarse en el flujo del canvas; `ResizeObserver` observa el ancho disponible y la zona de metadatos para calcular la barra de seek. Mantiene 68 px de altura en todas las anchuras. El código de producción y los iconos PNG originales quedan intactos.
 - `design-lab/GalleryPage.tsx`, `components.tsx`, `tokens.css`, `gallery.css`, `lab.css`: demos previas, sin afectar a producción.
 
 No hay catálogo de componentes adelantado, editor global, inspector ni motor de físicas genérico.

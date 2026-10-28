@@ -7,7 +7,7 @@ import type { Beat } from "./fixtures";
 export function Artwork({ beat, size = 160, playing = false }: { beat: Beat; size?: number; playing?: boolean }) {
   const cover = useMemo(() => getCoverSrc(beat.id, beat.coverMode, Math.max(0, Number(beat.id.slice(-2)) - 1)), [beat.id, beat.coverMode]);
   return (
-    <div style={{ width: size, height: size, borderRadius: 10, flexShrink: 0, position: "relative", overflow: "hidden", backgroundColor: "#0c0c0c", boxShadow: playing ? "0 0 0 2px rgba(255,255,255,0.15)" : "none" }}>
+    <div className="lab-playbar-artwork" style={{ width: size, height: size, borderRadius: 10, flexShrink: 0, position: "relative", overflow: "hidden", backgroundColor: "#0c0c0c", boxShadow: playing ? "0 0 0 2px rgba(255,255,255,0.15)" : "none" }}>
       {cover && <img src={cover} alt={beat.name} draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
     </div>
   );

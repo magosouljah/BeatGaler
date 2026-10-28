@@ -12,7 +12,7 @@ Añadimos **un componente real de BeatGaler cada vez** y lo perfeccionamos antes
 - Copia adaptada a `design-lab/playbar/Player.tsx`. Conserva la geometría, estilos en línea, iconos PNG originales, controles de shuffle/anterior/play/siguiente/repeat, scrubber, cola, menú y **slider de volumen vertical original**.
 - Los 14 PNG originales de `src/assets/player-icons/` se copiaron íntegros a `design-lab/playbar/assets/`.
 - Solo se reemplazaron imports de servicios, artwork y el acceso al sistema de archivos. El adaptador de portada usa datos e imágenes locales; la lógica de playback usa un estado ficticio. **No hay audio ni Cloud ni usuarios reales**. Los cambios aquí no modifican producción.
-- `design-lab/playbar/MasterPage.tsx` muestra la única pieza de trabajo y la regla visual de Márgenes. La navegación lateral se arrastra para cambiar tamaño; debajo del mínimo se oculta y se restaura con el botón superior izquierdo. En móvil funciona como panel superpuesto. `master.css` usa `--lab-space-6` (24 px) / `--lab-space-4` (16 px) para el canvas, sin declararlo regla general de BeatGaler.
+- `design-lab/playbar/MasterPage.tsx` muestra la única pieza de trabajo y la regla visual de Márgenes. La navegación lateral se arrastra para cambiar tamaño; debajo del mínimo se oculta y se restaura con el botón superior izquierdo. En móvil funciona como panel superpuesto. `master.css` usa `--lab-space-8` (32 px) como margen horizontal fijo del canvas de MASTER. La Playbar de MASTER mantiene 68 px de alto y al estrecharse reduce la portada y coloca el scrubber debajo de ella con una transición breve, sin modificar producción.
 
 ## Ejecutar (PowerShell)
 

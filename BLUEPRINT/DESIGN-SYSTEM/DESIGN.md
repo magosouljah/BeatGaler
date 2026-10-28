@@ -10,3 +10,5 @@
 [LAB] MASTER tiene menú lateral estrecho, redimensionable y ocultable; vista de márgenes del laboratorio (espaciado existente 24/16 px, no regla universal aprobada) y área de muestras sin texto. Ver [MASTER.md](MASTER.md). No existen inspector, editor global de tokens, catálogo de 58 fichas ni laboratorio de física en esta versión. El objetivo es trabajar la Playbar antes de añadir otra pieza.
 
 **Límite:** MASTER de este documento = página de diseño. No confundir con el MASTER técnico, INDEX y Telegram.
+
+- **[LAB] Decisión actual:** 32 px horizontales constantes en el canvas de MASTER (`--lab-space-8`). La Playbar siempre mide 68 px de alto, usa portada de 36 px y scrubber ancho completo bajo la portada cuando se comprime; transición 210 ms, reducida a cero para `prefers-reduced-motion`.

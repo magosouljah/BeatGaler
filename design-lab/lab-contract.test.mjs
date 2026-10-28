@@ -21,24 +21,30 @@ test("MASTER is a minimal resizable/collapsible navigation and centered componen
   for (const unwanted of ["Inspector","Search components","MotionPlayground","Tablet","Fluid","DsButton"]) {
     assert.doesNotMatch(master, new RegExp(unwanted));
   }
-  assert.match(css, /var\(--lab-space-6\)/);
-  assert.match(css, /var\(--lab-space-4\)/);
-  assert.match(css, /\.lab-master-player-frame > div/);
-  assert.match(css, /position: relative !important/);
+  assert.match(css, /padding: var\(--lab-space-8\)/);
+  assert.doesNotMatch(css, /lab-master-specimens \{ padding: var\(--lab-space-4\)/);
+  assert.match(css, /lab-playbar-seek--preview/);
+  assert.match(master, /<Player preview/);
   assert.match(read("../BLUEPRINT/DESIGN-SYSTEM/MASTER.md"), /Botones de Playbar/);
   assert.doesNotMatch(read("./main.tsx"), /studio\.css/);
 });
 
-test("Playbar preserves production markup and volume geometry except explicit isolated adapters", () => {
+test("isolated Playbar retains production controls, icons and volume while fixing its height", () => {
   const production = read("../src/components/Player.tsx");
   const lab = read("./playbar/Player.tsx");
-  const start = "interface Props {";
-  const normalized = production.slice(production.indexOf(start))
-    .replace("canReveal={platform.capabilities.revealLocalFile}", "canReveal={false}")
-    .replace("onReveal={() => void platform.system.revealPath(beat.folder_path)}", "onReveal={() => { /* No filesystem in the isolated lab. */ }}");
-  assert.equal(lab.slice(lab.indexOf(start)), normalized);
-  assert.match(lab, /Custom vertical slider/);
-  assert.match(lab, /volThumbBottom/);
+  for (const element of ["Custom vertical slider", "volThumbBottom", "onVolumeChange(Number(e.target.value))", "data-testid=\"player-scrubber\"",
+    "shuffleEnabled", "onCycleRepeat", "onToggleQueue", "speaker3FillPng", "backdropFilter: \"blur(20px)\""]) {
+    assert.ok(production.includes(element), "Production removed " + element);
+    assert.ok(lab.includes(element), "Lab removed " + element);
+  }
+  assert.match(lab, /const playerHeight = 68;/);
+  assert.doesNotMatch(lab, /playerHeight = isSmall \? 62/);
+  assert.match(lab, /isNarrow = preview && viewportWidth <= 760/);
+  assert.match(lab, /new ResizeObserver\(update\)/);
+  assert.match(lab, /className=\{preview \? "lab-playbar-seek/);
+  assert.match(lab, /position: preview \? "absolute" : "relative"/);
+  assert.match(lab, /width: preview \? seekGeometry.width/);
+  assert.match(read("./playbar/MasterPage.tsx"), /<Player preview/);
 });
 
 test("all original player PNG icon assets are copied unchanged", () => {

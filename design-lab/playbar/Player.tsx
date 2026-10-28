@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import type { Beat } from "./fixtures";
 import { Artwork, playerMetaLabel, playerToggleTitle } from "./bridge";
@@ -44,6 +44,7 @@ interface Props {
   onEdit: (beat: Beat) => void;
   onDelete: (beat: Beat) => void;
   onAddToQueue: (beat: Beat) => void;
+  preview?: boolean; // Design Lab only: render inline and observe actual available width.
 }
 
 function ContextMenu({ x, y, onEdit, onDetail, onAddToQueue, onDelete, canReveal, onReveal, onClose }: {
@@ -342,8 +343,11 @@ export default function Player({
   onEdit,
   onDelete,
   onAddToQueue,
+  preview = false,
 }: Props) {
-  const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1920);
+  const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1100);
+  const trackDataRef = useRef<HTMLDivElement | null>(null);
+  const [seekGeometry, setSeekGeometry] = useState({ left: 0, width: 0, ready: false });
   const [showVolume, setShowVolume] = useState(false);
   const [showEmptyQueueHint, setShowEmptyQueueHint] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -362,11 +366,47 @@ export default function Player({
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
-  useEffect(() => {
-    const handleResize = () => setViewportWidth(window.innerWidth);
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  useLayoutEffect(() => {
+    // Sidebars change the actual available width without resizing window.
+    const root = rootRef.current;
+    const host = preview ? root?.parentElement : null;
+    const update = () => setViewportWidth(preview ? (host?.getBoundingClientRect().width ?? window.innerWidth) : window.innerWidth);
+    update();
+    if (preview && host && typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(update);
+      observer.observe(host);
+      return () => observer.disconnect();
+    }
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [preview]);
+
+  useLayoutEffect(() => {
+    if (!preview) return;
+    const root = rootRef.current;
+    const trackData = trackDataRef.current;
+    if (!root || !trackData) return;
+    const update = () => {
+      const outer = root.getBoundingClientRect();
+      const inner = trackData.getBoundingClientRect();
+      const compact = outer.width <= 760;
+      const edge = outer.width < 700 ? 10 : outer.width < 860 ? 14 : 18;
+      const left = compact ? edge : Math.max(edge, inner.left - outer.left);
+      const width = compact ? outer.width - edge * 2 : inner.width;
+      const next = { left: Math.round(left), width: Math.max(0, Math.round(width)), ready: true };
+      setSeekGeometry(previous => previous.left === next.left && previous.width === next.width && previous.ready
+        ? previous : next);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(root);
+    observer.observe(trackData);
+    return () => observer.disconnect();
+  }, [preview, viewportWidth]);
 
   useEffect(() => {
     const onDocMouseDown = (event: MouseEvent) => {
@@ -460,7 +500,9 @@ export default function Player({
   const isCompact = viewportWidth < 1100;
   const isSmall = viewportWidth < 860;
   const isTiny = viewportWidth < 700;
-  const playerHeight = isSmall ? 62 : 68;
+  const playerHeight = 68; // Same height at every width, including condensed previews.
+  const isNarrow = preview && viewportWidth <= 760;
+  const isMicro = preview && viewportWidth < 380;
   const playerPadding = isTiny ? 10 : isSmall ? 14 : 18;
   const controlsGap = isTiny ? 5 : isSmall ? 7 : 10;
   const rightGap = isTiny ? 7 : 10;
@@ -469,7 +511,7 @@ export default function Player({
   const playPauseSize = 30;
   const utilityBtnSize = isTiny ? 26 : 30;
   const infoGap = isTiny ? 8 : 12;
-  const artworkSize = isTiny ? 42 : 48;
+  const artworkSize = isNarrow ? 36 : isTiny ? 42 : 48;
   const volContainerW = isTiny ? 32 : 36;
   const volContainerH = isTiny ? 150 : 168;
   const volPadY = 14;
@@ -480,12 +522,14 @@ export default function Player({
   return (
     <div
       ref={rootRef}
+      className="lab-playbar"
+      data-layout={preview ? isMicro ? "micro" : isNarrow ? "narrow" : "wide" : undefined}
       style={{
-        position: "fixed",
-        left: "50%",
-        transform: "translateX(-50%)",
-        bottom: 24,
-        width: playerWidth,
+        position: preview ? "relative" : "fixed",
+        left: preview ? undefined : "50%",
+        transform: preview ? undefined : "translateX(-50%)",
+        bottom: preview ? undefined : 24,
+        width: preview ? "100%" : playerWidth,
         height: playerHeight,
         background: "rgba(20, 20, 20, 0.75)",
         backdropFilter: "blur(20px)",
@@ -495,13 +539,14 @@ export default function Player({
         zIndex: 90,
         display: "flex",
         alignItems: "center",
-        padding: `10px ${playerPadding}px`,
+        padding: preview && isNarrow ? `7px ${playerPadding}px 19px` : `10px ${playerPadding}px`,
         gap: isTiny ? 10 : 14,
         overflow: "visible",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: controlsGap, flexShrink: 0 }}>
         <button
+          className="lab-playbar-optional"
           onClick={onToggleShuffle}
           style={controlButtonStyle(shuffleEnabled, utilityBtnSize)}
           title="Shuffle"
@@ -532,6 +577,7 @@ export default function Player({
         </div>
 
         <button
+          className="lab-playbar-optional"
           onClick={onCycleRepeat}
           style={controlButtonStyle(repeatMode !== "off", utilityBtnSize)}
           title="Repeat"
@@ -541,10 +587,10 @@ export default function Player({
         </button>
       </div>
 
-      {/* CENTER: Now Playing + Scrubber */}
+      {/* CENTER: artwork and metadata; seek moves beneath both at narrow widths. */}
       <div style={{ display: "flex", alignItems: "center", gap: infoGap, flex: 1, minWidth: 0 }}>
         <Artwork beat={beat} size={artworkSize} playing={false} />
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
+        <div ref={trackDataRef} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
           {/* Beat info + More button row */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0, paddingTop: 5 }}>
@@ -556,6 +602,7 @@ export default function Player({
               </div>
             </div>
               <button
+                className="lab-playbar-optional"
                 ref={moreButtonRef}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -578,14 +625,21 @@ export default function Player({
           <div
             ref={scrubberRef}
             data-testid="player-scrubber"
+            className={preview ? "lab-playbar-seek lab-playbar-seek--preview" : "lab-playbar-seek"}
             onPointerEnter={() => setHoveringScrubber(true)}
             onPointerLeave={() => setHoveringScrubber(false)}
             onPointerDown={startProgressDrag}
             style={{
-              marginTop: 6,
-              paddingTop: 6, paddingBottom: 6, marginBottom: -6, // wider invisible hit area, same visual position
+              marginTop: preview ? 0 : 6,
+              paddingTop: preview ? 5 : 6,
+              paddingBottom: preview ? 5 : 6,
+              marginBottom: preview ? 0 : -6, // wider invisible hit area, same visual position
               cursor: "pointer",
-              position: "relative",
+              position: preview ? "absolute" : "relative",
+              left: preview ? seekGeometry.left : undefined,
+              width: preview ? seekGeometry.width : undefined,
+              bottom: preview ? 6 : undefined,
+              visibility: preview && !seekGeometry.ready ? "hidden" : "visible",
               touchAction: "none",
               userSelect: "none",
             }}
@@ -623,10 +677,11 @@ export default function Player({
 
       {/* RIGHT: Auxiliary Controls */}
       <div style={{ display: "flex", alignItems: "center", gap: rightGap, flexShrink: 0, position: "relative" }}>
-        {canAddBeat && <button onClick={onAddBeat} style={controlButtonStyle(false, utilityBtnSize)} title="Add beat" {...iconButtonStateHandlers<HTMLButtonElement>()}>
+        {canAddBeat && <button className="lab-playbar-optional" onClick={onAddBeat} style={controlButtonStyle(false, utilityBtnSize)} title="Add beat" {...iconButtonStateHandlers<HTMLButtonElement>()}>
           <PlusIcon />
         </button>}
         <button
+          className="lab-playbar-optional"
           ref={queueButtonRef}
           onClick={() => {
             setShowVolume(false);
