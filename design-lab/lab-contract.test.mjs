@@ -40,7 +40,7 @@ test("source of proposals and safety boundaries remain explicit", () => {
   assert.match(design, /\[LAB\]/);
   assert.match(design, /\[PENDIENTE\]/);
   assert.match(design, /MASTER, INDEX|INDEX, Telegram/);
-  assert.match(read("./App.tsx"), /Restablecer tokens/);
+  assert.match(read("./system/MasterPage.tsx"), /Reset all foundations/);
 });
 
 test("procedural artwork is the exact BeatGaler bg-v1 generator, isolated from product imports", () => {
@@ -87,9 +87,10 @@ test("one session-scoped cover mode is wired into landing gallery and MASTER", (
  const app=read("./App.tsx"),cover=read("./coverSources.ts");
  assert.match(app,/useState<CoverMode>/);
  assert.match(app,/sessionStorage/);
- assert.match(app,/Generated/);
- assert.match(app,/Real covers/);
+ assert.match(read("./system/MasterPage.tsx"),/Generated/);
+ assert.match(read("./system/MasterPage.tsx"),/Real covers/);
  assert.match(app,/<Orbit coverMode=/);
+ assert.match(read("./system/MasterPage.tsx"),/<Orbit coverMode=/);
  assert.match(app,/<GalleryPage[^\n]*coverMode=/);
  assert.match(app,/<ComponentPage[^\n]*coverMode=/);
  assert.match(cover,/import\.meta\.glob/);
@@ -143,15 +144,17 @@ test("floating player copies production visual geometry while keeping simulated 
   assert.match(css, /position:fixed/);
 });
 
-test("landing retains original pointer repulsion with smoothing and reduced-motion guard", () => {
- const app=read("./App.tsx");
- assert.match(app,/addEventListener\("pointermove"/);
- assert.match(app,/addEventListener\("pointerleave"/);
- assert.match(app,/distance < reach/);
- assert.match(app,/105/);
- assert.match(app,/0\.19/);
- assert.match(app,/!reduced\.matches/);
- assert.match(app,/removeEventListener\("pointermove"/);
+test("landing and MASTER share one orbit with original pointer repulsion, smoothing and reduced-motion guard", () => {
+ const app=read("./App.tsx"),orbit=read("./motion/Orbit.tsx");
+ assert.match(app,/import Orbit from/);
+ assert.match(orbit,/addEventListener\("pointermove"/);
+ assert.match(orbit,/addEventListener\("pointerleave"/);
+ assert.match(orbit,/distance < reach/);
+ assert.match(orbit,/vectorForce/);
+ assert.match(orbit,/105/);
+ assert.match(orbit,/0\.19/);
+ assert.match(orbit,/!reduced\.matches/);
+ assert.match(orbit,/removeEventListener\("pointermove"/);
 });
 test("design system architecture has 3 token tiers and defined component contracts", () => {
  const reference=read("../BLUEPRINT/DESIGN-SYSTEM/UI-COLLECTIVE-TRANSCRIPT-NOTES.md");
@@ -162,4 +165,17 @@ test("design system architecture has 3 token tiers and defined component contrac
  }
  assert.match(architecture,/componentes/i);
  assert.match(architecture,/estado/i);
+});
+
+test("new workbench modules remain isolated and expose live catalog contracts", () => {
+ for(const file of ["system/MasterPage.tsx","system/primitives.tsx","system/foundations.ts","system/catalog.ts","motion/MotionPlayground.tsx","motion/Orbit.tsx","motion/physics.ts"]) {
+  const src=read("./"+file);
+  assert.doesNotMatch(src,/fetch\s*\(|XMLHttpRequest|WebSocket|new Audio\s*\(/);
+ }
+ const master=read("./system/MasterPage.tsx"),catalog=read("./system/catalog.ts"),css=read("./system/studio.css");
+ assert.match(master,/Search components/);
+ assert.match(master,/Inspector/);
+ assert.match(master,/MotionPlayground/);
+ assert.match(catalog,/Motion & Physics/);
+ assert.match(css,/max-width:720px/);
 });
