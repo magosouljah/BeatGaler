@@ -130,7 +130,7 @@ button, input, select { font: inherit; }
 .lab-token-dot { display: inline-block; width: 8px; height: 8px; margin-right: 7px; background: var(--lab-accent); border-radius: 50%; }
 .lab-landing { background: var(--lab-canvas); margin: -44px calc(-1 * clamp(20px,4vw,64px)) -80px; min-height: 700px; overflow: hidden; }
 .lab-landing-nav { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 22px clamp(20px,4vw,64px); border-bottom: 1px solid var(--lab-hairline); }
-.lab-landing-hero { max-width: 1320px; margin: 0 auto; min-height: 570px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0,1.12fr); align-items: center; padding: 28px clamp(20px,4vw,64px); gap: 16px; }
+.lab-landing-hero { max-width: 1200px; margin: 0 auto; min-height: 570px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0,1.12fr); align-items: center; padding: 28px clamp(20px,4vw,64px); gap: 16px; }
 .lab-landing-copy { position: relative; z-index: 1; }
 .lab-landing-copy h1 { max-width: 580px; font-size: clamp(40px,5.3vw,72px); line-height: 1.02; letter-spacing: -.055em; margin-bottom: 26px; }
 .lab-landing-copy p { max-width: 430px; color: var(--lab-secondary); font-size: 16px; line-height: 1.55; margin-bottom: 28px; }
