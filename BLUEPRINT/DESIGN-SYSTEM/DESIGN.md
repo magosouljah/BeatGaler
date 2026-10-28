@@ -304,13 +304,13 @@ Inventario vivo de botones, estados, campos, tokens editables, selector de porta
 - Comparar densidad y navegación real de gallery frente al mock; no trasladar cambios del player sin verificar accesibilidad ni tiempo de primera reproducción.
 - Establecer un procedimiento de revisión visual y aprobación cuando haya variantes reales.
 
-**Alcance verificado de este PR:** especificación + Design Lab ficticio. **No** cambio productivo, no decisión de identidad final, no certificación de contraste para cualquier token modificado manualmente.
+**Alcance del Design Lab:** especificación + Design Lab ficticio. **No** cambio productivo, no decisión de identidad final, no certificación de contraste para cualquier token modificado manualmente.
 
 ## 13. Selector de portadas [LAB]
 
 Estado único `coverMode = generated | real` compartido por Landing, Gallery, player y MASTER. Control radio en MASTER / Design foundations / Artwork mode; valor predeterminado Generated. Se conserva navegando y dentro de la misma pestaña mediante sessionStorage, sin persistencia de usuarios ni API.
 
-`Generated` utiliza la copia exacta del generador BeatGaler `bg-v1` con semilla determinista. `Real covers` usa **exclusivamente** JPG locales bajo `design-lab/assets/real-covers/`, recogidos por `import.meta.glob` de Vite. Faltando imágenes, vuelve al generador sin romper la UI. El laboratorio contiene **24 imágenes distintas** para 24 slots (20 JPG del ZIP y 4 AVIF nuevas). No se repiten portadas en la órbita. La galería mantiene sus identificadores ficticios y aspecto actual; solo cambia su imagen, incluidos mini player y muestras de MASTER.
+`Generated` utiliza la copia exacta del generador BeatGaler `bg-v1` con semilla determinista. `Real covers` usa **exclusivamente** JPG locales bajo `design-lab/assets/real-covers/`, recogidos por `import.meta.glob` de Vite. Faltando imágenes, vuelve al generador sin romper la UI. El laboratorio contiene **24 imágenes distintas** para 24 slots (20 JPG del ZIP y 4 AVIF nuevas). No se repiten portadas en la órbita. La galería conserva identificadores ficticios y recibe la composición experimental del apartado 14; el selector también modifica la portada del player y las muestras de MASTER.
 
 Los 20 JPEG optimizados a 384×384 y las cuatro AVIF a 320×320 ya están versionados en la rama de diseño; el importer opcional `design-lab/import-real-covers.ps1` permite restaurar localmente los originales de alta resolución sin audio/MIDI/HTML. No usar servicios externos ni incorporar imágenes a `src/`. Revisar licencias y permisos antes de publicar imágenes de terceros en una landing real. Todo es [LAB], nunca cambio en `main` o producción.
 
