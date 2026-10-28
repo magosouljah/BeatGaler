@@ -142,9 +142,11 @@ function transportButtonStyle(size = 28): React.CSSProperties {
 }
 
 function iconButtonStateHandlers<T extends HTMLElement>(on = true) {
+  const canScale = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   return {
     onMouseEnter: (e: React.MouseEvent<T>) => {
-      e.currentTarget.style.transform = on ? "scale(1.1)" : "scale(1)";
+      e.currentTarget.style.transform = on && canScale() ? "scale(1.1)" : "scale(1)";
       e.currentTarget.style.opacity = "1";
     },
     onMouseLeave: (e: React.MouseEvent<T>) => {
@@ -152,10 +154,10 @@ function iconButtonStateHandlers<T extends HTMLElement>(on = true) {
       e.currentTarget.style.opacity = "1";
     },
     onMouseDown: (e: React.MouseEvent<T>) => {
-      e.currentTarget.style.transform = "scale(0.95)";
+      e.currentTarget.style.transform = canScale() ? "scale(0.95)" : "scale(1)";
     },
     onMouseUp: (e: React.MouseEvent<T>) => {
-      e.currentTarget.style.transform = "scale(1.1)";
+      e.currentTarget.style.transform = on && canScale() ? "scale(1.1)" : "scale(1)";
     },
   };
 }
