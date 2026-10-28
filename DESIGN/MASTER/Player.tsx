@@ -614,8 +614,8 @@ export default function Player({
           </div>
         ) : <Artwork beat={beat} size={artworkSize} playing={false} />}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
-          {/* Beat info + More button row */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          {/* Move only the text row up, reserving a readable 11–12px gap to seek. */}
+          <div className={preview ? "lab-playbar-metadata-row" : undefined} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0, paddingBottom: preview ? 6 : 0 }}>
               <div style={{ fontSize: isTiny ? 12 : 14, fontWeight: 600, color: "#FFFFFF", lineHeight: "1.2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {beat.name}
