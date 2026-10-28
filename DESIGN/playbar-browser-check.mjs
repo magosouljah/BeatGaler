@@ -156,7 +156,70 @@ try {
   }))()`);
   assert.equal(reduced.cover, "0s", "Reduced motion: artwork still animates");
   assert.equal(reduced.text, "0s", "Reduced motion: metadata still animates");
-  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, result: "PASS" }, null, 2));
+
+  // Toolbar: interact with the actual rendered component in Chrome, capture both
+  // popovers and confirm that they remain on the identical top-right anchor.
+  await call("Emulation.setEmulatedMedia", { features: [] });
+  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar").click()');
+  for(let i=0;i<50;i++){
+    if(await evaluate('Boolean(document.querySelector(".lab-master-toolbar-frame .lab-toolbar"))'))break;
+    await sleep(100);
+  }
+  assert.ok(await evaluate('Boolean(document.querySelector(".lab-master-toolbar-frame .lab-toolbar"))'),"Toolbar not mounted in MASTER");
+  await sleep(220);
+  await screenshot("master-toolbar-default.png");
+
+  await evaluate('document.querySelector(".lab-toolbar-circle[aria-label=\"Sort beats\"]").click()');
+  await sleep(230);
+  const sortOpen=await evaluate('document.querySelector("[role=menu][aria-label=\"Sort beats\"]").classList.contains("is-open")');
+  assert.ok(sortOpen,"Sort menu did not open");
+  const anchor=await evaluate(`(() => {
+    const rect = (name) => {
+      const r=document.querySelector('[role=menu][aria-label="'+name+'"]').getBoundingClientRect();
+      return {left:r.left,right:r.right,top:r.top,width:r.width};
+    };
+    return {sort:rect("Sort beats"),profile:rect("Profile")};
+  })()`);
+  assert.ok(Math.abs(anchor.sort.top-anchor.profile.top)<1,"Popover vertical anchors differ");
+  assert.ok(Math.abs(anchor.sort.right-anchor.profile.right)<1,"Popover right anchors differ");
+  await screenshot("master-toolbar-sorting.png");
+
+  await evaluate('document.querySelector(".lab-toolbar-circle[aria-label=\"Profile\"]").click()');
+  await sleep(230);
+  assert.ok(await evaluate('document.querySelector("[role=menu][aria-label=\"Profile\"]").classList.contains("is-open")'),"Profile menu did not open");
+  await screenshot("master-toolbar-profile.png");
+  await evaluate('document.querySelector(".lab-toolbar-search-trigger").click()');
+  await sleep(230);
+  const searchShape=await evaluate(`(() => {
+    const glass=document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect();
+    const button=document.querySelector(".lab-toolbar-search-trigger").getBoundingClientRect();
+    const field=document.querySelector(".lab-toolbar-search-input");
+    return {glassLeft:glass.left,glassRight:glass.right,buttonLeft:button.left,focused:document.activeElement===field};
+  })()`);
+  assert.ok(searchShape.glassLeft<searchShape.buttonLeft-80,"Search does not extend left");
+  assert.ok(searchShape.focused,"Search is not immediately focused");
+  await screenshot("master-toolbar-search.png");
+  await evaluate('document.querySelector(".lab-toolbar-select").click()');
+  await sleep(230);
+  assert.ok(await evaluate('document.querySelector(".lab-toolbar-select").classList.contains("is-selecting")'),"Select did not become X");
+  await screenshot("master-toolbar-select.png");
+
+  await viewport(390,844);
+  await sleep(260);
+  const mobile=await evaluate(`(() => {
+    const root=document.querySelector(".lab-toolbar").getBoundingClientRect();
+    const controls=[...document.querySelectorAll(".lab-toolbar-search-trigger,.lab-toolbar-circle,.lab-toolbar-select")];
+    return {left:root.left,right:root.right,controls:controls.map(el=>({left:el.getBoundingClientRect().left,right:el.getBoundingClientRect().right}))};
+  })()`);
+  assert.equal(mobile.controls.length,4,"Mobile must retain all four controls");
+  assert.ok(mobile.controls.every(r=>r.left>=0&&r.right<=390),"Mobile toolbar clipped");
+  await screenshot("master-toolbar-mobile.png");
+  await evaluate('document.querySelector(".lab-toolbar-search-trigger").click()');
+  await sleep(230);
+  const mobileSearch=await evaluate('document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect().left');
+  assert.ok(mobileSearch>=0,"Mobile expanded search overflows left");
+  await screenshot("master-toolbar-mobile-search.png");
+  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{anchor,searchShape,mobile,mobileSearch}, result: "PASS" }, null, 2));
 } finally {
   ws?.close();
   vite.kill("SIGTERM");
