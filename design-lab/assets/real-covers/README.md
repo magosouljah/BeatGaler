@@ -1,7 +1,9 @@
-# Real covers — isolated Design Lab
+# Real covers — local-only Design Lab assets
 
-This directory is intentionally empty until artwork is imported from the user's ZIP. Run the root-local `design-lab/import-real-covers.ps1` with the ZIP path. Only JPEG files are extracted; audio, MIDI, HTML and other contents are ignored. The importer names them `cover-01.jpg` onward. The Lab bundles them through Vite's local `import.meta.glob`, never through production services or outside URLs.
+20 real JPEG images supplied for the mock are **already committed to this design branch**, named `cover-01.jpg` through `cover-20.jpg`. Each is a 384 × 384 square, progressive JPEG optimized for the fake gallery and animated orbit. No images are loaded from remote URLs and no media is copied into `src/`.
 
-20 files populate all 24 orbit positions deterministically by repeating the first four. The generated source remains the default and fallback. The images have **not** been cleared for public production usage; evaluate rights before publishing.
+The orbit has 24 positions: covers 01–04 are reused once. The original `bg-v1` procedural generator remains the default and fallback.
 
-For GitHub to serve the same photos on another computer, commit `cover-*.jpg` to the **design branch only**, or re-run this importer on each machine.
+Optional: run `design-lab/import-real-covers.ps1 -ZipPath <your ZIP>` to replace the optimized files locally with the original full-resolution JPGs. That script extracts only JPEG files and ignores audio, MIDI and HTML. If you do this, the files on your PC will differ from GitHub until explicitly committed.
+
+**Copyright/rights:** these are user-supplied visual references for a private design experiment, not artwork cleared for a public marketing site. Verify permissions before production.
