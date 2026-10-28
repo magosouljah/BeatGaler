@@ -50,7 +50,7 @@ test("procedural artwork is the exact BeatGaler bg-v1 generator, isolated from p
   assert.match(original, /BACKGROUND_HEX = "#0c0c0c"/);
   assert.match(read("./tokens.css"), /--lab-canvas: #0c0c0c/);
   assert.match(read("./App.tsx"), /COVER_BLACK = "#0c0c0c"/);
-  assert.match(read("./components.tsx"), /getProceduralBeatBackgroundDataUrl\(beat\.id\)/);
+  assert.match(read("./coverSources.ts"), /getProceduralBeatBackgroundDataUrl\(id\)/);
 });
 
 test("landing is default with a real demo CTA and discreet MASTER access", () => {
@@ -66,4 +66,33 @@ test("landing is default with a real demo CTA and discreet MASTER access", () =>
   const css = read("./lab.css");
   assert.match(css, /lab-landing-orbit/);
   assert.match(css, /prefers-reduced-motion/);
+});
+
+test("central scrim cannot shade any orbit cover", () => {
+ const css = read("./lab.css");
+ assert.match(css, /\.lab-center-scrim\s*\{[^}]*z-index:0;/);
+ assert.match(css, /\.lab-landing-orbit\s*\{[^}]*z-index:1;/);
+ assert.match(css, /\.lab-landing-center\s*\{[^}]*z-index:22;/);
+});
+test("buttons use size tokens and intrinsic width, not a fixed CTA width", () => {
+ const css=read("./lab.css"),tokens=read("./tokens.css"),component=read("./components.tsx");
+ assert.match(css,/width:max-content/);
+ assert.match(css,/--btn-pad/);
+ assert.doesNotMatch(css,/\.lab-create\s*\{[^}]*min-width:/);
+ for(const size of ["sm","md","lg","hero"]) assert.ok(tokens.includes(`--lab-button-${size}-height:`));
+ assert.match(component,/trailingIcon/);
+ assert.match(component,/aria-busy=/);
+});
+test("one session-scoped cover mode is wired into landing gallery and MASTER", () => {
+ const app=read("./App.tsx"),cover=read("./coverSources.ts");
+ assert.match(app,/useState<CoverMode>/);
+ assert.match(app,/sessionStorage/);
+ assert.match(app,/Generated/);
+ assert.match(app,/Real covers/);
+ assert.match(app,/<Orbit coverMode=/);
+ assert.match(app,/<GalleryPage[^\n]*coverMode=/);
+ assert.match(app,/<ComponentPage[^\n]*coverMode=/);
+ assert.match(cover,/import\.meta\.glob/);
+ assert.match(cover,/getProceduralBeatBackgroundDataUrl\(id\)/);
+ assert.doesNotMatch(cover,/https?:\/\/|\bfetch\s*\(/);
 });
