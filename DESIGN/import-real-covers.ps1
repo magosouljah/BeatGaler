@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archivePath = (Resolve-Path -LiteralPath $ZipPath).Path
-$destination = Join-Path $PSScriptRoot "assets/real-covers"
+$destination = Join-Path $PSScriptRoot "shared/assets/real-covers"
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
 try {

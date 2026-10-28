@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, Dispatch, SetStateAction } from "react";
-import { LabBeatTile, LabButton, LabPlayer } from "./components";
-import { DEMO_BEATS } from "./data";
-import type { DemoBeat } from "./data";
-import type { CoverMode } from "./coverSources";
+import { LabBeatTile, LabButton, LabPlayer } from "../shared/components";
+import { DEMO_BEATS } from "../shared/data";
+import type { DemoBeat } from "../shared/data";
+import type { CoverMode } from "../shared/coverSources";
 
 const TAG_PALETTE = [
   { name: "Red", hex: "#FF3B30" }, { name: "Orange", hex: "#FF9500" },

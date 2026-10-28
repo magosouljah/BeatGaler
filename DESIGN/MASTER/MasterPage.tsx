@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
-import type { CoverMode } from "../coverSources";
+import type { CoverMode } from "../shared/coverSources";
 import Player from "./Player";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";

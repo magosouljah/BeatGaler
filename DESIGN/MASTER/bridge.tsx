@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { getCoverSrc } from "../coverSources";
+import { getCoverSrc } from "../shared/coverSources";
 import type { Beat } from "./fixtures";
 
 // Adaptador local del Artwork de src/components/ui.tsx: mismas medidas y radios,

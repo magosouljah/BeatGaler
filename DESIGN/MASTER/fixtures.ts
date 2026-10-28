@@ -1,5 +1,5 @@
-import { DEMO_BEATS } from "../data";
-import type { CoverMode } from "../coverSources";
+import { DEMO_BEATS } from "../shared/data";
+import type { CoverMode } from "../shared/coverSources";
 
 export type Beat = {
   id: string;
