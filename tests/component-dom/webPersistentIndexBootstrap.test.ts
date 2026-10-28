@@ -146,6 +146,68 @@ describe("Web initial INDEX through existing serialized operation", () => {
     expect(events).toEqual(["master-index", "commit-operation", "reserve", "media-commit"]);
   });
 
+  it("records the redundant empty INDEX publish attempt for an existing library before media", async () => {
+    const originalManifest = {
+      schema: "beatgaler.telegram.library", version: 2,
+      beats: [{ id: "kept-beat" }], trash: [], deleted: [],
+    };
+    const h = harness({ messageId: 42, manifest: originalManifest });
+    const events: string[] = [];
+    const existingIndexError = "Library INDEX changed.";
+
+    vi.mocked(publishWebTransportIndex).mockImplementationOnce(async ({ manifest, expectedMessageId }) => {
+      events.push("empty-index-publish-attempt");
+      expect(manifest).toEqual({
+        schema: "beatgaler.telegram.library", version: 2,
+        beats: [], trash: [], deleted: [],
+      });
+      expect(expectedMessageId).toBe(0);
+      throw new Error(existingIndexError);
+    });
+    h.controller.beginOperation.mockImplementationOnce(async () => {
+      events.push("commit-import-begin");
+      return { operationId: "op-import", sessionId: "session", generation: 1 };
+    });
+    vi.mocked(reserveWebTransportBeat).mockImplementationOnce(async () => {
+      events.push("quota-reserved");
+    });
+    imports.commitWebImportedBeat.mockImplementationOnce(async beat => {
+      events.push("media-commit");
+      return { beat, index: null };
+    });
+
+    const file = new File(["audio"], "second.mp3", { type: "audio/mpeg" });
+    const incoming = { id: "incoming-beat" } as never;
+    expect(await h.create().commitImportedBeat(incoming, { master: file }, "test")).toBe(incoming);
+
+    // A nonempty library still incurs an empty-INDEX HTTP attempt and INDEX operation lease.
+    expect(events).toEqual([
+      "empty-index-publish-attempt", "commit-import-begin", "quota-reserved", "media-commit",
+    ]);
+    expect(publishWebTransportIndex).toHaveBeenCalledOnce();
+    expect(h.controller.withOperation).toHaveBeenCalledOnce();
+    expect(h.worker.replaceLibraryIndex).not.toHaveBeenCalled();
+    expect(commitWebTransportIndexPointer).not.toHaveBeenCalled();
+    expect(originalManifest.beats).toEqual([{ id: "kept-beat" }]);
+  });
+
+  it("does not proceed to upload if the empty-INDEX check fails unexpectedly", async () => {
+    const h = harness({ messageId: 42, manifest: {
+      schema: "beatgaler.telegram.library", version: 2,
+      beats: [{ id: "kept-beat" }], trash: [], deleted: [],
+    } });
+    vi.mocked(publishWebTransportIndex).mockRejectedValueOnce(new Error("MASTER unavailable"));
+
+    const file = new File(["audio"], "second.mp3", { type: "audio/mpeg" });
+    await expect(h.create().commitImportedBeat(
+      { id: "incoming-beat" } as never, { master: file }, "test",
+    )).rejects.toThrow("MASTER unavailable");
+
+    expect(h.controller.beginOperation).not.toHaveBeenCalled();
+    expect(reserveWebTransportBeat).not.toHaveBeenCalled();
+    expect(imports.commitWebImportedBeat).not.toHaveBeenCalled();
+  });
+
   it("bootstraps a fresh vault after pinned recovery returns BOT_METHOD_INVALID", async () => {
     vi.mocked(readWebTransportIndexBootstrapState).mockResolvedValueOnce({ pinned_message_id: null, bootstrap_pending: true });
     const h = harness();
