@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, Dispatch, SetStateAction } from "react";
 import { LabArtwork, LabBeatTile, LabButton, LabField, LabPanel, LabPlayer, LabTag } from "./components";
 import { DEMO_BEATS } from "./data";
 import type { DemoBeat } from "./data";
@@ -185,7 +185,7 @@ function GalleryPage({ goHome, playing, beat, toggle, selectBeat }: {
 }
 
 function ComponentPage({ goHome, colors, setColors, playing, beat, toggle, selectBeat }: {
-  goHome: () => void; colors: Colors; setColors: React.Dispatch<React.SetStateAction<Colors>>;
+  goHome: () => void; colors: Colors; setColors: Dispatch<SetStateAction<Colors>>;
   playing: boolean; beat: DemoBeat; toggle: () => void; selectBeat: (beat: DemoBeat) => void;
 }) {
   const [example, setExample] = useState("");
