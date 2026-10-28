@@ -26,13 +26,13 @@ Abrir **http://127.0.0.1:4173/**. Para detener, `Ctrl+C`.
 
 En **MASTER → Design foundations → Artwork mode** elegir `Generated` o `Real covers`. Cambia simultáneamente Landing, Gallery, player y muestras de MASTER. El modo predeterminado es `Generated`; `sessionStorage` recuerda el selector al navegar o recargar durante la misma pestaña.
 
-El archivo aportado contiene **20 JPG** (y también audio/MIDI/HTML que no deben importarse). Para cargar esas imágenes locales, guardar `Downloads.zip` en la carpeta Downloads de Windows y ejecutar:
+El archivo aportado contiene **20 JPG** (y también audio/MIDI/HTML que no deben importarse). **Las 20 portadas JPG ya están incluidas en GitHub**, optimizadas a 384×384 en `design-lab/assets/real-covers/`, por lo que basta con `git pull` y ejecutar Vite. Si se quiere sustituirlas localmente por los originales del ZIP, guardar `Downloads.zip` en la carpeta Downloads de Windows y ejecutar:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\design-lab\import-real-covers.ps1 -ZipPath "$HOME\Downloads\Downloads.zip"
 ```
 
-Se copian solo los 20 JPG a `design-lab/assets/real-covers/`. Vite los empaqueta localmente; ninguna dependencia de enlaces o producción. Como la órbita tiene 24 posiciones, repite cuatro cubiertas. Sin archivos JPG, el modo Real covers utiliza `bg-v1` como fallback. Para compartir imágenes con otro PC, hacer commit de `cover-*.jpg` **solo en la rama de diseño**; el importador no sube material a GitHub. Revisar derechos de uso antes de publicar imágenes de terceros fuera del laboratorio.
+El comando opcional sustituye los JPG optimizados locales por los originales del ZIP; no es necesario para probar el selector. Vite empaqueta las 20 cubiertas incluidas sin enlaces externos ni producción. La órbita de 24 posiciones repite cuatro cubiertas. Sin ningún JPG, Real covers usaría `bg-v1` como fallback. Revisar derechos de uso antes de publicar imágenes de terceros fuera del laboratorio.
 
 ## Arte original, sin imágenes de muestra aleatorias
 
