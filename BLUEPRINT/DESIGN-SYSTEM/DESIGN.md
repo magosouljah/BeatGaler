@@ -58,6 +58,8 @@ sources:
 | Borde destacado | `--border-strong` | `#4a4a4a` | `--lab-border-strong` |
 | Foco visible | `--focus-ring` | `#f2f2f2` | `--lab-focus` |
 
+**[LAB — excepción explícita de canvas en landing]** `design-lab/tokens.css` usa `--lab-canvas: #0c0c0c`, igual a `BACKGROUND_HEX` de `src/lib/proceduralBeatBackground.ts` (generador original bg-v1), para evitar uniones visibles entre portadas y fondo. El canvas vigente de la aplicación real sigue siendo `#090909` [EXISTENTE]. El laboratorio no modifica producción. Portadas demo creadas mediante una copia exacta del generador dentro de `design-lab/` para conservar aislamiento; un test comprueba paridad con el original.
+
 **[EXISTENTE]** `--bg-scrim: rgba(0,0,0,.72)`; `--text-inverse: #101010`. Usar scrim para modales, no como superficie ordinaria. No emplear `--text-disabled` para información importante: puede tener contraste insuficiente.
 
 ### 2.2 Acción, feedback y color expresivo
