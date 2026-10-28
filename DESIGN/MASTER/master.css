@@ -195,3 +195,6 @@
 }
 
 .lab-master-toolbar-frame{position:relative;display:flex;justify-content:center;width:min(100%,840px);flex:none;}
+
+/* On narrow canvases, reserve the full leftward search expansion inside the viewport. */
+@media(max-width:590px){.lab-master-toolbar-frame{justify-content:flex-end;}}
