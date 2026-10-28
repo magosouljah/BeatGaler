@@ -142,3 +142,24 @@ test("floating player copies production visual geometry while keeping simulated 
   assert.match(css, /border-radius:34px/);
   assert.match(css, /position:fixed/);
 });
+
+test("landing retains original pointer repulsion with smoothing and reduced-motion guard", () => {
+ const app=read("./App.tsx");
+ assert.match(app,/addEventListener\("pointermove"/);
+ assert.match(app,/addEventListener\("pointerleave"/);
+ assert.match(app,/distance < reach/);
+ assert.match(app,/105/);
+ assert.match(app,/0\.19/);
+ assert.match(app,/!reduced\.matches/);
+ assert.match(app,/removeEventListener\("pointermove"/);
+});
+test("design system architecture has 3 token tiers and defined component contracts", () => {
+ const reference=read("../BLUEPRINT/DESIGN-SYSTEM/UI-COLLECTIVE-TRANSCRIPT-NOTES.md");
+ const architecture=read("../BLUEPRINT/DESIGN-SYSTEM/ARCHITECTURE.md");
+ for(const tier of ["brand","alias","mapped"]) {
+   assert.match(reference,new RegExp(tier,"i"));
+   assert.match(architecture,new RegExp(tier,"i"));
+ }
+ assert.match(architecture,/componentes/i);
+ assert.match(architecture,/estado/i);
+});

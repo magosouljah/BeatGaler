@@ -9,3 +9,8 @@
 El diseño actual de producción sigue en `src/styles/` y `src/components/`; no declarar propuestas del laboratorio como cambios ya aprobados. Las decisiones se evalúan por componentes o pantalla, y solo después se proponen para el producto real.
 
 **Límite:** el laboratorio no usa login, API, Cloud, MASTER, INDEX, datos reales, audio ni assets externos. No se despliega en beatgaler.com y no sustituye el flujo real.
+
+## Arquitectura del sistema de diseño
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — arquitectura operativa de tokens Brand → Alias → Mapped, contratos de componentes, estados y adopción.
+- [UI-COLLECTIVE-TRANSCRIPT-NOTES.md](UI-COLLECTIVE-TRANSCRIPT-NOTES.md) — notas fieles y accionables de la transcripción facilitada por el propietario. El texto original permanece en el adjunto de la conversación.

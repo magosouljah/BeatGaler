@@ -39,6 +39,18 @@ function Orbit({ coverMode }: { coverMode: CoverMode }) {
     let frame = 0;
     let angle = 0;
     let last: number | null = null;
+    let pointer: { x: number; y: number } | null = null;
+    let initialized = false;
+    const positions = ORBIT_IDS.map(() => ({ x: 0, y: 0 }));
+    const onPointerMove = (event: PointerEvent) => {
+      if (reduced.matches || event.pointerType === "touch") return;
+      const bounds = element.getBoundingClientRect();
+      pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      if (paused) paint(performance.now());
+    };
+    const onPointerLeave = () => { pointer = null; if (paused) paint(performance.now()); };
+    element.addEventListener("pointermove", onPointerMove, { passive: true });
+    element.addEventListener("pointerleave", onPointerLeave, { passive: true });
 
     // The geometry follows the user's original circular landing, with a tighter
     // ellipse and a much shallower size difference between back and front covers.
@@ -69,16 +81,32 @@ function Orbit({ coverMode }: { coverMode: CoverMode }) {
         const tilt = mobile ? -0.065 : -0.15;
         const dx = co * rx;
         const dy = si * ry;
-        const x = w / 2 + dx * Math.cos(tilt) - dy * Math.sin(tilt);
-        const y = cy + dx * Math.sin(tilt) + dy * Math.cos(tilt);
+        let x = w / 2 + dx * Math.cos(tilt) - dy * Math.sin(tilt);
+        let y = cy + dx * Math.sin(tilt) + dy * Math.cos(tilt);
+        // Original landing: covers gently repel away from the pointer.
+        if (pointer && !reduced.matches) {
+          const deltaX = x - pointer.x;
+          const deltaY = y - pointer.y;
+          const distance = Math.hypot(deltaX, deltaY);
+          const reach = mobile ? 120 : 205;
+          if (distance > 0.01 && distance < reach) {
+            const force = (1 - distance / reach) ** 2 * (mobile ? 45 : 105);
+            x += deltaX / distance * force;
+            y += deltaY / distance * force;
+          }
+        }
+        const position = positions[index];
+        if (!initialized) { position.x = x; position.y = y; }
+        else { position.x += (x - position.x) * 0.19; position.y += (y - position.y) * 0.19; }
         const rotation = -co * (mobile ? 12 : 18);
         card.style.width = size + "px";
         card.style.height = size + "px";
-        card.style.transform = `translate3d(${x - size / 2}px,${y - size / 2}px,0) rotateY(${rotation}deg) rotateZ(${-co * 4}deg) scale(${scale})`;
+        card.style.transform = `translate3d(${position.x - size / 2}px,${position.y - size / 2}px,0) rotateY(${rotation}deg) rotateZ(${-co * 4}deg) scale(${scale})`;
         card.style.zIndex = String(Math.floor(depth * 15) + 1);
         card.style.opacity = String(0.57 + depth * 0.4);
         card.style.filter = `brightness(${0.73 + depth * 0.28})`;
       });
+      initialized = true;
       if (!paused) frame = requestAnimationFrame(paint);
     };
     const stopForMotion = (event: MediaQueryListEvent) => {
@@ -94,6 +122,8 @@ function Orbit({ coverMode }: { coverMode: CoverMode }) {
       cancelAnimationFrame(frame);
       reduced.removeEventListener("change", stopForMotion);
       resize.disconnect();
+      element.removeEventListener("pointermove", onPointerMove);
+      element.removeEventListener("pointerleave", onPointerLeave);
     };
   }, []);
 

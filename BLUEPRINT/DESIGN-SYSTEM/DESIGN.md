@@ -325,3 +325,7 @@ Los 20 JPEG optimizados a 384×384 y las cuatro AVIF a 320×320 ya están versio
 **[LAB] Navegación de prototipo:** `Landing` y `MASTER` son interruptores de texto plano fijos en la esquina inferior derecha, sin chrome visual; se eliminó `← Landing` del header. Estos interruptores nunca pertenecen a producción.
 
 **[PENDIENTE]** revisión visual de header al lado de las referencias glass y de la playbar con tamaños 320/390/768/1440px y zoom 200%; confirmar que la paleta de colores cumple contraste en tags seleccionados antes de migrar. El copy/design de la landing anterior permanece intacto.
+
+## 14. Arquitectura del Design System [LAB / PENDIENTE]
+
+La especificación visual anterior es solo **una parte** del sistema. La arquitectura canónica para diseñar, construir y verificar componentes reutilizables se define en [ARCHITECTURE.md](ARCHITECTURE.md), siguiendo el análisis de la transcripción en [UI-COLLECTIVE-TRANSCRIPT-NOTES.md](UI-COLLECTIVE-TRANSCRIPT-NOTES.md). No confundir un catálogo de estilos o el mock de MASTER con una biblioteca completa. La migración desde los tokens actuales debe ser incremental, auditada y explícitamente aprobada antes de afectar a `src/`.
