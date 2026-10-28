@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import type { DemoBeat } from "./data";
+import { getProceduralBeatBackgroundDataUrl } from "./proceduralBeatBackground";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type LabButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -33,12 +34,13 @@ export function LabTag({ active = false, children, onClick }: {
 }
 
 export function LabArtwork({ beat, className = "" }: { beat: DemoBeat; className?: string }) {
+  // The same bg-v1 algorithm used for missing beat artwork in BeatGaler itself.
+  // Deterministic and fully local: no external images, uploaded files or services.
+  let artwork: string | null = null;
+  try { artwork = getProceduralBeatBackgroundDataUrl(beat.id); } catch { /* canvas unavailable */ }
   return (
-    <div className={`lab-artwork lab-artwork--${beat.art} ${className}`} aria-hidden="true">
-      <div className="lab-artwork__halo" />
-      <div className="lab-artwork__arc" />
-      <span className="lab-artwork__monogram">{beat.monogram}</span>
-      <span className="lab-artwork__edition">BG / STUDY 0{beat.id.slice(-1)}</span>
+    <div className={`lab-artwork ${className}`} aria-hidden="true">
+      {artwork && <img src={artwork} alt="" draggable={false} />}
     </div>
   );
 }
