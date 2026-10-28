@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { ReactNode, HTMLAttributes, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from "react";
+import type { ReactNode, HTMLAttributes, ButtonHTMLAttributes, TextareaHTMLAttributes, SelectHTMLAttributes } from "react";
 import { LabButton } from "../components";
 
 export type Choice = { value: string; label: string };
@@ -47,7 +47,7 @@ export function DsSelect({label, options, ...props}: SelectHTMLAttributes<HTMLSe
   const id=useId();
   return <label className="ds-control-label" htmlFor={id}>{label}<span className="ds-select-wrap"><select {...props} id={id} className="ds-input">{options.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select><DsIcon name="chevron" size={16}/></span></label>;
 }
-export function DsTextarea({label, ...props}: InputHTMLAttributes<HTMLTextAreaElement> & {label:string}) {
+export function DsTextarea({label, ...props}: TextareaHTMLAttributes<HTMLTextAreaElement> & {label:string}) {
   const id=useId();return <label className="ds-control-label" htmlFor={id}>{label}<textarea {...props} id={id} className="ds-input ds-textarea"/></label>;
 }
 export function DsTabs({ tabs, active, onChange }: { tabs: Choice[]; active: string; onChange: (value: string) => void }) {
