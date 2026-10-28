@@ -20,3 +20,11 @@ jobs:
       - run: node --test DESIGN/lab-contract.test.mjs
       - run: npx --no-install tsc --project DESIGN/tsconfig.json --noEmit
       - run: npx --no-install vite build --config DESIGN/vite.config.ts
+      - run: node DESIGN/playbar-browser-check.mjs
+      - name: Playbar screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-playbar-visual-check
+          path: DESIGN/visual-check/*.png
+          if-no-files-found: ignore
