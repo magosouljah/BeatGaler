@@ -99,7 +99,7 @@ test("one session-scoped cover mode is wired into landing gallery and MASTER", (
 
 test("24 distinct real covers are bundled locally with valid JPEG and AVIF headers", () => {
   const dir = new URL("./assets/real-covers/", import.meta.url);
-  const covers = readdirSync(dir).filter(name => /^cover-\\d{2}\\.(jpg|avif)$/.test(name)).sort();
+  const covers = readdirSync(dir).filter(name => /^cover-\d{2}\.(jpg|avif)$/.test(name)).sort();
   assert.equal(covers.length, 24);
   covers.forEach((name, index) => {
     assert.equal(name, `cover-${String(index + 1).padStart(2, "0")}.${index < 20 ? "jpg" : "avif"}`);
