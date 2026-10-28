@@ -14,7 +14,7 @@
 .lab-toolbar svg{display:block;}
 .lab-toolbar-select{width:78px;position:relative;overflow:hidden;border-radius:999px;font-size:12px;font-weight:580;
   transition:width var(--lab-normal) var(--lab-ease),background var(--lab-fast) var(--lab-ease),border-color var(--lab-fast) var(--lab-ease);}
-.lab-toolbar-select.is-selecting{width:44px;}
+.lab-toolbar-select.is-selecting{width:44px;background:rgba(90,90,90,.68);border-color:rgba(255,255,255,.32);}
 .lab-toolbar-select-text,.lab-toolbar-select-x{position:absolute;inset:0;display:grid;place-items:center;
   transition:opacity var(--lab-fast) var(--lab-ease),transform var(--lab-normal) var(--lab-ease);}
 .lab-toolbar-select-text{opacity:1;transform:scale(1);}
@@ -29,7 +29,11 @@
   transform-origin:right center;transform:scaleX(.147);opacity:0;transition:transform var(--lab-normal) var(--lab-ease),opacity var(--lab-fast) var(--lab-ease);pointer-events:none;}
 .lab-toolbar-search.is-open .lab-toolbar-search-glass{transform:scaleX(1);opacity:1;}
 .lab-toolbar-search-trigger{position:absolute;top:0;right:0;z-index:3;width:44px;border-radius:50%;}
-.lab-toolbar-search.is-open .lab-toolbar-search-trigger{background:transparent;border-color:transparent;box-shadow:none;}
+.lab-toolbar-search.is-open .lab-toolbar-search-trigger{
+  /* The magnifying-glass button remains a circular glass control even when the search pill grows behind it. */
+  background:var(--glass-bg);border-color:rgba(255,255,255,.27);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.19),0 9px 24px rgba(0,0,0,.27);
+}
 .lab-toolbar-search-input{position:absolute;top:0;right:52px;z-index:2;height:44px;
   width:calc(min(300px, 100vw - 196px) - 64px);
   margin:0;padding:0;border:0;outline:none;background:transparent;color:#fff;font:inherit;font-size:13px;
@@ -59,7 +63,11 @@
 .lab-toolbar-profile-name strong{font-weight:620;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lab-toolbar-avatar{display:grid;place-items:center;width:26px;height:26px;flex:none;border-radius:50%;background:rgba(255,255,255,.11);}
 .lab-toolbar-avatar svg{width:17px;height:17px;}
-.lab-toolbar button:focus-visible,.lab-toolbar-search-input:focus-visible{outline:2px solid #fff;outline-offset:3px;}
+.lab-toolbar button:focus-visible{outline:2px solid #fff;outline-offset:3px;}
+/* A native text-input outline is rectangular and cuts through the round glass pill.
+   Keep keyboard focus discoverable on the containing pill rather than the input box. */
+.lab-toolbar-search-input:focus-visible{outline:none;box-shadow:none;}
+.lab-toolbar-search:focus-within .lab-toolbar-search-glass{border-color:rgba(255,255,255,.34);}
 @media(hover:hover) and (pointer:fine){
   .lab-toolbar-circle:hover,.lab-toolbar-select:hover{background:rgba(90,90,90,.68);border-color:rgba(255,255,255,.32);}
   .lab-toolbar-menu-item:hover{background:rgba(255,255,255,.10);color:#fff;}

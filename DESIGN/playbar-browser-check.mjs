@@ -195,14 +195,29 @@ try {
     const glass=document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect();
     const button=document.querySelector(".lab-toolbar-search-trigger").getBoundingClientRect();
     const field=document.querySelector(".lab-toolbar-search-input");
-    return {glassLeft:glass.left,glassRight:glass.right,buttonLeft:button.left,focused:document.activeElement===field};
+    const fieldStyle=getComputedStyle(field);
+    const buttonStyle=getComputedStyle(document.querySelector(".lab-toolbar-search-trigger"));
+    return {
+      glassLeft:glass.left,glassRight:glass.right,buttonLeft:button.left,focused:document.activeElement===field,
+      fieldOutline:fieldStyle.outlineStyle,circleBorderWidth:buttonStyle.borderTopWidth,circleBorderColor:buttonStyle.borderTopColor
+    };
   })()`);
   assert.ok(searchShape.glassLeft<searchShape.buttonLeft-80,"Search does not extend left");
   assert.ok(searchShape.focused,"Search is not immediately focused");
+  assert.equal(searchShape.fieldOutline,"none","Search input displays an unwanted rectangular focus outline");
+  assert.equal(searchShape.circleBorderWidth,"1px","Magnifier loses its circular edge when search opens");
+  assert.notEqual(searchShape.circleBorderColor,"rgba(0, 0, 0, 0)","Magnifier edge becomes transparent");
   await screenshot("master-toolbar-search.png");
   await evaluate('document.querySelector(".lab-toolbar-select").click()');
   await sleep(230);
   assert.ok(await evaluate('document.querySelector(".lab-toolbar-select").classList.contains("is-selecting")'),"Select did not become X");
+  const selectState=await evaluate(`(() => {
+    const control=document.querySelector(".lab-toolbar-select");
+    const style=getComputedStyle(control);
+    return {background:style.backgroundColor,border:style.borderTopColor};
+  })()`);
+  assert.ok(selectState.background.includes("90, 90, 90"),"The active X does not keep the hover-like glass fill");
+  assert.ok(selectState.border.includes("255, 255, 255"),"The active X lacks the emphasized edge");
   await screenshot("master-toolbar-select.png");
 
   await viewport(390,844);
@@ -220,7 +235,7 @@ try {
   const mobileSearch=await evaluate('document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect().left');
   assert.ok(mobileSearch>=0,"Mobile expanded search overflows left");
   await screenshot("master-toolbar-mobile-search.png");
-  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{sortAnchor,profileAnchor,searchShape,mobile,mobileSearch}, result: "PASS" }, null, 2));
+  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{sortAnchor,profileAnchor,searchShape,selectState,mobile,mobileSearch}, result: "PASS" }, null, 2));
 } finally {
   ws?.close();
   vite.kill("SIGTERM");
