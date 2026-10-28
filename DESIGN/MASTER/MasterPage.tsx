@@ -187,9 +187,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
               <div style={{display:"grid",gap:22,width:"min(100%,520px)"}}>
                 {(["#303034","#050506","linear-gradient(#ef91bc 50%,#09090d 50%)","linear-gradient(#ef91bc 39%,#09090d 39%)","#ef91bc"] as const).map((background,i)=>(
                   <div key={i} style={{background,borderRadius:18,padding:"48px 18px",display:"flex",justifyContent:"center",minHeight:144}}>
-                    <LabToolbarV2 search={toolbarSearch} onSearchChange={setToolbarSearch} sort={toolbarSort} onSortChange={setToolbarSort}
-                      selecting={toolbarSelecting} onToggleSelect={() => setToolbarSelecting(value => !value)}
-                      onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")}/>
+                    <ToolbarV2Sample onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")}/>
                   </div>
                 ))}
               </div>
@@ -210,4 +208,13 @@ export default function MasterPage({ coverMode, setCoverMode }: {
       </main>
     </div>
   );
+}
+
+/* Each optical-background specimen has its own interaction state and focus. */
+function ToolbarV2Sample({onProfileAction}:{onProfileAction:(action:"settings"|"logout")=>void}) {
+  const [search,setSearch] = useState("");
+  const [sort,setSort] = useState<LabSort>("manual");
+  const [selecting,setSelecting] = useState(false);
+  return <LabToolbarV2 search={search} onSearchChange={setSearch} sort={sort} onSortChange={setSort}
+    selecting={selecting} onToggleSelect={()=>setSelecting(v=>!v)} onProfileAction={onProfileAction}/>;
 }
