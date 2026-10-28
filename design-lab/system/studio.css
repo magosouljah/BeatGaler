@@ -299,3 +299,7 @@
 @media(max-width:390px){.ds-top-actions{gap:4px}.ds-top-actions button{padding:7px 8px}.ds-preview-controls .ds-segmented button{padding:4px 7px}.ds-size-row{grid-template-columns:50px minmax(0,1fr)}.ds-size-row>span{display:none}.ds-shapes,.ds-depth,.ds-card-grid{grid-template-columns:1fr}}
 @media(pointer:coarse){.ds-app :is(input,textarea,select){font-size:16px}.ds-app button{min-height:40px}}
 @media(prefers-reduced-motion:reduce){.ds-app *, .ds-app *:before, .ds-app *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+.ds-orbit-preview{position:relative;height:360px;overflow:hidden;background:var(--lab-canvas);border:1px solid #36363d;border-radius:var(--lab-radius-lg);isolation:isolate}
+.ds-orbit-preview .lab-landing-orbit{inset:0}
+@media(max-width:720px){.ds-orbit-preview{height:340px}}
