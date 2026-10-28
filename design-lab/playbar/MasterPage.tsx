@@ -73,6 +73,8 @@ export default function MasterPage({ coverMode, setCoverMode }: {
     catch { /* Preferences are optional. */ }
   }, [sidebarWidth]);
   useEffect(() => {
+    // A responsive auto-collapse is not a permanent preference on desktop.
+    if (window.matchMedia("(max-width: 800px)").matches) return;
     try { window.localStorage.setItem("beatgaler.lab.master.sidebar-hidden", sidebarOpen ? "no" : "yes"); }
     catch { /* Preferences are optional. */ }
   }, [sidebarOpen]);

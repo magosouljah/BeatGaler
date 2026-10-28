@@ -10,7 +10,9 @@
   grid-template-columns: var(--master-sidebar-width) minmax(0, 1fr);
 }
 .lab-master-sidebar {
-  position: relative;
+  position: sticky;
+  top: 0;
+  height: 100svh;
   z-index: 120;
   min-width: 0;
   border-right: 1px solid var(--lab-hairline);
@@ -39,7 +41,7 @@
   font-size: 21px;
   line-height: 1;
 }
-.lab-master-sidebar-nav { display: flex; flex-direction: column; gap: var(--lab-space-1); }
+.lab-master-sidebar-nav { display: flex; flex-direction: column; gap: var(--lab-space-1); max-height: calc(100svh - 78px); overflow-y: auto; overscroll-behavior: contain; }
 .lab-master-sidebar-heading {
   font-size: 10px;
   letter-spacing: .08em;
