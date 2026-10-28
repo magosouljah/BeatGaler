@@ -22,6 +22,13 @@ Abrir **http://127.0.0.1:4174/** y entrar a MASTER. Detener Vite con `Ctrl+C`. *
 
 ## Comprobaciones
 
+La verificación visual automatizada corre en Chrome real y captura vistas wide/compact de MASTER como artefactos del workflow GitHub Actions:
+
+```powershell
+node DESIGN/playbar-browser-check.mjs
+```
+
+
 ```powershell
 node --test DESIGN/lab-contract.test.mjs
 npx --no-install tsc --project DESIGN/tsconfig.json --noEmit
