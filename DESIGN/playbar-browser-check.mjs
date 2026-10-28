@@ -256,13 +256,13 @@ try {
   await sleep(210);
   assert.ok(await evaluate('document.querySelector(".lab-toolbar-v2 .lab-toolbar-select").classList.contains("is-selecting")'),"V2 select fails");
   await screenshot("master-toolbar-v2-select.png");
-  await evaluate('document.querySelector(".lab-toolbar-v2 .lab-toolbar-circle[aria-label="Sort beats"]').click()');
+  await evaluate(`document.querySelector('.lab-toolbar-v2 .lab-toolbar-circle[aria-label="Sort beats"]').click()`);
   await sleep(240);
-  assert.ok(await evaluate('document.querySelector(".lab-toolbar-v2 [role=menu][aria-label="Sort beats"]').classList.contains("is-open")'),"V2 sort menu fails");
+  assert.ok(await evaluate(`document.querySelector('.lab-toolbar-v2 [role=menu][aria-label="Sort beats"]').classList.contains('is-open')`),"V2 sort menu fails");
   await screenshot("master-toolbar-v2-sorting.png");
-  await evaluate('document.querySelector(".lab-toolbar-v2 .lab-toolbar-circle[aria-label="Profile"]').click()');
+  await evaluate(`document.querySelector('.lab-toolbar-v2 .lab-toolbar-circle[aria-label="Profile"]').click()`);
   await sleep(240);
-  assert.ok(await evaluate('document.querySelector(".lab-toolbar-v2 [role=menu][aria-label="Profile"]').classList.contains("is-open")'),"V2 profile menu fails");
+  assert.ok(await evaluate(`document.querySelector('.lab-toolbar-v2 [role=menu][aria-label="Profile"]').classList.contains('is-open')`),"V2 profile menu fails");
   await screenshot("master-toolbar-v2-profile.png");
   await viewport(390,844);
   await sleep(360);
