@@ -193,3 +193,5 @@
   .lab-playbar-cover-slot .lab-playbar-artwork,
   .lab-playbar-text-content { transition: none; }
 }
+
+.lab-master-toolbar-frame{position:relative;display:flex;justify-content:flex-end;width:min(100%,840px);flex:none;}

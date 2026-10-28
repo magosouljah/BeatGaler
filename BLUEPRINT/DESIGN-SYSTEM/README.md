@@ -13,11 +13,11 @@
 
 ## Estado actual
 
-**MASTER:** ubicado en `DESIGN/MASTER/`, sidebar colapsable con **Reglas → Márgenes** y **Componentes → Playbar**. El área principal centra solo la muestra seleccionada, sin textos explicativos. Primer componente en revisión: **Playbar**. El componente vive en `DESIGN/MASTER/Player.tsx`, basado en `src/components/Player.tsx` de producción `release/0.9.0-beta.2`, con sus iconos PNG originales y barra vertical de volumen. El adaptador ficticio usa portadas locales y botones que modifican estado de prueba, no audio.
+**MASTER:** ubicado en `DESIGN/MASTER/`, sidebar colapsable con **Reglas → Márgenes** y **Componentes → Playbar, Toolbar**. El área principal centra solo la muestra seleccionada, sin textos explicativos. Componentes en revisión: **Playbar** y **Toolbar**. El componente vive en `DESIGN/MASTER/Player.tsx`, basado en `src/components/Player.tsx` de producción `release/0.9.0-beta.2`, con sus iconos PNG originales y barra vertical de volumen. El adaptador ficticio usa portadas locales y botones que modifican estado de prueba, no audio.
 
 **Landing y Gallery:** están organizadas en `DESIGN/LANDING/` y `DESIGN/GALLERY/`; permanecen como prototipos independientes, con la órbita de portadas y la galería ficticia anteriores. El reproductor viejo de Gallery sigue siendo una simulación distinta; **la Playbar de MASTER** es la que estamos revisando con código real.
 
-**[PENDIENTE]:** aprobación visual y de comportamiento de la Playbar, revisión manual en móvil/teclado y futuros componentes solicitados expresamente. No asumir que lo no añadido está aprobado o diseñado.
+**[PENDIENTE]:** aprobación visual y de comportamiento de Playbar y Toolbar, revisión manual en móvil/teclado y futuros componentes solicitados expresamente. No asumir que lo no añadido está aprobado o diseñado.
 
 ## Regla para el siguiente cambio
 

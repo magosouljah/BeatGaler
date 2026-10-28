@@ -4,6 +4,8 @@ import { LabBeatTile, LabButton, LabPlayer } from "../shared/components";
 import { DEMO_BEATS } from "../shared/data";
 import type { DemoBeat } from "../shared/data";
 import type { CoverMode } from "../shared/coverSources";
+import LabToolbar from "../shared/Toolbar";
+import type { LabSort } from "../shared/Toolbar";
 
 const TAG_PALETTE = [
   { name: "Red", hex: "#FF3B30" }, { name: "Orange", hex: "#FF9500" },
@@ -20,7 +22,8 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState("manual");
+  const [sort, setSort] = useState<LabSort>("manual");
+  const [toolbarNotice, setToolbarNotice] = useState("");
   const [filters, setFilters] = useState<Record<string, TagFilter>>({});
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
@@ -52,6 +55,8 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     );
     if (sort === "name") return [...beats].sort((a, b) => a.title.localeCompare(b.title));
     if (sort === "bpm") return [...beats].sort((a, b) => a.bpm - b.bpm);
+    if (sort === "stars") return [...beats].sort((a, b) => b.stars - a.stars);
+    if (sort === "date") return [...beats].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return beats;
   }, [search, filters, sort]);
 
@@ -70,30 +75,13 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     <div className="lab-gallery-page">
       <header className="lab-gallery-header">
         <span className="lab-gallery-wordmark">beat galer</span>
-        <div className="lab-glass-toolbar" role="group" aria-label="Library tools">
-          <label className="lab-glass-search">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-              <circle cx="10.8" cy="10.8" r="6.7" /><path d="m16 16 5 5" />
-            </svg>
-            <input type="search" aria-label="Search beats" placeholder="Search beats" value={search} onChange={e => setSearch(e.target.value)} />
-          </label>
-          <span className="lab-glass-divider" aria-hidden="true" />
-          <label className="lab-glass-sort">
-            <span className="lab-sr-only">Sort by</span>
-            <select value={sort} aria-label="Sort by" onChange={e => setSort(e.target.value)}>
-              <option value="manual">Manual</option><option value="name">Name</option><option value="bpm">BPM</option>
-            </select>
-            <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true"><path d="m5 8 5 5 5-5" stroke="currentColor" fill="none" strokeWidth="1.5" /></svg>
-          </label>
-          <span className="lab-glass-divider" aria-hidden="true" />
-          {selectMode ? <>
-            <button type="button" className="lab-glass-action" onClick={() => setSelected(selected.length === filtered.length ? [] : filtered.map(item => item.id))}>
-              {selected.length === filtered.length && filtered.length ? "Deselect all" : "Select all"}
-            </button>
-            <button type="button" className="lab-glass-action is-selected" onClick={clearSelection}>Done</button>
-          </> : <button type="button" className="lab-glass-action" onClick={() => setSelectMode(true)}>Select</button>}
-        </div>
+        <LabToolbar search={search} onSearchChange={setSearch} sort={sort} onSortChange={setSort}
+          selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
+          onProfileAction={action => setToolbarNotice(action === "settings" ? "Settings: preview only." : "Log out: preview only; no session is active.")} />
       </header>
+      {toolbarNotice && <div className="lab-gallery-toolbar-notice" role="status">{toolbarNotice}
+        <button type="button" aria-label="Dismiss notice" onClick={() => setToolbarNotice("")}>×</button>
+      </div>}
       <div className="lab-gallery-tag-bar" role="group" aria-label="Tag filters">
         <button type="button" className={Object.keys(filters).length === 0 ? "lab-gallery-tag is-included" : "lab-gallery-tag"}
           aria-pressed={Object.keys(filters).length === 0} onClick={() => setFilters({})}>All</button>

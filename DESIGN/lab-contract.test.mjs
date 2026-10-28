@@ -122,3 +122,22 @@ test("DESIGN contains MASTER, LANDING, GALLERY and shared assets", () => {
   assert.match(read("../BLUEPRINT/DESIGN-SYSTEM/MASTER.md"), /DESIGN\/MASTER\/Player\.tsx/);
   assert.match(read("./README.md"), /--config DESIGN\/vite\.config\.ts/);
 });
+
+test("shared Toolbar has four icon references, five sort modes and anchored accessible menus", () => {
+  const toolbar = read("./shared/Toolbar.tsx");
+  const css = read("./shared/toolbar.css");
+  const gallery = read("./GALLERY/GalleryPage.tsx");
+  const master = read("./MASTER/MasterPage.tsx");
+  for(const name of ["magnifyingglass","line.3.horizontal.decrease","xmark","person.crop.circle"]) assert.ok(toolbar.includes(name));
+  for(const value of ["manual","name","bpm","stars","date"]) assert.ok(toolbar.includes('key:"' + value + '"'));
+  assert.match(toolbar,/role="menuitemradio"/);
+  assert.match(toolbar,/onMenuKeyDown/);
+  assert.match(toolbar,/document.addEventListener\("pointerdown"/);
+  assert.match(css,/top:calc\(100% \+ 12px\);right:0/);
+  assert.match(css,/prefers-reduced-motion:reduce/);
+  assert.doesNotMatch(css,/transition:\\s*all/);
+  assert.match(gallery,/<LabToolbar/);
+  assert.match(master,/<LabToolbar/);
+  assert.match(gallery,/b\.stars - a\.stars/);
+  assert.match(gallery,/b\.createdAt\.localeCompare/);
+});

@@ -4,19 +4,6 @@
 .lab-gallery-page { min-height:100svh; padding-bottom:144px; }
 .lab-gallery-header { height:66px; padding:0 clamp(16px,3vw,42px); display:flex; align-items:center; justify-content:space-between; gap:24px; border-bottom:1px solid #222; background:rgba(12,12,12,.93); position:sticky; top:0; z-index:40; }
 .lab-gallery-wordmark { font-size:22px; font-weight:720; letter-spacing:-.075em; color:#f5f5f5; white-space:nowrap; }
-.lab-glass-toolbar { display:flex; align-items:center; gap:5px; max-width:calc(100% - 110px); padding:5px 6px; border:1px solid rgba(255,255,255,.16); border-radius:999px; background:linear-gradient(125deg,rgba(48,48,48,.72),rgba(31,31,31,.56)); box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 10px 32px rgba(0,0,0,.33); backdrop-filter:blur(20px) saturate(1.25); -webkit-backdrop-filter:blur(20px) saturate(1.25); }
-.lab-glass-search { display:flex; align-items:center; gap:9px; padding:0 9px 0 13px; color:#bfc1c6; min-width:0; }
-.lab-glass-search svg { flex:none; }
-.lab-glass-search input { min-width:0; width:clamp(105px,14vw,235px); height:34px; padding:0; border:0; outline:none; color:#f1f1f1; background:transparent; font-size:12px; }
-.lab-glass-search input::placeholder { color:#9a9da2; }
-.lab-glass-search input::-webkit-search-cancel-button { cursor:pointer; }
-.lab-glass-divider { width:1px; height:20px; background:rgba(255,255,255,.13); flex:none; }
-.lab-glass-sort { display:flex; gap:5px; align-items:center; color:#d6d6d8; padding:0 8px; }
-.lab-glass-sort select { appearance:none; -webkit-appearance:none; border:0; background:transparent; color:inherit; font-size:12px; cursor:pointer; min-width:65px; height:34px; outline:none; }
-.lab-glass-sort select option { background:#242424; color:#f2f2f2; }
-.lab-glass-sort svg { pointer-events:none; flex:none; }
-.lab-glass-action { min-height:34px; border:0; background:transparent; color:#c3c3c6; border-radius:999px; padding:0 13px; font-size:12px; white-space:nowrap; }
-.lab-glass-action:hover,.lab-glass-action.is-selected { background:rgba(255,255,255,.11); color:#fff; }
 .lab-gallery-tag-bar { min-height:52px; display:flex; align-items:center; gap:7px; padding:8px clamp(16px,3vw,42px); border-bottom:1px solid #1a1a1a; background:#0c0c0c; position:relative; z-index:35; }
 .lab-gallery-tag-wrap { position:relative; display:inline-flex; align-items:center; border-radius:999px; gap:2px; }
 .lab-gallery-tag { min-height:32px; display:inline-flex; align-items:center; justify-content:center; padding:5px 13px; border-radius:999px; border:1px solid #303030; background:transparent; color:#999; font-size:12px; white-space:nowrap; }
@@ -93,7 +80,6 @@
  .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(3,160px); gap:24px 15px; }
  .lab-gallery-header { padding-inline:15px; }
  .lab-gallery-wordmark { font-size:19px; }
- .lab-glass-search input { width:90px; }
  .lab-gallery-tag-bar { overflow-x:auto; flex-wrap:nowrap; scrollbar-width:thin; }
  .lab-player__transport,.lab-player__utilities { gap:1px; }
  .lab-player.lab-player--dock { padding-inline:10px; gap:7px; height:62px; min-height:62px; }
@@ -103,9 +89,6 @@
 }
 @media(max-width:590px) {
  .lab-gallery-header { height:auto; min-height:100px; padding-block:11px; align-items:flex-start; flex-direction:column; gap:9px; }
- .lab-glass-toolbar { max-width:100%; width:100%; justify-content:space-between; }
- .lab-glass-search { flex:1; }
- .lab-glass-search input { width:100%; }
  .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(2, minmax(0,160px)); gap:22px 13px; }
  .lab-gallery-page .lab-beat-tile { width:100%; }
  .lab-gallery-page .lab-beat-tile__cover { width:100%; height:auto; aspect-ratio:1; }
@@ -116,4 +99,8 @@
 }
 @media(max-width:359px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:160px; } }
 @media(hover:none),(pointer:coarse) { .lab-gallery-page .lab-beat-tile__play { opacity:1; background:linear-gradient(transparent 65%,rgba(0,0,0,.6)); text-align:right; } }
-@media(prefers-reduced-transparency:reduce) { .lab-glass-toolbar,.lab-player.lab-player--dock { backdrop-filter:none; background:#202020; } }
+@media(prefers-reduced-transparency:reduce) { .lab-player.lab-player--dock { backdrop-filter:none; background:#202020; } }
+.lab-gallery-header .lab-toolbar{margin-left:auto;}
+.lab-gallery-toolbar-notice{display:flex;align-items:center;justify-content:center;gap:10px;padding:9px 16px;background:#181818;color:#ddd;font-size:12px;}
+.lab-gallery-toolbar-notice button{border:0;background:transparent;color:#fff;font-size:17px;cursor:pointer;}
+@media(max-width:590px){.lab-gallery-header .lab-toolbar{align-self:flex-end;}}

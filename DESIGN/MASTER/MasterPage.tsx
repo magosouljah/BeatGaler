@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { CoverMode } from "../shared/coverSources";
 import Player from "./Player";
+import LabToolbar from "../shared/Toolbar";
+import type { LabSort } from "../shared/Toolbar";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
 import "./master.css";
 
-type Section = "margins" | "playbar";
+type Section = "margins" | "playbar" | "toolbar";
 const SIDEBAR_START = 192; // Lab navigation only; not a BeatGaler product design token.
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 300;
@@ -63,6 +65,9 @@ export default function MasterPage({ coverMode, setCoverMode }: {
     setMessage(`Añadido a la cola de prueba: ${item.name}`);
   };
   const [section, setSection] = useState<Section>("playbar");
+  const [toolbarSearch, setToolbarSearch] = useState("");
+  const [toolbarSort, setToolbarSort] = useState<LabSort>("manual");
+  const [toolbarSelecting, setToolbarSelecting] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
   const dragActive = useRef(false);
@@ -135,6 +140,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
             <button type="button" className={section === "margins" ? "is-active" : ""} aria-current={section === "margins" ? "page" : undefined} onClick={() => openSection("margins")}>Márgenes</button>
             <div className="lab-master-sidebar-heading">COMPONENTES</div>
             <button type="button" className={section === "playbar" ? "is-active" : ""} aria-current={section === "playbar" ? "page" : undefined} onClick={() => openSection("playbar")}>Playbar</button>
+            <button type="button" className={section === "toolbar" ? "is-active" : ""} aria-current={section === "toolbar" ? "page" : undefined} onClick={() => openSection("toolbar")}>Toolbar</button>
           </nav>
           <div className="lab-master-resize-handle" role="separator" tabIndex={0} aria-label="Cambiar ancho de navegación"
             aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebarWidth}
@@ -147,7 +153,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
         <button type="button" className="lab-master-open-nav" aria-label="Mostrar navegación de MASTER"
           title="Mostrar navegación" onClick={() => setSidebarOpen(true)}>☰</button>
       )}
-      <main className="lab-master-workspace" aria-label={section === "playbar" ? "Vista del componente Playbar" : "Vista de la regla Márgenes"}>
+      <main className="lab-master-workspace" aria-label={section === "playbar" ? "Vista del componente Playbar" : section === "toolbar" ? "Vista del componente Toolbar" : "Vista de la regla Márgenes"}>
         {section === "playbar" ? (
           <div className="lab-master-specimens">
             <div className="lab-master-player-frame">
@@ -166,6 +172,14 @@ export default function MasterPage({ coverMode, setCoverMode }: {
                       onEdit={b => setMessage(`Editar ${b.name}: todavía no se ha añadido este componente.`)}
                       onDelete={() => setMessage("La biblioteca ficticia no elimina archivos.")}
                     />
+            </div>
+          </div>
+        ) : section === "toolbar" ? (
+          <div className="lab-master-specimens">
+            <div className="lab-master-toolbar-frame">
+              <LabToolbar search={toolbarSearch} onSearchChange={setToolbarSearch} sort={toolbarSort} onSortChange={setToolbarSort}
+                selecting={toolbarSelecting} onToggleSelect={() => setToolbarSelecting(value => !value)}
+                onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")} />
             </div>
           </div>
         ) : (
