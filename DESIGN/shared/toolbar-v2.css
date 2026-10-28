@@ -1,0 +1,50 @@
+/* Toolbar V2 — one continuous material per control; isolated from Toolbar V1. */
+.lab-toolbar-v2{--v2-ink:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:flex-end;gap:10px;position:relative;isolation:isolate;color:var(--v2-ink)}
+.lab-toolbar-v2 button{cursor:pointer;-webkit-tap-highlight-color:transparent;color:inherit}
+.lab-toolbar-v2 svg{display:block}
+.glass-v2{position:relative;isolation:isolate;overflow:hidden;border:1px solid rgba(255,255,255,.29);background:rgba(40,40,43,.27);color:#fff;
+backdrop-filter:blur(15px) saturate(1.72) brightness(1.08);-webkit-backdrop-filter:blur(15px) saturate(1.72) brightness(1.08);
+box-shadow:inset 0 1px 1px rgba(255,255,255,.38),inset 0 -1.5px 2px rgba(0,0,0,.22),0 9px 23px rgba(0,0,0,.22)}
+/* Edge light stays clipped inside the SAME glass surface, not an extra disk. */
+.glass-v2::before{content:"";pointer-events:none;position:absolute;inset:0;border-radius:inherit;
+background:linear-gradient(152deg,rgba(255,255,255,.23) 0%,transparent 31%,transparent 67%,rgba(255,255,255,.11) 100%);
+mix-blend-mode:screen;opacity:.78}
+.glass-v2::after{content:"";pointer-events:none;position:absolute;inset:0;border-radius:inherit;
+box-shadow:inset 1px 1px 0 rgba(255,255,255,.22),inset -1px -1px 0 rgba(255,255,255,.10);opacity:.85}
+.lab-toolbar-v2-circle,.lab-toolbar-v2-select{display:grid;place-items:center;flex:none;height:44px;min-height:44px;transition:transform 180ms cubic-bezier(.2,.8,.2,1),background-color 180ms ease,border-color 180ms ease}
+.lab-toolbar-v2-circle{width:44px;border-radius:50%}
+.lab-toolbar-v2-circle.is-active{background-color:rgba(18,18,22,.56)}
+.lab-toolbar-v2-select{width:78px;border-radius:999px;font:600 12px/1 system-ui,sans-serif;transition:width 230ms cubic-bezier(.2,.8,.2,1),background-color 180ms ease,transform 180ms ease}
+.lab-toolbar-v2-select.is-selecting{width:44px;background-color:rgba(9,9,13,.66)}
+.lab-toolbar-v2-select-text,.lab-toolbar-v2-select-x{position:absolute;inset:0;display:grid;place-items:center;transition:opacity 160ms ease,transform 220ms cubic-bezier(.2,.8,.2,1)}
+.lab-toolbar-v2-select-x{opacity:0;transform:scale(.75)}
+.lab-toolbar-v2-select.is-selecting .lab-toolbar-v2-select-text{opacity:0;transform:scale(.75)}
+.lab-toolbar-v2-select.is-selecting .lab-toolbar-v2-select-x{opacity:1;transform:scale(1)}
+/* Search surface itself expands left. No independent glass trigger or focus rectangle. */
+.lab-toolbar-v2-search{position:relative;flex:none;width:44px;height:44px;border-radius:999px;z-index:5;transition:width 260ms cubic-bezier(.2,.75,.15,1)}
+.lab-toolbar-v2-search.is-open{width:min(300px,calc(100vw - 220px))}
+.lab-toolbar-v2-search-trigger{position:absolute;right:0;top:0;z-index:2;height:42px;width:42px;display:grid;place-items:center;border:0;border-radius:50%;background:transparent;box-shadow:none;outline-offset:0}
+.lab-toolbar-v2-search-input{position:absolute;left:19px;top:0;z-index:1;height:42px;width:calc(100% - 71px);min-width:0;border:0;outline:none;box-shadow:none;background:transparent;color:white;font:500 13px system-ui,sans-serif;opacity:0;pointer-events:none;transform:translateX(8px);transition:opacity 150ms ease,transform 230ms ease}
+.lab-toolbar-v2-search.is-open .lab-toolbar-v2-search-input{opacity:1;pointer-events:auto;transform:translateX(0)}
+.lab-toolbar-v2-search-input::placeholder{color:rgba(255,255,255,.63)}
+.lab-toolbar-v2-search-dot{position:absolute;right:6px;bottom:6px;width:5px;height:5px;border-radius:50%;background:white}
+.lab-toolbar-v2-popover{position:absolute;top:calc(100% + 12px);right:0;z-index:20;width:min(260px,calc(100vw - 32px));padding:12px;border:1px solid rgba(255,255,255,.22);border-radius:23px;color:white;background:rgba(28,28,32,.66);backdrop-filter:blur(30px) saturate(1.45);-webkit-backdrop-filter:blur(30px) saturate(1.45);box-shadow:inset 0 1px rgba(255,255,255,.20),0 20px 55px rgba(0,0,0,.35);visibility:hidden;opacity:0;pointer-events:none;transform:translateY(-6px) scale(.97);transform-origin:top right;transition:opacity 190ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms}
+.lab-toolbar-v2-popover.is-open{visibility:visible;opacity:1;pointer-events:auto;transform:none;transition:opacity 190ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s}
+.lab-toolbar-v2-menu-title{min-height:33px;display:flex;align-items:center;padding:0 11px;font-size:12px;font-weight:600;color:rgba(255,255,255,.6)}
+.lab-toolbar-v2-menu-divider{height:1px;margin:7px;background:rgba(255,255,255,.15)}
+.lab-toolbar-v2-menu-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:38px;padding:0 12px;border:0;border-radius:12px;text-align:left;background:transparent;font-size:13px}
+.lab-toolbar-v2-menu-item.is-current{font-weight:650}
+.lab-toolbar-v2-selected-dot{width:6px;height:6px;border-radius:50%;background:white;opacity:0}
+.lab-toolbar-v2-menu-item.is-current .lab-toolbar-v2-selected-dot{opacity:1}
+.lab-toolbar-v2-profile-name{display:flex;align-items:center;gap:10px;padding:2px 11px 4px;min-height:39px;font-size:13px}
+.lab-toolbar-v2-profile-name strong{font-weight:620;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lab-toolbar-v2-avatar{display:grid;place-items:center;width:26px;height:26px;flex:none;border-radius:50%;background:rgba(255,255,255,.12)}
+.lab-toolbar-v2-avatar svg{width:17px;height:17px}
+.lab-toolbar-v2 button:focus-visible{outline:2px solid white;outline-offset:3px}
+.lab-toolbar-v2-search-input:focus-visible{outline:none;box-shadow:none}
+.lab-toolbar-v2-search:focus-within{border-color:rgba(255,255,255,.5)}
+@media(hover:hover) and (pointer:fine){.lab-toolbar-v2-circle:hover,.lab-toolbar-v2-select:hover{background-color:rgba(65,65,69,.48)}.lab-toolbar-v2-menu-item:hover{background:rgba(255,255,255,.12)}}
+.lab-toolbar-v2-circle:active,.lab-toolbar-v2-select:active{transform:scale(.97)}
+@media(max-width:590px){.lab-toolbar-v2{flex-direction:row-reverse}.lab-toolbar-v2-search.is-open{width:min(300px,calc(100vw - 64px))}.lab-toolbar-v2.is-searching>.lab-toolbar-v2-circle,.lab-toolbar-v2.is-searching>.lab-toolbar-v2-select{opacity:0;pointer-events:none;transition:opacity 130ms ease}}
+@media(prefers-reduced-motion:reduce){.lab-toolbar-v2 *,.lab-toolbar-v2 *::before,.lab-toolbar-v2 *::after{transition-duration:.01ms!important}}
+@media(prefers-reduced-transparency:reduce){.glass-v2,.lab-toolbar-v2-popover{backdrop-filter:none;-webkit-backdrop-filter:none;background-color:#29292d}}
