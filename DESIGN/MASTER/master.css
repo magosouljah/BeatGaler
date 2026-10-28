@@ -115,7 +115,6 @@
 /* The isolated Playbar's inline preview mode adapts to the available canvas width. */
 .lab-master-player-frame { container-type: inline-size; }
 /* Resize tracks the canvas in real time; WAAPI FLIP runs only on a compact-mode crossing. */
-.lab-playbar-seek--preview { will-change: auto; }
 .lab-playbar-cover-slot {
   width: 48px;
   height: 48px;
