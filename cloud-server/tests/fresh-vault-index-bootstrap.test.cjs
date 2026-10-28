@@ -73,3 +73,82 @@ test('a marked fresh vault publishes and clears eligibility in the same transact
   const commit = calls.findIndex(sql => /^COMMIT$/.test(sql));
   assert.ok(clear > 0 && commit > clear);
 });
+
+test('existing populated vault pays two MASTER pin reads for rejected empty-index preflight and recovery', async () => {
+  // Pure in-memory transport and SQL doubles. Never contacts Telegram, PostgreSQL or a real Vault.
+  const crypto = require('node:crypto');
+  const existing = {
+    schema: 'beatgaler.telegram.library', version: 2,
+    beats: [{ id: 'kept-beat' }], trash: [], deleted: [],
+  };
+  const raw = Buffer.from(JSON.stringify(existing));
+  const sha = crypto.createHash('sha256').update(raw).digest('hex');
+  const seenSql = [];
+  let checkedOut = 0;
+  let released = 0;
+  let pinnedReads = 0;
+  let published = 0;
+  let deleted = 0;
+
+  const query = async (sql) => {
+    seenSql.push(sql);
+    if (/^SELECT 1 FROM library_quota_state WHERE user_id/.test(sql)) return { rows: [{ present: 1 }] };
+    if (/^SELECT id,telegram_chat_id,index_bootstrap_pending FROM vaults/.test(sql)) {
+      return { rows: [{ id: 'existing-vault', telegram_chat_id: 'chat-existing', index_bootstrap_pending: false }] };
+    }
+    if (/^SELECT \* FROM library_quota_state WHERE user_id/.test(sql)) {
+      return { rows: [{ index_message_id: 42, index_sha256: sha }] };
+    }
+    if (/^SELECT id FROM vaults WHERE user_id/.test(sql)) return { rows: [{ id: 'existing-vault' }] };
+    if (/^SELECT index_message_id,index_sha256 FROM library_quota_state WHERE user_id/.test(sql)) {
+      return { rows: [{ index_message_id: 42, index_sha256: sha }] };
+    }
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql)) return { rows: [] };
+    throw new Error('Unexpected SQL in isolated test: ' + sql);
+  };
+  const pool = {
+    query,
+    async connect() {
+      checkedOut += 1;
+      return { query, release() { released += 1; } };
+    },
+  };
+  const transport = {
+    async getPinnedMessage() { throw new Error('Unexpected fallback pinned read'); },
+    async readPinnedIndexBuffer(chatId) {
+      assert.equal(chatId, 'chat-existing');
+      pinnedReads += 1; // One call opens/closes one MASTER GramJS client in production.
+      return { message_id: 42, caption: 'BEATGALER_LIBRARY_INDEX_V1', raw };
+    },
+    async publishIndexBuffer() { published += 1; throw new Error('Must not publish a replacement INDEX'); },
+    async downloadMessageBuffer() { throw new Error('Must not download via fallback'); },
+    async deleteMessages() { deleted += 1; throw new Error('Must not delete an INDEX'); },
+  };
+  const publication = createLibraryIndexPublication({ pool, transport });
+
+  // This is the publish attempt from Web's ensureImportQuotaIndex().
+  await assert.rejects(
+    publication.publish({
+      userId: 'existing-user', chatId: 'chat-existing',
+      manifest: empty, expectedMessageId: 0,
+    }),
+    { code: 'LIBRARY_QUOTA_INDEX_CHANGED', message: 'Library INDEX changed.' },
+  );
+  assert.equal(pinnedReads, 1, 'rejected preflight still reads through MASTER');
+  assert.equal(seenSql.filter(sql => sql === 'ROLLBACK').length, 1);
+
+  // server-core.js /transport/index/publish runs this recovery in its generic catch.
+  assert.deepEqual(
+    await publication.recover({ userId: 'existing-user', chatId: 'chat-existing' }),
+    { status: 'current' },
+  );
+  assert.equal(pinnedReads, 2, 'generic recovery opens MASTER again to read pinned INDEX');
+  assert.equal(checkedOut, 2, 'each call obtains its own SQL transaction client');
+  assert.equal(released, 2);
+  assert.equal(seenSql.filter(sql => sql === 'BEGIN').length, 2);
+  assert.equal(seenSql.filter(sql => sql === 'COMMIT').length, 1);
+  assert.equal(seenSql.filter(sql => sql === 'ROLLBACK').length, 1);
+  assert.equal(published, 0, 'no empty INDEX was published');
+  assert.equal(deleted, 0, 'existing INDEX was not deleted');
+  assert.deepEqual(JSON.parse(raw.toString('utf8')), existing, 'existing library remains unchanged');
+});
