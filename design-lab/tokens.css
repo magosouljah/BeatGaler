@@ -1,0 +1,61 @@
+/* [LAB] Experimental CSS tokens; existing neutral values mirror src/styles/design-foundations.css.
+   Scoped to the standalone lab HTML. Do not import this file into src/ or production. */
+:root {
+  color-scheme: dark;
+  --lab-canvas: #090909;
+  --lab-surface: #101010;
+  --lab-raised: #151515;
+  --lab-hover: #1c1c1c;
+  --lab-pressed: #222222;
+  --lab-ink: #f2f2f2;
+  --lab-secondary: #b0b0b0;
+  --lab-muted: #8b8b8b;
+  --lab-disabled: #666666;
+  --lab-hairline: #242424;
+  --lab-border: #343434;
+  --lab-border-strong: #4a4a4a;
+  --lab-focus: #f2f2f2;
+  --lab-on-primary: #101010;
+  --lab-primary: #ececec;
+  --lab-primary-hover: #ffffff;
+  --lab-error-bg: #2a1111;
+  --lab-error-border: #6d3030;
+  --lab-error-text: #ffb4b4;
+  --lab-success-bg: #10261a;
+  --lab-success-border: #2d6844;
+  --lab-success-text: #a8e6bd;
+  --lab-info-bg: #121d2b;
+  --lab-info-border: #304b6d;
+  --lab-info-text: #b9d6ff;
+  /* [LAB] Pure experiment; NOT an approved BeatGaler brand color. */
+  --lab-accent: #c8b7ff;
+
+  --lab-radius-sm: 8px;
+  --lab-radius-md: 12px;
+  --lab-radius-lg: 16px;
+  --lab-radius-artwork: 12px;
+  --lab-radius-pill: 999px;
+
+  --lab-space-1: 4px;
+  --lab-space-2: 8px;
+  --lab-space-3: 12px;
+  --lab-space-4: 16px;
+  --lab-space-5: 20px;
+  --lab-space-6: 24px;
+  --lab-space-7: 28px;
+  --lab-space-8: 32px;
+  --lab-space-10: 40px;
+  --lab-space-12: 48px;
+  --lab-space-16: 64px;
+  --lab-space-24: 96px;
+
+  --lab-control: 44px;
+  --lab-control-compact: 36px;
+  --lab-shadow-card: 0 24px 80px rgba(0, 0, 0, .55);
+  --lab-shadow-dialog: 0 28px 96px rgba(0, 0, 0, .7);
+  --lab-fast: 120ms;
+  --lab-normal: 180ms;
+  --lab-slow: 260ms;
+  --lab-ease: cubic-bezier(.2, .7, .2, 1);
+  --lab-font: "SF Pro Text", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+}
