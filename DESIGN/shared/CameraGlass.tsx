@@ -15,16 +15,9 @@ export default function CameraGlass({size=72}:{size?:number}) {
     aria-pressed={pressed} onClick={()=>setPressed(v=>!v)}>
     <svg className="camera-glass-defs" width="0" height="0" aria-hidden="true" focusable="false">
       <defs>
-        <radialGradient id={`lens-${uid}`} cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#808080"/>
-          <stop offset="58%" stopColor="#808080"/>
-          <stop offset="78%" stopColor="#b6b6b6"/>
-          <stop offset="90%" stopColor="#fafafa"/>
-          <stop offset="100%" stopColor="#808080"/>
-        </radialGradient>
         <filter id={filterId} x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
-          <feImage href={`#lens-${uid}`} result="map"/>
-          <feDisplacementMap in="SourceGraphic" in2="map" scale="13" xChannelSelector="R" yChannelSelector="G"/>
+          <feTurbulence type="fractalNoise" baseFrequency=".018" numOctaves="1" seed="3" result="map"/>
+          <feDisplacementMap in="SourceGraphic" in2="map" scale="5" xChannelSelector="R" yChannelSelector="G"/>
         </filter>
       </defs>
     </svg>
