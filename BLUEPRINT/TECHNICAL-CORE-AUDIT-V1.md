@@ -256,3 +256,51 @@ Otros tests del área que deben clasificarse y reutilizarse selectivamente: `clo
 **Conservar BLUEPRINT pequeño:** este documento concentra los hallazgos y el plan específico del Paso 1; [DIRECTION](DIRECTION.md) guarda exclusivamente el orden recomendado de frentes, no un calendario. Al terminar, condensar resultados comprobados en [ARCHITECTURE](ARCHITECTURE.md) y [CURRENT-STATE](CURRENT-STATE.md) sólo cuando corresponda; conservar las evidencias detalladas en un informe/PR específico sin agregar decenas de archivos a la guía.
 
 **Fuera de alcance:** desplegar `main`, tocar producción, reinvestigar incidente EC2, reactivar Desktop/Tauri, modificar cobros reales, marketing/campañas o prometer escalabilidad sin evidencia. Los pasos 2 (rendimiento/estabilidad), 3 (UX/landing), 4 (limpieza incremental) y 5 (validación final) tienen autonomía y sus planes se definirán cuando se elijan.
+
+
+## 8. Auditoría focalizada: una importación Web normal (27-10-2026)
+
+**Corte:** main @ 828ad73dad7853a127f701b10e232689f6061dbc. **Alcance:** lectura estática, no benchmark ni test ejecutado. Escenario: nuevo beat MP3, Vault con INDEX coherente y cuota inicializada, sesión Direct lista, sin proyecto ni reintentos. Los números son llamadas/a­perturas previstas por el código, no milisegundos observados.
+
+### Recorrido real y hallazgo
+
+1. **Preparación:** src/platform/webImport.ts:30–95 crea candidato e interpreta ID3; para WAV genera MASTER. src/features/cloud/useCloudUploadQueue.ts:121–172 llama al commit Web. src/features/import/webImportCommit.ts:111–132 lee INDEX Direct, valida duplicados y tombstones, y quita ID3 del MP3 sin recodificar.
+2. **Preflight inútil con INDEX existente:** src/features/cloud/webGalerCloudTransport.ts:522–535 llama **incondicionalmente** a ensureImportQuotaIndex(). Sus líneas 298–318 construyen un manifest vacío, toman operación replace_index por Vault y solicitan /transport/index/publish con expectedMessageId=0. Ante el mensaje Library INDEX changed. ignoran ese rechazo y siguen.
+3. **Costo real del rechazo:** cloud-server/library-index-publication.js:196–245 inicia transacción con FOR UPDATE, usa pinned() (lectura MASTER) y rechaza expected=0 contra INDEX existente. **No publica ni borra ningún INDEX** si todo está coherente. Pero cloud-server/server-core.js:2293–2314 llama a recover() en el catch de **cualquier** error de publicación; cloud-server/library-index-publication.js:101–129 vuelve a leer pinned() con MASTER y valida ledger. **Dos aperturas independientes de MASTER** y dos transacciones SQL innecesarias en este camino, más la espera de replace_index, antes de subir un byte. Aún no medimos la duración.
+4. **Audio:** webGalerCloudTransport.ts:536–568 adquiere commit_import, reserva cuota y asegura tópico por /transport/topic/ensure; para beat nuevo, server-core.js:246–274 usa MASTER para crear el tópico. webImportCommit.ts:133–205 prepara/en­vía el MP3 (y opcionales) con Transport Bot en el Worker, webTransport.worker.ts:3268–3289, usando mtcute sendMedia. PROJECT tiene ruta Cloud distinta. MASTER audio es el tipo de archivo, no la cuenta MASTER.
+5. **INDEX real y confirmación:** webImportCommit.ts:239–257 genera manifest conservando beats, Trash y otros campos. library-index-publication.js:206–416 verifica pin previo, publica/fija con MASTER, relee/verifica, confirma SQL y después borra el INDEX anterior. webGalerCloudTransport.ts:566–585 llama a /transport/index/commit; server-core.js:2185–2220 verifica committed contra pin MASTER y hace CAS del puntero.
+
+### Contabilidad por importación normal — estimación estática
+
+| Etapa | Aperturas MASTER | Clasificación |
+| --- | ---: | --- |
+| Intento inicial de INDEX vacío → pinned() | 1 | Innecesaria, Vault existente |
+| Catch del publish → recover() → pinned() | 1 | Innecesaria ante rechazo CAS esperado |
+| Crear tópico del beat nuevo | 1 | Necesaria con flujo actual |
+| INDEX real: leer pinned() anterior | 1 | Integridad |
+| INDEX real: publishIndexBuffer() / sendFile + pin | 1 | Necesaria |
+| INDEX real: pinned() para verificar nuevo | 1 | Integridad |
+| INDEX real: cleanupPrevious() / deleteMessages() | 1 | Limpieza después de commit |
+| /transport/index/commit → verifyCommitted() → pinned() | 1 | Verificación; posible optimización futura |
+| **Total típico con tópico nuevo** | **8** | **2 evitables** |
+
+Cada masterForVault() hace openMaster/connect, checkAuthorization, resolveVault mediante iterDialogs y disconnect (cloud-server/direct-transport-control.js:487–544); **8 aperturas no equivalen a 8 RPC ni prueban duración**. Reintentos, recuperación anómala, sesión inicial, PROJECT y servicios en segundo plano alteran la cuenta. Un Vault nuevo sí precisa bootstrap vacío. Si el INDEX existente es idéntico al vacío se puede tomar la ruta same. El camino sin tópico nuevo puede sustituir creación por editForumTopic; contar por operación real, no suponer cero conexiones.
+
+### Cuellos: evidencia frente a hipótesis
+
+- **CONFIRMADO POR CÓDIGO:** preflight vacío incondicional, rechazo y recuperación que reabre MASTER; operación replace_index serializada por Vault; conexiones MASTER independientes por operación; transacción SQL con FOR UPDATE abierta durante lectura/publicación externa.
+- **HIPÓTESIS:** fracción perceptible de tiempo perdido en connect, iterDialogs, descarga INDEX y transacciones; bloqueo de otra lectura INDEX al competir imports. No atribuir rendimiento a MASTER sin cronómetro.
+- **OPORTUNIDADES FUTURAS:** estudiar verificación del pin tras commit, reutilización/resolución MASTER y duración SQL únicamente después del baseline, sin retirar garantías.
+- **INSTRUMENTACIÓN:** src/features/playback/playTrace.ts, marcas IMPORT_COMMIT, IMPORT_MASTER_UPLOAD, IMPORT_INDEX_REPLACE, TRANSPORT_GET_INDEX y WORKER_INDEX; cloud-server/operations-observability.js registra contadores. Faltan correlación y duración por etapa de connect/checkAuthorization/iterDialogs, pin, SQL lock, recovery, cleanup. No publicar IDs, tokens o mensajes crudos.
+
+### Prueba aislada reproducible y concurrencia
+
+1. Preparar mocks de transporte Telegram y PostgreSQL con reloj controlado. Medir separadamente preflight, reserva, lectura Direct, preparación MP3, subida, envío/pin, verificación, SQL, commit y cleanup. Registrar operaciones, conexiones, tiempo, bytes, resultado, hashes y beats previos; iniciar con un beat pequeño. Contrastar Vault nuevo, existente, INDEX idéntico vacío, puntero ausente/obsoleto, error de red, concurrencia mismo Vault y retry.
+2. Generador Node **sin navegadores** de **1, 5, 10 y 20 usuarios lógicos** con cuentas/Vaults separados y caso mismo Vault, semilla determinista, mtcute falso con latencias configurables y tráfico acotado. Reportar p50/p95 (p99 cuando muestra lo permita), throughput, aperturas MASTER, espera por lock INDEX, SQL, CPU/RAM, errores, retries y coherencia final. DB sólo si es totalmente descartable, con preflight externo e Issue #133 resuelto. No usar postgres-live.integration.cjs ni servicios/usuarios de producción.
+3. Sólo con aprobación separada, validar métricas sintéticas frente a laboratorio privado Telegram. Sin ensayo real de proveedor no afirmar tiempos ni escalabilidad real.
+
+### Primer cambio candidato (NO implementado)
+
+**Omitir ensureImportQuotaIndex() si la sesión Direct ya incluye index_pointer.message_id válido**, disponible en webTransportSession.ts:61 y devuelto por server-core.js:1965–1978. Es un atajo positivo: **ausencia de puntero NO implica Vault vacío**, así que conservar flujo seguro actual cuando falte. Mantener lectura INDEX Direct, cuota, CAS, pin, verificación y recuperación. Probar primer import, existente, puntero obsoleto/ausente, dos sesiones y fallos pin/SQL. Aceptar cambio solamente si test aislado demuestra que elimina el intento vacío + recover (dos aperturas MASTER) preservando todas las invariantes. No alterar permisos ni rediseñar MASTER/INDEX.
+
+**Estado:** hallazgo confirmado estáticamente; conteos condicionados al escenario; benchmark y corrección **pendientes**.
