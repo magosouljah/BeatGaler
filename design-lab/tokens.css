@@ -49,6 +49,26 @@
   --lab-space-16: 64px;
   --lab-space-24: 96px;
 
+  /* [LAB] width is intrinsic; no arbitrary fixed CTA width */
+  --lab-button-sm-height: 44px;
+  --lab-button-sm-font: 13px;
+  --lab-button-sm-pad: 12px;
+  --lab-button-sm-gap: 8px;
+  --lab-button-md-height: 48px;
+  --lab-button-md-font: 14px;
+  --lab-button-md-pad: 16px;
+  --lab-button-md-gap: 8px;
+  --lab-button-lg-height: 56px;
+  --lab-button-lg-font: 16px;
+  --lab-button-lg-pad: 20px;
+  --lab-button-lg-gap: 12px;
+  --lab-button-hero-height: 64px;
+  --lab-button-hero-font: 18px;
+  --lab-button-hero-pad: 24px;
+  --lab-button-hero-gap: 12px;
+  --lab-button-hero-mobile-height: 56px;
+  --lab-button-hero-mobile-font: 16px;
+  --lab-button-hero-mobile-pad: 20px;
   --lab-control: 44px;
   --lab-control-compact: 36px;
   --lab-shadow-card: 0 24px 80px rgba(0, 0, 0, .55);
