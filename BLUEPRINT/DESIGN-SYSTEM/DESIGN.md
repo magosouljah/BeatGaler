@@ -11,6 +11,6 @@
 
 **Límite:** MASTER de este documento = página de diseño. No confundir con el MASTER técnico, INDEX y Telegram.
 
-- **[LAB] Decisión actual:** 32 px horizontales constantes en el canvas de MASTER (`--lab-space-8`). La Playbar siempre mide 68 px de alto, usa portada de 36 px y scrubber ancho completo bajo la portada cuando se comprime; transición 210 ms, reducida a cero para `prefers-reduced-motion`.
+- **[LAB] Decisión actual:** 32 px horizontales constantes en el canvas de MASTER (`--lab-space-8`). Playbar de 68 px de alto, caja estable de 48 px para la portada; al comprimirse la imagen mide 36 px y se eleva 4 px con un único `transform` de 180 ms. El scrubber mantiene una línea inferior común, empieza bajo el borde visible de la portada en compacto y responde inmediatamente al ancho mientras se arrastra el sidebar. Solo el cruce del breakpoint utiliza FLIP de 180 ms (`transform`); reducido a cambio inmediato con `prefers-reduced-motion`.
 
 **Ubicación actual:** implementación y recursos en `DESIGN/MASTER`, `DESIGN/LANDING`, `DESIGN/GALLERY` y `DESIGN/shared`. Documentos y decisiones en `BLUEPRINT/DESIGN-SYSTEM`. No queda un segundo laboratorio en `design-lab/`.
