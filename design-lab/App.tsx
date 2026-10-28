@@ -100,7 +100,7 @@ function LandingPage({ openGallery }: { openGallery: () => void }) {
         <span className="lab-brand"><LabMark /> BeatGaler</span>
         <LabButton variant="ghost" onClick={openGallery}>Explore the gallery</LabButton>
       </header>
-      <main className="lab-landing-hero">
+      <div className="lab-landing-hero">
         <div className="lab-landing-copy">
           <span className="lab-kicker">YOUR SOUND, IN ITS OWN SPACE</span>
           <h1>Make space for your sound.</h1>
@@ -116,7 +116,7 @@ function LandingPage({ openGallery }: { openGallery: () => void }) {
           ))}
           <span className="lab-orbit-caption">COLLECTION / STUDY 01</span>
         </div>
-      </main>
+      </div>
       <div className="lab-landing-bottom"><span>01 / FIRST EXPLORATION</span><span>Quiet UI. Loud ideas.</span></div>
     </div>
   );
@@ -200,11 +200,11 @@ export default function App() {
           <nav className="lab-tabs" aria-label="Design Lab previews">
             {TABS.map(tab => <button type="button" key={tab.id} className="lab-tab" aria-current={view === tab.id ? "page" : undefined} onClick={() => setView(tab.id)}>{tab.label}</button>)}
           </nav>
-          <div className="lab-preview" key={view}>
+          <main className="lab-preview" key={view}>
             {view === "components" && <ComponentPage beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={setSelectedBeat} />}
             {view === "landing" && <LandingPage openGallery={() => setView("gallery")} />}
             {view === "gallery" && <GalleryPage beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={setSelectedBeat} />}
-          </div>
+          </main>
         </div>
         <aside className="lab-tokens" aria-label="Editable Design Lab tokens">
           <div className="lab-tokens__top"><span className="lab-kicker">LIVE TOKENS</span><h2>Experiment freely.</h2><p>Los colores cambian en las tres vistas. Solo en memoria, nunca en producción.</p></div>
