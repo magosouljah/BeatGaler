@@ -1,32 +1,52 @@
 ---
-name: BeatGaler Design Lab — inventario actual
+name: BeatGaler Design System — inventario ejecutable
 status: descriptivo; no normativo
 source: design-lab/
 ---
 
-# DESIGN.md — Lo que existe, no lo que deberíamos tener
+# DESIGN.md — Estado implementado en la rama experimental
 
-**Este documento NO es jefe del diseño.** La autoridad del flujo y las precedencias está en [README.md](README.md); la realidad experimental está en el código de `design-lab/`. No aplicar automáticamente reglas visuales, números ni componentes que aparecían en versiones anteriores de este archivo. Los borradores anteriores permanecen recuperables por el historial de Git.
+**El único documento rector del proceso es [README.md](README.md).** Este inventario describe el código de `design-lab/`; no aprueba una identidad visual definitiva y no aplica automáticamente ninguna regla a producción.
 
-## Estado actual (verificar siempre con código)
+## [LAB] MASTER — biblioteca interactiva
 
-| Área | [LAB] Implementación observable | Código |
+MASTER fue reconstruido como una herramienta de trabajo con **58 fichas catalogadas** (véase `design-lab/system/catalog.ts`), navegación lateral con búsqueda por nombre/categoría, inspector contextual, preview de ancho fluido/tablet/teléfono, y modo de etiquetas largas para probar contenido extremo.
+
+Cada ficha declara **anatomía, propiedades, estados y procedencia del código**. Los ejemplos de UI cuentan con estado local, no son solo capturas. Las fichas describen muestras o agrupaciones; el número 58 **no equivale a 58 paquetes productivos ni a una matriz totalmente exhaustiva de variantes y estados**. Para verificar el comportamiento, abrir el ejemplo del laboratorio.
+
+| Área | Componentes y capacidades [LAB] | Implementación |
 | --- | --- | --- |
-| MASTER | Edición local de varios colores, reset de tokens, selector `Generated / Real covers`, muestras de botones, input, chips, artwork, card y player. **Diseño visual pendiente de aprobación.** | `App.tsx`, `components.tsx`, `lab.css`, `tokens.css` |
-| Landing | Órbita de portadas, movimiento propio, repulsión al puntero, botón `Create ur Galer` y navegación ficticia. Movimiento reducido contemplado en la implementación. | `App.tsx`, `lab.css` |
-| Gallery | Búsqueda, ordenación, filtros de tags, selección, beat tiles y reproductor en estado de demostración. | `GalleryPage.tsx`, `components.tsx`, `gallery.css` |
-| Componentes compartidos | `LabButton`, `LabField`, `LabTag`, `LabBeatTile`, `LabArtwork`, `LabPanel`, `LabPlayer`. Las variantes reales son las que admite el código, no una tabla de aspiraciones. | `components.tsx` |
-| Tokens | Valores que actualmente declara `tokens.css`, con algunas variables de color ajustables en MASTER mediante estado local. No todos los tokens tienen editor. | `tokens.css`, `App.tsx` |
-| Covers | Modo Generated/Real compartido en las tres vistas; muestras locales. | `coverSources.ts`, `App.tsx` |
+| **Foundations** | Paleta con editor, tipografía de muestra, espaciado, radios, bordes/foco, elevación, tamaños, responsive, iconografía y selector de portadas. | `system/foundations.ts`, `system/MasterPage.tsx`, `tokens.css`, `system/studio.css` |
+| **Acciones y formularios** | `LabButton` (primary/secondary/ghost/danger, sm/md/lg/hero, rounded/pill, loading/disabled), icon buttons, links, `LabField`, búsqueda, textarea, select, combobox, checkbox, radio, switch y slider. | `components.tsx`, `system/primitives.tsx`, `system/MasterPage.tsx` |
+| **Identidad y medios** | Tags/chips, badges semánticos, avatares con iniciales, iconos SVG, artwork, beat cards y reproductor simulado con seek, volumen, cola, shuffle y repeat. | `components.tsx`, `system/primitives.tsx` |
+| **Contenedores y navegación** | Cards, listas, tabla semántica, tabs con flechas, breadcrumbs, paginación y toolbar. | `system/primitives.tsx`, `system/MasterPage.tsx` |
+| **Capas y feedback** | Menú de acciones, popover, tooltip, diálogo con Escape y contención de foco, alerta, toast descartable, progreso, spinner, skeleton y estado vacío. | `system/primitives.tsx`, `system/MasterPage.tsx` |
+| **Motion & Physics** | `springStep`, `vectorForce` (atracción/repulsión), `inertialProjection`, `integrateGravity`; playground con arrastre, sliders de parámetros, teclado, reset, pausa y `prefers-reduced-motion`. | `motion/physics.ts`, `motion/MotionPlayground.tsx` |
+| **Patterns** | Biblioteca filtrada, selección múltiple, formulario de metadata, cola, upload ficticio y recuperación de búsqueda vacía. | `system/MasterPage.tsx`, `GalleryPage.tsx` |
+| **Órbita reutilizada** | Componente `Orbit` compartido por MASTER y Landing; 24 portadas, profundidad, suavizado y repulsión al cursor. Respeta reduced motion. | `motion/Orbit.tsx` |
 
-**Ejemplos verificables [LAB]:** `--lab-canvas: #0c0c0c`; `--lab-surface: #101010`; botones con tamaños `sm/md/lg/hero` y variantes `primary/secondary/ghost/danger`. Obtener **todas** las cifras y estados restantes del CSS y TSX, no de este resumen.
+### [LAB] Variables editables compartidas
 
-**[EXISTENTE]** La aplicación de producción en `main` sigue su propio `src/styles/design-foundations.css` y código de `src/`; nada aquí supone una migración.
+Se conservó la escala CSS existente en `tokens.css`; `toLabVariables` expone ajustes en tiempo real de `surface`, `raised`, `ink`, `secondary`, `accent`, espaciado base, radios, altura de control, tipografía de la biblioteca, sombra y transición normal. Los componentes que consumen **esas variables** reaccionan inmediatamente.
 
-**[PENDIENTE]** Rediseñar la presentación de MASTER; formalizar una biblioteca de componentes más completa; decidir y extraer contratos reutilizables para físicas; completar pruebas y aprobación visual de estados/responsive. No afirmar que estos elementos ya existan.
+El canvas `#0c0c0c` permanece bloqueado para coincidir con el generador procedural `bg-v1`. El modo `Generated / Real covers` se comparte entre MASTER, Landing y Gallery; hay 24 portadas locales. Las modificaciones de tokens no se guardan permanentemente; el selector de portada sí se mantiene en `sessionStorage` durante la sesión. Algunos estilos de Landing y Gallery aún usan valores locales literales, por lo que **no todos los cambios de Foundations afectan a todas las superficies**.
 
-## Cómo actualizar el inventario
+### [LAB] Lo que se conserva
 
-Después de cada cambio comprobado del Design Lab, actualizar solo las filas afectadas. Para decidir estilo y comportamiento consultar primero las [skills](../../.agents/skills/README.md) relevantes y [README.md](README.md). Las referencias externas y la transcripción **no** dictan el resultado visual de BeatGaler.
+- **Landing:** diseño orbital original, CTA `Create ur Galer` y navegación ficticia; física de la órbita extraída sin sustituir su comportamiento principal.
+- **Gallery:** búsqueda, orden, tags en tres estados, color de tags, selección, cards y player ficticio; sin llamadas a servicios reales.
+- **Seguridad del prototipo:** ningún módulo nuevo importa `src/`, conecta APIs, reproduce audio ni modifica usuarios o archivos reales.
 
-**Límites:** el mock no usa login, API, Cloud, ni el MASTER técnico, INDEX, Telegram o servicios reales. Seguir aislado de producción.
+## Validación
+
+El workflow aislado `.github/workflows/design-lab-workbench.yml` ejecuta contratos Node, pruebas matemáticas de físicas, parser TSX, TypeScript estricto del laboratorio y build independiente de Vite. **Ejecución exitosa**: [GitHub Actions #40745774360](https://github.com/magosouljah/BeatGaler/actions/runs/40745774360) sobre el commit `915bf6c` (28-10-2026). Las pruebas automatizadas son principalmente de contrato y lógica; no sustituyen inspección visual y gestual en teléfonos físicos.
+
+## [PENDIENTE] Lo que no se afirma como terminado
+
+- Validar visualmente MASTER a múltiples resoluciones, con zoom, lectores de pantalla, touch real, móviles físicos y contenido extremo; decidir ajustes estéticos con el propietario.
+- Mejorar cierre y navegación de menús/combobox, semántica ARIA de casos complejos y matriz de pruebas de estados de cada ficha; introducir pruebas automatizadas de interacción/renderizado.
+- Unificar progresivamente estilos específicos de Landing/Gallery que aún no consumen tokens y evaluar si el conjunto necesita más componentes; no crear variantes redundantes por volumen.
+- Extender el motor de físicas a patrones adicionales del producto real cuando exista un caso real; medir fluidez en dispositivos de recursos limitados.
+- Migración a `src/`: **no realizada ni autorizada**. [EXISTENTE] La aplicación real utiliza sus propias primitivas y `src/styles/design-foundations.css` en `main`.
+
+**Límites de seguridad:** MASTER técnico, INDEX y Telegram no intervienen en este laboratorio. Nada se ha publicado en producción.
