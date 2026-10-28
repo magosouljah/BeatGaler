@@ -173,20 +173,21 @@ try {
   await sleep(230);
   const sortOpen=await evaluate(`document.querySelector('[role=menu][aria-label="Sort beats"]').classList.contains('is-open')`);
   assert.ok(sortOpen,"Sort menu did not open");
-  const anchor=await evaluate(`(() => {
-    const rect = (name) => {
-      const r=document.querySelector('[role=menu][aria-label="'+name+'"]').getBoundingClientRect();
-      return {left:r.left,right:r.right,top:r.top,width:r.width};
-    };
-    return {sort:rect("Sort beats"),profile:rect("Profile")};
+  const sortAnchor=await evaluate(`(() => {
+    const r=document.querySelector('[role=menu][aria-label="Sort beats"]').getBoundingClientRect();
+    return {left:r.left,right:r.right,top:r.top,width:r.width};
   })()`);
-  assert.ok(Math.abs(anchor.sort.top-anchor.profile.top)<1,"Popover vertical anchors differ");
-  assert.ok(Math.abs(anchor.sort.right-anchor.profile.right)<1,"Popover right anchors differ");
   await screenshot("master-toolbar-sorting.png");
 
   await evaluate(`document.querySelector('.lab-toolbar-circle[aria-label="Profile"]').click()`);
   await sleep(230);
   assert.ok(await evaluate(`document.querySelector('[role=menu][aria-label="Profile"]').classList.contains('is-open')`),"Profile menu did not open");
+  const profileAnchor=await evaluate(`(() => {
+    const r=document.querySelector('[role=menu][aria-label="Profile"]').getBoundingClientRect();
+    return {left:r.left,right:r.right,top:r.top,width:r.width};
+  })()`);
+  assert.ok(Math.abs(sortAnchor.top-profileAnchor.top)<1,"Popover vertical anchors differ");
+  assert.ok(Math.abs(sortAnchor.right-profileAnchor.right)<1,"Popover right anchors differ");
   await screenshot("master-toolbar-profile.png");
   await evaluate('document.querySelector(".lab-toolbar-search-trigger").click()');
   await sleep(230);
@@ -219,7 +220,7 @@ try {
   const mobileSearch=await evaluate('document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect().left');
   assert.ok(mobileSearch>=0,"Mobile expanded search overflows left");
   await screenshot("master-toolbar-mobile-search.png");
-  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{anchor,searchShape,mobile,mobileSearch}, result: "PASS" }, null, 2));
+  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{sortAnchor,profileAnchor,searchShape,mobile,mobileSearch}, result: "PASS" }, null, 2));
 } finally {
   ws?.close();
   vite.kill("SIGTERM");
