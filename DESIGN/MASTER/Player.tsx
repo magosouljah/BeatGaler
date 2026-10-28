@@ -118,7 +118,7 @@ function controlButtonStyle(active = false, size = 30): React.CSSProperties {
       ? "rgba(255,255,255,0.12)"
       : "rgba(255,255,255,0.04)",
     color: active ? "#ffffff" : "rgba(255,255,255,0.45)",
-    transition: "all 0.2s ease-in-out",
+    transition: "background-color var(--lab-fast) var(--lab-ease), transform var(--lab-fast) var(--lab-ease), opacity var(--lab-fast) var(--lab-ease)",
     transform: "scale(1)",
   };
 }
@@ -136,7 +136,7 @@ function transportButtonStyle(size = 28): React.CSSProperties {
     padding: 0,
     background: "transparent",
     color: "rgba(255,255,255,0.86)",
-    transition: "all 0.18s ease-in-out",
+    transition: "transform var(--lab-fast) var(--lab-ease), opacity var(--lab-fast) var(--lab-ease)",
     transform: "scale(1)",
   };
 }
@@ -346,8 +346,10 @@ export default function Player({
   preview = false,
 }: Props) {
   const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1100);
-  const trackDataRef = useRef<HTMLDivElement | null>(null);
-  const [seekGeometry, setSeekGeometry] = useState({ left: 0, width: 0, ready: false });
+  // FLIP only at the mode boundary: no trailing animations during live resizing.
+  const measuredWidthRef = useRef<number | null>(null);
+  const seekFromRef = useRef<{ left: number; top: number; width: number } | null>(null);
+  const seekAnimationRef = useRef<Animation | null>(null);
   const [showVolume, setShowVolume] = useState(false);
   const [showEmptyQueueHint, setShowEmptyQueueHint] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -367,10 +369,21 @@ export default function Player({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   useLayoutEffect(() => {
-    // Sidebars change the actual available width without resizing window.
-    const root = rootRef.current;
-    const host = preview ? root?.parentElement : null;
-    const update = () => setViewportWidth(preview ? (host?.getBoundingClientRect().width ?? window.innerWidth) : window.innerWidth);
+    // The host shrinks when MASTER's sidebar is resized; the window need not resize.
+    const host = preview ? rootRef.current?.parentElement : null;
+    const update = () => {
+      const width = preview ? (host?.getBoundingClientRect().width ?? window.innerWidth) : window.innerWidth;
+      const before = measuredWidthRef.current;
+      if (preview && before !== null && (before <= 760) !== (width <= 760)) {
+        // Snapshot the visible bar before the breakpoint reflow, including interruptions.
+        const rect = scrubberRef.current?.getBoundingClientRect();
+        seekFromRef.current = rect ? { left: rect.left, top: rect.top, width: rect.width } : null;
+        seekAnimationRef.current?.cancel();
+        seekAnimationRef.current = null;
+      }
+      measuredWidthRef.current = width;
+      setViewportWidth(previous => previous === width ? previous : width);
+    };
     update();
     if (preview && host && typeof ResizeObserver !== "undefined") {
       const observer = new ResizeObserver(update);
@@ -381,32 +394,29 @@ export default function Player({
     return () => window.removeEventListener("resize", update);
   }, [preview]);
 
+  const narrowSeekLayout = preview && viewportWidth <= 760;
   useLayoutEffect(() => {
-    if (!preview) return;
-    const root = rootRef.current;
-    const trackData = trackDataRef.current;
-    if (!root || !trackData) return;
-    const update = () => {
-      const outer = root.getBoundingClientRect();
-      const inner = trackData.getBoundingClientRect();
-      const compact = outer.width <= 760;
-      const edge = outer.width < 700 ? 10 : outer.width < 860 ? 14 : 18;
-      const left = compact ? edge : Math.max(edge, inner.left - outer.left);
-      const width = compact ? outer.width - edge * 2 : inner.width;
-      const next = { left: Math.round(left), width: Math.max(0, Math.round(width)), ready: true };
-      setSeekGeometry(previous => previous.left === next.left && previous.width === next.width && previous.ready
-        ? previous : next);
-    };
-    update();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", update);
-      return () => window.removeEventListener("resize", update);
-    }
-    const observer = new ResizeObserver(update);
-    observer.observe(root);
-    observer.observe(trackData);
-    return () => observer.disconnect();
-  }, [preview]);
+    const from = seekFromRef.current;
+    seekFromRef.current = null;
+    const seek = scrubberRef.current;
+    if (!preview || !seek || !from || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const to = seek.getBoundingClientRect();
+    if (!to.width || !from.width) return;
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    const scaleX = from.width / to.width;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(scaleX - 1) < 0.005) return;
+    // FLIP: only transform, while the real left/right geometry already matches the canvas.
+    seekAnimationRef.current = seek.animate(
+      [
+        { transform: `translate3d(${dx}px, ${dy}px, 0) scaleX(${scaleX})` },
+        { transform: "translate3d(0, 0, 0) scaleX(1)" },
+      ],
+      { duration: 180, easing: getComputedStyle(seek).getPropertyValue("--lab-ease").trim() || "ease-out" },
+    );
+  }, [narrowSeekLayout, preview]);
+
+  useEffect(() => () => seekAnimationRef.current?.cancel(), []);
 
   useEffect(() => {
     const onDocMouseDown = (event: MouseEvent) => {
@@ -501,7 +511,7 @@ export default function Player({
   const isSmall = viewportWidth < 860;
   const isTiny = viewportWidth < 700;
   const playerHeight = 68; // Same height at every width, including condensed previews.
-  const isNarrow = preview && viewportWidth <= 760;
+  const isNarrow = narrowSeekLayout;
   const isMicro = preview && viewportWidth < 380;
   const playerPadding = isTiny ? 10 : isSmall ? 14 : 18;
   const controlsGap = isTiny ? 5 : isSmall ? 7 : 10;
@@ -510,8 +520,8 @@ export default function Player({
   const transportSize = 23;
   const playPauseSize = 30;
   const utilityBtnSize = isTiny ? 26 : 30;
-  const infoGap = isTiny ? 8 : 12;
-  const artworkSize = isNarrow ? 36 : isTiny ? 42 : 48;
+  const infoGap = preview ? 12 : isTiny ? 8 : 12;
+  const artworkSize = preview ? 48 : isTiny ? 42 : 48; // Fixed layout footprint in MASTER.
   const volContainerW = isTiny ? 32 : 36;
   const volContainerH = isTiny ? 150 : 168;
   const volPadY = 14;
@@ -539,7 +549,7 @@ export default function Player({
         zIndex: 90,
         display: "flex",
         alignItems: "center",
-        padding: preview && isNarrow ? `7px ${playerPadding}px 19px` : `10px ${playerPadding}px`,
+        padding: `10px ${playerPadding}px`, // No jump in vertical alignment at the breakpoint.
         gap: isTiny ? 10 : 14,
         overflow: "visible",
       }}
@@ -587,13 +597,17 @@ export default function Player({
         </button>
       </div>
 
-      {/* CENTER: artwork and metadata; seek moves beneath both at narrow widths. */}
-      <div style={{ display: "flex", alignItems: "center", gap: infoGap, flex: 1, minWidth: 0 }}>
-        <Artwork beat={beat} size={artworkSize} playing={false} />
-        <div ref={trackDataRef} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
+      {/* CENTER: keep the cover's layout slot fixed; scale/move the image together. */}
+      <div style={{ display: "flex", alignItems: "center", gap: infoGap, flex: 1, minWidth: 0, position: "relative" }}>
+        {preview ? (
+          <div className={isNarrow ? "lab-playbar-cover-slot is-condensed" : "lab-playbar-cover-slot"}>
+            <Artwork beat={beat} size={artworkSize} playing={false} />
+          </div>
+        ) : <Artwork beat={beat} size={artworkSize} playing={false} />}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
           {/* Beat info + More button row */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0, paddingTop: 5 }}>
+            <div style={{ flex: 1, minWidth: 0, paddingBottom: preview ? 6 : 0 }}>
               <div style={{ fontSize: isTiny ? 12 : 14, fontWeight: 600, color: "#FFFFFF", lineHeight: "1.2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {beat.name}
               </div>
@@ -633,13 +647,14 @@ export default function Player({
               marginTop: preview ? 0 : 6,
               paddingTop: preview ? 5 : 6,
               paddingBottom: preview ? 5 : 6,
-              marginBottom: preview ? 0 : -6, // wider invisible hit area, same visual position
+              marginBottom: preview ? 0 : -6,
               cursor: "pointer",
               position: preview ? "absolute" : "relative",
-              left: preview ? seekGeometry.left : undefined,
-              width: preview ? seekGeometry.width : undefined,
-              bottom: preview ? 6 : undefined,
-              visibility: preview && !seekGeometry.ready ? "hidden" : "visible",
+              // 6px inset matches the visible 36px cover inside its 48px slot.
+              left: preview ? (isNarrow ? 6 : artworkSize + infoGap) : undefined,
+              right: preview ? 0 : undefined,
+              bottom: preview ? -6 : undefined,
+              transformOrigin: preview ? "left center" : undefined,
               touchAction: "none",
               userSelect: "none",
             }}
@@ -651,7 +666,7 @@ export default function Player({
                   width: `${Math.max(0, Math.min(1, isDraggingProgress ? dragProgress : progress)) * 100}%`,
                   background: "#FFFFFF",
                   borderRadius: 2,
-                  transition: isDraggingProgress ? "none" : "width 0.1s linear",
+                  transition: isDraggingProgress ? "none" : "width var(--lab-fast) linear",
                 }}
               />
               <div
@@ -852,7 +867,7 @@ export default function Player({
                   color: "#FFFFFF",
                   textAlign: "left",
                   cursor: "pointer",
-                  transition: "all 0.2s ease-in-out",
+                  transition: "background-color var(--lab-fast) var(--lab-ease), transform var(--lab-fast) var(--lab-ease), opacity var(--lab-fast) var(--lab-ease)",
                 }}
               >
                 <Artwork beat={item} size={32} playing={false} />
