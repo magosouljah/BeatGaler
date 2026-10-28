@@ -5,6 +5,7 @@
 | Documento | Contenido |
 | --- | --- |
 | [DIRECTION.md](DIRECTION.md) | Orden **recomendado y flexible** hacia V1: auditoría → rendimiento → UX/landing → limpieza incremental → validación. Marketing en paralelo. |
+| [DESIGN-SYSTEM/](DESIGN-SYSTEM/) | Identidad visual BeatGaler, reglas de consistencia, referencias externas y prototipos **falsos** de landing/galería. |
 | [TECHNICAL-CORE-AUDIT-V1.md](TECHNICAL-CORE-AUDIT-V1.md) | **Plan específico del paso 1:** auditoría técnica Web + Cloud; todos los hallazgos de la inspección estática, riesgos, fuentes, verificaciones y criterios de cierre. |
 | [CURRENT-STATE.md](CURRENT-STATE.md) | Producción, desarrollo, decisiones vigentes y límites. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Mapa técnico, invariantes y auditorías pendientes. |
