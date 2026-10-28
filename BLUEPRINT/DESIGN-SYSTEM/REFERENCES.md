@@ -10,6 +10,8 @@ Colección amplia de análisis `DESIGN.md` de marcas y productos, organizada por
 
 Especialmente relevantes:
 
+- [Coinbase](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/coinbase/DESIGN.md): referencia principal de **profundidad y estructura de especificación** (tokens YAML, tabla de componentes, estado, comportamiento y reglas). Es un análisis de terceros, no un sistema oficial ni fuente de identidad para BeatGaler.
+
 - [Apple](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md): aire, jerarquía, discreción de la UI y fotografía protagonista.
 - [Spotify](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/spotify/DESIGN.md): fondos oscuros, carátulas como fuente de color y lectura musical.
 - [Linear](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/linear.app/DESIGN.md): superficies contenidas, bordes finos, densidad medida.
