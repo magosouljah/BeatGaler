@@ -52,3 +52,15 @@ Los dos repositorios citados declaran licencia **MIT**. Si más adelante se reut
 La licencia MIT de estas recopilaciones **no** autoriza por sí sola a distribuir fuentes comerciales, fotografías, portadas, iconos de terceros ni a copiar marcas registradas. Para mocks, usar portadas propias, demo o assets con licencias comprobadas. Registrar la procedencia de cualquier asset reutilizado.
 
 **Criterio:** consultar el material original cuando sea necesario; mantener este BLUEPRINT ligero y específico para BeatGaler.
+
+## Referencias de formato aportadas (28-10-2026)
+
+Los documentos `DESIGN-coinbase.md` y `DESIGN-apple.md` se aportaron como modelos de **formato y estructura**, no para copiar identidad ni afirmar que sean design systems oficiales de esas compañías. Ambos se centran en superficies web; para Gallery deben prevalecer criterios de aplicación.
+
+- **Coinbase (formato preferido):** ficha con frontmatter/tokens YAML, tablas de medidas, variantes de componentes, estados, anatomía, responsive, usos correctos e incorrectos y reglas comprobables.
+- **Apple (principios de interfaz):** jerarquía visual, economía de chrome, ergonomía, claridad y respuesta. Complementar con la guía `apple-design` y fuentes de diseño de aplicaciones, en lugar de adoptar literalmente su web de marketing.
+- **BeatGaler:** MASTER reúne Foundations y Components; Landing y Gallery prueban los componentes en contexto. Las físicas no se reducen a parámetros: cada interacción debe tener una implementación ejecutable, valores configurables, reglas de entrada y límites, reduced motion y pruebas de rendimiento.
+
+## Instalación de skills para agentes del proyecto
+
+Se incorporaron las **12 skills Web relevantes** de [Emil Kowalski](https://github.com/emilkowalski/skills) a [`.agents/skills/`](../../.agents/skills/README.md), conservando documentación original, archivos auxiliares y licencia MIT, fijados al commit `2d228630ba1446365f614a108cb8252f1feda202`. Se excluyeron `write-swift`, `animate-expo` y `ask-sonner` por no aportar al alcance actual. La instalación es **local al repositorio para agentes compatibles**, no una instalación global en ChatGPT ni una dependencia de producción.
