@@ -96,12 +96,14 @@ export function LabPlayer({ beat, playing, onToggle }: {
   );
 }
 
-export function LabField({ label, id, hint, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: string; id: string; hint?: string }) {
+export function LabField({ label, id, hint, error, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: string; id: string; hint?: string; error?: string }) {
+  const describedBy = [props["aria-describedby"], hint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(" ") || undefined;
   return (
     <div className="lab-field-group">
       <label htmlFor={id}>{label}</label>
-      <input {...props} id={id} className="lab-field" />
-      {hint && <small>{hint}</small>}
+      <input {...props} id={id} className="lab-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={describedBy} />
+      {hint && <small id={`${id}-hint`}>{hint}</small>}
+      {error && <small id={`${id}-error`} className="lab-field-error" role="alert">{error}</small>}
     </div>
   );
 }
