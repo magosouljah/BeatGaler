@@ -31,3 +31,9 @@ Son **instrucciones y conocimientos de diseño**; no dependencias de ejecución 
 - Prototipo actual: `DESIGN/` (MASTER, Landing, Gallery).
 - App publicada y desarrollo real: `src/styles/design-foundations.css`, `src/components/`, `src/app/` en `main`.
 - Protección de producción: no llevar cambios del laboratorio a `src/` ni desplegar sin aprobación.
+
+## Toolbar Liquid Glass — referencias del propietario (28-10-2026)
+
+- [Cinco capturas del mismo botón sobre distintos fondos](../../DESIGN/REFERENCES/TOOLBAR-GLASS/README.md): gris oscuro, negro, transición rosa/negro y rosa completo; analizar reflejos/refracción según el fondo, no cinco estilos separados.
+- [Figma Control Center UI Kit](https://www.figma.com/design/9M9KSCvRAbCQiAAZqxviNB/Apple-Liquid-Glass-iOS-26---Control-Center-UI-Kit----Community-?node-id=105-23): revisar componente de cámara `8001:1261`, y los nodos de código `10008:89` / `10019:89` con la conexión Figma. Referencia de comportamiento/material, no autoridad sobre la arquitectura de BeatGaler.
+- [rdev/liquid-glass-react](https://github.com/rdev/liquid-glass-react): implementación técnica opcional de refracción. No garantiza semejanza sin reproducir sus condiciones y validar el resultado; la V2 anterior fue descartada.

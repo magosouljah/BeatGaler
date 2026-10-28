@@ -7,6 +7,7 @@
 - **`MASTER/`** — Design System incremental: Playbar y Toolbar, navegación izquierda, reglas, Playbar tomada de la producción y sus 14 iconos originales. Márgenes horizontales aprobados de 32 px; Playbar de 68 px de alto, portada que se transforma una sola vez al comprimirse y seek reactivo sin latencia durante resize.
 - **`LANDING/`** — landing experimental y su órbita circular de portadas.
 - **`GALLERY/`** — galería ficticia, filtros, Toolbar Liquid Glass y reproductor de muestra anterior.
+- **`REFERENCES/TOOLBAR-GLASS/`** — cinco referencias visuales del botón Liquid Glass sobre fondos diferentes, para la futura Toolbar V2.
 - **`shared/`** — componentes, tokens, datos de beats ficticios, generador original `bg-v1` y 24 carátulas locales.
 - **`App.tsx`, `main.tsx`, `index.html`, `vite.config.ts`** — la única app y servidor aislados.
 
