@@ -1,37 +1,62 @@
-# ARCHITECTURE.md — Organización actual, sin arquitecturas obligatorias
+# ARCHITECTURE.md — Arquitectura vigente del Design Lab
 
-**Documento descriptivo; el único procedimiento rector es [README.md](README.md).** Este texto no exige implementar tres capas de tokens, ni crear ficheros de especificación por componente, ni sustituye el laboratorio interactivo.
+**Documento descriptivo, subordinado a [README.md](README.md).** El código de `design-lab/` es la fuente técnica de verdad. No se obliga a Brand → Alias → Mapped solo porque la transcripción de UI Collective lo utiliza.
 
-## Lo que existe [LAB]
+## Estructura implementada [LAB]
 
 ```text
 design-lab/
-  index.html + main.tsx  # entrada del HTML falso, con Vite/React
-  App.tsx                # MASTER y Landing; navegación y física orbital
-  GalleryPage.tsx        # Gallery
-  components.tsx         # componentes reutilizados
-  tokens.css             # fundamentos actuales
-  lab.css / gallery.css  # estilos existentes
-  coverSources.ts        # selector Generated / Real
+  main.tsx, index.html, vite.config.ts     # Entrada y build aislados
+  App.tsx                                 # Estado compartido / Landing / navegación
+  GalleryPage.tsx                         # Galería ficticia con interacciones
+  components.tsx                          # Primitivas BeatGaler reutilizadas
+  tokens.css                              # Escalas y roles CSS existentes
+  lab.css, gallery.css                    # Landing, Gallery y componentes originales
+  coverSources.ts, data.ts                # Fuentes de portada y fixtures
+  system/
+    catalog.ts                            # 58 fichas: área, grupo, contratos
+    foundations.ts                        # Valores editables → CSS custom properties
+    primitives.tsx                        # Componentes de controles y UI
+    MasterPage.tsx                        # Workbench y muestras con estado local
+    studio.css                            # Layout premium, inspector, responsive
+  motion/
+    physics.ts                            # Springs, campo de fuerza, inercia, gravedad
+    Orbit.tsx                             # Órbita extraída, compartida por dos vistas
+    MotionPlayground.tsx                  # Laboratorio físico interactivo
+  tsconfig.json                           # TypeScript estricto sólo para Design Lab
+  lab-contract.test.mjs                   # Contratos anteriores + aislamiento
+  system-contract.test.mjs                # Contratos de catálogo y matemáticas físicas
 ```
 
-En la experiencia visual proponemos **dos áreas de MASTER**:
+## Dependencias y flujo
 
-- **Foundations:** valores y criterios compartidos (color, espacio, tipo, radios, etc.).
-- **Components:** piezas reutilizables, estados, variantes y comportamientos.
+1. `App.tsx` mantiene **estado local** de colores, ajustes de Foundations, muestra de artwork, reproducción simulada, beat elegido y colores de tags.
+2. `system/foundations.ts` traduce los ajustes a variables CSS del contenedor `.lab-root`. `tokens.css` contiene los defaults; no hay generador externo de temas ni actualización de `src/`.
+3. `MasterPage` utiliza el catálogo de metadatos para navegación y documentación, y construye demos de los mismos componentes React de `components.tsx` y `system/primitives.tsx`. **El catálogo no genera código ni exporta paquetes**.
+4. Landing y MASTER importan una **única implementación** de `motion/Orbit.tsx`. La órbita llama a `vectorForce`, el motor puro en `motion/physics.ts`.
+5. Gallery y MASTER utilizan `LabBeatTile`, `LabArtwork`, `LabPlayer` y `LabButton`; Gallery conserva algunas particularidades visuales locales.
+6. El standalone build Vite no importa la app real; los datos de demo permanecen en memoria y las portadas locales no hacen peticiones de red.
 
-**Landing y Gallery** no son una tercera capa de configuración; son pantallas de demostración. La existencia efectiva de un token o componente se comprueba en código, no aquí.
+## Tokens: dos responsabilidades sin sobreingeniería
 
-## Físicas: tanto ejecución como parámetros
+- **Valores base:** defaults y escala en `tokens.css` con editor local en `system/foundations.ts`.
+- **Roles aplicados:** propiedades `--lab-*` consumidas por componentes, algunas dinámicas en `.lab-root` con `toLabVariables`.
 
-Una física de repulsión, gravedad, spring, inercia o parallax solo es reutilizable cuando su **implementación real** puede compartirse: respuesta al puntero/touch, integración por frame, interrupciones, límites, estado inicial, retorno, rendimiento, accesibilidad y reduced motion. Una tabla de fuerzas no sustituye eso.
+No se implementó un esquema separado **Brand / Alias / Mapped** ni versionado de tokens por marca. La transcripción enseña su uso, pero para BeatGaler experimental (una identidad y un tema oscuro) se ha conservado una estructura directa. La necesidad futura de alias se debe justificar con casos reales.
 
-Hoy la órbita de Landing está programada en `App.tsx`; **no** declaramos que exista ya un motor genérico de físicas o un editor de presets completo.
+## Física: contratos ejecutables
 
-## Ideas no adoptadas [PENDIENTE]
+- `springStep(axis, target, dt, {stiffness,damping,mass})`: integración estable, retargeting y continuidad de velocidad.
+- `vectorForce(position, center, radius, strength, mode)`: campo radial local de repulsión o atracción.
+- `inertialProjection(position, velocity, friction)`: predicción de destino al soltar.
+- `integrateGravity(position, velocity, dt, gravity, floor, bounce)`: aceleración, suelo y restitución.
 
-La transcripción de UI Collective enseña `Brand → Alias → Mapped`. Es una **referencia de estudio**, no una decisión obligatoria para BeatGaler. Actualmente no hay evidencia de que una sola marca y un tema oscuro necesiten esa complejidad. Introducir alias, nuevos esquemas o generadores de CSS solo si los exige un problema real y después de probarlo en Design Lab.
+El playground usa `requestAnimationFrame`, puntero, captura durante drag, teclado y consulta `prefers-reduced-motion`. El motor es reutilizable, **no un motor de colisiones general ni un sistema de gestos de producción**. Los efectos espaciales usados en Landing aún contienen geometría específica de ese caso, apropiada para `Orbit`.
 
-Para criterios de implementación, animación y UI, leer las [skills locales](../../.agents/skills/README.md), no asumir que una arquitectura teórica tiene autoridad sobre el código.
+## [PENDIENTE]
 
-**Producción:** el producto real vive en `src/` de `main`; ninguna decisión de este laboratorio puede migrarse automáticamente.
+- Pruebas de interacción navegador/E2E, accesibilidad real, medición de rendimiento y validación en hardware móvil.
+- Más control sobre propiedades y estados de todas las fichas; completar la composición de menús avanzados y navegación por teclado.
+- Auditar valores CSS literales de Gallery y Landing para una convergencia gradual a los mismos tokens sin dañar el diseño existente.
+
+**Alcance:** rama `design/beatgaler-design-system-lab-v1`, sin cambios a `main`, `src/` ni despliegue Web + Cloud. Para inventario de componentes actuales, ver [DESIGN.md](DESIGN.md).
