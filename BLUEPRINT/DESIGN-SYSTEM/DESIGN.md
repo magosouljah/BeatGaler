@@ -156,19 +156,27 @@ sources:
 
 Las reglas siguientes son **[LAB]** salvo valores marcados [EXISTENTE]. Los componentes ejecutables viven en `design-lab/components.tsx`. Especificar estados `default`, `hover`, `active`, `focus-visible`, `disabled`, `loading` y `error` cuando corresponda. Sin navegación auténtica ni funciones reales en mocks.
 
-### 6.1 Botones
+### 6.1 Botones — contrato de geometría intrínseca [LAB]
 
-| Variante | Alto / padding | Superficie / texto / borde | Uso |
-|---|---|---|---|
-| Primary | 44px; 12px 16px | `#ececec` / `#101010` / `#ececec` | Acción principal, máximo 1 por zona |
-| Secondary | 44px; 12px 16px | `#151515` / `#f2f2f2` / `#343434` | Siguiente mejor acción |
-| Ghost | 44px; 10px 12px | transparent / `#b0b0b0` / transparent | Acciones auxiliares |
-| Destructive | 44px; 12px 16px | `#2a1111` / `#ffb4b4` / `#6d3030` | Confirmación de acción destructiva |
-| Icon | 44×44px; centrado | Igual a secondary/ghost | Requiere `aria-label` |
-| Compact visual | 36px visual | solo si zona de interacción efectiva ≥44px | Densidad en barra de herramientas |
-| Hero CTA | 52px; 16px 24px | igual a Primary; `radius.pill` [LAB] | Solo landing |
+**Regla fundamental:** el ancho nace del contenido real, no de un `min-width` arbitrario. `W = ancho de texto renderizado + caja del icono (si existe) + gap texto/icono (si existe) + 2 × padding-inline + 2 × border`. Nunca estimar por longitud de caracteres: depender del renderizado real de la fuente. CSS: `display:inline-flex; width:max-content; max-width:100%;` y alineación central. La altura cumple `H = max(min-height del tamaño, línea de texto + padding vertical)`, sin espacios laterales artificiales. No utilizar `justify-content:space-between` para separar icono y etiqueta de un botón contenido.
 
-**Estados [LAB]:** hover primary `#ffffff`; secondary `#1c1c1c`; ghost `#1c1c1c`; pressed usa `#222222` para oscuros / `scale(.985)` de 120ms para todos; focus-visible anillo exterior de 2px sin esconderlo; disabled `opacity:.5`, no hover ni clic; loading spinner local y botón disabled, conserva ancho/texto y `aria-busy`. Error jamás sustituye el label por color. **[EXISTENTE]** botón actual 44px, radios 8px, 13px/650, variantes primary/secondary/ghost/danger. El hero pill 52px y peso 600 son experimentos; no reescribir variantes productivas.
+| Tamaño | Alto mínimo | Texto / line-height / peso | Padding inline por lado | Gap | Contexto |
+|---|---:|---|---:|---:|---|
+| `sm` | 44px | 13px / 1.2 / 650 | 12px | 8px | Botones ordinarios y herramientas |
+| `md` | 48px | 14px / 1.2 / 650 | 16px | 8px | Acción general |
+| `lg` | 56px | 16px / 1.2 / 650 | 20px | 12px | Acción destacada |
+| `hero` | 64px | 18px / 1.2 / 700 | 24px | 12px | CTA principal en Landing |
+| `hero` móvil (≤720px) | 56px | 16px / 1.2 / 700 | 20px | 12px | CTA en móvil |
+
+Todos son tokens ejecutables `--lab-button-{size}-{height,font,pad,gap}` en `design-lab/tokens.css`. **[EXISTENTE]** el botón base del producto utiliza 44px, 13px/650 y radio 8px; las otras tallas son solo [LAB]. No modificar CSS de `src/`.
+
+**Composición:** `button > content > label + trailingIcon?`. Caja de icono 1.2em centrada, gap según tamaño, icono decorativo `aria-hidden=true` cuando hay label. El icono no sirve para forzar el ancho. Botón solo-icono: usar una primitiva dedicada con `aria-label` obligatorio y hit-area ≥44×44px. `size` determina densidad; `variant` determina prioridad visual; `shape` determina forma. No mezclar geometría específica dentro de cada variante.
+
+**Jerarquía y variantes:** `primary` fondo `#ececec`, texto `#101010`, una acción dominante por grupo; `secondary` superficie raised y borde default; `ghost` transparente para auxiliar; `danger` tokens de error solo para acciones destructivas. `shape=rounded` radio 8px o `shape=pill` radio 999px, independientes del tamaño. El CTA `Create ur Galer` es `size=hero variant=primary shape=pill trailingIcon`, sin ancho mínimo ad hoc.
+
+**Estados de todos los botones:** default, hover (superficie, no cambio de geometría), active (scale .985, duración ≤120ms), focus-visible (anillo 2px y offset ≥2px), disabled (sin hover/clic, opacidad .5), loading (label conserva el espacio intrínseco aunque se oculte visualmente, spinner en posición absoluta, `aria-busy`, `disabled`). Error requiere label, nunca solo color. `prefers-reduced-motion` suprime animaciones no esenciales. Contraste: ≥4.5:1 para texto normal, ≥3:1 para bordes funcionales y foco.
+
+**Responsive y criterios de rechazo:** comprobar 320/390/768/1440px, zoom 200%, teclado, nombres largos, loading, disabled y wrapping. Permitir wrap si el contenedor es estrecho; no truncar la acción. Rechazar: (a) ancho fijo sin requerimiento semántico, (b) padding de cada lado >1.5× la altura de la línea textual, (c) gap icono–texto >padding lateral, (d) flecha alejada con `space-between`, (e) label desproporcionadamente pequeño frente al contenedor, (f) icon-only con hit-area <44px, (g) cambio de ancho al activar loading o (h) foco recortado. Excepciones de `width:100%` solo en el *layout padre* (formularios, toolbars), no en variantes globales.
 
 ### 6.2 Campos, búsqueda, selects y validación
 
@@ -224,7 +232,7 @@ Las reglas siguientes son **[LAB]** salvo valores marcados [EXISTENTE]. Los comp
 | `spring.sheet` | stiffness 320, damping 34, mass 1 | [PENDIENTE] sugerencia si surge gesto real; **no implementada** |
 | `orbit.ambient` | ciclo ≥32s, transform/opacity | [PENDIENTE] dirección cinematográfica, **no implementada** |
 
-**Matriz:** focus/click feedback 0–120ms; hover 120ms; popover 120–180ms; panel ocasional 180–260ms; acción frecuente y teclado: instantánea; ambient continuo: solo en landing, pausado fuera de vista y bajo `prefers-reduced-motion`. **No usar `transition: all` ni animar layout, `left/top/width/height`, sombras en cada frame, blur intensivo o re-render React por frame.** Para gestos futuros: seguimiento 1:1, interrupción y reversión en cualquier punto, herencia de velocidad y límites elásticos deliberados. No introducir motor de springs o 3D sin probar necesidad y rendimiento en móvil. **En el primer laboratorio la composición de portadas es estática**; se experimenta primero con geometría y tokens.
+**Matriz:** focus/click feedback 0–120ms; hover 120ms; popover 120–180ms; panel ocasional 180–260ms; acción frecuente y teclado: instantánea; ambient continuo: solo en landing, pausado fuera de vista y bajo `prefers-reduced-motion`. **No usar `transition: all` ni animar layout, `left/top/width/height`, sombras en cada frame, blur intensivo o re-render React por frame.** Para gestos futuros: seguimiento 1:1, interrupción y reversión en cualquier punto, herencia de velocidad y límites elásticos deliberados. No introducir motor de springs o 3D sin probar necesidad y rendimiento en móvil. **Estado real del Lab:** la órbita está animada con requestAnimationFrame y respeta prefers-reduced-motion. Evaluar consumo antes de llevarla a producción.
 
 ## 8. Responsive, accesibilidad y rendimiento
 
@@ -254,15 +262,15 @@ Las reglas siguientes son **[LAB]** salvo valores marcados [EXISTENTE]. Los comp
 
 ### Landing [LAB]
 
-Primera maqueta: nav, etiqueta editorial, H1, texto corto, CTA ficticio, composición estática de portadas generadas en CSS. Aún **no** definir copy final, órbita real, física, transiciones de scroll, autenticación, pricing ni videos. Artworks solo son ejemplos procedurales. Desktop puede apilar planos y usar perspectivas suaves; móvil reduce la composición en favor de legibilidad.
+Landing actual [LAB]: hero BeatGaler, subtítulo de almacenamiento, CTA Create ur Galer y 24 cubiertas en órbita (15 visibles en móvil). La sombra radial central está **detrás de todas las portadas** (scrim z=0, órbita z=1, texto z=22); no oscurece imágenes. El texto conserva sombra de legibilidad. Fondo #0c0c0c. Nada conecta login, cuentas o producción.
 
 ### Gallery [LAB]
 
-Primera maqueta: shell, cabecera, búsqueda local, filtros demo, rejilla de artwork, player ficticio. No hay importación, uploads, persistencia, Cloud, MASTER, INDEX, Telegram, billing ni acceso a archivos. Estados y filtros se resuelven en memoria. Las futuras pantallas podrán ampliarse por componente sin tocar la app.
+Mock existente **todavía sin rediseñar**: shell, cabecera, búsqueda local, filtros demo, rejilla de artwork, player ficticio. No hay importación, uploads, persistencia, Cloud, MASTER, INDEX, Telegram, billing ni acceso a archivos. Estados y filtros se resuelven en memoria. Las futuras pantallas podrán ampliarse por componente sin tocar la app.
 
 ### Components [LAB]
 
-Inventario vivo de botones, estados, campos, tokens editables, chips, cards, mini player y contraste visual. Los tokens editables alteran CSS variables **solo bajo el root del laboratorio**. Reset restituye defaults; nada se guarda ni afecta producción.
+Inventario vivo de botones, estados, campos, tokens editables, selector de portadas, chips, cards, mini player y contraste visual. Los tokens editables alteran CSS variables **solo bajo el root del laboratorio**. Reset restituye defaults; nada se guarda ni afecta producción.
 
 ## 10. Qué hacer / qué evitar — criterios de revisión para IA
 
@@ -292,8 +300,16 @@ Inventario vivo de botones, estados, campos, tokens editables, chips, cards, min
 
 - Aprobar o descartar el **acento experimental `#c8b7ff`** como color de identidad; por ahora el CTA sigue neutro.
 - Ratificar tamaño de cuerpo de 14px en app vs 13px existente, tracking de títulos y radios de artwork.
-- Elegir dirección final de la composición landing, y si requiere órbita; validar energía, consumo y opción de pausa antes de cualquier animación persistente.
+- Validar la órbita actual y el scrim detrás de las portadas con pruebas visuales, rendimiento y accesibilidad antes de aprobar producción.
 - Comparar densidad y navegación real de gallery frente al mock; no trasladar cambios del player sin verificar accesibilidad ni tiempo de primera reproducción.
 - Establecer un procedimiento de revisión visual y aprobación cuando haya variantes reales.
 
 **Alcance verificado de este PR:** especificación + Design Lab ficticio. **No** cambio productivo, no decisión de identidad final, no certificación de contraste para cualquier token modificado manualmente.
+
+## 13. Selector de portadas [LAB]
+
+Estado único `coverMode = generated | real` compartido por Landing, Gallery, player y MASTER. Control radio en MASTER / Design foundations / Artwork mode; valor predeterminado Generated. Se conserva navegando y dentro de la misma pestaña mediante sessionStorage, sin persistencia de usuarios ni API.
+
+`Generated` utiliza la copia exacta del generador BeatGaler `bg-v1` con semilla determinista. `Real covers` usa **exclusivamente** JPG locales bajo `design-lab/assets/real-covers/`, recogidos por `import.meta.glob` de Vite. Faltando imágenes, vuelve al generador sin romper la UI. El ZIP aportado contiene **20 imágenes**, por lo que la órbita con 24 slots repite las primeras cuatro (mapeo por índice). La galería mantiene sus identificadores ficticios y aspecto actual; solo cambia su imagen, incluidos mini player y muestras de MASTER.
+
+Para copiar sin audio/MIDI/HTML, usar `design-lab/import-real-covers.ps1`. No usar servicios externos ni incorporar imágenes a `src/`. Revisar licencias y permisos antes de publicar imágenes de terceros en una landing real. Todo es [LAB], nunca cambio en `main` o producción.
