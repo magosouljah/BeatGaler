@@ -1,25 +1,27 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import type { DemoBeat } from "./data";
-import { getProceduralBeatBackgroundDataUrl } from "./proceduralBeatBackground";
+import { getCoverSrc } from "./coverSources";
+import type { CoverMode } from "./coverSources";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+type ButtonSize = "sm" | "md" | "lg" | "hero";
+type ButtonShape = "rounded" | "pill";
 type LabButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
-  hero?: boolean;
+  size?: ButtonSize;
+  shape?: ButtonShape;
+  trailingIcon?: ReactNode;
   loading?: boolean;
 };
-
-export function LabButton({ variant = "secondary", hero = false, loading = false, className = "", disabled, children, ...props }: LabButtonProps) {
+export function LabButton({ variant = "secondary", size = "sm", shape = "rounded", trailingIcon, loading = false, className = "", disabled, children, ...props }: LabButtonProps) {
   return (
-    <button
-      {...props}
-      type={props.type ?? "button"}
-      disabled={disabled || loading}
-      aria-busy={loading || undefined}
-      className={["lab-button", `lab-button--${variant}`, hero && "lab-button--hero", className].filter(Boolean).join(" ")}
-    >
-      {loading ? <span className="lab-spinner" aria-hidden="true" /> : null}
-      <span>{children}</span>
+    <button {...props} type={props.type ?? "button"} disabled={disabled || loading} aria-busy={loading || undefined}
+      className={["lab-button", `lab-button--${variant}`, `lab-button--${size}`, `lab-button--${shape}`, loading && "lab-button--loading", className].filter(Boolean).join(" ")}>
+      <span className="lab-button__content">
+        <span className="lab-button__label">{children}</span>
+        {trailingIcon && <span className="lab-button__icon" aria-hidden="true">{trailingIcon}</span>}
+      </span>
+      {loading && <span className="lab-spinner" aria-hidden="true" />}
     </button>
   );
 }
@@ -33,11 +35,10 @@ export function LabTag({ active = false, children, onClick }: {
   return <span className="lab-chip">{children}</span>;
 }
 
-export function LabArtwork({ beat, className = "" }: { beat: DemoBeat; className?: string }) {
-  // The same bg-v1 algorithm used for missing beat artwork in BeatGaler itself.
-  // Deterministic and fully local: no external images, uploaded files or services.
+export function LabArtwork({ beat, coverMode, className = "" }: { beat: DemoBeat; coverMode: CoverMode; className?: string }) {
+  // Generated calls exact bg-v1; real artwork uses local bundled images only.
   let artwork: string | null = null;
-  try { artwork = getProceduralBeatBackgroundDataUrl(beat.id); } catch { /* canvas unavailable */ }
+  try { artwork = getCoverSrc(beat.id, coverMode, Math.max(0, Number(beat.id.slice(-2)) - 1)); } catch { /* canvas unavailable */ }
   return (
     <div className={`lab-artwork ${className}`} aria-hidden="true">
       {artwork && <img src={artwork} alt="" draggable={false} />}
@@ -45,15 +46,15 @@ export function LabArtwork({ beat, className = "" }: { beat: DemoBeat; className
   );
 }
 
-export function LabBeatTile({ beat, selected, onPlay }: {
-  beat: DemoBeat;
+export function LabBeatTile({ beat, selected, onPlay, coverMode }: {
+  beat: DemoBeat; coverMode: CoverMode;
   selected: boolean;
   onPlay: (beat: DemoBeat) => void;
 }) {
   return (
     <article className="lab-beat-tile">
       <div className="lab-beat-tile__cover">
-        <LabArtwork beat={beat} />
+        <LabArtwork beat={beat} coverMode={coverMode} />
         <button
           type="button"
           className="lab-beat-tile__play"
@@ -71,8 +72,8 @@ export function LabBeatTile({ beat, selected, onPlay }: {
   );
 }
 
-export function LabPlayer({ beat, playing, onToggle }: {
-  beat: DemoBeat;
+export function LabPlayer({ beat, playing, onToggle, coverMode }: {
+  beat: DemoBeat; coverMode: CoverMode;
   playing: boolean;
   onToggle: () => void;
 }) {
