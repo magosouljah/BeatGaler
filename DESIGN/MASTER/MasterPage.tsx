@@ -4,12 +4,13 @@ import type { CoverMode } from "../shared/coverSources";
 import Player from "./Player";
 import LabToolbar from "../shared/Toolbar";
 import LabToolbarV2 from "../shared/ToolbarV2";
+import CameraGlass from "../shared/CameraGlass";
 import type { LabSort } from "../shared/Toolbar";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
 import "./master.css";
 
-type Section = "margins" | "playbar" | "toolbar";
+type Section = "margins" | "playbar" | "toolbar" | "glass-camera";
 const SIDEBAR_START = 192; // Lab navigation only; not a BeatGaler product design token.
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 300;
@@ -142,6 +143,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
             <div className="lab-master-sidebar-heading">COMPONENTES</div>
             <button type="button" className={section === "playbar" ? "is-active" : ""} aria-current={section === "playbar" ? "page" : undefined} onClick={() => openSection("playbar")}>Playbar</button>
             <button type="button" className={section === "toolbar" ? "is-active" : ""} aria-current={section === "toolbar" ? "page" : undefined} onClick={() => openSection("toolbar")}>Toolbar</button>
+            <button type="button" className={section === "glass-camera" ? "is-active" : ""} aria-current={section === "glass-camera" ? "page" : undefined} onClick={() => openSection("glass-camera")}>Glass · Camera</button>
           </nav>
           <div className="lab-master-resize-handle" role="separator" tabIndex={0} aria-label="Cambiar ancho de navegación"
             aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebarWidth}
@@ -173,6 +175,17 @@ export default function MasterPage({ coverMode, setCoverMode }: {
                       onEdit={b => setMessage(`Editar ${b.name}: todavía no se ha añadido este componente.`)}
                       onDelete={() => setMessage("La biblioteca ficticia no elimina archivos.")}
                     />
+            </div>
+          </div>
+        ) : section === "glass-camera" ? (
+          <div className="lab-master-specimens" aria-label="Camera Liquid Glass optical test">
+            <div style={{display:"grid",gap:20,width:"min(100%,520px)"}}>
+              {(["#303034","#050506","linear-gradient(#ef91bc 50%,#09090d 50%)","linear-gradient(#ef91bc 38%,#09090d 38%)","#ef91bc"] as const).map((background,i)=>(
+                <div key={i} data-glass-background={i+1}
+                  style={{background,position:"relative",minHeight:154,borderRadius:20,display:"grid",placeItems:"center",overflow:"visible"}}>
+                  <CameraGlass size={92}/>
+                </div>
+              ))}
             </div>
           </div>
         ) : section === "toolbar" ? (
