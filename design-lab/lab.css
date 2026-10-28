@@ -20,9 +20,9 @@ button,input,select { font:inherit; }
 .lab-landing-cover img { display:block; width:100%; height:100%; object-fit:cover; }
 .lab-center-scrim { position:absolute; z-index:0; pointer-events:none; width:min(560px,55vw); height:410px; left:50%; top:49%; transform:translate(-50%,-50%); background:radial-gradient(ellipse at center,rgba(0,0,0,.78) 14%,rgba(0,0,0,.65) 43%,rgba(0,0,0,.33) 65%,transparent 76%); }
 .lab-landing-center { position:absolute; z-index:22; left:50%; top:49%; transform:translate(-50%,-50%); width:min(510px,88vw); display:flex; flex-direction:column; align-items:center; text-align:center; }
-.lab-landing-center h1 { font-size:clamp(49px,5.1vw,78px); font-weight:730; letter-spacing:-.072em; line-height:1.04; margin-bottom:24px; color:#f5f5f5; }
+.lab-landing-center h1 { text-shadow:0 4px 20px rgba(0,0,0,.6); font-size:clamp(49px,5.1vw,78px); font-weight:730; letter-spacing:-.072em; line-height:1.04; margin-bottom:24px; color:#f5f5f5; }
 .lab-landing-center p { text-shadow:0 2px 12px rgba(0,0,0,.85); max-width:405px; color:#a2a5aa; font-size:clamp(13px,1.08vw,15px); line-height:1.6; margin-bottom:31px; text-wrap:pretty; }
-.lab-create { letter-spacing:-.02em; box-shadow:0 12px 35px rgba(0,0,0,.08); }
+.lab-create { letter-spacing:-.02em; background:var(--lab-primary-hero); border-color:var(--lab-primary-hero-border); box-shadow:0 12px 35px rgba(0,0,0,.08); }
 .lab-create:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 12px 35px rgba(255,255,255,.1); }
 .lab-master-switch { position:fixed; z-index:50; bottom:20px; right:clamp(24px,5.4vw,88px); border:0; padding:10px 0; min-height:42px; background:transparent; color:#777b80; font-size:11px; letter-spacing:.035em; }
 .lab-master-switch:hover { color:#eee; }
@@ -105,7 +105,7 @@ button,input,select { font:inherit; }
 .lab-button--danger:hover:not(:disabled) { background:#3a1717; }
 .lab-button:active:not(:disabled) { transform:scale(.985); }
 .lab-button:disabled { opacity:.5; }
-.lab-button--loading .lab-button__content { visibility:hidden; }
+.lab-button--loading .lab-button__content { opacity:0; }
 .lab-spinner { position:absolute; left:50%; top:50%; margin:-7px 0 0 -7px; height:14px; width:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:lab-spin .8s linear infinite; }
 @keyframes lab-spin { to { transform:rotate(360deg); } }
 .lab-cover-modes { border:0; padding:0; margin:0; display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
