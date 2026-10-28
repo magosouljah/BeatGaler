@@ -276,6 +276,9 @@ try {
   await screenshot("master-toolbar-v2-mobile.png");
   await viewport(1440);
   await sleep(220);
+  // Restore the sidebar after the narrow breakpoint auto-closes it.
+  const showNavigation=await evaluate('Boolean(document.querySelector(".lab-master-open-nav"))');
+  if(showNavigation) await evaluate('document.querySelector(".lab-master-open-nav").click()');
   // Return to V1 to preserve its existing mobile regression checks.
   await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar V1").click()');
   await sleep(230);
