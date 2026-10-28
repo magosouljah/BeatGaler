@@ -60,6 +60,8 @@ test("Playbar mode changes use one FLIP motion; regular resize and artwork never
   assert.match(lab, /prefers-reduced-motion: reduce/);
   assert.match(lab, /const artworkSize = preview \? 48/);
   assert.match(lab, /padding: `10px \$\{playerPadding\}px`/);
+  assert.match(css, /\.lab-playbar-metadata-row \{ transform: translate3d\(0, -4px, 0\); \}/);
+  assert.match(lab, /className=\{preview \? "lab-playbar-metadata-row"/);
   assert.match(css, /\.lab-playbar-cover-slot\.is-condensed \.lab-playbar-artwork/);
   assert.match(css, /translate3d\(0, -4px, 0\) scale\(\.75\)/);
   assert.doesNotMatch(css, /transition:\s*left|transition:\s*width|transition:\s*height/);
