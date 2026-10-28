@@ -39,7 +39,7 @@ test("source of proposals and safety boundaries remain explicit", () => {
   assert.match(design, /\[EXISTENTE\]/);
   assert.match(design, /\[LAB\]/);
   assert.match(design, /\[PENDIENTE\]/);
-  assert.match(design, /MASTER, INDEX|INDEX, Telegram/);
+  assert.match(design, /MASTER técnico, INDEX y Telegram/);
   assert.match(read("./system/MasterPage.tsx"), /Reset all foundations/);
 });
 
