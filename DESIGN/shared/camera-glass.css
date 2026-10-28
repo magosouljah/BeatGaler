@@ -1,0 +1,20 @@
+/* Isolated optical test for the camera tile in Figma node 8001:1261. */
+.camera-glass{--camera-size:72px;position:relative;display:grid;place-items:center;width:var(--camera-size);height:var(--camera-size);flex:none;padding:0;border:0;border-radius:50%;overflow:hidden;isolation:isolate;background:transparent;color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .23s cubic-bezier(.2,.8,.2,1)}
+.camera-glass-defs{position:absolute;pointer-events:none}
+.camera-glass-lens{position:absolute;inset:0;border-radius:inherit;overflow:hidden;
+  background:rgba(36,36,38,.27);
+  -webkit-backdrop-filter:blur(6px) saturate(1.55) url(#camera-glass-unused);
+  backdrop-filter:blur(6px) saturate(1.55);
+  box-shadow:inset 0 1.3px 1px rgba(255,255,255,.42),inset 0 -1.3px 1px rgba(0,0,0,.36),0 2px 12px rgba(0,0,0,.18)}
+/* Distinct optical edge, but never another circular surface. */
+.camera-glass-lens::before{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid transparent;
+background:linear-gradient(156deg,rgba(255,255,255,.55),rgba(255,255,255,.06) 29%,rgba(255,255,255,.04) 64%,rgba(255,255,255,.31) 92%) border-box;
+-webkit-mask:linear-gradient(#fff 0 0) padding-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+.camera-glass-lens::after{content:"";position:absolute;inset:0;border-radius:inherit;
+background:radial-gradient(ellipse at 50% -17%,rgba(255,255,255,.25),transparent 45%),radial-gradient(ellipse at 50% 115%,rgba(255,255,255,.14),transparent 48%);mix-blend-mode:screen;pointer-events:none}
+.camera-glass-symbol{position:relative;width:38%;height:auto;filter:drop-shadow(0 1px 1px rgba(0,0,0,.18));pointer-events:none;z-index:1}
+.camera-glass.is-pressed .camera-glass-lens{background:rgba(12,12,17,.57)}
+.camera-glass:active{transform:scale(.955)}
+.camera-glass:focus-visible{outline:2px solid #fff;outline-offset:4px}
+@media(prefers-reduced-motion:reduce){.camera-glass{transition:none}}
+@media(prefers-reduced-transparency:reduce){.camera-glass-lens{backdrop-filter:none;-webkit-backdrop-filter:none;background:#29292a}}
