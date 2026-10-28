@@ -92,7 +92,7 @@ test("one session-scoped cover mode is wired into landing gallery and MASTER", (
  assert.match(app,/<Orbit coverMode=/);
  assert.match(read("./system/MasterPage.tsx"),/<Orbit coverMode=/);
  assert.match(app,/<GalleryPage[^\n]*coverMode=/);
- assert.match(app,/<ComponentPage[^\n]*coverMode=/);
+ assert.match(app,/<MasterPage[^\n]*coverMode=/);
  assert.match(cover,/import\.meta\.glob/);
  assert.match(cover,/getProceduralBeatBackgroundDataUrl\(id\)/);
  assert.doesNotMatch(cover,/https?:\/\/|\bfetch\s*\(/);
