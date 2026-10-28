@@ -64,7 +64,7 @@ function ComponentPage({ playing, beat, toggle, selectBeat }: {
         </LabPanel>
         <LabPanel title="Inputs & feedback">
           <LabField label="Search demo" id="components-search" placeholder="Type a title…" value={demoText} onChange={e => setDemoText(e.target.value)} />
-          <LabField label="Validation demo" id="components-validation" placeholder="Enter any value…" value={errorText} aria-invalid={errorText.length > 0} onChange={e => setErrorText(e.target.value)} hint="Los ejemplos no se envían a ningún servicio." />
+          <LabField label="Validation demo" id="components-validation" placeholder="Enter any value…" value={errorText} onChange={e => setErrorText(e.target.value)} error={errorText ? "Estado de error ficticio del campo." : undefined} hint="Los ejemplos no se envían a ningún servicio." />
           {errorText && <div role="status" className="lab-feedback">Estado de ejemplo: {errorText}</div>}
         </LabPanel>
         <LabPanel title="Tags & filters">
