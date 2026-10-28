@@ -1,0 +1,119 @@
+/* Experimental gallery only: adapted from BeatGaler's real library and floating player.
+   No product imports, no production account state, no network, no audio. */
+.lab-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.lab-gallery-page { min-height:100svh; padding-bottom:144px; }
+.lab-gallery-header { height:66px; padding:0 clamp(16px,3vw,42px); display:flex; align-items:center; justify-content:space-between; gap:24px; border-bottom:1px solid #222; background:rgba(12,12,12,.93); position:sticky; top:0; z-index:40; }
+.lab-gallery-wordmark { font-size:22px; font-weight:720; letter-spacing:-.075em; color:#f5f5f5; white-space:nowrap; }
+.lab-glass-toolbar { display:flex; align-items:center; gap:5px; max-width:calc(100% - 110px); padding:5px 6px; border:1px solid rgba(255,255,255,.16); border-radius:999px; background:linear-gradient(125deg,rgba(48,48,48,.72),rgba(31,31,31,.56)); box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 10px 32px rgba(0,0,0,.33); backdrop-filter:blur(20px) saturate(1.25); -webkit-backdrop-filter:blur(20px) saturate(1.25); }
+.lab-glass-search { display:flex; align-items:center; gap:9px; padding:0 9px 0 13px; color:#bfc1c6; min-width:0; }
+.lab-glass-search svg { flex:none; }
+.lab-glass-search input { min-width:0; width:clamp(105px,14vw,235px); height:34px; padding:0; border:0; outline:none; color:#f1f1f1; background:transparent; font-size:12px; }
+.lab-glass-search input::placeholder { color:#9a9da2; }
+.lab-glass-search input::-webkit-search-cancel-button { cursor:pointer; }
+.lab-glass-divider { width:1px; height:20px; background:rgba(255,255,255,.13); flex:none; }
+.lab-glass-sort { display:flex; gap:5px; align-items:center; color:#d6d6d8; padding:0 8px; }
+.lab-glass-sort select { appearance:none; -webkit-appearance:none; border:0; background:transparent; color:inherit; font-size:12px; cursor:pointer; min-width:65px; height:34px; outline:none; }
+.lab-glass-sort select option { background:#242424; color:#f2f2f2; }
+.lab-glass-sort svg { pointer-events:none; flex:none; }
+.lab-glass-action { min-height:34px; border:0; background:transparent; color:#c3c3c6; border-radius:999px; padding:0 13px; font-size:12px; white-space:nowrap; }
+.lab-glass-action:hover,.lab-glass-action.is-selected { background:rgba(255,255,255,.11); color:#fff; }
+.lab-gallery-tag-bar { min-height:52px; display:flex; align-items:center; gap:7px; padding:8px clamp(16px,3vw,42px); border-bottom:1px solid #1a1a1a; background:#0c0c0c; position:relative; z-index:35; }
+.lab-gallery-tag-wrap { position:relative; display:inline-flex; align-items:center; border-radius:999px; gap:2px; }
+.lab-gallery-tag { min-height:32px; display:inline-flex; align-items:center; justify-content:center; padding:5px 13px; border-radius:999px; border:1px solid #303030; background:transparent; color:#999; font-size:12px; white-space:nowrap; }
+.lab-gallery-tag:hover { border-color:#555; color:#ddd; }
+.lab-gallery-tag.is-included,.lab-gallery-tag.is-include { background:var(--lab-tag-color,#e8e8e8); border-color:var(--lab-tag-color,#e8e8e8); color:#0c0c0c; }
+.lab-gallery-tag.is-exclude { background:rgba(248,113,113,.13); border-color:#873939; color:#ff8989; text-decoration:line-through; }
+.lab-gallery-tag.is-idle[style] { color:var(--lab-tag-color); border-color:color-mix(in srgb,var(--lab-tag-color) 34%,transparent); background:color-mix(in srgb,var(--lab-tag-color) 10%,transparent); }
+.lab-gallery-tag-wrap .lab-gallery-tag { padding-right:9px; }
+.lab-tag-color-trigger { width:26px; height:32px; border:0; color:#777; background:transparent; font-size:15px; border-radius:999px; line-height:1; }
+.lab-tag-color-trigger:hover,.lab-tag-color-trigger[aria-expanded="true"] { background:#232323; color:#eee; }
+.lab-tag-color-popover { position:absolute; top:calc(100% + 9px); left:0; z-index:60; width:175px; padding:12px; border:1px solid #393939; border-radius:15px; background:rgba(27,27,27,.97); box-shadow:0 18px 54px rgba(0,0,0,.7); backdrop-filter:blur(16px); }
+.lab-tag-color-swatches { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; }
+.lab-tag-color-swatches button { width:27px; height:27px; border:1px solid rgba(255,255,255,.18); border-radius:50%; }
+.lab-tag-color-swatches button.is-current { outline:2px solid #fff; outline-offset:2px; }
+.lab-tag-color-none { margin-top:13px; width:100%; min-height:34px; border:1px solid #3a3a3a; border-radius:8px; background:#242424; color:#ddd; font-size:12px; }
+.lab-gallery-page .lab-gallery-main { max-width:1370px; margin:0 auto; padding:34px clamp(16px,3vw,42px) 60px; }
+.lab-gallery-page .lab-gallery-grid { display:grid; grid-template-columns:repeat(7,160px); gap:28px 22px; justify-content:center; }
+.lab-gallery-item { position:relative; min-width:0; }
+.lab-gallery-page .lab-beat-tile { width:160px; }
+.lab-gallery-page .lab-artwork { border-radius:10px; }
+.lab-gallery-page .lab-beat-tile__cover { width:160px; height:160px; }
+.lab-gallery-page .lab-beat-tile__play { inset:0; width:100%; height:100%; border:none; border-radius:10px; background:rgba(0,0,0,.34); opacity:0; font-size:25px; transition:opacity var(--lab-fast) var(--lab-ease); }
+.lab-gallery-page .lab-beat-tile__play:hover,.lab-gallery-page .lab-beat-tile__play:focus-visible,.lab-gallery-page .lab-beat-tile__play[aria-pressed="true"] { opacity:1; }
+.lab-gallery-page .lab-beat-tile__meta { padding-top:9px; }
+.lab-gallery-page .lab-beat-tile__title { color:#e5e5e5; font-size:13px; font-weight:580; }
+.lab-beat-tile__tags { display:flex; gap:5px; flex-wrap:wrap; min-height:25px; margin-top:5px; }
+.lab-beat-tile__tag { display:inline-flex; align-items:center; width:max-content; border-radius:999px; border:1px solid #292929; padding:2px 7px; color:#929292; font-size:10px; line-height:1.5; }
+.lab-gallery-page .lab-beat-tile__details { color:#777; font-size:11px; gap:7px; margin-top:5px; font-variant-numeric:tabular-nums; }
+.lab-gallery-select { position:absolute; top:7px; left:7px; z-index:6; border-radius:50%; background:#111b; width:34px; height:34px; display:grid; place-items:center; cursor:pointer; }
+.lab-gallery-select input { width:20px; height:20px; accent-color:#fff; cursor:pointer; }
+.lab-gallery-selection-status { display:flex; gap:16px; align-items:center; min-height:38px; padding:6px clamp(16px,3vw,42px); color:#b0b0b0; background:#141414; font-size:12px; }
+.lab-gallery-selection-status button { border:0; color:#eee; background:transparent; }
+.lab-gallery-page .lab-empty { max-width:480px; margin:64px auto; display:flex; flex-direction:column; align-items:center; gap:14px; }
+/* Real Player reference: floating 68px translucent capsule with 5 transport controls,
+   central cover + title + BPM/key + seek scrubber, and right-side utilities. */
+.lab-player.lab-player--dock,.lab-player.lab-player--preview { display:flex; align-items:center; flex-wrap:nowrap; gap:14px; height:68px; min-height:68px; padding:9px 18px; border:1px solid rgba(255,255,255,.09); border-radius:34px; background:rgba(20,20,20,.75); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); box-shadow:0 10px 30px rgba(0,0,0,.5); }
+.lab-player.lab-player--dock { position:fixed; left:50%; transform:translateX(-50%); bottom:36px; width:min(1100px,calc(100vw - 24px)); z-index:90; }
+.lab-player.lab-player--preview { position:relative; left:auto; bottom:auto; width:100%; box-shadow:none; }
+.lab-player__transport,.lab-player__utilities { display:flex; align-items:center; gap:6px; flex:none; }
+.lab-player__icon { border:0; border-radius:50%; flex:none; position:relative; width:30px; height:30px; padding:0; display:grid; place-items:center; background:transparent; color:rgba(255,255,255,.5); }
+.lab-player__icon:hover,.lab-player__icon:focus-visible,.lab-player__icon.is-active { color:#fff; background:rgba(255,255,255,.08); }
+.lab-player__icon svg { display:block; width:19px; height:19px; }
+.lab-player__toggle { color:#f7f7f7; }
+.lab-player__toggle svg { width:23px; height:23px; }
+.lab-player__repeat-one { font-size:9px; position:absolute; top:-4px; right:0; }
+.lab-player__now { display:flex; align-items:center; flex:1 1 auto; gap:12px; min-width:0; }
+.lab-player__now .lab-artwork { flex:none; width:48px; height:48px; border-radius:8px; }
+.lab-player__track-data { flex:1; min-width:0; }
+.lab-player__track-top { display:flex; align-items:baseline; gap:10px; justify-content:space-between; min-width:0; }
+.lab-player__track-top strong { color:#fff; font-size:13px; line-height:1.2; font-weight:600; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+.lab-player__track-top span { color:#999; font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.lab-player__subtitle { color:rgba(255,255,255,.6); font-size:11px; margin:1px 0 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lab-player__seek { display:block; width:100%; margin:0; height:4px; padding:0; border:0; border-radius:999px; appearance:none; background:linear-gradient(to right,#fff var(--lab-player-progress),rgba(255,255,255,.20) var(--lab-player-progress)); cursor:pointer; }
+.lab-player__seek::-webkit-slider-thumb { appearance:none; width:11px; height:11px; background:#fff; border-radius:50%; opacity:0; }
+.lab-player__seek::-moz-range-thumb { border:0; width:11px; height:11px; background:#fff; border-radius:50%; opacity:0; }
+.lab-player__seek:hover::-webkit-slider-thumb,.lab-player__seek:focus-visible::-webkit-slider-thumb { opacity:1; }
+.lab-player__seek:hover::-moz-range-thumb,.lab-player__seek:focus-visible::-moz-range-thumb { opacity:1; }
+.lab-player__add { font-size:23px; font-weight:250; }
+.lab-player__popover-holder { position:relative; }
+.lab-player__popover { display:flex; flex-direction:column; gap:9px; position:absolute; bottom:calc(100% + 13px); right:0; min-width:185px; padding:14px; border:1px solid #353535; border-radius:13px; background:rgba(23,23,23,.97); box-shadow:0 12px 40px rgba(0,0,0,.65); backdrop-filter:blur(14px); color:#f1f1f1; }
+.lab-player__popover strong { font-size:12px; }
+.lab-player__popover span,.lab-player__popover label { font-size:11px; color:#999; white-space:nowrap; }
+.lab-player__queue { max-height:220px; overflow-y:auto; }
+.lab-player__queue button { width:100%; min-height:36px; padding:6px; border:0; border-radius:7px; background:#272727; color:#ddd; font-size:12px; text-align:left; }
+.lab-player__volume input { width:150px; accent-color:#f1f1f1; }
+/* Developer-only switches: intentionally plain, unlike the product UI. */
+.lab-dev-switches { position:fixed; bottom:5px; right:clamp(16px,3vw,42px); z-index:110; display:flex; align-items:center; gap:16px; }
+.lab-dev-switches button { border:0; border-radius:0; background:transparent; padding:0; min-height:20px; font-size:11px; color:#777; font-weight:400; letter-spacing:0; }
+.lab-dev-switches button:hover,.lab-dev-switches button:focus-visible { color:#ddd; }
+@media(max-width:1400px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(6,160px); } }
+@media(max-width:1160px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(5,160px); } .lab-player.lab-player--preview .lab-player__utilities { display:none; } }
+@media(max-width:940px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(4,160px); } }
+@media(max-width:750px) {
+ .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(3,160px); gap:24px 15px; }
+ .lab-gallery-header { padding-inline:15px; }
+ .lab-gallery-wordmark { font-size:19px; }
+ .lab-glass-search input { width:90px; }
+ .lab-gallery-tag-bar { overflow-x:auto; flex-wrap:nowrap; scrollbar-width:thin; }
+ .lab-player__transport,.lab-player__utilities { gap:1px; }
+ .lab-player.lab-player--dock { padding-inline:10px; gap:7px; height:62px; min-height:62px; }
+ .lab-player__icon { width:27px; height:27px; }
+ .lab-player__now .lab-artwork { width:38px; height:38px; }
+ .lab-player__utilities .lab-player__add,.lab-player__utilities .lab-player__popover-holder:last-child { display:none; }
+}
+@media(max-width:590px) {
+ .lab-gallery-header { height:auto; min-height:100px; padding-block:11px; align-items:flex-start; flex-direction:column; gap:9px; }
+ .lab-glass-toolbar { max-width:100%; width:100%; justify-content:space-between; }
+ .lab-glass-search { flex:1; }
+ .lab-glass-search input { width:100%; }
+ .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(2, minmax(0,160px)); gap:22px 13px; }
+ .lab-gallery-page .lab-beat-tile { width:100%; }
+ .lab-gallery-page .lab-beat-tile__cover { width:100%; height:auto; aspect-ratio:1; }
+ .lab-player.lab-player--dock { width:calc(100vw - 12px); bottom:34px; }
+ .lab-player__transport .lab-player__icon:first-child,.lab-player__transport .lab-player__icon:last-child,.lab-player__utilities { display:none; }
+ .lab-player__now { gap:7px; }
+ .lab-player__track-top span { display:none; }
+}
+@media(max-width:359px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:160px; } }
+@media(hover:none),(pointer:coarse) { .lab-gallery-page .lab-beat-tile__play { opacity:1; background:linear-gradient(transparent 65%,rgba(0,0,0,.6)); text-align:right; } }
+@media(prefers-reduced-transparency:reduce) { .lab-glass-toolbar,.lab-player.lab-player--dock { backdrop-filter:none; background:#202020; } }

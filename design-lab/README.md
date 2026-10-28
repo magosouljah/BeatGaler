@@ -19,20 +19,23 @@ Abrir **http://127.0.0.1:4173/**. Para detener, `Ctrl+C`.
 
 - **Landing primero:** título BeatGaler, descripción de almacenamiento ilimitado y organización por tags, metadata y cover art; CTA `Create ur Galer`. Se basa en el HTML de referencia de la landing circular.
 - **Create ur Galer:** entra a la galería ficticia. `Log in` también navega a la demo, sin autenticar.
-- **beat galer / ← Landing:** regresa a la primera pantalla.
-- **MASTER:** acceso discreto abajo a la derecha en las pantallas ficticias; abre el catálogo de componentes y tokens editables. Este botón NO formará parte de la landing de producción.
+- **Landing / MASTER:** interruptores de desarrollo de texto plano abajo a la derecha (no forman parte del producto). En Gallery y MASTER no aparece el enlace de Landing arriba.
 
 ## Selector de fuentes de portadas
 
 En **MASTER → Design foundations → Artwork mode** elegir `Generated` o `Real covers`. Cambia simultáneamente Landing, Gallery, player y muestras de MASTER. El modo predeterminado es `Generated`; `sessionStorage` recuerda el selector al navegar o recargar durante la misma pestaña.
 
-El archivo aportado contiene **20 JPG** (y también audio/MIDI/HTML que no deben importarse). **Las 20 portadas JPG ya están incluidas en GitHub**, optimizadas a 384×384 en `design-lab/assets/real-covers/`, por lo que basta con `git pull` y ejecutar Vite. Si se quiere sustituirlas localmente por los originales del ZIP, guardar `Downloads.zip` en la carpeta Downloads de Windows y ejecutar:
+Hay **24 imágenes reales distintas** dentro de `design-lab/assets/real-covers/`: las primeras 20 JPG optimizadas a 384×384 y otras cuatro AVIF optimizadas a 320×320. Todas se incluyen en el build de Vite; no se repiten posiciones en la órbita de 24. Si se quiere sustituirlas localmente por los originales del ZIP, guardar `Downloads.zip` en la carpeta Downloads de Windows y ejecutar:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\design-lab\import-real-covers.ps1 -ZipPath "$HOME\Downloads\Downloads.zip"
 ```
 
-El comando opcional sustituye los JPG optimizados locales por los originales del ZIP; no es necesario para probar el selector. Vite empaqueta las 20 cubiertas incluidas sin enlaces externos ni producción. La órbita de 24 posiciones repite cuatro cubiertas. Sin ningún JPG, Real covers usaría `bg-v1` como fallback. Revisar derechos de uso antes de publicar imágenes de terceros fuera del laboratorio.
+El comando opcional sustituye solo los JPG 01–20 por originales del primer ZIP; no toca las AVIF 21–24. No es necesario para probar el selector. Vite empaqueta las 24 portadas sin enlaces externos ni producción. Sin ningún JPG, Real covers usaría `bg-v1` como fallback. Revisar derechos de uso antes de publicar imágenes de terceros fuera del laboratorio.
+
+## Galería experimental (inspirada en la app real)
+La barra superior contiene búsqueda, ordenamiento (Manual/Name/BPM) y selección. Los filtros de tags tienen tres estados: clic para incluir, segundo para excluir, tercero para limpiar; botón de puntos o clic derecho para modificar su color con la paleta de BeatGaler. Los colores se comparten durante la sesión entre los componentes ficticios.
+Los cards muestran portada, título, tag y key/BPM; se eliminaron el heading redundante y los artistas inventados visibles. El reproductor es una **copia visual aislada** de la playbar real: cápsula flotante, controles shuffle/anterior/play/siguiente/repeat, artwork y scrubber, cola/volumen y más. Todos los controles alteran **solo estado ficticio**; no reproducen audio, no suben ni borran beats, y no leen datos reales. La dirección estética del header es una adaptación dark/translucent de las referencias adjuntas, sin usar assets ni código de Coinbase.
 
 ## Arte original, sin imágenes de muestra aleatorias
 

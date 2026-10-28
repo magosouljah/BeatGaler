@@ -266,7 +266,7 @@ Landing actual [LAB]: hero BeatGaler, subtítulo de almacenamiento, CTA Create u
 
 ### Gallery [LAB]
 
-Mock existente **todavía sin rediseñar**: shell, cabecera, búsqueda local, filtros demo, rejilla de artwork, player ficticio. No hay importación, uploads, persistencia, Cloud, MASTER, INDEX, Telegram, billing ni acceso a archivos. Estados y filtros se resuelven en memoria. Las futuras pantallas podrán ampliarse por componente sin tocar la app.
+Galería ficticia en rediseño [LAB]: cabecera compacta con búsqueda, sort y selección; barra de tags con estados incluido/excluido/neutro, editor de colores y rejilla de portadas; player visual flotante inspirado en el Player real. No hay importación, uploads, persistencia, Cloud, MASTER, INDEX, Telegram, billing ni acceso a archivos. Estados y filtros se resuelven en memoria. Las futuras pantallas podrán ampliarse por componente sin tocar la app.
 
 ### Components [LAB]
 
@@ -310,6 +310,18 @@ Inventario vivo de botones, estados, campos, tokens editables, selector de porta
 
 Estado único `coverMode = generated | real` compartido por Landing, Gallery, player y MASTER. Control radio en MASTER / Design foundations / Artwork mode; valor predeterminado Generated. Se conserva navegando y dentro de la misma pestaña mediante sessionStorage, sin persistencia de usuarios ni API.
 
-`Generated` utiliza la copia exacta del generador BeatGaler `bg-v1` con semilla determinista. `Real covers` usa **exclusivamente** JPG locales bajo `design-lab/assets/real-covers/`, recogidos por `import.meta.glob` de Vite. Faltando imágenes, vuelve al generador sin romper la UI. El ZIP aportado contiene **20 imágenes**, por lo que la órbita con 24 slots repite las primeras cuatro (mapeo por índice). La galería mantiene sus identificadores ficticios y aspecto actual; solo cambia su imagen, incluidos mini player y muestras de MASTER.
+`Generated` utiliza la copia exacta del generador BeatGaler `bg-v1` con semilla determinista. `Real covers` usa **exclusivamente** JPG locales bajo `design-lab/assets/real-covers/`, recogidos por `import.meta.glob` de Vite. Faltando imágenes, vuelve al generador sin romper la UI. El laboratorio contiene **24 imágenes distintas** para 24 slots (20 JPG del ZIP y 4 AVIF nuevas). No se repiten portadas en la órbita. La galería mantiene sus identificadores ficticios y aspecto actual; solo cambia su imagen, incluidos mini player y muestras de MASTER.
 
-Los 20 JPEG optimizados a 384×384 ya están versionados en la rama de diseño; el importer opcional `design-lab/import-real-covers.ps1` permite restaurar localmente los originales de alta resolución sin audio/MIDI/HTML. No usar servicios externos ni incorporar imágenes a `src/`. Revisar licencias y permisos antes de publicar imágenes de terceros en una landing real. Todo es [LAB], nunca cambio en `main` o producción.
+Los 20 JPEG optimizados a 384×384 y las cuatro AVIF a 320×320 ya están versionados en la rama de diseño; el importer opcional `design-lab/import-real-covers.ps1` permite restaurar localmente los originales de alta resolución sin audio/MIDI/HTML. No usar servicios externos ni incorporar imágenes a `src/`. Revisar licencias y permisos antes de publicar imágenes de terceros en una landing real. Todo es [LAB], nunca cambio en `main` o producción.
+
+## 14. Galería y player: referencia real y nueva exploración [LAB]
+
+**Procedencia [EXISTENTE]:** inspeccionados `src/app/AppShell.tsx`, `src/components/BeatCard.tsx`, `src/components/Player.tsx`, `src/features/tags/components/TagColorMenu.tsx`, `src/lib/tagColors.ts` y `src/styles/library-ux.css` como especificaciones funcionales/visuales de la **aplicación real**, sin importarlos en el Design Lab.
+
+**[LAB] Galería:** no utilizar h1 grande, subtítulo de marketing ni etiquetas `PRIVATE LIBRARY / DEMO` dentro de la app. La cabecera compacta aloja `Search`, `Sort` y `Select` en un grupo cápsula oscuro con transparencia sutil; conserva separación óptica, contraste y foco. Este efecto *glass* se aplica solo a la barra y reproductor, no a todas las tarjetas. Los filtros de tags viven inmediatamente debajo, sin etiquetas de sección redundantes. Cada tag cicla `idle → include → exclude → idle` y tiene editor de colores accesible por botón de puntos (además del clic derecho); colores `#FF3B30 #FF9500 #FFCC00 #34C759 #007AFF #AF52DE #8E8E93` tomados de la paleta existente. Selección múltiple de demo mediante checks. Tarjetas compactas con arte 1:1, nombre, tag y key/BPM; no añadir artistas inventados o subtítulos innecesarios.
+
+**[LAB] Player:** `design-lab/components.tsx` reproduce la composición del reproductor [EXISTENTE] de BeatGaler: cápsula fija centrada, ancho máximo 1100px, 68px de alto en desktop, `rgba(20,20,20,.75)`, 20px de desenfoque, 34px de radio, sombra `0 10px 30px rgba(0,0,0,.5)`; zona de transporte a la izquierda (shuffle, previous, play/pause, next, repeat), portada 48px + título/key/BPM + scrubber de 4px en el centro, acciones cola, volumen y más a la derecha. Adaptar la densidad en móviles sin provocar scroll horizontal. Todas las acciones de esta versión son **simulaciones de estado local** sin audio, seeking real, cuenta, red ni persistencia. Nunca importar el `Player.tsx` productivo como dependencia. `MASTER` muestra variante previa integrada en el panel, no otro player flotante.
+
+**[LAB] Navegación de prototipo:** `Landing` y `MASTER` son interruptores de texto plano fijos en la esquina inferior derecha, sin chrome visual; se eliminó `← Landing` del header. Estos interruptores nunca pertenecen a producción.
+
+**[PENDIENTE]** revisión visual de header al lado de las referencias glass y de la playbar con tamaños 320/390/768/1440px y zoom 200%; confirmar que la paleta de colores cumple contraste en tags seleccionados antes de migrar. El copy/design de la landing anterior permanece intacto.

@@ -14,7 +14,7 @@ test("standalone HTML loads only the lab entry", () => {
 });
 
 test("lab does not import product code or initiate remote requests", () => {
-  for (const file of ["main.tsx", "App.tsx", "components.tsx", "data.ts"]) {
+  for (const file of ["main.tsx", "App.tsx", "GalleryPage.tsx", "components.tsx", "data.ts"]) {
     const source = read(`./${file}`);
     assert.doesNotMatch(source, /from\s*["'][^"']*\.\.\/src\//);
     assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket|new Audio\s*\(|\.play\s*\(/);
@@ -59,7 +59,7 @@ test("landing is default with a real demo CTA and discreet MASTER access", () =>
   assert.match(app, /Create ur Galer/);
   assert.match(app, /Unlimited cloud storage for your beats/);
   assert.match(app, /Profiles and sharing coming soon\./);
-  assert.match(app, /lab-master-switch/);
+  assert.match(app, /lab-dev-switches/);
   assert.match(app, /onClick=\{openGallery\}/);
   assert.doesNotMatch(app, /Pause motion|Made for music creators|Your beats\. Your space\. Your Galer\./);
   assert.doesNotMatch(app, /lab-tabs|Explore demo gallery|Make space for your sound/);
@@ -97,14 +97,48 @@ test("one session-scoped cover mode is wired into landing gallery and MASTER", (
  assert.doesNotMatch(cover,/https?:\/\/|\bfetch\s*\(/);
 });
 
-test("20–24 real covers are bundled as local JPEG artwork with valid headers", () => {
+test("24 distinct real covers are bundled locally with valid JPEG and AVIF headers", () => {
   const dir = new URL("./assets/real-covers/", import.meta.url);
-  const covers = readdirSync(dir).filter(name => /^cover-\d{2}\.jpg$/.test(name)).sort();
-  assert.ok(covers.length >= 20 && covers.length <= 24, `Expected 20–24 local covers; got ${covers.length}`);
-  covers.forEach(name => {
+  const covers = readdirSync(dir).filter(name => /^cover-\\d{2}\\.(jpg|avif)$/.test(name)).sort();
+  assert.equal(covers.length, 24);
+  covers.forEach((name, index) => {
+    assert.equal(name, `cover-${String(index + 1).padStart(2, "0")}.${index < 20 ? "jpg" : "avif"}`);
     const bytes = readFileSync(new URL(name, dir));
-    assert.equal(bytes[0], 0xff, name);
-    assert.equal(bytes[1], 0xd8, name);
-    assert.equal(bytes[2], 0xff, name);
+    if (index < 20) assert.equal(bytes.subarray(0, 3).toString("hex"), "ffd8ff", name);
+    else assert.equal(bytes.subarray(4, 12).toString("ascii"), "ftypavif", name);
   });
+});
+
+test("gallery uses the compact glass header, real tag color palette and no redundant marketing copy", () => {
+  const gallery = read("./GalleryPage.tsx");
+  const css = read("./gallery.css");
+  assert.match(gallery, /lab-glass-toolbar/);
+  assert.match(gallery, /type="search"/);
+  assert.match(gallery, /aria-label="Sort by"/);
+  assert.match(gallery, /lab-gallery-tag-bar/);
+  assert.match(gallery, /TAG_PALETTE/);
+  assert.match(gallery, /Change \$\{name\} tag color/);
+  assert.match(gallery, /selected\.includes/);
+  assert.doesNotMatch(gallery, /Your Galer|Your beats, organized|PRIVATE LIBRARY/);
+  assert.match(css, /backdrop-filter:blur\(20px\)/);
+});
+test("Landing and MASTER are plain dev-only bottom navigation, with no upper Landing link", () => {
+  const app = read("./App.tsx"), css = read("./gallery.css");
+  assert.match(app, /lab-dev-switches/);
+  assert.doesNotMatch(app, /← Landing|lab-back/);
+  assert.match(css, /\.lab-dev-switches button \{[^}]*background:transparent/);
+});
+test("floating player copies production visual geometry while keeping simulated controls", () => {
+  const component = read("./components.tsx"),css=read("./gallery.css");
+  assert.match(component, /lab-player--\$\{variant\}/);
+  assert.match(component, /Previous beat/);
+  assert.match(component, /Next beat/);
+  assert.match(component, /Repeat:/);
+  assert.match(component, /Demo playback position/);
+  assert.match(component, /aria-label="Up next"/);
+  assert.match(component, /Demo volume/);
+  assert.match(component, /no audio/);
+  assert.match(css, /height:68px/);
+  assert.match(css, /border-radius:34px/);
+  assert.match(css, /position:fixed/);
 });

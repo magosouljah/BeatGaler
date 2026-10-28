@@ -4,6 +4,7 @@ import { LabArtwork, LabBeatTile, LabButton, LabField, LabPanel, LabPlayer, LabT
 import { DEMO_BEATS } from "./data";
 import type { DemoBeat } from "./data";
 import { getCoverSrc, REAL_COVER_COUNT } from "./coverSources";
+import GalleryPage from "./GalleryPage";
 import type { CoverMode } from "./coverSources";
 
 type View = "landing" | "gallery" | "components";
@@ -132,59 +133,8 @@ function LandingPage({ goHome, openGallery, coverMode }: { goHome: () => void; o
   );
 }
 
-function GalleryPage({ goHome, playing, beat, toggle, selectBeat, coverMode }: {
-  goHome: () => void; playing: boolean; beat: DemoBeat; coverMode: CoverMode; toggle: () => void;
-  selectBeat: (beat: DemoBeat) => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [tag, setTag] = useState("All");
-  const [sort, setSort] = useState("default");
-  const filtered = useMemo(() => {
-    const query = search.toLocaleLowerCase().trim();
-    const rows = DEMO_BEATS.filter(item =>
-      (tag === "All" || item.tag === tag) &&
-      (!query || [item.title, item.artist, item.tag, item.key].some(v => v.toLocaleLowerCase().includes(query)))
-    );
-    if (sort === "name") return [...rows].sort((a, b) => a.title.localeCompare(b.title));
-    if (sort === "bpm") return [...rows].sort((a, b) => a.bpm - b.bpm);
-    return rows;
-  }, [search, tag, sort]);
-  return (
-    <div className="lab-gallery-page">
-      <header className="lab-internal-header">
-        <Brand onClick={goHome} />
-        <button className="lab-back" type="button" onClick={goHome}>← Landing</button>
-      </header>
-      <main className="lab-gallery-main">
-        <div className="lab-gallery-heading">
-          <div><span className="lab-quiet-label">PRIVATE LIBRARY / DEMO</span><h1>Your Galer</h1><p>Your beats, organized in one place.</p></div>
-          <span className="lab-demo-label">Fictional beats only</span>
-        </div>
-        <div className="lab-gallery-tools">
-          <LabField label="Search beats" id="lab-gallery-search" type="search" placeholder="Search beats…" value={search} onChange={e => setSearch(e.target.value)} />
-          <div className="lab-field-group lab-gallery-sort"><label htmlFor="lab-gallery-sort">Sort by</label>
-            <select id="lab-gallery-sort" className="lab-field" value={sort} onChange={e => setSort(e.target.value)}>
-              <option value="default">Recently added</option><option value="name">Name</option><option value="bpm">BPM</option>
-            </select>
-          </div>
-        </div>
-        <div className="lab-gallery-chips" aria-label="Filter beats by genre">
-          {["All", "Ambient", "Trap", "Electronic"].map(value => <LabTag key={value} active={tag === value} onClick={() => setTag(value)}>{value}</LabTag>)}
-        </div>
-        <span className="lab-gallery-count">{filtered.length} {filtered.length === 1 ? "beat" : "beats"}</span>
-        {filtered.length ? (
-          <div className="lab-gallery-grid">
-            {filtered.map(item => <LabBeatTile key={item.id} beat={item} coverMode={coverMode} selected={playing && item.id === beat.id} onPlay={selectBeat} />)}
-          </div>
-        ) : <div className="lab-empty" role="status"><strong>No beats found.</strong><p>Try another search or filter.</p><LabButton onClick={() => { setSearch(""); setTag("All"); }}>Clear filters</LabButton></div>}
-        <div className="lab-gallery-player"><LabPlayer beat={beat} coverMode={coverMode} playing={playing} onToggle={toggle} /></div>
-      </main>
-    </div>
-  );
-}
-
-function ComponentPage({ goHome, colors, setColors, playing, beat, toggle, selectBeat, coverMode, setCoverMode }: {
-  goHome: () => void; colors: Colors; setColors: Dispatch<SetStateAction<Colors>>;
+function ComponentPage({ colors, setColors, playing, beat, toggle, selectBeat, coverMode, setCoverMode }: {
+  colors: Colors; setColors: Dispatch<SetStateAction<Colors>>;
   coverMode: CoverMode; setCoverMode: (mode: CoverMode) => void;
   playing: boolean; beat: DemoBeat; toggle: () => void; selectBeat: (beat: DemoBeat) => void;
 }) {
@@ -193,8 +143,7 @@ function ComponentPage({ goHome, colors, setColors, playing, beat, toggle, selec
   return (
     <div className="lab-master-page">
       <header className="lab-internal-header">
-        <Brand onClick={goHome} />
-        <button type="button" className="lab-back" onClick={goHome}>← Landing</button>
+        <span className="lab-brand-link">beat galer</span>
       </header>
       <main className="lab-master-main">
         <div className="lab-master-heading"><span className="lab-quiet-label">ISOLATED DESIGN LAB / MASTER</span><h1>Design foundations</h1><p>Componentes ficticios y tokens de laboratorio. Nada se guarda en producción.</p></div>
@@ -254,6 +203,7 @@ export default function App() {
     try { window.sessionStorage.setItem("beatgaler.lab.cover-mode", coverMode); } catch { /* storage disabled */ }
   }, [coverMode]);
   const [colors, setColors] = useState<Colors>({ ...DEFAULT_COLORS });
+  const [tagColors, setTagColors] = useState<Record<string,string>>({});
   const [playing, setPlaying] = useState(false);
   const [beat, setBeat] = useState<DemoBeat>(DEMO_BEATS[0]);
   const selectBeat = (selected: DemoBeat) => {
@@ -271,9 +221,12 @@ export default function App() {
   return (
     <div className="lab-root" style={tokens}>
       {view === "landing" && <LandingPage goHome={() => setView("landing")} openGallery={() => setView("gallery")} coverMode={coverMode} />}
-      {view === "gallery" && <GalleryPage goHome={() => setView("landing")} coverMode={coverMode} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} />}
-      {view === "components" && <ComponentPage goHome={() => setView("landing")} colors={colors} setColors={setColors} coverMode={coverMode} setCoverMode={setCoverMode} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} />}
-      {view !== "components" && <button type="button" className="lab-master-switch" onClick={() => setView("components")} aria-label="Open internal design components">MASTER</button>}
+      {view === "gallery" && <GalleryPage coverMode={coverMode} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} tagColors={tagColors} setTagColors={setTagColors} />}
+      {view === "components" && <ComponentPage colors={colors} setColors={setColors} coverMode={coverMode} setCoverMode={setCoverMode} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} />}
+      <nav className="lab-dev-switches" aria-label="Design Lab-only navigation">
+        <button type="button" aria-current={view === "landing" ? "page" : undefined} onClick={() => setView("landing")}>Landing</button>
+        <button type="button" aria-current={view === "components" ? "page" : undefined} onClick={() => setView("components")}>MASTER</button>
+      </nav>
     </div>
   );
 }
