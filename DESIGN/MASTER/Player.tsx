@@ -384,7 +384,14 @@ export default function Player({
         seekAnimationRef.current = null;
       }
       measuredWidthRef.current = width;
-      setViewportWidth(previous => previous === width ? previous : width);
+      // Only rerender when a visual breakpoint changes. CSS handles every in-between pixel.
+      setViewportWidth(previous => (
+        (previous < 1100) === (width < 1100) &&
+        (previous < 860) === (width < 860) &&
+        (previous < 700) === (width < 700) &&
+        (previous <= 760) === (width <= 760) &&
+        (previous < 380) === (width < 380)
+      ) ? previous : width);
     };
     update();
     if (preview && host && typeof ResizeObserver !== "undefined") {
