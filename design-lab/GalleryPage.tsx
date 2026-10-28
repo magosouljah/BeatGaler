@@ -4,7 +4,6 @@ import { LabBeatTile, LabButton, LabPlayer } from "./components";
 import { DEMO_BEATS } from "./data";
 import type { DemoBeat } from "./data";
 import type { CoverMode } from "./coverSources";
-import "./gallery.css";
 
 const TAG_PALETTE = [
   { name: "Red", hex: "#FF3B30" }, { name: "Orange", hex: "#FF9500" },
