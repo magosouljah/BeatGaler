@@ -4,6 +4,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archivePath = (Resolve-Path -LiteralPath $ZipPath).Path
 $destination = Join-Path $PSScriptRoot "assets/real-covers"
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
