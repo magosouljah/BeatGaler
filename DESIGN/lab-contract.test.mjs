@@ -153,3 +153,29 @@ test("Toolbar search has no rectangular focus ring, keeps circular glass edge, a
   assert.doesNotMatch(css,/\.lab-toolbar-search-glass[^}]*transform:scaleX/);
   assert.doesNotMatch(css,/\.lab-toolbar-search\.is-open \.lab-toolbar-search-trigger\{[^}]*background:var\(--glass-bg\)/);
 });
+
+test("Toolbar V2 is independent and uses vendored MIT liquid-glass-react refraction", () => {
+  const v1 = read("./shared/Toolbar.tsx");
+  const v2 = read("./shared/ToolbarV2.tsx");
+  const style = read("./shared/toolbar-v2.css");
+  const master = read("./MASTER/MasterPage.tsx");
+  const engine = read("./vendor/liquid-glass-react/index.tsx");
+  const licence = read("./vendor/liquid-glass-react/LICENSE");
+  assert.match(master, /Toolbar V1/);
+  assert.match(master, /Toolbar V2/);
+  assert.match(master, /<LabToolbarV2/);
+  assert.match(v2, /import LiquidGlass from "\.\.\/vendor\/liquid-glass-react"/);
+  assert.match(v2, /<LiquidGlass/);
+  assert.match(v2, /lab-toolbar-v2-skin/);
+  assert.match(v2, /role="menuitemradio"/);
+  assert.match(v2, /onMenuKeyDown/);
+  for(const icon of ["magnifyingglass", "line.3.horizontal.decrease", "xmark", "person.crop.circle"])
+    assert.ok(v2.includes(icon));
+  assert.match(style, /\.lab-toolbar-v2 \.lab-toolbar-select\.is-selecting \.lab-toolbar-v2-skin/);
+  assert.match(engine, /feDisplacementMap/);
+  assert.match(engine, /ResizeObserver/);
+  assert.match(licence, /MIT|Permission is hereby granted/);
+  assert.match(v1, /export default function LabToolbar\(/);
+  assert.doesNotMatch(v2, /from\s*["'][^"']*\.\.\/src\//);
+  assert.doesNotMatch(v2, /fetch\s*\(|XMLHttpRequest|WebSocket|new Audio\s*\(/);
+});
