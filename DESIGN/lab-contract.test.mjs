@@ -43,8 +43,27 @@ test("isolated Playbar retains production controls, icons and volume while fixin
   assert.match(lab, /new ResizeObserver\(update\)/);
   assert.match(lab, /className=\{preview \? "lab-playbar-seek/);
   assert.match(lab, /position: preview \? "absolute" : "relative"/);
-  assert.match(lab, /width: preview \? seekGeometry.width/);
+  assert.match(lab, /right: preview \? 0 : undefined/);
+  assert.match(lab, /left: preview \? \(isNarrow \? 6 : artworkSize \+ infoGap\)/);
+  assert.doesNotMatch(lab, /seekGeometry|trackDataRef/);
   assert.match(read("./MASTER/MasterPage.tsx"), /<Player preview/);
+});
+
+test("Playbar mode changes use one FLIP motion; regular resize and artwork never chase dimensions", () => {
+  const lab = read("./MASTER/Player.tsx");
+  const css = read("./MASTER/master.css");
+  assert.match(lab, /seekFromRef/);
+  assert.match(lab, /\(before <= 760\) !== \(width <= 760\)/);
+  assert.match(lab, /seek\.animate\(/);
+  assert.match(lab, /from\.width \/ to\.width/);
+  assert.match(lab, /transformOrigin: preview \? "left center"/);
+  assert.match(lab, /prefers-reduced-motion: reduce/);
+  assert.match(lab, /const artworkSize = preview \? 48/);
+  assert.match(lab, /padding: `10px \$\{playerPadding\}px`/);
+  assert.match(css, /\.lab-playbar-cover-slot\.is-condensed \.lab-playbar-artwork/);
+  assert.match(css, /translate3d\(0, -4px, 0\) scale\(\.75\)/);
+  assert.doesNotMatch(css, /transition:\s*left|transition:\s*width|transition:\s*height/);
+  assert.doesNotMatch(css, /transition:\s*all/);
 });
 
 test("all original player PNG icon assets are copied unchanged", () => {
