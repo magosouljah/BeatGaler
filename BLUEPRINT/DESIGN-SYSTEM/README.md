@@ -1,16 +1,48 @@
-# Design System — BeatGaler
+# BeatGaler — Design System vivo (Design Lab)
 
-**Una sola identidad, dos intensidades:** app/galería sobria, rápida y precisa; landing artística, inmersiva y cinematográfica. Contenido y portadas antes que chrome decorativo.
+**Documento rector único del trabajo de diseño.** Esta página define dónde mirar y cómo trabajar; **no define por adelantado la apariencia que aún no hemos construido**.
 
-- [DESIGN.md](DESIGN.md) — especificación precisa, procedencia [EXISTENTE]/[LAB]/[PENDIENTE], valores, estados, responsive y reglas para IA.
-- [REFERENCES.md](REFERENCES.md) — fuentes de estudio, incluyendo Coinbase, Apple y Emil Kowalski. Referencias, no marcas para copiar.
-- [Design Lab](../../design-lab/README.md) — preview local **ficticia**, componentes, landing/gallery iniciales y edición reversible de tokens.
+## Fuente de verdad, sin competición entre documentos
 
-El diseño actual de producción sigue en `src/styles/` y `src/components/`; no declarar propuestas del laboratorio como cambios ya aprobados. Las decisiones se evalúan por componentes o pantalla, y solo después se proponen para el producto real.
+1. **Decisiones del propietario y prototipo ejecutable:** para el sistema experimental, lo que existe hoy es la interfaz interactiva de [`design-lab/`](../../design-lab/README.md): MASTER, Landing y Gallery. Sus componentes, estilos, tokens, estados, físicas y comportamientos reales son la fuente verificable. Una propuesta en Markdown no modifica esa realidad.
+2. **Producto publicado / rama `main`:** `src/` y los demás servicios son la fuente de verdad de la aplicación real; Design Lab no es producción ni demuestra que el diseño se migró.
+3. **Este README:** manda sobre el **proceso de diseño y la interpretación del resto de la carpeta**, pero nunca sobre lo que el código efectivamente hace.
+4. **Skills:** la **referencia prioritaria de criterio y estilo** para proponer cambios es [`.agents/skills/`](../../.agents/skills/README.md) (Emil Kowalski). Ayudan a decidir y revisar; no sustituyen decisiones del propietario ni convierten automáticamente su estética en componentes implementados.
+5. **Otros Markdown:** [`DESIGN.md`](DESIGN.md) es un inventario descriptivo, [`ARCHITECTURE.md`](ARCHITECTURE.md) explica la organización actual y opciones, [`REFERENCES.md`](REFERENCES.md) identifica procedencia, y [`UI-COLLECTIVE-TRANSCRIPT-NOTES.md`](UI-COLLECTIVE-TRANSCRIPT-NOTES.md) resume un tutorial. **Ninguno puede imponer nuevos colores, medidas, capas o componentes al prototipo.**
 
-**Límite:** el laboratorio no usa login, API, Cloud, MASTER, INDEX, datos reales, audio ni assets externos. No se despliega en beatgaler.com y no sustituye el flujo real.
+Si hay contradicción: **se inspecciona el código y se consulta la decisión del propietario; no se escoge arbitrariamente un documento**. Lo no construido se marca **[PENDIENTE]**. No presentar una sugerencia como [LAB] ya implementado.
 
-## Arquitectura del sistema de diseño
+## El Design System que estamos construyendo
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — arquitectura operativa de tokens Brand → Alias → Mapped, contratos de componentes, estados y adopción.
-- [UI-COLLECTIVE-TRANSCRIPT-NOTES.md](UI-COLLECTIVE-TRANSCRIPT-NOTES.md) — notas fieles y accionables de la transcripción facilitada por el propietario. El texto original permanece en el adjunto de la conversación.
+- **MASTER:** espacio de Foundations (colores, tipografía, espaciado, etc.) y componentes interactivos con variantes y parámetros. **La presentación visual actual de MASTER no está aprobada** y requiere un rediseño futuro; se conserva funcional mientras tanto.
+- **Landing:** demostración artística de cómo se ven y se mueven los componentes; personalidad más atrevida.
+- **Gallery:** demostración de la aplicación sobria y precisa, con los mismos fundamentos compartidos.
+- **Físicas y movimiento:** forman parte de componentes/programas **ejecutables**, no únicamente de variables de fuerza, gravedad, repulsión o timing. Documentar parámetros *y* comportamiento observable (puntero, touch, interacción, retorno, interrupción, reduced motion, rendimiento). El efecto orbital existente vive hoy en `design-lab/App.tsx`; aún no es una librería reutilizable completa.
+
+**Dos áreas útiles en MASTER: Foundations y Components.** Landing y Gallery son superficies de prueba, **no** un tercer nivel obligatorio de tokens. La propuesta de tres capas Brand → Alias → Mapped del tutorial queda como referencia opcional; introducirla solo si aparece una necesidad real de escalabilidad.
+
+## Flujo OBLIGATORIO para agentes y para cualquier cambio de diseño
+
+1. **Leer este README** y examinar los archivos relevantes de `design-lab/` y el componente que realmente existe.
+2. **Leer las skills pertinentes antes de diseñar o escribir código.** Elegir por tarea:
+   - Interfaz y calidad de aplicación: `apple-design`, `emil-design-eng`, `mobile-native`, `break-ui`.
+   - Movimiento, resortes, repulsión y rendimiento: `animate`, `animation-performance`, `review-animations`, `improve-animations`.
+   - Comparación de propuestas: `prototype`; selección de piezas: `pick-ui-library`.
+   Las rutas están en `../../.agents/skills/<nombre>/SKILL.md`. Usar los archivos de apoyo de una skill cuando existan.
+3. **Aplicar cambios al laboratorio interactivo**, no solo a documentos. Buscar que las reglas se compartan entre MASTER, Landing y Gallery cuando corresponda.
+4. **Validar** desktop/móvil, estados, teclado, touch, reduced motion y fluidez; ejecutar las pruebas focalizadas del laboratorio. Si una física o propiedad solo existe en Landing, no declararla componente compartido.
+5. **Documentar después** el resultado real, las decisiones aprobadas y lo pendiente; evitar tablas futuras que compitan con el CSS y los componentes actuales.
+
+## Archivos de implementación
+
+- `design-lab/index.html` + `main.tsx`: entrada del HTML de prueba (Vite/React, no un único HTML estático).
+- `App.tsx`: navegación de las tres vistas, MASTER y física orbital de Landing.
+- `GalleryPage.tsx`: galería y sus interacciones falsas.
+- `components.tsx`: primitives `LabButton`, `LabField`, `LabTag`, `LabBeatTile`, `LabPlayer`, etc.
+- `tokens.css`, `lab.css`, `gallery.css`: valores y estilos utilizados hoy.
+- `coverSources.ts`, `data.ts`: muestras Generated/Real y datos ficticios.
+- `lab-contract.test.mjs`: algunas verificaciones del laboratorio.
+
+**Límite de seguridad:** solo UI aislada, sin login, Cloud, API, almacenamiento real, MASTER técnico, INDEX ni audio verdadero. No modificar `src/`, `main` o producción ni publicar las carátulas de terceros sin autorización y derechos verificados.
+
+**Estado:** sistema en construcción. MASTER no está visualmente aprobado. Componentes, animaciones y tokens solo se consideran existentes cuando pueden demostrarse en el laboratorio.

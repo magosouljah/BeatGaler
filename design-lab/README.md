@@ -1,4 +1,8 @@
-# BeatGaler Design Lab — landing y demo aisladas
+# BeatGaler Design Lab — Design System vivo, aislado
+
+**Esta interfaz interactiva es la referencia visual y funcional actual del Design System experimental.** MASTER, Landing y Gallery muestran lo que realmente existe hoy, no un plan ideal. Las reglas de trabajo están en [BLUEPRINT/DESIGN-SYSTEM/README.md](../BLUEPRINT/DESIGN-SYSTEM/README.md). Antes de modificar la UI, los agentes deben leer las skills adecuadas de [`.agents/skills/`](../.agents/skills/README.md).
+
+**MASTER aún no está aprobado visualmente**: funciona como panel de muestras/editor parcial y se rediseñará cuando se elija esa tarea. La órbita de Landing funciona en su código actual, pero no es todavía una primitiva reutilizable de físicas. No inventar en documentos features no implementadas.
 
 **No es producción.** No utiliza cuentas, datos de usuarios, Telegram, Cloud API, audio, servicios externos ni carga archivos. Solo hay fixtures y estado local del navegador.
 
@@ -54,4 +58,4 @@ npx --no-install vite build --config design-lab/vite.config.ts
 
 El build solo genera `design-lab/dist/` (ignorado por Git). No correr suites globales ni desplegar la app. Comprobar manualmente escritorio, móvil, contraste, foco de teclado y reducción de movimiento.
 
-El color `--lab-canvas` está fijado a `#0c0c0c` para coincidir con el generador; no significa que se haya cambiado el `#090909` del diseño actual de la aplicación real. Los demás tokens siguen experimentales. La documentación de producto está en `BLUEPRINT/DESIGN-SYSTEM/DESIGN.md`.
+El color `--lab-canvas` está fijado a `#0c0c0c` para coincidir con el generador; no significa que se haya cambiado el `#090909` del diseño actual de la aplicación real. Los demás tokens siguen experimentales. La guía del Design System experimental y su regla de autoridad están en `BLUEPRINT/DESIGN-SYSTEM/README.md`. `DESIGN.md` es solo un inventario del estado implementado.

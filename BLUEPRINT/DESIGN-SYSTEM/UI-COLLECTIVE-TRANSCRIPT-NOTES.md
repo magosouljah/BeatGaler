@@ -1,5 +1,7 @@
 # Notas de referencia — transcripción de UI Collective
 
+> **Referencia histórica, NO norma activa del Design System de BeatGaler.** La arquitectura opcional de tres niveles y la adaptación propuesta en la sección 6 no tienen prioridad sobre [README.md](README.md) ni sobre el código ejecutable en `design-lab/`. No implementar estas propuestas sin una decisión nueva.
+
 **Fuente:** transcripción completa proporcionada por el propietario (28-10-2026), archivo original `Texto pegado(20261028-172408).txt` en la conversación. Estas son notas de estudio, no un respaldo literal de las ~208 KB del archivo. No se adjudica al autor ninguna regla que no aparezca en el contenido.
 
 ## 1. Enfoque del tutorial
@@ -28,7 +30,7 @@ El tutorial contrasta explícitamente esta arquitectura con la alternativa **dos
 - Diferencia **branded house** (familia de marcas con gran parte de los tokens compartidos) y **house of brands** (identidades distintas), destacando la importancia de resolver roles sin reescribir componentes.
 - Señala prácticas de organización de componentes y publicación de librerías en Figma. Esto no publica automáticamente nada en BeatGaler.
 
-## 6. Adaptación a BeatGaler (propuesta nuestra, no afirmación del video)
+## 6. Adaptación histórica propuesta (no adoptada; no afirmación del video)
 - Seguir con una identidad y un solo tema oscuro, preservando `#0c0c0c` del laboratorio y el `#090909` actual de producto hasta aprobación.
 - Introducir Brand → Alias → Mapped **sin reescribir `src/`** y sin exigir Figma para que exista un contrato verificable.
 - Mantener datos de demostración, portadas locales y selección Generated/Real en Design Lab.

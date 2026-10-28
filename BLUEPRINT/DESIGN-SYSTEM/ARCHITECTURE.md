@@ -1,72 +1,37 @@
-# BeatGaler Design System — Arquitectura operativa
+# ARCHITECTURE.md — Organización actual, sin arquitecturas obligatorias
 
-**Estado:** [LAB], propuesta de arquitectura; no aprobada ni importada a producción. **Fuente de criterios:** [DESIGN.md](DESIGN.md) y [UI-COLLECTIVE-TRANSCRIPT-NOTES.md](UI-COLLECTIVE-TRANSCRIPT-NOTES.md).
+**Documento descriptivo; el único procedimiento rector es [README.md](README.md).** Este texto no exige implementar tres capas de tokens, ni crear ficheros de especificación por componente, ni sustituye el laboratorio interactivo.
 
-## Qué convierte una guía visual en un design system
-
-No basta una página MASTER de muestras ni una tabla de tamaños. El sistema necesita una **fuente de verdad versionada** para tokens, contratos de componentes, variantes, estados, composición, accesibilidad, documentación, pruebas y un proceso explícito de adopción.
-
-## 1. Tokens con dependencias dirigidas (Brand → Alias → Mapped)
-
-| Nivel | Contiene | Ejemplo propuesto [LAB] | No debe contener |
-|---|---|---|---|
-| Brand | valores puros / escalas / familias | `brand.neutral.900` → hex, `brand.scale.400` → 16px | `button`, `errorText`, `background` |
-| Alias | intención semántica compartida | `alias.neutral.canvas` → brand, `alias.feedback.error` → brand | referencias directas a componentes |
-| Mapped | uso visual concreto y estados | `mapped.button.primary.background.default` → alias | hex y números sin referencia salvo excepción justificada |
-
-**Invariantes:** Brand solo literales; Alias solo referencias a Brand; Mapped solo Alias o tokens Mapped sin ciclos. Resolución determinista; no permitir referencias rotas. Mantener unidades (`px`, color, tiempo), descripción, origen y estado de aprobación. Los nombres son semánticos; no renombrar silenciosamente. No inventar escalas innecesarias: solo valores utilizados. A diferencia de un cambio de tema, una modificación de Brand puede afectar muchos componentes y exige evaluación de impacto.
-
-**Escala geométrica inicial [LAB]:** `25=1, 50=2, 100=4, 200=8, 300=12, 400=16, 500=20, 600=24, 700=28, 800=32, 900=40, 1000=48, 1100=64` (px). Ejemplo del tutorial, **no reemplaza** todos los valores actuales. Cualquier desviación queda documentada.
-
-**Temas:** primera versión usa tema dark, una marca, variantes responsivas explícitas. Brand/alias pueden admitir futuros modos sin duplicar todos los componentes.
-
-## 2. Contrato obligatorio de componentes
-
-Cada componente debe tener **un fichero de especificación** (o una sección equivalente versionada) que incluya:
-
-1. Propósito y uso prohibido; composición y anatomía (slots, texto, iconos).
-2. API de propiedades y valores predeterminados; variantes enumeradas y relaciones permitidas.
-3. Medidas calculables a partir de tokens (alto, ancho intrínseco, padding, gap, iconografía, tipografía).
-4. Estados default, hover, pressed, focused, disabled, loading, selected, error según aplique.
-5. Interacción real en Design Lab (si es mock, describir simulaciones), semántica y teclado.
-6. Reglas responsive / truncamiento / contenido largo, contraste, reduced motion.
-7. Ejemplos de uso correcto/incorrecto y pruebas visuales/automatizadas.
-8. Origen [EXISTENTE]/[LAB]/[PENDIENTE] y decisiones pendientes.
-
-**Botones:** la ecuación de ancho = ancho medido del contenido + suma de iconos + separación entre slots + padding izquierdo + derecho + bordes. La altura se deriva de tipografía, line-height, padding vertical y objetivo táctil. No fijar `min-width` estético para simular densidad. El contrato existente de botones en DESIGN.md permanece vigente hasta migración explícita.
-
-## 3. Estructura propuesta, incremental
+## Lo que existe [LAB]
 
 ```text
-BLUEPRINT/DESIGN-SYSTEM/
-  README.md
-  DESIGN.md                         # dirección y reglas vigentes del laboratorio
-  ARCHITECTURE.md                   # arquitectura y contrato de componentes
-  UI-COLLECTIVE-TRANSCRIPT-NOTES.md # estudio de la transcripción
-  REFERENCES.md                     # otras referencias
 design-lab/
-  tokens.css                        # implementación actual, conservar
-  components.tsx                    # primitivos actuales, conservar
-  GalleryPage.tsx / App.tsx         # pantallas demo, no componentes fundacionales
+  index.html + main.tsx  # entrada del HTML falso, con Vite/React
+  App.tsx                # MASTER y Landing; navegación y física orbital
+  GalleryPage.tsx        # Gallery
+  components.tsx         # componentes reutilizados
+  tokens.css             # fundamentos actuales
+  lab.css / gallery.css  # estilos existentes
+  coverSources.ts        # selector Generated / Real
 ```
 
-**Próximo paso de implementación [PENDIENTE]:** definir el esquema de tokens fuente (`brand/alias/mapped`) y un resolvedor/validador que emita CSS; migrar primero `LabButton` como componente de referencia; documentar inputs, tags y player después. No afirmar que la arquitectura escrita ya equivale a una librería completa.
+En la experiencia visual proponemos **dos áreas de MASTER**:
 
-## 4. Verificación y adopción
+- **Foundations:** valores y criterios compartidos (color, espacio, tipo, radios, etc.).
+- **Components:** piezas reutilizables, estados, variantes y comportamientos.
 
-- Contratos y snapshots de tokens; detección de ciclos y referencias rotas.
-- Pruebas de cada estado y variante con interacción real; accesibilidad WCAG/teclado/táctil y zoom 200%.
-- Capturas en 320, 390, 768, 1024 y 1440px, temas relevantes, portadas Generated y Real.
-- Registrar decisiones, cambios incompatibles y deprecaciones.
-- Permitir solo lectura desde `src/` durante el estudio. No importar Design Lab a producto, no publicar ni alterar main hasta autorización.
+**Landing y Gallery** no son una tercera capa de configuración; son pantallas de demostración. La existencia efectiva de un token o componente se comprueba en código, no aquí.
 
-## 5. Ejemplo de mapeo ilustrativo [LAB]
+## Físicas: tanto ejecución como parámetros
 
-```
-brand.neutral.950 = "#0c0c0c"      (laboratorio)
-alias.surface.canvas -> brand.neutral.950
-mapped.gallery.canvas -> alias.surface.canvas
-mapped.button.primary.label -> alias.neutral.onPrimary
-```
+Una física de repulsión, gravedad, spring, inercia o parallax solo es reutilizable cuando su **implementación real** puede compartirse: respuesta al puntero/touch, integración por frame, interrupciones, límites, estado inicial, retorno, rendimiento, accesibilidad y reduced motion. Una tabla de fuerzas no sustituye eso.
 
-`#090909` del canvas actual de producto no se cambia. Los colores definidos en Design Lab todavía no son identidad aprobada.
+Hoy la órbita de Landing está programada en `App.tsx`; **no** declaramos que exista ya un motor genérico de físicas o un editor de presets completo.
+
+## Ideas no adoptadas [PENDIENTE]
+
+La transcripción de UI Collective enseña `Brand → Alias → Mapped`. Es una **referencia de estudio**, no una decisión obligatoria para BeatGaler. Actualmente no hay evidencia de que una sola marca y un tema oscuro necesiten esa complejidad. Introducir alias, nuevos esquemas o generadores de CSS solo si los exige un problema real y después de probarlo en Design Lab.
+
+Para criterios de implementación, animación y UI, leer las [skills locales](../../.agents/skills/README.md), no asumir que una arquitectura teórica tiene autoridad sobre el código.
+
+**Producción:** el producto real vive en `src/` de `main`; ninguna decisión de este laboratorio puede migrarse automáticamente.

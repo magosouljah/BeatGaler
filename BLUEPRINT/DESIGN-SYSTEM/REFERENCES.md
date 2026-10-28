@@ -1,66 +1,33 @@
-# Referencias y procedencia — Design System
+# REFERENCES.md — Fuentes de estudio, nunca autoridad de estilos
 
-Revisión inicial de los **repositorios completos** y selección de documentos especialmente útiles para las dos primeras pantallas. Son **fuentes de estudio**, no archivos para copiar dentro del producto ni reglas obligatorias.
+La **fuente de verdad** del Design System experimental es [Design Lab](../../design-lab/README.md). El procedimiento y la prioridad se definen solo en [README.md](README.md). Este archivo es únicamente un índice de procedencia: **no prescribe colores, tamaños, botones o animaciones**.
 
-## Colección de sistemas `DESIGN.md`
+## Guía principal para diseñar: skills de Emil Kowalski
 
-**Repositorio:** [VoltAgent / awesome-design-md](https://github.com/VoltAgent/awesome-design-md) · [README](https://github.com/VoltAgent/awesome-design-md/blob/main/README.md) · [Licencia MIT](https://github.com/VoltAgent/awesome-design-md/blob/main/LICENSE).
+Repositorio de origen: https://github.com/emilkowalski/skills
 
-Colección amplia de análisis `DESIGN.md` de marcas y productos, organizada por áreas. Sirve para aprender la estructura de una especificación de diseño: tema y atmósfera, roles de color, tipografía, componentes, espaciados, profundidad, responsividad y antipatrones. Estos archivos son reconstrucciones/análisis, **no** guías oficiales de las marcas.
+Skills instaladas localmente y versionadas en [`.agents/skills/`](../../.agents/skills/README.md), con licencia MIT y revisión fijada a un commit upstream. **Antes de diseñar, consultar las apropiadas a la tarea**:
 
-Especialmente relevantes:
+| Necesidad | Skills relevantes |
+| --- | --- |
+| Criterios de UI de aplicación, jerarquía, tacto | `apple-design`, `emil-design-eng`, `mobile-native` |
+| Animación, springs, repulsión, fluidez | `animate`, `animation-performance`, `review-animations`, `improve-animations`, `animation-vocabulary` |
+| Propuestas comparables y robustez | `prototype`, `break-ui`, `find-animation-opportunities`, `pick-ui-library` |
 
-- [Coinbase](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/coinbase/DESIGN.md): referencia principal de **profundidad y estructura de especificación** (tokens YAML, tabla de componentes, estado, comportamiento y reglas). Es un análisis de terceros, no un sistema oficial ni fuente de identidad para BeatGaler.
+Son **instrucciones y conocimientos de diseño**; no dependencias de ejecución ni un paquete global instalado en ChatGPT. Interpretarlas con el contexto de BeatGaler y las decisiones del propietario. Consultar la documentación oficial cuando se requiera verificar accesibilidad o compatibilidad.
 
-- [Apple](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md): aire, jerarquía, discreción de la UI y fotografía protagonista.
-- [Spotify](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/spotify/DESIGN.md): fondos oscuros, carátulas como fuente de color y lectura musical.
-- [Linear](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/linear.app/DESIGN.md): superficies contenidas, bordes finos, densidad medida.
-- [Runway](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/runwayml/DESIGN.md): dirección artística cinematográfica y protagonismo visual.
-- [Framer](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/framer/DESIGN.md): landing dinámica y uso selectivo de profundidad.
-- [Figma](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/figma/DESIGN.md): lenguaje de herramientas visuales y estructura de UI.
+## Ejemplos aportados: formato, no identidad
 
-No mezclaremos los tokens cromáticos y fuentes de esas marcas: crearíamos una aplicación inconsistente.
+- `DESIGN-coinbase.md` (archivo aportado el 28-10-2026): referencia preferida para el **formato detallado** de sistemas documentados (tokens, estructura, variantes, anatomía, tablas y ejemplos). No tomar su paleta ni tipografías.
+- `DESIGN-apple.md` (archivo aportado el 28-10-2026): referencia de presentación web, **menos apropiada para Gallery** que las skills de ingeniería de aplicaciones. No copiar la estética de su web.
+- [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/): complemento oficial sobre interfaces, distinto de un análisis de su página web.
+- [VoltAgent / awesome-design-md](https://github.com/VoltAgent/awesome-design-md) (MIT): colección de análisis no oficiales de diseños de marcas. También contiene ejemplos de Linear, Spotify, Runway, Figma y Framer; son inspiración opcional, no una lista de requisitos.
+- [Notas de UI Collective](UI-COLLECTIVE-TRANSCRIPT-NOTES.md): resumen de la transcripción facilitada. Su modelo de tres niveles de tokens no es arquitectura decidida.
 
-## Ingeniería de diseño y animaciones
+**Licencias:** no redistribuir fuentes, fotografías, portadas, logos o marcas de terceros sin autorización. Las skills de Emil conservan su licencia MIT en `.agents/skills/`.
 
-**Repositorio:** [emilkowalski / skills](https://github.com/emilkowalski/skills) · [README](https://github.com/emilkowalski/skills/blob/main/README.md) · [Licencia MIT](https://github.com/emilkowalski/skills/blob/main/LICENSE).
+## Fuentes técnicas reales
 
-No se limita a `apple-design`: hay habilidades de diseño, construcción de animaciones, revisión, rendimiento, prototipos y prueba de casos límite. Selección:
-
-- [apple-design/SKILL.md](https://github.com/emilkowalski/skills/blob/main/skills/apple-design/SKILL.md): respuesta inmediata, direct manipulation, momentum, springs interrumpibles, jerarquía espacial, tipografía y movimiento reducido.
-- [animate/SKILL.md](https://github.com/emilkowalski/skills/blob/main/skills/animate/SKILL.md): decidir si animar, propósito, timing, easing y salida.
-- [animation-performance/SKILL.md](https://github.com/emilkowalski/skills/blob/main/skills/animation-performance/SKILL.md): costes layout/paint/composite, evitar trabajo por frame y medir.
-- [review-animations/STANDARDS.md](https://github.com/emilkowalski/skills/blob/main/skills/review-animations/STANDARDS.md): estándares para revisar coherencia y fluidez.
-- [prototype/SKILL.md](https://github.com/emilkowalski/skills/blob/main/skills/prototype/SKILL.md): comparar variantes genuinamente diferentes en un selector y aprobar una.
-- [break-ui/SKILL.md](https://github.com/emilkowalski/skills/blob/main/skills/break-ui/SKILL.md): estrés con datos reales extremos y vacío.
-
-La habilidad `apple-design` es una **interpretación para web** basada en charlas de diseño de Apple; no debe confundirse con una especificación oficial de Apple ni copiarse como instrucciones para agentes sin revisar su idoneidad.
-
-Referencia oficial complementaria: [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/).
-
-## Estado real de BeatGaler
-
-- [Fundamentos CSS](../../src/styles/design-foundations.css): tokens y componentes de estilo **existentes**, punto de partida real.
-- [Composición de biblioteca](../../src/styles/library-ux.css): cabecera, rejilla, filtros, responsive.
-- [Primitivas de UI](../../src/components/ui/DesignPrimitives.tsx): componentes actuales que hay que revisar antes de duplicar.
-- [Shell de aplicación](../../src/app/AppShell.tsx): estructura real de la galería, **no** destino del prototipo aislado.
-
-## Uso, licencia y límites
-
-Los dos repositorios citados declaran licencia **MIT**. Si más adelante se reutilizara código o texto sustancial de un archivo MIT, conservar avisos de copyright y licencia requeridos. En esta carpeta **solo hay síntesis y propuestas originales**, no una copia masiva de los repositorios.
-
-La licencia MIT de estas recopilaciones **no** autoriza por sí sola a distribuir fuentes comerciales, fotografías, portadas, iconos de terceros ni a copiar marcas registradas. Para mocks, usar portadas propias, demo o assets con licencias comprobadas. Registrar la procedencia de cualquier asset reutilizado.
-
-**Criterio:** consultar el material original cuando sea necesario; mantener este BLUEPRINT ligero y específico para BeatGaler.
-
-## Referencias de formato aportadas (28-10-2026)
-
-Los documentos `DESIGN-coinbase.md` y `DESIGN-apple.md` se aportaron como modelos de **formato y estructura**, no para copiar identidad ni afirmar que sean design systems oficiales de esas compañías. Ambos se centran en superficies web; para Gallery deben prevalecer criterios de aplicación.
-
-- **Coinbase (formato preferido):** ficha con frontmatter/tokens YAML, tablas de medidas, variantes de componentes, estados, anatomía, responsive, usos correctos e incorrectos y reglas comprobables.
-- **Apple (principios de interfaz):** jerarquía visual, economía de chrome, ergonomía, claridad y respuesta. Complementar con la guía `apple-design` y fuentes de diseño de aplicaciones, en lugar de adoptar literalmente su web de marketing.
-- **BeatGaler:** MASTER reúne Foundations y Components; Landing y Gallery prueban los componentes en contexto. Las físicas no se reducen a parámetros: cada interacción debe tener una implementación ejecutable, valores configurables, reglas de entrada y límites, reduced motion y pruebas de rendimiento.
-
-## Instalación de skills para agentes del proyecto
-
-Se incorporaron las **12 skills Web relevantes** de [Emil Kowalski](https://github.com/emilkowalski/skills) a [`.agents/skills/`](../../.agents/skills/README.md), conservando documentación original, archivos auxiliares y licencia MIT, fijados al commit `2d228630ba1446365f614a108cb8252f1feda202`. Se excluyeron `write-swift`, `animate-expo` y `ask-sonner` por no aportar al alcance actual. La instalación es **local al repositorio para agentes compatibles**, no una instalación global en ChatGPT ni una dependencia de producción.
+- Prototipo actual: `design-lab/` (MASTER, Landing, Gallery).
+- App publicada y desarrollo real: `src/styles/design-foundations.css`, `src/components/`, `src/app/` en `main`.
+- Protección de producción: no llevar cambios del laboratorio a `src/` ni desplegar sin aprobación.
