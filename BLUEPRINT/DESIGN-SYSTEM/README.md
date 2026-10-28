@@ -15,12 +15,12 @@ Si hay contradicción: **se inspecciona el código y se consulta la decisión de
 
 ## El Design System que estamos construyendo
 
-- **MASTER:** espacio de Foundations (colores, tipografía, espaciado, etc.) y componentes interactivos con variantes y parámetros. **La presentación visual actual de MASTER no está aprobada** y requiere un rediseño futuro; se conserva funcional mientras tanto.
+- **MASTER:** espacio de Foundations (colores, tipografía, espaciado, etc.) y componentes interactivos con variantes y parámetros. **MASTER fue rediseñado** como workbench premium con 58 fichas, búsqueda, inspector y demos interactivas. Es una propuesta experimental implementada, **pendiente de validación estética y pruebas reales con el propietario**.
 - **Landing:** demostración artística de cómo se ven y se mueven los componentes; personalidad más atrevida.
 - **Gallery:** demostración de la aplicación sobria y precisa, con los mismos fundamentos compartidos.
-- **Físicas y movimiento:** forman parte de componentes/programas **ejecutables**, no únicamente de variables de fuerza, gravedad, repulsión o timing. Documentar parámetros *y* comportamiento observable (puntero, touch, interacción, retorno, interrupción, reduced motion, rendimiento). El efecto orbital existente vive hoy en `design-lab/App.tsx`; aún no es una librería reutilizable completa.
+- **Físicas y movimiento:** forman parte de componentes/programas **ejecutables**, no únicamente de variables de fuerza, gravedad, repulsión o timing. Documentar parámetros *y* comportamiento observable (puntero, touch, interacción, retorno, interrupción, reduced motion, rendimiento). La órbita extraída vive en `design-lab/motion/Orbit.tsx`; las funciones genéricas de física están en `design-lab/motion/physics.ts` y se prueban en `MotionPlayground.tsx`. No son una librería de gestos productiva.
 
-**Dos áreas útiles en MASTER: Foundations y Components.** Landing y Gallery son superficies de prueba, **no** un tercer nivel obligatorio de tokens. La propuesta de tres capas Brand → Alias → Mapped del tutorial queda como referencia opcional; introducirla solo si aparece una necesidad real de escalabilidad.
+**MASTER presenta cuatro áreas de navegación (Foundations, Components, Motion & Physics y Patterns), que no son niveles de tokens.** Landing y Gallery son superficies de prueba, no capas adicionales del sistema. La propuesta de tres capas Brand → Alias → Mapped del tutorial queda como referencia opcional; introducirla solo si aparece una necesidad real de escalabilidad.
 
 ## Flujo OBLIGATORIO para agentes y para cualquier cambio de diseño
 
@@ -37,8 +37,11 @@ Si hay contradicción: **se inspecciona el código y se consulta la decisión de
 ## Archivos de implementación
 
 - `design-lab/index.html` + `main.tsx`: entrada del HTML de prueba (Vite/React, no un único HTML estático).
-- `App.tsx`: navegación de las tres vistas, MASTER y física orbital de Landing.
-- `GalleryPage.tsx`: galería y sus interacciones falsas.
+- `App.tsx`: navegación de tres vistas y estado de Foundations, portadas y player; Landing utiliza la órbita extraída.
+- `system/MasterPage.tsx` + `system/catalog.ts` + `system/studio.css`: workbench MASTER y 58 fichas con inspector, responsive y muestras.
+- `system/primitives.tsx` + `system/foundations.ts`: componentes de UI adicionales y variables CSS editables.
+- `motion/physics.ts` + `motion/MotionPlayground.tsx` + `motion/Orbit.tsx`: motor físico puro, demo interactiva y órbita compartida.
+- `GalleryPage.tsx`: galería y sus interacciones ficticias.
 - `components.tsx`: primitives `LabButton`, `LabField`, `LabTag`, `LabBeatTile`, `LabPlayer`, etc.
 - `tokens.css`, `lab.css`, `gallery.css`: valores y estilos utilizados hoy.
 - `coverSources.ts`, `data.ts`: muestras Generated/Real y datos ficticios.
@@ -46,4 +49,4 @@ Si hay contradicción: **se inspecciona el código y se consulta la decisión de
 
 **Límite de seguridad:** solo UI aislada, sin login, Cloud, API, almacenamiento real, MASTER técnico, INDEX ni audio verdadero. No modificar `src/`, `main` o producción ni publicar las carátulas de terceros sin autorización y derechos verificados.
 
-**Estado:** sistema en construcción. MASTER no está visualmente aprobado. Componentes, animaciones y tokens solo se consideran existentes cuando pueden demostrarse en el laboratorio.
+**Estado:** sistema en construcción; MASTER ya fue reconstruido y supera la prueba automatizada aislada de contratos, TypeScript y build. **No está visualmente aprobado**, no está migrado a producción y necesita pruebas móviles/teclado/lectores de pantalla en hardware real. Los 58 registros del catálogo no implican 58 componentes de producción.
