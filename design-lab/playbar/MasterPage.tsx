@@ -1,9 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { CoverMode } from "../coverSources";
 import Player from "./Player";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
 import "./master.css";
+
+type Section = "margins" | "playbar";
+const SIDEBAR_START = 192; // Lab navigation only; not a BeatGaler product design token.
+const SIDEBAR_MIN = 160;
+const SIDEBAR_MAX = 300;
+const SIDEBAR_HIDE_AT = 136;
+
+function initialSidebarWidth() {
+  try {
+    const stored = Number(window.localStorage.getItem("beatgaler.lab.master.sidebar-width"));
+    return stored >= SIDEBAR_MIN && stored <= SIDEBAR_MAX ? stored : SIDEBAR_START;
+  } catch { return SIDEBAR_START; }
+}
+function initialSidebarOpen() {
+  try {
+    return window.innerWidth > 800 && window.localStorage.getItem("beatgaler.lab.master.sidebar-hidden") !== "yes";
+  } catch { return true; }
+}
 
 export default function MasterPage({ coverMode, setCoverMode }: {
   coverMode: CoverMode;
@@ -43,37 +62,123 @@ export default function MasterPage({ coverMode, setCoverMode }: {
     setQueueIds(ids => ids.includes(item.id) ? ids : [...ids, item.id]);
     setMessage(`Añadido a la cola de prueba: ${item.name}`);
   };
+  const [section, setSection] = useState<Section>("playbar");
+  const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
+  const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
+  const dragActive = useRef(false);
+  const dragClientX = useRef(SIDEBAR_START);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("beatgaler.lab.master.sidebar-width", String(sidebarWidth)); }
+    catch { /* Preferences are optional. */ }
+  }, [sidebarWidth]);
+  useEffect(() => {
+    try { window.localStorage.setItem("beatgaler.lab.master.sidebar-hidden", sidebarOpen ? "no" : "yes"); }
+    catch { /* Preferences are optional. */ }
+  }, [sidebarOpen]);
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 800px)");
+    const collapseOnNarrow = (event: MediaQueryListEvent) => {
+      if (event.matches) setSidebarOpen(false);
+    };
+    narrow.addEventListener("change", collapseOnNarrow);
+    return () => narrow.removeEventListener("change", collapseOnNarrow);
+  }, []);
+
+  const openSection = (value: Section) => {
+    setSection(value);
+    setMessage("");
+    if (window.matchMedia("(max-width: 800px)").matches) setSidebarOpen(false);
+  };
+  const onResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    dragClientX.current = event.clientX;
+    dragActive.current = true;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragActive.current) return;
+    dragClientX.current = event.clientX;
+    if (event.clientX >= SIDEBAR_HIDE_AT) {
+      setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(event.clientX))));
+    }
+  };
+  const onResizeEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragActive.current) return;
+    dragActive.current = false;
+    if (dragClientX.current < SIDEBAR_HIDE_AT) setSidebarOpen(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const onResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Home" || event.key === "Escape") {
+      event.preventDefault();
+      setSidebarOpen(false);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      setSidebarWidth(width => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width + (event.key === "ArrowLeft" ? -8 : 8))));
+    }
+  };
+
   return (
-    <main className="lab-master-document">
-      <h1>MASTER</h1>
-      <p>Componentes de BeatGaler, uno por uno. Solo se documenta lo que ya estamos trabajando.</p>
-      <hr />
-      <h2>01. Playbar</h2>
-      <p><strong>Origen:</strong> <code>src/components/Player.tsx</code> (producción v0.9.0-beta.2).</p>
-      <p><strong>Estado:</strong> componente original copiado para revisión. Iconos, tamaño, distribución, scrubber, cola y volumen vertical preservados. Sin audio real ni conexión a servicios.</p>
-      <p>La Playbar aparece abajo, igual que en BeatGaler. Prueba sus botones, abre el volumen o arrastra el progreso.</p>
-      <p className="lab-master-simple-options">
-        Portadas de prueba:{" "}
-        <label><input type="radio" name="master-cover-mode" checked={coverMode === "generated"} onChange={() => setCoverMode("generated")} /> Generated</label>
-        <label><input type="radio" name="master-cover-mode" checked={coverMode === "real"} onChange={() => setCoverMode("real")} /> Real covers</label>
-      </p>
-      <p><small>Los botones funcionan con seis beats ficticios. No se reproduce audio ni se guardan cambios.</small></p>
-      <p className="lab-master-message" role="status" aria-live="polite">{message}</p>
-      <Player
-        beat={beat} playing={playing} progress={progress} duration={beat.duration} volume={volume}
-        queue={queue} currentIndex={queue.findIndex(b => b.id === beat.id)}
-        showQueue={showQueue} canShowQueue={queue.length > 0} shuffleEnabled={shuffleEnabled} repeatMode={repeatMode}
-        onToggle={() => { if (progress >= 1) setProgress(0); setPlaying(p => !p); }}
-        onSeek={setProgress} onPrev={() => choose(selected - 1)} onNext={next} onVolumeChange={setVolume}
-        onToggleShuffle={() => setShuffleEnabled(v => !v)}
-        onCycleRepeat={() => setRepeatMode(v => v === "off" ? "all" : v === "all" ? "one" : "off")}
-        onToggleQueue={() => setShowQueue(v => !v)}
-        onPlayQueueIndex={i => { const at = beats.findIndex(b => b.id === queue[i]?.id); if (at >= 0) { choose(at); setPlaying(true); } setShowQueue(false); }}
-        canAddBeat onAddBeat={() => queueBeat(beat)} onAddToQueue={queueBeat}
-        onDetail={b => setMessage(`Detalle de prueba: ${b.name}`)}
-        onEdit={b => setMessage(`Editar ${b.name}: todavía no se ha añadido este componente.`)}
-        onDelete={() => setMessage("La biblioteca ficticia no elimina archivos.")}
-      />
-    </main>
+    <div className={`lab-master-shell ${sidebarOpen ? "is-sidebar-open" : "is-sidebar-closed"}`}
+      style={{ "--master-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+      {sidebarOpen ? (
+        <aside className="lab-master-sidebar" aria-label="Navegación de MASTER">
+          <div className="lab-master-sidebar-header">
+            <strong>MASTER</strong>
+            <button type="button" className="lab-master-sidebar-toggle" onClick={() => setSidebarOpen(false)} aria-label="Ocultar navegación" title="Ocultar navegación">‹</button>
+          </div>
+          <nav className="lab-master-sidebar-nav" aria-label="Secciones del Design System">
+            <div className="lab-master-sidebar-heading">REGLAS</div>
+            <button type="button" className={section === "margins" ? "is-active" : ""} aria-current={section === "margins" ? "page" : undefined} onClick={() => openSection("margins")}>Márgenes</button>
+            <div className="lab-master-sidebar-heading">COMPONENTES</div>
+            <button type="button" className={section === "playbar" ? "is-active" : ""} aria-current={section === "playbar" ? "page" : undefined} onClick={() => openSection("playbar")}>Playbar</button>
+          </nav>
+          <div className="lab-master-resize-handle" role="separator" tabIndex={0} aria-label="Cambiar ancho de navegación"
+            aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebarWidth}
+            title="Arrastra para cambiar ancho. Lleva a la izquierda para ocultar. Flechas para ajustar."
+            onPointerDown={onResizeStart} onPointerMove={onResizeMove} onPointerUp={onResizeEnd}
+            onPointerCancel={onResizeEnd} onLostPointerCapture={() => { dragActive.current = false; }}
+            onKeyDown={onResizeKeyDown}/>
+        </aside>
+      ) : (
+        <button type="button" className="lab-master-open-nav" aria-label="Mostrar navegación de MASTER"
+          title="Mostrar navegación" onClick={() => setSidebarOpen(true)}>☰</button>
+      )}
+      <main className="lab-master-workspace" aria-label={section === "playbar" ? "Vista del componente Playbar" : "Vista de la regla Márgenes"}>
+        {section === "playbar" ? (
+          <div className="lab-master-specimens">
+            <div className="lab-master-player-frame">
+              <Player
+                      beat={beat} playing={playing} progress={progress} duration={beat.duration} volume={volume}
+                      queue={queue} currentIndex={queue.findIndex(b => b.id === beat.id)}
+                      showQueue={showQueue} canShowQueue={queue.length > 0} shuffleEnabled={shuffleEnabled} repeatMode={repeatMode}
+                      onToggle={() => { if (progress >= 1) setProgress(0); setPlaying(p => !p); }}
+                      onSeek={setProgress} onPrev={() => choose(selected - 1)} onNext={next} onVolumeChange={setVolume}
+                      onToggleShuffle={() => setShuffleEnabled(v => !v)}
+                      onCycleRepeat={() => setRepeatMode(v => v === "off" ? "all" : v === "all" ? "one" : "off")}
+                      onToggleQueue={() => setShowQueue(v => !v)}
+                      onPlayQueueIndex={i => { const at = beats.findIndex(b => b.id === queue[i]?.id); if (at >= 0) { choose(at); setPlaying(true); } setShowQueue(false); }}
+                      canAddBeat onAddBeat={() => queueBeat(beat)} onAddToQueue={queueBeat}
+                      onDetail={b => setMessage(`Detalle de prueba: ${b.name}`)}
+                      onEdit={b => setMessage(`Editar ${b.name}: todavía no se ha añadido este componente.`)}
+                      onDelete={() => setMessage("La biblioteca ficticia no elimina archivos.")}
+                    />
+            </div>
+          </div>
+        ) : (
+          <div className="lab-master-specimens">
+            <div className="lab-master-margin-example" aria-label="Muestra de márgenes del área de trabajo">
+              <div className="lab-master-margin-inner" />
+            </div>
+          </div>
+        )}
+        {message && (
+          <div className="lab-master-feedback" role="status">{message}
+            <button type="button" onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button>
+          </div>
+        )}
+      </main>
+    </div>
   );
 }

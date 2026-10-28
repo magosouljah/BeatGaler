@@ -1,6 +1,6 @@
 # BeatGaler Design Lab — taller de componentes
 
-Este laboratorio está aislado de la aplicación real. **MASTER es deliberadamente una página casi Markdown**, sin dashboard, inspector, catálogo inventado ni vistas Fluid/Tablet/Phone.
+Este laboratorio está aislado de la aplicación real. **MASTER es un taller minimalista:** navegación izquierda (reglas/componentes) redimensionable y ocultable, y vista derecha con el componente centrado, sin dashboard, inspector, catálogo inventado ni vistas Fluid/Tablet/Phone. Reglas completas en `BLUEPRINT/DESIGN-SYSTEM/MASTER.md`.
 
 ## Dirección decidida
 
@@ -12,7 +12,7 @@ Añadimos **un componente real de BeatGaler cada vez** y lo perfeccionamos antes
 - Copia adaptada a `design-lab/playbar/Player.tsx`. Conserva la geometría, estilos en línea, iconos PNG originales, controles de shuffle/anterior/play/siguiente/repeat, scrubber, cola, menú y **slider de volumen vertical original**.
 - Los 14 PNG originales de `src/assets/player-icons/` se copiaron íntegros a `design-lab/playbar/assets/`.
 - Solo se reemplazaron imports de servicios, artwork y el acceso al sistema de archivos. El adaptador de portada usa datos e imágenes locales; la lógica de playback usa un estado ficticio. **No hay audio ni Cloud ni usuarios reales**. Los cambios aquí no modifican producción.
-- `design-lab/playbar/MasterPage.tsx` contiene texto y el único componente de trabajo; `master.css` solo establece tipografía/documentación básica.
+- `design-lab/playbar/MasterPage.tsx` muestra la única pieza de trabajo y la regla visual de Márgenes. La navegación lateral se arrastra para cambiar tamaño; debajo del mínimo se oculta y se restaura con el botón superior izquierdo. En móvil funciona como panel superpuesto. `master.css` usa `--lab-space-6` (24 px) / `--lab-space-4` (16 px) para el canvas, sin declararlo regla general de BeatGaler.
 
 ## Ejecutar (PowerShell)
 

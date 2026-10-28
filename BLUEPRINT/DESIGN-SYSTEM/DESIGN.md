@@ -7,6 +7,6 @@
 - **[LAB]** Landing y Gallery son demos anteriores y no se han rediseñado en este cambio.
 - **[PENDIENTE]** Revisión visual del propietario, accesibilidad y pruebas manuales. Cualquier otro componente aún **no forma parte de MASTER**.
 
-No existen inspector, editor global de tokens, catálogo de 58 fichas ni laboratorio de física en esta versión. El objetivo es trabajar la Playbar antes de añadir otra pieza.
+[LAB] MASTER tiene menú lateral estrecho, redimensionable y ocultable; vista de márgenes del laboratorio (espaciado existente 24/16 px, no regla universal aprobada) y área de muestras sin texto. Ver [MASTER.md](MASTER.md). No existen inspector, editor global de tokens, catálogo de 58 fichas ni laboratorio de física en esta versión. El objetivo es trabajar la Playbar antes de añadir otra pieza.
 
 **Límite:** MASTER de este documento = página de diseño. No confundir con el MASTER técnico, INDEX y Telegram.

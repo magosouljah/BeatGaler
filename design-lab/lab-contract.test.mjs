@@ -4,14 +4,28 @@ import { readFileSync, readdirSync } from "node:fs";
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 
-test("MASTER is plain documentation containing only the real Playbar", () => {
+test("MASTER is a minimal resizable/collapsible navigation and centered component canvas", () => {
   const master = read("./playbar/MasterPage.tsx");
-  assert.match(master, /<h1>MASTER<\/h1>/);
-  assert.match(master, /<h2>01\. Playbar<\/h2>/);
+  const css = read("./playbar/master.css");
+  assert.match(master, /lab-master-sidebar/);
+  assert.match(master, /lab-master-workspace/);
+  assert.match(master, /lab-master-specimens/);
+  assert.match(master, /setPointerCapture/);
+  assert.match(master, /SIDEBAR_HIDE_AT/);
+  assert.match(master, /aria-label="Mostrar navegación de MASTER"/);
+  assert.match(master, /REGLAS/);
+  assert.match(master, /COMPONENTES/);
+  assert.match(master, /Márgenes/);
+  assert.match(master, /Playbar/);
   assert.match(master, /<Player/);
   for (const unwanted of ["Inspector","Search components","MotionPlayground","Tablet","Fluid","DsButton"]) {
     assert.doesNotMatch(master, new RegExp(unwanted));
   }
+  assert.match(css, /var\(--lab-space-6\)/);
+  assert.match(css, /var\(--lab-space-4\)/);
+  assert.match(css, /\.lab-master-player-frame > div/);
+  assert.match(css, /position: relative !important/);
+  assert.match(read("../BLUEPRINT/DESIGN-SYSTEM/MASTER.md"), /Botones de Playbar/);
   assert.doesNotMatch(read("./main.tsx"), /studio\.css/);
 });
 

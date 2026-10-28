@@ -1,6 +1,6 @@
 # BeatGaler — Design System incremental
 
-**Dirección aprobada:** MASTER será una página sencilla, casi Markdown. No implementar un dashboard de diseño, inspector, catálogo de decenas de componentes, editor global ni simuladores Fluid/Tablet/Phone. No diseñar componentes futuros por adelantado.
+**Dirección aprobada:** MASTER es un taller minimalista de componentes reales con navegación lateral redimensionable, reglas primero y componentes después. Su contrato de interfaz y crecimiento está en **[MASTER.md](MASTER.md)**. No implementar dashboard, inspector, catálogo inventado, editor global ni simuladores Fluid/Tablet/Phone.
 
 ## Fuente de verdad
 
@@ -13,7 +13,7 @@
 
 ## Estado actual
 
-**MASTER:** documentación simple con un único componente en revisión: **Playbar**. El componente vive en `design-lab/playbar/Player.tsx`, basado en `src/components/Player.tsx` de producción `release/0.9.0-beta.2`, con sus iconos PNG originales y barra vertical de volumen. El adaptador ficticio usa portadas locales y botones que modifican estado de prueba, no audio.
+**MASTER:** sidebar colapsable con **Reglas → Márgenes** y **Componentes → Playbar**. El área principal centra solo la muestra seleccionada, sin textos explicativos. Primer componente en revisión: **Playbar**. El componente vive en `design-lab/playbar/Player.tsx`, basado en `src/components/Player.tsx` de producción `release/0.9.0-beta.2`, con sus iconos PNG originales y barra vertical de volumen. El adaptador ficticio usa portadas locales y botones que modifican estado de prueba, no audio.
 
 **Landing y Gallery:** permanecen como prototipos independientes, con la órbita de portadas y la galería ficticia anteriores. El reproductor viejo de Gallery sigue siendo una simulación distinta; **la Playbar de MASTER** es la que estamos revisando con código real.
 
