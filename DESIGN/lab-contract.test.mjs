@@ -57,7 +57,7 @@ test("all original player PNG icon assets are copied unchanged", () => {
 });
 
 test("isolated lab has no product runtime imports or network/audio calls", () => {
-  for (const path of ["main.tsx","App.tsx","GALLERY/GalleryPage.tsx","shared/components.tsx","playbar/Player.tsx","playbar/MasterPage.tsx","playbar/bridge.tsx"]) {
+  for (const path of ["main.tsx","App.tsx","GALLERY/GalleryPage.tsx","shared/components.tsx","MASTER/Player.tsx","MASTER/MasterPage.tsx","MASTER/bridge.tsx"]) {
     const code = read("./" + path);
     assert.doesNotMatch(code, /from\s*["'][^"']*\.\.\/src\//);
     assert.doesNotMatch(code, /\bfetch\s*\(|XMLHttpRequest|WebSocket|new Audio\s*\(/);
