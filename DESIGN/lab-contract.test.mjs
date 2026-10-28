@@ -62,6 +62,12 @@ test("Playbar mode changes use one FLIP motion; regular resize and artwork never
   assert.match(lab, /padding: `10px \$\{playerPadding\}px`/);
   assert.match(css, /\.lab-playbar-metadata-row \{ transform: translate3d\(0, -4px, 0\); \}/);
   assert.match(lab, /className=\{preview \? "lab-playbar-metadata-row"/);
+  assert.match(lab, /lab-playbar-text-content\$\{isNarrow \? " is-condensed" : ""\}/);
+  assert.match(css, /\.lab-playbar-text-content \{/);
+  assert.match(css, /\.lab-playbar-text-content\.is-condensed \{/);
+  assert.match(css, /translate3d\(-6px, 0, 0\)/);
+  assert.match(css, /transition: transform var\(--lab-normal\) var\(--lab-ease\)/);
+  assert.match(css, /\.lab-playbar-text-content \{ transition: none; \}/);
   assert.match(css, /\.lab-playbar-cover-slot\.is-condensed \.lab-playbar-artwork/);
   assert.match(css, /translate3d\(0, -4px, 0\) scale\(\.75\)/);
   assert.doesNotMatch(css, /transition:\s*left|transition:\s*width|transition:\s*height/);
