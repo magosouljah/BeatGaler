@@ -39,7 +39,7 @@ test("isolated Playbar retains production controls, icons and volume while fixin
   }
   assert.match(lab, /const playerHeight = 68;/);
   assert.doesNotMatch(lab, /playerHeight = isSmall \? 62/);
-  assert.match(lab, /isNarrow = preview && viewportWidth <= 760/);
+  assert.match(lab, /narrowSeekLayout = preview && viewportWidth <= 760/);
   assert.match(lab, /new ResizeObserver\(update\)/);
   assert.match(lab, /className=\{preview \? "lab-playbar-seek/);
   assert.match(lab, /position: preview \? "absolute" : "relative"/);
