@@ -22,7 +22,7 @@ Son **instrucciones y conocimientos de diseño**; no dependencias de ejecución 
 - `DESIGN-apple.md` (archivo aportado el 28-10-2026): referencia de presentación web, **menos apropiada para Gallery** que las skills de ingeniería de aplicaciones. No copiar la estética de su web.
 - [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/): complemento oficial sobre interfaces, distinto de un análisis de su página web.
 - [VoltAgent / awesome-design-md](https://github.com/VoltAgent/awesome-design-md) (MIT): colección de análisis no oficiales de diseños de marcas. También contiene ejemplos de Linear, Spotify, Runway, Figma y Framer; son inspiración opcional, no una lista de requisitos.
-- [Notas de UI Collective](UI-COLLECTIVE-TRANSCRIPT-NOTES.md): resumen de la transcripción facilitada. Su modelo de tres niveles de tokens no es arquitectura decidida.
+- [Transcripción íntegra de UI Collective](UI-COLLECTIVE-TRANSCRIPT-ORIGINAL.txt): **base metodológica** de cómo construir y mantener el Design System (valores, roles, variantes, responsive, componentes y pruebas). Está guardada literalmente, sin modificaciones. [Notas de lectura](UI-COLLECTIVE-TRANSCRIPT-NOTES.md). Su modelo de tres niveles es una opción, no arquitectura obligatoria.
 
 **Licencias:** no redistribuir fuentes, fotografías, portadas, logos o marcas de terceros sin autorización. Las skills de Emil conservan su licencia MIT en `.agents/skills/`.
 

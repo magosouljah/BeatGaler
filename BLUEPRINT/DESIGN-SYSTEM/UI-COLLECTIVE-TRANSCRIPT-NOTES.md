@@ -1,8 +1,8 @@
 # Notas de referencia — transcripción de UI Collective
 
-> **Referencia histórica, NO norma activa del Design System de BeatGaler.** La arquitectura opcional de tres niveles y la adaptación propuesta en la sección 6 no tienen prioridad sobre [README.md](README.md) ni sobre el código ejecutable en `design-lab/`. No implementar estas propuestas sin una decisión nueva.
+> **Referencia metodológica importante, no un contrato estricto.** El tutorial enseña cómo construir un Design System; BeatGaler adoptará las técnicas que aporten valor, ajustadas a MASTER, Landing y Gallery. El código ejecutable y las decisiones del propietario siguen siendo la fuente de verdad. En particular, tres niveles de tokens no son obligatorios.
 
-**Fuente:** transcripción completa proporcionada por el propietario (28-10-2026), archivo original `Texto pegado(20261028-172408).txt` en la conversación. Estas son notas de estudio, no un respaldo literal de las ~208 KB del archivo. No se adjudica al autor ninguna regla que no aparezca en el contenido.
+**Fuente:** [transcripción original íntegra, sin modificar](UI-COLLECTIVE-TRANSCRIPT-ORIGINAL.txt), aportada por el propietario (28-10-2026), conservada tal cual en este repositorio. Estas notas son solo una ayuda de lectura, no sustituyen las ~208 KB del archivo. No se adjudica al autor ninguna regla que no aparezca en el contenido.
 
 ## 1. Enfoque del tutorial
 El tutorial construye un **sistema de diseño inicial** en Figma, con variables, colecciones y un conjunto de componentes con variantes. Su alcance declarado es el *framework* de los componentes, no una biblioteca de máxima sofisticación. Habla también de organización y publicación de librerías.
@@ -30,7 +30,7 @@ El tutorial contrasta explícitamente esta arquitectura con la alternativa **dos
 - Diferencia **branded house** (familia de marcas con gran parte de los tokens compartidos) y **house of brands** (identidades distintas), destacando la importancia de resolver roles sin reescribir componentes.
 - Señala prácticas de organización de componentes y publicación de librerías en Figma. Esto no publica automáticamente nada en BeatGaler.
 
-## 6. Adaptación histórica propuesta (no adoptada; no afirmación del video)
+## 6. Posibles adaptaciones a BeatGaler (no implementadas; no afirmación del video)
 - Seguir con una identidad y un solo tema oscuro, preservando `#0c0c0c` del laboratorio y el `#090909` actual de producto hasta aprobación.
 - Introducir Brand → Alias → Mapped **sin reescribir `src/`** y sin exigir Figma para que exista un contrato verificable.
 - Mantener datos de demostración, portadas locales y selección Generated/Real en Design Lab.

@@ -8,7 +8,8 @@
 2. **Producto publicado / rama `main`:** `src/` y los demás servicios son la fuente de verdad de la aplicación real; Design Lab no es producción ni demuestra que el diseño se migró.
 3. **Este README:** manda sobre el **proceso de diseño y la interpretación del resto de la carpeta**, pero nunca sobre lo que el código efectivamente hace.
 4. **Skills:** la **referencia prioritaria de criterio y estilo** para proponer cambios es [`.agents/skills/`](../../.agents/skills/README.md) (Emil Kowalski). Ayudan a decidir y revisar; no sustituyen decisiones del propietario ni convierten automáticamente su estética en componentes implementados.
-5. **Otros Markdown:** [`DESIGN.md`](DESIGN.md) es un inventario descriptivo, [`ARCHITECTURE.md`](ARCHITECTURE.md) explica la organización actual y opciones, [`REFERENCES.md`](REFERENCES.md) identifica procedencia, y [`UI-COLLECTIVE-TRANSCRIPT-NOTES.md`](UI-COLLECTIVE-TRANSCRIPT-NOTES.md) resume un tutorial. **Ninguno puede imponer nuevos colores, medidas, capas o componentes al prototipo.**
+5. **Método para construir el sistema:** la [transcripción íntegra de UI Collective](UI-COLLECTIVE-TRANSCRIPT-ORIGINAL.txt) es **referencia metodológica de base**: variables, escalas, componentes, variantes, composición, estados, responsive y mantenimiento. La estudiaremos y adoptaremos lo útil, **sin obligación de replicar Figma ni sus tres capas de tokens**.
+6. **Documentos auxiliares:** [`DESIGN.md`](DESIGN.md) es el inventario de lo implementado; [`ARCHITECTURE.md`](ARCHITECTURE.md) describe la arquitectura vigente y opciones; [`REFERENCES.md`](REFERENCES.md) documenta fuentes; [`UI-COLLECTIVE-TRANSCRIPT-NOTES.md`](UI-COLLECTIVE-TRANSCRIPT-NOTES.md) es un resumen. **No compiten con el código ejecutable ni imponen nuevas decisiones.**
 
 Si hay contradicción: **se inspecciona el código y se consulta la decisión del propietario; no se escoge arbitrariamente un documento**. Lo no construido se marca **[PENDIENTE]**. No presentar una sugerencia como [LAB] ya implementado.
 
@@ -23,7 +24,7 @@ Si hay contradicción: **se inspecciona el código y se consulta la decisión de
 
 ## Flujo OBLIGATORIO para agentes y para cualquier cambio de diseño
 
-1. **Leer este README** y examinar los archivos relevantes de `design-lab/` y el componente que realmente existe.
+1. **Leer este README** y examinar los archivos relevantes de `design-lab/` y el componente que realmente existe. Para crear o ampliar el sistema de diseño, leer también la [transcripción original completa](UI-COLLECTIVE-TRANSCRIPT-ORIGINAL.txt) como base metodológica, distinguiendo las propuestas del tutorial de nuestras decisiones.
 2. **Leer las skills pertinentes antes de diseñar o escribir código.** Elegir por tarea:
    - Interfaz y calidad de aplicación: `apple-design`, `emil-design-eng`, `mobile-native`, `break-ui`.
    - Movimiento, resortes, repulsión y rendimiento: `animate`, `animation-performance`, `review-animations`, `improve-animations`.
