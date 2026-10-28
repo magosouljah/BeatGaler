@@ -3,6 +3,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import type { CoverMode } from "../shared/coverSources";
 import Player from "./Player";
 import LabToolbar from "../shared/Toolbar";
+import LabToolbarV2 from "../shared/ToolbarV2";
 import type { LabSort } from "../shared/Toolbar";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
@@ -180,6 +181,18 @@ export default function MasterPage({ coverMode, setCoverMode }: {
               <LabToolbar search={toolbarSearch} onSearchChange={setToolbarSearch} sort={toolbarSort} onSortChange={setToolbarSort}
                 selecting={toolbarSelecting} onToggleSelect={() => setToolbarSelecting(value => !value)}
                 onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")} />
+            </div>
+            <div style={{display:"grid",gap:24,marginTop:48,justifyItems:"center"}}>
+              <div style={{fontSize:11,letterSpacing:".11em",opacity:.52}}>TOOLBAR V2 · GLASS</div>
+              <div style={{display:"grid",gap:22,width:"min(100%,520px)"}}>
+                {(["#303034","#050506","linear-gradient(#ef91bc 50%,#09090d 50%)","linear-gradient(#ef91bc 39%,#09090d 39%)","#ef91bc"] as const).map((background,i)=>(
+                  <div key={i} style={{background,borderRadius:18,padding:"48px 18px",display:"flex",justifyContent:"center",minHeight:144}}>
+                    <LabToolbarV2 search={toolbarSearch} onSearchChange={setToolbarSearch} sort={toolbarSort} onSortChange={setToolbarSort}
+                      selecting={toolbarSelecting} onToggleSelect={() => setToolbarSelecting(value => !value)}
+                      onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")}/>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
