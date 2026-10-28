@@ -104,7 +104,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--lab-space-12);
-  padding: var(--lab-space-8); /* Approved 32px canvas margin at every width. */
+  padding: var(--lab-space-6) var(--lab-space-8); /* Existing 24px vertical rhythm; fixed 32px horizontal margin. */
 }
 .lab-master-player-frame {
   position: relative;

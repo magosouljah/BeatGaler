@@ -21,7 +21,7 @@ test("MASTER is a minimal resizable/collapsible navigation and centered componen
   for (const unwanted of ["Inspector","Search components","MotionPlayground","Tablet","Fluid","DsButton"]) {
     assert.doesNotMatch(master, new RegExp(unwanted));
   }
-  assert.match(css, /padding: var\(--lab-space-8\)/);
+  assert.match(css, /padding: var\(--lab-space-6\) var\(--lab-space-8\)/);
   assert.doesNotMatch(css, /lab-master-specimens \{ padding: var\(--lab-space-4\)/);
   assert.match(css, /lab-playbar-seek--preview/);
   assert.match(master, /<Player preview/);
