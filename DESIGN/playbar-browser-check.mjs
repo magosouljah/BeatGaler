@@ -106,5 +106,6 @@ try {
   ws?.close();
   vite.kill("SIGTERM");
   browser.kill("SIGTERM");
-  await rm(profile, { recursive:true, force:true });
+  // Chrome may still be writing its profile after SIGTERM; retry cleanup instead of failing a passed visual check.
+  await rm(profile, { recursive:true, force:true, maxRetries:8, retryDelay:200 });
 }
