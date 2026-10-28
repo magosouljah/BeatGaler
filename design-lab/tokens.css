@@ -18,6 +18,9 @@
   --lab-on-primary: #101010;
   --lab-primary: #ececec;
   --lab-primary-hover: #ffffff;
+  /* [LAB] Preserve landing CTA color while sizing follows button tokens. */
+  --lab-primary-hero: #f5f5f5;
+  --lab-primary-hero-border: #f3f3f3;
   --lab-error-bg: #2a1111;
   --lab-error-border: #6d3030;
   --lab-error-text: #ffb4b4;
