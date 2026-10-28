@@ -62,7 +62,7 @@ export default function LabToolbar({search,onSearchChange,sort,onSortChange,sele
     const next=e.key==="Home"?0:e.key==="End"?buttons.length-1:e.key==="ArrowDown"?(current+1)%buttons.length:(current+buttons.length-1)%buttons.length;
     e.preventDefault();buttons[next]?.focus();
   };
-  return <div ref={root} className="lab-toolbar" role="group" aria-label="Library toolbar">
+  return <div ref={root} className={`lab-toolbar${searchOpen?" is-searching":""}`} role="group" aria-label="Library toolbar">
     <div className={`lab-toolbar-search${searchOpen?" is-open":""}`}>
       <span aria-hidden="true" className="lab-toolbar-search-glass"/>
       <input ref={input} type="search" autoComplete="off" aria-label="Search beats" placeholder="Search beats"
