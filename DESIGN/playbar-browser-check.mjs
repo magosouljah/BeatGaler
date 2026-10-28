@@ -75,6 +75,7 @@ try {
     };
     return {
       artwork: rect(".lab-playbar-cover-slot .lab-playbar-artwork"),
+      text: rect(".lab-playbar-text-content"),
       track: rect(".lab-playbar-seek--preview > div"),
       metadata: rect(".lab-playbar-metadata-row > div > div:nth-child(2)"),
       layout: document.querySelector(".lab-playbar").dataset.layout,
@@ -85,23 +86,77 @@ try {
     const result = await call("Page.captureScreenshot", { format:"png", captureBeyondViewport:false });
     await writeFile(path.join(output, filename), Buffer.from(result.data, "base64"));
   };
+  // Measure every rendered frame through both directions. A single screenshot misses
+  // the original bug: the gap used to grow from 12px to 18px mid-morph.
+  const captureFrames = () => evaluate(`(() => {
+    window.__playbarMotionFrames = [];
+    let remaining = 34;
+    const record = () => {
+      const cover = document.querySelector(".lab-playbar-cover-slot .lab-playbar-artwork");
+      const label = document.querySelector(".lab-playbar-text-content");
+      if (cover && label) {
+        const image = cover.getBoundingClientRect();
+        const text = label.getBoundingClientRect();
+        window.__playbarMotionFrames.push({
+          gap: text.left - image.right,
+          imageWidth: image.width,
+          mode: document.querySelector(".lab-playbar").dataset.layout
+        });
+      }
+      if (--remaining > 0) requestAnimationFrame(record);
+    };
+    requestAnimationFrame(record);
+    return true;
+  })()`);
+  const frames = () => evaluate("window.__playbarMotionFrames ?? []");
+  const checkGapFrames = (samples, direction) => {
+    assert.ok(samples.length >= 12, `${direction}: not enough animation frames`);
+    for (const [index, item] of samples.entries()) {
+      assert.ok(Math.abs(item.gap - 12) < 1.5,
+        `${direction}: frame ${index} jumps to ${item.gap.toFixed(2)}px instead of 12px`);
+    }
+    const intermediate = samples.filter(item => item.imageWidth > 37 && item.imageWidth < 47);
+    assert.ok(intermediate.length >= 2, `${direction}: did not observe a smooth cover morph`);
+    return { frames: samples.length, interpolatedFrames: intermediate.length,
+      minGap: Math.min(...samples.map(item => item.gap)),
+      maxGap: Math.max(...samples.map(item => item.gap)) };
+  };
   await sleep(350);
   const wide = await measure();
   assert.equal(wide.layout, "wide");
   assert.ok(Math.abs(wide.artwork.width - 48) < 1, "Wide cover must measure 48px");
   assert.ok(Math.abs(wide.track.left - (wide.artwork.right + 12)) < 2, "Wide seek must align with text");
   assert.ok(wide.track.top - wide.metadata.bottom >= 10, "Wide metadata too close to seek");
+  assert.ok(Math.abs(wide.text.left - wide.artwork.right - 12) < 1, "Wide artwork/text gap is not 12px");
   await screenshot("master-playbar-wide.png");
+  await captureFrames();
   await viewport(980);
-  await sleep(350);
+  await sleep(650);
+  const intoCompact = checkGapFrames(await frames(), "wide-to-compact");
   const compact = await measure();
   assert.equal(compact.layout, "narrow");
   assert.ok(Math.abs(compact.artwork.width - 36) < 1, "Compact cover must measure 36px");
   assert.ok(Math.abs(compact.track.left - compact.artwork.left) < 2, "Compact seek must align with the cover");
   assert.ok(compact.track.top - compact.metadata.bottom >= 10, "Compact metadata too close to seek");
+  assert.ok(Math.abs(compact.text.left - compact.artwork.right - 12) < 1, "Compact gap must be exactly 12px");
   assert.ok(!compact.seekTransition.includes("left") && !compact.seekTransition.includes("width"), "Seek must not trail resize");
   await screenshot("master-playbar-compact.png");
-  console.log(JSON.stringify({ wide, compact, result: "PASS" }, null, 2));
+  await captureFrames();
+  await viewport(1440);
+  await sleep(650);
+  const intoWide = checkGapFrames(await frames(), "compact-to-wide");
+  const wideAgain = await measure();
+  assert.equal(wideAgain.layout, "wide");
+  assert.ok(Math.abs(wideAgain.text.left - wideAgain.artwork.right - 12) < 1);
+  // Reduced motion must remove both linked transforms simultaneously.
+  await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  const reduced = await evaluate(`(() => ({
+    cover: getComputedStyle(document.querySelector(".lab-playbar-artwork")).transitionDuration,
+    text: getComputedStyle(document.querySelector(".lab-playbar-text-content")).transitionDuration
+  }))()`);
+  assert.equal(reduced.cover, "0s", "Reduced motion: artwork still animates");
+  assert.equal(reduced.text, "0s", "Reduced motion: metadata still animates");
+  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, result: "PASS" }, null, 2));
 } finally {
   ws?.close();
   vite.kill("SIGTERM");
