@@ -183,7 +183,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
               {(["#303034","#050506","linear-gradient(#ef91bc 50%,#09090d 50%)","linear-gradient(#ef91bc 38%,#09090d 38%)","#ef91bc"] as const).map((background,i)=>(
                 <div key={i} data-glass-background={i+1}
                   style={{background,position:"relative",minHeight:154,borderRadius:20,display:"grid",placeItems:"center",overflow:"visible"}}>
-                  <CameraGlass size={92}/>
+                  <CameraGlass size={112}/>
                 </div>
               ))}
             </div>
