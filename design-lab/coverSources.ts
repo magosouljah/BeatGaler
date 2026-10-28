@@ -5,6 +5,9 @@ const imported = import.meta.glob("./assets/real-covers/*.{jpg,jpeg,png,webp,avi
 const covers = Object.entries(imported).sort(([a],[b]) => a.localeCompare(b,"en",{numeric:true})).map(([,url])=>url);
 export const REAL_COVER_COUNT = covers.length;
 export function getCoverSrc(id: string, mode: CoverMode, index: number): string | null {
- if(mode === "real" && covers.length) return covers[((index % covers.length) + covers.length) % covers.length];
+ if(mode === "real" && covers.length) {
+   const slot = Number.isFinite(index) ? Math.trunc(index) : 0;
+   return covers[((slot % covers.length) + covers.length) % covers.length];
+ }
  return getProceduralBeatBackgroundDataUrl(id);
 }
