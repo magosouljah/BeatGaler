@@ -80,7 +80,7 @@ export function LabPlayer({ beat, playing, onToggle, coverMode }: {
   return (
     <section className="lab-player" aria-label="Reproductor visual ficticio, sin audio">
       <div className="lab-player__track">
-        <LabArtwork beat={beat} />
+        <LabArtwork beat={beat} coverMode={coverMode} />
         <div className="lab-player__description">
           <strong title={beat.title}>{beat.title}</strong>
           <span>{beat.artist}</span>
