@@ -160,7 +160,7 @@ try {
   // Toolbar: interact with the actual rendered component in Chrome, capture both
   // popovers and confirm that they remain on the identical top-right anchor.
   await call("Emulation.setEmulatedMedia", { features: [] });
-  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar").click()');
+  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar V1").click()');
   for(let i=0;i<50;i++){
     if(await evaluate('Boolean(document.querySelector(".lab-master-toolbar-frame .lab-toolbar"))'))break;
     await sleep(100);
