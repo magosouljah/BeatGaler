@@ -3,7 +3,7 @@ import "./camera-glass.css";
 
 /**
  * Isolated material experiment. No production dependencies.
- * SVG displacement is applied to the backdrop, NOT to the camera glyph.
+ * Very light SVG displacement is applied to the backdrop, NOT to the camera glyph.
  */
 export default function CameraGlass({size=72}:{size?:number}) {
   const [pressed,setPressed]=useState(false);
@@ -17,7 +17,7 @@ export default function CameraGlass({size=72}:{size?:number}) {
       <defs>
         <filter id={filterId} x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
           <feTurbulence type="fractalNoise" baseFrequency=".018" numOctaves="1" seed="3" result="map"/>
-          <feDisplacementMap in="SourceGraphic" in2="map" scale="5" xChannelSelector="R" yChannelSelector="G"/>
+          <feDisplacementMap in="SourceGraphic" in2="map" scale="1.5" xChannelSelector="R" yChannelSelector="G"/>
         </filter>
       </defs>
     </svg>
