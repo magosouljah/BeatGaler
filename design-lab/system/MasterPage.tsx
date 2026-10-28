@@ -11,6 +11,7 @@ import { DEFAULT_COLORS, DEFAULT_FOUNDATIONS, FOUNDATION_DESCRIPTIONS, FOUNDATIO
 import type { Colors, FoundationSettings } from "./foundations";
 import { DsAlert, DsAvatar, DsBadge, DsBreadcrumbs, DsCheckbox, DsCombobox, DsDialog, DsEmpty, DsIcon, DsIconButton, DsMenu, DsPagination, DsPopover, DsProgress, DsRadioGroup, DsSegmented, DsSelect, DsSkeleton, DsSwitch, DsTable, DsTabs, DsTextarea, DsToolbar, DsTooltip } from "./primitives";
 import { MotionPlayground } from "../motion/MotionPlayground";
+import Orbit from "../motion/Orbit";
 
 type Props = {
   colors: Colors; setColors: Dispatch<SetStateAction<Colors>>;
@@ -35,7 +36,6 @@ function Meta({label,children}:{label:string;children:ReactNode}) {
   return <div className="ds-meta"><span>{label}</span><p>{children}</p></div>;
 }
 function Kicker({children}:{children:ReactNode}) {return <span className="ds-kicker">{children}</span>}
-function Well({title,children}:{title:string;children:ReactNode}) {return <div className="ds-well"><span className="ds-well-title">{title}</span>{children}</div>}
 export default function MasterPage({colors,setColors,settings,setSettings,coverMode,setCoverMode,playing,beat,toggle,selectBeat,onNavigate}:Props) {
   const [id,setId]=useState("colors");
   const [query,setQuery]=useState("");
@@ -61,7 +61,6 @@ export default function MasterPage({colors,setColors,settings,setSettings,coverM
   const [sort,setSort]=useState("manual");
   const [testEmpty,setTestEmpty]=useState(false);
   const [mobileNav,setMobileNav]=useState(false);
-  const [mode,setMode]=useState("generated");
   const entry=CATALOG.find(item=>item.id===id) ?? CATALOG[0];
   const matches=useMemo(()=>CATALOG.filter(item=>[item.title,item.id,item.group,item.description,item.area].join(" ").toLowerCase().includes(query.trim().toLowerCase())),[query]);
   const title=stress?"Schwarzlicht Sessions — Extended Edit, Remastered ∞ Edition": "Afterimage";
@@ -126,7 +125,7 @@ export default function MasterPage({colors,setColors,settings,setSettings,coverM
       case "library-pattern":return <div className="ds-stack"><DsToolbar><label className="ds-search-field"><DsIcon name="search"/><input aria-label="Filter library" placeholder="Filter beats…" value={search} onChange={e=>setSearch(e.target.value)}/></label><LabButton onClick={()=>onNavigate("gallery")}>Open full Gallery <DsIcon name="arrow" size={14}/></LabButton></DsToolbar><div className="ds-beats">{DEMO_BEATS.filter(b=>b.title.toLowerCase().includes(search.toLowerCase())).slice(0,3).map(item=><LabBeatTile key={item.id} beat={item} selected={playing&&beat.id===item.id} coverMode={coverMode} onPlay={selectBeat}/>)}</div></div>;
       case "selection-pattern":return <div className="ds-stack"><DsToolbar><DsBadge tone={selected.length?"success":"neutral"}>{selected.length} selected</DsBadge><LabButton onClick={()=>setSelected(selected.length===3?[]:DEMO_BEATS.slice(0,3).map(item=>item.id))}>Toggle all</LabButton><LabButton disabled={!selected.length} onClick={()=>{announce(selected.length+" beats organized");setSelected([])}}>Organize selected</LabButton></DsToolbar>{DEMO_BEATS.slice(0,3).map(item=><div className="ds-selection-row" key={item.id}><DsCheckbox label={item.title} checked={selected.includes(item.id)} onChange={()=>toggleSelect(item.id)}/><small>{item.bpm} BPM</small></div>)}</div>;
       case "metadata-pattern":return <div className="ds-form-width ds-stack"><LabField id="ds-meta-name" label="Beat name" placeholder="Afterimage" value={input} onChange={e=>setInput(e.target.value)} error={input.length>30?"Keep this demo value under 30 characters":undefined}/><DsSelect label="Primary tag" value={choice} onChange={e=>setChoice(e.target.value)} options={TAGS.map(t=>({value:t,label:t}))}/><label className="ds-range-label"><span>BPM <strong>{level+80}</strong></span><input type="range" min={0} max={120} value={level} onChange={e=>setLevel(Number(e.target.value))}/></label><LabButton variant="primary" disabled={input.length>30} onClick={()=>announce("Fictional metadata saved")}>Save changes</LabButton></div>;
-      case "orbit":return <div className="ds-stack"><p>The 24-cover orbit is active on Landing. It responds to pointer movement, scales by depth and respects reduced-motion preferences.</p><LabButton variant="primary" onClick={()=>onNavigate("landing")}>Open interactive orbit <DsIcon name="arrow" size={14}/></LabButton><div className="ds-artwork-grid">{DEMO_BEATS.slice(0,4).map(item=><LabArtwork beat={item} coverMode={coverMode} key={item.id}/>)}</div></div>;
+      case "orbit":return <div className="ds-stack"><div className="ds-orbit-preview"><Orbit coverMode={coverMode}/></div><p>Same reusable orbit as Landing: 24 covers, pointer repulsion, spatial depth and reduced-motion support.</p><LabButton variant="primary" onClick={()=>onNavigate("landing")}>Open full Landing orbit <DsIcon name="arrow" size={14}/></LabButton></div>;
       default:if(entry.area==="Motion & Physics")return <MotionPlayground key={id} initial={id as "spring"|"repel"|"attract"|"inertia"|"gravity"}/>;
       return <p>Select a component.</p>;
     }
