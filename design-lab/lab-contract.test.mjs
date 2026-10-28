@@ -22,10 +22,10 @@ test("lab does not import product code or initiate remote requests", () => {
   }
 });
 
-test("baseline neutral tokens preserve values documented from main", () => {
+test("lab tokens preserve source values except the exact procedural artwork canvas", () => {
   const css = read("./tokens.css");
   const tokens = {
-    canvas: "#090909", surface: "#101010", raised: "#151515", hover: "#1c1c1c",
+    canvas: "#0c0c0c", surface: "#101010", raised: "#151515", hover: "#1c1c1c",
     pressed: "#222222", ink: "#f2f2f2", secondary: "#b0b0b0", muted: "#8b8b8b",
     hairline: "#242424", border: "#343434", focus: "#f2f2f2",
   };
