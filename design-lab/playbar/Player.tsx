@@ -406,7 +406,7 @@ export default function Player({
     observer.observe(root);
     observer.observe(trackData);
     return () => observer.disconnect();
-  }, [preview, viewportWidth]);
+  }, [preview]);
 
   useEffect(() => {
     const onDocMouseDown = (event: MouseEvent) => {
