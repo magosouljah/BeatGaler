@@ -3,7 +3,7 @@ on:
   push:
     branches: [design/beatgaler-design-system-lab-v1]
     paths:
-      - "design-lab/**"
+      - "DESIGN/**"
       - "BLUEPRINT/DESIGN-SYSTEM/**"
       - ".github/workflows/design-lab-workbench.yml"
   workflow_dispatch:
@@ -17,6 +17,6 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - run: node --test design-lab/lab-contract.test.mjs
-      - run: npx --no-install tsc --project design-lab/tsconfig.json --noEmit
-      - run: npx --no-install vite build --config design-lab/vite.config.ts
+      - run: node --test DESIGN/lab-contract.test.mjs
+      - run: npx --no-install tsc --project DESIGN/tsconfig.json --noEmit
+      - run: npx --no-install vite build --config DESIGN/vite.config.ts

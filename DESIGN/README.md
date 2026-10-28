@@ -1,36 +1,37 @@
-# BeatGaler Design Lab — taller de componentes
+# DESIGN — BeatGaler
 
-Este laboratorio está aislado de la aplicación real. **MASTER es un taller minimalista:** navegación izquierda (reglas/componentes) redimensionable y ocultable, y vista derecha con el componente centrado, sin dashboard, inspector, catálogo inventado ni vistas Fluid/Tablet/Phone. Reglas completas en `BLUEPRINT/DESIGN-SYSTEM/MASTER.md`.
+**Esta carpeta contiene y ejecuta el laboratorio experimental**, anteriormente en `design-lab/`. Solo hay una aplicación y un servidor; no se mantiene una segunda copia del laboratorio.
 
-## Dirección decidida
+## Carpetas
 
-Añadimos **un componente real de BeatGaler cada vez** y lo perfeccionamos antes de avanzar. El primer componente es la **Playbar**. Landing y Gallery se conservan como demos separadas; no son la autoridad sobre el diseño de MASTER.
+- **`MASTER/`** — Design System incremental: navegación izquierda, reglas, Playbar tomada de la producción y sus 14 iconos originales. Márgenes horizontales aprobados de 32 px; Playbar de 68 px de alto, con transición al reducirse.
+- **`LANDING/`** — landing experimental y su órbita circular de portadas.
+- **`GALLERY/`** — galería ficticia, filtros y reproductor de muestra anterior.
+- **`shared/`** — componentes, tokens, datos de beats ficticios, generador original `bg-v1` y 24 carátulas locales.
+- **`App.tsx`, `main.tsx`, `index.html`, `vite.config.ts`** — la única app y servidor aislados.
 
-## Playbar: procedencia y límites
-
-- Fuente de la UI: `src/components/Player.tsx` en la versión publicada `release/0.9.0-beta.2` (mismo código que `main` al copiarlo).
-- Copia adaptada a `design-lab/playbar/Player.tsx`. Conserva la geometría, estilos en línea, iconos PNG originales, controles de shuffle/anterior/play/siguiente/repeat, scrubber, cola, menú y **slider de volumen vertical original**.
-- Los 14 PNG originales de `src/assets/player-icons/` se copiaron íntegros a `design-lab/playbar/assets/`.
-- La copia del componente sustituye imports de servicios, artwork y acceso al sistema de archivos. **Además, la versión de MASTER ajusta exclusivamente su presentación responsive**: mantiene 68 px de alto, pasa la portada a 36 px y desplaza el progreso a una fila inferior al reducirse el ancho disponible. La lógica de reproducción usa estado ficticio. **No hay audio ni Cloud ni usuarios reales**. La fuente publicada y los assets originales no se modifican.
-- `design-lab/playbar/MasterPage.tsx` muestra la única pieza de trabajo y la regla visual de Márgenes. La navegación lateral se arrastra para cambiar tamaño; debajo del mínimo se oculta y se restaura con el botón superior izquierdo. En móvil funciona como panel superpuesto. `master.css` usa `--lab-space-8` (32 px) como margen horizontal fijo del canvas de MASTER. La Playbar de MASTER mantiene 68 px de alto y al estrecharse reduce la portada y coloca el scrubber debajo de ella con una transición breve, sin modificar producción.
-
-## Ejecutar (PowerShell)
+## Abrir desde la raíz del repositorio (PowerShell)
 
 ```powershell
-cd E:\777\app\BeatGaler
 git fetch origin refs/heads/design/beatgaler-design-system-lab-v1:refs/remotes/origin/design/beatgaler-design-system-lab-v1
 git merge --ff-only origin/design/beatgaler-design-system-lab-v1
-npx --no-install vite --config design-lab/vite.config.ts --port 4174
+npx --no-install vite --config DESIGN/vite.config.ts --port 4174
 ```
 
-Abre http://127.0.0.1:4174/ → **MASTER**.
+Abrir **http://127.0.0.1:4174/** y entrar a MASTER. Detener Vite con `Ctrl+C`. **Ya no existe** el comando antiguo con `design-lab/vite.config.ts`.
 
-## Verificar
+## Comprobaciones
 
 ```powershell
-node --test design-lab/lab-contract.test.mjs
-npx --no-install tsc --project design-lab/tsconfig.json --noEmit
-npx --no-install vite build --config design-lab/vite.config.ts
+node --test DESIGN/lab-contract.test.mjs
+npx --no-install tsc --project DESIGN/tsconfig.json --noEmit
+npx --no-install vite build --config DESIGN/vite.config.ts
 ```
 
-`BLUEPRINT/DESIGN-SYSTEM/README.md` define el flujo de trabajo. No se toca `src/`, `main` ni producción.
+El build se escribe en `DESIGN/dist/` (ignorado por Git). Los 24 covers y los 14 iconos se movieron sin alterar sus bytes. El laboratorio no accede a usuarios, producción, API, Cloud ni audio. Los archivos de `src/` son la referencia de los componentes reales, pero **no se importan directamente** al bundle.
+
+## Cómo trabajar
+
+- `BLUEPRINT/DESIGN-SYSTEM/MASTER.md` establece cómo funciona MASTER y cómo se agregan componentes.
+- `BLUEPRINT/DESIGN-SYSTEM/DESIGN.md` enumera lo implementado; `ARCHITECTURE.md` explica su código. `REFERENCES.md` y el transcript son fuentes metodológicas.
+- Antes de cada incorporación, consultar las skills relevantes de `.agents/skills/`. Añadir **solo componentes aprobados, uno a la vez**.
