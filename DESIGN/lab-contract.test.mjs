@@ -23,7 +23,7 @@ test("MASTER is a minimal resizable/collapsible navigation and centered componen
   }
   assert.match(css, /padding: var\(--lab-space-6\) var\(--lab-space-8\)/);
   assert.doesNotMatch(css, /lab-master-specimens \{ padding: var\(--lab-space-4\)/);
-  assert.match(css, /lab-playbar-seek--preview/);
+  assert.match(read("./MASTER/Player.tsx"), /lab-playbar-seek--preview/);
   assert.match(master, /<Player preview/);
   assert.match(read("../BLUEPRINT/DESIGN-SYSTEM/MASTER.md"), /Botones de Playbar/);
   assert.doesNotMatch(read("./main.tsx"), /studio\.css/);
