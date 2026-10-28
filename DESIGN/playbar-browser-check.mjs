@@ -160,7 +160,7 @@ try {
   // Toolbar: interact with the actual rendered component in Chrome, capture both
   // popovers and confirm that they remain on the identical top-right anchor.
   await call("Emulation.setEmulatedMedia", { features: [] });
-  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar V1").click()');
+  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar").click()');
   for(let i=0;i<50;i++){
     if(await evaluate('Boolean(document.querySelector(".lab-master-toolbar-frame .lab-toolbar"))'))break;
     await sleep(100);
@@ -227,61 +227,6 @@ try {
   assert.ok(selectState.border.includes("255, 255, 255"),"The active X lacks the emphasized edge");
   await screenshot("master-toolbar-select.png");
 
-  // Compare V2 against the untouched V1 in a real browser. The optical
-  // material is intentionally not mounted on any production/Gallery surface.
-  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar V2").click()');
-  for(let i=0;i<50;i++) {
-    if(await evaluate('Boolean(document.querySelector(".lab-toolbar-v2 .lab-toolbar-v2-engine .glass"))'))break;
-    await sleep(100);
-  }
-  await sleep(350);
-  const v2SkinCount=await evaluate('document.querySelectorAll(".lab-toolbar-v2 .lab-toolbar-v2-skin").length');
-  assert.equal(v2SkinCount,4,"V2 must use original liquid glass engine on all four controls");
-  const v2FilterCount=await evaluate('document.querySelectorAll(".lab-toolbar-v2 feDisplacementMap").length');
-  assert.ok(v2FilterCount>0,"V2 missing rdev SVG refraction engine");
-  await screenshot("master-toolbar-v2-default.png");
-  await evaluate('document.querySelector(".lab-toolbar-v2 .lab-toolbar-search-trigger").click()');
-  await sleep(280);
-  const v2Search=await evaluate(`(() => {
-    const outer=document.querySelector(".lab-toolbar-v2 .lab-toolbar-search-glass").getBoundingClientRect();
-    const glass=document.querySelector(".lab-toolbar-v2 .lab-toolbar-search-glass .glass").getBoundingClientRect();
-    const input=document.querySelector(".lab-toolbar-v2 .lab-toolbar-search-input");
-    return {outerWidth:outer.width,glassWidth:glass.width,focus:document.activeElement===input,outline:getComputedStyle(input).outlineStyle};
-  })()`);
-  assert.ok(v2Search.outerWidth>180,"V2 search circle did not expand");
-  assert.ok(Math.abs(v2Search.outerWidth-v2Search.glassWidth)<3,"V2 displacement layer does not follow search morph");
-  assert.ok(v2Search.focus && v2Search.outline==="none","V2 input focus is incorrect");
-  await screenshot("master-toolbar-v2-search.png");
-  await evaluate('document.querySelector(".lab-toolbar-v2 .lab-toolbar-select").click()');
-  await sleep(210);
-  assert.ok(await evaluate('document.querySelector(".lab-toolbar-v2 .lab-toolbar-select").classList.contains("is-selecting")'),"V2 select fails");
-  await screenshot("master-toolbar-v2-select.png");
-  await evaluate(`document.querySelector('.lab-toolbar-v2 .lab-toolbar-circle[aria-label="Sort beats"]').click()`);
-  await sleep(240);
-  assert.ok(await evaluate(`document.querySelector('.lab-toolbar-v2 [role=menu][aria-label="Sort beats"]').classList.contains('is-open')`),"V2 sort menu fails");
-  await screenshot("master-toolbar-v2-sorting.png");
-  await evaluate(`document.querySelector('.lab-toolbar-v2 .lab-toolbar-circle[aria-label="Profile"]').click()`);
-  await sleep(240);
-  assert.ok(await evaluate(`document.querySelector('.lab-toolbar-v2 [role=menu][aria-label="Profile"]').classList.contains('is-open')`),"V2 profile menu fails");
-  await screenshot("master-toolbar-v2-profile.png");
-  await viewport(390,844);
-  await sleep(360);
-  const v2Mobile=await evaluate(`(() => {
-    const toolbar=document.querySelector(".lab-toolbar-v2").getBoundingClientRect();
-    const buttons=[...document.querySelectorAll(".lab-toolbar-v2 .lab-toolbar-search-trigger,.lab-toolbar-v2 .lab-toolbar-circle,.lab-toolbar-v2 .lab-toolbar-select")];
-    return {toolbarLeft:toolbar.left,toolbarRight:toolbar.right,controls:buttons.map(b=>({left:b.getBoundingClientRect().left,right:b.getBoundingClientRect().right}))};
-  })()`);
-  assert.equal(v2Mobile.controls.length,4);
-  assert.ok(v2Mobile.controls.every(r=>r.left>=0&&r.right<=390),"V2 controls clipped on mobile");
-  await screenshot("master-toolbar-v2-mobile.png");
-  await viewport(1440);
-  await sleep(220);
-  // Restore the sidebar after the narrow breakpoint auto-closes it.
-  const showNavigation=await evaluate('Boolean(document.querySelector(".lab-master-open-nav"))');
-  if(showNavigation) await evaluate('document.querySelector(".lab-master-open-nav").click()');
-  // Return to V1 to preserve its existing mobile regression checks.
-  await evaluate('[...document.querySelectorAll(".lab-master-sidebar-nav button")].find(x => x.textContent === "Toolbar V1").click()');
-  await sleep(230);
   await viewport(390,844);
   await sleep(260);
   const mobile=await evaluate(`(() => {
@@ -297,7 +242,7 @@ try {
   const mobileSearch=await evaluate('document.querySelector(".lab-toolbar-search-glass").getBoundingClientRect().left');
   assert.ok(mobileSearch>=0,"Mobile expanded search overflows left");
   await screenshot("master-toolbar-mobile-search.png");
-  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{sortAnchor,profileAnchor,searchShape,selectState,mobile,mobileSearch,v2SkinCount,v2FilterCount,v2Search,v2Mobile}, result: "PASS" }, null, 2));
+  console.log(JSON.stringify({ wide, compact, intoCompact, intoWide, reduced, toolbar:{sortAnchor,profileAnchor,searchShape,selectState,mobile,mobileSearch}, result: "PASS" }, null, 2));
 } finally {
   ws?.close();
   vite.kill("SIGTERM");

@@ -42,7 +42,3 @@ El build se escribe en `DESIGN/dist/` (ignorado por Git). Los 24 covers y los 14
 - `BLUEPRINT/DESIGN-SYSTEM/MASTER.md` establece cómo funciona MASTER y cómo se agregan componentes.
 - `BLUEPRINT/DESIGN-SYSTEM/DESIGN.md` enumera lo implementado; `ARCHITECTURE.md` explica su código. `REFERENCES.md` y el transcript son fuentes metodológicas.
 - Antes de cada incorporación, consultar las skills relevantes de `.agents/skills/`. Añadir **solo componentes aprobados, uno a la vez**.
-
-## Toolbar V2 (experimento)
-
-En MASTER hay **Toolbar V1** (original) y **Toolbar V2** (mismo comportamiento, motor óptico adaptado de `rdev/liquid-glass-react` bajo MIT). La V2 está aislada en `DESIGN/shared/ToolbarV2.tsx`; su copia de motor y atribución están en `DESIGN/vendor/liquid-glass-react/`. No reemplaza la Gallery ni añade paquetes a producción. Evaluar visualmente y medir FPS antes de aprobarla.
