@@ -69,6 +69,11 @@ export default function MasterPage({ coverMode, setCoverMode }: {
   const [toolbarSearch, setToolbarSearch] = useState("");
   const [toolbarSort, setToolbarSort] = useState<LabSort>("manual");
   const [toolbarSelecting, setToolbarSelecting] = useState(false);
+  // Separate V2 fixtures so switching versions never leaves the new specimen in
+  // the previous version's search/sort/select state.
+  const [toolbarV2Search, setToolbarV2Search] = useState("");
+  const [toolbarV2Sort, setToolbarV2Sort] = useState<LabSort>("manual");
+  const [toolbarV2Selecting, setToolbarV2Selecting] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
   const dragActive = useRef(false);
@@ -179,8 +184,8 @@ export default function MasterPage({ coverMode, setCoverMode }: {
         ) : section === "toolbar-v2" ? (
           <div className="lab-master-specimens">
             <div className="lab-master-toolbar-frame">
-              <LabToolbarV2 search={toolbarSearch} onSearchChange={setToolbarSearch} sort={toolbarSort} onSortChange={setToolbarSort}
-                selecting={toolbarSelecting} onToggleSelect={() => setToolbarSelecting(value => !value)}
+              <LabToolbarV2 search={toolbarV2Search} onSearchChange={setToolbarV2Search} sort={toolbarV2Sort} onSortChange={setToolbarV2Sort}
+                selecting={toolbarV2Selecting} onToggleSelect={() => setToolbarV2Selecting(value => !value)}
                 onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")} />
             </div>
           </div>
