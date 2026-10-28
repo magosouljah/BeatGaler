@@ -2,7 +2,7 @@
 
 **Esta interfaz interactiva es la referencia visual y funcional actual del Design System experimental.** MASTER, Landing y Gallery muestran lo que realmente existe hoy, no un plan ideal. Las reglas de trabajo están en [BLUEPRINT/DESIGN-SYSTEM/README.md](../BLUEPRINT/DESIGN-SYSTEM/README.md). Antes de modificar la UI, los agentes deben leer las skills adecuadas de [`.agents/skills/`](../.agents/skills/README.md).
 
-**MASTER aún no está aprobado visualmente**: funciona como panel de muestras/editor parcial y se rediseñará cuando se elija esa tarea. La órbita de Landing funciona en su código actual, pero no es todavía una primitiva reutilizable de físicas. No inventar en documentos features no implementadas.
+**MASTER se reconstruyó como biblioteca interactiva (propuesta visual todavía pendiente de aprobación)**. La órbita de Landing ahora es un componente compartido con MASTER y las matemáticas de física viven en módulos aislados de `motion/`. Documentar solo las capacidades que existen en el código.
 
 **No es producción.** No utiliza cuentas, datos de usuarios, Telegram, Cloud API, audio, servicios externos ni carga archivos. Solo hay fixtures y estado local del navegador.
 
@@ -18,6 +18,18 @@ npx --no-install vite --config design-lab/vite.config.ts
 ```
 
 Abrir **http://127.0.0.1:4173/**. Para detener, `Ctrl+C`.
+
+## MASTER — Design System Workbench [LAB]
+
+MASTER ofrece **58 fichas** distribuidas entre **Foundations**, **Components**, **Motion & Physics** y **Patterns**. Cada ficha incluye descripción, anatomía, propiedades, estados y archivo fuente. La navegación tiene búsqueda por componente/grupo, inspector de propiedades a la derecha, preview redimensionable (Fluid / Tablet / Phone) y un control para someter muestras a texto largo. Es una biblioteca de prototipos con estado local; **58 fichas no significan 58 componentes de producción acabados**.
+
+Los controles implementados cubren botones y estados, icon buttons, input y textarea, select, combobox, radio, checkbox, switch, slider, chips/tags, badges, avatares, artwork, beat cards, player, cards, lista, tabla, tabs, breadcrumbs, paginación, toolbar, menú, popover, tooltip, diálogo, alertas, toast, progreso, skeleton y empty state.
+
+El editor de Foundations modifica en tiempo real colores de superficie/texto/acento, espaciamiento base, radios, tamaño de control, tipografía de muestras, sombras y duración normal. Los elementos que usan esos tokens reaccionan a los cambios. El canvas de artwork sigue bloqueado a `#0c0c0c`, y **algunas decisiones de Landing y Gallery aún usan CSS local**. El modo de portadas se comparte entre las tres vistas y se recuerda en la sesión.
+
+La sección Motion & Physics permite probar cinco comportamientos (spring, atracción, repulsión, inercia y gravedad) con drag, puntero, teclado, parámetros editables, pausa, reset y reduced motion. Sus cálculos están en `motion/physics.ts` y son reutilizables por otros componentes. La órbita original está en `motion/Orbit.tsx` y se monta tanto en Landing como en la ficha de MASTER.
+
+**Pruebas automatizadas:** `lab-contract.test.mjs`, `system-contract.test.mjs`, TypeScript estricto de `design-lab/tsconfig.json` y build Vite independiente. GitHub Actions: [Design Lab Workbench](https://github.com/magosouljah/BeatGaler/actions/workflows/design-lab-workbench.yml). La primera ejecución validada pasó el 28-10-2026; todavía falta inspección visual/manual real a 320px, zoom 200%, screen readers y teléfono físico.
 
 ## Navegación
 
@@ -52,10 +64,11 @@ La copia del generador se verifica contra el archivo fuente con `lab-contract.te
 ## Comprobaciones seguras y focalizadas
 
 ```powershell
-node --test design-lab/lab-contract.test.mjs
+node --test design-lab/lab-contract.test.mjs design-lab/system-contract.test.mjs
+npx --no-install tsc --project design-lab/tsconfig.json --noEmit
 npx --no-install vite build --config design-lab/vite.config.ts
 ```
 
 El build solo genera `design-lab/dist/` (ignorado por Git). No correr suites globales ni desplegar la app. Comprobar manualmente escritorio, móvil, contraste, foco de teclado y reducción de movimiento.
 
-El color `--lab-canvas` está fijado a `#0c0c0c` para coincidir con el generador; no significa que se haya cambiado el `#090909` del diseño actual de la aplicación real. Los demás tokens siguen experimentales. La guía del Design System experimental y su regla de autoridad están en `BLUEPRINT/DESIGN-SYSTEM/README.md`. `DESIGN.md` es solo un inventario del estado implementado.
+MASTER utiliza ahora `system/MasterPage.tsx` y `system/studio.css`, no la antigua cuadrícula de muestras. El color `--lab-canvas` está fijado a `#0c0c0c` para coincidir con el generador; no significa que se haya cambiado el `#090909` del diseño actual de la aplicación real. Los demás tokens siguen experimentales. La guía del Design System experimental y su regla de autoridad están en `BLUEPRINT/DESIGN-SYSTEM/README.md`. `DESIGN.md` es solo un inventario del estado implementado.
