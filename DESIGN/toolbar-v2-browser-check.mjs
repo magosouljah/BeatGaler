@@ -59,6 +59,9 @@ try {
  assert.equal(await read("document.querySelectorAll('[data-toolbar-background]').length"),5,"Five optical backdrops required");
  assert.ok(await read("Boolean(document.querySelector('[aria-label=\"Toolbar V1 — original\"] .lab-toolbar'))"),"Toolbar V1 missing");
  const allLens=await read("(() => {const panels=[...document.querySelectorAll('[data-toolbar-background]')];return panels.map(p=>{const t=p.querySelector('.lab-toolbar-v2');return {buttons:t.querySelectorAll('.glass-button--toolbar').length,lenses:t.querySelectorAll('.shape-glass-surface').length,edges:t.querySelectorAll('.glass-button-edge-left').length,materials:[...t.querySelectorAll('.shape-glass-surface')].map(l=>getComputedStyle(l).backgroundImage),maps:t.querySelectorAll('feImage[ref]').length}})})()");
+ const optics=await read("(() => {const root=document.querySelector('[data-toolbar-background=\\\"1\\\"] .glass-button--liquid');return {filter:getComputedStyle(root.querySelector('.shape-glass-surface')).backdropFilter,maps:[...root.querySelectorAll('feImage')].map(n=>n.getAttribute('href'))}})()");
+ assert.ok(optics.maps.length===2&&optics.maps.every(x=>x?.startsWith("data:image/png;base64,")),"Optical maps missing in Chrome");
+ assert.ok(optics.filter.includes("url("),"Optical backdrop filter was not installed");
  for(const row of allLens){
   assert.equal(row.buttons,4,"Each toolbar must have four glass surfaces");
   assert.equal(row.lenses,4,"Each control must use the shape-aware lens");
@@ -89,6 +92,14 @@ try {
  assert.equal(await read("document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+").value"),"aurora","Search input must accept text");
  assert.ok(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.shape-glass-surface').length===1"),"Search has more than one glass layer");
  await screenshot("toolbar-v2-search-desktop.png");
+ const selectLens=select(row,".lab-toolbar-v2-select");
+ const beforeSpec=await read("document.querySelector("+JSON.stringify(selectLens)+").querySelectorAll('feImage')[1].getAttribute('href')");
+ await evaluate("(() => {const el=document.querySelector("+JSON.stringify(selectLens)+");const r=el.getBoundingClientRect();el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:r.right-2,clientY:r.top+2}))})()");
+ await sleep(120);
+ const afterSpec=await read("document.querySelector("+JSON.stringify(selectLens)+").querySelectorAll('feImage')[1].getAttribute('href')");
+ assert.notEqual(beforeSpec,afterSpec,"Specular highlight remained static after pointer movement");
+ await screenshot("toolbar-v2-pointer-reflection-desktop.png");
+ await evaluate("document.querySelector("+JSON.stringify(selectLens)+").dispatchEvent(new PointerEvent('pointerleave',{bubbles:false}))");
  await click(trigger);await sleep(50);await click(trigger);await sleep(35);await click(trigger);await sleep(290);
  assert.ok(Math.abs((await size(search)).width-44)<1,"Rapid reversal left search in an intermediate state");
  await click(sort);await sleep(250);
@@ -147,7 +158,7 @@ try {
  const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
  assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
  assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:15,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ console.log(JSON.stringify({result:"PASS",screenshots:16,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
  await sleep(600);
