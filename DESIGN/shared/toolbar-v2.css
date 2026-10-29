@@ -1,0 +1,83 @@
+/* Toolbar V2: optical material is ONLY CameraGlass -> GlassButton.
+   No generic glass-v2 overlays, rings, or independent background on controls. */
+.lab-toolbar-v2 {
+  --v2-ink:rgba(255,255,255,.94);
+  display:flex;align-items:center;justify-content:flex-end;gap:10px;
+  position:relative;isolation:isolate;width:min(100%,520px);
+  color:var(--v2-ink);min-height:44px;
+}
+.lab-toolbar-v2 button{cursor:pointer;-webkit-tap-highlight-color:transparent;color:inherit;touch-action:manipulation}
+.lab-toolbar-v2 svg{display:block}
+.lab-toolbar-v2 .glass-button--toolbar{
+  flex:none;height:44px;min-height:44px;
+  transition:width 220ms cubic-bezier(.2,.8,.2,1),transform 160ms cubic-bezier(.2,.8,.2,1);
+}
+.lab-toolbar-v2 .glass-button-content > svg{width:19px;height:19px}
+.lab-toolbar-v2-circle {width:44px}
+.lab-toolbar-v2-select {font:600 12px/1 system-ui,sans-serif}
+.lab-toolbar-v2-select-text,.lab-toolbar-v2-select-x{
+  position:absolute;inset:0;display:grid;place-items:center;
+  transition:opacity 130ms ease,transform 200ms cubic-bezier(.2,.8,.2,1);
+}
+.lab-toolbar-v2-select-x{opacity:0;transform:scale(.86)}
+.lab-toolbar-v2-select.is-selecting .lab-toolbar-v2-select-text{opacity:0;transform:scale(.86)}
+.lab-toolbar-v2-select.is-selecting .lab-toolbar-v2-select-x{opacity:1;transform:none}
+.lab-toolbar-v2-search-slot{position:relative;z-index:5;flex:none;width:44px;height:44px}
+.lab-toolbar-v2 .lab-toolbar-v2-search{position:absolute;top:0;right:0;left:auto;z-index:5}
+.lab-toolbar-v2-search .glass-button-content{position:relative}
+.lab-toolbar-v2-search-trigger{
+  position:absolute;right:0;top:0;z-index:2;width:44px;height:44px;
+  display:grid;place-items:center;border:0;border-radius:999px;background:transparent;
+  pointer-events:auto;padding:0;
+}
+.lab-toolbar-v2-search-input{
+  position:absolute;left:17px;top:0;z-index:1;height:44px;width:calc(100% - 72px);
+  min-width:0;border:0;outline:none;box-shadow:none;background:transparent;color:white;
+  font:500 13px/1 system-ui,sans-serif;opacity:0;pointer-events:none;
+  transform:translateX(7px);transition:opacity 130ms ease,transform 180ms cubic-bezier(.2,.8,.2,1);
+}
+.lab-toolbar-v2-search.is-open .lab-toolbar-v2-search-input{opacity:1;pointer-events:auto;transform:none}
+.lab-toolbar-v2-search-input::placeholder{color:rgba(255,255,255,.65)}
+.lab-toolbar-v2-search-dot{position:absolute;right:6px;bottom:6px;width:5px;height:5px;border-radius:50%;background:white}
+.lab-toolbar-v2-popover{position:absolute;top:calc(100% + 12px);right:0;z-index:20;width:min(260px,calc(100vw - 32px));padding:12px;border:1px solid rgba(255,255,255,.22);border-radius:23px;color:white;background:rgba(28,28,32,.66);backdrop-filter:blur(30px) saturate(1.45);-webkit-backdrop-filter:blur(30px) saturate(1.45);box-shadow:inset 0 1px rgba(255,255,255,.20),0 20px 55px rgba(0,0,0,.35);visibility:hidden;opacity:0;pointer-events:none;transform:translateY(-6px) scale(.97);transform-origin:top right;transition:opacity 190ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms}
+/* Each MASTER background is a separate specimen. Lift the active specimen above
+   the ones following it, otherwise their toolbars cover the lower menu items. */
+[data-toolbar-background]:has(.lab-toolbar-v2-popover.is-open) {
+  position: relative;
+  z-index: 10;
+}
+.lab-toolbar-v2-popover.is-open{visibility:visible;opacity:1;pointer-events:auto;transform:none;transition:opacity 190ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s}
+.lab-toolbar-v2-menu-title{min-height:33px;display:flex;align-items:center;padding:0 11px;font-size:12px;font-weight:600;color:rgba(255,255,255,.6)}
+.lab-toolbar-v2-menu-divider{height:1px;margin:7px;background:rgba(255,255,255,.15)}
+.lab-toolbar-v2-menu-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:38px;padding:0 12px;border:0;border-radius:12px;text-align:left;background:transparent;font-size:13px}
+.lab-toolbar-v2-menu-item.is-current{font-weight:650}
+.lab-toolbar-v2-selected-dot{width:6px;height:6px;border-radius:50%;background:white;opacity:0}
+.lab-toolbar-v2-menu-item.is-current .lab-toolbar-v2-selected-dot{opacity:1}
+.lab-toolbar-v2-profile-name{display:flex;align-items:center;gap:10px;padding:2px 11px 4px;min-height:39px;font-size:13px}
+.lab-toolbar-v2-profile-name strong{font-weight:620;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lab-toolbar-v2-avatar{display:grid;place-items:center;width:26px;height:26px;flex:none;border-radius:50%;background:rgba(255,255,255,.12)}
+.lab-toolbar-v2-avatar svg{width:17px;height:17px}
+
+.lab-toolbar-v2 button:focus-visible{outline:2px solid white;outline-offset:3px}
+.lab-root .lab-toolbar-v2-search-input:focus,
+.lab-root .lab-toolbar-v2-search-input:focus-visible{outline:none;box-shadow:none}
+.lab-toolbar-v2-search:focus-within .camera-glass-lens{filter:brightness(1.05)}
+@media (hover:hover) and (pointer:fine){
+  .lab-toolbar-v2-menu-item:hover{background:rgba(255,255,255,.12)}
+}
+@media(max-width:590px){
+ .lab-toolbar-v2{width:100%;flex-direction:row-reverse;justify-content:flex-start;gap:8px}
+ .lab-toolbar-v2.is-searching>.glass-button--toolbar{
+   opacity:0;pointer-events:none;transition:opacity 100ms ease;
+ }
+ .lab-toolbar-v2.is-searching .lab-toolbar-v2-search{width:min(290px,calc(100vw - 64px))!important}
+ .lab-toolbar-v2-search-input{font-size:16px}
+}
+@media(prefers-reduced-motion:reduce){
+ .lab-toolbar-v2 .glass-button--toolbar,
+ .lab-toolbar-v2 .glass-button--toolbar *,
+ .lab-toolbar-v2 .lab-toolbar-v2-popover{transition-duration:0.01ms!important}
+}
+@media(prefers-reduced-transparency:reduce){
+ .lab-toolbar-v2-popover{backdrop-filter:none;-webkit-backdrop-filter:none;background:#29292d}
+}

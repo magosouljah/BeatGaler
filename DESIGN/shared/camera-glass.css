@@ -1,0 +1,80 @@
+/* Camera glass specimen: restrained diffuse material, calibrated against the
+   supplied black-background reference, not the high-gloss previous prototype. */
+.camera-glass {
+  --camera-size: 72px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--camera-size);
+  height: var(--camera-size);
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  isolation: isolate;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 230ms cubic-bezier(.2,.8,.2,1);
+}
+.camera-glass-defs { position: absolute; pointer-events: none; }
+.camera-glass-lens {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  /* The target is a charcoal gradient, not a mirror-black convex sphere.
+     Its alpha lets the same material visibly inherit color from pink backdrops. */
+  background: linear-gradient(135deg,rgba(38,38,38,.80),rgba(54,54,54,.80));
+  -webkit-backdrop-filter: blur(6px) saturate(1.2);
+  backdrop-filter: blur(6px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2) var(--camera-filter);
+  backdrop-filter: blur(6px) saturate(1.2) var(--camera-filter);
+  /* No continuous inner ring: all edge lighting is directionally masked below. */
+}
+/* Subpixel antialiasing is handled by the SVG strokes; no CSS border masks,
+   shadow rings, or full-circle highlight layers. */
+.camera-glass-edge {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  z-index: 1;
+  pointer-events: none;
+}
+.camera-glass-symbol {
+  position: relative;
+  z-index: 1;
+  width: 35%;
+  height: auto;
+  transform: translate(-.5px,-1px);
+  pointer-events: none;
+  filter: drop-shadow(0 .35px .5px rgba(0,0,0,.10));
+}
+.camera-glass.is-pressed .camera-glass-lens {
+  background: linear-gradient(135deg,rgba(13,13,16,.94),rgba(24,24,27,.94));
+}
+.camera-glass:active { transform: scale(.97); }
+.camera-glass:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+@media (prefers-reduced-motion: reduce) { .camera-glass { transition: none; } }
+@media (prefers-reduced-transparency: reduce) {
+  .camera-glass-lens { backdrop-filter: none; -webkit-backdrop-filter: none; background: #292929; }
+}
+
+/* Shared content plane, no new optical layer. The lens and SVG contours
+   remain byte-for-byte equivalent to the approved camera specimen. */
+.glass-button-content {position:relative;z-index:2;display:grid;place-items:center;width:100%;height:100%;pointer-events:none}
+.glass-button-content .camera-glass-symbol {width:35%;height:auto}
+.glass-button.glass-button--toolbar .camera-glass-symbol {width:20px;height:20px;transform:none}
+.glass-button.glass-button--toolbar {--camera-size:44px;touch-action:manipulation;user-select:none}
+
+
+/* The approved localized arcs are split between the two ends of a capsule.
+   At circular width they coincide exactly with the approved single contour. */
+.glass-button .camera-glass-edge{width:var(--camera-size);height:var(--camera-size)}
+.glass-button-edge-left{left:0;right:auto}
+.glass-button-edge-right{left:auto;right:0}

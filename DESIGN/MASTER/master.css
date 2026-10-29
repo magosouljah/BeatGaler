@@ -1,0 +1,200 @@
+/* MASTER is intentionally neutral chrome: navigation + a real-sized component canvas. */
+.lab-master-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 100svh;
+  background: var(--lab-canvas);
+  color: var(--lab-ink);
+}
+.lab-master-shell.is-sidebar-open {
+  grid-template-columns: var(--master-sidebar-width) minmax(0, 1fr);
+}
+.lab-master-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100svh;
+  z-index: 120;
+  min-width: 0;
+  border-right: 1px solid var(--lab-hairline);
+  background: var(--lab-surface);
+  padding: var(--lab-space-4) var(--lab-space-2);
+  user-select: none;
+}
+.lab-master-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--lab-space-2) var(--lab-space-8);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+.lab-master-sidebar-toggle, .lab-master-open-nav {
+  background: transparent;
+  border: 1px solid var(--lab-border);
+  color: var(--lab-secondary);
+  border-radius: var(--lab-radius-sm);
+  width: var(--lab-control-compact);
+  height: var(--lab-control-compact);
+  display: inline-grid;
+  place-items: center;
+  font-size: 21px;
+  line-height: 1;
+}
+.lab-master-sidebar-nav { display: flex; flex-direction: column; gap: var(--lab-space-1); max-height: calc(100svh - 78px); overflow-y: auto; overscroll-behavior: contain; }
+.lab-master-sidebar-heading {
+  font-size: 10px;
+  letter-spacing: .08em;
+  font-weight: 650;
+  color: var(--lab-muted);
+  padding: var(--lab-space-4) var(--lab-space-2) var(--lab-space-1);
+}
+.lab-master-sidebar-nav button {
+  width: 100%;
+  min-height: var(--lab-control-compact);
+  text-align: left;
+  border: 0;
+  border-radius: var(--lab-radius-sm);
+  padding: 0 var(--lab-space-2);
+  color: var(--lab-secondary);
+  background: transparent;
+  font-size: 13px;
+}
+.lab-master-sidebar-nav button:hover, .lab-master-sidebar-nav button.is-active {
+  background: var(--lab-hover);
+  color: var(--lab-ink);
+}
+.lab-master-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -6px;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+  outline-offset: -1px;
+}
+.lab-master-resize-handle:hover::after, .lab-master-resize-handle:focus-visible::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  background: var(--lab-border-strong);
+}
+.lab-master-open-nav {
+  position: fixed;
+  top: var(--lab-space-4);
+  left: var(--lab-space-4);
+  z-index: 125;
+  font-size: 15px;
+}
+.lab-master-workspace {
+  min-width: 0;
+  position: relative;
+  isolation: isolate;
+  background: var(--lab-canvas);
+}
+.lab-master-specimens {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--lab-space-12);
+  padding: var(--lab-space-6) var(--lab-space-8); /* Existing 24px vertical rhythm; fixed 32px horizontal margin. */
+}
+.lab-master-player-frame {
+  position: relative;
+  width: 100%;
+  max-width: 1100px; /* Original production Playbar's desktop max-width. */
+  flex: none;
+}
+/* The isolated Playbar's inline preview mode adapts to the available canvas width. */
+.lab-master-player-frame { container-type: inline-size; }
+/* Resize tracks the canvas in real time; WAAPI FLIP runs only on a compact-mode crossing. */
+/* Move the reading content, not its layout box: 11px+ air above the track. */
+.lab-playbar-metadata-row { transform: translate3d(0, -4px, 0); }
+.lab-playbar-cover-slot {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.lab-playbar-cover-slot .lab-playbar-artwork {
+  transform-origin: center center;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition: transform var(--lab-normal) var(--lab-ease);
+}
+.lab-playbar-cover-slot.is-condensed .lab-playbar-artwork {
+  /* The 36px image ends above the track; no wrapper-height or padding jump. */
+  transform: translate3d(0, -4px, 0) scale(.75);
+}
+/*
+ * The cover keeps a 48px layout slot but visually shrinks by 6px on each side.
+ * Shift the metadata 6px left with exactly the SAME timing/easing as the cover:
+ * cover.right → label.left stays 12px throughout the animation, not only at rest.
+ * Keep the "More" control in place; only the reading content follows the cover.
+ */
+.lab-playbar-text-content {
+  transform: translate3d(0, 0, 0);
+  transition: transform var(--lab-normal) var(--lab-ease);
+}
+.lab-playbar-text-content.is-condensed {
+  transform: translate3d(-6px, 0, 0);
+}
+/* Extreme narrow preview: keep transport, artwork, volume and scrubber reachable. */
+.lab-playbar[data-layout="micro"] .lab-playbar-optional { display: none !important; }
+.lab-master-margin-example {
+  width: min(100%, 1100px);
+  padding: var(--lab-space-8);
+  outline: 1px dashed var(--lab-border-strong);
+}
+.lab-master-margin-inner {
+  min-height: var(--lab-space-24);
+  border: 1px solid var(--lab-border);
+  background: var(--lab-raised);
+}
+.lab-master-feedback {
+  position: fixed;
+  top: var(--lab-space-4);
+  right: var(--lab-space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--lab-space-3);
+  max-width: min(360px, calc(100vw - 48px));
+  background: var(--lab-raised);
+  color: var(--lab-ink);
+  border: 1px solid var(--lab-border);
+  border-radius: var(--lab-radius-sm);
+  padding: var(--lab-space-2) var(--lab-space-3);
+  font-size: 12px;
+  z-index: 100;
+}
+.lab-master-feedback button {
+  background: transparent;
+  color: inherit;
+  border: none;
+}
+@media (max-width: 800px) {
+  .lab-master-shell.is-sidebar-open { grid-template-columns: minmax(0, 1fr); }
+  .lab-master-sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: min(var(--master-sidebar-width), 80vw);
+    box-shadow: 8px 0 24px rgba(0,0,0,.5);
+  }
+  .lab-master-resize-handle { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lab-playbar-cover-slot .lab-playbar-artwork,
+  .lab-playbar-text-content { transition: none; }
+}
+
+.lab-master-toolbar-frame{position:relative;display:flex;justify-content:center;width:min(100%,840px);flex:none;}
+
+/* On narrow canvases, reserve the full leftward search expansion inside the viewport. */
+@media(max-width:590px){.lab-master-toolbar-frame{justify-content:flex-end;}}

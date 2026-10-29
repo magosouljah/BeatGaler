@@ -1,0 +1,40 @@
+name: Design Lab standalone
+on:
+  push:
+    branches: [design/beatgaler-design-system-lab-v1]
+    paths:
+      - "DESIGN/**"
+      - "BLUEPRINT/DESIGN-SYSTEM/**"
+      - ".github/workflows/design-lab-workbench.yml"
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: node --test DESIGN/lab-contract.test.mjs
+      - run: npx --no-install tsc --project DESIGN/tsconfig.json --noEmit
+      - run: npx --no-install vite build --config DESIGN/vite.config.ts
+      - run: node DESIGN/playbar-browser-check.mjs
+      - run: node DESIGN/toolbar-v2-browser-check.mjs
+      - name: Playbar screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-playbar-visual-check
+          path: DESIGN/visual-check/*.png
+          if-no-files-found: ignore
+      - name: Toolbar V1/V2 Chrome screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolbar-v1-v2-chrome-visual-check
+          path: |
+            DESIGN/toolbar-visual-check/*.png
+            DESIGN/REFERENCES/TOOLBAR-GLASS/*.webp
+          if-no-files-found: ignore

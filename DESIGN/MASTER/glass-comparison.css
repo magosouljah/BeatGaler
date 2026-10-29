@@ -1,0 +1,28 @@
+/* Optical engine comparison is separate from Toolbar V1/V2 and CameraGlass */
+.glass-comparison{width:min(1100px,100%);margin:auto;display:grid;gap:18px;}
+.glass-comparison-instruction{max-width:690px;margin:0 auto;color:rgba(255,255,255,.7);text-align:center;font:13px/1.6 system-ui,sans-serif;}
+.glass-comparison-grid-layout{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;align-items:start;}
+.glass-comparison-card{min-width:0;display:grid;gap:8px;padding:12px;border-radius:16px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.085);}
+.glass-comparison-card>header{display:flex;align-items:baseline;justify-content:space-between;gap:6px;color:#fff;font:14px system-ui,sans-serif;}
+.glass-comparison-card>header>span{font-size:10px;color:rgba(255,255,255,.55);text-align:right;}
+.glass-comparison-card>p{font:11px/1.5 system-ui,sans-serif;color:rgba(255,255,255,.52);text-align:center;margin:0;min-height:30px;}
+.glass-comparison-stage{height:285px;position:relative;display:grid;place-items:center;overflow:hidden;isolation:isolate;border-radius:14px;background:#151621;touch-action:none;cursor:grab;overscroll-behavior:contain;}
+.glass-comparison-stage:active{cursor:grabbing;}
+.glass-comparison-textured{position:absolute;inset:-600px;pointer-events:none;background:linear-gradient(154deg,#35303d 0 34%,#13131a 34% 68%,#753a77 68%);will-change:transform;}
+.glass-comparison-stripe{position:absolute;top:48%;left:0;width:100%;height:75px;background:#e981b7;transform:rotate(-6deg);}
+.glass-comparison-bigtype{position:absolute;top:53%;left:43%;font:bold 110px/1 system-ui;color:#fff;letter-spacing:-.06em;opacity:.8;transform:rotate(5deg);}
+.glass-comparison-grid{position:absolute;inset:0;background:linear-gradient(90deg,transparent 95%,rgba(255,255,255,.24) 95%),linear-gradient(transparent 95%,rgba(255,255,255,.24) 95%);background-size:36px 36px;opacity:.55;}
+.glass-comparison-number{position:absolute;left:38%;top:41%;color:white;opacity:.48;font:bold 80px system-ui;letter-spacing:-.04em;}
+.glass-comparison-naughty-target{width:150px;height:54px;position:sticky;top:110px;border-radius:999px;z-index:5;display:grid;place-items:center;color:white;background:rgba(255,255,255,.07);font:600 17px system-ui;outline-offset:4px;cursor:pointer;}
+.glass-comparison-naughty-target>span{position:relative;z-index:1;pointer-events:none;}
+.glass-comparison-naughty-target:focus-visible{outline:2px solid white;}
+.glass-comparison-card .archis-original-experiment{width:100%;gap:0;}
+.glass-comparison-card .archis-original-stage{min-height:285px;border-radius:14px;}
+.glass-comparison-card .archis-original-options,.glass-comparison-card .archis-original-caption{display:none;}
+.glass-comparison-card .archis-original-stage .glassDiv{z-index:3;}
+.glass-comparison-studio-render{position:absolute;inset:0;display:grid;place-items:center;}
+.glass-comparison-studio-canvas{position:absolute;inset:0;width:100%;height:100%;}
+.glass-comparison-studio-label{position:relative;z-index:2;pointer-events:none;color:white;font:600 17px system-ui;}
+.glass-comparison-engine-error{position:absolute;bottom:8px;left:8px;right:8px;background:rgba(22,6,10,.9);padding:8px;border-radius:6px;color:#ffb0b0;font-size:11px;z-index:10;}
+@media(max-width:850px){.glass-comparison-grid-layout{grid-template-columns:1fr;max-width:500px;margin:auto;width:100%;}.glass-comparison-card>p{min-height:0;}.glass-comparison{padding:4px 0 50px;}}
+@media(prefers-reduced-motion:reduce){.glass-comparison-textured{will-change:auto;}}

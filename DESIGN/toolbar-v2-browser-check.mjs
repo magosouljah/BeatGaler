@@ -1,0 +1,250 @@
+// Isolated Toolbar V2 visual + interaction check using real headless Chromium CDP.
+import assert from "node:assert/strict";
+import {spawn,spawnSync} from "node:child_process";
+import {mkdir,mkdtemp,rm,writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import path from "node:path";
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const chrome=["google-chrome","chromium","chromium-browser"].find(x=>spawnSync("which",[x]).status===0);
+assert.ok(chrome,"Chrome/Chromium is required for the visual check");
+const output=path.resolve("DESIGN/toolbar-visual-check");
+await mkdir(output,{recursive:true});
+const profile=await mkdtemp(path.join(tmpdir(),"beatgaler-toolbar-"));
+const vite=spawn(process.execPath,["node_modules/vite/bin/vite.js","--config","DESIGN/vite.config.ts","--port","4184","--strictPort"],{stdio:"ignore"});
+const browser=spawn(chrome,["--headless=new","--no-sandbox","--disable-dev-shm-usage","--hide-scrollbars","--remote-debugging-port=9249","--remote-allow-origins=*","--window-size=1440,1800","--user-data-dir="+profile,"about:blank"],{stdio:"ignore"});
+let ws;
+try {
+ let ready=false,tab;
+ for(let i=0;i<120;i++){try{if((await fetch("http://127.0.0.1:4184/")).ok){ready=true;break}}catch{}if(vite.exitCode!==null)throw Error("Vite exited "+vite.exitCode);await sleep(250)}
+ assert.ok(ready,"Vite server unavailable");
+ for(let i=0;i<120;i++){try{tab=(await (await fetch("http://127.0.0.1:9249/json")).json()).find(x=>x.type==="page");if(tab)break}catch{}if(browser.exitCode!==null)throw Error("Chrome exited "+browser.exitCode);await sleep(250)}
+ assert.ok(tab,"CDP unavailable");
+ ws=new WebSocket(tab.webSocketDebuggerUrl);
+ const pending=new Map();let nextId=0;
+ ws.addEventListener("message",event=>{const m=JSON.parse(event.data);const q=pending.get(m.id);if(q){pending.delete(m.id);m.error?q.reject(Error(JSON.stringify(m.error))):q.resolve(m.result)}});
+ await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true})});
+ const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++nextId;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
+ const evaluate=async expression=>{const r=await call("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value};
+ const select=(index,selector)=>"[data-toolbar-background='"+index+"'] "+selector;
+ const click=selector=>evaluate("document.querySelector("+JSON.stringify(selector)+").click()");
+ const read=expression=>evaluate(expression);
+ const size=selector=>read("(() => {const r=document.querySelector("+JSON.stringify(selector)+").getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,width:r.width,height:r.height}})()");
+ const screenshot=async filename=>{const r=await call("Page.captureScreenshot",{format:"png",captureBeyondViewport:false});await writeFile(path.join(output,filename),Buffer.from(r.data,"base64"))};
+ const scroll=selector=>evaluate("document.querySelector("+JSON.stringify(selector)+").scrollIntoView({block:'center'})");
+ const beginFrames=selector=>evaluate("(() => {const el=document.querySelector("+JSON.stringify(selector)+");window.__glassFrames=[];let remaining=32;const tick=()=>{const r=el.getBoundingClientRect();window.__glassFrames.push({left:r.left,right:r.right,width:r.width});if(--remaining>0)requestAnimationFrame(tick)};requestAnimationFrame(tick);return true})()");
+ const verifyFrames=async(anchor,context)=>{
+  const frames=await read("window.__glassFrames");
+  assert.ok(frames.length>=20,context+": too few animation frames");
+  assert.ok(frames.filter(x=>x.width>55&&x.width<275).length>=3,context+": morph jumped without intermediate widths");
+  assert.ok(Math.max(...frames.map(x=>Math.abs(x.right-anchor)))<2,context+": right edge jumped during expansion; anchor="+anchor+" frames="+JSON.stringify(frames));
+ };
+ const assertMenuReachable=async(menuSelector,itemSelector,label)=>{
+  const visible=await read("(() => {const menu=document.querySelector("+JSON.stringify(menuSelector)+");const item=menu?.querySelector("+JSON.stringify(itemSelector)+");if(!item)return false;const r=item.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return hit===item||item.contains(hit)})()");
+  assert.ok(visible,label+": menu item is covered by a subsequent specimen");
+ };
+ const media=(width,height=1800)=>call("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:width<600});
+ await call("Page.enable");await call("Runtime.enable");
+ const runtimeErrors=[];
+ ws.addEventListener("message",event=>{const m=JSON.parse(event.data);if(m.method==="Runtime.exceptionThrown")runtimeErrors.push(m.params.exceptionDetails.text)});
+ await media(1440);
+ await call("Page.navigate",{url:"http://127.0.0.1:4184/"});
+ for(let i=0;i<100;i++){if(await read("Boolean(document.querySelector('.lab-dev-switches'))"))break;await sleep(100)}
+ assert.ok(await read("Boolean(document.querySelector('.lab-dev-switches'))"),"Lab navigation missing");
+ await evaluate("[...document.querySelectorAll('.lab-dev-switches button')].find(x=>x.textContent==='MASTER').click()");
+ for(let i=0;i<100;i++){if(await read("Boolean(document.querySelector('.lab-master-sidebar-nav'))"))break;await sleep(100)}
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · Camera').click()");
+ await sleep(150);await screenshot("approved-camera-desktop.png");
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Toolbar').click()");
+ for(let i=0;i<50;i++){if(await read("document.querySelectorAll('[data-toolbar-background]').length===5"))break;await sleep(100)}
+ assert.equal(await read("document.querySelectorAll('[data-toolbar-background]').length"),5,"Five optical backdrops required");
+ assert.ok(await read("Boolean(document.querySelector('[aria-label=\"Toolbar V1 — original\"] .lab-toolbar'))"),"Toolbar V1 missing");
+ const allLens=await read("(() => {const panels=[...document.querySelectorAll('[data-toolbar-background]')];return panels.map(p=>{const t=p.querySelector('.lab-toolbar-v2');return {buttons:t.querySelectorAll('.glass-button--toolbar').length,lenses:t.querySelectorAll('.shape-glass-surface').length,edges:t.querySelectorAll('.glass-button-edge-left').length,materials:[...t.querySelectorAll('.shape-glass-surface')].map(l=>getComputedStyle(l).backgroundImage),maps:t.querySelectorAll('feImage[ref]').length}})})()");
+ const optics=await read("(() => {const root=document.querySelector('[data-toolbar-background=\\\"1\\\"] .glass-button--liquid');return {filter:getComputedStyle(root.querySelector('.shape-glass-surface')).backdropFilter,maps:[...root.querySelectorAll('feImage')].map(n=>n.getAttribute('href'))}})()");
+ assert.ok(optics.maps.length===2&&optics.maps.every(x=>x?.startsWith("data:image/png;base64,")),"Optical maps missing in Chrome");
+ assert.ok(optics.filter.includes("url("),"Optical backdrop filter was not installed");
+ for(const row of allLens){
+  assert.equal(row.buttons,4,"Each toolbar must have four glass surfaces");
+  assert.equal(row.lenses,4,"Each control must use the shape-aware lens");
+  assert.equal(row.edges,0,"Circular camera arcs must never appear inside pills");
+  assert.ok(row.materials.every(x=>x===row.materials[0]),"Inconsistent materials within one toolbar");
+ }
+ await scroll(".lab-master-toolbar-frame");await sleep(150);await screenshot("toolbar-v1-desktop.png");
+ for(let i=1;i<=5;i++){await scroll("[data-toolbar-background='"+i+"']");await sleep(120);await screenshot("toolbar-v2-background-"+i+"-desktop.png")}
+ await scroll("[data-toolbar-background='1']");await sleep(120);
+ const row=1,root=select(row,".lab-toolbar-v2");
+ const search=select(row,".lab-toolbar-v2-search");
+ const trigger=select(row,".lab-toolbar-v2-search-trigger");
+ const selectButton=select(row,".lab-toolbar-v2-select");
+ const sort=select(row,"[aria-label='Sort beats'][aria-haspopup='menu']");
+ const profileButton=select(row,"[aria-label='Profile'][aria-haspopup='menu']");
+ const closedSearch=await size(search);
+ assert.ok(Math.abs((await size(search)).width-44)<1,"Closed search must be circular");
+ await beginFrames(search);
+ await click(trigger);await sleep(550);
+ await verifyFrames(closedSearch.right,"desktop");
+ const opened=await size(search);
+ assert.equal(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.shape-glass-surface').length"),1,"Search must have one liquid surface");
+ assert.ok(opened.width>180,"Search pill failed to grow");
+ assert.ok(Math.abs(opened.right-closedSearch.right)<1.5,"Desktop search must expand to the left without moving its icon anchor");
+ assert.ok(await read("document.activeElement===document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")"),"Input not focused");
+ assert.equal(await read("getComputedStyle(document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")).outlineStyle"),"none","Search must never show an inherited rectangular focus ring");
+ await call("Input.insertText",{text:"aurora"});
+ assert.equal(await read("document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+").value"),"aurora","Search input must accept text");
+ assert.ok(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.shape-glass-surface').length===1"),"Search has more than one glass layer");
+ await screenshot("toolbar-v2-search-desktop.png");
+ const selectLens=select(row,".lab-toolbar-v2-select");
+ const beforeSpec=await read("document.querySelector("+JSON.stringify(selectLens)+").querySelectorAll('feImage')[1].getAttribute('href')");
+ await evaluate("(() => {const el=document.querySelector("+JSON.stringify(selectLens)+");const r=el.getBoundingClientRect();el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:r.right-2,clientY:r.top+2}))})()");
+ await sleep(120);
+ const afterSpec=await read("document.querySelector("+JSON.stringify(selectLens)+").querySelectorAll('feImage')[1].getAttribute('href')");
+ assert.notEqual(beforeSpec,afterSpec,"Specular highlight remained static after pointer movement");
+ await screenshot("toolbar-v2-pointer-reflection-desktop.png");
+ await evaluate("document.querySelector("+JSON.stringify(selectLens)+").dispatchEvent(new PointerEvent('pointerleave',{bubbles:false}))");
+ await click(trigger);await sleep(50);await click(trigger);await sleep(35);await click(trigger);await sleep(290);
+ assert.ok(Math.abs((await size(search)).width-44)<1,"Rapid reversal left search in an intermediate state");
+ await click(sort);await sleep(250);
+ const sortMenu=select(row,"[role='menu'][aria-label='Sort beats']");
+ assert.ok(await read("document.querySelector("+JSON.stringify(sortMenu)+").classList.contains('is-open')"),"Sort menu did not open");
+ assert.equal(await read("document.querySelector("+JSON.stringify(sortMenu)+").querySelectorAll('[role=menuitemradio]').length"),5,"Five sort options missing");
+ await assertMenuReachable(sortMenu,"[role=menuitemradio]:nth-of-type(3)","desktop sort");
+ const sortAnchor=await size(sortMenu);
+ await screenshot("toolbar-v2-sort-desktop.png");
+ await click(select(row,"[role=menuitemradio]:nth-of-type(3)"));
+ assert.ok(await read("document.querySelector("+JSON.stringify(sortMenu)+").querySelector('[aria-checked=true]').textContent.includes('BPM')"),"Sort mode not persisted");
+ await click(profileButton);await sleep(250);
+ const profileMenu=select(row,"[role='menu'][aria-label='Profile']");
+ assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')"),"Profile menu did not open");
+ await assertMenuReachable(profileMenu,"[role=menuitem]:last-of-type","desktop profile");
+ const profileAnchor=await size(profileMenu);
+ assert.ok(Math.abs(sortAnchor.top-profileAnchor.top)<1&&Math.abs(sortAnchor.right-profileAnchor.right)<1,"Menu anchors are not consistent");
+ assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").textContent.includes('Demo User')"),"Profile name missing");
+ await screenshot("toolbar-v2-profile-desktop.png");
+ await click(select(row,"[role=menu][aria-label='Profile'] [role=menuitem]:first-of-type"));
+ assert.ok(await read("document.querySelector('.lab-master-feedback')?.textContent.includes('Settings')"),"Settings handler did not run");
+ await click(profileButton);await sleep(180);
+ await click(select(row,"[role=menu][aria-label='Profile'] [role=menuitem]:last-of-type"));
+ assert.ok(await read("document.querySelector('.lab-master-feedback')?.textContent.includes('Log out')"),"Log out handler did not run");
+ await click(profileButton);await sleep(180);
+ await call("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
+ assert.ok(!(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')")),"Escape failed to close menu");
+ const before=await size(selectButton);
+ await evaluate("document.querySelector('.lab-master-feedback button')?.click()");
+ await click(selectButton);await sleep(270);
+ await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+ const after=await size(selectButton);
+ assert.ok(before.width>70&&Math.abs(after.width-44)<1,"Select pill-to-circle failed");
+ assert.ok(await read("document.querySelector("+JSON.stringify(selectButton)+").getAttribute('aria-pressed')==='true'"),"Select aria state incorrect");
+ await screenshot("toolbar-v2-select-active-desktop.png");
+ await click(selectButton);await sleep(240);
+ assert.ok((await size(selectButton)).width>70,"Select reverse morph failed");
+ await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+ await media(390,1000);await sleep(250); 
+ await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+ await evaluate("document.querySelector('.lab-master-feedback button')?.click()");
+ await scroll("[data-toolbar-background='1']");await sleep(140);
+ await screenshot("toolbar-v2-mobile-default.png");
+ const mobileClosed=await size(search);
+ await beginFrames(search);
+ await click(trigger);await sleep(550);
+ await verifyFrames(mobileClosed.right,"mobile");
+ const mobile=await size(search);
+ assert.ok(mobile.width>=250&&mobile.right<=391&&mobile.left>=-1,"Mobile search overflow or too narrow");
+ assert.ok(Math.abs(mobile.right-mobileClosed.right)<1.5,"Mobile search must grow left, not slide across the toolbar");
+ await screenshot("toolbar-v2-mobile-search.png");
+ await click(trigger);await sleep(260);
+ await click(sort);await sleep(230);await assertMenuReachable(sortMenu,"[role=menuitemradio]:nth-of-type(3)","mobile sort");await screenshot("toolbar-v2-mobile-sort.png");
+ await click(profileButton);await sleep(230);await assertMenuReachable(profileMenu,"[role=menuitem]:last-of-type","mobile profile");await screenshot("toolbar-v2-mobile-profile.png");
+ await call("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});
+ const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
+ assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
+ // Independent, unchanged upstream SVG engine specimen. V1/V2 remain untouched.
+ await call("Emulation.setEmulatedMedia",{features:[]});
+ await media(1440,1800); await sleep(150);
+ // MASTER auto-closes its sidebar when viewport becomes mobile; reopen it.
+ await evaluate("document.querySelector('.lab-master-open-nav')?.click()");
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · Original').click()");
+ for(let i=0;i<50;i++){if(await read("Boolean(document.querySelector('[data-archis-original-experiment]'))"))break;await sleep(100)}
+ const originalRoot="[data-archis-original-experiment]";
+ const originalButton=originalRoot+" #glass";
+ const originalFilter=originalRoot+" #liquid-glass-filter";
+ const originalMenu=originalRoot+" .archis-original-options";
+ const originalReady=await read("(() => {const el=document.querySelector("+JSON.stringify(originalRoot)+");const f=el.querySelector('#liquid-glass-filter');const b=el.querySelector('#glass');return {width:b.offsetWidth,height:b.offsetHeight,filters:el.querySelectorAll('#liquid-glass-filter').length,displacement:!!f?.querySelector('feDisplacementMap'),composite:!!f?.querySelector('feBlend'),images:[...f.querySelectorAll('feImage')].map(n=>n.getAttribute('href')),background:getComputedStyle(b,'::after').backdropFilter}})()");
+ assert.equal(originalReady.width,140,"Original upstream Button preset width changed");
+ assert.equal(originalReady.height,52,"Original upstream Button preset height changed");
+ assert.equal(originalReady.filters,1,"Original optical filter must be isolated");
+ assert.ok(originalReady.displacement&&originalReady.composite,"Original SVG filter stack missing");
+ assert.ok(originalReady.images.length===2&&originalReady.images.every(x=>x.startsWith("data:image/png;base64,")),"Original maps were not generated");
+ assert.ok(originalReady.background.includes("url("),"Original CSS backdrop-filter not active");
+ const beforeOriginal=await read("document.querySelector("+JSON.stringify(originalFilter)+").innerHTML");
+ await evaluate("(() => {const el=document.querySelector("+JSON.stringify(originalButton)+");const r=el.getBoundingClientRect();el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:r.left+5,clientY:r.top+5}))})()");
+ await sleep(80);
+ assert.equal(await read("document.querySelector("+JSON.stringify(originalFilter)+").innerHTML"),beforeOriginal,"Upstream engine must NOT modify reflections when moving the mouse");
+ await click(originalButton);
+ assert.equal(await read("document.querySelector("+JSON.stringify(originalButton)+").getAttribute('aria-pressed')"),"true","Original sample click failed");
+ await click(originalButton);
+ assert.equal(await read("document.querySelector("+JSON.stringify(originalButton)+").getAttribute('aria-pressed')"),"false","Original sample toggle failed");
+ for(let i=0;i<5;i++){
+   await click(originalMenu+" button:nth-child("+(i+1)+")");
+   assert.ok(await read("document.querySelector("+JSON.stringify(originalMenu+" button:nth-child("+(i+1)+")")+").getAttribute('aria-pressed')==='true'"),"Original background selection failed "+i);
+   await scroll(originalRoot);await sleep(100);
+   await screenshot("archis-original-background-"+(i+1)+"-desktop.png");
+ }
+ await media(390,1000);await sleep(160);
+ await scroll(originalRoot);await screenshot("archis-original-mobile.png");
+ // Three source engines: each standalone with a wheel-movable textured
+ // backdrop. The original V1/V2 and camera remain in their existing section.
+ await media(1440,1200);await sleep(150);
+ await evaluate("document.querySelector('.lab-master-open-nav')?.click()");
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · 3 Engines').click()");
+ for(let i=0;i<90;i++){if(await read("Boolean(document.querySelector('[data-glass-3-compare]'))"))break;await sleep(100)}
+ assert.ok(await read("Boolean(document.querySelector('[data-glass-3-compare]'))"),"Three engine comparison missing");
+ assert.equal(await read("document.querySelectorAll('.glass-comparison-card').length"),3,"All three original engines must have a card");
+ for(let i=0;i<90;i++){
+  if(await read("document.querySelector('.glass-comparison-studio-canvas')?.dataset.engineReady !== undefined"))break;
+  await sleep(100);
+ }
+ const studioState=await read("document.querySelector('.glass-comparison-studio-canvas')?.dataset.engineReady");
+ assert.equal(studioState,"true","Studio original GLSL renderer did not initialise");
+ const nButton=".glass-comparison-naughty-target";
+ for(let i=0;i<60;i++){
+  if(await read("document.querySelector("+JSON.stringify(nButton)+")?.dataset.engineStatus !== 'loading'"))break;
+  await sleep(100);
+ }
+ assert.equal(await read("document.querySelector("+JSON.stringify(nButton)+").dataset.engineStatus"),"ready","NaughtyDuk original renderer did not start");
+ assert.ok(await read("Boolean(document.querySelector('[data-glass-3-compare] #liquid-glass-filter'))"),"Archis original SVG filter missing in comparison");
+ await scroll("[data-glass-3-compare]");await sleep(900);
+ await screenshot("three-original-glass-engines-desktop.png");
+ // Wheel the background: change offsets, not button geometry or optical code.
+ const stages=[".glass-comparison-stage",".archis-original-stage",".glass-comparison-stage.is-studio"];
+ for(const stage of stages){
+  const before=await read("Number(document.querySelector("+JSON.stringify(stage)+").dataset.backgroundOffsetY)");
+  await evaluate("document.querySelector("+JSON.stringify(stage)+").dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:95}))");
+  await sleep(200);
+  const after=await read("Number(document.querySelector("+JSON.stringify(stage)+").dataset.backgroundOffsetY)");
+  assert.notEqual(before,after,"Mouse wheel did not move background: "+stage);
+ }
+ await screenshot("three-original-glass-engines-scrolled.png");
+ // Real CDP pointer drag, not a synthetic React event, on each background.
+ for(const selector of stages){
+   const rect=await size(selector);
+   const before=await read("Number(document.querySelector("+JSON.stringify(selector)+").dataset.backgroundOffsetX)");
+   const x=Math.round(rect.left+26),y=Math.round(rect.top+rect.height*.53);
+   await call("Input.dispatchMouseEvent",{type:"mouseMoved",x,y});
+   await call("Input.dispatchMouseEvent",{type:"mousePressed",x,y,button:"left",clickCount:1});
+   await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:x+50,y:y+8,buttons:1});
+   await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:x+50,y:y+8,button:"left",clickCount:1});
+   await sleep(130);
+   const after=await read("Number(document.querySelector("+JSON.stringify(selector)+").dataset.backgroundOffsetX)");
+   assert.notEqual(before,after,"Real mouse drag did not move background: "+selector);
+ }
+ await screenshot("three-original-glass-engines-dragged.png");
+ await media(390,1000);await sleep(260);
+ await scroll("[data-glass-3-compare]");
+ await screenshot("three-original-glass-engines-mobile.png");
+  assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
+ console.log(JSON.stringify({result:"PASS",screenshots:26,backdrops:5,comparisonEngines:3,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+} finally {
+ ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
+ await sleep(600);
+ await rm(profile,{recursive:true,force:true,maxRetries:12,retryDelay:250});
+}
