@@ -54,6 +54,7 @@ try {
  }
  await scroll(".lab-master-toolbar-frame");await sleep(150);await screenshot("toolbar-v1-desktop.png");
  for(let i=1;i<=5;i++){await scroll("[data-toolbar-background='"+i+"']");await sleep(120);await screenshot("toolbar-v2-background-"+i+"-desktop.png")}
+ await scroll("[data-toolbar-background='1']");await sleep(120);
  const row=1,root=select(row,".lab-toolbar-v2");
  const search=select(row,".lab-toolbar-v2-search");
  const trigger=select(row,".lab-toolbar-v2-search-trigger");
