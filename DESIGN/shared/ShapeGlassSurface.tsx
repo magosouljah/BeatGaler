@@ -125,6 +125,7 @@ export default function ShapeGlassSurface() {
       previous = key;
       displacementImage.current?.setAttribute("href", maps.displacement);
       specularImage.current?.setAttribute("href", maps.specular);
+      lens.style.setProperty("--shape-glare", `url("${maps.specular}")`);
       displacementFilter.current?.setAttribute("scale", String(maps.scale));
     };
     const schedule = () => { if (!animation) animation = requestAnimationFrame(update); };
