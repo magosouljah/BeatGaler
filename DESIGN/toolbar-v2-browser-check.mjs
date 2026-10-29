@@ -66,6 +66,9 @@ try {
  const opened=await size(search);
  assert.ok(opened.width>180,"Search pill failed to grow");
  assert.ok(await read("document.activeElement===document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")"),"Input not focused");
+ assert.equal(await read("getComputedStyle(document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")).outlineStyle"),"none","Search must never show an inherited rectangular focus ring");
+ await call("Input.insertText",{text:"aurora"});
+ assert.equal(await read("document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+").value"),"aurora","Search input must accept text");
  assert.ok(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.camera-glass-lens').length===1"),"Search has more than one glass layer");
  await screenshot("toolbar-v2-search-desktop.png");
  await click(trigger);await sleep(50);await click(trigger);await sleep(35);await click(trigger);await sleep(290);
@@ -85,6 +88,12 @@ try {
  assert.ok(Math.abs(sortAnchor.top-profileAnchor.top)<1&&Math.abs(sortAnchor.right-profileAnchor.right)<1,"Menu anchors are not consistent");
  assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").textContent.includes('Demo User')"),"Profile name missing");
  await screenshot("toolbar-v2-profile-desktop.png");
+ await click(select(row,"[role=menu][aria-label='Profile'] [role=menuitem]:first-of-type"));
+ assert.ok(await read("document.querySelector('.lab-master-feedback')?.textContent.includes('Settings')"),"Settings handler did not run");
+ await click(profileButton);await sleep(180);
+ await click(select(row,"[role=menu][aria-label='Profile'] [role=menuitem]:last-of-type"));
+ assert.ok(await read("document.querySelector('.lab-master-feedback')?.textContent.includes('Log out')"),"Log out handler did not run");
+ await click(profileButton);await sleep(180);
  await call("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
  assert.ok(!(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')")),"Escape failed to close menu");
  const before=await size(selectButton);
@@ -95,7 +104,9 @@ try {
  await screenshot("toolbar-v2-select-active-desktop.png");
  await click(selectButton);await sleep(240);
  assert.ok((await size(selectButton)).width>70,"Select reverse morph failed");
- await media(390,1000);await sleep(250);
+ await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+ await media(390,1000);await sleep(250); 
+ await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
  await scroll("[data-toolbar-background='1']");await sleep(140);
  await screenshot("toolbar-v2-mobile-default.png");
  await click(trigger);await sleep(260);
