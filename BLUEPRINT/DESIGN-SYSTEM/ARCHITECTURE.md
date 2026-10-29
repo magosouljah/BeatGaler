@@ -24,8 +24,8 @@ La transcripción UI Collective explica tokens brand → alias → mapped, colec
 
 El directorio anterior `design-lab/` se eliminó para evitar dos fuentes de verdad. No modificar `src/`, `main` ni producción.
 
-## Toolbar V2: óptica compartida
+## Toolbar V2: óptica geométrica
 
-`DESIGN/shared/GlassButton.tsx` es la única fuente de la superficie óptica aprobada en `CameraGlass`: desenfoque/refracción ligera SVG y reflejos localizados (distribuidos en los extremos de la pill sin añadir un disco). `camera-glass.css` contiene su material. `CameraGlass.tsx` conserva el icono original como instancia del mismo botón. `ToolbarV2.tsx` aplica cuatro instancias con interacción y estados; `toolbar-v2.css` solo organiza geometría, transiciones, menús y accesibilidad. `Toolbar.tsx`/ `toolbar.css` (V1) y GALLERY no se alteran.
+`DESIGN/shared/GlassButton.tsx` usa el material `camera` por defecto y deja CameraGlass sin cambios. La opción `material="liquid"` usada exclusivamente en V2 monta `ShapeGlassSurface.tsx` y `shape-glass.css` en vez de sus reflejos circulares. Su refracción y brillo se generan localmente desde el contorno real de la pill mediante la adaptación MIT de [Archis Vaze](https://github.com/archisvaze/liquid-glass), documentada en `SHAPE_GLASS_LICENSE.txt`. `ResizeObserver` sigue las transformaciones círculo↔pill y el puntero cambia el ángulo especular sin renders React por fotograma. En navegadores sin filtro SVG de backdrop se usa blur de CSS como degradación. No se añadieron dependencias.
 
-Las comparaciones de V1/V2, cinco fondos, Chrome de escritorio y móvil están automatizadas por `DESIGN/toolbar-v2-browser-check.mjs`, que genera capturas y las publica como artefactos del workflow aislado `design-lab-workbench.yml`. La aprobación humana de la apariencia V2 sigue siendo necesaria.
+`ToolbarV2.tsx` conserva la funcionalidad de V1 sin modificar `Toolbar.tsx`, `src/`, GALLERY ni producción. La verificación corre en Chrome con capturas y comprueba mapas SVG generados, cambios de reflejo, controles y accesibilidad. La aprobación visual final corresponde al propietario.

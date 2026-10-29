@@ -46,7 +46,7 @@ El build se escribe en `DESIGN/dist/` (ignorado por Git). Los 24 covers y los 14
 
 ## Toolbar V2 — material de cámara aprobado
 
-- `shared/GlassButton.tsx` reutiliza la lente, desplazamiento SVG y dos arcos de luz localizados de `CameraGlass`. El botón de cámara continúa como demo independiente usando el mismo componente; no hay material CSS genérico alternativo.
+- `shared/GlassButton.tsx` conserva la óptica `camera` original aprobada y ofrece `liquid` para Toolbar V2. `ShapeGlassSurface.tsx` adapta el algoritmo SVG de [Archis Vaze / liquid-glass](https://github.com/archisvaze/liquid-glass) (MIT): genera mapas de refracción y brillo con Canvas para cada círculo/pill, según su ancho actual. Los reflejos siguen al puntero, sin arcos circulares dentro de la pill ni dependencias adicionales.
 - `shared/Toolbar.tsx` permanece V1 intacta. `shared/ToolbarV2.tsx` usa GlassButton para Search, Sorting, Select y Profile con sus estados y menús. MASTER muestra ambas versiones y los cinco fondos ópticos.
 - Comprobación automatizada de V2 en Chrome real (incluye interacciones, escritorio/móvil, accesibilidad, movimiento reducido y capturas): `node DESIGN/toolbar-v2-browser-check.mjs`. GitHub Actions guarda las capturas junto a las referencias WebP en el artefacto `toolbar-v1-v2-chrome-visual-check`.
 - **Estado:** nueva candidata implementada en DESIGN; la aprobación visual final de V2 corresponde al propietario. No se modifica GALLERY, `src/` ni producción.
