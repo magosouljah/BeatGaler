@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { forwardRef, useId } from "react";
 import type { CSSProperties, ButtonHTMLAttributes, ReactNode } from "react";
 import "./camera-glass.css";
 
@@ -13,14 +13,14 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 /** Approved CameraGlass optical stack. Same SVG contour and displacement,
  * shared by circular and capsule controls, without any additional surfaces. */
-export default function GlassButton({as="button",size=72,width,active=false,pressed=false,children,className="",style,...rest}:Props) {
+const GlassButton = forwardRef<HTMLButtonElement, Props>(function GlassButton({as="button",size=72,width,active=false,pressed=false,children,className="",style,...rest}, ref) {
   const uid=useId().replace(/:/g,"");
   const filterId=`camera-glass-optics-${uid}`;
   const topEdgeId=`camera-edge-upper-${uid}`;
   const bottomEdgeId=`camera-edge-lower-${uid}`;
   const softEdgeId=`camera-edge-soft-${uid}`;
   const Element=as;
-  return <Element {...(rest as any)} className={`camera-glass glass-button${active?" is-pressed":""}${pressed?" is-pressed":""} ${className}`}
+  return <Element {...(rest as any)} ref={ref as any} className={`camera-glass glass-button${active?" is-pressed":""}${pressed?" is-pressed":""} ${className}`}
     style={{"--camera-size":`${size}px`,width:width ?? size,borderRadius:9999,...style} as CSSProperties}>
     <svg className="camera-glass-defs" width="0" height="0" aria-hidden="true" focusable="false">
       <defs>
@@ -59,4 +59,5 @@ export default function GlassButton({as="button",size=72,width,active=false,pres
     </svg>
     <span className="glass-button-content">{children}</span>
   </Element>;
-}
+});
+export default GlassButton;
