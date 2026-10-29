@@ -59,7 +59,7 @@
   .lab-toolbar-v2-menu-item:hover{background:rgba(255,255,255,.12)}
 }
 @media(max-width:590px){
- .lab-toolbar-v2{width:100%;justify-content:flex-end;gap:8px}
+ .lab-toolbar-v2{width:100%;flex-direction:row-reverse;justify-content:flex-start;gap:8px}
  .lab-toolbar-v2.is-searching>.glass-button--toolbar:not(.lab-toolbar-v2-search){
    opacity:0;pointer-events:none;width:0!important;min-width:0;transition:width 190ms cubic-bezier(.2,.8,.2,1),opacity 100ms ease;
  }
