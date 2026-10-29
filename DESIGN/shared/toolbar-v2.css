@@ -52,7 +52,8 @@
 .lab-toolbar-v2-avatar svg{width:17px;height:17px}
 
 .lab-toolbar-v2 button:focus-visible{outline:2px solid white;outline-offset:3px}
-.lab-toolbar-v2-search-input:focus-visible{outline:none;box-shadow:none}
+.lab-root .lab-toolbar-v2-search-input:focus,
+.lab-root .lab-toolbar-v2-search-input:focus-visible{outline:none;box-shadow:none}
 .lab-toolbar-v2-search:focus-within .camera-glass-lens{filter:brightness(1.05)}
 @media (hover:hover) and (pointer:fine){
   .lab-toolbar-v2-menu-item:hover{background:rgba(255,255,255,.12)}
