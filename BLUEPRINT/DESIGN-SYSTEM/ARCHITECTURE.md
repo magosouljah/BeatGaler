@@ -23,3 +23,9 @@ Las 24 portadas y 14 iconos se trasladaron manteniendo **los mismos blobs Git**,
 La transcripción UI Collective explica tokens brand → alias → mapped, colecciones, componentes, variantes y estado. Es una referencia, no una estructura obligatoria prematura. `MASTER.md` define el comportamiento del taller y `DESIGN.md` registra solo las piezas existentes. Primero perfeccionar la Playbar; añadir otros componentes únicamente con autorización del propietario.
 
 El directorio anterior `design-lab/` se eliminó para evitar dos fuentes de verdad. No modificar `src/`, `main` ni producción.
+
+## Toolbar V2: óptica compartida
+
+`DESIGN/shared/GlassButton.tsx` es la única fuente de la superficie óptica aprobada en `CameraGlass`: desenfoque/refracción ligera SVG y reflejos localizados (distribuidos en los extremos de la pill sin añadir un disco). `camera-glass.css` contiene su material. `CameraGlass.tsx` conserva el icono original como instancia del mismo botón. `ToolbarV2.tsx` aplica cuatro instancias con interacción y estados; `toolbar-v2.css` solo organiza geometría, transiciones, menús y accesibilidad. `Toolbar.tsx`/ `toolbar.css` (V1) y GALLERY no se alteran.
+
+Las comparaciones de V1/V2, cinco fondos, Chrome de escritorio y móvil están automatizadas por `DESIGN/toolbar-v2-browser-check.mjs`, que genera capturas y las publica como artefactos del workflow aislado `design-lab-workbench.yml`. La aprobación humana de la apariencia V2 sigue siendo necesaria.
