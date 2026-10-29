@@ -63,10 +63,12 @@ try {
  const selectButton=select(row,".lab-toolbar-v2-select");
  const sort=select(row,"[aria-label='Sort beats'][aria-haspopup='menu']");
  const profileButton=select(row,"[aria-label='Profile'][aria-haspopup='menu']");
+ const closedSearch=await size(search);
  assert.ok(Math.abs((await size(search)).width-44)<1,"Closed search must be circular");
  await click(trigger);await sleep(270);
  const opened=await size(search);
  assert.ok(opened.width>180,"Search pill failed to grow");
+ assert.ok(Math.abs(opened.right-closedSearch.right)<1.5,"Desktop search must expand to the left without moving its icon anchor");
  assert.ok(await read("document.activeElement===document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")"),"Input not focused");
  assert.equal(await read("getComputedStyle(document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")).outlineStyle"),"none","Search must never show an inherited rectangular focus ring");
  await call("Input.insertText",{text:"aurora"});
@@ -109,11 +111,14 @@ try {
  await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
  await media(390,1000);await sleep(250); 
  await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+ await evaluate("document.querySelector('.lab-master-feedback button')?.click()");
  await scroll("[data-toolbar-background='1']");await sleep(140);
  await screenshot("toolbar-v2-mobile-default.png");
+ const mobileClosed=await size(search);
  await click(trigger);await sleep(260);
  const mobile=await size(search);
  assert.ok(mobile.width>=250&&mobile.right<=391&&mobile.left>=-1,"Mobile search overflow or too narrow");
+ assert.ok(Math.abs(mobile.right-mobileClosed.right)<1.5,"Mobile search must grow left, not slide across the toolbar");
  await screenshot("toolbar-v2-mobile-search.png");
  await click(trigger);await sleep(260);
  await click(sort);await sleep(230);await screenshot("toolbar-v2-mobile-sort.png");
