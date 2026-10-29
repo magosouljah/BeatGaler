@@ -107,3 +107,22 @@
 @media (prefers-reduced-transparency:reduce) {
   .archis-original-stage .glassDiv::after { -webkit-backdrop-filter:none; backdrop-filter:none; background:rgba(43,43,46,.85); }
 }
+
+/* Only the BACKGROUND moves; Archis Vaze's original glass CSS stays unchanged. */
+.archis-original-stage{touch-action:none;cursor:grab;overscroll-behavior:contain;}
+.archis-original-stage:active{cursor:grabbing;}
+.archis-original-movable{
+  position:absolute;inset:-600px;pointer-events:none;
+  background:
+    linear-gradient(115deg,transparent 35%,rgba(255,255,255,.32) 35% 40%,transparent 40%),
+    repeating-linear-gradient(0deg,transparent 0 34px,rgba(255,255,255,.2) 35px 36px),
+    repeating-linear-gradient(90deg,transparent 0 34px,rgba(255,255,255,.2) 35px 36px),
+    linear-gradient(145deg,#e783b3 0 40%,#12111b 40% 70%,#8e5dda 70%);
+  background-color:var(--archis-original-background);
+}
+.archis-original-movable .archis-original-behind{inset:40% 0 auto 16%;font-size:125px;transform:none;opacity:.95;}
+.archis-original-movable-numbers{position:absolute;top:59%;left:32%;font:bold 98px system-ui;letter-spacing:-.05em;opacity:.32;color:white;white-space:nowrap;}
+.archis-original-stage .glassDiv{z-index:3;}
+.archis-original-experiment.is-compact .archis-original-stage{min-height:285px;}
+.archis-original-experiment.is-compact .archis-original-options,
+.archis-original-experiment.is-compact .archis-original-caption{display:none;}

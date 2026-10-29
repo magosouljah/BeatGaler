@@ -6,12 +6,13 @@ import LabToolbar from "../shared/Toolbar";
 import LabToolbarV2 from "../shared/ToolbarV2";
 import CameraGlass from "../shared/CameraGlass";
 import ArchisOriginalSpecimen from "./ArchisOriginalSpecimen";
+import GlassThreeCompare from "./GlassThreeCompare";
 import type { LabSort } from "../shared/Toolbar";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
 import "./master.css";
 
-type Section = "margins" | "playbar" | "toolbar" | "glass-camera" | "glass-original";
+type Section = "margins" | "playbar" | "toolbar" | "glass-camera" | "glass-original" | "glass-compare";
 const SIDEBAR_START = 192; // Lab navigation only; not a BeatGaler product design token.
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 300;
@@ -146,6 +147,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
             <button type="button" className={section === "toolbar" ? "is-active" : ""} aria-current={section === "toolbar" ? "page" : undefined} onClick={() => openSection("toolbar")}>Toolbar</button>
             <button type="button" className={section === "glass-camera" ? "is-active" : ""} aria-current={section === "glass-camera" ? "page" : undefined} onClick={() => openSection("glass-camera")}>Glass · Camera</button>
             <button type="button" className={section === "glass-original" ? "is-active" : ""} aria-current={section === "glass-original" ? "page" : undefined} onClick={() => openSection("glass-original")}>Glass · Original</button>
+            <button type="button" className={section === "glass-compare" ? "is-active" : ""} aria-current={section === "glass-compare" ? "page" : undefined} onClick={() => openSection("glass-compare")}>Glass · 3 Engines</button>
           </nav>
           <div className="lab-master-resize-handle" role="separator" tabIndex={0} aria-label="Cambiar ancho de navegación"
             aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebarWidth}
@@ -179,6 +181,8 @@ export default function MasterPage({ coverMode, setCoverMode }: {
                     />
             </div>
           </div>
+        ) : section === "glass-compare" ? (
+          <div className="lab-master-specimens" aria-label="Comparación de tres motores Liquid Glass"><GlassThreeCompare/></div>
         ) : section === "glass-original" ? (
           <div className="lab-master-specimens" aria-label="Archis Vaze original Liquid Glass experiment">
             <ArchisOriginalSpecimen/>

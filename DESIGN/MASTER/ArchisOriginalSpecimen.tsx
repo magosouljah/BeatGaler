@@ -13,9 +13,12 @@ const BACKDROPS = [
   { label: "Rosa", background: "#ef91bc" }
 ] as const;
 
-export default function ArchisOriginalSpecimen() {
+export default function ArchisOriginalSpecimen({compact=false}:{compact?:boolean}) {
   const [background, setBackground] = useState(2);
   const [selected, setSelected] = useState(false);
+  const [offset,setOffset]=useState({x:0,y:0});
+  const drag=useRef<{x:number;y:number;start:{x:number;y:number}}|null>(null);
+  const clamp=(x:number)=>Math.max(-550,Math.min(550,x));
   const glass = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -26,10 +29,19 @@ export default function ArchisOriginalSpecimen() {
     return () => observer.disconnect();
   }, []);
 
-  return <div className="archis-original-experiment" data-archis-original-experiment>
+  return <div className={`archis-original-experiment${compact?" is-compact":""}`} data-archis-original-experiment>
     <div className="archis-original-stage" data-archis-original-stage
-      style={{ "--archis-original-background": BACKDROPS[background].background } as React.CSSProperties}>
-      <div className="archis-original-behind" aria-hidden="true">BeatGaler</div>
+      data-background-offset-x={Math.round(offset.x)} data-background-offset-y={Math.round(offset.y)}
+      style={{ "--archis-original-background": BACKDROPS[background].background } as React.CSSProperties}
+      onWheel={e=>{e.preventDefault();setOffset(v=>({x:clamp(v.x-e.deltaX),y:clamp(v.y-e.deltaY)}))}}
+      onPointerDown={e=>{if(e.button!==0||e.target instanceof Element&&e.target.closest("button"))return;drag.current={x:e.clientX,y:e.clientY,start:offset};e.currentTarget.setPointerCapture(e.pointerId)}}
+      onPointerMove={e=>{if(!drag.current)return;const p=drag.current;setOffset({x:clamp(p.start.x+e.clientX-p.x),y:clamp(p.start.y+e.clientY-p.y)})}}
+      onPointerUp={e=>{drag.current=null;if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId)}}
+      onPointerCancel={()=>{drag.current=null}}>
+      <div className="archis-original-movable" aria-hidden="true" style={{transform:`translate3d(${offset.x}px,${offset.y}px,0)`}}>
+        <div className="archis-original-behind">REFRACT</div>
+        <div className="archis-original-movable-numbers">0123456789</div>
+      </div>
       <button ref={glass} id="glass" className="glassDiv" type="button"
         aria-label="Select — original Archis Vaze liquid glass"
         aria-pressed={selected} onClick={() => setSelected(v => !v)}>
