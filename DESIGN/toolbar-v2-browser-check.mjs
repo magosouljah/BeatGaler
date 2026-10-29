@@ -109,8 +109,9 @@ try {
  const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
  assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
  assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:15,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ console.log(JSON.stringify({result:"PASS",screenshots:14,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
- await rm(profile,{recursive:true,force:true});
+ await sleep(600);
+ await rm(profile,{recursive:true,force:true,maxRetries:12,retryDelay:250});
 }
