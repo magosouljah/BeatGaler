@@ -64,3 +64,11 @@
 @media (prefers-reduced-transparency: reduce) {
   .camera-glass-lens { backdrop-filter: none; -webkit-backdrop-filter: none; background: #292929; }
 }
+
+/* Shared content plane, no new optical layer. The lens and SVG contours
+   remain byte-for-byte equivalent to the approved camera specimen. */
+.glass-button-content {position:relative;z-index:2;display:grid;place-items:center;width:100%;height:100%;pointer-events:none}
+.glass-button-content .camera-glass-symbol {width:35%;height:auto}
+.glass-button.glass-button--toolbar .camera-glass-symbol {width:20px;height:20px;transform:none}
+.glass-button.glass-button--toolbar {--camera-size:44px;touch-action:manipulation;user-select:none}
+
