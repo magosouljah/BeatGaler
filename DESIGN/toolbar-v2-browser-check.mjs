@@ -160,6 +160,8 @@ try {
  // Independent, unchanged upstream SVG engine specimen. V1/V2 remain untouched.
  await call("Emulation.setEmulatedMedia",{features:[]});
  await media(1440,1800); await sleep(150);
+ // MASTER auto-closes its sidebar when viewport becomes mobile; reopen it.
+ await evaluate("document.querySelector('.lab-master-open-nav')?.click()");
  await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · Original').click()");
  for(let i=0;i<50;i++){if(await read("Boolean(document.querySelector('[data-archis-original-experiment]'))"))break;await sleep(100)}
  const originalRoot="[data-archis-original-experiment]";
