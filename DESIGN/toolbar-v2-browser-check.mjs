@@ -1,0 +1,115 @@
+// Isolated Toolbar V2 visual + interaction check using real headless Chromium CDP.
+import assert from "node:assert/strict";
+import {spawn,spawnSync} from "node:child_process";
+import {mkdir,mkdtemp,rm,writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import path from "node:path";
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const chrome=["google-chrome","chromium","chromium-browser"].find(x=>spawnSync("which",[x]).status===0);
+assert.ok(chrome,"Chrome/Chromium is required for the visual check");
+const output=path.resolve("DESIGN/toolbar-visual-check");
+await mkdir(output,{recursive:true});
+const profile=await mkdtemp(path.join(tmpdir(),"beatgaler-toolbar-"));
+const vite=spawn(process.execPath,["node_modules/vite/bin/vite.js","--config","DESIGN/vite.config.ts","--port","4184","--strictPort"],{stdio:"ignore"});
+const browser=spawn(chrome,["--headless=new","--no-sandbox","--disable-dev-shm-usage","--hide-scrollbars","--remote-debugging-port=9249","--remote-allow-origins=*","--window-size=1440,1800","--user-data-dir="+profile,"about:blank"],{stdio:"ignore"});
+let ws;
+try {
+ let ready=false,tab;
+ for(let i=0;i<120;i++){try{if((await fetch("http://127.0.0.1:4184/")).ok){ready=true;break}}catch{}if(vite.exitCode!==null)throw Error("Vite exited "+vite.exitCode);await sleep(250)}
+ assert.ok(ready,"Vite server unavailable");
+ for(let i=0;i<120;i++){try{tab=(await (await fetch("http://127.0.0.1:9249/json")).json()).find(x=>x.type==="page");if(tab)break}catch{}if(browser.exitCode!==null)throw Error("Chrome exited "+browser.exitCode);await sleep(250)}
+ assert.ok(tab,"CDP unavailable");
+ ws=new WebSocket(tab.webSocketDebuggerUrl);
+ const pending=new Map();let nextId=0;
+ ws.addEventListener("message",event=>{const m=JSON.parse(event.data);const q=pending.get(m.id);if(q){pending.delete(m.id);m.error?q.reject(Error(JSON.stringify(m.error))):q.resolve(m.result)}});
+ await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true})});
+ const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++nextId;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
+ const evaluate=async expression=>{const r=await call("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value};
+ const select=(index,selector)=>"[data-toolbar-background='"+index+"'] "+selector;
+ const click=selector=>evaluate("document.querySelector("+JSON.stringify(selector)+").click()");
+ const read=expression=>evaluate(expression);
+ const size=selector=>read("(() => {const r=document.querySelector("+JSON.stringify(selector)+").getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,width:r.width,height:r.height}})()");
+ const screenshot=async filename=>{const r=await call("Page.captureScreenshot",{format:"png",captureBeyondViewport:false});await writeFile(path.join(output,filename),Buffer.from(r.data,"base64"))};
+ const scroll=selector=>evaluate("document.querySelector("+JSON.stringify(selector)+").scrollIntoView({block:'center'})");
+ const media=(width,height=1800)=>call("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:width<600});
+ await call("Page.enable");await call("Runtime.enable");
+ const runtimeErrors=[];
+ ws.addEventListener("message",event=>{const m=JSON.parse(event.data);if(m.method==="Runtime.exceptionThrown")runtimeErrors.push(m.params.exceptionDetails.text)});
+ await media(1440);
+ await call("Page.navigate",{url:"http://127.0.0.1:4184/"});
+ for(let i=0;i<100;i++){if(await read("Boolean(document.querySelector('.lab-dev-switches'))"))break;await sleep(100)}
+ assert.ok(await read("Boolean(document.querySelector('.lab-dev-switches'))"),"Lab navigation missing");
+ await evaluate("[...document.querySelectorAll('.lab-dev-switches button')].find(x=>x.textContent==='MASTER').click()");
+ for(let i=0;i<100;i++){if(await read("Boolean(document.querySelector('.lab-master-sidebar-nav'))"))break;await sleep(100)}
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Toolbar').click()");
+ for(let i=0;i<50;i++){if(await read("document.querySelectorAll('[data-toolbar-background]').length===5"))break;await sleep(100)}
+ assert.equal(await read("document.querySelectorAll('[data-toolbar-background]').length"),5,"Five optical backdrops required");
+ assert.ok(await read("Boolean(document.querySelector('[aria-label=\"Toolbar V1 — original\"] .lab-toolbar'))"),"Toolbar V1 missing");
+ const allLens=await read("(() => {const panels=[...document.querySelectorAll('[data-toolbar-background]')];return panels.map(p=>{const t=p.querySelector('.lab-toolbar-v2');return {buttons:t.querySelectorAll('.glass-button--toolbar').length,lenses:t.querySelectorAll('.camera-glass-lens').length,edges:t.querySelectorAll('.glass-button-edge-left').length,materials:[...t.querySelectorAll('.camera-glass-lens')].map(l=>getComputedStyle(l).backgroundImage)}})})()");
+ for(const row of allLens){
+  assert.equal(row.buttons,4,"Each toolbar must have four glass surfaces");
+  assert.equal(row.lenses,4,"Each control must use the camera lens");
+  assert.equal(row.edges,4,"Each control must retain the approved SVG highlights");
+  assert.ok(row.materials.every(x=>x===row.materials[0]),"Inconsistent materials within one toolbar");
+ }
+ await scroll(".lab-master-toolbar-frame");await sleep(150);await screenshot("toolbar-v1-desktop.png");
+ for(let i=1;i<=5;i++){await scroll("[data-toolbar-background='"+i+"']");await sleep(120);await screenshot("toolbar-v2-background-"+i+"-desktop.png")}
+ const row=1,root=select(row,".lab-toolbar-v2");
+ const search=select(row,".lab-toolbar-v2-search");
+ const trigger=select(row,".lab-toolbar-v2-search-trigger");
+ const selectButton=select(row,".lab-toolbar-v2-select");
+ const sort=select(row,"[aria-label='Sort beats'][aria-haspopup='menu']");
+ const profileButton=select(row,"[aria-label='Profile'][aria-haspopup='menu']");
+ assert.ok(Math.abs((await size(search)).width-44)<1,"Closed search must be circular");
+ await click(trigger);await sleep(270);
+ const opened=await size(search);
+ assert.ok(opened.width>180,"Search pill failed to grow");
+ assert.ok(await read("document.activeElement===document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")"),"Input not focused");
+ assert.ok(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.camera-glass-lens').length===1"),"Search has more than one glass layer");
+ await screenshot("toolbar-v2-search-desktop.png");
+ await click(trigger);await sleep(50);await click(trigger);await sleep(35);await click(trigger);await sleep(290);
+ assert.ok(Math.abs((await size(search)).width-44)<1,"Rapid reversal left search in an intermediate state");
+ await click(sort);await sleep(250);
+ const sortMenu=select(row,"[role='menu'][aria-label='Sort beats']");
+ assert.ok(await read("document.querySelector("+JSON.stringify(sortMenu)+").classList.contains('is-open')"),"Sort menu did not open");
+ assert.equal(await read("document.querySelector("+JSON.stringify(sortMenu)+").querySelectorAll('[role=menuitemradio]').length"),5,"Five sort options missing");
+ const sortAnchor=await size(sortMenu);
+ await screenshot("toolbar-v2-sort-desktop.png");
+ await click(select(row,"[role=menuitemradio]:nth-of-type(3)"));
+ assert.ok(await read("document.querySelector("+JSON.stringify(sortMenu)+").querySelector('[aria-checked=true]').textContent.includes('BPM')"),"Sort mode not persisted");
+ await click(profileButton);await sleep(250);
+ const profileMenu=select(row,"[role='menu'][aria-label='Profile']");
+ assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')"),"Profile menu did not open");
+ const profileAnchor=await size(profileMenu);
+ assert.ok(Math.abs(sortAnchor.top-profileAnchor.top)<1&&Math.abs(sortAnchor.right-profileAnchor.right)<1,"Menu anchors are not consistent");
+ assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").textContent.includes('Demo User')"),"Profile name missing");
+ await screenshot("toolbar-v2-profile-desktop.png");
+ await call("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
+ assert.ok(!(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')")),"Escape failed to close menu");
+ const before=await size(selectButton);
+ await click(selectButton);await sleep(270);
+ const after=await size(selectButton);
+ assert.ok(before.width>70&&Math.abs(after.width-44)<1,"Select pill-to-circle failed");
+ assert.ok(await read("document.querySelector("+JSON.stringify(selectButton)+").getAttribute('aria-pressed')==='true'"),"Select aria state incorrect");
+ await screenshot("toolbar-v2-select-active-desktop.png");
+ await click(selectButton);await sleep(240);
+ assert.ok((await size(selectButton)).width>70,"Select reverse morph failed");
+ await media(390,1000);await sleep(250);
+ await scroll("[data-toolbar-background='1']");await sleep(140);
+ await screenshot("toolbar-v2-mobile-default.png");
+ await click(trigger);await sleep(260);
+ const mobile=await size(search);
+ assert.ok(mobile.width>=250&&mobile.right<=391&&mobile.left>=-1,"Mobile search overflow or too narrow");
+ await screenshot("toolbar-v2-mobile-search.png");
+ await click(trigger);await sleep(260);
+ await click(sort);await sleep(230);await screenshot("toolbar-v2-mobile-sort.png");
+ await click(profileButton);await sleep(230);await screenshot("toolbar-v2-mobile-profile.png");
+ await call("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});
+ const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
+ assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
+ assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
+ console.log(JSON.stringify({result:"PASS",screenshots:15,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+} finally {
+ ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
+ await rm(profile,{recursive:true,force:true});
+}
