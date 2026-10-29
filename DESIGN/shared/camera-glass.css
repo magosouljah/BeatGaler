@@ -72,3 +72,9 @@
 .glass-button.glass-button--toolbar .camera-glass-symbol {width:20px;height:20px;transform:none}
 .glass-button.glass-button--toolbar {--camera-size:44px;touch-action:manipulation;user-select:none}
 
+
+/* The approved localized arcs are split between the two ends of a capsule.
+   At circular width they coincide exactly with the approved single contour. */
+.glass-button .camera-glass-edge{width:var(--camera-size);height:var(--camera-size)}
+.glass-button-edge-left{left:0;right:auto}
+.glass-button-edge-right{left:auto;right:0}
