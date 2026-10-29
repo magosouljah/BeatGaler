@@ -224,11 +224,25 @@ try {
   assert.notEqual(before,after,"Mouse wheel did not move background: "+stage);
  }
  await screenshot("three-original-glass-engines-scrolled.png");
+ // Real CDP pointer drag, not a synthetic React event, on each background.
+ for(const selector of stages){
+   const rect=await size(selector);
+   const before=await read("Number(document.querySelector("+JSON.stringify(selector)+").dataset.backgroundOffsetX)");
+   const x=Math.round(rect.left+26),y=Math.round(rect.top+rect.height*.53);
+   await call("Input.dispatchMouseEvent",{type:"mouseMoved",x,y});
+   await call("Input.dispatchMouseEvent",{type:"mousePressed",x,y,button:"left",clickCount:1});
+   await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:x+50,y:y+8,buttons:1});
+   await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:x+50,y:y+8,button:"left",clickCount:1});
+   await sleep(130);
+   const after=await read("Number(document.querySelector("+JSON.stringify(selector)+").dataset.backgroundOffsetX)");
+   assert.notEqual(before,after,"Real mouse drag did not move background: "+selector);
+ }
+ await screenshot("three-original-glass-engines-dragged.png");
  await media(390,1000);await sleep(260);
  await scroll("[data-glass-3-compare]");
  await screenshot("three-original-glass-engines-mobile.png");
   assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:25,backdrops:5,comparisonEngines:3,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ console.log(JSON.stringify({result:"PASS",screenshots:26,backdrops:5,comparisonEngines:3,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
  await sleep(600);
