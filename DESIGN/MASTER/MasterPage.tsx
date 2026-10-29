@@ -190,7 +190,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
           </div>
         ) : section === "toolbar" ? (
           <div className="lab-master-specimens">
-            <div className="lab-master-toolbar-frame">
+            <div className="lab-master-toolbar-frame" aria-label="Toolbar V1 — original">
               <LabToolbar search={toolbarSearch} onSearchChange={setToolbarSearch} sort={toolbarSort} onSortChange={setToolbarSort}
                 selecting={toolbarSelecting} onToggleSelect={() => setToolbarSelecting(value => !value)}
                 onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")} />
@@ -199,7 +199,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
               <div style={{fontSize:11,letterSpacing:".11em",opacity:.52}}>TOOLBAR V2 · GLASS</div>
               <div style={{display:"grid",gap:22,width:"min(100%,520px)"}}>
                 {(["#303034","#050506","linear-gradient(#ef91bc 50%,#09090d 50%)","linear-gradient(#ef91bc 39%,#09090d 39%)","#ef91bc"] as const).map((background,i)=>(
-                  <div key={i} style={{background,borderRadius:18,padding:"48px 18px",display:"flex",justifyContent:"center",minHeight:144}}>
+                  <div key={i} data-toolbar-background={i+1} aria-label={`Toolbar V2 — glass backdrop ${i+1}`} style={{background,borderRadius:18,padding:"48px 18px",display:"flex",justifyContent:"center",minHeight:144}}>
                     <ToolbarV2Sample onProfileAction={action => setMessage(action === "settings" ? "Settings: solo demostración." : "Log out: no hay sesión real en DESIGN.")}/>
                   </div>
                 ))}
