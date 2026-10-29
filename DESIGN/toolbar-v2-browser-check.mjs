@@ -41,6 +41,8 @@ try {
  assert.ok(await read("Boolean(document.querySelector('.lab-dev-switches'))"),"Lab navigation missing");
  await evaluate("[...document.querySelectorAll('.lab-dev-switches button')].find(x=>x.textContent==='MASTER').click()");
  for(let i=0;i<100;i++){if(await read("Boolean(document.querySelector('.lab-master-sidebar-nav'))"))break;await sleep(100)}
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · Camera').click()");
+ await sleep(150);await screenshot("approved-camera-desktop.png");
  await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Toolbar').click()");
  for(let i=0;i<50;i++){if(await read("document.querySelectorAll('[data-toolbar-background]').length===5"))break;await sleep(100)}
  assert.equal(await read("document.querySelectorAll('[data-toolbar-background]').length"),5,"Five optical backdrops required");
@@ -120,7 +122,7 @@ try {
  const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
  assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
  assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:14,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ console.log(JSON.stringify({result:"PASS",screenshots:15,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
  await sleep(600);
