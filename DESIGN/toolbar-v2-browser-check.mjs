@@ -191,8 +191,44 @@ try {
  }
  await media(390,1000);await sleep(160);
  await scroll(originalRoot);await screenshot("archis-original-mobile.png");
- assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:22,backdrops:5,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ // Three source engines: each standalone with a wheel-movable textured
+ // backdrop. The original V1/V2 and camera remain in their existing section.
+ await media(1440,1200);await sleep(150);
+ await evaluate("document.querySelector('.lab-master-open-nav')?.click()");
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · 3 Engines').click()");
+ for(let i=0;i<90;i++){if(await read("Boolean(document.querySelector('[data-glass-3-compare]'))"))break;await sleep(100)}
+ assert.ok(await read("Boolean(document.querySelector('[data-glass-3-compare]'))"),"Three engine comparison missing");
+ assert.equal(await read("document.querySelectorAll('.glass-comparison-card').length"),3,"All three original engines must have a card");
+ for(let i=0;i<90;i++){
+  if(await read("document.querySelector('.glass-comparison-studio-canvas')?.dataset.engineReady !== undefined"))break;
+  await sleep(100);
+ }
+ const studioState=await read("document.querySelector('.glass-comparison-studio-canvas')?.dataset.engineReady");
+ assert.equal(studioState,"true","Studio original GLSL renderer did not initialise");
+ const nButton=".glass-comparison-naughty-target";
+ for(let i=0;i<60;i++){
+  if(await read("document.querySelector("+JSON.stringify(nButton)+")?.dataset.engineStatus !== 'loading'"))break;
+  await sleep(100);
+ }
+ assert.equal(await read("document.querySelector("+JSON.stringify(nButton)+").dataset.engineStatus"),"ready","NaughtyDuk original renderer did not start");
+ assert.ok(await read("Boolean(document.querySelector('[data-glass-3-compare] #liquid-glass-filter'))"),"Archis original SVG filter missing in comparison");
+ await scroll("[data-glass-3-compare]");await sleep(900);
+ await screenshot("three-original-glass-engines-desktop.png");
+ // Wheel the background: change offsets, not button geometry or optical code.
+ const stages=[".glass-comparison-stage",".archis-original-stage",".glass-comparison-stage.is-studio"];
+ for(const stage of stages){
+  const before=await read("Number(document.querySelector("+JSON.stringify(stage)+").dataset.backgroundOffsetY)");
+  await evaluate("document.querySelector("+JSON.stringify(stage)+").dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:95}))");
+  await sleep(200);
+  const after=await read("Number(document.querySelector("+JSON.stringify(stage)+").dataset.backgroundOffsetY)");
+  assert.notEqual(before,after,"Mouse wheel did not move background: "+stage);
+ }
+ await screenshot("three-original-glass-engines-scrolled.png");
+ await media(390,1000);await sleep(260);
+ await scroll("[data-glass-3-compare]");
+ await screenshot("three-original-glass-engines-mobile.png");
+  assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
+ console.log(JSON.stringify({result:"PASS",screenshots:25,backdrops:5,comparisonEngines:3,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
  await sleep(600);
