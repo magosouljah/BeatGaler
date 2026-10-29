@@ -36,7 +36,7 @@ try {
   const frames=await read("window.__glassFrames");
   assert.ok(frames.length>=20,context+": too few animation frames");
   assert.ok(frames.filter(x=>x.width>55&&x.width<275).length>=3,context+": morph jumped without intermediate widths");
-  assert.ok(Math.max(...frames.map(x=>Math.abs(x.right-anchor)))<2,context+": right edge jumped during expansion");
+  assert.ok(Math.max(...frames.map(x=>Math.abs(x.right-anchor)))<2,context+": right edge jumped during expansion; anchor="+anchor+" frames="+JSON.stringify(frames));
  };
  const media=(width,height=1800)=>call("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:width<600});
  await call("Page.enable");await call("Runtime.enable");
