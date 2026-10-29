@@ -1,0 +1,109 @@
+/* CSS below copied verbatim from archisvaze/liquid-glass/index.css at fbeb99ef5e8dad2cbbc991ffc23e186a28dc01c4.
+   The only local styles start AFTER the END VERBATIM marker. */
+/* BEGIN VERBATIM UPSTREAM */
+.glassDiv {
+    position: absolute;
+    width: 300px;
+    height: 200px;
+    border-radius: var(--glass-radius);
+    cursor: move;
+    isolation: isolate;
+    touch-action: none;
+    box-shadow: 0px 4px var(--outer-shadow-blur) rgba(0, 0, 0, 0.18);
+}
+
+.glassDiv::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    box-shadow: inset 0 0 var(--shadow-blur) var(--shadow-spread) var(--shadow-color);
+    background-color: rgba(var(--tint-color), var(--tint-opacity));
+    pointer-events: none;
+}
+
+.glassDiv::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    backdrop-filter: url(#liquid-glass-filter);
+    -webkit-backdrop-filter: url(#liquid-glass-filter);
+    isolation: isolate;
+}
+/* END VERBATIM UPSTREAM */
+
+/* Isolated UI wrapper: position/size for the repository's original Button
+   preset (140 x 52, radius 26). No hover-reactive optics or custom highlights. */
+.archis-original-experiment {
+  width: min(100%, 520px);
+  display: grid;
+  justify-items: stretch;
+  gap: 14px;
+}
+.archis-original-stage {
+  --glass-radius: 26px;
+  --tint-color: 255, 255, 255;
+  --tint-opacity: .06;
+  --shadow-blur: 20px;
+  --shadow-spread: -5px;
+  --shadow-color: rgba(255,255,255,.45);
+  --outer-shadow-blur: 24px;
+  background: var(--archis-original-background);
+  border-radius: 18px;
+  min-height: 290px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+  overflow: hidden;
+}
+.archis-original-behind {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  font: 700 clamp(35px,10vw,90px)/1 system-ui,sans-serif;
+  letter-spacing: -.06em;
+  color: rgba(255,255,255,.17);
+  white-space: nowrap;
+  transform: translateY(7px);
+}
+.archis-original-stage .glassDiv {
+  position: relative;
+  width: 140px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  font: 600 16px/1 system-ui,sans-serif;
+}
+.archis-original-stage .glassDiv > span { position:relative; z-index:2; pointer-events:none; }
+.archis-original-stage .glassDiv:focus-visible { outline:2px solid #fff; outline-offset:4px; }
+.archis-original-options { display:flex; flex-wrap:wrap; justify-content:center; gap:7px; }
+.archis-original-options button {
+  border:1px solid rgba(255,255,255,.25);
+  background:rgba(255,255,255,.07);
+  border-radius:999px;
+  padding:9px 12px;
+  min-height:36px;
+  color:rgba(255,255,255,.78);
+  font:500 12px/1.1 system-ui,sans-serif;
+  cursor:pointer;
+}
+.archis-original-options button[aria-pressed="true"] { background:rgba(255,255,255,.18); color:#fff; }
+.archis-original-options button:focus-visible { outline:2px solid #fff; outline-offset:3px; }
+.archis-original-caption { margin:0; text-align:center; font:500 12px/1.45 system-ui,sans-serif; color:rgba(255,255,255,.58); }
+@media (prefers-reduced-transparency:reduce) {
+  .archis-original-stage .glassDiv::after { -webkit-backdrop-filter:none; backdrop-filter:none; background:rgba(43,43,46,.85); }
+}

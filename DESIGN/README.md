@@ -44,6 +44,12 @@ El build se escribe en `DESIGN/dist/` (ignorado por Git). Los 24 covers y los 14
 - `BLUEPRINT/DESIGN-SYSTEM/DESIGN.md` enumera lo implementado; `ARCHITECTURE.md` explica su código. `REFERENCES.md` y el transcript son fuentes metodológicas.
 - Antes de cada incorporación, consultar las skills relevantes de `.agents/skills/`. Añadir **solo componentes aprobados, uno a la vez**.
 
+## Prueba separada — motor original archisvaze/liquid-glass
+
+- En **MASTER → Glass · Original** hay un único botón de prueba independiente usando el **motor SVG sin cambios** de `archisvaze/liquid-glass` (commit `fbeb99ef5e8dad2cbbc991ffc23e186a28dc01c4`), con su preset original **Button 140×52** y parámetros por defecto. Los cálculos y el filtro de origen se copiaron literalmente a `MASTER/ArchisOriginalEngine.ts`; el CSS óptico original está marcado en `MASTER/archis-original.css`.
+- Solo el contenedor React, posición, contenido del botón y selección de cinco fondos son locales. No hay reacciones al puntero ni nuevos efectos. La muestra sirve para **evaluar antes de migrar**: Toolbar V2, CameraGlass, Gallery, `src/` y producción permanecen intactos.
+- El algoritmo SVG original funciona plenamente en Chrome/Chromium; en otros motores puede degradarse. Se conserva la atribución MIT.
+
 ## Toolbar V2 — material de cámara aprobado
 
 - `shared/GlassButton.tsx` conserva la óptica `camera` original aprobada y ofrece `liquid` para Toolbar V2. `ShapeGlassSurface.tsx` adapta el algoritmo SVG de [Archis Vaze / liquid-glass](https://github.com/archisvaze/liquid-glass) (MIT): genera mapas de refracción y brillo con Canvas para cada círculo/pill, según su ancho actual. Los reflejos siguen al puntero, sin arcos circulares dentro de la pill ni dependencias adicionales.
