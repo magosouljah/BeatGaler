@@ -64,6 +64,7 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
     e.preventDefault();buttons[next]?.focus();
   };
   return <div ref={root} className={`lab-toolbar-v2${searchOpen?" is-searching":""}`} role="group" aria-label="Library toolbar">
+    <div className="lab-toolbar-v2-search-slot">
     <GlassButton as="div" size={44} width={searchOpen?"min(290px, calc(100vw - 244px))":44} className={`glass-button--toolbar lab-toolbar-v2-search${searchOpen?" is-open":""}`}>
 
       <input ref={input} type="search" autoComplete="off" aria-label="Search beats" placeholder="Search beats"
@@ -75,6 +76,7 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
         <Icon name="magnifyingglass"/>{search&&!searchOpen&&<span className="lab-toolbar-v2-search-dot" aria-hidden="true"/>}
       </button>
     </GlassButton>
+    </div>
     <GlassButton size={44} ref={sortButton} type="button" className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="sort"}
       aria-label="Sort beats" aria-haspopup="menu" aria-controls={sortId} aria-expanded={menu==="sort"} onClick={()=>openMenu("sort")}>
       <Icon name="line.3.horizontal.decrease"/>
