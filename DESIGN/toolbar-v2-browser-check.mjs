@@ -31,6 +31,13 @@ try {
  const size=selector=>read("(() => {const r=document.querySelector("+JSON.stringify(selector)+").getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,width:r.width,height:r.height}})()");
  const screenshot=async filename=>{const r=await call("Page.captureScreenshot",{format:"png",captureBeyondViewport:false});await writeFile(path.join(output,filename),Buffer.from(r.data,"base64"))};
  const scroll=selector=>evaluate("document.querySelector("+JSON.stringify(selector)+").scrollIntoView({block:'center'})");
+ const beginFrames=selector=>evaluate("(() => {const el=document.querySelector("+JSON.stringify(selector)+");window.__glassFrames=[];let remaining=32;const tick=()=>{const r=el.getBoundingClientRect();window.__glassFrames.push({left:r.left,right:r.right,width:r.width});if(--remaining>0)requestAnimationFrame(tick)};requestAnimationFrame(tick);return true})()");
+ const verifyFrames=async(anchor,context)=>{
+  const frames=await read("window.__glassFrames");
+  assert.ok(frames.length>=20,context+": too few animation frames");
+  assert.ok(frames.filter(x=>x.width>55&&x.width<275).length>=3,context+": morph jumped without intermediate widths");
+  assert.ok(Math.max(...frames.map(x=>Math.abs(x.right-anchor)))<2,context+": right edge jumped during expansion");
+ };
  const media=(width,height=1800)=>call("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:width<600});
  await call("Page.enable");await call("Runtime.enable");
  const runtimeErrors=[];
@@ -65,7 +72,9 @@ try {
  const profileButton=select(row,"[aria-label='Profile'][aria-haspopup='menu']");
  const closedSearch=await size(search);
  assert.ok(Math.abs((await size(search)).width-44)<1,"Closed search must be circular");
- await click(trigger);await sleep(270);
+ await beginFrames(search);
+ await click(trigger);await sleep(550);
+ await verifyFrames(closedSearch.right,"desktop");
  const opened=await size(search);
  assert.ok(opened.width>180,"Search pill failed to grow");
  assert.ok(Math.abs(opened.right-closedSearch.right)<1.5,"Desktop search must expand to the left without moving its icon anchor");
@@ -101,7 +110,9 @@ try {
  await call("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
  assert.ok(!(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')")),"Escape failed to close menu");
  const before=await size(selectButton);
+ await evaluate("document.querySelector('.lab-master-feedback button')?.click()");
  await click(selectButton);await sleep(270);
+ await evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
  const after=await size(selectButton);
  assert.ok(before.width>70&&Math.abs(after.width-44)<1,"Select pill-to-circle failed");
  assert.ok(await read("document.querySelector("+JSON.stringify(selectButton)+").getAttribute('aria-pressed')==='true'"),"Select aria state incorrect");
@@ -115,7 +126,9 @@ try {
  await scroll("[data-toolbar-background='1']");await sleep(140);
  await screenshot("toolbar-v2-mobile-default.png");
  const mobileClosed=await size(search);
- await click(trigger);await sleep(260);
+ await beginFrames(search);
+ await click(trigger);await sleep(550);
+ await verifyFrames(mobileClosed.right,"mobile");
  const mobile=await size(search);
  assert.ok(mobile.width>=250&&mobile.right<=391&&mobile.left>=-1,"Mobile search overflow or too narrow");
  assert.ok(Math.abs(mobile.right-mobileClosed.right)<1.5,"Mobile search must grow left, not slide across the toolbar");
