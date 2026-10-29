@@ -38,6 +38,10 @@ try {
   assert.ok(frames.filter(x=>x.width>55&&x.width<275).length>=3,context+": morph jumped without intermediate widths");
   assert.ok(Math.max(...frames.map(x=>Math.abs(x.right-anchor)))<2,context+": right edge jumped during expansion; anchor="+anchor+" frames="+JSON.stringify(frames));
  };
+ const assertMenuReachable=async(menuSelector,itemSelector,label)=>{
+  const visible=await read("(() => {const menu=document.querySelector("+JSON.stringify(menuSelector)+");const item=menu?.querySelector("+JSON.stringify(itemSelector)+");if(!item)return false;const r=item.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return hit===item||item.contains(hit)})()");
+  assert.ok(visible,label+": menu item is covered by a subsequent specimen");
+ };
  const media=(width,height=1800)=>call("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:width<600});
  await call("Page.enable");await call("Runtime.enable");
  const runtimeErrors=[];
@@ -90,6 +94,7 @@ try {
  const sortMenu=select(row,"[role='menu'][aria-label='Sort beats']");
  assert.ok(await read("document.querySelector("+JSON.stringify(sortMenu)+").classList.contains('is-open')"),"Sort menu did not open");
  assert.equal(await read("document.querySelector("+JSON.stringify(sortMenu)+").querySelectorAll('[role=menuitemradio]').length"),5,"Five sort options missing");
+ await assertMenuReachable(sortMenu,"[role=menuitemradio]:nth-of-type(3)","desktop sort");
  const sortAnchor=await size(sortMenu);
  await screenshot("toolbar-v2-sort-desktop.png");
  await click(select(row,"[role=menuitemradio]:nth-of-type(3)"));
@@ -97,6 +102,7 @@ try {
  await click(profileButton);await sleep(250);
  const profileMenu=select(row,"[role='menu'][aria-label='Profile']");
  assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").classList.contains('is-open')"),"Profile menu did not open");
+ await assertMenuReachable(profileMenu,"[role=menuitem]:last-of-type","desktop profile");
  const profileAnchor=await size(profileMenu);
  assert.ok(Math.abs(sortAnchor.top-profileAnchor.top)<1&&Math.abs(sortAnchor.right-profileAnchor.right)<1,"Menu anchors are not consistent");
  assert.ok(await read("document.querySelector("+JSON.stringify(profileMenu)+").textContent.includes('Demo User')"),"Profile name missing");
@@ -134,8 +140,8 @@ try {
  assert.ok(Math.abs(mobile.right-mobileClosed.right)<1.5,"Mobile search must grow left, not slide across the toolbar");
  await screenshot("toolbar-v2-mobile-search.png");
  await click(trigger);await sleep(260);
- await click(sort);await sleep(230);await screenshot("toolbar-v2-mobile-sort.png");
- await click(profileButton);await sleep(230);await screenshot("toolbar-v2-mobile-profile.png");
+ await click(sort);await sleep(230);await assertMenuReachable(sortMenu,"[role=menuitemradio]:nth-of-type(3)","mobile sort");await screenshot("toolbar-v2-mobile-sort.png");
+ await click(profileButton);await sleep(230);await assertMenuReachable(profileMenu,"[role=menuitem]:last-of-type","mobile profile");await screenshot("toolbar-v2-mobile-profile.png");
  await call("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});
  const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
  assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
