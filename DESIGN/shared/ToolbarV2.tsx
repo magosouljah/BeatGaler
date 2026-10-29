@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import "./toolbar-v2.css";
+import GlassButton from "./GlassButton";
 
 export type LabSort = "manual" | "name" | "bpm" | "stars" | "date";
 type Menu = "sort" | "profile" | null;
@@ -63,7 +64,7 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
     e.preventDefault();buttons[next]?.focus();
   };
   return <div ref={root} className={`lab-toolbar-v2${searchOpen?" is-searching":""}`} role="group" aria-label="Library toolbar">
-    <div className={`lab-toolbar-v2-search glass-v2${searchOpen?" is-open":""}`}>
+    <GlassButton as="div" size={44} width={searchOpen?"min(290px, calc(100vw - 244px))":44} className={`glass-button--toolbar lab-toolbar-v2-search${searchOpen?" is-open":""}`}>
 
       <input ref={input} type="search" autoComplete="off" aria-label="Search beats" placeholder="Search beats"
         className="lab-toolbar-v2-search-input" tabIndex={searchOpen?0:-1}
@@ -73,24 +74,24 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
         onClick={()=>{setMenu(null);setSearchOpen(v=>!v);}}>
         <Icon name="magnifyingglass"/>{search&&!searchOpen&&<span className="lab-toolbar-v2-search-dot" aria-hidden="true"/>}
       </button>
-    </div>
-    <button ref={sortButton} type="button" className={`lab-toolbar-v2-circle glass-v2${menu==="sort"?" is-active":""}`}
+    </GlassButton>
+    <GlassButton size={44} ref={sortButton} type="button" className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="sort"}
       aria-label="Sort beats" aria-haspopup="menu" aria-controls={sortId} aria-expanded={menu==="sort"} onClick={()=>openMenu("sort")}>
       <Icon name="line.3.horizontal.decrease"/>
-    </button>
-    <button type="button" className={`lab-toolbar-v2-select glass-v2${selecting?" is-selecting":""}`}
+    </GlassButton>
+    <GlassButton size={44} width={selecting?44:78} className={`glass-button--toolbar lab-toolbar-v2-select${selecting?" is-selecting":""}`} active={selecting}
       aria-label={selecting?"Cancel selection":"Select beats"} aria-pressed={selecting}
       onClick={()=>{setMenu(null);setSearchOpen(false);onToggleSelect();}}>
       <span className="lab-toolbar-v2-select-text" aria-hidden={selecting}>Select</span>
       <span className="lab-toolbar-v2-select-x" aria-hidden={!selecting}><Icon name="xmark"/></span>
-    </button>
-    <button ref={profileButton} type="button" className={`lab-toolbar-v2-circle glass-v2${menu==="profile"?" is-active":""}`}
+    </GlassButton>
+    <GlassButton ref={profileButton} size={44} className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="profile"}
       aria-label="Profile" aria-haspopup="menu" aria-controls={profileId} aria-expanded={menu==="profile"} onClick={()=>openMenu("profile")}>
       <Icon name="person.crop.circle"/>
-    </button>
+    </GlassButton>
     {/* Identical top and right anchors for sorting and profile. */}
     <div ref={sortMenu} id={sortId} role="menu" aria-label="Sort beats" aria-hidden={menu!=="sort"}
-      onKeyDown={onMenuKeyDown} className={`lab-toolbar-v2-popover${menu==="sort"?" is-open":""}`}>
+      onKeyDown={onMenuKeyDown} className={`lab-toolbar-v2-popover is-sort${menu==="sort"?" is-open":""}`}>
       <div className="lab-toolbar-v2-menu-title">Sort by</div><div className="lab-toolbar-v2-menu-divider"/>
       {OPTIONS.map(o=><button key={o.key} type="button" role="menuitemradio" aria-checked={sort===o.key}
         tabIndex={menu==="sort"?0:-1} className={`lab-toolbar-v2-menu-item${sort===o.key?" is-current":""}`}
@@ -99,7 +100,7 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
       </button>)}
     </div>
     <div ref={profileMenu} id={profileId} role="menu" aria-label="Profile" aria-hidden={menu!=="profile"}
-      onKeyDown={onMenuKeyDown} className={`lab-toolbar-v2-popover${menu==="profile"?" is-open":""}`}>
+      onKeyDown={onMenuKeyDown} className={`lab-toolbar-v2-popover is-profile${menu==="profile"?" is-open":""}`}>
       <div className="lab-toolbar-v2-profile-name"><span className="lab-toolbar-v2-avatar"><Icon name="person.crop.circle"/></span><strong>{username}</strong></div>
       <div className="lab-toolbar-v2-menu-divider"/>
       <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1} className="lab-toolbar-v2-menu-item"
