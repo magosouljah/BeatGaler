@@ -85,7 +85,7 @@ export default function StudioOriginalButton({offset}:{offset:{x:number,y:number
             u_refDistance:.05,u_refFactor:1.4,u_refDispersion:7,
             u_refFresnelRange:30,u_refFresnelHardness:.2,u_refFresnelFactor:.2,
             u_glareRange:30,u_glareHardness:.2,u_glareConvergence:.5,
-            u_glareOppositeFactor:.8,u_glareFactor:.9,u_blurEdge:1,STEP:0}
+            u_glareOppositeFactor:.8,u_glareFactor:.9,u_blurEdge:1,STEP:9}
         });
       };
       update.current=draw;
