@@ -1,6 +1,7 @@
 import { forwardRef, useId } from "react";
 import type { CSSProperties, ButtonHTMLAttributes, ReactNode } from "react";
 import "./camera-glass.css";
+import ShapeGlassSurface from "./ShapeGlassSurface";
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   as?: "button" | "div";
@@ -8,12 +9,13 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   width?: number | string;
   active?: boolean;
   pressed?: boolean;
+  material?: "camera" | "liquid";
   children: ReactNode;
 };
 
 /** Approved CameraGlass optical stack. Same SVG contour and displacement,
  * shared by circular and capsule controls, without any additional surfaces. */
-const GlassButton = forwardRef<HTMLButtonElement, Props>(function GlassButton({as="button",size=72,width,active=false,pressed=false,children,className="",style,...rest}, ref) {
+const GlassButton = forwardRef<HTMLButtonElement, Props>(function GlassButton({as="button",size=72,width,active=false,pressed=false,material="camera",children,className="",style,...rest}, ref) {
   const uid=useId().replace(/:/g,"");
   const filterId=`camera-glass-optics-${uid}`;
   const topEdgeId=`camera-edge-upper-${uid}`;
@@ -21,8 +23,9 @@ const GlassButton = forwardRef<HTMLButtonElement, Props>(function GlassButton({a
   const softEdgeId=`camera-edge-soft-${uid}`;
   const softRightId=`camera-edge-soft-right-${uid}`;
   const Element=as;
-  return <Element {...(rest as any)} ref={ref as any} className={`camera-glass glass-button${active?" is-pressed":""}${pressed?" is-pressed":""} ${className}`}
+  return <Element {...(rest as any)} ref={ref as any} className={`camera-glass glass-button${active?" is-pressed":""}${pressed?" is-pressed":""}${material==="liquid"?" glass-button--liquid":""} ${className}`}
     style={{"--camera-size":`${size}px`,width:width ?? size,borderRadius:9999,...style} as CSSProperties}>
+    {material === "liquid" ? <ShapeGlassSurface/> : <>
     <svg className="camera-glass-defs" width="0" height="0" aria-hidden="true" focusable="false">
       <defs>
         <filter id={filterId} x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
@@ -65,6 +68,7 @@ const GlassButton = forwardRef<HTMLButtonElement, Props>(function GlassButton({a
       <path d="M 108.17 39.05 A 54.85 54.85 0 0 1 38.96 108.17" stroke={`url(#${bottomEdgeId})`} strokeWidth="1.4" filter={`url(#${softRightId})`}/>
       <path d="M 108.17 39.05 A 54.85 54.85 0 0 1 38.96 108.17" stroke={`url(#${bottomEdgeId})`} strokeWidth=".78"/>
     </svg>
+    </>}
     <span className="glass-button-content">{children}</span>
   </Element>;
 });

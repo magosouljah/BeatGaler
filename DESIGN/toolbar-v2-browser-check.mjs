@@ -58,11 +58,11 @@ try {
  for(let i=0;i<50;i++){if(await read("document.querySelectorAll('[data-toolbar-background]').length===5"))break;await sleep(100)}
  assert.equal(await read("document.querySelectorAll('[data-toolbar-background]').length"),5,"Five optical backdrops required");
  assert.ok(await read("Boolean(document.querySelector('[aria-label=\"Toolbar V1 — original\"] .lab-toolbar'))"),"Toolbar V1 missing");
- const allLens=await read("(() => {const panels=[...document.querySelectorAll('[data-toolbar-background]')];return panels.map(p=>{const t=p.querySelector('.lab-toolbar-v2');return {buttons:t.querySelectorAll('.glass-button--toolbar').length,lenses:t.querySelectorAll('.camera-glass-lens').length,edges:t.querySelectorAll('.glass-button-edge-left').length,materials:[...t.querySelectorAll('.camera-glass-lens')].map(l=>getComputedStyle(l).backgroundImage)}})})()");
+ const allLens=await read("(() => {const panels=[...document.querySelectorAll('[data-toolbar-background]')];return panels.map(p=>{const t=p.querySelector('.lab-toolbar-v2');return {buttons:t.querySelectorAll('.glass-button--toolbar').length,lenses:t.querySelectorAll('.shape-glass-surface').length,edges:t.querySelectorAll('.glass-button-edge-left').length,materials:[...t.querySelectorAll('.shape-glass-surface')].map(l=>getComputedStyle(l).backgroundImage),maps:t.querySelectorAll('feImage[ref]').length}})})()");
  for(const row of allLens){
   assert.equal(row.buttons,4,"Each toolbar must have four glass surfaces");
-  assert.equal(row.lenses,4,"Each control must use the camera lens");
-  assert.equal(row.edges,4,"Each control must retain the approved SVG highlights");
+  assert.equal(row.lenses,4,"Each control must use the shape-aware lens");
+  assert.equal(row.edges,0,"Circular camera arcs must never appear inside pills");
   assert.ok(row.materials.every(x=>x===row.materials[0]),"Inconsistent materials within one toolbar");
  }
  await scroll(".lab-master-toolbar-frame");await sleep(150);await screenshot("toolbar-v1-desktop.png");
@@ -80,13 +80,14 @@ try {
  await click(trigger);await sleep(550);
  await verifyFrames(closedSearch.right,"desktop");
  const opened=await size(search);
+ assert.equal(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.shape-glass-surface').length"),1,"Search must have one liquid surface");
  assert.ok(opened.width>180,"Search pill failed to grow");
  assert.ok(Math.abs(opened.right-closedSearch.right)<1.5,"Desktop search must expand to the left without moving its icon anchor");
  assert.ok(await read("document.activeElement===document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")"),"Input not focused");
  assert.equal(await read("getComputedStyle(document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+")).outlineStyle"),"none","Search must never show an inherited rectangular focus ring");
  await call("Input.insertText",{text:"aurora"});
  assert.equal(await read("document.querySelector("+JSON.stringify(select(row,".lab-toolbar-v2-search-input"))+").value"),"aurora","Search input must accept text");
- assert.ok(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.camera-glass-lens').length===1"),"Search has more than one glass layer");
+ assert.ok(await read("document.querySelector("+JSON.stringify(search)+").querySelectorAll('.shape-glass-surface').length===1"),"Search has more than one glass layer");
  await screenshot("toolbar-v2-search-desktop.png");
  await click(trigger);await sleep(50);await click(trigger);await sleep(35);await click(trigger);await sleep(290);
  assert.ok(Math.abs((await size(search)).width-44)<1,"Rapid reversal left search in an intermediate state");

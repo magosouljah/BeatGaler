@@ -65,7 +65,7 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
   };
   return <div ref={root} className={`lab-toolbar-v2${searchOpen?" is-searching":""}`} role="group" aria-label="Library toolbar">
     <div className="lab-toolbar-v2-search-slot">
-    <GlassButton as="div" size={44} width={searchOpen?"min(290px, calc(100vw - 244px))":44} className={`glass-button--toolbar lab-toolbar-v2-search${searchOpen?" is-open":""}`}>
+    <GlassButton as="div" size={44} width={searchOpen?"min(290px, calc(100vw - 244px))":44} material="liquid" className={`glass-button--toolbar lab-toolbar-v2-search${searchOpen?" is-open":""}`}>
 
       <input ref={input} type="search" autoComplete="off" aria-label="Search beats" placeholder="Search beats"
         className="lab-toolbar-v2-search-input" tabIndex={searchOpen?0:-1}
@@ -77,17 +77,17 @@ export default function LabToolbarV2({search,onSearchChange,sort,onSortChange,se
       </button>
     </GlassButton>
     </div>
-    <GlassButton size={44} ref={sortButton} type="button" className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="sort"}
+    <GlassButton size={44} ref={sortButton} type="button" material="liquid" className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="sort"}
       aria-label="Sort beats" aria-haspopup="menu" aria-controls={sortId} aria-expanded={menu==="sort"} onClick={()=>openMenu("sort")}>
       <Icon name="line.3.horizontal.decrease"/>
     </GlassButton>
-    <GlassButton size={44} width={selecting?44:78} className={`glass-button--toolbar lab-toolbar-v2-select${selecting?" is-selecting":""}`} active={selecting}
+    <GlassButton size={44} width={selecting?44:78} material="liquid" className={`glass-button--toolbar lab-toolbar-v2-select${selecting?" is-selecting":""}`} active={selecting}
       aria-label={selecting?"Cancel selection":"Select beats"} aria-pressed={selecting}
       onClick={()=>{setMenu(null);setSearchOpen(false);onToggleSelect();}}>
       <span className="lab-toolbar-v2-select-text" aria-hidden={selecting}>Select</span>
       <span className="lab-toolbar-v2-select-x" aria-hidden={!selecting}><Icon name="xmark"/></span>
     </GlassButton>
-    <GlassButton ref={profileButton} size={44} className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="profile"}
+    <GlassButton ref={profileButton} size={44} material="liquid" className="glass-button--toolbar lab-toolbar-v2-circle" active={menu==="profile"}
       aria-label="Profile" aria-haspopup="menu" aria-controls={profileId} aria-expanded={menu==="profile"} onClick={()=>openMenu("profile")}>
       <Icon name="person.crop.circle"/>
     </GlassButton>
