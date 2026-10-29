@@ -157,8 +157,40 @@ try {
  await call("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});
  const duration=await read("getComputedStyle(document.querySelector("+JSON.stringify(search)+")).transitionDuration");
  assert.ok(duration.split(",").every(s=>parseFloat(s)<=.01),"Reduced motion not respected");
+ // Independent, unchanged upstream SVG engine specimen. V1/V2 remain untouched.
+ await call("Emulation.setEmulatedMedia",{features:[]});
+ await media(1440,1800); await sleep(150);
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · Original').click()");
+ for(let i=0;i<50;i++){if(await read("Boolean(document.querySelector('[data-archis-original-experiment]'))"))break;await sleep(100)}
+ const originalRoot="[data-archis-original-experiment]";
+ const originalButton=originalRoot+" #glass";
+ const originalFilter=originalRoot+" #liquid-glass-filter";
+ const originalMenu=originalRoot+" .archis-original-options";
+ const originalReady=await read("(() => {const el=document.querySelector("+JSON.stringify(originalRoot)+");const f=el.querySelector('#liquid-glass-filter');const b=el.querySelector('#glass');return {width:b.offsetWidth,height:b.offsetHeight,filters:el.querySelectorAll('#liquid-glass-filter').length,displacement:!!f?.querySelector('feDisplacementMap'),composite:!!f?.querySelector('feBlend'),images:[...f.querySelectorAll('feImage')].map(n=>n.getAttribute('href')),background:getComputedStyle(b,'::after').backdropFilter}})()");
+ assert.equal(originalReady.width,140,"Original upstream Button preset width changed");
+ assert.equal(originalReady.height,52,"Original upstream Button preset height changed");
+ assert.equal(originalReady.filters,1,"Original optical filter must be isolated");
+ assert.ok(originalReady.displacement&&originalReady.composite,"Original SVG filter stack missing");
+ assert.ok(originalReady.images.length===2&&originalReady.images.every(x=>x.startsWith("data:image/png;base64,")),"Original maps were not generated");
+ assert.ok(originalReady.background.includes("url("),"Original CSS backdrop-filter not active");
+ const beforeOriginal=await read("document.querySelector("+JSON.stringify(originalFilter)+").innerHTML");
+ await evaluate("(() => {const el=document.querySelector("+JSON.stringify(originalButton)+");const r=el.getBoundingClientRect();el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:r.left+5,clientY:r.top+5}))})()");
+ await sleep(80);
+ assert.equal(await read("document.querySelector("+JSON.stringify(originalFilter)+").innerHTML"),beforeOriginal,"Upstream engine must NOT modify reflections when moving the mouse");
+ await click(originalButton);
+ assert.equal(await read("document.querySelector("+JSON.stringify(originalButton)+").getAttribute('aria-pressed')"),"true","Original sample click failed");
+ await click(originalButton);
+ assert.equal(await read("document.querySelector("+JSON.stringify(originalButton)+").getAttribute('aria-pressed')"),"false","Original sample toggle failed");
+ for(let i=0;i<5;i++){
+   await click(originalMenu+" button:nth-child("+(i+1)+")");
+   assert.ok(await read("document.querySelector("+JSON.stringify(originalMenu+" button:nth-child("+(i+1)+")")+").getAttribute('aria-pressed')==='true'"),"Original background selection failed "+i);
+   await scroll(originalRoot);await sleep(100);
+   await screenshot("archis-original-background-"+(i+1)+"-desktop.png");
+ }
+ await media(390,1000);await sleep(160);
+ await scroll(originalRoot);await screenshot("archis-original-mobile.png");
  assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:16,backdrops:5,chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ console.log(JSON.stringify({result:"PASS",screenshots:22,backdrops:5,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
  await sleep(600);
