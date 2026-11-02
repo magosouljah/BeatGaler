@@ -26,3 +26,22 @@
 .glass-comparison-engine-error{position:absolute;bottom:8px;left:8px;right:8px;background:rgba(22,6,10,.9);padding:8px;border-radius:6px;color:#ffb0b0;font-size:11px;z-index:10;}
 @media(max-width:850px){.glass-comparison-grid-layout{grid-template-columns:1fr;max-width:500px;margin:auto;width:100%;}.glass-comparison-card>p{min-height:0;}.glass-comparison{padding:4px 0 50px;}}
 @media(prefers-reduced-motion:reduce){.glass-comparison-textured{will-change:auto;}}
+
+/* Only evaluation press feedback. None of the source shaders is modified. */
+.glass-comparison-naughty-target{transition:transform 110ms ease-out;}
+.glass-comparison-naughty-target:active{transform:scale(.97);}
+.glass-comparison-naughty-target[aria-pressed="true"]>span{opacity:.77;}
+.glass-comparison-studio-button{
+  width:150px;height:54px;border-radius:999px;background:transparent;border:0;
+  color:#fff;position:relative;z-index:4;display:grid;place-items:center;
+  cursor:pointer;touch-action:manipulation;font:600 17px system-ui,sans-serif;
+  -webkit-tap-highlight-color:transparent;outline-offset:4px;
+}
+.glass-comparison-studio-button>span{transition:transform 110ms ease-out,opacity 110ms ease-out;}
+.glass-comparison-studio-button:active>span{transform:scale(.96);}
+.glass-comparison-studio-button[aria-pressed="true"]>span{opacity:.77;}
+.glass-comparison-studio-button:focus-visible{outline:2px solid #fff;}
+@media(prefers-reduced-motion:reduce){
+ .glass-comparison-naughty-target,.glass-comparison-studio-button>span{transition:none;}
+ .glass-comparison-naughty-target:active,.glass-comparison-studio-button:active>span{transform:none;}
+}

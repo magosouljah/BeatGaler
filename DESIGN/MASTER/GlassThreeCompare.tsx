@@ -9,7 +9,8 @@ function MotionStage({children,studio=false}:{children:(offset:Offset)=>React.Re
   const [offset,setOffset]=useState<Offset>({x:0,y:0});
   const drag=useRef<{x:number;y:number;start:Offset}|null>(null);
   const move=(dx:number,dy:number)=>setOffset(prev=>({x:Math.max(-550,Math.min(550,prev.x+dx)),y:Math.max(-550,Math.min(550,prev.y+dy))}));
-  return <div className={`glass-comparison-stage${studio?" is-studio":""}`}
+  return <div className={`glass-comparison-stage${studio?" is-studio":" is-naughty"}`}
+    id={studio?"glass-comparison-studio-stage":"glass-comparison-naughty-stage"}
     data-background-offset-x={Math.round(offset.x)}
     data-background-offset-y={Math.round(offset.y)}
     onWheel={e=>{e.preventDefault();move(-e.deltaX,-e.deltaY)}}
@@ -42,7 +43,7 @@ export default function GlassThreeCompare(){
     <div className="glass-comparison-grid-layout">
       <section className="glass-comparison-card" aria-label="NaughtyDuk liquidGL original">
         <header><strong>1. NaughtyDuk</strong><span>liquidGL · WebGL2</span></header>
-        <MotionStage>{()=> <NaughtyOriginalButton/>}</MotionStage>
+        <MotionStage>{offset=><NaughtyOriginalButton offset={offset}/>}</MotionStage>
         <p>Motor liquidGL original · snapshot del DOM</p>
       </section>
       <section className="glass-comparison-card" aria-label="Archis Vaze original">

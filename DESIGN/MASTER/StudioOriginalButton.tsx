@@ -37,6 +37,8 @@ export default function StudioOriginalButton({offset}:{offset:{x:number,y:number
   const ref=useRef<HTMLCanvasElement>(null);
   const update=useRef<(x:number,y:number)=>void>(()=>{});
   const [error,setError]=useState("");
+  const [selected,setSelected]=useState(false);
+  const selectedRef=useRef(false);
   useEffect(()=>{
     const canvas=ref.current;if(!canvas)return;
     let renderer:MultiPassRenderer|undefined;
@@ -75,13 +77,13 @@ export default function StudioOriginalButton({offset}:{offset:{x:number,y:number
         renderer.setUniforms({
           u_resolution:[w,h],u_dpr:1,u_blurWeights:weights,u_blurRadius:1,
           u_mouse:[w/2,h/2],u_mouseSpring:[w/2,h/2],
-          u_shapeWidth:150,u_shapeHeight:54,u_shapeRadius:23,u_shapeRoundness:5,
-          u_mergeRate:.05,u_glareAngle:-Math.PI/4,u_showShape1:0,
+          u_shapeWidth:150,u_shapeHeight:54,u_shapeRadius:27,u_shapeRoundness:2,
+          u_mergeRate:0,u_glareAngle:-Math.PI/4,u_showShape1:0,
         });
         renderer.render({
           bgPass:{u_bgType:3,u_bgTexture:texture,u_bgTextureReady:1,u_bgTextureRatio:w/h,
             u_shadowExpand:25,u_shadowFactor:.15,u_shadowPosition:[0,0]},
-          mainPass:{u_tint:[1,1,1,.06],u_refThickness:20,
+          mainPass:{u_tint:[1,1,1,selectedRef.current?.16:.06],u_refThickness:20,
             u_refDistance:.05,u_refFactor:1.4,u_refDispersion:7,
             u_refFresnelRange:30,u_refFresnelHardness:.2,u_refFresnelFactor:.2,
             u_glareRange:30,u_glareHardness:.2,u_glareConvergence:.5,
@@ -101,9 +103,10 @@ export default function StudioOriginalButton({offset}:{offset:{x:number,y:number
     return()=>{observer?.disconnect();update.current=()=>{};if(texture)canvas.getContext("webgl2")?.deleteTexture(texture);renderer?.dispose()};
   },[]);
   useEffect(()=>{update.current(offset.x,offset.y)},[offset.x,offset.y]);
+  const onToggle=()=>{selectedRef.current=!selectedRef.current;setSelected(selectedRef.current);update.current(offset.x,offset.y)};
   return <div className="glass-comparison-studio-render">
     <canvas ref={ref} className="glass-comparison-studio-canvas" aria-label="Liquid Glass Studio, WebGL2 shader"/>
-    <span className="glass-comparison-studio-label" aria-hidden="true">Select</span>
+    <button type="button" className="glass-comparison-studio-button" aria-label="Select, Liquid Glass Studio" aria-pressed={selected} onClick={onToggle}><span>{selected?"Selected":"Select"}</span></button>
     {error&&<p className="glass-comparison-engine-error">WebGL Studio: {error}</p>}
   </div>;
 }
