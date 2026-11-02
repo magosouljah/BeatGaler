@@ -9,14 +9,13 @@ import main from "./engines/studio/fragment-main.glsl?raw";
 import math from "./engines/studio/lib/math.glsl?raw";
 import color from "./engines/studio/lib/color.glsl?raw";
 import shape from "./studio-toolbar-shape.glsl?raw";
+import {advanceSpring, makeSpring, PRESS_GROW, PRESS_RELEASE, MORPH_SPRING, moving} from "./studio-toolbar-spring";
 import presetText from "./studio-toolbar-44.json?raw";
 import "./studio-toolbar.css";
 
 type Kind="search"|"sort"|"profile"|"close";
 type Menu="sort"|"profile"|null;
 type Theme="dark"|"light";
-type Spring={x:number,v:number,target:number};
-const makeSpring=(x:number):Spring=>({x,v:0,target:x});
 const clamp=(n:number,min:number,max:number)=>Math.max(min,Math.min(max,n));
 const preset=JSON.parse(presetText).controls as {
   refThickness:number;refDistance:number;refFactor:number;refDispersion:number;
@@ -27,17 +26,6 @@ const preset=JSON.parse(presetText).controls as {
   shadowFactor:number;shadowPosition:{x:number;y:number};step:number;
 };
 const options=["Manual","Name","BPM","Stars","Date"] as const;
-function integrate(s:Spring,dt:number,frequency:number,damping:number){
-  const omega=2*Math.PI*frequency;
-  // Substep the oscillator to keep velocity continuous on rapid reversal.
-  const steps=Math.max(1,Math.ceil(dt/.008)),step=dt/steps;
-  for(let i=0;i<steps;i++){
-    s.v+=(omega*omega*(s.target-s.x)-2*damping*omega*s.v)*step;
-    s.x+=s.v*step;
-  }
-  if(Math.abs(s.x-s.target)<.0004&&Math.abs(s.v)<.012){s.x=s.target;s.v=0;}
-}
-const moving=(s:Spring)=>Math.abs(s.x-s.target)>.0005||Math.abs(s.v)>.012;
 function include(source:string){
   return source.replace(/^#include ['"]\.\/lib\/(sdf|math|color)\.glsl['"]\s*$/gm,
     (_all:string,name:string)=>name==="sdf"?shape:name==="math"?math:color);
@@ -120,6 +108,7 @@ export default function StudioToolbarCandidate(){
       if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
     },
     onPointerCancel:()=>press(index,false),
+    onLostPointerCapture:()=>press(index,false),
     onKeyDown:(e:ReactKeyboardEvent<HTMLButtonElement>)=>{
       if(!e.repeat&&(e.key==="Enter"||e.key===" "))press(index,true);
     },
@@ -188,12 +177,12 @@ export default function StudioToolbarCandidate(){
       const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       for(const s of pressSprings.current){
         if(reduce){s.x=s.target;s.v=0;}
-        else integrate(s,dt,s.target>s.x?7.0:6.0,.56);
+        else advanceSpring(s,dt,s.target===1?PRESS_GROW:PRESS_RELEASE);
       }
       const motion=morphSprings.current;
       for(const s of [motion.search,motion.select]){
         if(reduce){s.x=s.target;s.v=0;}
-        else integrate(s,dt,4.9,.79);
+        else advanceSpring(s,dt,MORPH_SPRING);
       }
       if(controls.current[0])controls.current[0]!.style.width=Math.max(44,motion.search.x)+"px";
       if(controls.current[2])controls.current[2]!.style.width=Math.max(44,motion.select.x)+"px";
@@ -217,10 +206,17 @@ export default function StudioToolbarCandidate(){
         shapes.push(rect.left-stageRect.left+rect.width*.5,
           stageRect.bottom-rect.top-rect.height*.5,rect.width,rect.height);
         const morphSpeed=i===0?motion.search.v:i===2?motion.select.v:0;
-        waves.push(reduce?0:clamp(morphSpeed*.0035,-2.6,2.6),
-          reduce?0:clamp(pressSprings.current[i].v*.18,-1.8,1.8));
+        // Material shear belongs to Search/Select morphing ONLY.
+        // A press changes uniform scale, never a jelly-like sideways wobble.
+        waves.push(reduce?0:clamp(morphSpeed*.0035,-2.6,2.6),0);
         pressures.push(pressSprings.current[i].x);
+      // Icon grows slightly with the lens, while the hit target stays 44px.
+      const button=controls.current[i]?.querySelector<HTMLButtonElement>("button");
+      if(button)button.style.transform=`scale(${1+Math.max(0,pressSprings.current[i].x)*.06})`;
       }
+      // Readable only in DESIGN tests: a long hold must approach 1, and its
+      // release must overshoot through 0 before naturally settling.
+      canvas.dataset.pressValues=pressSprings.current.map(s=>s.x.toFixed(5)).join(",");
       gl.viewport(0,0,w,h);
       renderer.setUniforms({
         u_resolution:[w,h],u_dpr:dpr,u_lenses:shapes,u_waves:waves,

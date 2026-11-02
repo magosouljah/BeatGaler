@@ -12,7 +12,7 @@ float lensSDF(vec2 pixel, int i) {
   float halfH=max(1.0,lens.w*0.5);
   float nx=clamp(q.x/halfW,-1.0,1.0);
   float ny=clamp(q.y/halfH,-1.0,1.0);
-  // Shear the interior of the glass during a morph/press and let it settle.
+  // SDF shear applies ONLY to Search/Select morphing; press is uniform scale.
   q.y-=u_waves[i].x*sin(nx*3.14159265)*max(0.0,1.0-nx*nx);
   q.x-=u_waves[i].y*sin(ny*3.14159265)*max(0.0,1.0-ny*ny);
   float grow=1.0+clamp(u_presses[i],-0.18,1.15)*0.115;

@@ -1,33 +1,24 @@
-# Toolbar · Studio 44 — candidate
+# Toolbar · Studio 44 — candidato
 
-**MASTER → Toolbar · Studio 44.** Candidato aislado para revisión visual. Sin cambios en Toolbar V1, Toolbar V2, Gallery, src, main o producción.
+**MASTER → Toolbar · Studio 44.** Aislado de Toolbar V1/V2, Gallery, `src/`, `main` y producción.
 
-- Se usan todos los **valores** del JSON entregado el 2026-11-02 a las 22:07:48, incluidos 44×44, blur 4, Fresnel range 0, showShape1 false, parámetros originales de brillo y sombra.
-- Motor original WebGL2 de `iyinchao/liquid-glass-studio`, cuatro pases GLSL. Adaptación local de SDF en `studio-toolbar-shape.glsl` para cuatro botones **independientes** en un solo lienzo WebGL.
-- Todos los botones reaccionan a mantener pulsado: crecen dentro de la máscara refractiva, se aclaran temporalmente y recuperan su tamaño con resorte amortiguado y sobrepaso.
-- Search: círculo 44px → pill hacia la izquierda, conservando el borde derecho. Select: pill 78×44px → círculo con X. El morphing usa otro resorte, de menor rebote, y ambos son reversibles a mitad de recorrido. Velocidades del resorte alimentan la deformación de la superficie.
-- Los parámetros ópticos del preset no cambian. La luminosidad al presionar es **temporal**, no una nueva configuración del material.
-- El escenario ofrece un fondo **normal** oscuro o claro que pertenece a la escena, no un fondo fijado a cada botón. El renderizador no captura DOM arbitrario detrás del vidrio: esto debe resolverse antes de integrar con contenido real de Gallery.
-- Si falla WebGL2, los controles siguen siendo accesibles en modo de respaldo.
-- Respeta `prefers-reduced-motion`, teclado, foco y pulsaciones canceladas.
+- El preset óptico en `studio-toolbar-44.json` utiliza los valores nuevos de **2026-11-02 23:23:31** (glareRange 32.2, glareHardness 14.74, glareFactor 33.82, glareConvergence 48.76). No se reescribe con valores de animación. La iluminación de pulsación se aplica después del shader y es 0 al descansar.
+- Motor WebGL2 original de `iyinchao/liquid-glass-studio` y cuatro pases GLSL; adaptación local de SDF para las 4 superficies independientes. El fondo pertenece al escenario (oscuro/claro), no a las lentes. Como el JSON no incluye su imagen `bgType 11`, el aspecto siempre depende del fondo real.
+- **Press físico:** resorte críticamente amortiguado durante el crecimiento (`PRESS_GROW` período .34s), mantiene su tamaño durante cualquier hold; al soltar cambia de objetivo a 0 con su velocidad conservada, y rebota suavemente (`PRESS_RELEASE` período .39s, razón de amortiguamiento .47). El tamaño del botón crece uniformemente: no hay shear lateral ni jelly cuando se pulsa.
+- **Morph:** un resorte independiente (`MORPH_SPRING` período .205s, damping .79), con deformación SDF **solo** durante las transiciones de Search y Select, interrumpible y reversible.
+- La elección se inspira en **Apple WWDC23, Animate with springs**: https://developer.apple.com/videos/play/wwdc2023/10158/ . Son parámetros físicos propios de la demo, **no** una reproducción exacta de los coeficientes privados de SwiftUI.
+- Accesibilidad: pointer capture, cancelación, foco y `prefers-reduced-motion`. WebGL2 degrada a controles accesibles si no está disponible.
+- No captura DOM arbitrario debajo de la lente; esta limitación se debe resolver antes de integrar en Gallery.
 
-## Probar
-
-```powershell
-git fetch origin
-git switch design/beatgaler-design-system-lab-v1
-git pull --ff-only origin design/beatgaler-design-system-lab-v1
-npx --no-install vite --config DESIGN/vite.config.ts --port 4174
-```
-
-Abre http://127.0.0.1:4174/ → MASTER → **Toolbar · Studio 44**.
-
-Para Chrome headless y capturas:
+## Prueba local (PowerShell)
 
 ```powershell
-node DESIGN/studio-toolbar-browser-check.mjs
+git fetch origin "+refs/heads/design/beatgaler-design-system-lab-v1:refs/remotes/origin/design/beatgaler-design-system-lab-v1"
+git switch --detach origin/design/beatgaler-design-system-lab-v1
+git rev-parse --short HEAD
+npx --no-install vite --config DESIGN/vite.config.ts --port 4175 --force
 ```
 
-Capturas: `DESIGN/studio-toolbar-visual-check/`, además del artefacto `studio-toolbar-44-chrome` en GitHub Actions.
+Abre http://127.0.0.1:4175/ → MASTER → **Toolbar · Studio 44**. Si Vite sigue abierto, detener primero con Ctrl+C.
 
-Esta versión es una **simulación de interacción con contornos SDF y resortes físicos**, no una simulación volumétrica de fluidos Navier–Stokes. No se afirma fidelidad óptica plena sobre DOM real.
+Para comprobar resorts y estados (Chrome): `node DESIGN/studio-toolbar-browser-check.mjs`.

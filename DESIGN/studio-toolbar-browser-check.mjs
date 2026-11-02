@@ -2,11 +2,14 @@
 // Run from repository root: node DESIGN/studio-toolbar-browser-check.mjs
 import assert from "node:assert/strict";
 import {spawn,spawnSync} from "node:child_process";
-import {existsSync} from "node:fs";
+import {existsSync,readFileSync} from "node:fs";
 import {mkdir,mkdtemp,rm,writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const latestPreset=JSON.parse(readFileSync("DESIGN/MASTER/studio-toolbar-44.json","utf-8"));
+assert.equal(latestPreset.timestamp,"2026-11-02T23:23:31.866Z","Expected most recent user preset");
+assert.deepEqual(Object.fromEntries(["glareRange","glareHardness","glareFactor","glareConvergence"].map(k=>[k,latestPreset.controls[k]])),{glareRange:32.2,glareHardness:14.74,glareFactor:33.82,glareConvergence:48.76});
 const binaries=[
  process.env.PROGRAMFILES&&path.join(process.env.PROGRAMFILES,"Google","Chrome","Application","chrome.exe"),
  process.env["PROGRAMFILES(X86)"]&&path.join(process.env["PROGRAMFILES(X86)"],"Google","Chrome","Application","chrome.exe"),
@@ -89,6 +92,24 @@ try {
  const selectBefore=await bounds(".studio-select");
  assert.ok(Math.abs(closed.width-44)<1&&Math.abs(selectBefore.width-78)<1,"Wrong 44/78px geometry");
  await capture("01-studio-default-dark.png");
+ // Long hold is essential: the old 6Hz return became imperceptible once
+ // the press had settled, even though quick clicks looked animated.
+ const sortButton=await bounds('.studio-lens:nth-of-type(2)>button');
+ const sx=sortButton.left+sortButton.width/2,sy=sortButton.top+sortButton.height/2;
+ const pressure=async index=>Number((await evaluate("document.querySelector(\'.studio-candidate-canvas\').dataset.pressValues")).split(",")[index]);
+ await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:sx,y:sy});
+ await call("Input.dispatchMouseEvent",{type:"mousePressed",x:sx,y:sy,button:"left",clickCount:1});
+ await sleep(850);
+ const held=await pressure(1);
+ assert.ok(held>.96&&held<1.02,"Long hold must settle at full grown size, got "+held);
+ await capture("01b-studio-long-hold.png");
+ await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:sx,y:sy,button:"left",clickCount:1});
+ const releaseSamples=[];
+ for(let i=0;i<11;i++){await sleep(50);releaseSamples.push(await pressure(1));}
+ assert.ok(releaseSamples.some(v=>v<-.015),"Held release must rebound BELOW normal size, samples: "+releaseSamples.join(","));
+ await sleep(300);
+ assert.ok(Math.abs(await pressure(1))<.045,"Release must settle to exact normal size");
+ await capture("01c-studio-long-hold-recovered.png");
  // Hold-and-release: verify press produces a rendered pixel change, not just an icon scaling.
  const target=await bounds(".studio-select>button"),x=target.left+target.width/2,y=target.top+target.height/2;
  await call("Input.dispatchMouseEvent",{type:"mouseMoved",x,y});
