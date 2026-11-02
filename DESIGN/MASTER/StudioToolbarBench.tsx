@@ -240,6 +240,8 @@ export default function StudioToolbarBench() {
   const [offset,setOffset]=useState(0),[revision,setRevision]=useState(0);
   const [size,setSize]=useState(0);
   const [searchOpen,setSearchOpen]=useState(false),[search,setSearch]=useState("");
+  const searchInput=useRef<HTMLInputElement>(null);
+  useEffect(()=>{if(searchOpen)searchInput.current?.focus({preventScroll:true});},[searchOpen]);
   const [selecting,setSelecting]=useState(false);
   const [menu,setMenu]=useState<"sort"|"profile"|null>(null);
   const [sort,setSort]=useState("Manual");
@@ -288,7 +290,7 @@ export default function StudioToolbarBench() {
       <div className={"sg-toolbar"+(searchOpen?" has-search":"")} role="group" aria-label="Toolbar experimental">
         <div className="sg-search-slot">
           <GlassChip kind="search" expanded={searchOpen} {...stageInput}>
-            <input className="sg-search-field" type="search" placeholder="Search beats" aria-label="Search beats"
+            <input ref={searchInput} className="sg-search-field" type="search" placeholder="Search beats" aria-label="Search beats"
               tabIndex={searchOpen?0:-1} value={search} onChange={e=>setSearch(e.target.value)}/>
             <button type="button" className="sg-search-trigger" aria-label={searchOpen?"Close search":"Search beats"}
               aria-expanded={searchOpen} onClick={()=>{setMenu(null);setSearchOpen(v=>!v);}}>
