@@ -40,8 +40,10 @@ Las cuatro superficies usan las utilidades WebGL2 y los shaders GLSL originales 
 
 Desde la raíz, una vez instaladas las dependencias:
 
-`powershell
+```powershell
 node DESIGN/studio-toolbar-browser-check.mjs
-`
+```
 
 Inicia un servidor Vite temporal para la prueba (puerto 4186), abre Chromium/Chrome, recorre las cuatro opciones y guarda capturas PNG en `DESIGN/studio-toolbar-screenshots/`. Requiere Chrome/Chromium. Usa también pruebas manuales para juzgar brillo, compresión, respuesta táctil y calidad visual; el test no decide la mejor variante.
+
+Las capturas también se publican en GitHub Actions → **Design Lab standalone** → artefacto `studio-toolbar-4-variants-chrome` (archivos `original-*`, `geometry-*`, `depth-*`, `curvature-*`, además de pruebas de búsqueda y selección).
