@@ -1,0 +1,92 @@
+/* Studio 44 candidate is isolated from Toolbar V1/V2, CameraGlass and Gallery. */
+.studio-candidate {
+  width:min(950px,100%);margin:0 auto;display:grid;gap:14px;
+  font:13px/1.45 var(--lab-font);color:var(--lab-ink);
+}
+.studio-candidate-controls{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+}
+.studio-candidate-controls>span{font-size:11px;letter-spacing:.065em;opacity:.62}
+.studio-candidate-theme{
+  display:flex;gap:5px;padding:3px;border:1px solid #39383e;border-radius:999px;
+}
+.studio-candidate-theme button{
+  border:0;border-radius:999px;background:transparent;padding:7px 12px;color:#ccc;
+  cursor:pointer;font:500 12px var(--lab-font);
+}
+.studio-candidate-theme button[aria-pressed=true]{background:#eee;color:#17171a}
+.studio-candidate-stage{
+  position:relative;width:100%;height:265px;border-radius:16px;
+  overflow:visible;isolation:isolate;background:#26262b;--studio-ink:#fff;
+}
+.studio-candidate-stage.is-light{background:#e7e7e9;--studio-ink:#16161a}
+.studio-candidate-canvas{
+  position:absolute;inset:0;display:block;width:100%;height:100%;
+  border-radius:16px;pointer-events:none;
+}
+.studio-candidate-toolbar{
+  position:absolute;right:36px;top:84px;z-index:3;display:flex;align-items:center;
+  justify-content:flex-end;gap:10px;min-height:44px;color:var(--studio-ink);
+}
+.studio-candidate-search-slot{position:relative;z-index:5;width:44px;height:44px;flex:none}
+.studio-lens{position:relative;width:44px;height:44px;flex:none;border-radius:999px}
+.studio-search{position:absolute;right:0;top:0;z-index:5;overflow:visible}
+.studio-lens>button{
+  border:0;background:transparent;padding:0;color:inherit;cursor:pointer;
+  display:grid;place-items:center;width:100%;height:100%;border-radius:999px;
+  touch-action:manipulation;-webkit-tap-highlight-color:transparent;position:relative;z-index:2;
+}
+.studio-lens svg{display:block;width:19px;height:19px}
+.studio-lens button:focus-visible{outline:2px solid currentColor;outline-offset:4px}
+.studio-select{width:78px}
+.studio-select button{font:600 12px var(--lab-font)}
+.studio-select-label,.studio-select-x{
+  position:absolute;inset:0;display:grid;place-items:center;
+  transition:opacity var(--lab-fast) ease,transform var(--lab-normal) var(--lab-ease);
+  pointer-events:none;
+}
+.studio-select-x{opacity:0;transform:scale(.84)}
+.studio-select.is-selecting .studio-select-label{opacity:0;transform:scale(.84)}
+.studio-select.is-selecting .studio-select-x{opacity:1;transform:none}
+.studio-search input{
+  position:absolute;top:0;left:16px;width:calc(100% - 72px);height:44px;
+  background:transparent;color:inherit;border:0;outline:0;padding:0;min-width:0;
+  font:500 13px var(--lab-font);opacity:0;pointer-events:none;
+  transition:opacity var(--lab-fast) ease;
+}
+.studio-search.is-open input{opacity:1;pointer-events:auto}
+.studio-search input::placeholder{color:color-mix(in srgb,var(--studio-ink) 55%,transparent)}
+.studio-search>button{position:absolute;right:0;top:0;width:44px;height:44px}
+.studio-candidate-menu{
+  position:absolute;right:0;top:calc(100% + 14px);width:196px;padding:8px;
+  background:#29282e;border:1px solid #53515c;border-radius:15px;
+  box-shadow:0 16px 40px #0007;display:grid;gap:2px;z-index:10;color:white;
+}
+.studio-candidate-menu button{
+  background:transparent;color:inherit;border:0;border-radius:8px;cursor:pointer;
+  text-align:left;padding:10px;font:500 12px var(--lab-font);
+}
+.studio-candidate-menu button:hover,.studio-candidate-menu button:focus-visible{background:#ffffff20}
+.studio-candidate-menu strong{font-size:12px;padding:8px}
+.studio-candidate-hint{
+  max-width:720px;margin:0 auto;text-align:center;
+  color:var(--lab-secondary);font-size:12px;
+}
+.studio-candidate-error,.studio-candidate-message{
+  position:absolute;bottom:10px;left:12px;right:12px;
+  font-size:11px;color:#ff9ea4;pointer-events:none;
+}
+.studio-candidate-message{color:var(--studio-ink)}
+.studio-candidate-stage[data-glass-engine=fallback] .studio-lens{
+  background:#ffffff20;border:1px solid #ffffff30;
+}
+@media(max-width:600px){
+  .studio-candidate-stage{height:240px}
+  .studio-candidate-toolbar{right:15px;top:65px;gap:8px}
+  .studio-candidate-search-slot{z-index:6}
+  .studio-candidate-toolbar:has(.studio-search.is-open)>.studio-lens{opacity:.2;pointer-events:none}
+  .studio-search input{font-size:16px}
+}
+@media(prefers-reduced-motion:reduce){
+  .studio-select-label,.studio-select-x,.studio-search input{transition:none}
+}
