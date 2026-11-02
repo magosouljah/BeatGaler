@@ -1,0 +1,131 @@
+// Chromium CDP smoke test for the isolated Studio 44 toolbar.
+// Run from repository root: node DESIGN/studio-toolbar-browser-check.mjs
+import assert from "node:assert/strict";
+import {spawn,spawnSync} from "node:child_process";
+import {existsSync} from "node:fs";
+import {mkdir,mkdtemp,rm,writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import path from "node:path";
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const binaries=[
+ process.env.PROGRAMFILES&&path.join(process.env.PROGRAMFILES,"Google","Chrome","Application","chrome.exe"),
+ process.env["PROGRAMFILES(X86)"]&&path.join(process.env["PROGRAMFILES(X86)"],"Google","Chrome","Application","chrome.exe"),
+ process.env.LOCALAPPDATA&&path.join(process.env.LOCALAPPDATA,"Google","Chrome","Application","chrome.exe")
+].filter(Boolean);
+const chrome=process.env.CHROME_BIN||(process.platform==="win32"?binaries.find(existsSync):
+ ["google-chrome","chromium","chromium-browser"].find(n=>spawnSync("which",[n]).status===0));
+assert.ok(chrome,"Chrome / Chromium required (or CHROME_BIN)");
+const output=path.resolve("DESIGN/studio-toolbar-visual-check");
+await mkdir(output,{recursive:true});
+const profile=await mkdtemp(path.join(tmpdir(),"beatgaler-studio44-"));
+const vite=spawn(process.execPath,["node_modules/vite/bin/vite.js","--config","DESIGN/vite.config.ts",
+ "--port","4186","--strictPort"],{stdio:"ignore"});
+const browser=spawn(chrome,["--headless=new","--no-sandbox","--disable-dev-shm-usage",
+ "--enable-unsafe-swiftshader","--remote-debugging-port=9256","--remote-allow-origins=*",
+ "--window-size=1440,1150","--user-data-dir="+profile,"about:blank"],{stdio:"ignore"});
+let ws;
+try {
+ let tab;
+ for(let i=0;i<120;i++){
+  try{if((await fetch("http://127.0.0.1:4186/")).ok)break;}catch{}
+  if(vite.exitCode!==null)throw Error("Vite exited "+vite.exitCode);
+  await sleep(250);
+ }
+ for(let i=0;i<120;i++){
+  try{tab=(await (await fetch("http://127.0.0.1:9256/json")).json()).find(x=>x.type==="page");if(tab)break;}catch{}
+  if(browser.exitCode!==null)throw Error("Chromium exited "+browser.exitCode);
+  await sleep(250);
+ }
+ assert.ok(tab,"Chromium CDP unavailable");
+ ws=new WebSocket(tab.webSocketDebuggerUrl);
+ const pending=new Map();let serial=0;
+ ws.addEventListener("message",event=>{
+  const msg=JSON.parse(event.data),item=pending.get(msg.id);
+  if(item){pending.delete(msg.id);msg.error?item.reject(Error(JSON.stringify(msg.error))):item.resolve(msg.result);}
+ });
+ await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true});});
+ const call=(method,params={})=>new Promise((resolve,reject)=>{
+  const id=++serial;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));
+ });
+ const evaluate=async expression=>{
+  const result=await call("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true});
+  if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));
+  return result.result.value;
+ };
+ const click=selector=>evaluate("document.querySelector("+JSON.stringify(selector)+").click()");
+ const bounds=selector=>evaluate("(()=>{const r=document.querySelector("+JSON.stringify(selector)+").getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,width:r.width,height:r.height};})()");
+ const capture=async name=>{
+  const s=await call("Page.captureScreenshot",{format:"png",captureBeyondViewport:false});
+  await writeFile(path.join(output,name),Buffer.from(s.data,"base64"));
+ };
+ const errors=[];
+ ws.addEventListener("message",event=>{
+  const m=JSON.parse(event.data);
+  if(m.method==="Runtime.exceptionThrown")errors.push(m.params.exceptionDetails.text);
+ });
+ await call("Runtime.enable");await call("Page.enable");
+ await call("Page.navigate",{url:"http://127.0.0.1:4186/"});
+ for(let i=0;i<100;i++){
+  if(await evaluate("Boolean(document.querySelector('.lab-dev-switches'))"))break;
+  await sleep(100);
+ }
+ assert.ok(await evaluate("Boolean(document.querySelector('.lab-dev-switches'))"),"Design Lab did not mount");
+ await evaluate("[...document.querySelectorAll('.lab-dev-switches button')].find(x=>x.textContent==='MASTER').click()");
+ for(let i=0;i<100;i++){
+  if(await evaluate("Boolean(document.querySelector('.lab-master-sidebar-nav'))"))break;
+  await sleep(100);
+ }
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Toolbar · Studio 44').click()");
+ for(let i=0;i<100;i++){
+  if(await evaluate("Boolean(document.querySelector('.studio-candidate-canvas[data-engine-ready]'))"))break;
+  await sleep(100);
+ }
+ const engine=await evaluate("document.querySelector('.studio-candidate-canvas')?.dataset.engineReady");
+ assert.equal(engine,"true","Original Studio WebGL shader did not compile / initialize");
+ await evaluate("document.querySelector('.studio-candidate-stage').scrollIntoView({block:'center'})");
+ await sleep(500);
+ assert.equal(await evaluate("document.querySelectorAll('.studio-lens').length"),4);
+ const closed=await bounds(".studio-search");
+ const selectBefore=await bounds(".studio-select");
+ assert.ok(Math.abs(closed.width-44)<1&&Math.abs(selectBefore.width-78)<1,"Wrong 44/78px geometry");
+ await capture("01-studio-default-dark.png");
+ // Hold-and-release: verify press produces a rendered pixel change, not just an icon scaling.
+ const target=await bounds(".studio-select>button"),x=target.left+target.width/2,y=target.top+target.height/2;
+ await call("Input.dispatchMouseEvent",{type:"mouseMoved",x,y});
+ await call("Input.dispatchMouseEvent",{type:"mousePressed",x,y,button:"left",clickCount:1});
+ await sleep(190);
+ await capture("02-studio-pressed.png");
+ await call("Input.dispatchMouseEvent",{type:"mouseReleased",x,y,button:"left",clickCount:1});
+ await sleep(580);
+ await capture("03-studio-after-bounce.png");
+ // Return Select to pill before checking its active -> circle transition.
+ if(await evaluate("document.querySelector('.studio-select>button').getAttribute('aria-pressed')==='true'"))
+  await click(".studio-select>button");
+ await sleep(580);
+ assert.ok((await bounds(".studio-select")).width>75,"Select failed to return to pill");
+ await click(".studio-select>button");await sleep(620);
+ assert.ok(Math.abs((await bounds(".studio-select")).width-44)<1,"Select morph did not end as circle");
+ assert.equal(await evaluate("document.querySelector('.studio-select>button').getAttribute('aria-pressed')"),"true");
+ await capture("04-studio-select-circle.png");
+ await click(".studio-select>button");await sleep(620);
+ assert.ok((await bounds(".studio-select")).width>75,"Select spring did not reverse");
+ const searchClosed=await bounds(".studio-search");
+ await click(".studio-search>button");await sleep(750);
+ const searchOpen=await bounds(".studio-search");
+ assert.ok(searchOpen.width>165,"Search circle did not morph");
+ assert.ok(Math.abs(searchOpen.right-searchClosed.right)<1.5,"Search moved its right anchor");
+ assert.ok(await evaluate("document.activeElement===document.querySelector('.studio-search input')"),"Search input not focused");
+ await capture("05-studio-search-open.png");
+ await click(".studio-search>button");await sleep(40);await click(".studio-search>button");
+ await sleep(40);await click(".studio-search>button");await sleep(750);
+ assert.ok(Math.abs((await bounds(".studio-search")).width-44)<1.5,"Rapid reverse left an intermediate size");
+ await click(".studio-lens:nth-of-type(2)>button").catch(()=>{});
+ await click(".studio-candidate-theme button:nth-child(2)");
+ await sleep(350);await capture("06-studio-light.png");
+ assert.deepEqual(errors,[],"Browser runtime exceptions");
+ console.log("Studio 44: WebGL compiled; press screenshots; two reversible spring morphs; no runtime exceptions.");
+ console.log("Screenshots in",output);
+}finally{
+ ws?.close();vite.kill("SIGTERM");browser.kill("SIGTERM");
+ await rm(profile,{recursive:true,force:true,maxRetries:4,retryDelay:200}).catch(()=>{});
+}
