@@ -184,7 +184,7 @@ export default function StudioToolbarCandidate(){
     const tick=(now:number)=>{
       frame=0;
       if(disposed||!gl||!texture||!renderer)return;
-      const dt=last?Math.min(.04,(now-last)/1000):.016;last=now;
+      const dt=last?Math.min(.2,(now-last)/1000):.016;last=now;
       const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       for(const s of pressSprings.current){
         if(reduce){s.x=s.target;s.v=0;}
