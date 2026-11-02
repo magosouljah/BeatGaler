@@ -213,6 +213,30 @@ try {
  assert.equal(await read("document.querySelector("+JSON.stringify(nButton)+").dataset.engineStatus"),"ready","NaughtyDuk original renderer did not start");
  assert.ok(await read("Boolean(document.querySelector('[data-glass-3-compare] #liquid-glass-filter'))"),"Archis original SVG filter missing in comparison");
  await scroll("[data-glass-3-compare]");await sleep(900);
+ // Verify the actual optical evaluation can receive button actions; all
+ // three are toggle buttons, with pressed feedback independent of lens math.
+ const toggles=[
+  ".glass-comparison-naughty-target",
+  ".archis-original-stage #glass",
+  ".glass-comparison-studio-button"
+ ];
+ for(const selector of toggles){
+   assert.equal(await read("document.querySelector("+JSON.stringify(selector)+").getAttribute('aria-pressed')"),"false","Initial toggle state");
+   await click(selector);await sleep(90);
+   assert.equal(await read("document.querySelector("+JSON.stringify(selector)+").getAttribute('aria-pressed')"),"true","Button failed to activate "+selector);
+   assert.ok(await read("document.querySelector("+JSON.stringify(selector)+").textContent.includes('Selected')"),"Label did not update "+selector);
+ }
+ await screenshot("three-original-glass-engines-selected.png");
+ for(const selector of toggles){
+   await click(selector);
+   assert.equal(await read("document.querySelector("+JSON.stringify(selector)+").getAttribute('aria-pressed')"),"false","Button failed to deactivate "+selector);
+ }
+ const archisMap=await read("document.querySelector('#liquid-glass-filter feImage')?.getAttribute('href')");
+ assert.ok(await read("(async url=>{const image=new Image();image.src=url;await image.decode();return image.naturalWidth>=420&&image.naturalHeight>=156})("+JSON.stringify(archisMap)+")"),"Archis must supersample its displacement map at >=3x");
+ // Instrument NaughtyDuk's own capture method while moving its backdrop;
+ // test live recapture, not merely a React translate counter.
+ const recaptureAvailable=await read("(() => {const renderer=window.__liquidGLRenderer__;if(!renderer?.captureSnapshot)return false;const capture=renderer.captureSnapshot.bind(renderer);window.__liquidCaptures=0;renderer.captureSnapshot=(...args)=>{window.__liquidCaptures++;return capture(...args)};return true})()");
+ assert.ok(recaptureAvailable,"NaughtyDuk snapshot refresh API unavailable");
  await screenshot("three-original-glass-engines-desktop.png");
  // Wheel the background: change offsets, not button geometry or optical code.
  const stages=[".glass-comparison-stage",".archis-original-stage",".glass-comparison-stage.is-studio"];
@@ -223,7 +247,9 @@ try {
   const after=await read("Number(document.querySelector("+JSON.stringify(stage)+").dataset.backgroundOffsetY)");
   assert.notEqual(before,after,"Mouse wheel did not move background: "+stage);
  }
- await screenshot("three-original-glass-engines-scrolled.png");
+ await sleep(500);
+ assert.ok(await read("window.__liquidCaptures>0"),"NaughtyDuk snapshot was not refreshed while the background moved");
+  await screenshot("three-original-glass-engines-scrolled.png");
  // Real CDP pointer drag, not a synthetic React event, on each background.
  for(const selector of stages){
    const rect=await size(selector);
@@ -242,7 +268,7 @@ try {
  await scroll("[data-glass-3-compare]");
  await screenshot("three-original-glass-engines-mobile.png");
   assert.equal(runtimeErrors.length,0,"Browser JavaScript exception: "+runtimeErrors.join("; "));
- console.log(JSON.stringify({result:"PASS",screenshots:26,backdrops:5,comparisonEngines:3,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
+ console.log(JSON.stringify({result:"PASS",screenshots:27,backdrops:5,comparisonEngines:3,originalEngine:"archisvaze/liquid-glass original",chrome:chrome,searchDesktopWidth:opened.width,searchMobileWidth:mobile.width},null,2));
 } finally {
  ws?.close();browser.kill("SIGTERM");vite.kill("SIGTERM");
  await sleep(600);
