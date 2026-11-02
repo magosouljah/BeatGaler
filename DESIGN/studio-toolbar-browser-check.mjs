@@ -104,7 +104,9 @@ try {
  await sleep(580);
  assert.ok((await bounds(".studio-select")).width>75,"Select failed to return to pill");
  await click(".studio-select>button");await sleep(620);
- assert.ok(Math.abs((await bounds(".studio-select")).width-44)<1,"Select morph did not end as circle");
+ const circleWidth=(await bounds(".studio-select")).width;
+ console.log("Select circle width after 620ms:",circleWidth);
+ assert.ok(Math.abs(circleWidth-44)<1,"Select morph did not end as circle; actual="+circleWidth);
  assert.equal(await evaluate("document.querySelector('.studio-select>button').getAttribute('aria-pressed')"),"true");
  await capture("04-studio-select-circle.png");
  await click(".studio-select>button");await sleep(620);
