@@ -25,3 +25,21 @@ All three repositories declare MIT for the source code. No NaughtyDuk
 
 **This is an evaluation lab, NOT approval to integrate any engine in Toolbar.**
 Browser verification and a real device review are required before approval.
+
+## Optical fixes after interactive review
+
+- NaughtyDuk uses upstream `liquidGL.registerDynamic()`, `captureSnapshot()`
+  and a stage-scoped higher resolution snapshot. This is the integration
+  required for the moving background to update while dragging or scrolling.
+- Archis uses a separate `ArchisHiFiEngine.ts` based on the source engine,
+  with 3x antialiased displacement/specular bitmaps and less excessive small
+  button settings (bezel 7 px, thickness 12, IOR 1.4). The verbatim engine
+  remains in `ArchisOriginalEngine.ts` for traceability.
+- Studio retains the original GLSL and renderer, now uses a fully rounded
+  pill (54px high with 27px corner radius, roundness 2, merge 0).
+- The original repositories focus on optical effects; none defines one
+  standard accessible click-toggle animation for this toolbar.
+  We add a restrained 110ms press feedback and `aria-pressed` state only
+  to the **standalone demo buttons**. Studio darkens its original tint
+  parameter on selection; no new specular shaders or mouse light effect.
+- `prefers-reduced-motion` disables our button transforms/transitions.

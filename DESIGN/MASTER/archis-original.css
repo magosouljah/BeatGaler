@@ -126,3 +126,10 @@
 .archis-original-experiment.is-compact .archis-original-stage{min-height:285px;}
 .archis-original-experiment.is-compact .archis-original-options,
 .archis-original-experiment.is-compact .archis-original-caption{display:none;}
+
+/* Button-only press feedback added by the lab; upstream optical CSS above
+   and all shape/refraction computations remain in their own modules. */
+.archis-original-stage .glassDiv>span{transition:transform 110ms ease-out,opacity 110ms ease-out;}
+.archis-original-stage .glassDiv:active>span{transform:scale(.96);}
+.archis-original-stage .glassDiv[aria-pressed="true"]>span{opacity:.77;}
+@media(prefers-reduced-motion:reduce){.archis-original-stage .glassDiv>span{transition:none}.archis-original-stage .glassDiv:active>span{transform:none}}

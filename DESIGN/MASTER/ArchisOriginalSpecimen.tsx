@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { mountOriginalArchisEngine } from "./ArchisOriginalEngine";
+import { mountHiFiArchisEngine } from "./ArchisHiFiEngine";
 import "./archis-original.css";
 
 // Optical functions, SVG filter stack and initial settings are upstream's.
@@ -23,7 +23,7 @@ export default function ArchisOriginalSpecimen({compact=false}:{compact?:boolean
 
   useEffect(() => {
     if (!glass.current) return;
-    const rebuild = mountOriginalArchisEngine();
+    const rebuild = mountHiFiArchisEngine();
     const observer = new ResizeObserver(rebuild);
     observer.observe(glass.current);
     return () => observer.disconnect();
@@ -55,18 +55,18 @@ export default function ArchisOriginalSpecimen({compact=false}:{compact?:boolean
         {item.label}
       </button>)}
     </div>
-    <p className="archis-original-caption">Motor SVG original · preset Button 140 × 52 · sin reacción artificial al mouse</p>
+    <p className="archis-original-caption">Motor SVG Archis · óptica 3× y parámetros adaptados a 140 × 52</p>
 
     {/* Original control values, unchanged; only hidden because this is a single specimen. */}
     <div hidden aria-hidden="true">
       <select id="surface-fn" defaultValue="convex_squircle"><option value="convex_squircle">Convex Squircle</option></select>
-      <input id="glass-thickness" type="hidden" value="80" readOnly/>
-      <input id="bezel-width" type="hidden" value="60" readOnly/>
-      <input id="refractive-index" type="hidden" value="3.0" readOnly/>
-      <input id="scale-ratio" type="hidden" value="1.0" readOnly/>
+      <input id="glass-thickness" type="hidden" value="12" readOnly/>
+      <input id="bezel-width" type="hidden" value="7" readOnly/>
+      <input id="refractive-index" type="hidden" value="1.4" readOnly/>
+      <input id="scale-ratio" type="hidden" value="0.6" readOnly/>
       <input id="blur-amount" type="hidden" value="0.3" readOnly/>
-      <input id="specular-opacity" type="hidden" value="0.5" readOnly/>
-      <input id="specular-saturation" type="hidden" value="4" readOnly/>
+      <input id="specular-opacity" type="hidden" value="0.24" readOnly/>
+      <input id="specular-saturation" type="hidden" value="1.2" readOnly/>
       <input id="border-radius" type="hidden" value="26" readOnly/>
     </div>
     <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"
