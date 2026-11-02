@@ -117,6 +117,7 @@ try {
  assert.ok(searchOpen.width>165,"Search circle did not morph");
  assert.ok(Math.abs(searchOpen.right-searchClosed.right)<1.5,"Search moved its right anchor");
  assert.ok(await evaluate("document.activeElement===document.querySelector('.studio-search input')"),"Search input not focused");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.studio-search input')).outlineStyle"),"none","Rectangular search focus outline leaked through");
  await capture("05-studio-search-open.png");
  await click(".studio-search>button");await sleep(40);await click(".studio-search>button");
  await sleep(40);await click(".studio-search>button");await sleep(750);
