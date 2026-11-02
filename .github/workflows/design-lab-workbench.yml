@@ -22,6 +22,7 @@ jobs:
       - run: npx --no-install vite build --config DESIGN/vite.config.ts
       - run: node DESIGN/playbar-browser-check.mjs
       - run: node DESIGN/toolbar-v2-browser-check.mjs
+      - run: node DESIGN/studio-toolbar-browser-check.mjs
       - name: Playbar screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -37,4 +38,11 @@ jobs:
           path: |
             DESIGN/toolbar-visual-check/*.png
             DESIGN/REFERENCES/TOOLBAR-GLASS/*.webp
+          if-no-files-found: ignore
+      - name: Studio 44 Chrome screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-toolbar-44-chrome
+          path: DESIGN/studio-toolbar-visual-check/*.png
           if-no-files-found: ignore
