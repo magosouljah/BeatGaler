@@ -17,7 +17,7 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - run: node --test DESIGN/lab-contract.test.mjs
+      - run: node --test DESIGN/lab-contract.test.mjs DESIGN/studio-toolbar-spring.test.mjs
       - run: npx --no-install tsc --project DESIGN/tsconfig.json --noEmit
       - run: npx --no-install vite build --config DESIGN/vite.config.ts
       - run: node DESIGN/playbar-browser-check.mjs
