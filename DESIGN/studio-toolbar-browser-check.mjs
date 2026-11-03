@@ -148,6 +148,11 @@ try {
  await capture("01c-studio-long-hold-recovered.png");
  // Actions happen AFTER mouseup. A held Sort should not open its menu until released.
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"false");
+ await sleep(220);
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.menuMaterial"),"studio");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).backgroundColor"),"rgba(0, 0, 0, 0)","Sorting menu must use Studio WebGL, not CSS background");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).backdropFilter"),"none","Sorting menu CSS blur must be disabled");
+ assert.equal(await evaluate("Math.round(document.querySelector('.lab-toolbar-v2-popover.is-sort').getBoundingClientRect().width)"),260,"Preserve original V2 popup dimensions");
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-title').textContent"),"Sort by");
  await click('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-item:nth-of-type(3)');
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"true");
@@ -184,7 +189,7 @@ try {
  assert.ok(await evaluate("document.activeElement===document.querySelector('.studio-search input')"),"Search input not focused");
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.studio-search input')).outlineStyle"),"none","Rectangular search focus outline leaked through");
  await capture("05-studio-search-open.png");
- // Expanded Search: pressing the 44px trigger must NOT scale the whole pill.
+ // Expanded Search: whole pill grows uniformly about the 44px trigger center.
  const searchRightTrigger=await bounds('.studio-search>button');
  const tx=searchRightTrigger.left+searchRightTrigger.width*.5;
  const ty=searchRightTrigger.top+searchRightTrigger.height*.5;
@@ -192,6 +197,9 @@ try {
  await call("Input.dispatchMouseEvent",{type:"mousePressed",x:tx,y:ty,button:"left",clickCount:1});
  await sleep(420);
  assert.ok((await bounds(".studio-search")).width>165,"Expanded Search collapsed during press");
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.searchScaleAnchor"),"trigger-center");
+ // SDF shader must use one single rounded rectangle: no separate cap.
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.geometry"),"studio-original-rounded-rect");
  assert.ok(Math.abs((await bounds(".studio-search>button")).width-44)<1,"Expanded Search trigger should stay 44px");
  await capture("05a-studio-expanded-search-pressed.png");
  // With pointer capture, releasing outside would normally still click Search.
@@ -219,6 +227,10 @@ try {
  // Profile must reuse V2 profile popover content and keyboard-friendly roles.
  await click('.studio-lens:nth-of-type(4)>button');
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile').getAttribute('aria-hidden')"),"false");
+ await sleep(220);
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.menuMaterial"),"studio");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-profile')).backgroundColor"),"rgba(0, 0, 0, 0)");
+ assert.equal(await evaluate("Math.round(document.querySelector('.lab-toolbar-v2-popover.is-profile').getBoundingClientRect().width)"),260);
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile .lab-toolbar-v2-profile-name strong').textContent"),"Demo User");
  await click('.lab-toolbar-v2-popover.is-profile .lab-toolbar-v2-menu-item');
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile').getAttribute('aria-hidden')"),"true");

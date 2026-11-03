@@ -25,7 +25,7 @@
   border-radius:16px;pointer-events:none;
 }
 .studio-candidate-toolbar{
-  position:absolute;right:36px;top:278px;z-index:3;display:flex;align-items:center;
+  position:absolute;right:36px;top:207px;z-index:3;display:flex;align-items:center;
   justify-content:flex-end;gap:10px;min-height:44px;color:var(--studio-ink);
 }
 .studio-candidate-search-slot{position:relative;z-index:5;width:44px;height:44px;flex:none}
@@ -69,6 +69,21 @@
 }
 .studio-candidate-toolbar .lab-toolbar-v2-popover{
   z-index:20;
+  /* Preserve the V2 260px width, 12px padding, 23px corners, typography,
+     structure, anchor and transitions. Only replace its CSS-faked material:
+     the Studio shader now draws the WHOLE popover in the shared WebGL canvas. */
+  background:transparent;
+  border-color:transparent;
+  box-shadow:none;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+.studio-candidate-stage[data-glass-engine=fallback] .lab-toolbar-v2-popover{
+  background:rgba(28,28,32,.66);
+  border-color:rgba(255,255,255,.22);
+  box-shadow:inset 0 1px rgba(255,255,255,.20),0 20px 55px rgba(0,0,0,.35);
+  backdrop-filter:blur(30px) saturate(1.45);
+  -webkit-backdrop-filter:blur(30px) saturate(1.45);
 }
 .studio-candidate-hint{
   max-width:720px;margin:0 auto;text-align:center;
@@ -84,7 +99,7 @@
 }
 @media(max-width:600px){
   .studio-candidate-stage{height:600px}
-  .studio-candidate-toolbar{right:15px;top:278px;gap:8px}
+  .studio-candidate-toolbar{right:15px;top:207px;gap:8px}
   .studio-candidate-search-slot{z-index:6}
   .studio-candidate-toolbar:has(.studio-search.is-open)>.studio-lens{opacity:.2;pointer-events:none}
   .studio-search input{font-size:16px}

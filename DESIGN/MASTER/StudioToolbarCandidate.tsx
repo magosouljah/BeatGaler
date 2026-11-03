@@ -80,6 +80,9 @@ export default function StudioToolbarCandidate(){
   const sortButton=useRef<HTMLButtonElement>(null),profileButton=useRef<HTMLButtonElement>(null);
   const sortMenu=useRef<HTMLDivElement>(null),profileMenu=useRef<HTMLDivElement>(null);
   const sortId=useId(),profileId=useId();
+  const menuActiveRef=useRef<Menu>(null);
+  const menuLastRef=useRef<Menu>(null);
+  const menuTransitionEnd=useRef(0);
   const heldPointers=useRef(new Map<number,number>()); // button index -> pointerId
   const suppressCapturedClick=useRef(new Set<number>());
   const pressSprings=useRef(Array.from({length:4},()=>makeSpring(0)));
@@ -293,6 +296,21 @@ export default function StudioToolbarCandidate(){
       }
       // Readable only in DESIGN tests: a long hold must approach 1, and its
       // release must overshoot through 0 before naturally settling.
+      const shownMenu=menuActiveRef.current||(
+        now<menuTransitionEnd.current?menuLastRef.current:null);
+      const menuElement=shownMenu==="sort"?sortMenu.current:
+        shownMenu==="profile"?profileMenu.current:null;
+      const menuRect=menuElement?.getBoundingClientRect();
+      const menuVisible=!!(menuRect&&menuRect.width>1&&menuRect.height>1);
+      const menuLens=menuVisible&&menuRect?[
+        menuRect.left-stageRect.left+menuRect.width*.5,
+        stageRect.bottom-menuRect.top-menuRect.height*.5,
+        menuRect.width,menuRect.height
+      ]:[-1000,-1000,1,1];
+      canvas.dataset.menuMaterial=menuVisible?"studio":"none";
+      canvas.dataset.menuShape=menuVisible&&menuRect
+        ?`${Math.round(menuRect.width)}x${Math.round(menuRect.height)}`:"none";
+      canvas.dataset.searchScaleAnchor="trigger-center";
       canvas.dataset.pressValues=pressSprings.current.map(s=>s.x.toFixed(5)).join(",");
       canvas.dataset.geometry="studio-original-rounded-rect";
       canvas.dataset.optics="studio-original-shader";
@@ -301,6 +319,7 @@ export default function StudioToolbarCandidate(){
       gl.viewport(0,0,w,h);
       renderer.setUniforms({
         u_resolution:[w,h],u_dpr:dpr,u_lenses:shapes,
+        u_menuLens:menuLens,u_menuVisible:menuVisible?1:0,
         u_presses:pressures,u_blurWeights:blurWeights,u_blurRadius:preset.blurRadius,
         u_shapeWidth:preset.shapeWidth,u_shapeHeight:preset.shapeHeight,
         u_shapeRadius:Math.min(preset.shapeWidth,preset.shapeHeight)*.5*preset.shapeRadius/100,
@@ -325,7 +344,8 @@ export default function StudioToolbarCandidate(){
           u_glareOppositeFactor:preset.glareOppositeFactor/100,
           u_blurEdge:preset.blurEdge?1:0,STEP:preset.step}
       });
-      if([...pressSprings.current,motion.search,motion.select].some(moving))
+      if([...pressSprings.current,motion.search,motion.select].some(moving)||
+        now<menuTransitionEnd.current)
         frame=requestAnimationFrame(tick);
       else last=0;
     };
@@ -349,6 +369,14 @@ export default function StudioToolbarCandidate(){
     };
   },[]);
   useEffect(()=>{stage.current?.dispatchEvent(new CustomEvent("studio-theme",{detail:theme}));},[theme]);
+  useEffect(()=>{
+    // Let the refraction follow the existing V2 popover's .97-scale enter
+    // and exit animations. Render through its 220ms transition.
+    if(menu)menuLastRef.current=menu;
+    menuActiveRef.current=menu;
+    menuTransitionEnd.current=performance.now()+280;
+    animate.current();
+  },[menu]);
 
   return <div className="studio-candidate" data-studio-candidate>
     <div className="studio-candidate-controls">
