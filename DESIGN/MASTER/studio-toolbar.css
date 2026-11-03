@@ -63,17 +63,13 @@
 }
 
 .studio-search>button{position:absolute;right:0;top:0;width:44px;height:44px}
-.studio-candidate-menu{
-  position:absolute;right:0;top:calc(100% + 14px);width:196px;padding:8px;
-  background:#29282e;border:1px solid #53515c;border-radius:15px;
-  box-shadow:0 16px 40px #0007;display:grid;gap:2px;z-index:10;color:white;
+/* Menu material/spacing/hover/animation are imported intact from Toolbar V2. */
+.studio-candidate-toolbar .lab-toolbar-v2-menu-item{
+  color:inherit;cursor:pointer;
 }
-.studio-candidate-menu button{
-  background:transparent;color:inherit;border:0;border-radius:8px;cursor:pointer;
-  text-align:left;padding:10px;font:500 12px var(--lab-font);
+.studio-candidate-toolbar .lab-toolbar-v2-popover{
+  z-index:20;
 }
-.studio-candidate-menu button:hover,.studio-candidate-menu button:focus-visible{background:#ffffff20}
-.studio-candidate-menu strong{font-size:12px;padding:8px}
 .studio-candidate-hint{
   max-width:720px;margin:0 auto;text-align:center;
   color:var(--lab-secondary);font-size:12px;

@@ -1,5 +1,5 @@
-import {useCallback,useEffect,useRef,useState} from "react";
-import type {KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent} from "react";
+import {useCallback,useEffect,useId,useRef,useState} from "react";
+import type {KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent} from "react";
 import {MultiPassRenderer} from "./engines/studio/GLUtils";
 import vertex from "./engines/studio/vertex.glsl?raw";
 import bg from "./engines/studio/fragment-bg.glsl?raw";
@@ -13,6 +13,8 @@ import sdf from "./engines/studio/lib/sdf.glsl?raw";
 import {advanceSpring, makeSpring, PRESS_GROW, PRESS_RELEASE, MORPH_SPRING, moving} from "./studio-toolbar-spring";
 import presetText from "./studio-toolbar-44.json?raw";
 import "./studio-toolbar.css";
+// Reuse the exact popup visuals/keyboard treatment from Toolbar V2 · Glass.
+import "../shared/toolbar-v2.css";
 
 type Kind="search"|"sort"|"profile"|"close";
 type Menu="sort"|"profile"|null;
@@ -75,6 +77,11 @@ export default function StudioToolbarCandidate(){
   const controls=useRef<(HTMLDivElement|null)[]>([]);
   const toolbar=useRef<HTMLDivElement>(null);
   const input=useRef<HTMLInputElement>(null);
+  const sortButton=useRef<HTMLButtonElement>(null),profileButton=useRef<HTMLButtonElement>(null);
+  const sortMenu=useRef<HTMLDivElement>(null),profileMenu=useRef<HTMLDivElement>(null);
+  const sortId=useId(),profileId=useId();
+  const heldPointers=useRef(new Map<number,number>()); // button index -> pointerId
+  const suppressCapturedClick=useRef(new Set<number>());
   const pressSprings=useRef(Array.from({length:4},()=>makeSpring(0)));
   const morphSprings=useRef({search:makeSpring(44),select:makeSpring(78)});
   const animate=useRef<()=>void>(()=>{});
@@ -92,24 +99,90 @@ export default function StudioToolbarCandidate(){
   const press=useCallback((index:number,down:boolean)=>{
     pressSprings.current[index].target=down?1:0;animate.current();
   },[]);
+  const inside=(button:HTMLButtonElement,x:number,y:number)=>{
+    const r=button.getBoundingClientRect();
+    return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;
+  };
+  // Pointer capture keeps pointerup on the trigger even if mouseup occurs OUTSIDE.
+  // Reject that synthetic click explicitly instead of trusting captured events.
   const handlers=(index:number)=>({
     onPointerDown:(e:ReactPointerEvent<HTMLButtonElement>)=>{
-      if(e.button!==0)return;
+      if(e.button!==0||!e.isPrimary)return;
+      suppressCapturedClick.current.delete(index);
+      heldPointers.current.set(index,e.pointerId);
       e.currentTarget.setPointerCapture(e.pointerId);
       press(index,true);
     },
+    onPointerMove:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      if(heldPointers.current.get(index)!==e.pointerId)return;
+      press(index,inside(e.currentTarget,e.clientX,e.clientY));
+    },
     onPointerUp:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      if(heldPointers.current.get(index)===e.pointerId){
+        // The button action remains deferred until click AFTER pointer release.
+        if(!inside(e.currentTarget,e.clientX,e.clientY))suppressCapturedClick.current.add(index);
+        heldPointers.current.delete(index);
+      }
       press(index,false);
       if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
     },
-    onPointerCancel:()=>press(index,false),
-    onLostPointerCapture:()=>press(index,false),
-    onKeyDown:(e:ReactKeyboardEvent<HTMLButtonElement>)=>{
-      if(!e.repeat&&(e.key==="Enter"||e.key===" "))press(index,true);
+    onPointerCancel:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      heldPointers.current.delete(index);
+      suppressCapturedClick.current.add(index);
+      press(index,false);
+      if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
     },
-    onKeyUp:()=>press(index,false),
+    onLostPointerCapture:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      // Unexpected capture loss = canceled gesture, not a click.
+      if(heldPointers.current.get(index)===e.pointerId){
+        heldPointers.current.delete(index);
+        suppressCapturedClick.current.add(index);
+      }
+      press(index,false);
+    },
+    onKeyDown:(e:ReactKeyboardEvent<HTMLButtonElement>)=>{
+      if(e.key!=="Enter"&&e.key!==" ")return;
+      e.preventDefault(); // wait for keyup, even for Enter
+      if(!e.repeat)press(index,true);
+    },
+    onKeyUp:(e:ReactKeyboardEvent<HTMLButtonElement>)=>{
+      if(e.key!=="Enter"&&e.key!==" ")return;
+      e.preventDefault();
+      press(index,false);
+      e.currentTarget.click(); // keyboard activation after release
+    },
     onBlur:()=>press(index,false)
   });
+  const activate=(index:number,action:()=>void)=>(e:ReactMouseEvent<HTMLButtonElement>)=>{
+    if(e.detail>0&&suppressCapturedClick.current.has(index)){
+      suppressCapturedClick.current.delete(index);
+      e.preventDefault();e.stopPropagation();
+      return;
+    }
+    suppressCapturedClick.current.delete(index);
+    action();
+  };
+  const openMenu=(target:"sort"|"profile")=>{
+    setSearchOpen(false);
+    if(menu===target){setMenu(null);return;}
+    setMenu(target);
+    requestAnimationFrame(()=>{
+      (target==="sort"?sortMenu:profileMenu).current
+        ?.querySelector<HTMLButtonElement>('[role^="menuitem"]')?.focus({preventScroll:true});
+    });
+  };
+  const closeMenu=(target:"sort"|"profile")=>{
+    setMenu(null);
+    (target==="sort"?sortButton:profileButton).current?.focus({preventScroll:true});
+  };
+  const onMenuKeyDown=(e:ReactKeyboardEvent<HTMLDivElement>)=>{
+    if(!["Home","End","ArrowDown","ArrowUp"].includes(e.key))return;
+    const buttons=Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]'));
+    const current=buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next=e.key==="Home"?0:e.key==="End"?buttons.length-1:
+      e.key==="ArrowDown"?(current+1)%buttons.length:(current+buttons.length-1)%buttons.length;
+    e.preventDefault();buttons[next]?.focus();
+  };
 
   useEffect(()=>{
     const query=window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -126,10 +199,14 @@ export default function StudioToolbarCandidate(){
   useEffect(()=>{morphSprings.current.select.target=selecting?44:78;animate.current();},[selecting]);
   useEffect(()=>{
     const outside=(e:PointerEvent)=>{if(!toolbar.current?.contains(e.target as Node)){setMenu(null);setSearchOpen(false);}};
-    const escape=(e:KeyboardEvent)=>{if(e.key==="Escape"){setMenu(null);setSearchOpen(false);}};
+    const escape=(e:KeyboardEvent)=>{
+      if(e.key!=="Escape")return;
+      if(menu==="sort"||menu==="profile")closeMenu(menu);
+      else setSearchOpen(false);
+    };
     document.addEventListener("pointerdown",outside);document.addEventListener("keydown",escape);
     return()=>{document.removeEventListener("pointerdown",outside);document.removeEventListener("keydown",escape);};
-  },[]);
+  },[menu]);
 
   useEffect(()=>{
     const host=stage.current,canvas=display.current;
@@ -170,7 +247,9 @@ export default function StudioToolbarCandidate(){
       if(disposed||!gl||!texture||!renderer)return;
       // The spring integration is analytical (closed form): do NOT cap elapsed time
       // to 0.2s, which makes a long hold look unfinished on slower GPU frames.
-      const dt=last?Math.min(2,(now-last)/1000):.016;last=now;
+      // Never consume >1 frame of bounce at a time: WebGL may be slow.
+      // Once the spring settles, the next interaction starts at a NEW t=0.
+      const dt=last?Math.min(.045,(now-last)/1000):.016;last=now;
       const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       for(const s of pressSprings.current){
         if(reduce){s.x=s.target;s.v=0;}
@@ -246,8 +325,9 @@ export default function StudioToolbarCandidate(){
       });
       if([...pressSprings.current,motion.search,motion.select].some(moving))
         frame=requestAnimationFrame(tick);
+      else last=0;
     };
-    animate.current=()=>{if(!frame)frame=requestAnimationFrame(tick);};
+    animate.current=()=>{if(!frame){last=0;frame=requestAnimationFrame(tick);}};
     const observer=new ResizeObserver(()=>{
       if(searchOpenRef.current)morphSprings.current.search.target=Math.min(278,Math.max(170,host.clientWidth-190));
       needsBackground=true;animate.current();
@@ -286,40 +366,61 @@ export default function StudioToolbarCandidate(){
               tabIndex={searchOpen?0:-1} value={search} onChange={e=>setSearch(e.target.value)}/>
             <button type="button" aria-label={searchOpen?"Close search":"Search beats"}
               aria-expanded={searchOpen}
-              onClick={()=>{setMenu(null);setSearchOpen(v=>!v);}}
+              onClick={activate(0,()=>{setMenu(null);setSearchOpen(v=>!v);})}
               {...handlers(0)}><Glyph kind="search"/></button>
           </div>
         </div>
         <div ref={node=>{controls.current[1]=node;}} className="studio-lens">
-          <button type="button" aria-label="Sort beats" aria-haspopup="menu" aria-expanded={menu==="sort"}
-            onClick={()=>{setSearchOpen(false);setMenu(v=>v==="sort"?null:"sort");}}
+          <button ref={sortButton} type="button" aria-label="Sort beats" aria-haspopup="menu"
+            aria-controls={sortId} aria-expanded={menu==="sort"}
+            onClick={activate(1,()=>openMenu("sort"))}
             {...handlers(1)}><Glyph kind="sort"/></button>
         </div>
         <div ref={node=>{controls.current[2]=node;}}
           className={"studio-lens studio-select"+(selecting?" is-selecting":"")}>
           <button type="button" aria-pressed={selecting}
             aria-label={selecting?"Cancel selection":"Select beats"}
-            onClick={()=>{setSearchOpen(false);setMenu(null);setSelecting(v=>!v);}}
+            onClick={activate(2,()=>{setSearchOpen(false);setMenu(null);setSelecting(v=>!v);})}
             {...handlers(2)}>
             <span className="studio-select-label">Select</span>
             <span className="studio-select-x"><Glyph kind="close"/></span>
           </button>
         </div>
         <div ref={node=>{controls.current[3]=node;}} className="studio-lens">
-          <button type="button" aria-label="Profile" aria-haspopup="menu" aria-expanded={menu==="profile"}
-            onClick={()=>{setSearchOpen(false);setMenu(v=>v==="profile"?null:"profile");}}
+          <button ref={profileButton} type="button" aria-label="Profile" aria-haspopup="menu"
+            aria-controls={profileId} aria-expanded={menu==="profile"}
+            onClick={activate(3,()=>openMenu("profile"))}
             {...handlers(3)}><Glyph kind="profile"/></button>
         </div>
-        {menu&&<div className="studio-candidate-menu" role="menu" aria-label={menu==="sort"?"Sort beats":"Profile"}>
-          {menu==="sort"
-            ? options.map(option=><button key={option} type="button" role="menuitemradio"
-                aria-checked={sort===option} onClick={()=>{setSort(option);setMenu(null);}}>
-                {option}{sort===option?" ✓":""}</button>)
-            : <><strong>Demo User</strong>{["Settings","Log out"].map(action=>
-                <button key={action} type="button" role="menuitem" onClick={()=>{
-                  setMessage(action+" · demo");setMenu(null);
-                }}>{action}</button>)}</>}
-        </div>}
+        {/* Exact Toolbar V2 · Glass popover classes and structure. */}
+        <div ref={sortMenu} id={sortId} role="menu" aria-label="Sort beats"
+          aria-hidden={menu!=="sort"} onKeyDown={onMenuKeyDown}
+          className={`lab-toolbar-v2-popover is-sort${menu==="sort"?" is-open":""}`}>
+          <div className="lab-toolbar-v2-menu-title">Sort by</div>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          {options.map(option=><button key={option} type="button" role="menuitemradio"
+            aria-checked={sort===option} tabIndex={menu==="sort"?0:-1}
+            className={`lab-toolbar-v2-menu-item${sort===option?" is-current":""}`}
+            onClick={()=>{setSort(option);closeMenu("sort");}}>
+            {option}<span aria-hidden="true" className="lab-toolbar-v2-selected-dot"/>
+          </button>)}
+        </div>
+        <div ref={profileMenu} id={profileId} role="menu" aria-label="Profile"
+          aria-hidden={menu!=="profile"} onKeyDown={onMenuKeyDown}
+          className={`lab-toolbar-v2-popover is-profile${menu==="profile"?" is-open":""}`}>
+          <div className="lab-toolbar-v2-profile-name">
+            <span className="lab-toolbar-v2-avatar"><Glyph kind="profile"/></span>
+            <strong>Demo User</strong>
+          </div>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1}
+            className="lab-toolbar-v2-menu-item"
+            onClick={()=>{setMessage("Settings · demo");closeMenu("profile");}}>Settings</button>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1}
+            className="lab-toolbar-v2-menu-item"
+            onClick={()=>{setMessage("Log out · demo");closeMenu("profile");}}>Log out</button>
+        </div>
       </div>
       {error&&<div className="studio-candidate-error" role="status">Studio: {error}. Se muestra fallback.</div>}
       {message&&<div className="studio-candidate-message" role="status">{message}</div>}
