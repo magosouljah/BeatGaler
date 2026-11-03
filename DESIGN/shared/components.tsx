@@ -48,8 +48,8 @@ export function LabArtwork({ beat, coverMode, className = "" }: { beat: DemoBeat
 }
 
 
-export function LabBeatTile({ beat, selected, onPlay, coverMode }: {
-  beat: DemoBeat; coverMode: CoverMode;
+export function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {} }: {
+  beat: DemoBeat; coverMode: CoverMode; tagColors?: Record<string, string>;
   selected: boolean; onPlay: (beat: DemoBeat) => void;
 }) {
   return (
@@ -64,7 +64,11 @@ export function LabBeatTile({ beat, selected, onPlay, coverMode }: {
       </div>
       <div className="lab-beat-tile__meta">
         <div className="lab-beat-tile__title" title={beat.title}>{beat.title}</div>
-        <div className="lab-beat-tile__tags">{beat.tags.map(tag => <span key={tag} className="lab-beat-tile__tag">{tag}</span>)}</div>
+        <div className="lab-beat-tile__tags">{beat.tags.map(tag => {
+          const color = tagColors[tag];
+          return <span key={tag} className="lab-beat-tile__tag"
+            style={color ? { color, borderColor: `${color}77`, background: `${color}19` } : undefined}>{tag}</span>;
+        })}</div>
         <div className="lab-beat-tile__details">{beat.key}<span aria-hidden="true">·</span>{beat.bpm} BPM</div>
       </div>
     </article>

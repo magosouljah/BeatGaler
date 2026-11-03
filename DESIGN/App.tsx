@@ -16,6 +16,7 @@ export default function App() {
   useEffect(() => {
     try { window.sessionStorage.setItem("beatgaler.lab.cover-mode", coverMode); } catch { /* storage disabled */ }
   }, [coverMode]);
+  const [tagColors, setTagColors] = useState<Record<string, string>>({});
   const [playing, setPlaying] = useState(false);
   const [beat, setBeat] = useState<DemoBeat>(DEMO_BEATS[0]);
   const selectBeat = (selected: DemoBeat) => {
@@ -25,7 +26,7 @@ export default function App() {
   return (
     <div className="lab-root">
       {view === "landing" && <LandingPage goHome={() => setView("landing")} openGallery={() => setView("gallery")} coverMode={coverMode} />}
-      {view === "gallery" && <GalleryPage coverMode={coverMode} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} />}
+      {view === "gallery" && <GalleryPage coverMode={coverMode} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} tagColors={tagColors} setTagColors={setTagColors} />}
       {view === "components" && <MasterPage coverMode={coverMode} setCoverMode={setCoverMode} />}
       <nav className="lab-dev-switches" aria-label="Design Lab-only navigation">
         <button type="button" aria-current={view === "landing" ? "page" : undefined} onClick={() => setView("landing")}>Landing</button>

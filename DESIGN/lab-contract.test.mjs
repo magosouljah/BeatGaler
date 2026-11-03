@@ -175,6 +175,11 @@ test("gallery uses 24 distinct one-word names, multi-tags and real covers", () =
   assert.ok(!gallery.includes("lab-tag-color-trigger"));
   assert.ok(!gallery.includes("···"));
   assert.ok(!read("./GALLERY/gallery.css").includes(".lab-tag-color-trigger"));
+  assert.ok(gallery.includes("onContextMenu"));
+  assert.ok(gallery.includes("onPointerDown"));
+  assert.ok(gallery.includes("lab-tag-color-popover"));
+  assert.ok(gallery.includes("setTagColors"));
+  assert.ok(read("./App.tsx").includes("tagColors={tagColors} setTagColors={setTagColors}"));
   const covers = readdirSync(new URL("./shared/assets/real-covers/", import.meta.url));
   assert.equal(covers.filter(name => /^cover-\d{2}\.(jpg|avif)$/.test(name)).length, 24);
 });
