@@ -152,10 +152,13 @@ try {
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.menuMaterial"),"studio");
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).backgroundColor"),"rgba(0, 0, 0, 0)","Sorting menu must use Studio WebGL, not CSS background");
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).backdropFilter"),"none","Sorting menu CSS blur must be disabled");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).transitionDuration"),"0s","Sort menu must have no open/close transition");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).transform"),"none","Sort menu must not translate/scale on open");
  assert.equal(await evaluate("Math.round(document.querySelector('.lab-toolbar-v2-popover.is-sort').getBoundingClientRect().width)"),260,"Preserve original V2 popup dimensions");
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-title').textContent"),"Sort by");
  await click('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-item:nth-of-type(3)');
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"true");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-sort')).visibility"),"hidden","Sort menu must disappear immediately on close");
  await click('.studio-lens:nth-of-type(2)>button');
  assert.equal(await evaluate("[...document.querySelectorAll('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-item')].find(x=>x.textContent==='BPM').getAttribute('aria-checked')"),"true");
  await click('.studio-lens:nth-of-type(2)>button');
@@ -230,6 +233,8 @@ try {
  await sleep(220);
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.menuMaterial"),"studio");
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-profile')).backgroundColor"),"rgba(0, 0, 0, 0)");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-profile')).transitionDuration"),"0s","Profile menu must have no open/close transition");
+ assert.equal(await evaluate("getComputedStyle(document.querySelector('.lab-toolbar-v2-popover.is-profile')).transform"),"none","Profile menu must not scale on open");
  assert.equal(await evaluate("Math.round(document.querySelector('.lab-toolbar-v2-popover.is-profile').getBoundingClientRect().width)"),260);
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile .lab-toolbar-v2-profile-name strong').textContent"),"Demo User");
  await click('.lab-toolbar-v2-popover.is-profile .lab-toolbar-v2-menu-item');

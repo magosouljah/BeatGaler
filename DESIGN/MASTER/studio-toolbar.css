@@ -69,14 +69,26 @@
 }
 .studio-candidate-toolbar .lab-toolbar-v2-popover{
   z-index:20;
-  /* Preserve the V2 260px width, 12px padding, 23px corners, typography,
-     structure, anchor and transitions. Only replace its CSS-faked material:
-     the Studio shader now draws the WHOLE popover in the shared WebGL canvas. */
+  /* Keep V2 width, padding, 23px corners, typography and exact anchor.
+     No CSS tint, second blur material, or open/close animation. */
   background:transparent;
   border-color:transparent;
   box-shadow:none;
   backdrop-filter:none;
   -webkit-backdrop-filter:none;
+}
+
+/* Studio popovers are instantaneous in both directions. V2's source
+   component keeps its existing transitions; only this sample overrides them.
+   Use higher specificity than .lab-toolbar-v2-popover.is-open even when
+   toolbar-v2.css is loaded after the candidate's local stylesheet. */
+.studio-candidate-stage .studio-candidate-toolbar .lab-toolbar-v2-popover,
+.studio-candidate-stage .studio-candidate-toolbar .lab-toolbar-v2-popover.is-open{
+  transition:none;
+  transition-delay:0s;
+  animation:none;
+  transform:none;
+  transform-origin:top right;
 }
 .studio-candidate-stage[data-glass-engine=fallback] .lab-toolbar-v2-popover{
   background:rgba(28,28,32,.66);

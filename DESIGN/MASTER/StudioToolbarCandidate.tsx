@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useId,useRef,useState} from "react";
+import {useCallback,useEffect,useId,useLayoutEffect,useRef,useState} from "react";
 import type {KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent} from "react";
 import {MultiPassRenderer} from "./engines/studio/GLUtils";
 import vertex from "./engines/studio/vertex.glsl?raw";
@@ -81,8 +81,6 @@ export default function StudioToolbarCandidate(){
   const sortMenu=useRef<HTMLDivElement>(null),profileMenu=useRef<HTMLDivElement>(null);
   const sortId=useId(),profileId=useId();
   const menuActiveRef=useRef<Menu>(null);
-  const menuLastRef=useRef<Menu>(null);
-  const menuTransitionEnd=useRef(0);
   const heldPointers=useRef(new Map<number,number>()); // button index -> pointerId
   const suppressCapturedClick=useRef(new Set<number>());
   const pressSprings=useRef(Array.from({length:4},()=>makeSpring(0)));
@@ -296,8 +294,8 @@ export default function StudioToolbarCandidate(){
       }
       // Readable only in DESIGN tests: a long hold must approach 1, and its
       // release must overshoot through 0 before naturally settling.
-      const shownMenu=menuActiveRef.current||(
-        now<menuTransitionEnd.current?menuLastRef.current:null);
+      // No entry/exit animation or lingering lens after close.
+      const shownMenu=menuActiveRef.current;
       const menuElement=shownMenu==="sort"?sortMenu.current:
         shownMenu==="profile"?profileMenu.current:null;
       const menuRect=menuElement?.getBoundingClientRect();
@@ -344,8 +342,7 @@ export default function StudioToolbarCandidate(){
           u_glareOppositeFactor:preset.glareOppositeFactor/100,
           u_blurEdge:preset.blurEdge?1:0,STEP:preset.step}
       });
-      if([...pressSprings.current,motion.search,motion.select].some(moving)||
-        now<menuTransitionEnd.current)
+      if([...pressSprings.current,motion.search,motion.select].some(moving))
         frame=requestAnimationFrame(tick);
       else last=0;
     };
@@ -369,12 +366,11 @@ export default function StudioToolbarCandidate(){
     };
   },[]);
   useEffect(()=>{stage.current?.dispatchEvent(new CustomEvent("studio-theme",{detail:theme}));},[theme]);
-  useEffect(()=>{
-    // Let the refraction follow the existing V2 popover's .97-scale enter
-    // and exit animations. Render through its 220ms transition.
-    if(menu)menuLastRef.current=menu;
+  useLayoutEffect(()=>{
+    // After React commits the menu DOM but before browser paint, request a
+    // single WebGL frame with the new lens. No 220ms transition timer and
+    // no retained optical mask after closing.
     menuActiveRef.current=menu;
-    menuTransitionEnd.current=performance.now()+280;
     animate.current();
   },[menu]);
 
