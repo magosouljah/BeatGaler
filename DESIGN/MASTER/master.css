@@ -226,3 +226,18 @@
  color:var(--lab-ink); background:var(--lab-hover); box-shadow:inset 2px 0 0 var(--lab-ink);
 }
 
+
+/* The two Paint layouts are independent of the black/playbar material. */
+.lab-master-sidebar-nav .lab-master-tag-layouts {
+  display: grid; gap: var(--lab-space-1);
+  padding: 0 var(--lab-space-1) var(--lab-space-2);
+}
+.lab-master-sidebar-nav .lab-master-tag-layouts button {
+  font-size: 12px; min-height: var(--lab-control-compact);
+  padding-inline: var(--lab-space-2);
+}
+.lab-master-sidebar-nav .lab-master-tag-layouts button[aria-pressed="true"] {
+  color: var(--lab-ink); background: var(--lab-hover);
+  box-shadow: inset 2px 0 0 var(--lab-ink);
+}
+

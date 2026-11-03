@@ -92,7 +92,7 @@ try{
      contentWidth:bar.scrollWidth,viewportWidth:bar.clientWidth,barHeight:bar.clientHeight,
      surfaceBackground:getComputedStyle(surface).backgroundColor};
  })()`);
- assert.ok(Math.abs(tagLayout.surfaceTop)<=2,"Tag bar must touch the viewport top");
+ assert.ok(Math.abs(tagLayout.surfaceTop-16)<=2,"Image 2 Tag Bar should follow the 16px spacing token");
  assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Toolbar uses the 8px spacing token");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");

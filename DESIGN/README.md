@@ -76,3 +76,9 @@ Tag Bar and the “Tags ↑” cue are document-positioned and leave the viewpor
 
 No custom-color underline. “Sin color” deletes the custom assignment and returns to the same neutral idle/included/excluded state as an unassigned tag. Reordering animates selected tags toward All but does not scroll the user's horizontal viewport. Wheel events over the tag strip are consumed even at the beginning/end, with no vertical scroll chaining. Studio uses nine texture samples per control, flipping to slightly heavier dark ink only on predominantly near-white backgrounds (not yellow/orange artwork); glass shaders and presets are unchanged.
 
+
+## Paint layouts — Image 2 and Image 3
+MASTER → **DISTRIBUCIÓN TAGS** selects Image 2 (full-width bar, with the Studio Toolbar aligned beneath it) or Image 3 (centered within Gallery's content width, softly faded at its horizontal scroll boundaries, Studio Toolbar aligned over the rightmost beat artwork). They are a separate, session-persisted choice from **TAG BAR** materials. Both preserve scrolling filters, animations and no stickiness.
+
+Image 3 uses a soft, noninteractive, horizontal-edge-masked shadow, fading vertically to transparent just inside the top area of the first beats. Widths follow the seven/six/five/four/three/two/one-column Gallery grid. Image 2 has no added shadow. The Studio Toolbar computes spacing from the real, currently visible Tag Bar rect and `--lab-space-2`, including interrupted reveals and page scroll. No changes to the Studio optical shader or preset.
+

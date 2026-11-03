@@ -97,11 +97,11 @@ function Glyph({kind}:{kind:Kind}){
 }
 
 export default function StudioToolbarCandidate({
-  gallery=false, galleryTagsOpen=false, search:controlledSearch, onSearchChange,
+  gallery=false, galleryTagsOpen=false, galleryTagLayout, search:controlledSearch, onSearchChange,
   sort:controlledSort, onSortChange, selecting:controlledSelecting,
   onToggleSelect, onProfileAction
 }:{
-  gallery?:boolean;galleryTagsOpen?:boolean;search?:string;onSearchChange?:(value:string)=>void;
+  gallery?:boolean;galleryTagsOpen?:boolean;galleryTagLayout?:"full-bleed"|"gallery-inset";search?:string;onSearchChange?:(value:string)=>void;
   sort?:LabSort;onSortChange?:(value:LabSort)=>void;
   selecting?:boolean;onToggleSelect?:()=>void;
   onProfileAction?:(action:"settings"|"logout")=>void;
@@ -468,7 +468,7 @@ export default function StudioToolbarCandidate({
     };
     raf=requestAnimationFrame(refresh);
     return()=>cancelAnimationFrame(raf);
-  },[gallery,galleryTagsOpen]);
+  },[gallery,galleryTagsOpen,galleryTagLayout]);
   useEffect(()=>{stage.current?.dispatchEvent(new CustomEvent("studio-theme",{detail:theme}));},[theme]);
   useLayoutEffect(()=>{
     // After React commits the menu DOM but before browser paint, request a

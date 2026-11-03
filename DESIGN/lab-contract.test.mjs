@@ -217,8 +217,8 @@ test("gallery navigation has a real one-line bar that pushes the Studio toolbar"
   const studio = read("./MASTER/StudioToolbarCandidate.tsx");
   const studioCss = read("./MASTER/studio-toolbar.css");
   assert.match(gallery, /lab-gallery-top-stack/);
-  assert.match(gallery, /data-tags-open=\{tagsOpen/);
-  assert.match(gallery, /galleryTagsOpen=\{tagsOpen\}/);
+  assert.match(gallery, /data-tags-open=\{tagsVisible/);
+  assert.match(gallery, /galleryTagsOpen=\{tagsVisible\}/);
   assert.match(nav, /onVisibilityChange/);
   assert.match(nav, /createPortal\(/);
   assert.match(nav, /scrollBy\(/);
@@ -318,13 +318,38 @@ test("Tag Bar leaves the viewport, Studio floats with spacing tokens and no whee
  const nav=read("./GALLERY/TagNavigation.tsx");
  assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: absolute/);
  assert.match(css,/\.lab-gallery-toolbar-float \{[\s\S]*?position: fixed/);
- assert.match(gallery,/const tokenGap = 8/);
- assert.match(gallery,/window\.scrollY/);
+ assert.match(gallery,/getPropertyValue\("--lab-space-2"\)/);
+ assert.match(gallery,/strip\.getBoundingClientRect\(\)\.bottom/);
  assert.match(css,/overflow-anchor: none/);
  assert.match(nav,/preserveScroll\.current = scrollerRef\.current\?\.scrollLeft/);
  assert.doesNotMatch(nav,/scrollToStart/);
  assert.match(nav,/event\.preventDefault\(\);\n\s*const scale/);
  assert.match(css,/overscroll-behavior: contain/);
  assert.match(css,/will-change: backdrop-filter/);
+});
+
+
+test("Paint image 2 and image 3 are independently selectable from MASTER", () => {
+ const master=read("./MASTER/MasterPage.tsx");
+ const gallery=read("./GALLERY/GalleryPage.tsx");
+ const app=read("./App.tsx");
+ const css=read("./GALLERY/gallery.css");
+ assert.match(master,/Imagen 2 · Ancho completo/);
+ assert.match(master,/Imagen 3 · En galería/);
+ assert.match(master,/setTagBarLayout\("full-bleed"\)/);
+ assert.match(master,/setTagBarLayout\("gallery-inset"\)/);
+ assert.match(app,/beatgaler\.lab\.tag-bar-layout/);
+ assert.match(app,/tagBarLayout=\{tagBarLayout\}/);
+ assert.match(gallery,/data-tag-layout=\{tagBarLayout\}/);
+ assert.match(css,/data-tag-layout="full-bleed"/);
+ assert.match(css,/data-tag-layout="gallery-inset"/);
+ assert.match(css,/--gallery-beats-width: 1252px/);
+ assert.match(css,/lab-gallery-tag-shadow/);
+ assert.match(css,/mask-image: linear-gradient\(90deg,transparent 0%/);
+ assert.match(css,/height: calc\(var\(--lab-space-12\) \+ var\(--lab-space-12\)\)/);
+ assert.match(gallery,/new ResizeObserver\(sync\)/);
+ assert.match(gallery,/getPropertyValue\("--lab-space-2"\)/);
+ assert.doesNotMatch(gallery,/const barHeight =/);
+ assert.match(read("./MASTER/StudioToolbarCandidate.tsx"),/galleryTagLayout/);
 });
 

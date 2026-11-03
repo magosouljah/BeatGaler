@@ -3,6 +3,7 @@ import { DEMO_BEATS } from "./shared/data";
 import type { DemoBeat } from "./shared/data";
 import type { CoverMode } from "./shared/coverSources";
 import type { TagBarVariant } from "./shared/tagBarVariant";
+import type { TagBarLayout } from "./shared/tagBarLayout";
 import LandingPage from "./LANDING/LandingPage";
 import GalleryPage from "./GALLERY/GalleryPage";
 import MasterPage from "./MASTER/MasterPage";
@@ -24,6 +25,16 @@ export default function App() {
   useEffect(() => {
     try { sessionStorage.setItem("beatgaler.lab.tag-bar-variant", tagBarVariant); } catch { /* optional */ }
   }, [tagBarVariant]);
+  const [tagBarLayout, setTagBarLayout] = useState<TagBarLayout>(() => {
+    try {
+      return sessionStorage.getItem("beatgaler.lab.tag-bar-layout") === "gallery-inset"
+        ? "gallery-inset" : "full-bleed";
+    } catch { return "full-bleed"; }
+  });
+  useEffect(() => {
+    try { sessionStorage.setItem("beatgaler.lab.tag-bar-layout", tagBarLayout); }
+    catch { /* Optional DESIGN preference. */ }
+  }, [tagBarLayout]);
   const [tagColors, setTagColors] = useState<Record<string, string>>({});
   const [playing, setPlaying] = useState(false);
   const [beat, setBeat] = useState<DemoBeat>(DEMO_BEATS[0]);
@@ -34,8 +45,8 @@ export default function App() {
   return (
     <div className="lab-root">
       {view === "landing" && <LandingPage goHome={() => setView("landing")} openGallery={() => setView("gallery")} coverMode={coverMode} />}
-      {view === "gallery" && <GalleryPage coverMode={coverMode} tagBarVariant={tagBarVariant} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} tagColors={tagColors} setTagColors={setTagColors} />}
-      {view === "components" && <MasterPage coverMode={coverMode} setCoverMode={setCoverMode} tagBarVariant={tagBarVariant} setTagBarVariant={setTagBarVariant} />}
+      {view === "gallery" && <GalleryPage coverMode={coverMode} tagBarVariant={tagBarVariant} tagBarLayout={tagBarLayout} beat={beat} playing={playing} toggle={() => setPlaying(x => !x)} selectBeat={selectBeat} tagColors={tagColors} setTagColors={setTagColors} />}
+      {view === "components" && <MasterPage coverMode={coverMode} setCoverMode={setCoverMode} tagBarVariant={tagBarVariant} setTagBarVariant={setTagBarVariant} tagBarLayout={tagBarLayout} setTagBarLayout={setTagBarLayout} />}
       <nav className="lab-dev-switches" aria-label="Design Lab-only navigation">
         <button type="button" aria-current={view === "landing" ? "page" : undefined} onClick={() => setView("landing")}>Landing</button>
         <button type="button" aria-current={view === "components" ? "page" : undefined} onClick={() => setView("components")}>MASTER</button>
