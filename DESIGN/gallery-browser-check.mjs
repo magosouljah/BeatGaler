@@ -83,6 +83,18 @@ try{
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
  await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","tag bar reveal");
  await sleep(360);
+ // Compare rendered rectangles; filter and scroll must not change the viewport overlay.
+ const overlayGeometry=()=>expr(`(()=>{
+   const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
+   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
+   return {top:toolbar.top,right:toolbar.right,navTop:nav.top,navRight:nav.right,
+     navBottom:nav.bottom,navHeight:nav.height,scrollY:window.scrollY};
+ })()`);
+ const assertSameOverlay=(before,after,step)=>{
+   assert.ok(Math.abs(after.right-before.right)<=2,step+": toolbar right edge shifted");
+   assert.ok(Math.abs(after.top-before.top)<=2,step+": toolbar top edge shifted");
+ };
+ const openOverlay=await overlayGeometry();
  const tagLayout=await expr(`(()=>{
    const surface=document.querySelector('.lab-gallery-tag-surface');
    const bar=document.querySelector('.lab-gallery-tag-bar');
@@ -94,19 +106,14 @@ try{
  })()`);
  assert.ok(Math.abs(tagLayout.surfaceTop-24)<=2,"Inset bar must use the approved 24px token");
  assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Toolbar uses the 8px spacing token");
- assert.ok(await expr(`(()=>{
-  const grid=document.querySelector('.lab-gallery-grid');
-  const first=grid.children[0].getBoundingClientRect();
-  const last=grid.children[6].getBoundingClientRect();
-  const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
-  return Math.abs(toolbar.right-(last.right-10))<=2
-    && Math.abs(toolbar.top-(first.top+10))<=3;
- })()`),"Studio must sit 10px inside and 10px below the first row of beats");
+ assert.ok(Math.abs(openOverlay.right-(openOverlay.navRight-28))<=2,
+   "Toolbar right edge must follow Gallery frame, never the last visible beat");
+ assert.ok(Math.abs(openOverlay.navHeight-96)<=2,"Tag band must use the 96px design token");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
- assert.ok(tagLayout.barHeight<=52,"Tag strip should remain compact");
+ assert.ok(Math.abs(tagLayout.barHeight-96)<=2,"Tag bar height follows the 96px token");
  assert.ok(await expr("(()=>{const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();return nav.left>16&&nav.right<innerWidth-16;})()"),"Tag strip is centered within Gallery, not full bleed");
- assert.ok(tagLayout.barHeight<80,"Tag navigation must remain a single row");
+ assert.ok(tagLayout.barHeight<100,"The thick Tag Bar must remain a single row");
  assert.ok(await expr("(()=>{const a=document.querySelector('.lab-gallery-tag-all').getBoundingClientRect(),b=document.querySelector('.lab-gallery-tag-wrap').getBoundingClientRect();return b.left-a.right<20;})()"),"Compact tag spacing");
  const scrollResult=await expr(`(()=>{
    const bar=document.querySelector('.lab-gallery-tag-bar');
@@ -162,6 +169,20 @@ try{
  assert.equal(await expr("document.querySelector('.lab-gallery-tag-bar button[aria-label^=\"Trap:\"]').parentElement.offsetLeft"),nextOffsetBefore,"Selection weight must not push adjacent tags");
  const count=await expr("document.querySelectorAll('.lab-beat-tile').length");
  assert.ok(count>0&&count<24,"Ambient inclusion should filter");
+ assertSameOverlay(openOverlay,await overlayGeometry(),"partial filter");
+ // A zero-result search while filters are active must not move the Studio toolbar.
+ await click("document.querySelector('.studio-candidate.is-gallery button[aria-label=\\\"Search beats\\\"]')".replaceAll("\\\\"","\\\""));
+ await until("document.querySelector('.studio-candidate.is-gallery input[aria-label=\\\"Search beats\\\"]')?.tabIndex===0".replaceAll("\\\\"","\\\""),"search input active");
+ await expr("document.querySelector('.studio-candidate.is-gallery input[aria-label=\\\"Search beats\\\"]').focus()".replaceAll("\\\\"","\\\""));
+ await command("Input.insertText",{text:"__never_matches_a_demo_beat__"});
+ await until("Boolean(document.querySelector('.lab-empty'))","zero results search");
+ await sleep(250);
+ assertSameOverlay(openOverlay,await overlayGeometry(),"zero results");
+ await click("document.querySelector('.lab-empty button')");
+ await until("document.querySelectorAll('.lab-beat-tile').length===24","clear zero-result search");
+ await click(ambient); // restore the selected filter for the existing toggle checks
+ await click("document.querySelector('.studio-candidate.is-gallery button[aria-label=\\\"Close search\\\"]')".replaceAll("\\\\"","\\\""));
+ assertSameOverlay(openOverlay,await overlayGeometry(),"filter restoration");
  await click(ambient);
  assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Plain click must toggle inclusion off, not cycle to exclusion");
  await expr('(()=>{const el='+ambient+';el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true}));return true;})()');
@@ -199,13 +220,25 @@ try{
  await sleep(340);
  const collapsed=await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top");
  assert.ok(collapsed>=12&&collapsed<50,"Collapsed Toolbar should return to its top margin");
+ const beforeWheel=await overlayGeometry();
+ await expr("window.scrollBy(0,120)");
+ await sleep(150);
+ assertSameOverlay(beforeWheel,await overlayGeometry(),"one vertical wheel step");
  await expr("window.scrollTo(0,480)");
- await sleep(120);
+ await sleep(150);
+ assertSameOverlay(beforeWheel,await overlayGeometry(),"prolonged vertical scroll");
  assert.ok(await expr("document.querySelector('.lab-gallery-top-stack').getBoundingClientRect().top>=0"),"Tag Bar remains viewport-ready for hover");
- assert.ok(await expr("(()=>{const y=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top;return y>=12&&y<=50;})()"),"Studio Toolbar must stay floating");
  await expr("window.scrollTo(0,0)");
  assert.ok(await expr("document.querySelector('.lab-gallery-item').getBoundingClientRect().top<120"),"Gallery covers must begin after only the toolbar, without reserving the hidden tag strip");
- // Small screens keep a 600px optical viewport and do not overlap the tags.
+ // Different grid column counts must not change frame-based alignment.
+ await command("Emulation.setDeviceMetricsOverride",{width:840,height:850,deviceScaleFactor:1,mobile:false});
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","medium viewport bar reveal");
+ await sleep(300);
+ const medium=await overlayGeometry();
+ assert.ok(Math.abs(medium.right-(medium.navRight-28))<=2,"Medium viewport aligns Toolbar to fixed Gallery frame");
+ assert.ok(Math.abs(medium.top-medium.navBottom-8)<=2,"Medium viewport keeps 8px strip gap");
+ // Small screens keep the 600px optical viewport and thick Tag Bar.
  await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
  await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","mobile bar visible");
@@ -221,12 +254,15 @@ try{
  let mobile=await readMobile();
  // On CI SwiftShader, WebGL work can delay CSS frames. Wait until the
  // interruptible grid transition has actually reached its final spacing.
- for(let i=0;i<24&&mobile.gap<10;i++){
+ for(let i=0;i<24&&Math.abs(mobile.gap-8)>2;i++){
    await sleep(120);
    mobile=await readMobile();
  }
  console.log("Mobile Gallery layout:",mobile);
- assert.ok(mobile.gap>=7,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
+ assert.ok(Math.abs(mobile.gap-8)<=2,"Mobile toolbar preserves the 8px gap: "+JSON.stringify(mobile));
+ const mobileOverlay=await overlayGeometry();
+ assert.ok(Math.abs(mobileOverlay.navHeight-96)<=2,"Mobile Tag Bar uses the same 96px token");
+ assert.ok(Math.abs(mobileOverlay.right-mobileOverlay.navRight)<=2,"Mobile Toolbar uses its viewport inset");
  assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile strip retains inset margins");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
@@ -240,7 +276,7 @@ try{
  assert.ok(await expr("document.querySelector('.lab-gallery-tag-cue')===null"),"Hint only appears before the first reveal");
  await screenshot("gallery-inset-deep-scroll.png");
  await expr("window.scrollTo(0,0)");
- console.log("Gallery verified: inset hover on deep scroll, beat-aligned Studio, one-shot hint and horizontal scroll.");
+ console.log("Gallery verified: viewport-fixed glass, 96px Tag Bar, 8px gap, filters, scroll and viewport changes.");
 }finally{
  ws?.close();vite.kill("SIGTERM");browser.kill("SIGTERM");
  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200}).catch(()=>{});
