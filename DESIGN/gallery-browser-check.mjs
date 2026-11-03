@@ -159,7 +159,7 @@ try{
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
  await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","mobile bar visible");
  await sleep(350);
- const mobile=await expr(`(()=>{
+ const readMobile=()=>expr(`(()=>{
    const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
    const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
    const glass=document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas');
@@ -167,6 +167,13 @@ try{
    return {gap:toolbar.top-nav.bottom,navWidth:nav.width,screenWidth:innerWidth,
      sceneHeight:glass.height,scrollable:scroller.scrollWidth>scroller.clientWidth};
  })()`);
+ let mobile=await readMobile();
+ // On CI SwiftShader, WebGL work can delay CSS frames. Wait until the
+ // interruptible grid transition has actually reached its final spacing.
+ for(let i=0;i<24&&mobile.gap<10;i++){
+   await sleep(120);
+   mobile=await readMobile();
+ }
  console.log("Mobile Gallery layout:",mobile);
  assert.ok(mobile.gap>=8,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
  assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile navigation must fit viewport width");
