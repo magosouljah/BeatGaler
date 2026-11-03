@@ -190,6 +190,14 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
       if (rootRef.current?.contains(event.target as Node)) show();
       else scheduleHide();
     };
+    const touchDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") return;
+      // On hybrids, the most recent touch restores the permanently
+      // discoverable touch navigation; another mouse move opts into auto-hide.
+      mousePresent.current = false;
+      pointerNearby.current = false;
+      show();
+    };
     const leaveWindow = (event: PointerEvent) => {
       if (event.pointerType === "mouse" && !event.relatedTarget) {
         pointerNearby.current = false;
@@ -197,17 +205,21 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
       }
     };
     document.addEventListener("pointermove", move, { passive: true });
+    document.addEventListener("pointerdown", touchDown, { passive: true });
     document.addEventListener("pointerout", leaveWindow, { passive: true });
     document.addEventListener("focusin", focus);
     return () => {
       document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerdown", touchDown);
       document.removeEventListener("pointerout", leaveWindow);
       document.removeEventListener("focusin", focus);
     };
   }, [show, scheduleHide, visible]);
   useEffect(() => {
     const onScroll = () => {
-      if (hasActiveFilters) return; // A selected filter remains accessible.
+      if (hasActiveFilters ||
+        (!mousePresent.current && window.matchMedia("(hover: none), (pointer: coarse)").matches)) return;
+      // Active filters and genuine touch input never hide the tag navigation.
       pointerNearby.current = false;
       clearHide();
       onVisibilityChange(false);
