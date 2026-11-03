@@ -268,9 +268,16 @@ try{
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
  await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","medium viewport bar reveal");
  await sleep(300);
- const medium=await overlayGeometry();
+ let medium=await overlayGeometry();
+ // Headless SwiftShader may delay frames. Verify the settled frame rather
+ // than assuming 180ms of CSS motion completed in 300ms of wall-clock time.
+ for(let i=0;i<24&&Math.abs(medium.top-medium.navBottom-8)>2;i++){
+   await sleep(120);
+   medium=await overlayGeometry();
+ }
+ console.log("Medium Gallery overlay geometry:",medium);
  assert.ok(Math.abs(medium.right-(medium.navRight-28))<=2,"Medium viewport aligns Toolbar to fixed Gallery frame");
- assert.ok(Math.abs(medium.top-medium.navBottom-8)<=2,"Medium viewport keeps 8px strip gap");
+ assert.ok(Math.abs(medium.top-medium.navBottom-8)<=2,"Medium viewport keeps 8px strip gap: "+JSON.stringify(medium));
  // Small screens keep the 600px optical viewport and thick Tag Bar.
  await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
