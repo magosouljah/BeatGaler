@@ -88,6 +88,8 @@ try {
  assert.equal(original.ready,"true","Original Studio reference WebGL could not initialize");
  assert.equal(original.shader,"original","Original Studio shaders are not loaded");
  assert.equal(original.radius,"22","Studio percentage radius conversion should be 22px");
+ assert.equal(await evaluate("document.querySelector('.studio-exact-canvas').dataset.surfaceSize"),"600x600","Original Studio reference should use 600x600 pixel canvas");
+ assert.equal(await evaluate("document.querySelector('.studio-exact-canvas').dataset.backgroundColor"),"#26262b","Original Studio reference should use a solid-color background");
  assert.equal(original.preset,"2026-11-02T23:59:40.405Z");
  await evaluate("document.querySelector('.studio-exact-stage').scrollIntoView({block:'center'})");
  await sleep(350);

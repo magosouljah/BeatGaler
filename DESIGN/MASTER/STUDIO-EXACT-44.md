@@ -1,14 +1,15 @@
-# Glass · Studio Original 44 — referencia de material
+# Glass · Studio Original 44 — fondo sólido y referencia óptica
 
-Punto de control independiente de Toolbar: MASTER → **Glass · Studio Original 44**.
+MASTER → **Glass · Studio Original 44**
 
-- Contiene **un solo botón estático 44×44**, sin pulsación, bounce, deformación, nuevas máscaras ni iluminación artificial.
-- Lee el preset de Studio exportado el **2026-11-02T23:59:40.405Z** (mismos controles ópticos que 23:23:31), preservado separadamente.
-- Reutiliza **sin cambios** los shaders de \`DESIGN/MASTER/engines/studio/\` (incluidos \`lib/sdf.glsl\`, \`fragment-main.glsl\`, dos blur y bg), y \`MultiPassRenderer\`. No importa \`studio-toolbar-shape.glsl\`.
-- Uniformes exactamente como \`src/App.tsx\` de \`iyinchao/liquid-glass-studio\`: radio de 100 % → 22 px en una figura 44×44; glareAngle convertido a radianes, intensidades/hardness /100, \`dpr=1\`, blur kernel original y \`u_refFresnelRange=0\` **sin parchear**.
-- \`bgType:11\` refiere a **un fondo personalizado**, pero el JSON no contiene ni embebe su imagen. Por defecto se muestra una escena neutral, NO se asegura coincidencia con la captura del usuario. El input **Cargar fondo original** importa una imagen local directamente en Canvas/WebGL sin upload; permite usar el mismo fondo para comparación válida.
-- El ícono de perfil se dibuja en una capa HTML encima, no modifica el cristal.
-- Requiere revisión con el mismo fondo y tamaño de canvas que la demo original para intentar una comparación pixel-a-pixel. Aún no está integrada en la Toolbar.
-- Esta prueba no modifica V1, V2, Gallery ni \`src/\`; producción y main intactos.
+- Un único círculo de **44 × 44 px** sin animaciones, bounce, shear ni luz añadida.
+- Archivo `studio-toolbar-44.json`: exportación del 2026-11-02 23:59:40, parámetros ópticos sin alteraciones.
+- Shaders originales exactos (`lib/sdf.glsl`, `fragment-main.glsl`, blur y background), con `MultiPassRenderer` original.
+- `shapeRadius: 100` es **porcentaje**; Studio convierte al radio geométrico de 22px. `dpr=1`, blur kernel original y Fresnel range 0 sin parche.
+- **Corrección:** el canvas original de la prueba era 780×280, mientras `iyinchao/liquid-glass-studio` inicia con `Math.max(Math.min(window.innerWidth,window.innerHeight)-150,600)` en ambos ejes. `getNormal()` del shader divide el gradiente por `u_resolution.y`, por lo que una altura de 280 exageraba los reflejos en comparación con 600.
+- La prueba ahora usa un canvas **600×600** en escritorio; se adapta en pantallas pequeñas. El fondo es un **color RGB plano**, modificable con el selector hexadecimal. No exige ni solicita imagen.
+- En Studio, `bgType:11` denota fondo personalizado. Aquí ese slot se alimenta con una textura de color uniforme, conservando el shader. El JSON no contiene un valor HEX, así que el color inicial (#26262b) es solo punto de partida y se puede ajustar.
+- La validación automatizada confirma que el canvas es 600×600 en el navegador de pruebas.
+- Esta prueba no modifica los cuatro botones de Toolbar Studio 44 ni Gallery, `src/`, producción o `main`.
 
-Referencia original: https://github.com/iyinchao/liquid-glass-studio/blob/main/src/App.tsx y sus shaders originales, MIT.
+Referencia original: https://github.com/iyinchao/liquid-glass-studio/blob/main/src/App.tsx

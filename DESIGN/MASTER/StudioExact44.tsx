@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useRef,useState} from "react";
+import {useEffect,useRef,useState} from "react";
 import {MultiPassRenderer} from "./engines/studio/GLUtils";
 import vertex from "./engines/studio/vertex.glsl?raw";
 import bg from "./engines/studio/fragment-bg.glsl?raw";
@@ -13,6 +13,8 @@ import "./studio-exact-44.css";
 
 // IMPORTANT: This diagnostic renders ONE static Studio shape, using Studio's
 // ORIGINAL sdf.glsl, main fragment, background, blur shaders and GL renderer.
+// Render on a 600 × 600px square, not the previous 780 × 280px viewport:
+// the upstream normal amplitude depends on u_resolution.y.
 // No toolbar SDF, no 43% white press mix, no animation or CSS filter.
 // The upstream App converts shapeRadius (%) to pixels; the JSON stores 100,
 // but the actual u_shapeRadius for a 44px circle is 22px.
@@ -45,48 +47,25 @@ function computeGaussianKernelByRadius(radius:number){
 }
 const weights=computeGaussianKernelByRadius(preset.blurRadius);
 
-function paintScene(ctx:CanvasRenderingContext2D,w:number,h:number,theme:"dark"|"light",photo:HTMLImageElement|null){
-  ctx.clearRect(0,0,w,h);
-  if(photo){
-    const ratio=Math.max(w/photo.naturalWidth,h/photo.naturalHeight);
-    const dw=photo.naturalWidth*ratio,dh=photo.naturalHeight*ratio;
-    ctx.drawImage(photo,(w-dw)/2,(h-dh)/2,dw,dh);
-    return;
-  }
-  // Neutral DEFAULT demo background. This is not the unknown uploaded
-  // background from the user's Studio session (bgType 11 carries no image).
-  ctx.fillStyle=theme==="dark"?"#26262b":"#e7e7e9";
+function paintScene(ctx:CanvasRenderingContext2D,w:number,h:number,backgroundColor:string){
+  // Flat RGB background: no image or decorative scene is required.
+  // bgType 11 in Studio is the custom-texture slot; a solid-color canvas
+  // is an exact texture representation of the selected color.
+  ctx.fillStyle=backgroundColor;
   ctx.fillRect(0,0,w,h);
 }
 const presetShapeRadius=()=>Math.min(preset.shapeWidth,preset.shapeHeight)/2*preset.shapeRadius/100;
 
 export default function StudioExact44(){
   const canvasRef=useRef<HTMLCanvasElement>(null);
-  const themeRef=useRef<"dark"|"light">("dark");
-  const imageRef=useRef<HTMLImageElement|null>(null);
+  const colorRef=useRef("#26262b");
   const renderRef=useRef<()=>void>(()=>{});
-  const [theme,setTheme]=useState<"dark"|"light">("dark");
-  const [selectedFile,setSelectedFile]=useState("");
+  const [color,setColor]=useState("#26262b");
   const [error,setError]=useState("");
   const [ready,setReady]=useState(false);
-  const changeTheme=(value:"dark"|"light")=>{
-    themeRef.current=value;setTheme(value);renderRef.current();
+  const changeColor=(value:string)=>{
+    colorRef.current=value;setColor(value);renderRef.current();
   };
-  const loadBackground=useCallback((file:File|undefined)=>{
-    if(!file)return;
-    if(!file.type.startsWith("image/")){setError("Elige una imagen.");return;}
-    const url=URL.createObjectURL(file);
-    const image=new Image();
-    image.onload=()=>{
-      imageRef.current=image;
-      setSelectedFile(file.name);
-      setError("");
-      renderRef.current();
-      URL.revokeObjectURL(url);
-    };
-    image.onerror=()=>{URL.revokeObjectURL(url);setError("No se pudo cargar la imagen.")};
-    image.src=url;
-  },[]);
   useEffect(()=>{
     const canvas=canvasRef.current;if(!canvas)return;
     let gl:WebGL2RenderingContext|null=null;
@@ -136,7 +115,7 @@ export default function StudioExact44(){
       }
       if(backgroundCanvas.width!==w)backgroundCanvas.width=w;
       if(backgroundCanvas.height!==h)backgroundCanvas.height=h;
-      paintScene(ctx,w,h,themeRef.current,imageRef.current);
+      paintScene(ctx,w,h,colorRef.current);
       gl.viewport(0,0,w,h);
       gl.bindTexture(gl.TEXTURE_2D,texture);
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,backgroundCanvas);
@@ -181,6 +160,8 @@ export default function StudioExact44(){
         }
       });
       canvas.dataset.shapeRadiusPx=String(presetShapeRadius());
+      canvas.dataset.backgroundColor=colorRef.current;
+      canvas.dataset.surfaceSize=`${w}x${h}`;
       canvas.dataset.presetTimestamp="2026-11-02T23:59:40.405Z";
       canvas.dataset.shader="original";
     };
@@ -197,18 +178,19 @@ export default function StudioExact44(){
     <div className="studio-exact-controls">
       <span>STUDIO ORIGINAL · 44 × 44 · SIN ANIMACIÓN</span>
       <div className="studio-exact-options">
-        <button type="button" onClick={()=>changeTheme("dark")} aria-pressed={theme==="dark"}>Oscuro</button>
-        <button type="button" onClick={()=>changeTheme("light")} aria-pressed={theme==="light"}>Claro</button>
-        <label className="studio-exact-file">
-          <span>{selectedFile?"Cambiar fondo":"Cargar fondo original"}</span>
-          <input type="file" accept="image/png,image/jpeg,image/webp" aria-label="Cargar fondo de Studio"
-            onChange={e=>loadBackground(e.currentTarget.files?.[0])}/>
+        <button type="button" onClick={()=>changeColor("#26262b")} aria-pressed={color==="#26262b"}>Oscuro</button>
+        <button type="button" onClick={()=>changeColor("#e7e7e9")} aria-pressed={color==="#e7e7e9"}>Claro</button>
+        <label className="studio-exact-color">
+          <span>Color de fondo</span>
+          <input type="color" value={color} aria-label="Color de fondo de Studio"
+            onChange={e=>changeColor(e.currentTarget.value)}/>
+          <code>{color.toUpperCase()}</code>
         </label>
       </div>
     </div>
     <div className="studio-exact-stage">
       <canvas ref={canvasRef} className="studio-exact-canvas" aria-label="Studio original WebGL2 44px estático"/>
-      <span className={"studio-exact-icon "+(theme==="light"&&!selectedFile?"is-dark":"")}
+      <span className={"studio-exact-icon "+(color==="#e7e7e9"?"is-dark":"")}
         aria-hidden="true">
         <svg viewBox="0 0 24 24" width="19" height="19" fill="none"
           stroke="currentColor" strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round">
@@ -220,9 +202,10 @@ export default function StudioExact44(){
     </div>
     <p className="studio-exact-note">
       {ready?"Motor Studio original activo. ":""}
-      Tu preset indica fondo personalizado (bgType 11), pero el JSON no contiene esa imagen.
-      Para comparar exactamente los reflejos, carga la misma imagen que usaste en Studio.
-      No se sube a ningún servidor.
+      El fondo es un color plano configurable, sin imágenes.
+      Studio usa de forma predeterminada un lienzo de al menos 600 × 600 px;
+      su cálculo de normales depende de la altura del lienzo.
+      Selecciona el mismo color de fondo de Studio para compararlos.
     </p>
   </div>;
 }
