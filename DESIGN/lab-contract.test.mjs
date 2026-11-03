@@ -343,7 +343,7 @@ test("Gallery uses the inset hover layout, deliberate ink and approved 44 preset
  assert.doesNotMatch(studio,/getImageData\(/);
  assert.match(read("./MASTER/studio-toolbar.css"),/color: #fff; --studio-ink: #fff/);
  assert.equal(preset.tint.r,94);
- assert.equal(preset.tint.a,176\/255);
+ assert.equal(preset.tint.a,176/255);
  assert.equal(preset.shadowExpand,20);
  assert.equal(preset.shadowFactor,20);
 });
