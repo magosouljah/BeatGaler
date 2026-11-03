@@ -8,12 +8,13 @@ import CameraGlass from "../shared/CameraGlass";
 import ArchisOriginalSpecimen from "./ArchisOriginalSpecimen";
 import GlassThreeCompare from "./GlassThreeCompare";
 import StudioToolbarCandidate from "./StudioToolbarCandidate";
+import StudioExact44 from "./StudioExact44";
 import type { LabSort } from "../shared/Toolbar";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
 import "./master.css";
 
-type Section = "margins" | "playbar" | "toolbar" | "glass-camera" | "glass-original" | "glass-compare" | "studio-toolbar";
+type Section = "margins" | "playbar" | "toolbar" | "glass-camera" | "glass-original" | "glass-compare" | "studio-toolbar" | "studio-exact";
 const SIDEBAR_START = 192; // Lab navigation only; not a BeatGaler product design token.
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 300;
@@ -150,6 +151,7 @@ export default function MasterPage({ coverMode, setCoverMode }: {
             <button type="button" className={section === "glass-original" ? "is-active" : ""} aria-current={section === "glass-original" ? "page" : undefined} onClick={() => openSection("glass-original")}>Glass · Original</button>
             <button type="button" className={section === "glass-compare" ? "is-active" : ""} aria-current={section === "glass-compare" ? "page" : undefined} onClick={() => openSection("glass-compare")}>Glass · 3 Engines</button>
             <button type="button" className={section === "studio-toolbar" ? "is-active" : ""} aria-current={section === "studio-toolbar" ? "page" : undefined} onClick={() => openSection("studio-toolbar")}>Toolbar · Studio 44</button>
+            <button type="button" className={section === "studio-exact" ? "is-active" : ""} aria-current={section === "studio-exact" ? "page" : undefined} onClick={() => openSection("studio-exact")}>Glass · Studio Original 44</button>
           </nav>
           <div className="lab-master-resize-handle" role="separator" tabIndex={0} aria-label="Cambiar ancho de navegación"
             aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebarWidth}
@@ -183,6 +185,8 @@ export default function MasterPage({ coverMode, setCoverMode }: {
                     />
             </div>
           </div>
+        ) : section === "studio-exact" ? (
+          <div className="lab-master-specimens" aria-label="Studio original 44 px estático"><StudioExact44/></div>
         ) : section === "studio-toolbar" ? (
           <div className="lab-master-specimens" aria-label="Studio Toolbar 44 experimental"><StudioToolbarCandidate/></div>
         ) : section === "glass-compare" ? (
