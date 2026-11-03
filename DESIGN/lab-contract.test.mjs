@@ -316,7 +316,7 @@ test("Gallery overlays use viewport tokens, never beat geometry, and prevent whe
  assert.doesNotMatch(gallery,/getBoundingClientRect|ResizeObserver|--gallery-tags-push|querySelector<HTMLElement>/);
  assert.match(css,/--gallery-frame-width:\s*min\(1370px/);
  assert.match(css,/--gallery-tag-height:calc\(var\(--lab-space-24\) - var\(--lab-space-2\)\)/);
- assert.match(css,/--gallery-tag-gap: var\(--lab-space-2\)/);
+ assert.match(css,/--gallery-tag-gap:\s*var\(--lab-space-2\)/);
  assert.match(css,/calc\(var\(--gallery-tag-top\) \+ var\(--gallery-tag-height\) \+ var\(--gallery-tag-gap\) - var\(--gallery-toolbar-top\)\)/);
  assert.match(css,/overflow-anchor: none/);
  assert.match(nav,/preserveScroll\.current = scrollerRef\.current\?\.scrollLeft/);
