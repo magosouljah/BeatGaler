@@ -19,3 +19,13 @@ Scope: `DESIGN/` on `design/beatgaler-design-system-lab-v1`. The five temporary 
 ## Verification plan
 
 Update static contracts to reject dynamic first-row/grid measurement and require shared responsive CSS coordinates; update Chrome browser checks to compare `getBoundingClientRect()` in no-filter, partial-filter, zero-result, one-wheel/deep scroll, reveal/hide/reveal, interrupted transitions, alternate Tag Bar material and desktop/compact widths. Verify band height and 8px settled gap. Run `node --test DESIGN/lab-contract.test.mjs`, DESIGN TypeScript, DESIGN Vite build and, where browser access permits, `node DESIGN/gallery-browser-check.mjs`. Remove the entire temporary reference directory from the final branch tree without rewriting history.
+
+## Validation results
+
+The dedicated Design Lab workflow for commit `38fc017e17929f65fd42d3704025f8554d61b5ce` [passed](https://github.com/magosouljah/BeatGaler/actions/runs/41704983106). GitHub Actions confirmed: 22 Node contracts/spring tests; isolated TypeScript; Vite build; Chrome Playbar, Toolbar V2, Studio 44, and Gallery browser checks. Gallery assertions use real `getBoundingClientRect()` values for filtered and empty views, mouse/touch auto-hide, interrupted reveal, scroll, and responsive layouts. At viewport 840px the measured tag band was 96px (`top:24`, `bottom:120`), Toolbar top was 128px (8px gap), and Toolbar right was 28px inside the fixed frame. At 390px, the gap was also 8px and the WebGL viewport stayed 600px tall. No production paths were modified.
+
+Root cause of the extra CI auto-hide failure: headless Chrome advertised `(pointer: coarse)` while simulated mouse events were active. `TagNavigation.tsx` now follows the actual last input type: the mouse allows the existing 900ms hide delay, and touch keeps the strip discoverable. This preserves existing selection pinning and keyboard access. Under SwiftShader, transitional frames can be delayed; Chrome checks now wait for a settled rectangle rather than assuming a 300ms wall-clock delay means the 180ms CSS transition has completed.
+
+## Reference cleanup
+
+The five temporary WebP screenshots and their temporary README were reviewed, then deleted from the final branch tree. This ordinary forward commit retains Git history and leaves the permanent reference assets intact.
