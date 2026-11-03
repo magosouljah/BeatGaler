@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { LabBeatTile, LabButton } from "../shared/components";
 import { DEMO_BEATS, DEMO_TAGS } from "../shared/data";
@@ -24,6 +24,28 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   const [filters, setFilters] = useState<Partial<Record<DemoTag, TagFilter>>>({});
   const hasActiveFilters = Object.values(filters).some(Boolean);
   const tagsVisible = tagsOpen || hasActiveFilters;
+  const toolbarFloatRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // Tag Bar scrolls with the page; Studio remains floating. Follow the
+    // visible part of the strip with the existing 8px spacing token.
+    const sync = () => {
+      const compact = window.matchMedia("(max-width: 750px)").matches;
+      const barHeight = compact ? 46 : 50;
+      const toolbarTop = compact ? 16 : 20;
+      const tokenGap = 8; // --lab-space-2
+      const offset = tagsVisible
+        ? Math.max(0, barHeight + tokenGap - toolbarTop - window.scrollY)
+        : 0;
+      toolbarFloatRef.current?.style.setProperty("--gallery-tags-push", `${offset}px`);
+    };
+    sync();
+    window.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, [tagsVisible]);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const filtered = useMemo(() => {
@@ -64,12 +86,12 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
         <TagNavigation visible={tagsVisible} hasActiveFilters={hasActiveFilters} onVisibilityChange={setTagsOpen}
           filters={filters} onCycleTag={cycleTag} onClear={() => setFilters({})}
           tagColors={tagColors} setTagColors={setTagColors} />
-        <div className="lab-gallery-toolbar-float">
+      </div>
+      <div ref={toolbarFloatRef} className="lab-gallery-toolbar-float">
           <StudioToolbarCandidate gallery galleryTagsOpen={tagsVisible} search={search} onSearchChange={setSearch}
             sort={sort} onSortChange={setSort}
             selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
             onProfileAction={action => setToolbarNotice(action === "settings" ? "Settings: preview only." : "Log out: preview only; no session is active.")} />
-        </div>
       </div>
       <div className="lab-gallery-tag-cue" aria-hidden="true">Tags ↑</div>
       {toolbarNotice && <div className="lab-gallery-toolbar-notice" role="status">{toolbarNotice}

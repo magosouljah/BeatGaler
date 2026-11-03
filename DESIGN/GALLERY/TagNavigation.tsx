@@ -45,7 +45,7 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
   const longPress = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef<{ tag: DemoTag; time: number } | null>(null);
-  const scrollToStart = useRef(false);
+  const preserveScroll = useRef<number | null>(null);
   const ordered = useMemo(() => [
     ...DEMO_TAGS.filter(name => filters[name] !== undefined),
     ...DEMO_TAGS.filter(name => filters[name] === undefined)
@@ -76,6 +76,8 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
     pointerOrigin.current = null;
   };
   const saveLayout = () => {
+    // Reordering a selected tag must not jump the horizontal viewport.
+    preserveScroll.current = scrollerRef.current?.scrollLeft ?? null;
     const positions = new Map<DemoTag, number>();
     itemRefs.current.forEach((node, name) => positions.set(name, node.getBoundingClientRect().left));
     beforeLayout.current = positions;
@@ -106,6 +108,9 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
     const previous = springs.current;
+    if (scrollerRef.current && preserveScroll.current !== null)
+      scrollerRef.current.scrollLeft = preserveScroll.current;
+    preserveScroll.current = null;
     itemRefs.current.forEach(node => { node.style.transform = ""; });
     const next = new Map<DemoTag, Spring>();
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -120,12 +125,6 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
     springs.current = next;
     lastFrame.current = 0;
     if (next.size) frame.current = requestAnimationFrame(stepSpring);
-    if (scrollToStart.current) {
-      scrollToStart.current = false;
-      const scroller = scrollerRef.current;
-      if (scroller && scroller.scrollLeft > 2)
-        scroller.scrollTo({ left: 0, behavior: reduced ? "instant" : "smooth" });
-    }
   }, [orderKey]);
 
   const updateEdges = useCallback(() => {
@@ -139,12 +138,12 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
     const el = scrollerRef.current;
     if (!el) return;
     const wheel = (event: WheelEvent) => {
-      if (el.scrollWidth <= el.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      const next = Math.max(0, Math.min(el.scrollWidth - el.clientWidth, el.scrollLeft + event.deltaY));
-      if (Math.abs(next - el.scrollLeft) > 0.25) {
-        event.preventDefault();
-        el.scrollLeft = next;
-      }
+      // Always consume wheel input, even at both ends of the horizontal track.
+      // Never allow the wheel gesture to chain into vertical Gallery scrolling.
+      event.preventDefault();
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientWidth : 1;
+      const delta = (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY) * scale;
+      el.scrollLeft = Math.max(0, Math.min(el.scrollWidth - el.clientWidth, el.scrollLeft + delta));
     };
     el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("scroll", updateEdges, { passive: true });
@@ -177,9 +176,9 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
       if (event.pointerType !== "mouse") return;
       const toolbar = document.querySelector(".studio-candidate.is-gallery .studio-candidate-toolbar") ?? document.querySelector(".lab-gallery-toolbar-float");
       const toolbarLeft = toolbar?.getBoundingClientRect().left ?? window.innerWidth;
-      const inRevealZone = event.clientY <= 78 && event.clientX < toolbarLeft - 12;
+      const inRevealZone = window.scrollY < 50 && event.clientY <= 78 && event.clientX < toolbarLeft - 12;
       pointerNearby.current = !!(inRevealZone || rootRef.current?.contains(event.target as Node) ||
-        (visible && toolbar?.contains(event.target as Node)));
+        (visible && window.scrollY < 50 && toolbar?.contains(event.target as Node)));
       if (pointerNearby.current) show();
       else scheduleHide();
     };
@@ -274,7 +273,6 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
     suppressClick.current = null;
     if (suppress?.tag === name && Date.now() - suppress.time < 1800) return;
     saveLayout();
-    if (filters[name] === undefined) scrollToStart.current = true;
     onCycleTag(name, exclude);
   };
   const reset = () => { saveLayout(); onClear(); };
@@ -354,6 +352,7 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
         </div>
         <button type="button" className="lab-tag-color-none" onClick={() => {
           setTagColors(current => { const next = { ...current }; delete next[editingTag]; return next; });
+          // Remove only custom paint; existing inclusion/exclusion stays intact.
           setEditingTag(null);
         }}>Sin color</button>
       </div>, document.body)}

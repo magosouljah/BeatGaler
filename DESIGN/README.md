@@ -70,3 +70,9 @@ Gallery now uses the exact `MASTER/Player.tsx` in the responsive fixed dock thro
 
 Verify with `node --test DESIGN/lab-contract.test.mjs`, `node DESIGN/gallery-browser-check.mjs`, the DESIGN-only TypeScript check and Vite build.
 
+
+## Gallery behavior refinements (November 3, 2026)
+Tag Bar and the “Tags ↑” cue are document-positioned and leave the viewport on vertical scroll. Studio Toolbar remains floating; where the bar is still visible, its offset follows the bar with the existing `--lab-space-2` 8px gap. The variant's backdrop material stays rendered behind the height-clipped 0fr→1fr reveal, avoiding a transient wrong finish.
+
+No custom-color underline. “Sin color” deletes the custom assignment and returns to the same neutral idle/included/excluded state as an unassigned tag. Reordering animates selected tags toward All but does not scroll the user's horizontal viewport. Wheel events over the tag strip are consumed even at the beginning/end, with no vertical scroll chaining. Studio uses nine texture samples per control, flipping to slightly heavier dark ink only on predominantly near-white backgrounds (not yellow/orange artwork); glass shaders and presets are unchanged.
+

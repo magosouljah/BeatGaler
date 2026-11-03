@@ -93,7 +93,7 @@ try{
      surfaceBackground:getComputedStyle(surface).backgroundColor};
  })()`);
  assert.ok(Math.abs(tagLayout.surfaceTop)<=2,"Tag bar must touch the viewport top");
- assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+14,"Toolbar retains spacing under the strip");
+ assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Toolbar uses the 8px spacing token");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
  assert.ok(tagLayout.barHeight<=52,"Tag strip should remain compact");
@@ -106,10 +106,21 @@ try{
    return {left:bar.scrollLeft,edge:bar.className};
  })()`);
  assert.ok(scrollResult.left>0,"Vertical wheel must drive the horizontal scroller");
+ const edgeWheel=await expr(`(()=>{
+   const el=document.querySelector('.lab-gallery-tag-bar');el.scrollLeft=el.scrollWidth;
+   const before=window.scrollY;
+   const accepted=el.dispatchEvent(new WheelEvent('wheel',{deltaY:800,bubbles:true,cancelable:true}));
+   return {accepted,before,after:window.scrollY};
+ })()`);
+ assert.equal(edgeWheel.accepted,false,"Wheel must be consumed at the horizontal end");
+ assert.equal(edgeWheel.after,edgeWheel.before,"Wheel must not bleed into vertical scrolling");
  await expr("document.querySelector('.lab-gallery-tag-bar').scrollLeft=0");
  // Far-right selected tag should reorder immediately after All, without losing All.
+ await expr("document.querySelector('.lab-gallery-tag-bar').scrollLeft=1200");
+ const preservedScroll=await expr("document.querySelector('.lab-gallery-tag-bar').scrollLeft");
  await click("document.querySelector('.lab-gallery-tag[aria-label^=\"BoomBap:\"]')");
  assert.ok(await expr("document.querySelector('.lab-gallery-tag-track').children[1]?.textContent==='BoomBap'"),"Selected tag must move after All");
+ assert.ok(Math.abs(await expr("document.querySelector('.lab-gallery-tag-bar').scrollLeft")-preservedScroll)<=2,"Far tag must move without moving the viewport");
  await click("document.querySelector('.lab-gallery-tag-all')");
  const tiles=await expr("[...document.querySelectorAll('.lab-beat-tile')].map(t=>({name:t.querySelector('.lab-beat-tile__title').textContent,tags:[...t.querySelectorAll('.lab-beat-tile__tag')].map(x=>x.textContent),cover:t.querySelector('.lab-artwork img').src}))");
  assert.equal(tiles.length,24);
@@ -180,6 +191,11 @@ try{
  await sleep(340);
  const collapsed=await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top");
  assert.ok(collapsed>=12&&collapsed<50,"Collapsed Toolbar should return to its top margin");
+ await expr("window.scrollTo(0,480)");
+ await sleep(120);
+ assert.ok(await expr("document.querySelector('.lab-gallery-top-stack').getBoundingClientRect().bottom<0"),"Tag Bar must scroll out of view");
+ assert.ok(await expr("(()=>{const y=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top;return y>=12&&y<=50;})()"),"Studio Toolbar must stay floating");
+ await expr("window.scrollTo(0,0)");
  assert.ok(await expr("document.querySelector('.lab-gallery-item').getBoundingClientRect().top<120"),"Gallery covers must begin after only the toolbar, without reserving the hidden tag strip");
  // Small screens keep a 600px optical viewport and do not overlap the tags.
  await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});

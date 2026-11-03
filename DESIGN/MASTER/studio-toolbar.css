@@ -157,3 +157,10 @@
 @media (prefers-reduced-transparency: reduce) {
   .studio-candidate.is-gallery .studio-lens { background: #29292dbb; }
 }
+
+/* Dark Studio ink gains subtle optical weight without changing the glass. */
+.studio-candidate.is-gallery .studio-lens[data-ink="dark"] svg { stroke-width: 2.15; }
+.studio-candidate.is-gallery .studio-lens[data-ink="dark"] .studio-select-label {
+  font-weight: 700; -webkit-text-stroke: .2px currentColor;
+}
+

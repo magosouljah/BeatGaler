@@ -224,8 +224,8 @@ test("gallery navigation has a real one-line bar that pushes the Studio toolbar"
   assert.match(nav, /scrollBy\(/);
   assert.match(nav, /passive: false/);
   assert.match(nav, /useLayoutEffect/);
-  assert.match(css, /grid-template-rows: 0fr 64px/);
-  assert.match(css, /grid-template-rows: 1fr 64px/);
+  assert.match(css, /grid-template-rows: 0fr/);
+  assert.match(css, /grid-template-rows: 1fr/);
   assert.match(css, /lab-gallery-tag-surface/);
   assert.match(css, /padding-top: 88px/);
   assert.match(css, /background: #0c0c0c/);
@@ -288,7 +288,7 @@ test("Gallery tag bar pins filters, sits at top, and differentiates assigned col
  assert.match(css,/gap: 8px/);
  assert.match(css,/\.lab-gallery-tag\.is-idle\.is-custom/);
  assert.match(css,/\.lab-gallery-tag\.is-exclude\.is-custom/);
- assert.match(css,/\.lab-gallery-tag\.is-custom::after/);
+ assert.doesNotMatch(css,/\.lab-gallery-tag\.is-custom::after/);
  assert.match(css,/data-tag-variant="playbar"/);
  assert.match(gallery,/lab-gallery-tag-cue/);
 });
@@ -307,7 +307,24 @@ test("Gallery mounts the real DESIGN Player and MASTER controls its material", (
 test("Studio icon contrast uses sampled backdrop without changes to the shader", () => {
  const studio=read("./MASTER/StudioToolbarCandidate.tsx");
  assert.match(studio,/ctx\.getImageData\(x,y,1,1\)/);
- assert.match(studio,/luminance>=185/);
- assert.match(studio,/control\.dataset\.ink=bright/);
+ assert.match(studio,/Math\.min\(rgba\[0\],rgba\[1\],rgba\[2\]\)>=215/);
+ assert.match(studio,/whitePixels\/samples>=\.67/);
+ assert.match(studio,/control\.dataset\.ink=darkInk/);
+});
+
+
+test("Tag Bar leaves the viewport, Studio floats with spacing tokens and no wheel bleed", () => {
+ const gallery=read("./GALLERY/GalleryPage.tsx"), css=read("./GALLERY/gallery.css");
+ const nav=read("./GALLERY/TagNavigation.tsx");
+ assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: absolute/);
+ assert.match(css,/\.lab-gallery-toolbar-float \{[\s\S]*?position: fixed/);
+ assert.match(gallery,/const tokenGap = 8/);
+ assert.match(gallery,/window\.scrollY/);
+ assert.match(css,/overflow-anchor: none/);
+ assert.match(nav,/preserveScroll\.current = scrollerRef\.current\?\.scrollLeft/);
+ assert.doesNotMatch(nav,/scrollToStart/);
+ assert.match(nav,/event\.preventDefault\(\);\n\s*const scale/);
+ assert.match(css,/overscroll-behavior: contain/);
+ assert.match(css,/will-change: backdrop-filter/);
 });
 
