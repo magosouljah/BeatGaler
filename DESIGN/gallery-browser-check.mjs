@@ -219,8 +219,17 @@ try{
      pointerMedia:matchMedia('(hover: none), (pointer: coarse)').matches,
      hasSearch:document.querySelector('.studio-search.is-open')!==null};
  })()`);
- console.log("Gallery final-filter auto-hide state:",afterClear);
  assert.equal(afterClear.open,"false","Unfiltered bar must auto-hide after pointer exits: "+JSON.stringify(afterClear));
+ // Reverse an in-flight close: the revealed toolbar must settle back to the
+ // same viewport coordinates, independent of scroll and any grid content.
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='true'","reveal after final filter");
+ await sleep(270);
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
+ await sleep(950);
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
+ await sleep(320);
+ assertSameOverlay(openOverlay,await overlayGeometry(),"interrupted tag hide and reveal");
  await goMaster();
  await until("Boolean(document.querySelector('.lab-master-cover-modes'))","MASTER revisit");
  await click("document.querySelector('.lab-master-tag-modes button:nth-child(2)')");
@@ -291,6 +300,12 @@ try{
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
  await screenshot("gallery-mobile-tags.png");
+ // A real touch input, even on a hybrid, pins the navigation through
+ // vertical scrolling; mouse input can opt back into automatic hide.
+ await expr("document.dispatchEvent(new PointerEvent('pointerdown',{pointerType:'touch',clientX:100,clientY:120,bubbles:true}))");
+ await expr("window.scrollTo(0,480)");
+ await sleep(120);
+ assert.equal(await expr("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen"),"true","Touch navigation must stay accessible while scrolling");
  // Hover from a deeply scrolled Gallery must still reveal the inset bar.
  await expr("window.scrollTo(0,480)");
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:280,clientY:8,bubbles:true}))");
