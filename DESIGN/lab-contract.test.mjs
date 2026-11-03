@@ -307,13 +307,17 @@ test("Gallery mounts the real DESIGN Player and MASTER controls its material", (
 
 
 
-test("Tag Bar leaves the viewport, Studio floats with spacing tokens and no wheel bleed", () => {
+test("Gallery overlays use viewport tokens, never beat geometry, and prevent wheel bleed", () => {
  const gallery=read("./GALLERY/GalleryPage.tsx"), css=read("./GALLERY/gallery.css");
  const nav=read("./GALLERY/TagNavigation.tsx");
  assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: fixed/);
  assert.match(css,/\.lab-gallery-toolbar-float \{[\s\S]*?position: fixed/);
- assert.match(gallery,/getPropertyValue\("--lab-space-2"\)/);
- assert.match(gallery,/stack\.getBoundingClientRect\(\)\.top/);
+ assert.match(gallery,/data-tags-open=\{tagsVisible/);
+ assert.doesNotMatch(gallery,/getBoundingClientRect|ResizeObserver|--gallery-tags-push|querySelector<HTMLElement>/);
+ assert.match(css,/--gallery-frame-width: min\(1370px/);
+ assert.match(css,/--gallery-tag-height: var\(--lab-space-24\)/);
+ assert.match(css,/--gallery-tag-gap: var\(--lab-space-2\)/);
+ assert.match(css,/calc\(var\(--gallery-tag-top\) \+ var\(--gallery-tag-height\) \+ var\(--gallery-tag-gap\) - var\(--gallery-toolbar-top\)\)/);
  assert.match(css,/overflow-anchor: none/);
  assert.match(nav,/preserveScroll\.current = scrollerRef\.current\?\.scrollLeft/);
  assert.doesNotMatch(nav,/scrollToStart/);
@@ -334,10 +338,10 @@ test("Gallery uses the inset hover layout, deliberate ink and approved 44 preset
  assert.match(css,/\.lab-gallery-top-stack \.lab-gallery-tag-surface \{ background: #0c0c0c; \}/);
  assert.match(css,/\.lab-gallery-tag-cue \{[\s\S]*?position:fixed/);
  assert.match(gallery,/tags-hint-seen/);
- assert.match(gallery,/lastRight \+ 10/);
- assert.match(gallery,/first.top \+ 10/);
- assert.match(gallery,/--gallery-tags-push/);
- assert.match(css,/transition:transform var\(--lab-normal\) var\(--lab-ease\)/);
+ assert.doesNotMatch(gallery,/lastRight|first\.top|--gallery-tags-push|useLayoutEffect/);
+ assert.match(css,/right: calc\(\(100vw - var\(--gallery-frame-width\)\) \/ 2 \+ var\(--gallery-toolbar-inset\)\)/);
+ assert.match(css,/transition: transform var\(--gallery-reveal-duration\) var\(--lab-ease\)/);
+ assert.match(css,/transition: grid-template-rows var\(--gallery-reveal-duration\) var\(--lab-ease\)/);
  assert.match(nav,/event\.clientY <= 78/);
  assert.doesNotMatch(nav,/window\.scrollY < 50/);
  assert.doesNotMatch(studio,/getImageData\(/);
