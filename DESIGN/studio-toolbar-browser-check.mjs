@@ -219,8 +219,16 @@ try {
  assert.ok((await bounds(".studio-search")).width>165,"Outside release collapsed Search");
  await capture("05b-studio-search-outside-release.png");
  await click(".studio-search>button");await sleep(40);await click(".studio-search>button");
- await sleep(40);await click(".studio-search>button");await sleep(750);
- assert.ok(Math.abs((await bounds(".studio-search")).width-44)<1.5,"Rapid reverse left an intermediate size");
+ await sleep(40);await click(".studio-search>button");
+ // SwiftShader can render the 600px Studio pass slower than real-time. Check
+ // the settled geometry, not a fixed wall-clock delay after three reversals.
+ let reverseWidth=NaN;
+ for(let retry=0;retry<32;retry++){
+   await sleep(125);
+   reverseWidth=(await bounds(".studio-search")).width;
+   if(Math.abs(reverseWidth-44)<1.5)break;
+ }
+ assert.ok(Math.abs(reverseWidth-44)<1.5,"Rapid reverse left an intermediate size: "+reverseWidth);
  await click(".studio-lens:nth-of-type(2)>button");
  assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"false");
  // Release over blank stage after dragging out of Sort; no menu action.
