@@ -104,16 +104,26 @@ try{
      contentWidth:bar.scrollWidth,viewportWidth:bar.clientWidth,barHeight:bar.clientHeight,
      surfaceBackground:getComputedStyle(surface).backgroundColor};
  })()`);
- assert.ok(Math.abs(tagLayout.surfaceTop-24)<=2,"Inset bar must use the approved 24px token");
+ assert.ok(Math.abs(tagLayout.surfaceTop)<=2,"Tag Bar must start flush at the viewport top");
  assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Toolbar uses the 8px spacing token");
- assert.ok(Math.abs(openOverlay.right-(openOverlay.navRight-28))<=2,
-   "Toolbar right edge must follow Gallery frame, never the last visible beat");
- assert.ok(Math.abs(openOverlay.navHeight-96)<=2,"Tag band must use the 96px design token");
+ assert.ok(await expr(`(()=>{
+   const tiles=[...document.querySelectorAll('.lab-gallery-grid .lab-gallery-item')];
+   const y=tiles[0].getBoundingClientRect().top;
+   const end=tiles.map(t=>t.getBoundingClientRect()).filter(r=>Math.abs(r.top-y)<=2).at(-1);
+   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
+   return Math.abs(toolbar.right-(end.right-10))<=2;
+ })()`),"Toolbar must match the ORIGINAL full-grid alignment before filtering");
+ assert.ok(Math.abs(openOverlay.navHeight-88)<=2,"Tag Bar must match the 88px reference crop");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
- assert.ok(Math.abs(tagLayout.barHeight-96)<=2,"Tag bar height follows the 96px token");
+ assert.ok(Math.abs(tagLayout.barHeight-88)<=2,"Tag Bar must be 88px tall");
  assert.ok(await expr("(()=>{const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();return nav.left>16&&nav.right<innerWidth-16;})()"),"Tag strip is centered within Gallery, not full bleed");
- assert.ok(tagLayout.barHeight<100,"The thick Tag Bar must remain a single row");
+ assert.ok(tagLayout.barHeight<96,"Tag Bar must remain one row");
+ assert.ok(await expr(`(()=>{
+   const surface=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
+   const label=document.querySelector('.lab-gallery-tag[aria-label^="Melodic:"] .lab-gallery-tag-label').getBoundingClientRect();
+   return Math.abs((label.top+label.bottom)/2-(surface.top+surface.bottom)/2)<=2;
+ })()`),"Tag text must be vertically centered like the reference");
  assert.ok(await expr("(()=>{const a=document.querySelector('.lab-gallery-tag-all').getBoundingClientRect(),b=document.querySelector('.lab-gallery-tag-wrap').getBoundingClientRect();return b.left-a.right<20;})()"),"Compact tag spacing");
  const scrollResult=await expr(`(()=>{
    const bar=document.querySelector('.lab-gallery-tag-bar');
@@ -283,7 +293,7 @@ try{
    medium=await overlayGeometry();
  }
  console.log("Medium Gallery overlay geometry:",medium);
- assert.ok(Math.abs(medium.right-(medium.navRight-28))<=2,"Medium viewport aligns Toolbar to fixed Gallery frame");
+ assert.ok(Math.abs(medium.right-((840-(4*160+3*22))/2+10))<=2,"Medium viewport restores original four-column alignment");
  assert.ok(Math.abs(medium.top-medium.navBottom-8)<=2,"Medium viewport keeps 8px strip gap: "+JSON.stringify(medium));
  // Small screens keep the 600px optical viewport and thick Tag Bar.
  await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
@@ -308,8 +318,8 @@ try{
  console.log("Mobile Gallery layout:",mobile);
  assert.ok(Math.abs(mobile.gap-8)<=2,"Mobile toolbar preserves the 8px gap: "+JSON.stringify(mobile));
  const mobileOverlay=await overlayGeometry();
- assert.ok(Math.abs(mobileOverlay.navHeight-96)<=2,"Mobile Tag Bar uses the same 96px token");
- assert.ok(Math.abs(mobileOverlay.right-mobileOverlay.navRight)<=2,"Mobile Toolbar uses its viewport inset");
+ assert.ok(Math.abs(mobileOverlay.navHeight-88)<=2,"Mobile Tag Bar matches the 88px reference");
+ assert.ok(Math.abs(mobileOverlay.right-((390-(2*160+13))/2+10))<=2,"Mobile Toolbar restores two-column alignment");
  assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile strip retains inset margins");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
@@ -329,7 +339,7 @@ try{
  assert.ok(await expr("document.querySelector('.lab-gallery-tag-cue')===null"),"Hint only appears before the first reveal");
  await screenshot("gallery-inset-deep-scroll.png");
  await expr("window.scrollTo(0,0)");
- console.log("Gallery verified: viewport-fixed glass, 96px Tag Bar, 8px gap, filters, scroll and viewport changes.");
+ console.log("Gallery verified: top-flush 88px centered Tag Bar, restored toolbar optical alignment, 8px gap, filters and scroll.");
 }finally{
  ws?.close();vite.kill("SIGTERM");browser.kill("SIGTERM");
  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200}).catch(()=>{});
