@@ -170,6 +170,15 @@ try{
  const count=await expr("document.querySelectorAll('.lab-beat-tile').length");
  assert.ok(count>0&&count<24,"Ambient inclusion should filter");
  assertSameOverlay(openOverlay,await overlayGeometry(),"partial filter");
+ // Filtering must not move Studio even while the filtered page scrolls.
+ const filteredOverlay=await overlayGeometry();
+ await expr("window.scrollTo(0,120)");
+ await sleep(160);
+ assertSameOverlay(filteredOverlay,await overlayGeometry(),"active-filter scroll");
+ assert.equal(await expr("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen"),"true");
+ await expr("window.scrollTo(0,0)");
+ await sleep(160);
+ assertSameOverlay(filteredOverlay,await overlayGeometry(),"active-filter scroll return");
  // A zero-result search while filters are active must not move the Studio toolbar.
  await click(`document.querySelector(\'.studio-candidate.is-gallery button[aria-label="Search beats"]\')`);
  await until(`document.querySelector(\'.studio-candidate.is-gallery input[aria-label="Search beats"]\')?.tabIndex===0`,"search input active");
@@ -196,6 +205,10 @@ try{
  await sleep(1200);
  assert.equal(await expr("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen"),"true","Active filters must keep the bar open");
  await click(ambient);
+ assert.equal(await expr("document.querySelector('.lab-gallery-tag-bar button[aria-label^=\\\"Ambient:\\\"]').getAttribute('aria-pressed')"),"false","Clearing the final filter must actually deselect its tag");
+ // Runtime .click() does not dispatch a physical pointerleave. A real mouse
+ // leaves the strip after clicking; reproduce that before expecting auto-hide.
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
  await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='false'","bar hides after clearing final filter");
  await goMaster();
  await until("Boolean(document.querySelector('.lab-master-cover-modes'))","MASTER revisit");
