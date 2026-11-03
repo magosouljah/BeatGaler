@@ -108,6 +108,9 @@ try {
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.optics"),"studio-original-shader");
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.viewportHeight"),"600");
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.background"),"#26262b");
+ // V2 menus must be the actual V2 popover markup/styles, not old demo menus.
+ assert.equal(await evaluate("document.querySelectorAll('.studio-candidate-toolbar .lab-toolbar-v2-popover').length"),2);
+ assert.equal(await evaluate("document.querySelectorAll('.studio-candidate-menu').length"),0);
  await evaluate("document.querySelector('.studio-candidate-stage').scrollIntoView({block:'center'})");
  await sleep(500);
  assert.equal(await evaluate("document.querySelectorAll('.studio-lens').length"),4);
@@ -143,6 +146,14 @@ try {
  await sleep(300);
  assert.ok(Math.abs(await pressure(1))<.045,"Release must settle to exact normal size");
  await capture("01c-studio-long-hold-recovered.png");
+ // Actions happen AFTER mouseup. A held Sort should not open its menu until released.
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"false");
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-title').textContent"),"Sort by");
+ await click('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-item:nth-of-type(3)');
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"true");
+ await click('.studio-lens:nth-of-type(2)>button');
+ assert.equal(await evaluate("[...document.querySelectorAll('.lab-toolbar-v2-popover.is-sort .lab-toolbar-v2-menu-item')].find(x=>x.textContent==='BPM').getAttribute('aria-checked')"),"true");
+ await click('.studio-lens:nth-of-type(2)>button');
  // Hold-and-release: verify press produces a rendered pixel change, not just an icon scaling.
  const target=await bounds(".studio-select>button"),x=target.left+target.width/2,y=target.top+target.height/2;
  await call("Input.dispatchMouseEvent",{type:"mouseMoved",x,y});
@@ -173,10 +184,44 @@ try {
  assert.ok(await evaluate("document.activeElement===document.querySelector('.studio-search input')"),"Search input not focused");
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.studio-search input')).outlineStyle"),"none","Rectangular search focus outline leaked through");
  await capture("05-studio-search-open.png");
+ // Expanded Search: pressing the 44px trigger must NOT scale the whole pill.
+ const searchRightTrigger=await bounds('.studio-search>button');
+ const tx=searchRightTrigger.left+searchRightTrigger.width*.5;
+ const ty=searchRightTrigger.top+searchRightTrigger.height*.5;
+ await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:tx,y:ty});
+ await call("Input.dispatchMouseEvent",{type:"mousePressed",x:tx,y:ty,button:"left",clickCount:1});
+ await sleep(420);
+ assert.ok((await bounds(".studio-search")).width>165,"Expanded Search collapsed during press");
+ assert.ok(Math.abs((await bounds(".studio-search>button")).width-44)<1,"Expanded Search trigger should stay 44px");
+ await capture("05a-studio-expanded-search-pressed.png");
+ // With pointer capture, releasing outside would normally still click Search.
+ // Reject that click and preserve its open state.
+ await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:tx+110,y:ty+95,button:"left",buttons:1});
+ await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:tx+110,y:ty+95,button:"left",clickCount:1});
+ await sleep(230);
+ assert.equal(await evaluate("document.querySelector('.studio-search>button').getAttribute('aria-expanded')"),"true","Outside release toggled Search");
+ assert.ok((await bounds(".studio-search")).width>165,"Outside release collapsed Search");
+ await capture("05b-studio-search-outside-release.png");
  await click(".studio-search>button");await sleep(40);await click(".studio-search>button");
  await sleep(40);await click(".studio-search>button");await sleep(750);
  assert.ok(Math.abs((await bounds(".studio-search")).width-44)<1.5,"Rapid reverse left an intermediate size");
- await click(".studio-lens:nth-of-type(2)>button").catch(()=>{});
+ await click(".studio-lens:nth-of-type(2)>button");
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"false");
+ // Release over blank stage after dragging out of Sort; no menu action.
+ const sortDrop=await bounds('.studio-lens:nth-of-type(2)>button');
+ const mx=sortDrop.left+sortDrop.width*.5,my=sortDrop.top+sortDrop.height*.5;
+ await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:mx,y:my});
+ await call("Input.dispatchMouseEvent",{type:"mousePressed",x:mx,y:my,button:"left",clickCount:1});
+ await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:mx,y:my+150,button:"left",buttons:1});
+ await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:mx,y:my+150,button:"left",clickCount:1});
+ await sleep(120);
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-sort').getAttribute('aria-hidden')"),"false","Sort was toggled by outside release");
+ // Profile must reuse V2 profile popover content and keyboard-friendly roles.
+ await click('.studio-lens:nth-of-type(4)>button');
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile').getAttribute('aria-hidden')"),"false");
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile .lab-toolbar-v2-profile-name strong').textContent"),"Demo User");
+ await click('.lab-toolbar-v2-popover.is-profile .lab-toolbar-v2-menu-item');
+ assert.equal(await evaluate("document.querySelector('.lab-toolbar-v2-popover.is-profile').getAttribute('aria-hidden')"),"true");
  await click(".studio-candidate-theme button:nth-child(2)");
  await sleep(350);await capture("06-studio-light.png");
  assert.deepEqual(errors,[],"Browser runtime exceptions");
