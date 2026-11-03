@@ -21,7 +21,7 @@
     "glareConvergence": 48.76,
     "glareOppositeFactor": 78.81,
     "glareAngle": -45,
-    "blurRadius": 4,
+    "blurRadius": 6,
     "blurEdge": true,
     "tint": {
       "r": 94,
