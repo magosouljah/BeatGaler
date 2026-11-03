@@ -223,7 +223,41 @@ try{
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
  await screenshot("gallery-mobile-tags.png");
- console.log("Gallery verified: 24 unique real covers, 24 generated covers, one-word titles, mixed tags, no ellipsis.");
+ // Image 3: test the separate inset layout, Gallery alignment and the shadow
+ // reaching only slightly onto the first row of covers.
+ await command("Emulation.setDeviceMetricsOverride",{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+ await goMaster();
+ await until("Boolean(document.querySelector('.lab-master-tag-layouts'))","MASTER layout choice");
+ await click("document.querySelector('.lab-master-tag-layouts button:nth-child(2)')");
+ assert.equal(await expr("document.querySelector('.lab-master-tag-layouts button:nth-child(2)').getAttribute('aria-pressed')"),"true");
+ await goGallery();
+ assert.equal(await expr("document.querySelector('.lab-gallery-page').dataset.tagLayout"),"gallery-inset");
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='true'","inset bar reveal");
+ await sleep(430);
+ const inset=await expr(`(()=>{
+   const bar=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
+   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
+   const covers=[...document.querySelectorAll('.lab-gallery-grid .lab-beat-tile__cover')];
+   const lastCover=covers[6].getBoundingClientRect();
+   const shadow=document.querySelector('.lab-gallery-tag-shadow');
+   return {left:bar.left,right:bar.right,toolbarRight:toolbar.right,toolbarTop:toolbar.top,
+     barBottom:bar.bottom,coverRight:lastCover.right,artTop:lastCover.top,
+     shadowBottom:shadow.getBoundingClientRect().bottom,shadowOpacity:Number(getComputedStyle(shadow).opacity)};
+ })()`);
+ assert.ok(inset.left>16&&inset.right<1440-16,"Image 3 must use a centered, narrower strip");
+ assert.ok(Math.abs(inset.toolbarRight-inset.coverRight)<12,"Image 3 toolbar must align with rightmost beat");
+ assert.ok(inset.toolbarTop>=inset.barBottom+7,"Image 3 toolbar keeps the shared 8px gap");
+ assert.ok(inset.shadowOpacity>.95,"Image 3 soft shadow must appear only when the tag strip opens");
+ assert.ok(inset.shadowBottom>inset.artTop&&inset.shadowBottom<inset.artTop+48,
+   "Shadow must reach slightly beyond the artwork start, not down the beat grid");
+ await screenshot("gallery-image-3-inset.png");
+ await goMaster();
+ await click("document.querySelector('.lab-master-tag-layouts button:nth-child(1)')");
+ await goGallery();
+ assert.equal(await expr("document.querySelector('.lab-gallery-page').dataset.tagLayout"),"full-bleed");
+ await screenshot("gallery-image-2-full-bleed.png");
+ console.log("Gallery verified: two independently selectable Paint-inspired layouts, material, artwork, filtering and scroll.");
 }finally{
  ws?.close();vite.kill("SIGTERM");browser.kill("SIGTERM");
  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200}).catch(()=>{});
