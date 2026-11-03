@@ -167,7 +167,8 @@ try{
    return {gap:toolbar.top-nav.bottom,navWidth:nav.width,screenWidth:innerWidth,
      sceneHeight:glass.height,scrollable:scroller.scrollWidth>scroller.clientWidth};
  })()`);
- assert.ok(mobile.gap>=8,"Mobile toolbar must remain below the tag bar");
+ console.log("Mobile Gallery layout:",mobile);
+ assert.ok(mobile.gap>=8,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
  assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile navigation must fit viewport width");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
