@@ -18,7 +18,12 @@
 .lab-tag-color-none { margin-top:13px; width:100%; min-height:34px; border:1px solid #3a3a3a; border-radius:8px; background:#242424; color:#ddd; font-size:12px; }
 
 .lab-gallery-page .lab-gallery-main { max-width:1370px; margin:0 auto; padding:34px clamp(16px,3vw,42px) 60px; }
-.lab-gallery-page .lab-gallery-grid { display:grid; grid-template-columns:repeat(7,160px); gap:28px 22px; justify-content:center; }
+.lab-gallery-page .lab-gallery-grid {
+  display:grid;
+  grid-template-columns:repeat(var(--gallery-grid-columns),minmax(0,var(--gallery-tile-width)));
+  gap:var(--gallery-grid-row-gap) var(--gallery-grid-column-gap);
+  justify-content:center;
+}
 .lab-gallery-item { position:relative; min-width:0; }
 .lab-gallery-page .lab-beat-tile { width:160px; }
 .lab-gallery-page .lab-artwork { border-radius:10px; }
@@ -71,11 +76,11 @@
 .lab-dev-switches { position:fixed; bottom:5px; right:clamp(16px,3vw,42px); z-index:110; display:flex; align-items:center; gap:16px; }
 .lab-dev-switches button { border:0; border-radius:0; background:transparent; padding:0; min-height:20px; font-size:11px; color:#777; font-weight:400; letter-spacing:0; }
 .lab-dev-switches button:hover,.lab-dev-switches button:focus-visible { color:#ddd; }
-@media(max-width:1400px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(6,160px); } }
-@media(max-width:1160px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(5,160px); } .lab-player.lab-player--preview .lab-player__utilities { display:none; } }
-@media(max-width:940px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(4,160px); } }
+
+@media(max-width:1160px) { .lab-player.lab-player--preview .lab-player__utilities { display:none; } }
+
 @media(max-width:750px) {
- .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(3,160px); gap:24px 15px; }
+
  .lab-gallery-header { padding-inline:15px; }
  .lab-gallery-wordmark { font-size:19px; }
  .lab-gallery-tag-bar { overflow-x:auto; flex-wrap:nowrap; scrollbar-width:thin; }
@@ -87,7 +92,7 @@
 }
 @media(max-width:590px) {
  .lab-gallery-header { height:auto; min-height:100px; padding-block:11px; align-items:flex-start; flex-direction:column; gap:9px; }
- .lab-gallery-page .lab-gallery-grid { grid-template-columns:repeat(2, minmax(0,160px)); gap:22px 13px; }
+
  .lab-gallery-page .lab-beat-tile { width:100%; }
  .lab-gallery-page .lab-beat-tile__cover { width:100%; height:auto; aspect-ratio:1; }
  .lab-player.lab-player--dock { width:calc(100vw - 12px); bottom:34px; }
@@ -95,7 +100,7 @@
  .lab-player__now { gap:7px; }
  .lab-player__track-top span { display:none; }
 }
-@media(max-width:359px) { .lab-gallery-page .lab-gallery-grid { grid-template-columns:160px; } }
+
 @media(hover:none),(pointer:coarse) { .lab-gallery-page .lab-beat-tile__play { opacity:1; background:linear-gradient(transparent 65%,rgba(0,0,0,.6)); text-align:right; } }
 @media(prefers-reduced-transparency:reduce) { .lab-player.lab-player--dock { backdrop-filter:none; background:#202020; } }
 .lab-gallery-header .lab-toolbar{margin-left:auto;}
@@ -104,21 +109,28 @@
 @media(max-width:590px){.lab-gallery-header .lab-toolbar{align-self:flex-end;}}
 
 
-/* Gallery reserves room for only the 44px toolbar. When revealed, the
-   full-width black tag strip pushes the glass toolbar down, but never
-   reserves an empty 50px strip above the beats while collapsed. */
+/* Shared geometric source: the full responsive grid track, NOT visible
+   beat nodes, defines the original 10px Studio optical alignment. */
 .lab-gallery-page {
-  position: relative;
-  /* All overlay coordinates come from the viewport and the Gallery frame. */
-  --gallery-frame-width: min(1370px, calc(100vw - 2 * var(--lab-space-8)));
-  --gallery-tag-top: var(--lab-space-6);
-  --gallery-tag-height: var(--lab-space-24);
-  --gallery-toolbar-top: var(--lab-space-5);
-  --gallery-toolbar-inset: var(--lab-space-7);
-  --gallery-tag-gap: var(--lab-space-2);
-  --gallery-reveal-duration: var(--lab-normal);
+  position:relative;
+  --gallery-frame-width:min(1370px,calc(100vw - 2 * var(--lab-space-8)));
+  --gallery-grid-columns:7;
+  --gallery-tile-width:160px;
+  --gallery-grid-column-gap:22px;
+  --gallery-grid-row-gap:28px;
+  --gallery-grid-track-width:calc(
+    var(--gallery-grid-columns) * var(--gallery-tile-width) +
+    (var(--gallery-grid-columns) - 1) * var(--gallery-grid-column-gap)
+  );
+  --gallery-toolbar-optical-inset:10px;
+  --gallery-toolbar-right:calc((100vw - var(--gallery-grid-track-width)) / 2 + var(--gallery-toolbar-optical-inset));
+  --gallery-tag-top:env(safe-area-inset-top,0px);
+  --gallery-tag-height:calc(var(--lab-space-24) - var(--lab-space-2));
+  --gallery-toolbar-top:var(--lab-space-5);
+  --gallery-tag-gap:var(--lab-space-2);
+  --gallery-reveal-duration:var(--lab-normal);
 }
-.lab-gallery-page .lab-gallery-main { padding-top: 88px; }
+.lab-gallery-page .lab-gallery-main { padding-top: calc(var(--lab-space-24) - var(--lab-space-2)); }
 .lab-gallery-top-stack {
   --gallery-edge: max(28px, env(safe-area-inset-right, 0px));
   position: absolute; z-index: 76;
@@ -232,7 +244,7 @@
 .lab-gallery-toolbar-float {
   position: fixed;
   top: var(--gallery-toolbar-top);
-  right: calc((100vw - var(--gallery-frame-width)) / 2 + var(--gallery-toolbar-inset));
+  right:var(--gallery-toolbar-right);
   z-index: 77;
   width: min(600px, calc(100vw - 2 * var(--lab-space-7)));
   height: 44px; min-height: 44px;
@@ -261,7 +273,7 @@
   }
 }
 @media (max-width: 750px) {
-  .lab-gallery-page .lab-gallery-main { padding-top: 80px; }
+  .lab-gallery-page .lab-gallery-main { padding-top: calc(var(--lab-space-24) - var(--lab-space-2)); }
   .lab-gallery-top-stack { --gallery-edge: max(16px, env(safe-area-inset-right, 0px)); top: env(safe-area-inset-top, 0px); }
   .lab-gallery-toolbar-float { width: min(600px, calc(100vw - 2 * var(--lab-space-4))); }
   .lab-gallery-tag-surface { height: var(--gallery-tag-height); }
@@ -338,7 +350,7 @@
   padding-inline: var(--lab-space-7);
 }
 .lab-gallery-tag-track {
-  transform: translate3d(0,-6px,0);
+  transform:none; /* center glyph on 88px band */
 }
 .lab-gallery-tag-shadow {
   position: fixed; z-index: 75; top: var(--gallery-tag-top);
@@ -358,7 +370,7 @@
 .lab-gallery-tag-cue {
   position:fixed; z-index:75;
   left:50%; top:var(--gallery-tag-top);
-  transform:translate3d(-50%,-6px,0);
+  transform:translateX(-50%);
   width:var(--gallery-frame-width);
   height:var(--gallery-tag-height); padding-inline:var(--lab-space-7);
   display:flex;align-items:center;
@@ -368,9 +380,7 @@
 @media(max-width:750px){
   .lab-gallery-page {
     --gallery-frame-width: calc(100vw - 2 * var(--lab-space-4));
-    --gallery-tag-top: var(--lab-space-4);
     --gallery-toolbar-top: var(--lab-space-4);
-    --gallery-toolbar-inset: 0px;
   }
   .lab-gallery-top-stack .lab-gallery-tag-bar,.lab-gallery-tag-cue {
     padding-inline:var(--lab-space-4);
@@ -379,3 +389,11 @@
 @media(prefers-reduced-motion:reduce){
  .lab-gallery-toolbar-float,.lab-gallery-tag-shadow { transition:none; }
 }
+
+/* Grid and Toolbar use the same responsive tracks; do not duplicate numbers. */
+@media(max-width:1400px){.lab-gallery-page{--gallery-grid-columns:6;}}
+@media(max-width:1160px){.lab-gallery-page{--gallery-grid-columns:5;}}
+@media(max-width:940px){.lab-gallery-page{--gallery-grid-columns:4;}}
+@media(max-width:750px){.lab-gallery-page{--gallery-grid-columns:3;--gallery-grid-column-gap:15px;--gallery-grid-row-gap:24px;}}
+@media(max-width:590px){.lab-gallery-page{--gallery-grid-columns:2;--gallery-grid-column-gap:13px;--gallery-grid-row-gap:22px;}}
+@media(max-width:359px){.lab-gallery-page{--gallery-grid-columns:1;--gallery-toolbar-right:var(--lab-space-4);}}
