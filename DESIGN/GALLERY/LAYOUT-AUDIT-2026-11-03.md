@@ -29,3 +29,7 @@ Root cause of the extra CI auto-hide failure: headless Chrome advertised `(point
 ## Reference cleanup
 
 The five temporary WebP screenshots and their temporary README were reviewed, then deleted from the final branch tree. This ordinary forward commit retains Git history and leaves the permanent reference assets intact.
+
+## New visual correction — November 3, 2026 (user screenshots)
+
+The newer 96×88 screenshot crop supersedes the prior 96px-high band: the Tag Bar must start **at viewport y=0**, be **88px tall**, and center its lettering without the previous -6px vertical shift. On regular desktop screens, the Studio Toolbar must retain the original optical x-position: **10px inside the final column of the full Gallery grid**. This was lost when the toolbar was moved 41px toward the right edge of the 1370px frame. The live beat count is never a positioning input. A shared CSS grid-column count, tile width and gap define both the actual responsive grid template and the Toolbar right edge. Only the Tag Bar reveal changes the Toolbar y-position; its final top is Tag Bar bottom + the existing 8px token. Extra-small screens (<=359px) use a viewport-safe inset rather than clipping the controls. No Studio WebGL shaders, presets or production components were changed. Tests compare real DOM positions against the reference layout and check stability under filters, scroll and viewport changes.
