@@ -171,9 +171,9 @@ try{
  assert.ok(count>0&&count<24,"Ambient inclusion should filter");
  assertSameOverlay(openOverlay,await overlayGeometry(),"partial filter");
  // A zero-result search while filters are active must not move the Studio toolbar.
- await click("document.querySelector('.studio-candidate.is-gallery button[aria-label=\\\"Search beats\\\"]')".replaceAll("\\\\"","\\\""));
- await until("document.querySelector('.studio-candidate.is-gallery input[aria-label=\\\"Search beats\\\"]')?.tabIndex===0".replaceAll("\\\\"","\\\""),"search input active");
- await expr("document.querySelector('.studio-candidate.is-gallery input[aria-label=\\\"Search beats\\\"]').focus()".replaceAll("\\\\"","\\\""));
+ await click(`document.querySelector(\'.studio-candidate.is-gallery button[aria-label="Search beats"]\')`);
+ await until(`document.querySelector(\'.studio-candidate.is-gallery input[aria-label="Search beats"]\')?.tabIndex===0`,"search input active");
+ await expr(`document.querySelector(\'.studio-candidate.is-gallery input[aria-label="Search beats"]\').focus()`);
  await command("Input.insertText",{text:"__never_matches_a_demo_beat__"});
  await until("Boolean(document.querySelector('.lab-empty'))","zero results search");
  await sleep(250);
@@ -181,7 +181,7 @@ try{
  await click("document.querySelector('.lab-empty button')");
  await until("document.querySelectorAll('.lab-beat-tile').length===24","clear zero-result search");
  await click(ambient); // restore the selected filter for the existing toggle checks
- await click("document.querySelector('.studio-candidate.is-gallery button[aria-label=\\\"Close search\\\"]')".replaceAll("\\\\"","\\\""));
+ await click(`document.querySelector(\'.studio-candidate.is-gallery button[aria-label="Close search"]\')`);
  assertSameOverlay(openOverlay,await overlayGeometry(),"filter restoration");
  await click(ambient);
  assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Plain click must toggle inclusion off, not cycle to exclusion");
