@@ -94,14 +94,14 @@ try{
  })()`);
  assert.ok(Math.abs(tagLayout.surfaceTop-24)<=2,"Inset bar must use the approved 24px token");
  assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Toolbar uses the 8px spacing token");
- assert.ok(await expr("(()=>{
+ assert.ok(await expr(`(()=>{
   const grid=document.querySelector('.lab-gallery-grid');
   const first=grid.children[0].getBoundingClientRect();
   const last=grid.children[6].getBoundingClientRect();
   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
   return Math.abs(toolbar.right-(last.right-10))<=2
     && Math.abs(toolbar.top-(first.top+10))<=3;
- })()"),"Studio must sit 10px inside and 10px below the first row of beats");
+ })()`),"Studio must sit 10px inside and 10px below the first row of beats");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
  assert.ok(tagLayout.barHeight<=52,"Tag strip should remain compact");
