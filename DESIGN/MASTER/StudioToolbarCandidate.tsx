@@ -249,16 +249,18 @@ export default function StudioToolbarCandidate(){
       // to 0.2s, which makes a long hold look unfinished on slower GPU frames.
       // Never consume >1 frame of bounce at a time: WebGL may be slow.
       // Once the spring settles, the next interaction starts at a NEW t=0.
-      const dt=last?Math.min(.045,(now-last)/1000):.016;last=now;
+      const elapsed=last?Math.min(.3,(now-last)/1000):.016;last=now;
+      const pressDt=Math.min(.045,elapsed); // perceptible press bounce even on slow GPU
+      const morphDt=Math.min(.12,elapsed);  // fast, more damped width morph
       const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       for(const s of pressSprings.current){
         if(reduce){s.x=s.target;s.v=0;}
-        else advanceSpring(s,dt,s.target===1?PRESS_GROW:PRESS_RELEASE);
+        else advanceSpring(s,pressDt,s.target===1?PRESS_GROW:PRESS_RELEASE);
       }
       const motion=morphSprings.current;
       for(const s of [motion.search,motion.select]){
         if(reduce){s.x=s.target;s.v=0;}
-        else advanceSpring(s,dt,MORPH_SPRING);
+        else advanceSpring(s,morphDt,MORPH_SPRING);
       }
       if(controls.current[0])controls.current[0]!.style.width=Math.max(44,motion.search.x)+"px";
       if(controls.current[2])controls.current[2]!.style.width=Math.max(44,motion.select.x)+"px";
