@@ -209,7 +209,18 @@ try{
  // Runtime .click() does not dispatch a physical pointerleave. A real mouse
  // leaves the strip after clicking; reproduce that before expecting auto-hide.
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
- await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='false'","bar hides after clearing final filter");
+ await sleep(1350);
+ const afterClear=await expr(`(()=>{
+   const active=document.activeElement;
+   return {open:document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen,
+     all:document.querySelector('.lab-gallery-tag-all')?.getAttribute('aria-pressed'),
+     activeTags:[...document.querySelectorAll('.lab-gallery-tag.is-included,.lab-gallery-tag.is-exclude')].map(x=>x.textContent),
+     focused:active?.outerHTML?.slice(0,280),focusVisible:active?.matches?.(':focus-visible'),
+     pointerMedia:matchMedia('(hover: none), (pointer: coarse)').matches,
+     hasSearch:document.querySelector('.studio-search.is-open')!==null};
+ })()`);
+ console.log("Gallery final-filter auto-hide state:",afterClear);
+ assert.equal(afterClear.open,"false","Unfiltered bar must auto-hide after pointer exits: "+JSON.stringify(afterClear));
  await goMaster();
  await until("Boolean(document.querySelector('.lab-master-cover-modes'))","MASTER revisit");
  await click("document.querySelector('.lab-master-tag-modes button:nth-child(2)')");
