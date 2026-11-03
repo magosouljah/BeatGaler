@@ -88,6 +88,19 @@ try{
  assert.equal(await expr("document.querySelectorAll('.lab-tag-color-trigger').length"),0);
  await until("[...document.querySelectorAll('.lab-beat-tile .lab-artwork img')].every(i=>i.complete&&i.naturalWidth>0)","real cover image loads");
  await screenshot("gallery-24-real.png");
+ // Right-click on a tag opens its color editor without a visible three-dot
+ // control. Both the top filter and every beat using the tag must update.
+ await expr(`(()=>{
+   const chip=document.querySelector('.lab-gallery-tag-bar button[aria-label^="Ambient:"]');
+   return chip.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2}));
+ })()`);
+ await until("Boolean(document.querySelector('.lab-tag-color-popover'))","tag color palette");
+ assert.equal(await expr("document.querySelectorAll('.lab-tag-color-trigger').length"),0);
+ await click("document.querySelector('.lab-tag-color-swatches button[aria-label=\"Purple\"]')");
+ assert.equal(await expr("getComputedStyle(document.querySelector('.lab-gallery-tag-bar button[aria-label^=\"Ambient:\"]')).getPropertyValue('--lab-tag-color').trim()"),"#AF52DE");
+ assert.ok(await expr("[...document.querySelectorAll('.lab-beat-tile__tag')].filter(e=>e.textContent==='Ambient').every(e=>getComputedStyle(e).color==='rgb(175, 82, 222)')"));
+ assert.equal(await expr("document.querySelectorAll('.lab-tag-color-popover').length"),0);
+
  const ambient="document.querySelector('.lab-gallery-tag-bar button[aria-label^=\"Ambient:\"]')";
  await click(ambient);
  const count=await expr("document.querySelectorAll('.lab-beat-tile').length");
