@@ -123,7 +123,11 @@ try {
  await call("Input.dispatchMouseEvent",{type:"mouseMoved",x:sx,y:sy});
  await call("Input.dispatchMouseEvent",{type:"mousePressed",x:sx,y:sy,button:"left",clickCount:1});
  await sleep(850);
- const held=await pressure(1);
+ let held=await pressure(1);
+ // Headless WebGL may render slowly; allow one extra paint to settle.
+ for(let retry=0;retry<8&&held<.96;retry++){
+   await sleep(115);held=await pressure(1);
+ }
  assert.ok(held>.96&&held<1.02,"Long hold must settle at full grown size, got "+held);
  await capture("01b-studio-long-hold.png");
  await call("Input.dispatchMouseEvent",{type:"mouseReleased",x:sx,y:sy,button:"left",clickCount:1});

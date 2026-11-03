@@ -1,6 +1,6 @@
 /* Studio 44 candidate is isolated from Toolbar V1/V2, CameraGlass and Gallery. */
 .studio-candidate {
-  width:min(950px,100%);margin:0 auto;display:grid;gap:14px;
+  width:min(600px,100%);margin:0 auto;display:grid;gap:14px;
   font:13px/1.45 var(--lab-font);color:var(--lab-ink);
 }
 .studio-candidate-controls{

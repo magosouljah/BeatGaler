@@ -168,7 +168,9 @@ export default function StudioToolbarCandidate(){
     const tick=(now:number)=>{
       frame=0;
       if(disposed||!gl||!texture||!renderer)return;
-      const dt=last?Math.min(.2,(now-last)/1000):.016;last=now;
+      // The spring integration is analytical (closed form): do NOT cap elapsed time
+      // to 0.2s, which makes a long hold look unfinished on slower GPU frames.
+      const dt=last?Math.min(2,(now-last)/1000):.016;last=now;
       const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       for(const s of pressSprings.current){
         if(reduce){s.x=s.target;s.v=0;}
