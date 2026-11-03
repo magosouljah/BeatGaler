@@ -304,22 +304,16 @@ test("Gallery mounts the real DESIGN Player and MASTER controls its material", (
  assert.match(player,/onVolumeChange=\{setVolume\}/);
  assert.match(player,/onSeek=\{setProgress\}/);
 });
-test("Studio icon contrast uses sampled backdrop without changes to the shader", () => {
- const studio=read("./MASTER/StudioToolbarCandidate.tsx");
- assert.match(studio,/ctx\.getImageData\(x,y,1,1\)/);
- assert.match(studio,/Math\.min\(rgba\[0\],rgba\[1\],rgba\[2\]\)>=215/);
- assert.match(studio,/whitePixels\/samples>=\.67/);
- assert.match(studio,/control\.dataset\.ink=darkInk/);
-});
+
 
 
 test("Tag Bar leaves the viewport, Studio floats with spacing tokens and no wheel bleed", () => {
  const gallery=read("./GALLERY/GalleryPage.tsx"), css=read("./GALLERY/gallery.css");
  const nav=read("./GALLERY/TagNavigation.tsx");
- assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: absolute/);
+ assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: fixed/);
  assert.match(css,/\.lab-gallery-toolbar-float \{[\s\S]*?position: fixed/);
  assert.match(gallery,/getPropertyValue\("--lab-space-2"\)/);
- assert.match(gallery,/strip\.getBoundingClientRect\(\)\.bottom/);
+ assert.match(gallery,/stack\.getBoundingClientRect\(\)\.top/);
  assert.match(css,/overflow-anchor: none/);
  assert.match(nav,/preserveScroll\.current = scrollerRef\.current\?\.scrollLeft/);
  assert.doesNotMatch(nav,/scrollToStart/);
@@ -329,27 +323,26 @@ test("Tag Bar leaves the viewport, Studio floats with spacing tokens and no whee
 });
 
 
-test("Paint image 2 and image 3 are independently selectable from MASTER", () => {
- const master=read("./MASTER/MasterPage.tsx");
+test("Gallery uses the inset hover layout, deliberate ink and approved 44 preset", () => {
  const gallery=read("./GALLERY/GalleryPage.tsx");
- const app=read("./App.tsx");
+ const nav=read("./GALLERY/TagNavigation.tsx");
  const css=read("./GALLERY/gallery.css");
- assert.match(master,/Imagen 2 · Ancho completo/);
- assert.match(master,/Imagen 3 · En galería/);
- assert.match(master,/setTagBarLayout\("full-bleed"\)/);
- assert.match(master,/setTagBarLayout\("gallery-inset"\)/);
- assert.match(app,/beatgaler\.lab\.tag-bar-layout/);
- assert.match(app,/tagBarLayout=\{tagBarLayout\}/);
- assert.match(gallery,/data-tag-layout=\{tagBarLayout\}/);
- assert.match(css,/data-tag-layout="full-bleed"/);
- assert.match(css,/data-tag-layout="gallery-inset"/);
- assert.match(css,/--gallery-beats-width: 1252px/);
- assert.match(css,/lab-gallery-tag-shadow/);
- assert.match(css,/mask-image: linear-gradient\(90deg,transparent 0%/);
- assert.match(css,/height: calc\(var\(--lab-space-12\) \+ var\(--lab-space-12\)\)/);
- assert.match(gallery,/new ResizeObserver\(sync\)/);
- assert.match(gallery,/getPropertyValue\("--lab-space-2"\)/);
- assert.doesNotMatch(gallery,/const barHeight =/);
- assert.match(read("./MASTER/StudioToolbarCandidate.tsx"),/galleryTagLayout/);
+ const studio=read("./MASTER/StudioToolbarCandidate.tsx");
+ const preset=JSON.parse(read("./MASTER/studio-toolbar-44.json")).controls;
+ assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: fixed/);
+ assert.match(css,/transform: translate3d\(0,-6px,0\)/);
+ assert.match(css,/\.lab-gallery-tag-cue \{[\s\S]*?position:fixed/);
+ assert.match(gallery,/tags-hint-seen/);
+ assert.match(gallery,/lastRight \+ 10/);
+ assert.match(gallery,/first.top \+ 10/);
+ assert.match(gallery,/--gallery-tags-push/);
+ assert.match(css,/transition:transform var\(--lab-normal\) var\(--lab-ease\)/);
+ assert.match(nav,/event\.clientY <= 78/);
+ assert.doesNotMatch(nav,/window\.scrollY < 50/);
+ assert.doesNotMatch(studio,/getImageData\(/);
+ assert.match(read("./MASTER/studio-toolbar.css"),/color: #fff; --studio-ink: #fff/);
+ assert.equal(preset.tint.r,94);
+ assert.equal(preset.tint.a,176\/255);
+ assert.equal(preset.shadowExpand,20);
+ assert.equal(preset.shadowFactor,20);
 });
-

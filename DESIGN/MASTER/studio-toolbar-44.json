@@ -27,10 +27,10 @@
       "r": 94,
       "g": 94,
       "b": 94,
-      "a": 0.28
+      "a": 0.6901960784313725
     },
-    "shadowExpand": 2.9899999999999984,
-    "shadowFactor": 1.1999999999999993,
+    "shadowExpand": 20,
+    "shadowFactor": 20,
     "shadowPosition": {
       "x": 0,
       "y": 0
@@ -45,5 +45,5 @@
     "springSizeFactor": 10,
     "step": 9
   },
-  "description": "Gallery and Toolbar Studio 44: gently softened glare, original optics otherwise unchanged"
+  "description": "DESIGN Studio 44: tint #5e5e5eb0, shadow expand 20, shadow intensity 20; softened glare unchanged"
 }

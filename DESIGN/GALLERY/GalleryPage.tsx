@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { LabBeatTile, LabButton } from "../shared/components";
 import { DEMO_BEATS, DEMO_TAGS } from "../shared/data";
@@ -8,61 +8,74 @@ import StudioToolbarCandidate from "../MASTER/StudioToolbarCandidate";
 import TagNavigation from "./TagNavigation";
 import GalleryPlayer from "./GalleryPlayer";
 import type { TagBarVariant } from "../shared/tagBarVariant";
-import type { TagBarLayout } from "../shared/tagBarLayout";
 import type { LabSort } from "../shared/ToolbarV2";
 
 type TagFilter = "include" | "exclude";
-export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMode, tagBarVariant, tagBarLayout, tagColors, setTagColors }: {
+export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMode, tagBarVariant, tagColors, setTagColors }: {
   playing: boolean; beat: DemoBeat; toggle: () => void; selectBeat: (beat: DemoBeat) => void;
-  coverMode: CoverMode; tagBarVariant: TagBarVariant; tagBarLayout: TagBarLayout; tagColors: Record<string, string>;
+  coverMode: CoverMode; tagBarVariant: TagBarVariant; tagColors: Record<string, string>;
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
   const [search, setSearch] = useState("");
+
   const [tagsOpen, setTagsOpen] = useState(() => typeof window !== "undefined" &&
     window.matchMedia("(hover: none), (pointer: coarse)").matches);
+  const [hintSeen, setHintSeen] = useState(() => {
+    try { return sessionStorage.getItem("beatgaler.lab.tags-hint-seen") === "yes"; }
+    catch { return false; }
+  });
   const [sort, setSort] = useState<LabSort>("manual");
   const [toolbarNotice, setToolbarNotice] = useState("");
   const [filters, setFilters] = useState<Partial<Record<DemoTag, TagFilter>>>({});
   const hasActiveFilters = Object.values(filters).some(Boolean);
   const tagsVisible = tagsOpen || hasActiveFilters;
+  useEffect(() => {
+    if(!tagsVisible || hintSeen) return;
+    setHintSeen(true);
+    try { sessionStorage.setItem("beatgaler.lab.tags-hint-seen","yes"); }
+    catch { /* storage optional */ }
+  }, [tagsVisible, hintSeen]);
   const toolbarFloatRef = useRef<HTMLDivElement>(null);
   const tagStackRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    // The strip scrolls with the page, while Studio stays fixed.
-    // Measure its *visible* position during the interruptible reveal and
-    // apply the canonical DESIGN spacing token (no duplicated dimensions).
-    const strip = tagStackRef.current;
     const toolbar = toolbarFloatRef.current;
-    if (!strip || !toolbar) return;
+    const stack = tagStackRef.current;
+    if (!toolbar || !stack) return;
     const sync = () => {
-      const baseTop = parseFloat(getComputedStyle(toolbar).top) || 0;
+      const style = getComputedStyle(toolbar);
+      const baseTop = parseFloat(style.top) || 20;
       const tokenGap = parseFloat(getComputedStyle(document.documentElement)
         .getPropertyValue("--lab-space-2")) || 8;
-      const visibleBottom = tagsVisible ? strip.getBoundingClientRect().bottom : 0;
-      const push = Math.max(0, visibleBottom + tokenGap - baseTop);
-      toolbar.style.setProperty("--gallery-tags-push", `${push}px`);
+      // Align the rightmost lens 10px inside the rightmost first-row beat,
+      // irrespective of the number of columns at this viewport size.
+      const grid = document.querySelector<HTMLElement>(".lab-gallery-grid");
+      const items = Array.from(grid?.children ?? []) as HTMLElement[];
+      const first = items[0]?.getBoundingClientRect();
+      if (first) {
+        const row = items.map(item => item.getBoundingClientRect())
+          .filter(rect => Math.abs(rect.top-first.top) <= 2);
+        const lastRight = Math.max(...row.map(rect => rect.right));
+        toolbar.style.right = Math.max(0, window.innerWidth - lastRight + 10) + "px";
+      }
+      const tagsBottom = stack.getBoundingClientRect().top + (window.matchMedia("(max-width: 750px)").matches ? 46 : 50);
+      const coverTarget = first ? first.top + 10 : baseTop;
+      const finalTop = tagsVisible ? Math.max(baseTop, tagsBottom + tokenGap, coverTarget) : baseTop;
+      // CSS transitions the transform from its current painted value, so
+      // rapidly closing/reopening the bar never teleports the Studio optics.
+      toolbar.style.setProperty("--gallery-tags-push", (finalTop - baseTop) + "px");
     };
-    const observer = new ResizeObserver(sync);
-    observer.observe(strip);
     sync();
-    // Check continuously while switching between both layouts or reversing
-    // the row reveal. No fixed top offsets, no toolbar lag while scrolling.
-    let frame = 0;
-    const end = performance.now() + 340;
-    const follow = () => {
-      sync();
-      if (performance.now() < end) frame = requestAnimationFrame(follow);
-    };
-    frame = requestAnimationFrame(follow);
-    window.addEventListener("scroll", sync, { passive: true });
-    window.addEventListener("resize", sync, { passive: true });
+    const observer = new ResizeObserver(sync);
+    const grid = document.querySelector(".lab-gallery-grid");
+    if (grid) observer.observe(grid);
+    window.addEventListener("resize",sync,{passive:true});
+    window.addEventListener("scroll",sync,{passive:true});
     return () => {
-      cancelAnimationFrame(frame);
       observer.disconnect();
-      window.removeEventListener("scroll", sync);
-      window.removeEventListener("resize", sync);
+      window.removeEventListener("resize",sync);
+      window.removeEventListener("scroll",sync);
     };
-  }, [tagsVisible, tagBarLayout]);
+  }, [tagsVisible]);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const filtered = useMemo(() => {
@@ -98,20 +111,20 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     current.includes(id) ? current.filter(item => item !== id) : [...current, id]
   );
   return (
-    <div className="lab-gallery-page" data-tag-layout={tagBarLayout}>
-      <div ref={tagStackRef} className="lab-gallery-top-stack" data-tags-open={tagsVisible ? "true" : "false"} data-tag-variant={tagBarVariant} data-tag-layout={tagBarLayout}>
+    <div className="lab-gallery-page">
+      <div ref={tagStackRef} className="lab-gallery-top-stack" data-tags-open={tagsVisible ? "true" : "false"} data-tag-variant={tagBarVariant}>
         <TagNavigation visible={tagsVisible} hasActiveFilters={hasActiveFilters} onVisibilityChange={setTagsOpen}
           filters={filters} onCycleTag={cycleTag} onClear={() => setFilters({})}
           tagColors={tagColors} setTagColors={setTagColors} />
       </div>
       <div className="lab-gallery-tag-shadow" aria-hidden="true" />
       <div ref={toolbarFloatRef} className="lab-gallery-toolbar-float">
-          <StudioToolbarCandidate gallery galleryTagsOpen={tagsVisible} galleryTagLayout={tagBarLayout} search={search} onSearchChange={setSearch}
+          <StudioToolbarCandidate gallery galleryTagsOpen={tagsVisible} search={search} onSearchChange={setSearch}
             sort={sort} onSortChange={setSort}
             selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
             onProfileAction={action => setToolbarNotice(action === "settings" ? "Settings: preview only." : "Log out: preview only; no session is active.")} />
       </div>
-      <div className="lab-gallery-tag-cue" aria-hidden="true">Tags ↑</div>
+      {!hintSeen && <div className="lab-gallery-tag-cue" aria-hidden="true">Tags ↑</div>}
       {toolbarNotice && <div className="lab-gallery-toolbar-notice" role="status">{toolbarNotice}
         <button type="button" aria-label="Dismiss notice" onClick={() => setToolbarNotice("")}>×</button>
       </div>}

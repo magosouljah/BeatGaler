@@ -92,12 +92,12 @@ try{
      contentWidth:bar.scrollWidth,viewportWidth:bar.clientWidth,barHeight:bar.clientHeight,
      surfaceBackground:getComputedStyle(surface).backgroundColor};
  })()`);
- assert.ok(Math.abs(tagLayout.surfaceTop-16)<=2,"Image 2 Tag Bar should follow the 16px spacing token");
+ assert.ok(Math.abs(tagLayout.surfaceTop-24)<=2,"Inset bar must use the approved 24px token");
  assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Toolbar uses the 8px spacing token");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
  assert.ok(tagLayout.barHeight<=52,"Tag strip should remain compact");
- assert.ok(await expr("(()=>{const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();return nav.left<=1&&nav.right>=innerWidth-1;})()"),"Tag strip must span the entire viewport");
+ assert.ok(await expr("(()=>{const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();return nav.left>16&&nav.right<innerWidth-16;})()"),"Tag strip is centered within Gallery, not full bleed");
  assert.ok(tagLayout.barHeight<80,"Tag navigation must remain a single row");
  assert.ok(await expr("(()=>{const a=document.querySelector('.lab-gallery-tag-all').getBoundingClientRect(),b=document.querySelector('.lab-gallery-tag-wrap').getBoundingClientRect();return b.left-a.right<20;})()"),"Compact tag spacing");
  const scrollResult=await expr(`(()=>{
@@ -193,7 +193,7 @@ try{
  assert.ok(collapsed>=12&&collapsed<50,"Collapsed Toolbar should return to its top margin");
  await expr("window.scrollTo(0,480)");
  await sleep(120);
- assert.ok(await expr("document.querySelector('.lab-gallery-top-stack').getBoundingClientRect().bottom<0"),"Tag Bar must scroll out of view");
+ assert.ok(await expr("document.querySelector('.lab-gallery-top-stack').getBoundingClientRect().top>=0"),"Tag Bar remains viewport-ready for hover");
  assert.ok(await expr("(()=>{const y=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top;return y>=12&&y<=50;})()"),"Studio Toolbar must stay floating");
  await expr("window.scrollTo(0,0)");
  assert.ok(await expr("document.querySelector('.lab-gallery-item').getBoundingClientRect().top<120"),"Gallery covers must begin after only the toolbar, without reserving the hidden tag strip");
@@ -219,45 +219,20 @@ try{
  }
  console.log("Mobile Gallery layout:",mobile);
  assert.ok(mobile.gap>=7,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
- assert.ok(Math.abs(mobile.navWidth-mobile.screenWidth)<=2,"Mobile black tag strip must extend edge-to-edge");
+ assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile strip retains inset margins");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
  await screenshot("gallery-mobile-tags.png");
- // Image 3: test the separate inset layout, Gallery alignment and the shadow
- // reaching only slightly onto the first row of covers.
- await command("Emulation.setDeviceMetricsOverride",{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
- await goMaster();
- await until("Boolean(document.querySelector('.lab-master-tag-layouts'))","MASTER layout choice");
- await click("document.querySelector('.lab-master-tag-layouts button:nth-child(2)')");
- assert.equal(await expr("document.querySelector('.lab-master-tag-layouts button:nth-child(2)').getAttribute('aria-pressed')"),"true");
- await goGallery();
- assert.equal(await expr("document.querySelector('.lab-gallery-page').dataset.tagLayout"),"gallery-inset");
- await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
- await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='true'","inset bar reveal");
- await sleep(430);
- const inset=await expr(`(()=>{
-   const bar=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
-   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
-   const covers=[...document.querySelectorAll('.lab-gallery-grid .lab-beat-tile__cover')];
-   const lastCover=covers[6].getBoundingClientRect();
-   const shadow=document.querySelector('.lab-gallery-tag-shadow');
-   return {left:bar.left,right:bar.right,toolbarRight:toolbar.right,toolbarTop:toolbar.top,
-     barBottom:bar.bottom,coverRight:lastCover.right,artTop:lastCover.top,
-     shadowBottom:shadow.getBoundingClientRect().bottom,shadowOpacity:Number(getComputedStyle(shadow).opacity)};
- })()`);
- assert.ok(inset.left>16&&inset.right<1440-16,"Image 3 must use a centered, narrower strip");
- assert.ok(Math.abs(inset.toolbarRight-inset.coverRight)<12,"Image 3 toolbar must align with rightmost beat");
- assert.ok(inset.toolbarTop>=inset.barBottom+7,"Image 3 toolbar keeps the shared 8px gap");
- assert.ok(inset.shadowOpacity>.95,"Image 3 soft shadow must appear only when the tag strip opens");
- assert.ok(inset.shadowBottom>inset.artTop&&inset.shadowBottom<inset.artTop+48,
-   "Shadow must reach slightly beyond the artwork start, not down the beat grid");
- await screenshot("gallery-image-3-inset.png");
- await goMaster();
- await click("document.querySelector('.lab-master-tag-layouts button:nth-child(1)')");
- await goGallery();
- assert.equal(await expr("document.querySelector('.lab-gallery-page').dataset.tagLayout"),"full-bleed");
- await screenshot("gallery-image-2-full-bleed.png");
- console.log("Gallery verified: two independently selectable Paint-inspired layouts, material, artwork, filtering and scroll.");
+ // Hover from a deeply scrolled Gallery must still reveal the inset bar.
+ await expr("window.scrollTo(0,480)");
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:280,clientY:8,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='true'","deep-scroll reveal");
+ await sleep(300);
+ assert.ok(await expr("document.querySelector('.lab-gallery-top-stack').getBoundingClientRect().top>=0"),"Tags reappear at viewport top");
+ assert.ok(await expr("document.querySelector('.lab-gallery-tag-cue')===null"),"Hint only appears before the first reveal");
+ await screenshot("gallery-inset-deep-scroll.png");
+ await expr("window.scrollTo(0,0)");
+ console.log("Gallery verified: inset hover on deep scroll, beat-aligned Studio, one-shot hint and horizontal scroll.");
 }finally{
  ws?.close();vite.kill("SIGTERM");browser.kill("SIGTERM");
  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200}).catch(()=>{});

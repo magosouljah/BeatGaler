@@ -97,11 +97,11 @@ function Glyph({kind}:{kind:Kind}){
 }
 
 export default function StudioToolbarCandidate({
-  gallery=false, galleryTagsOpen=false, galleryTagLayout, search:controlledSearch, onSearchChange,
+  gallery=false, galleryTagsOpen=false, search:controlledSearch, onSearchChange,
   sort:controlledSort, onSortChange, selecting:controlledSelecting,
   onToggleSelect, onProfileAction
 }:{
-  gallery?:boolean;galleryTagsOpen?:boolean;galleryTagLayout?:"full-bleed"|"gallery-inset";search?:string;onSearchChange?:(value:string)=>void;
+  gallery?:boolean;galleryTagsOpen?:boolean;search?:string;onSearchChange?:(value:string)=>void;
   sort?:LabSort;onSortChange?:(value:LabSort)=>void;
   selecting?:boolean;onToggleSelect?:()=>void;
   onProfileAction?:(action:"settings"|"logout")=>void;
@@ -333,42 +333,6 @@ export default function StudioToolbarCandidate({
         const button=controls.current[i]?.querySelector<HTMLButtonElement>("button");
         if(button)button.style.transform=`scale(${1+clamp(pressSprings.current[i].x,-.2,1.1)*.06})`;
       }
-      if(gallery){
-        // 3×3 sample across each lens. A bright center pixel (e.g. saturated
-        // yellow in the video) must not trigger dark ink on a colored cover.
-        const ctx=source.getContext("2d");
-        if(ctx){
-          let darkInkControls=0, sampledControls=0;
-          for(const control of controls.current){
-            if(!control)continue;
-            const r=control.getBoundingClientRect();
-            let whitePixels=0, samples=0;
-            for(const px of [-.28,0,.28]) for(const py of [-.24,0,.24]){
-              const x=Math.round(r.left-stageRect.left+r.width*(.5+px));
-              const y=Math.round(r.top-stageRect.top+r.height*(.5+py));
-              if(x<0||y<0||x>=w||y>=h)continue;
-              try {
-                const rgba=ctx.getImageData(x,y,1,1).data;
-                // Neutral near-white only; high-luminance saturated colors
-                // must retain white icons and text.
-                if(Math.min(rgba[0],rgba[1],rgba[2])>=215)whitePixels++;
-                samples++;
-              } catch { /* Retain current ink if the texture cannot be sampled. */ }
-            }
-            if(!samples)continue;
-            const darkInk=whitePixels/samples>=.67;
-            control.style.color=darkInk?"#171717":"#ffffff";
-            control.dataset.ink=darkInk?"dark":"light";
-            sampledControls++;
-            if(darkInk)darkInkControls++;
-          }
-          if(toolbar.current&&sampledControls){
-            const darkInk=darkInkControls>sampledControls/2;
-            toolbar.current.style.color=darkInk?"#171717":"#ffffff";
-            toolbar.current.dataset.ink=darkInk?"dark":"light";
-          }
-        }
-      }
       // Readable only in DESIGN tests: a long hold must approach 1, and its
       // release must overshoot through 0 before naturally settling.
       // No entry/exit animation or lingering lens after close.
@@ -468,7 +432,7 @@ export default function StudioToolbarCandidate({
     };
     raf=requestAnimationFrame(refresh);
     return()=>cancelAnimationFrame(raf);
-  },[gallery,galleryTagsOpen,galleryTagLayout]);
+  },[gallery,galleryTagsOpen]);
   useEffect(()=>{stage.current?.dispatchEvent(new CustomEvent("studio-theme",{detail:theme}));},[theme]);
   useLayoutEffect(()=>{
     // After React commits the menu DOM but before browser paint, request a

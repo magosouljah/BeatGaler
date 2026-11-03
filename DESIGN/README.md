@@ -77,8 +77,11 @@ Tag Bar and the “Tags ↑” cue are document-positioned and leave the viewpor
 No custom-color underline. “Sin color” deletes the custom assignment and returns to the same neutral idle/included/excluded state as an unassigned tag. Reordering animates selected tags toward All but does not scroll the user's horizontal viewport. Wheel events over the tag strip are consumed even at the beginning/end, with no vertical scroll chaining. Studio uses nine texture samples per control, flipping to slightly heavier dark ink only on predominantly near-white backgrounds (not yellow/orange artwork); glass shaders and presets are unchanged.
 
 
-## Paint layouts — Image 2 and Image 3
-MASTER → **DISTRIBUCIÓN TAGS** selects Image 2 (full-width bar, with the Studio Toolbar aligned beneath it) or Image 3 (centered within Gallery's content width, softly faded at its horizontal scroll boundaries, Studio Toolbar aligned over the rightmost beat artwork). They are a separate, session-persisted choice from **TAG BAR** materials. Both preserve scrolling filters, animations and no stickiness.
 
-Image 3 uses a soft, noninteractive, horizontal-edge-masked shadow, fading vertically to transparent just inside the top area of the first beats. Widths follow the seven/six/five/four/three/two/one-column Gallery grid. Image 2 has no added shadow. The Studio Toolbar computes spacing from the real, currently visible Tag Bar rect and `--lab-space-2`, including interrupted reveals and page scroll. No changes to the Studio optical shader or preset.
+## Gallery inset design — final selected variant
+The full-width layout experiment was removed. The selected inset bar is viewport-positioned and can be revealed at the top of the screen from any scroll depth. On normal page scrolling it closes unless an active tag filter pins it. Its text is moved upward 6px (from the Paint-adjusted Melodic reference).
+
+The “Tags ↑” hint aligns with the All tag and appears only until the first reveal. Session storage remembers dismissal across Gallery/Master navigation. The Studio Toolbar is aligned 10px down and 10px inside the right edge of the last beat in the first row when tags are visible; it returns to the top when closed. Position changes use the existing 180ms ease curve rather than teleporting.
+
+Studio 44 experiment preset: `tint #5e5e5eb0`, `shadowExpand 20`, `shadowFactor 20`. The original diagnostic preset remains unchanged; automated light-background ink detection has been removed in Gallery. The Tag Bar's horizontal scrolling, filters and material comparison remain as before.
 

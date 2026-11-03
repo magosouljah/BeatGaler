@@ -3,7 +3,6 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { REAL_COVER_COUNT } from "../shared/coverSources";
 import type { CoverMode } from "../shared/coverSources";
 import type { TagBarVariant } from "../shared/tagBarVariant";
-import type { TagBarLayout } from "../shared/tagBarLayout";
 import Player from "./Player";
 import LabToolbar from "../shared/Toolbar";
 import LabToolbarV2 from "../shared/ToolbarV2";
@@ -35,13 +34,11 @@ function initialSidebarOpen() {
   } catch { return true; }
 }
 
-export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, setTagBarVariant, tagBarLayout, setTagBarLayout }: {
+export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, setTagBarVariant }: {
   coverMode: CoverMode;
   setCoverMode: (mode: CoverMode) => void;
   tagBarVariant: TagBarVariant;
   setTagBarVariant: (mode: TagBarVariant) => void;
-  tagBarLayout: TagBarLayout;
-  setTagBarLayout: (mode: TagBarLayout) => void;
 }) {
   const [selected, setSelected] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -167,15 +164,6 @@ export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, set
               <button type="button" aria-pressed={tagBarVariant === "playbar"}
                 className={tagBarVariant === "playbar" ? "is-active" : ""}
                 onClick={() => setTagBarVariant("playbar")}>Playbar material</button>
-            </div>
-            <div className="lab-master-sidebar-heading">DISTRIBUCIÓN TAGS</div>
-            <div className="lab-master-tag-layouts" role="group" aria-label="Distribución de Tag Bar">
-              <button type="button" aria-pressed={tagBarLayout === "full-bleed"}
-                className={tagBarLayout === "full-bleed" ? "is-active" : ""}
-                onClick={() => setTagBarLayout("full-bleed")}>Imagen 2 · Ancho completo</button>
-              <button type="button" aria-pressed={tagBarLayout === "gallery-inset"}
-                className={tagBarLayout === "gallery-inset" ? "is-active" : ""}
-                onClick={() => setTagBarLayout("gallery-inset")}>Imagen 3 · En galería</button>
             </div>
             <div className="lab-master-sidebar-heading">REGLAS</div>
             <button type="button" className={section === "margins" ? "is-active" : ""} aria-current={section === "margins" ? "page" : undefined} onClick={() => openSection("margins")}>Márgenes</button>

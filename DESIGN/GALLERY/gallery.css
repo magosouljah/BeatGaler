@@ -274,7 +274,7 @@
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
 }
 .lab-gallery-tag-cue {
-  position: absolute; top: 20px; left: 28px; z-index: 75;
+
   display: flex; align-items: center; height: 44px;
   color: #d8d8d8; font: 600 17px var(--lab-font);
   letter-spacing: -.035em; pointer-events: none;
@@ -304,83 +304,63 @@
 }
 
 
-/* Gallery layout experiments based on the two supplied Paint references.
-   Material choice remains independent: Full black / Playbar material. */
-.lab-gallery-page {
-  --gallery-beats-width: 1252px; /* 7 × 160px artworks + 6 × 22px gaps */
-}
-.lab-gallery-top-stack[data-tag-layout="full-bleed"] {
-  top: var(--lab-space-4);
-}
-.lab-gallery-top-stack[data-tag-layout="gallery-inset"] {
+/* Chosen Gallery-inset layout (Paint image 3) — only spatial variant.
+   Hidden strip overlays no content. Revealed strip works at every scroll depth. */
+.lab-gallery-top-stack {
+  position: fixed;
+  z-index: 76;
   top: var(--lab-space-6);
   left: 50%; right: auto;
-  width: min(1370px, calc(100% - 2 * var(--lab-space-8)));
+  width: min(1370px, calc(100vw - 2 * var(--lab-space-8)));
   transform: translateX(-50%);
 }
-.lab-gallery-page[data-tag-layout="gallery-inset"] .lab-gallery-toolbar-float {
-  right: max(var(--lab-space-4), calc((100vw - var(--gallery-beats-width)) / 2));
-}
-.lab-gallery-tag-shadow {
-  position: absolute; z-index: 75; top: var(--lab-space-6);
-  left: 50%; transform: translateX(-50%);
-  width: min(1370px, calc(100% - 2 * var(--lab-space-8)));
-  height: calc(var(--lab-space-12) + var(--lab-space-12));
-  background: linear-gradient(180deg,
-    rgba(12,12,12,.98) 0%,
-    rgba(12,12,12,.88) 45%,
-    rgba(12,12,12,.48) 72%,
-    rgba(12,12,12,0) 100%);
-  mask-image: linear-gradient(90deg,transparent 0%,black 6%,black 94%,transparent 100%);
-  -webkit-mask-image: linear-gradient(90deg,transparent 0%,black 6%,black 94%,transparent 100%);
-  opacity: 0; pointer-events: none;
-  transition: opacity var(--lab-normal) var(--lab-ease);
-}
-.lab-gallery-top-stack[data-tags-open="true"][data-tag-layout="gallery-inset"] ~ .lab-gallery-tag-shadow {
-  opacity: 1;
-}
-/* A narrower band, not a full-width black box. The scroll fades already
-   respond to actual overflow at each edge (not hardcoded positions). */
-.lab-gallery-top-stack[data-tag-layout="gallery-inset"] .lab-gallery-tag-surface {
-  background: transparent;
-}
-.lab-gallery-top-stack[data-tag-layout="gallery-inset"] .lab-gallery-tag-bar {
-  padding-inline: var(--lab-space-7);
-}
-.lab-gallery-top-stack[data-tag-layout="gallery-inset"][data-tag-variant="playbar"] .lab-gallery-tag-surface {
+.lab-gallery-top-stack .lab-gallery-tag-surface { background: transparent; }
+.lab-gallery-top-stack[data-tag-variant="playbar"] .lab-gallery-tag-surface {
   background: rgba(20,20,20,.75);
 }
+.lab-gallery-top-stack .lab-gallery-tag-bar {
+  padding-inline: var(--lab-space-7);
+}
+.lab-gallery-tag-track {
+  transform: translate3d(0,-6px,0);
+}
+.lab-gallery-tag-shadow {
+  position: fixed; z-index: 75; top: var(--lab-space-6);
+  left:50%; transform:translateX(-50%);
+  width:min(1370px,calc(100vw - 2 * var(--lab-space-8)));
+  height:calc(var(--lab-space-12) + var(--lab-space-12));
+  background:linear-gradient(180deg,
+     rgba(12,12,12,.98) 0%,rgba(12,12,12,.88) 45%,
+     rgba(12,12,12,.48) 72%,rgba(12,12,12,0) 100%);
+  mask-image:linear-gradient(90deg,transparent 0%,black 6%,black 94%,transparent 100%);
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,black 6%,black 94%,transparent 100%);
+  opacity:0;pointer-events:none;
+  transition:opacity var(--lab-normal) var(--lab-ease);
+}
+.lab-gallery-top-stack[data-tags-open="true"] ~ .lab-gallery-tag-shadow { opacity:1; }
 .lab-gallery-toolbar-float {
-  transition: none; /* Position follows the animated strip, not a delayed target. */
+  transition:transform var(--lab-normal) var(--lab-ease);
 }
-@media(max-width:1400px) {
-  .lab-gallery-page { --gallery-beats-width:1070px; }
+.lab-gallery-tag-cue {
+  position:fixed; z-index:75;
+  left:50%; top:var(--lab-space-6);
+  transform:translate3d(-50%,-6px,0);
+  width:min(1370px,calc(100vw - 2 * var(--lab-space-8)));
+  height:50px; padding-inline:var(--lab-space-7);
+  display:flex;align-items:center;
+  pointer-events:none;
+  transition:opacity var(--lab-fast) var(--lab-ease);
 }
-@media(max-width:1160px) {
-  .lab-gallery-page { --gallery-beats-width:888px; }
+@media(max-width:750px){
+ .lab-gallery-top-stack,.lab-gallery-tag-shadow,.lab-gallery-tag-cue {
+   top:var(--lab-space-4);
+   width:calc(100vw - 2 * var(--lab-space-4));
+ }
+ .lab-gallery-top-stack .lab-gallery-tag-bar,.lab-gallery-tag-cue {
+   padding-inline:var(--lab-space-4);
+ }
+ .lab-gallery-tag-cue { height:46px; }
 }
-@media(max-width:940px) {
-  .lab-gallery-page { --gallery-beats-width:706px; }
+@media(prefers-reduced-motion:reduce){
+ .lab-gallery-toolbar-float,.lab-gallery-tag-shadow { transition:none; }
 }
-@media(max-width:750px) {
-  .lab-gallery-page { --gallery-beats-width:510px; }
-  .lab-gallery-top-stack[data-tag-layout="gallery-inset"],
-  .lab-gallery-tag-shadow { width: calc(100% - 2 * var(--lab-space-4)); }
-  .lab-gallery-top-stack[data-tag-layout="gallery-inset"] {
-    top: var(--lab-space-4);
-  }
-  .lab-gallery-tag-shadow { top: var(--lab-space-4); }
-  .lab-gallery-top-stack[data-tag-layout="gallery-inset"] .lab-gallery-tag-bar {
-    padding-inline: var(--lab-space-4);
-  }
-}
-@media(max-width:590px) {
-  .lab-gallery-page { --gallery-beats-width:333px; }
-}
-@media(max-width:359px) {
-  .lab-gallery-page { --gallery-beats-width:160px; }
-}
-@media(prefers-reduced-motion:reduce) {
-  .lab-gallery-tag-shadow { transition: none; }
-}
-

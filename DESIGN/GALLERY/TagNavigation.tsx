@@ -176,9 +176,9 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
       if (event.pointerType !== "mouse") return;
       const toolbar = document.querySelector(".studio-candidate.is-gallery .studio-candidate-toolbar") ?? document.querySelector(".lab-gallery-toolbar-float");
       const toolbarLeft = toolbar?.getBoundingClientRect().left ?? window.innerWidth;
-      const inRevealZone = window.scrollY < 50 && event.clientY <= 78 && event.clientX < toolbarLeft - 12;
+      const inRevealZone = event.clientY <= 78 && event.clientX < toolbarLeft - 12;
       pointerNearby.current = !!(inRevealZone || rootRef.current?.contains(event.target as Node) ||
-        (visible && window.scrollY < 50 && toolbar?.contains(event.target as Node)));
+        (visible && toolbar?.contains(event.target as Node)));
       if (pointerNearby.current) show();
       else scheduleHide();
     };
@@ -201,6 +201,16 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
       document.removeEventListener("focusin", focus);
     };
   }, [show, scheduleHide, visible]);
+  useEffect(() => {
+    const onScroll = () => {
+      if (hasActiveFilters) return; // A selected filter remains accessible.
+      pointerNearby.current = false;
+      clearHide();
+      onVisibilityChange(false);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [hasActiveFilters, clearHide, onVisibilityChange]);
 
   useEffect(() => {
     if (!editingTag) return;
