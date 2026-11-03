@@ -331,6 +331,7 @@ test("Gallery uses the inset hover layout, deliberate ink and approved 44 preset
  const preset=JSON.parse(read("./MASTER/studio-toolbar-44.json")).controls;
  assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: fixed/);
  assert.match(css,/transform: translate3d\(0,-6px,0\)/);
+ assert.match(css,/\.lab-gallery-top-stack \.lab-gallery-tag-surface \{ background: #0c0c0c; \}/);
  assert.match(css,/\.lab-gallery-tag-cue \{[\s\S]*?position:fixed/);
  assert.match(gallery,/tags-hint-seen/);
  assert.match(gallery,/lastRight \+ 10/);

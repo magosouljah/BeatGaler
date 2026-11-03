@@ -314,7 +314,7 @@
   width: min(1370px, calc(100vw - 2 * var(--lab-space-8)));
   transform: translateX(-50%);
 }
-.lab-gallery-top-stack .lab-gallery-tag-surface { background: transparent; }
+.lab-gallery-top-stack .lab-gallery-tag-surface { background: #0c0c0c; }
 .lab-gallery-top-stack[data-tag-variant="playbar"] .lab-gallery-tag-surface {
   background: rgba(20,20,20,.75);
 }
