@@ -205,7 +205,7 @@ try{
  await sleep(1200);
  assert.equal(await expr("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen"),"true","Active filters must keep the bar open");
  await click(ambient);
- assert.equal(await expr("document.querySelector('.lab-gallery-tag-bar button[aria-label^=\\\"Ambient:\\\"]').getAttribute('aria-pressed')"),"false","Clearing the final filter must actually deselect its tag");
+ assert.equal(await expr(`document.querySelector('.lab-gallery-tag-bar button[aria-label^="Ambient:"]').getAttribute('aria-pressed')`),"false","Clearing the final filter must actually deselect its tag");
  // Runtime .click() does not dispatch a physical pointerleave. A real mouse
  // leaves the strip after clicking; reproduce that before expecting auto-hide.
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
