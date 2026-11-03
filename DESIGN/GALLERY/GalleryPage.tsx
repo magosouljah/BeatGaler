@@ -35,7 +35,7 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     try { sessionStorage.setItem("beatgaler.lab.tags-hint-seen","yes"); }
     catch { /* storage optional */ }
   }, [tagsVisible, hintSeen]);
-  const toolbarFloatRef =electMode] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
