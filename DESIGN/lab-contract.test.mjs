@@ -322,6 +322,10 @@ test("Gallery overlays use viewport tokens, never beat geometry, and prevent whe
  assert.match(nav,/preserveScroll\.current = scrollerRef\.current\?\.scrollLeft/);
  assert.doesNotMatch(nav,/scrollToStart/);
  assert.match(nav,/event\.preventDefault\(\);\n\s*const scale/);
+ assert.match(nav,/mousePresent\.current = true/);
+ assert.match(nav,/mousePresent\.current = false/);
+ assert.match(nav,/document\.addEventListener\("pointerdown", touchDown/);
+ assert.match(nav,/!mousePresent\.current && window\.matchMedia/);
  assert.match(css,/overscroll-behavior: contain/);
  assert.match(css,/will-change: backdrop-filter/);
 });
