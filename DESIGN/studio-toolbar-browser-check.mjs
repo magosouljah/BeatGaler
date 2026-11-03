@@ -200,7 +200,7 @@ try {
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.searchScaleAnchor"),"trigger-center");
  // SDF shader must use one single rounded rectangle: no separate cap.
  assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.geometry"),"studio-original-rounded-rect");
- assert.ok(Math.abs((await bounds(".studio-search>button")).width-44)<1,"Expanded Search trigger should stay 44px");
+ assert.equal(await evaluate("document.querySelector(\'.studio-search>button\').offsetWidth"),44,"Search trigger layout must remain 44px while its icon scales visually");
  await capture("05a-studio-expanded-search-pressed.png");
  // With pointer capture, releasing outside would normally still click Search.
  // Reject that click and preserve its open state.
