@@ -227,7 +227,7 @@ test("gallery navigation has a real one-line bar that pushes the Studio toolbar"
   assert.match(css, /grid-template-rows: 0fr/);
   assert.match(css, /grid-template-rows: 1fr/);
   assert.match(css, /lab-gallery-tag-surface/);
-  assert.match(css, /padding-top: 88px/);
+  assert.match(css, /padding-top: calc\(var\(--lab-space-24\) - var\(--lab-space-2\)\)/);
   assert.match(css, /background: #0c0c0c/);
   assert.match(css, /content: attr\(data-label\)/);
   assert.match(css, /text-shadow: 0 0 \.8px currentColor/);
@@ -315,7 +315,7 @@ test("Gallery overlays use viewport tokens, never beat geometry, and prevent whe
  assert.match(gallery,/data-tags-open=\{tagsVisible/);
  assert.doesNotMatch(gallery,/getBoundingClientRect|ResizeObserver|--gallery-tags-push|querySelector<HTMLElement>/);
  assert.match(css,/--gallery-frame-width: min\(1370px/);
- assert.match(css,/--gallery-tag-height: var\(--lab-space-24\)/);
+ assert.match(css,/--gallery-tag-height:calc\(var\(--lab-space-24\) - var\(--lab-space-2\)\)/);
  assert.match(css,/--gallery-tag-gap: var\(--lab-space-2\)/);
  assert.match(css,/calc\(var\(--gallery-tag-top\) \+ var\(--gallery-tag-height\) \+ var\(--gallery-tag-gap\) - var\(--gallery-toolbar-top\)\)/);
  assert.match(css,/overflow-anchor: none/);
@@ -338,12 +338,17 @@ test("Gallery uses the inset hover layout, deliberate ink and approved 44 preset
  const studio=read("./MASTER/StudioToolbarCandidate.tsx");
  const preset=JSON.parse(read("./MASTER/studio-toolbar-44.json")).controls;
  assert.match(css,/\.lab-gallery-top-stack \{[\s\S]*?position: fixed/);
- assert.match(css,/transform: translate3d\(0,-6px,0\)/);
+ assert.match(css,/\.lab-gallery-tag-track \{\s*transform:none/);
  assert.match(css,/\.lab-gallery-top-stack \.lab-gallery-tag-surface \{ background: #0c0c0c; \}/);
  assert.match(css,/\.lab-gallery-tag-cue \{[\s\S]*?position:fixed/);
  assert.match(gallery,/tags-hint-seen/);
  assert.doesNotMatch(gallery,/lastRight|first\.top|--gallery-tags-push|useLayoutEffect/);
- assert.match(css,/right: calc\(\(100vw - var\(--gallery-frame-width\)\) \/ 2 \+ var\(--gallery-toolbar-inset\)\)/);
+ assert.match(css,/right:var\(--gallery-toolbar-right\)/);
+ assert.match(css,/--gallery-toolbar-optical-inset:10px/);
+ assert.match(css,/--gallery-grid-track-width:calc\(/);
+ assert.match(css,/grid-template-columns:repeat\(var\(--gallery-grid-columns\)/);
+ assert.match(css,/--gallery-tag-top:env\(safe-area-inset-top,0px\)/);
+ assert.doesNotMatch(css,/--gallery-toolbar-inset|translate3d\(0,-6px,0\)/);
  assert.match(css,/transition: transform var\(--gallery-reveal-duration\) var\(--lab-ease\)/);
  assert.match(css,/transition: grid-template-rows var\(--gallery-reveal-duration\) var\(--lab-ease\)/);
  assert.match(nav,/event\.clientY <= 78/);
