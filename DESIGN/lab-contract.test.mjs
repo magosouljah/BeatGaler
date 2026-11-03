@@ -314,7 +314,7 @@ test("Gallery overlays use viewport tokens, never beat geometry, and prevent whe
  assert.match(css,/\.lab-gallery-toolbar-float \{[\s\S]*?position: fixed/);
  assert.match(gallery,/data-tags-open=\{tagsVisible/);
  assert.doesNotMatch(gallery,/getBoundingClientRect|ResizeObserver|--gallery-tags-push|querySelector<HTMLElement>/);
- assert.match(css,/--gallery-frame-width: min\(1370px/);
+ assert.match(css,/--gallery-frame-width:\s*min\(1370px/);
  assert.match(css,/--gallery-tag-height:calc\(var\(--lab-space-24\) - var\(--lab-space-2\)\)/);
  assert.match(css,/--gallery-tag-gap: var\(--lab-space-2\)/);
  assert.match(css,/calc\(var\(--gallery-tag-top\) \+ var\(--gallery-tag-height\) \+ var\(--gallery-tag-gap\) - var\(--gallery-toolbar-top\)\)/);
