@@ -21,7 +21,7 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
   visible: boolean;
   onVisibilityChange: (visible: boolean) => void;
   filters: Partial<Record<DemoTag, Filter>>;
-  onCycleTag: (name: DemoTag) => void;
+  onCycleTag: (name: DemoTag, exclude: boolean) => void;
   onClear: () => void;
   tagColors: Record<string, string>;
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
@@ -249,13 +249,13 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
     if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 9)
       clearLongPress();
   };
-  const activate = (name: DemoTag) => {
+  const activate = (name: DemoTag, exclude = false) => {
     const suppress = suppressClick.current;
     suppressClick.current = null;
     if (suppress?.tag === name && Date.now() - suppress.time < 1800) return;
     saveLayout();
     if (filters[name] === undefined) scrollToStart.current = true;
-    onCycleTag(name);
+    onCycleTag(name, exclude);
   };
   const reset = () => { saveLayout(); onClear(); };
   const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -291,7 +291,7 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
           onKeyDown={moveFocus} tabIndex={0} aria-label="Horizontal tag navigation">
           <div ref={contentRef} className="lab-gallery-tag-track">
             <button type="button" className={"lab-gallery-tag lab-gallery-tag-all" + (allActive ? " is-included" : "")}
-              aria-pressed={allActive} onClick={reset}>All</button>
+              data-label="All" aria-pressed={allActive} onClick={reset}><span className="lab-gallery-tag-label">All</span></button>
             {ordered.map(name => {
               const state = filters[name] ?? "idle";
               const color = tagColors[name];
@@ -299,11 +299,12 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
                 className="lab-gallery-tag-wrap">
                 <button type="button" ref={node => { if (node) buttonRefs.current.set(name, node); else buttonRefs.current.delete(name); }}
                   className={"lab-gallery-tag is-" + state}
+                  data-label={name}
                   style={color ? { "--lab-tag-color": color } as CSSProperties : undefined}
                   aria-pressed={state === "include"}
-                  aria-label={name + ": " + state + ". Click to filter; right-click, long-press or Shift+F10 to change color."}
-                  title="Click to include, exclude or clear · Right-click to edit color"
-                  onClick={() => activate(name)}
+                  aria-label={name + ": " + state + ". Click to include or clear; Alt+click to exclude or clear; right-click, long-press or Shift+F10 to change color."}
+                  title="Click: include/clear · Alt+click: exclude/clear · Right-click: color"
+                  onClick={event => activate(name, event.altKey)}
                   onContextMenu={event => { event.preventDefault(); openPalette(name); }}
                   onPointerDown={event => beginLongPress(name, event)}
                   onPointerMove={moveLongPress}
@@ -315,7 +316,7 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
                       event.preventDefault();
                       openPalette(name);
                     }
-                  }}>{name}</button>
+                  }}><span className="lab-gallery-tag-label">{name}</span></button>
               </div>;
             })}
           </div>

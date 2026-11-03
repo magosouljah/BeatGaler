@@ -92,9 +92,11 @@ try{
      contentWidth:bar.scrollWidth,viewportWidth:bar.clientWidth,barHeight:bar.clientHeight,
      surfaceBackground:getComputedStyle(surface).backgroundColor};
  })()`);
- assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+8,"Tag surface must push toolbar down with a real gap");
+ assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Tag strip must push toolbar down without overlap");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
- assert.match(tagLayout.surfaceBackground,/rgba?\(/,"Tag bar needs a real subtle background");
+ assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
+ assert.ok(tagLayout.barHeight<=52,"Tag strip should remain compact");
+ assert.ok(await expr("(()=>{const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();return nav.left<=1&&nav.right>=innerWidth-1;})()"),"Tag strip must span the entire viewport");
  assert.ok(tagLayout.barHeight<80,"Tag navigation must remain a single row");
  const scrollResult=await expr(`(()=>{
    const bar=document.querySelector('.lab-gallery-tag-bar');
@@ -132,13 +134,20 @@ try{
  assert.equal(await expr("document.querySelectorAll('.lab-tag-color-popover').length"),0);
 
  const ambient="document.querySelector('.lab-gallery-tag-bar button[aria-label^=\"Ambient:\"]')";
+ const beforeWidth=await expr(ambient+".offsetWidth");
+ const nextOffsetBefore=await expr("document.querySelector('.lab-gallery-tag-bar button[aria-label^=\"Trap:\"]').parentElement.offsetLeft");
  await click(ambient);
+ assert.equal(await expr(ambient+".offsetWidth"),beforeWidth,"Bold included tag must retain its hitbox width");
+ assert.equal(await expr("document.querySelector('.lab-gallery-tag-bar button[aria-label^=\"Trap:\"]').parentElement.offsetLeft"),nextOffsetBefore,"Selection weight must not push adjacent tags");
  const count=await expr("document.querySelectorAll('.lab-beat-tile').length");
  assert.ok(count>0&&count<24,"Ambient inclusion should filter");
  await click(ambient);
- assert.ok(await expr("[...document.querySelectorAll('.lab-beat-tile')].every(t=>![...t.querySelectorAll('.lab-beat-tile__tag')].some(e=>e.textContent==='Ambient'))"),"Ambient exclusion across multi-tag beats");
- await click(ambient);
- assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24);
+ assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Plain click must toggle inclusion off, not cycle to exclusion");
+ await expr('(()=>{const el='+ambient+';el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true}));return true;})()');
+ assert.ok(await expr("[...document.querySelectorAll('.lab-beat-tile')].every(t=>![...t.querySelectorAll('.lab-beat-tile__tag')].some(e=>e.textContent==='Ambient'))"),"Alt+click must exclude Ambient across multi-tag beats");
+ assert.ok(await expr("(()=>{const c=getComputedStyle("+ambient+").color;const m=c.match(/\\d+/g).map(Number);return m[2]>m[1]&&m[0]>m[1];})()"),"Excluded colored tag must keep its purple hue instead of turning white");
+ await expr('(()=>{const el='+ambient+';el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true}));return true;})()');
+ assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Second Alt+click clears exclusion");
  await goMaster();
  await until("Boolean(document.querySelector('.lab-master-cover-modes'))","MASTER revisit");
  await click("document.querySelector('.lab-master-cover-modes button:nth-child(1)')");
@@ -154,6 +163,7 @@ try{
  await sleep(340);
  const collapsed=await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top");
  assert.ok(collapsed>=12&&collapsed<50,"Collapsed Toolbar should return to its top margin");
+ assert.ok(await expr("document.querySelector('.lab-gallery-item').getBoundingClientRect().top<120"),"Gallery covers must begin after only the toolbar, without reserving the hidden tag strip");
  // Small screens keep a 600px optical viewport and do not overlap the tags.
  await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
@@ -175,7 +185,7 @@ try{
    mobile=await readMobile();
  }
  console.log("Mobile Gallery layout:",mobile);
- assert.ok(mobile.gap>=8,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
+ assert.ok(mobile.gap>=7,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
  assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile navigation must fit viewport width");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");

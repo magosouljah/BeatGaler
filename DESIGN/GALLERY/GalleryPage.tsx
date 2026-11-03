@@ -41,11 +41,13 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     return beats;
   }, [search, filters, sort]);
 
-  const cycleTag = (name: DemoTag) => setFilters(current => {
+  const cycleTag = (name: DemoTag, exclude: boolean) => setFilters(current => {
     const next = { ...current };
-    if (!next[name]) next[name] = "include";
-    else if (next[name] === "include") next[name] = "exclude";
-    else delete next[name];
+    const requested: TagFilter = exclude ? "exclude" : "include";
+    // Click toggles inclusion; Alt+click toggles exclusion. Neither gesture
+    // cycles through the opposite mode.
+    if (next[name] === requested) delete next[name];
+    else next[name] = requested;
     return next;
   });
   const clearSelection = () => { setSelected([]); setSelectMode(false); };

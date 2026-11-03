@@ -227,6 +227,13 @@ test("gallery navigation has a real one-line bar that pushes the Studio toolbar"
   assert.match(css, /grid-template-rows: 0fr 44px/);
   assert.match(css, /grid-template-rows: 1fr 44px/);
   assert.match(css, /lab-gallery-tag-surface/);
+  assert.match(css, /padding-top: 88px/);
+  assert.match(css, /background: #0c0c0c/);
+  assert.match(css, /content: attr\(data-label\)/);
+  assert.match(css, /text-shadow: 0 0 \.8px currentColor/);
+  assert.match(nav, /event\.altKey/);
+  assert.match(gallery, /exclude \? "exclude" : "include"/);
+  assert.doesNotMatch(nav, /Click to include, exclude or clear/);
   assert.match(css, /overflow-x: auto/);
   assert.match(css, /white-space: nowrap/);
   assert.match(css, /has-left\.has-right/);
