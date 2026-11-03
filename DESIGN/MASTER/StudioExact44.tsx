@@ -8,7 +8,7 @@ import main from "./engines/studio/fragment-main.glsl?raw";
 import sdf from "./engines/studio/lib/sdf.glsl?raw";
 import math from "./engines/studio/lib/math.glsl?raw";
 import color from "./engines/studio/lib/color.glsl?raw";
-import presetText from "./studio-toolbar-44.json?raw";
+import presetText from "./studio-toolbar-44-original.json?raw";
 import "./studio-exact-44.css";
 
 // IMPORTANT: This diagnostic renders ONE static Studio shape, using Studio's

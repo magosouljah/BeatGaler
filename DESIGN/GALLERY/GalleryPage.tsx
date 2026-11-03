@@ -15,6 +15,8 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
   const [search, setSearch] = useState("");
+  const [tagsOpen, setTagsOpen] = useState(() => typeof window !== "undefined" &&
+    window.matchMedia("(hover: none), (pointer: coarse)").matches);
   const [sort, setSort] = useState<LabSort>("manual");
   const [toolbarNotice, setToolbarNotice] = useState("");
   const [filters, setFilters] = useState<Partial<Record<DemoTag, TagFilter>>>({});
@@ -52,16 +54,20 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   );
   return (
     <div className="lab-gallery-page">
-      <div className="lab-gallery-toolbar-float">
-        <StudioToolbarCandidate gallery search={search} onSearchChange={setSearch} sort={sort} onSortChange={setSort}
-          selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
-          onProfileAction={action => setToolbarNotice(action === "settings" ? "Settings: preview only." : "Log out: preview only; no session is active.")} />
+      <div className="lab-gallery-top-stack" data-tags-open={tagsOpen ? "true" : "false"}>
+        <TagNavigation visible={tagsOpen} onVisibilityChange={setTagsOpen}
+          filters={filters} onCycleTag={cycleTag} onClear={() => setFilters({})}
+          tagColors={tagColors} setTagColors={setTagColors} />
+        <div className="lab-gallery-toolbar-float">
+          <StudioToolbarCandidate gallery galleryTagsOpen={tagsOpen} search={search} onSearchChange={setSearch}
+            sort={sort} onSortChange={setSort}
+            selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
+            onProfileAction={action => setToolbarNotice(action === "settings" ? "Settings: preview only." : "Log out: preview only; no session is active.")} />
+        </div>
       </div>
       {toolbarNotice && <div className="lab-gallery-toolbar-notice" role="status">{toolbarNotice}
         <button type="button" aria-label="Dismiss notice" onClick={() => setToolbarNotice("")}>×</button>
       </div>}
-      <TagNavigation filters={filters} onCycleTag={cycleTag} onClear={() => setFilters({})}
-        tagColors={tagColors} setTagColors={setTagColors} />
       {selectMode && selected.length > 0 && <div className="lab-gallery-selection-status" role="status">
         {selected.length} selected <button type="button" onClick={() => setSelected([])}>Clear selection</button>
       </div>}

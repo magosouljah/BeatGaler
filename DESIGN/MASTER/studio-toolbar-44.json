@@ -17,9 +17,9 @@
     "refFresnelFactor": 20,
     "glareRange": 32.2,
     "glareHardness": 14.74,
-    "glareFactor": 33.82,
+    "glareFactor": 30.2,
     "glareConvergence": 48.76,
-    "glareOppositeFactor": 78.81,
+    "glareOppositeFactor": 69,
     "glareAngle": -45,
     "blurRadius": 6,
     "blurEdge": true,
@@ -44,5 +44,6 @@
     "showShape1": false,
     "springSizeFactor": 10,
     "step": 9
-  }
+  },
+  "description": "Gallery and Toolbar Studio 44: gently softened glare, original optics otherwise unchanged"
 }

@@ -97,11 +97,11 @@ function Glyph({kind}:{kind:Kind}){
 }
 
 export default function StudioToolbarCandidate({
-  gallery=false, search:controlledSearch, onSearchChange,
+  gallery=false, galleryTagsOpen=false, search:controlledSearch, onSearchChange,
   sort:controlledSort, onSortChange, selecting:controlledSelecting,
   onToggleSelect, onProfileAction
 }:{
-  gallery?:boolean;search?:string;onSearchChange?:(value:string)=>void;
+  gallery?:boolean;galleryTagsOpen?:boolean;search?:string;onSearchChange?:(value:string)=>void;
   sort?:LabSort;onSortChange?:(value:LabSort)=>void;
   selecting?:boolean;onToggleSelect?:()=>void;
   onProfileAction?:(action:"settings"|"logout")=>void;
@@ -120,6 +120,7 @@ export default function StudioToolbarCandidate({
   const pressSprings=useRef(Array.from({length:4},()=>makeSpring(0)));
   const morphSprings=useRef({search:makeSpring(44),select:makeSpring(78)});
   const animate=useRef<()=>void>(()=>{});
+  const refreshGallery=useRef<()=>void>(()=>{});
   const searchOpenRef=useRef(false);
   const [searchOpen,setSearchOpen]=useState(false);
   const [search,setSearch]=useState("");
@@ -305,7 +306,8 @@ export default function StudioToolbarCandidate({
       if(controls.current[2])controls.current[2]!.style.width=Math.max(44,motion.select.x)+"px";
       const stageRect=host.getBoundingClientRect();
       // Studio's original CanvasInfo defaults to DPR = 1.
-      // A 600px-tall stage matches the 600x600 approved reference geometry.
+      // Gallery also uses the 600px-tall reference stage: the original
+      // normal, Fresnel and glare calculations depend on u_resolution.y.
       const dpr=1;
       const w=Math.max(2,Math.round(stageRect.width*dpr));
       const h=Math.max(2,Math.round(stageRect.height*dpr));
@@ -353,6 +355,7 @@ export default function StudioToolbarCandidate({
       canvas.dataset.optics="studio-original-shader";
       canvas.dataset.background=gallery?"gallery-artwork":sceneTheme==="dark"?"#26262b":"#e7e7e9";
       canvas.dataset.viewportHeight=String(h);
+      canvas.dataset.presetVariant="studio-44-soft-glare";
       gl.viewport(0,0,w,h);
       renderer.setUniforms({
         u_resolution:[w,h],u_dpr:dpr,u_lenses:shapes,
@@ -392,6 +395,7 @@ export default function StudioToolbarCandidate({
     });
     observer.observe(host);
     const refreshBackdrop=()=>{if(gallery){needsBackground=true;animate.current();}};
+    refreshGallery.current=refreshBackdrop;
     if(gallery){
       window.addEventListener("scroll",refreshBackdrop,{passive:true});
       window.addEventListener("resize",refreshBackdrop,{passive:true});
@@ -410,10 +414,25 @@ export default function StudioToolbarCandidate({
       disposed=true;cancelAnimationFrame(frame);observer.disconnect();mutations.disconnect();
       if(gallery){window.removeEventListener("scroll",refreshBackdrop);window.removeEventListener("resize",refreshBackdrop);document.removeEventListener("load",refreshBackdrop,true);}
       host.removeEventListener("studio-theme",themeListener);
+      refreshGallery.current=()=>{};
       animate.current=()=>{};renderer?.dispose();
       if(gl&&texture)gl.deleteTexture(texture);
     };
   },[]);
+  useEffect(()=>{
+    if(!gallery)return;
+    // The tag bar changes the toolbar's DOM position without resizing the
+    // 600px WebGL canvas. Re-sample its geometry/background throughout the
+    // reversible grid-track transition, including mid-flight interruptions.
+    let raf=0;
+    const end=performance.now()+340;
+    const refresh=()=>{
+      refreshGallery.current();
+      if(performance.now()<end)raf=requestAnimationFrame(refresh);
+    };
+    raf=requestAnimationFrame(refresh);
+    return()=>cancelAnimationFrame(raf);
+  },[gallery,galleryTagsOpen]);
   useEffect(()=>{stage.current?.dispatchEvent(new CustomEvent("studio-theme",{detail:theme}));},[theme]);
   useLayoutEffect(()=>{
     // After React commits the menu DOM but before browser paint, request a

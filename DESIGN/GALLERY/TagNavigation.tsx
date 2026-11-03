@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, Dispatch, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, SetStateAction } from "react";
 import { DEMO_TAGS } from "../shared/data";
 import type { DemoTag } from "../shared/data";
@@ -16,14 +17,15 @@ const PALETTE = [
 
 // DOM order follows visual order for focus and assistive technology.
 // FLIP preserves the current pixel position and velocity when interrupted.
-export default function TagNavigation({ filters, onCycleTag, onClear, tagColors, setTagColors }: {
+export default function TagNavigation({ visible, onVisibilityChange, filters, onCycleTag, onClear, tagColors, setTagColors }: {
+  visible: boolean;
+  onVisibilityChange: (visible: boolean) => void;
   filters: Partial<Record<DemoTag, Filter>>;
   onCycleTag: (name: DemoTag) => void;
   onClear: () => void;
   tagColors: Record<string, string>;
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
-  const [visible, setVisible] = useState(false);
   const [editingTag, setEditingTag] = useState<DemoTag | null>(null);
   const [palettePosition, setPalettePosition] = useState({ left: 0, top: 0 });
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -52,15 +54,15 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
     if (hideTimer.current !== null) clearTimeout(hideTimer.current);
     hideTimer.current = null;
   }, []);
-  const show = useCallback(() => { clearHide(); setVisible(true); }, [clearHide]);
+  const show = useCallback(() => { clearHide(); onVisibilityChange(true); }, [clearHide, onVisibilityChange]);
   const scheduleHide = useCallback(() => {
     if (editingTag || rootRef.current?.contains(document.activeElement)) return;
     if (hideTimer.current !== null) return;
     hideTimer.current = setTimeout(() => {
       hideTimer.current = null;
-      setVisible(false);
+      onVisibilityChange(false);
     }, CLOSE_DELAY);
-  }, [editingTag]);
+  }, [editingTag, onVisibilityChange]);
   const clearLongPress = () => {
     if (longPress.current !== null) clearTimeout(longPress.current);
     longPress.current = null;
@@ -151,12 +153,22 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
   }, [updateEdges, orderKey]);
 
   useEffect(() => {
+    // Touch and hybrid devices must always expose the navigation without hover.
+    const media = window.matchMedia("(hover: none), (pointer: coarse)");
+    const update = () => onVisibilityChange(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [onVisibilityChange]);
+
+  useEffect(() => {
     const move = (event: PointerEvent) => {
       if (event.pointerType !== "mouse") return;
       const toolbar = document.querySelector(".studio-candidate.is-gallery .studio-candidate-toolbar") ?? document.querySelector(".lab-gallery-toolbar-float");
       const toolbarLeft = toolbar?.getBoundingClientRect().left ?? window.innerWidth;
       const inRevealZone = event.clientY <= 78 && event.clientX < toolbarLeft - 12;
-      if (inRevealZone || rootRef.current?.contains(event.target as Node)) show();
+      if (inRevealZone || rootRef.current?.contains(event.target as Node) ||
+        (visible && toolbar?.contains(event.target as Node))) show();
       else scheduleHide();
     };
     const focus = (event: FocusEvent) => {
@@ -169,7 +181,7 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
       document.removeEventListener("pointermove", move);
       document.removeEventListener("focusin", focus);
     };
-  }, [show, scheduleHide]);
+  }, [show, scheduleHide, visible]);
 
   useEffect(() => {
     if (!editingTag) return;
@@ -247,8 +259,22 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
   };
   const reset = () => { saveLayout(); onClear(); };
   const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    if (event.target === scroller) {
+      if (event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        scroller.scrollTo({ left: event.key === "Home" ? 0 : scroller.scrollWidth, behavior: "smooth" });
+      } else if (event.key === "ArrowRight" || event.key === "ArrowLeft" ||
+        event.key === "PageDown" || event.key === "PageUp") {
+        event.preventDefault();
+        const forward = event.key === "ArrowRight" || event.key === "PageDown";
+        scroller.scrollBy({ left: (forward ? 1 : -1) * (event.key.startsWith("Page") ? scroller.clientWidth * .8 : 160), behavior: "smooth" });
+      }
+      return;
+    }
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
-    const buttons = Array.from(scrollerRef.current?.querySelectorAll<HTMLButtonElement>(".lab-gallery-tag") ?? []);
+    const buttons = Array.from(scroller.querySelectorAll<HTMLButtonElement>(".lab-gallery-tag"));
     const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
     if (index < 0) return;
     event.preventDefault();
@@ -260,6 +286,7 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
     <>
       <div ref={rootRef} className={"lab-gallery-tags-layer" + (visible ? " is-open" : "")}
         role="group" aria-label="Tag filters" onFocusCapture={show}>
+        <div className="lab-gallery-tag-surface">
         <div ref={scrollerRef} className={"lab-gallery-tag-bar" + (edges.left ? " has-left" : "") + (edges.right ? " has-right" : "")}
           onKeyDown={moveFocus} tabIndex={0} aria-label="Horizontal tag navigation">
           <div ref={contentRef} className="lab-gallery-tag-track">
@@ -293,8 +320,9 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
             })}
           </div>
         </div>
+        </div>
       </div>
-      {editingTag && <div ref={paletteRef} className="lab-tag-color-popover lab-tag-color-popover--floating"
+      {editingTag && createPortal(<div ref={paletteRef} className="lab-tag-color-popover lab-tag-color-popover--floating"
         role="group" aria-label={"Colores de " + editingTag} style={palettePosition}>
         <div className="lab-tag-color-swatches">
           {PALETTE.map(option => <button type="button" key={option.hex}
@@ -307,7 +335,7 @@ export default function TagNavigation({ filters, onCycleTag, onClear, tagColors,
           setTagColors(current => { const next = { ...current }; delete next[editingTag]; return next; });
           setEditingTag(null);
         }}>Sin color</button>
-      </div>}
+      </div>, document.body)}
     </>
   );
 }

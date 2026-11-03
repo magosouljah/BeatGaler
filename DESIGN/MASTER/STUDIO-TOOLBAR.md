@@ -2,7 +2,7 @@
 
 MASTER → **Toolbar · Studio 44** (candidato independiente).
 
-- Se conserva sin cambios el preset `studio-toolbar-44.json` enviado 2026-11-02 23:59:40: propiedades ópticas, 44px, `glare`, `Fresnel`, tinte y blur.
+- El espécimen exacto de MASTER conserva el preset aprobado de 2026-11-02 23:59:40 en `studio-toolbar-44-original.json`. El preset activo `studio-toolbar-44.json` conserva geometría, 44 px, Fresnel, tinte y blur; reduce moderadamente `glareFactor` (33.82 → 30.2) y `glareOppositeFactor` (78.81 → 69).
 - Un solo canvas WebGL2 y los cuatro pases de `iyinchao/liquid-glass-studio` originales (shaders de background, blur, main y renderizador). La composición de cuatro lentes reemplaza solamente `mainSDF`, **reutilizando literalmente** `roundedRectSDF` y `superellipseCornerSDF` del archivo de geometría original. Cada lente tiene dimensiones propias y la unión toma la mínima distancia; **no se fusionan con smin**.
 - Mismo lienzo **600×600px y DPR=1** que la referencia estática previamente aceptada. Se usa fondo plano oscuro #26262b o claro #e7e7e9, mediante la textura de fondo (no dentro de los botones). Un fondo distinto puede cambiar los reflejos.
 - **Sin jelly**: eliminado u_waves/sinusoidal/shear. Search/Select realizan cambios del **ancho del rounded rectangle** mediante resortes; reflejos se recalculan físicamente sobre la nueva forma, sin deformarla.
@@ -20,4 +20,4 @@ Toolbar V1/V2, `src/`, `main` y producción siguen intactos.
 
 ## Integración en Gallery (solo DESIGN)
 
-`StudioToolbarCandidate` acepta la variante `gallery` y callbacks de filtros de búsqueda, sorting, selección y perfil. Sin alterar el espécimen de MASTER ni el preset, monta la misma óptica Studio 44 en un canvas transparente fuera del contorno, con textura local generada a partir de las portadas visibles y refrescada al hacer scroll. El componente queda fijo arriba a la derecha, separado de los tags. La prueba sobre fondos de Gallery requiere validación Chrome/WebGL en una sesión local.
+`StudioToolbarCandidate` acepta la variante `gallery` y callbacks de búsqueda, sorting, selección y perfil. Gallery restaura el alto óptico original de **600px** (en vez de 362px), conserva el mismo shader óptico y usa alpha únicamente fuera del contorno. El fondo de Gallery se muestrea desde las portadas visibles y se refresca durante scroll y el movimiento coordinado de la barra. La barra tiene un contenedor real, y al expandirse desplaza la Toolbar hacia abajo sin superposición. El espécimen exacto de MASTER queda intacto y usa el JSON original congelado. El workflow Design Lab verifica Chrome/WebGL y guarda capturas.

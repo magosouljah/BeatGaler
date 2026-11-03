@@ -168,8 +168,13 @@ test("gallery uses 24 distinct one-word names, multi-tags and real covers", () =
   assert.equal(names.length, 24);
   const tags = [...data.matchAll(/tags:\[([^\]]+)\]/g)].map(m=>m[1].split(","));
   assert.equal(tags.length, 24);
-  assert.ok([1,2,3].every(n=>tags.some(group=>group.length===n)));
-  assert.ok(tags.every(group=>group.length>=1&&group.length<=3));
+  assert.ok([4,5].every(n=>tags.some(group=>group.length===n)));
+  assert.ok(tags.every(group=>group.length>=3&&group.length<=6));
+  const declaredTags = JSON.parse(data.match(/export const DEMO_TAGS = (\[[^;]+\]) as const;/)?.[1] ?? "[]");
+  assert.equal(declaredTags.length,35);
+  assert.equal(new Set(declaredTags).size,declaredTags.length);
+  assert.deepEqual(new Set(tags.flat().map(name=>JSON.parse(name))),new Set(declaredTags));
+  assert.ok(declaredTags.includes("BoomBap")&&declaredTags.includes("Hyperpop"));
   assert.ok(tile.includes("beat.tags.map(tag =>"));
   assert.ok(gallery.includes("included.some(name => item.tags.includes(name))"));
   assert.ok(gallery.includes("<StudioToolbarCandidate gallery"));
@@ -203,6 +208,48 @@ test("MASTER switches generated/real covers above REGLAS for Gallery and Landing
   assert.ok(app.includes("<GalleryPage coverMode={coverMode}"));
   assert.ok(app.includes("<LandingPage")&&app.includes("coverMode={coverMode}"));
   assert.ok(app.includes("<MasterPage coverMode={coverMode} setCoverMode={setCoverMode}"));
+});
+
+test("gallery navigation has a real one-line bar that pushes the Studio toolbar", () => {
+  const gallery = read("./GALLERY/GalleryPage.tsx");
+  const nav = read("./GALLERY/TagNavigation.tsx");
+  const css = read("./GALLERY/gallery.css");
+  const studio = read("./MASTER/StudioToolbarCandidate.tsx");
+  const studioCss = read("./MASTER/studio-toolbar.css");
+  assert.match(gallery, /lab-gallery-top-stack/);
+  assert.match(gallery, /data-tags-open=\{tagsOpen/);
+  assert.match(gallery, /galleryTagsOpen=\{tagsOpen\}/);
+  assert.match(nav, /onVisibilityChange/);
+  assert.match(nav, /createPortal\(/);
+  assert.match(nav, /scrollBy\(/);
+  assert.match(nav, /passive: false/);
+  assert.match(nav, /useLayoutEffect/);
+  assert.match(css, /grid-template-rows: 0fr 44px/);
+  assert.match(css, /grid-template-rows: 1fr 44px/);
+  assert.match(css, /lab-gallery-tag-surface/);
+  assert.match(css, /overflow-x: auto/);
+  assert.match(css, /white-space: nowrap/);
+  assert.match(css, /has-left\.has-right/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.doesNotMatch(css.slice(css.indexOf("/* Single fixed navigation stack")), /lab-gallery-tags-layer \{[^}]*position: fixed/);
+  assert.match(studioCss, /height: 600px/);
+  assert.match(studio, /galleryTagsOpen/);
+  assert.match(studio, /const end=performance.now\(\)\+340/);
+});
+
+test("softened Studio 44 preset keeps the untouched diagnostic reference", () => {
+  const original = JSON.parse(read("./MASTER/studio-toolbar-44-original.json"));
+  const current = JSON.parse(read("./MASTER/studio-toolbar-44.json"));
+  const exact = read("./MASTER/StudioExact44.tsx");
+  assert.equal(original.controls.glareFactor,33.82);
+  assert.equal(original.controls.glareOppositeFactor,78.81);
+  assert.ok(current.controls.glareFactor<original.controls.glareFactor);
+  assert.ok(current.controls.glareOppositeFactor<original.controls.glareOppositeFactor);
+  assert.ok(current.controls.glareFactor>original.controls.glareFactor*.82);
+  assert.ok(current.controls.glareOppositeFactor>original.controls.glareOppositeFactor*.82);
+  assert.equal(current.controls.refDistance,original.controls.refDistance);
+  assert.equal(current.controls.refFresnelFactor,original.controls.refFresnelFactor);
+  assert.match(exact, /studio-toolbar-44-original\.json\?raw/);
 });
 
 test("Studio gallery transparent shader supports Windows CRLF and Linux LF, with graceful fallback", () => {

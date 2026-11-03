@@ -78,11 +78,41 @@ try{
  await click("document.querySelector('.lab-master-cover-modes button:nth-child(2)')");
  assert.equal(await expr("document.querySelector('.lab-master-cover-modes button:nth-child(2)').getAttribute('aria-pressed')"),"true");
  await goGallery();
+ await until("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas')?.dataset.engineReady==='true'","Gallery Studio WebGL ready");
+ assert.equal(await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas').dataset.viewportHeight"),"600","Gallery glass must use original 600px optics");
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","tag bar reveal");
+ await sleep(360);
+ const tagLayout=await expr(`(()=>{
+   const surface=document.querySelector('.lab-gallery-tag-surface');
+   const bar=document.querySelector('.lab-gallery-tag-bar');
+   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar');
+   const a=surface.getBoundingClientRect(),b=toolbar.getBoundingClientRect();
+   return {surfaceTop:a.top,surfaceBottom:a.bottom,toolbarTop:b.top,
+     contentWidth:bar.scrollWidth,viewportWidth:bar.clientWidth,barHeight:bar.clientHeight,
+     surfaceBackground:getComputedStyle(surface).backgroundColor};
+ })()`);
+ assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+8,"Tag surface must push toolbar down with a real gap");
+ assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
+ assert.match(tagLayout.surfaceBackground,/rgba?\(/,"Tag bar needs a real subtle background");
+ assert.ok(tagLayout.barHeight<80,"Tag navigation must remain a single row");
+ const scrollResult=await expr(`(()=>{
+   const bar=document.querySelector('.lab-gallery-tag-bar');
+   bar.dispatchEvent(new WheelEvent('wheel',{deltaY:210,bubbles:true,cancelable:true}));
+   return {left:bar.scrollLeft,edge:bar.className};
+ })()`);
+ assert.ok(scrollResult.left>0,"Vertical wheel must drive the horizontal scroller");
+ await expr("document.querySelector('.lab-gallery-tag-bar').scrollLeft=0");
+ // Far-right selected tag should reorder immediately after All, without losing All.
+ await click("document.querySelector('.lab-gallery-tag[aria-label^=\"BoomBap:\"]')");
+ assert.ok(await expr("document.querySelector('.lab-gallery-tag-track').children[1]?.textContent==='BoomBap'"),"Selected tag must move after All");
+ await click("document.querySelector('.lab-gallery-tag-all')");
  const tiles=await expr("[...document.querySelectorAll('.lab-beat-tile')].map(t=>({name:t.querySelector('.lab-beat-tile__title').textContent,tags:[...t.querySelectorAll('.lab-beat-tile__tag')].map(x=>x.textContent),cover:t.querySelector('.lab-artwork img').src}))");
  assert.equal(tiles.length,24);
  assert.equal(new Set(tiles.map(t=>t.name)).size,24);
  assert.ok(tiles.every(t=>/^[a-z]+$/i.test(t.name)));
- assert.ok([1,2,3].every(n=>tiles.some(t=>t.tags.length===n)));
+ assert.ok(tiles.every(t=>t.tags.length>=3&&t.tags.length<=6));
+ assert.ok([4,5].every(n=>tiles.some(t=>t.tags.length===n)));
  assert.equal(new Set(tiles.map(t=>t.cover)).size,24);
  assert.ok(tiles.every(t=>/\/real-covers\/cover-\d{2}\.(jpg|avif)/.test(t.cover)));
  assert.equal(await expr("document.querySelectorAll('.lab-tag-color-trigger').length"),0);
@@ -118,6 +148,30 @@ try{
  assert.ok(generated.every(x=>x.startsWith("data:image/")),"Generated mode should use local bg-v1");
  assert.equal(new Set(generated).size,24);
  await screenshot("gallery-24-generated.png");
+ // Desktop hide and reveal: the toolbar must return to the same top margin.
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='false'","tag bar auto-hide after delay");
+ await sleep(340);
+ const collapsed=await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect().top");
+ assert.ok(collapsed>=12&&collapsed<50,"Collapsed Toolbar should return to its top margin");
+ // Small screens keep a 600px optical viewport and do not overlap the tags.
+ await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","mobile bar visible");
+ await sleep(350);
+ const mobile=await expr(`(()=>{
+   const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
+   const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
+   const glass=document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas');
+   const scroller=document.querySelector('.lab-gallery-tag-bar');
+   return {gap:toolbar.top-nav.bottom,navWidth:nav.width,screenWidth:innerWidth,
+     sceneHeight:glass.height,scrollable:scroller.scrollWidth>scroller.clientWidth};
+ })()`);
+ assert.ok(mobile.gap>=8,"Mobile toolbar must remain below the tag bar");
+ assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile navigation must fit viewport width");
+ assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
+ assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
+ await screenshot("gallery-mobile-tags.png");
  console.log("Gallery verified: 24 unique real covers, 24 generated covers, one-word titles, mixed tags, no ellipsis.");
 }finally{
  ws?.close();vite.kill("SIGTERM");browser.kill("SIGTERM");

@@ -3,7 +3,7 @@
 MASTER → **Glass · Studio Original 44**
 
 - Un único círculo de **44 × 44 px** sin animaciones, bounce, shear ni luz añadida.
-- Archivo `studio-toolbar-44.json`: exportación del 2026-11-02 23:59:40, parámetros ópticos sin alteraciones.
+- Archivo `studio-toolbar-44-original.json`: snapshot congelado de la exportación del 2026-11-02 23:59:40, parámetros ópticos sin alteraciones. `studio-toolbar-44.json` es ahora el preset activo con glare suavizado para Toolbar/Gallery, no el que usa este espécimen.
 - Shaders originales exactos (`lib/sdf.glsl`, `fragment-main.glsl`, blur y background), con `MultiPassRenderer` original.
 - `shapeRadius: 100` es **porcentaje**; Studio convierte al radio geométrico de 22px. `dpr=1`, blur kernel original y Fresnel range 0 sin parche.
 - **Corrección:** el canvas original de la prueba era 780×280, mientras `iyinchao/liquid-glass-studio` inicia con `Math.max(Math.min(window.innerWidth,window.innerHeight)-150,600)` en ambos ejes. `getNormal()` del shader divide el gradiente por `u_resolution.y`, por lo que una altura de 280 exageraba los reflejos en comparación con 600.

@@ -104,60 +104,76 @@
 @media(max-width:590px){.lab-gallery-header .lab-toolbar{align-self:flex-end;}}
 
 
-/* Floating text navigation: portadas pass behind both layers while scrolling. */
+/* Single fixed navigation stack. Revealing the real bar expands the first
+   grid track; the Studio toolbar is the next row, never an overlapping sibling.
+   Gallery artwork continues to scroll below the translucent navigation. */
 .lab-gallery-page { position: relative; }
 .lab-gallery-page .lab-gallery-main { padding-top: 156px; }
-.lab-gallery-toolbar-float {
+.lab-gallery-top-stack {
   position: fixed; z-index: 76;
   top: max(20px, env(safe-area-inset-top, 0px));
+  left: max(28px, env(safe-area-inset-left, 0px));
   right: max(28px, env(safe-area-inset-right, 0px));
-  width: max-content; max-width: calc(100vw - 40px); pointer-events: auto;
+  display: grid;
+  grid-template-rows: 0fr 44px;
+  row-gap: 0;
+  transition: grid-template-rows var(--lab-slow) var(--lab-ease),
+    row-gap var(--lab-slow) var(--lab-ease);
+  pointer-events: none;
 }
-.lab-gallery-toolbar-float .lab-toolbar-v2 { width: max-content; max-width: 100%; }
-.lab-gallery-toolbar-notice {
-  position: fixed; right: 28px; top: 80px; z-index: 79;
-  border-radius: 10px; box-shadow: 0 8px 25px #0008;
+.lab-gallery-top-stack[data-tags-open="true"] {
+  grid-template-rows: 1fr 44px;
+  row-gap: var(--lab-space-3);
 }
 .lab-gallery-tags-layer {
-  position: fixed; z-index: 67;
-  top: max(88px, calc(env(safe-area-inset-top, 0px) + 80px));
-  left: 0; right: 0;
-  opacity: 0; visibility: hidden; transform: translate3d(0, -9px, 0);
-  pointer-events: none;
-  transition: opacity var(--lab-normal) cubic-bezier(.23, 1, .32, 1),
-    transform var(--lab-slow) cubic-bezier(.23, 1, .32, 1),
+  min-height: 0; min-width: 0;
+  overflow: hidden; opacity: 0; visibility: hidden;
+  transform: translate3d(0, -9px, 0); pointer-events: none;
+  transition: opacity var(--lab-normal) var(--lab-ease),
+    transform var(--lab-slow) var(--lab-ease),
     visibility 0s linear var(--lab-slow);
 }
 .lab-gallery-tags-layer.is-open {
-  opacity: 1; visibility: visible; transform: translate3d(0, 0, 0);
-  pointer-events: auto;
-  transition: opacity var(--lab-normal) cubic-bezier(.23, 1, .32, 1),
-    transform var(--lab-slow) cubic-bezier(.23, 1, .32, 1), visibility 0s;
+  opacity: 1; visibility: visible; transform: none; pointer-events: auto;
+  transition: opacity var(--lab-normal) var(--lab-ease),
+    transform var(--lab-slow) var(--lab-ease), visibility 0s;
+}
+.lab-gallery-tag-surface {
+  min-height: 70px; display: flex; align-items: center;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 15px;
+  background: rgba(19,19,21,.87);
+  box-shadow: 0 10px 34px rgba(0,0,0,.3), inset 0 1px rgba(255,255,255,.035);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 .lab-gallery-page .lab-gallery-tag-bar {
-  position: relative; width: 100%; min-height: 58px; display: block;
-  overflow-x: auto; overflow-y: hidden;
-  padding: 0 max(28px, env(safe-area-inset-left, 0px));
-  border: 0; background: none;
+  position: relative; z-index: 1;
+  width: 100%; min-width: 0; min-height: 68px;
+  padding: 0 var(--lab-space-4);
+  border: 0; background: transparent;
+  display: block; overflow-x: auto; overflow-y: hidden;
   scrollbar-width: none; overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
+  scroll-padding-inline: var(--lab-space-4);
+  -webkit-overflow-scrolling: touch; touch-action: pan-x;
 }
 .lab-gallery-page .lab-gallery-tag-bar::-webkit-scrollbar { display: none; }
 .lab-gallery-page .lab-gallery-tag-bar.has-right {
-  mask-image: linear-gradient(90deg, black 0%, black calc(100% - 46px), transparent 100%);
-  -webkit-mask-image: linear-gradient(90deg, black 0%, black calc(100% - 46px), transparent 100%);
+  mask-image: linear-gradient(90deg, black 0%, black calc(100% - 48px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, black 0%, black calc(100% - 48px), transparent 100%);
 }
 .lab-gallery-page .lab-gallery-tag-bar.has-left {
-  mask-image: linear-gradient(90deg, transparent, black 46px, black 100%);
-  -webkit-mask-image: linear-gradient(90deg, transparent, black 46px, black 100%);
+  mask-image: linear-gradient(90deg, transparent, black 48px, black 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent, black 48px, black 100%);
 }
 .lab-gallery-page .lab-gallery-tag-bar.has-left.has-right {
-  mask-image: linear-gradient(90deg, transparent, black 46px, black calc(100% - 46px), transparent);
-  -webkit-mask-image: linear-gradient(90deg, transparent, black 46px, black calc(100% - 46px), transparent);
+  mask-image: linear-gradient(90deg, transparent, black 48px, black calc(100% - 48px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, black 48px, black calc(100% - 48px), transparent);
 }
 .lab-gallery-tag-track {
   display: flex; align-items: center; gap: clamp(25px, 3.1vw, 46px);
-  width: max-content; min-width: min-content; white-space: nowrap;
+  width: max-content; min-width: min-content;
+  height: 68px; white-space: nowrap;
 }
 .lab-gallery-page .lab-gallery-tag-wrap {
   position: relative; display: flex; flex: none; border-radius: 0;
@@ -169,10 +185,9 @@
   color: color-mix(in srgb, var(--lab-tag-color, #a3a3a3) 55%, #666);
   font: 430 clamp(25px, 2.75vw, 39px)/1.15 var(--lab-font);
   letter-spacing: -.042em; white-space: nowrap; text-decoration: none;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, .48);
   transition: color var(--lab-fast) ease, opacity var(--lab-fast) ease;
-  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
-  touch-action: pan-x;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; touch-action: pan-x;
 }
 .lab-gallery-page .lab-gallery-tag-all { color: #9b9b9b; }
 .lab-gallery-page .lab-gallery-tag.is-idle[style] {
@@ -201,6 +216,16 @@
   position: fixed; z-index: 95; top: 0; left: 0;
   background: rgba(27, 27, 27, .97);
 }
+.lab-gallery-toolbar-float {
+  position: relative; justify-self: end;
+  width: min(600px, 100%); height: 44px; min-height: 44px;
+  pointer-events: none;
+}
+.lab-gallery-toolbar-float .lab-toolbar-v2 { width: max-content; max-width: 100%; }
+.lab-gallery-toolbar-notice {
+  position: fixed; right: 28px; top: 80px; z-index: 79;
+  border-radius: 10px; box-shadow: 0 8px 25px #0008;
+}
 .lab-gallery-page .lab-gallery-selection-status {
   position: fixed; z-index: 65; bottom: 120px;
   left: 50%; transform: translateX(-50%); white-space: nowrap;
@@ -213,20 +238,14 @@
 }
 @media (max-width: 750px) {
   .lab-gallery-page .lab-gallery-main { padding-top: 150px; }
-  .lab-gallery-toolbar-float { top: 16px; right: 16px; }
-  .lab-gallery-tags-layer { top: 82px; }
-  .lab-gallery-page .lab-gallery-tag-bar { padding-inline: 16px; min-height: 52px; }
+  .lab-gallery-top-stack { top: 16px; left: 16px; right: 16px; }
+  .lab-gallery-tag-surface { min-height: 64px; }
+  .lab-gallery-page .lab-gallery-tag-bar { padding-inline: 14px; min-height: 62px; }
+  .lab-gallery-tag-track { gap: 26px; height: 62px; }
   .lab-gallery-page .lab-gallery-tag { height: 52px; min-height: 52px; font-size: clamp(24px, 6vw, 31px); }
-  .lab-gallery-tag-track { gap: 26px; }
-}
-@media (hover: none), (pointer: coarse) {
-  /* Touch cannot reveal on hover: keep tags discoverable and accessible. */
-  .lab-gallery-tags-layer {
-    visibility: visible; opacity: 1; transform: none; pointer-events: auto;
-    transition: none;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
+  .lab-gallery-top-stack,
   .lab-gallery-tags-layer,
   .lab-gallery-page .lab-gallery-tag { transition: none; }
 }

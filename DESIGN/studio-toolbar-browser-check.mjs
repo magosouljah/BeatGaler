@@ -9,7 +9,12 @@ import path from "node:path";
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const latestPreset=JSON.parse(readFileSync("DESIGN/MASTER/studio-toolbar-44.json","utf-8"));
 assert.equal(latestPreset.timestamp,"2026-11-02T23:59:40.405Z","Expected most recent user preset");
-assert.deepEqual(Object.fromEntries(["glareRange","glareHardness","glareFactor","glareConvergence"].map(k=>[k,latestPreset.controls[k]])),{glareRange:32.2,glareHardness:14.74,glareFactor:33.82,glareConvergence:48.76});
+const originalPreset=JSON.parse(readFileSync("DESIGN/MASTER/studio-toolbar-44-original.json","utf-8"));
+assert.equal(originalPreset.controls.glareFactor,33.82);
+assert.equal(originalPreset.controls.glareOppositeFactor,78.81);
+assert.equal(latestPreset.controls.glareFactor,30.2);
+assert.equal(latestPreset.controls.glareOppositeFactor,69);
+assert.equal(latestPreset.controls.glareRange,originalPreset.controls.glareRange);
 const binaries=[
  process.env.PROGRAMFILES&&path.join(process.env.PROGRAMFILES,"Google","Chrome","Application","chrome.exe"),
  process.env["PROGRAMFILES(X86)"]&&path.join(process.env["PROGRAMFILES(X86)"],"Google","Chrome","Application","chrome.exe"),

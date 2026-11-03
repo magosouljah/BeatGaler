@@ -121,11 +121,12 @@
 }
 
 
-/* Gallery mode: same Studio 44 WebGL optics, without the 600x600 demo stage.
-   Draw only optical lenses into an alpha-enabled overlay. No opaque header. */
+/* Gallery uses a transparent compositor ONLY outside the lenses.
+   Keep the approved 600px optical viewport and position it relative to
+   the toolbar row so the tag bar can move it without shader changes. */
 .studio-candidate.is-gallery {
-  position: fixed; top: 0; right: 0; z-index: 80;
-  width: min(600px, 100vw); height: 362px;
+  position: absolute; top: -20px; right: 0; z-index: 3;
+  width: min(600px, calc(100vw - 32px)); height: 600px;
   margin: 0; display: block; pointer-events: none;
 }
 .studio-candidate.is-gallery .studio-candidate-controls,
@@ -140,18 +141,18 @@
   border-radius: 0; background: transparent; pointer-events: none;
 }
 .studio-candidate.is-gallery .studio-candidate-toolbar {
-  top: max(20px, env(safe-area-inset-top, 0px));
-  right: max(28px, env(safe-area-inset-right, 0px));
-  pointer-events: auto;
+  top: 20px; right: 0; pointer-events: auto;
 }
 .studio-candidate.is-gallery .studio-candidate-error,
 .studio-candidate.is-gallery .studio-candidate-message { display: none; }
-@media (max-width: 590px) {
-  .studio-candidate.is-gallery { height: 354px; }
+@media (max-width: 750px) {
+  .studio-candidate.is-gallery { top: -16px; }
   .studio-candidate.is-gallery .studio-candidate-toolbar {
-    top: 16px; right: 16px;
-    gap: 8px; flex-direction: row-reverse;
+    top: 16px; right: 0; gap: 8px;
   }
+}
+@media (max-width: 590px) {
+  .studio-candidate.is-gallery .studio-candidate-toolbar { flex-direction: row-reverse; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .studio-candidate.is-gallery .studio-lens { background: #29292dbb; }
