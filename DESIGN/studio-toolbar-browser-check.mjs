@@ -8,7 +8,7 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const latestPreset=JSON.parse(readFileSync("DESIGN/MASTER/studio-toolbar-44.json","utf-8"));
-assert.equal(latestPreset.timestamp,"2026-11-02T23:23:31.866Z","Expected most recent user preset");
+assert.equal(latestPreset.timestamp,"2026-11-02T23:59:40.405Z","Expected most recent user preset");
 assert.deepEqual(Object.fromEntries(["glareRange","glareHardness","glareFactor","glareConvergence"].map(k=>[k,latestPreset.controls[k]])),{glareRange:32.2,glareHardness:14.74,glareFactor:33.82,glareConvergence:48.76});
 const binaries=[
  process.env.PROGRAMFILES&&path.join(process.env.PROGRAMFILES,"Google","Chrome","Application","chrome.exe"),
@@ -78,7 +78,24 @@ try {
   if(await evaluate("Boolean(document.querySelector('.lab-master-sidebar-nav'))"))break;
   await sleep(100);
  }
- await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Toolbar · Studio 44').click()");
+ // Test ORIGINAL Studio shaders before loading the animated candidate.
+ await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Glass · Studio Original 44').click()");
+ for(let i=0;i<100;i++){
+  if(await evaluate("Boolean(document.querySelector('.studio-exact-canvas[data-engine-ready]'))"))break;
+  await sleep(100);
+ }
+ const original=await evaluate("(()=>{let c=document.querySelector('.studio-exact-canvas');return {ready:c?.dataset.engineReady,shader:c?.dataset.shader,radius:c?.dataset.shapeRadiusPx,preset:c?.dataset.presetTimestamp};})()");
+ assert.equal(original.ready,"true","Original Studio reference WebGL could not initialize");
+ assert.equal(original.shader,"original","Original Studio shaders are not loaded");
+ assert.equal(original.radius,"22","Studio percentage radius conversion should be 22px");
+ assert.equal(original.preset,"2026-11-02T23:59:40.405Z");
+ await evaluate("document.querySelector('.studio-exact-stage').scrollIntoView({block:'center'})");
+ await sleep(350);
+ await capture("00-studio-original-static-dark.png");
+ await click(".studio-exact-options button:nth-child(2)");
+ await sleep(260);
+ await capture("00b-studio-original-static-light.png");
+  await evaluate("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(x=>x.textContent==='Toolbar · Studio 44').click()");
  for(let i=0;i<100;i++){
   if(await evaluate("Boolean(document.querySelector('.studio-candidate-canvas[data-engine-ready]'))"))break;
   await sleep(100);
