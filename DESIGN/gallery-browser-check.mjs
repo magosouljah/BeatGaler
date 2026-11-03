@@ -228,8 +228,15 @@ try{
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
  await sleep(950);
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
- await sleep(320);
- assertSameOverlay(openOverlay,await overlayGeometry(),"interrupted tag hide and reveal");
+ await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='true'","reveal after interrupted hide");
+ let reopened=await overlayGeometry();
+ // SwiftShader may defer CSS frames while compositing Studio WebGL. Assert the
+ // exact final rectangle, but allow the browser to reach it before comparing.
+ for(let i=0;i<32&&(Math.abs(reopened.top-openOverlay.top)>2||Math.abs(reopened.right-openOverlay.right)>2);i++){
+   await sleep(125);
+   reopened=await overlayGeometry();
+ }
+ assertSameOverlay(openOverlay,reopened,"interrupted tag hide and reveal");
  await goMaster();
  await until("Boolean(document.querySelector('.lab-master-cover-modes'))","MASTER revisit");
  await click("document.querySelector('.lab-master-tag-modes button:nth-child(2)')");
