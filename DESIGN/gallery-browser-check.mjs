@@ -92,12 +92,14 @@ try{
      contentWidth:bar.scrollWidth,viewportWidth:bar.clientWidth,barHeight:bar.clientHeight,
      surfaceBackground:getComputedStyle(surface).backgroundColor};
  })()`);
- assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+7,"Tag strip must push toolbar down without overlap");
+ assert.ok(Math.abs(tagLayout.surfaceTop)<=2,"Tag bar must touch the viewport top");
+ assert.ok(tagLayout.toolbarTop>=tagLayout.surfaceBottom+14,"Toolbar retains spacing under the strip");
  assert.ok(tagLayout.contentWidth>tagLayout.viewportWidth*2,"Long horizontal tag navigation not overflowing");
  assert.equal(tagLayout.surfaceBackground,"rgb(12, 12, 12)","Tag strip must be solid black, not translucent");
  assert.ok(tagLayout.barHeight<=52,"Tag strip should remain compact");
  assert.ok(await expr("(()=>{const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();return nav.left<=1&&nav.right>=innerWidth-1;})()"),"Tag strip must span the entire viewport");
  assert.ok(tagLayout.barHeight<80,"Tag navigation must remain a single row");
+ assert.ok(await expr("(()=>{const a=document.querySelector('.lab-gallery-tag-all').getBoundingClientRect(),b=document.querySelector('.lab-gallery-tag-wrap').getBoundingClientRect();return b.left-a.right<20;})()"),"Compact tag spacing");
  const scrollResult=await expr(`(()=>{
    const bar=document.querySelector('.lab-gallery-tag-bar');
    bar.dispatchEvent(new WheelEvent('wheel',{deltaY:210,bubbles:true,cancelable:true}));
@@ -148,11 +150,26 @@ try{
  assert.ok(await expr("(()=>{const c=getComputedStyle("+ambient+").color;return c!==\"rgb(255, 255, 255)\"&&c!==\"rgb(244, 244, 244)\";})()"),"Excluded colored tag must keep its tint instead of turning white");
  await expr('(()=>{const el='+ambient+';el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true}));return true;})()');
  assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Second Alt+click clears exclusion");
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
+ await click(ambient);
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:720,clientY:460,bubbles:true}))");
+ await sleep(1200);
+ assert.equal(await expr("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen"),"true","Active filters must keep the bar open");
+ await click(ambient);
+ await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='false'","bar hides after clearing final filter");
  await goMaster();
  await until("Boolean(document.querySelector('.lab-master-cover-modes'))","MASTER revisit");
+ await click("document.querySelector('.lab-master-tag-modes button:nth-child(2)')");
+ assert.equal(await expr("document.querySelector('.lab-master-tag-modes button:nth-child(2)').getAttribute('aria-pressed')"),"true");
  await click("document.querySelector('.lab-master-cover-modes button:nth-child(1)')");
  await goGallery();
  await until("document.querySelectorAll('.lab-beat-tile .lab-artwork img').length===24","generated covers");
+ assert.equal(await expr("document.querySelector('.lab-gallery-top-stack').dataset.tagVariant"),"playbar");
+ assert.ok(await expr("Boolean(document.querySelector('.lab-gallery-playbar-frame .lab-playbar-seek--preview'))"),"Gallery reuses MASTER Player");
+ await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
+ await until("document.querySelector('.lab-gallery-top-stack').dataset.tagsOpen==='true'","material reveal");
+ await sleep(350);
+ assert.equal(await expr("getComputedStyle(document.querySelector('.lab-gallery-tag-surface')).backgroundColor"),"rgba(20, 20, 20, 0.75)");
  const generated=await expr("[...document.querySelectorAll('.lab-beat-tile .lab-artwork img')].map(i=>i.src)");
  assert.ok(generated.every(x=>x.startsWith("data:image/")),"Generated mode should use local bg-v1");
  assert.equal(new Set(generated).size,24);

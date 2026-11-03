@@ -207,7 +207,7 @@ test("MASTER switches generated/real covers above REGLAS for Gallery and Landing
   assert.ok(master.includes('setCoverMode("generated")'));
   assert.ok(app.includes("<GalleryPage coverMode={coverMode}"));
   assert.ok(app.includes("<LandingPage")&&app.includes("coverMode={coverMode}"));
-  assert.ok(app.includes("<MasterPage coverMode={coverMode} setCoverMode={setCoverMode}"));
+  assert.ok(app.includes("<MasterPage coverMode={coverMode} setCoverMode={setCoverMode} tagBarVariant={tagBarVariant}"));
 });
 
 test("gallery navigation has a real one-line bar that pushes the Studio toolbar", () => {
@@ -224,8 +224,8 @@ test("gallery navigation has a real one-line bar that pushes the Studio toolbar"
   assert.match(nav, /scrollBy\(/);
   assert.match(nav, /passive: false/);
   assert.match(nav, /useLayoutEffect/);
-  assert.match(css, /grid-template-rows: 0fr 44px/);
-  assert.match(css, /grid-template-rows: 1fr 44px/);
+  assert.match(css, /grid-template-rows: 0fr 64px/);
+  assert.match(css, /grid-template-rows: 1fr 64px/);
   assert.match(css, /lab-gallery-tag-surface/);
   assert.match(css, /padding-top: 88px/);
   assert.match(css, /background: #0c0c0c/);
@@ -275,3 +275,39 @@ test("Studio gallery transparent shader supports Windows CRLF and Linux LF, with
     assert.match(patched, /fragColor = vec4\(outColor.rgb, 0.0\)/);
   }
 });
+
+
+test("Gallery tag bar pins filters, sits at top, and differentiates assigned colors", () => {
+ const gallery=read("./GALLERY/GalleryPage.tsx"),nav=read("./GALLERY/TagNavigation.tsx"),css=read("./GALLERY/gallery.css");
+ assert.match(gallery,/const tagsVisible = tagsOpen \|\| hasActiveFilters/);
+ assert.match(gallery,/hasActiveFilters=\{hasActiveFilters\}/);
+ assert.match(nav,/if \(hasActiveFilters \|\| editingTag \|\| keyboardFocus/);
+ assert.match(nav,/matches\(":focus-visible"\)/);
+ assert.match(nav,/pointerNearby/);
+ assert.match(css,/top: env\(safe-area-inset-top, 0px\)/);
+ assert.match(css,/gap: 8px/);
+ assert.match(css,/\.lab-gallery-tag\.is-idle\.is-custom/);
+ assert.match(css,/\.lab-gallery-tag\.is-exclude\.is-custom/);
+ assert.match(css,/\.lab-gallery-tag\.is-custom::after/);
+ assert.match(css,/data-tag-variant="playbar"/);
+ assert.match(gallery,/lab-gallery-tag-cue/);
+});
+test("Gallery mounts the real DESIGN Player and MASTER controls its material", () => {
+ const master=read("./MASTER/MasterPage.tsx"), app=read("./App.tsx");
+ const gallery=read("./GALLERY/GalleryPage.tsx"), player=read("./GALLERY/GalleryPlayer.tsx");
+ assert.match(master,/Full black/);assert.match(master,/Playbar material/);
+ assert.match(master,/setTagBarVariant\("playbar"\)/);
+ assert.match(app,/beatgaler\.lab\.tag-bar-variant/);
+ assert.match(gallery,/<GalleryPlayer/);assert.doesNotMatch(gallery,/<LabPlayer/);
+ assert.match(player,/import Player from "\.\.\/MASTER\/Player"/);
+ assert.match(player,/<Player preview/);
+ assert.match(player,/onVolumeChange=\{setVolume\}/);
+ assert.match(player,/onSeek=\{setProgress\}/);
+});
+test("Studio icon contrast uses sampled backdrop without changes to the shader", () => {
+ const studio=read("./MASTER/StudioToolbarCandidate.tsx");
+ assert.match(studio,/ctx\.getImageData\(x,y,1,1\)/);
+ assert.match(studio,/luminance>=185/);
+ assert.match(studio,/control\.dataset\.ink=bright/);
+});
+

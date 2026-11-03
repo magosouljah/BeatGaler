@@ -333,6 +333,34 @@ export default function StudioToolbarCandidate({
         const button=controls.current[i]?.querySelector<HTMLButtonElement>("button");
         if(button)button.style.transform=`scale(${1+clamp(pressSprings.current[i].x,-.2,1.1)*.06})`;
       }
+      if(gallery){
+        // Sample the same local canvas used by the Studio glass texture.
+        // Only control ink changes; shader optics and preset stay untouched.
+        const ctx=source.getContext("2d");
+        if(ctx){
+          let brightCount=0;
+          for(const control of controls.current){
+            if(!control)continue;
+            const r=control.getBoundingClientRect();
+            const x=Math.round(r.left-stageRect.left+r.width*.5);
+            const y=Math.round(r.top-stageRect.top+r.height*.5);
+            if(x<0||y<0||x>=w||y>=h)continue;
+            try {
+              const rgba=ctx.getImageData(x,y,1,1).data;
+              const luminance=.2126*rgba[0]+.7152*rgba[1]+.0722*rgba[2];
+              const bright=luminance>=185;
+              control.style.color=bright?"#171717":"#ffffff";
+              control.dataset.ink=bright?"dark":"light";
+              if(bright)brightCount++;
+            } catch { /* Retain current ink when canvas sampling is unavailable. */ }
+          }
+          if(toolbar.current){
+            const darkInk=brightCount>=2;
+            toolbar.current.style.color=darkInk?"#171717":"#ffffff";
+            toolbar.current.dataset.ink=darkInk?"dark":"light";
+          }
+        }
+      }
       // Readable only in DESIGN tests: a long hold must approach 1, and its
       // release must overshoot through 0 before naturally settling.
       // No entry/exit animation or lingering lens after close.

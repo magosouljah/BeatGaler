@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { REAL_COVER_COUNT } from "../shared/coverSources";
 import type { CoverMode } from "../shared/coverSources";
+import type { TagBarVariant } from "../shared/tagBarVariant";
 import Player from "./Player";
 import LabToolbar from "../shared/Toolbar";
 import LabToolbarV2 from "../shared/ToolbarV2";
@@ -33,9 +34,11 @@ function initialSidebarOpen() {
   } catch { return true; }
 }
 
-export default function MasterPage({ coverMode, setCoverMode }: {
+export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, setTagBarVariant }: {
   coverMode: CoverMode;
   setCoverMode: (mode: CoverMode) => void;
+  tagBarVariant: TagBarVariant;
+  setTagBarVariant: (mode: TagBarVariant) => void;
 }) {
   const [selected, setSelected] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -152,6 +155,15 @@ export default function MasterPage({ coverMode, setCoverMode }: {
                 className={coverMode === "real" ? "is-active" : ""}
                 disabled={REAL_COVER_COUNT === 0}
                 onClick={() => setCoverMode("real")}>Reales · {REAL_COVER_COUNT}</button>
+            </div>
+            <div className="lab-master-sidebar-heading">TAG BAR</div>
+            <div className="lab-master-tag-modes" role="group" aria-label="Material de Tag Bar">
+              <button type="button" aria-pressed={tagBarVariant === "full-black"}
+                className={tagBarVariant === "full-black" ? "is-active" : ""}
+                onClick={() => setTagBarVariant("full-black")}>Full black</button>
+              <button type="button" aria-pressed={tagBarVariant === "playbar"}
+                className={tagBarVariant === "playbar" ? "is-active" : ""}
+                onClick={() => setTagBarVariant("playbar")}>Playbar material</button>
             </div>
             <div className="lab-master-sidebar-heading">REGLAS</div>
             <button type="button" className={section === "margins" ? "is-active" : ""} aria-current={section === "margins" ? "page" : undefined} onClick={() => openSection("margins")}>Márgenes</button>

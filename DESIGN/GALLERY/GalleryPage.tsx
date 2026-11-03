@@ -1,17 +1,19 @@
 import { useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { LabBeatTile, LabButton, LabPlayer } from "../shared/components";
+import { LabBeatTile, LabButton } from "../shared/components";
 import { DEMO_BEATS, DEMO_TAGS } from "../shared/data";
 import type { DemoBeat, DemoTag } from "../shared/data";
 import type { CoverMode } from "../shared/coverSources";
 import StudioToolbarCandidate from "../MASTER/StudioToolbarCandidate";
 import TagNavigation from "./TagNavigation";
+import GalleryPlayer from "./GalleryPlayer";
+import type { TagBarVariant } from "../shared/tagBarVariant";
 import type { LabSort } from "../shared/ToolbarV2";
 
 type TagFilter = "include" | "exclude";
-export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMode, tagColors, setTagColors }: {
+export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMode, tagBarVariant, tagColors, setTagColors }: {
   playing: boolean; beat: DemoBeat; toggle: () => void; selectBeat: (beat: DemoBeat) => void;
-  coverMode: CoverMode; tagColors: Record<string, string>;
+  coverMode: CoverMode; tagBarVariant: TagBarVariant; tagColors: Record<string, string>;
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
   const [search, setSearch] = useState("");
@@ -20,6 +22,8 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   const [sort, setSort] = useState<LabSort>("manual");
   const [toolbarNotice, setToolbarNotice] = useState("");
   const [filters, setFilters] = useState<Partial<Record<DemoTag, TagFilter>>>({});
+  const hasActiveFilters = Object.values(filters).some(Boolean);
+  const tagsVisible = tagsOpen || hasActiveFilters;
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const filtered = useMemo(() => {
@@ -56,17 +60,18 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   );
   return (
     <div className="lab-gallery-page">
-      <div className="lab-gallery-top-stack" data-tags-open={tagsOpen ? "true" : "false"}>
-        <TagNavigation visible={tagsOpen} onVisibilityChange={setTagsOpen}
+      <div className="lab-gallery-top-stack" data-tags-open={tagsVisible ? "true" : "false"} data-tag-variant={tagBarVariant}>
+        <TagNavigation visible={tagsVisible} hasActiveFilters={hasActiveFilters} onVisibilityChange={setTagsOpen}
           filters={filters} onCycleTag={cycleTag} onClear={() => setFilters({})}
           tagColors={tagColors} setTagColors={setTagColors} />
         <div className="lab-gallery-toolbar-float">
-          <StudioToolbarCandidate gallery galleryTagsOpen={tagsOpen} search={search} onSearchChange={setSearch}
+          <StudioToolbarCandidate gallery galleryTagsOpen={tagsVisible} search={search} onSearchChange={setSearch}
             sort={sort} onSortChange={setSort}
             selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
             onProfileAction={action => setToolbarNotice(action === "settings" ? "Settings: preview only." : "Log out: preview only; no session is active.")} />
         </div>
       </div>
+      <div className="lab-gallery-tag-cue" aria-hidden="true">Tags ↑</div>
       {toolbarNotice && <div className="lab-gallery-toolbar-notice" role="status">{toolbarNotice}
         <button type="button" aria-label="Dismiss notice" onClick={() => setToolbarNotice("")}>×</button>
       </div>}
@@ -85,8 +90,7 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
         </div> : <div className="lab-empty" role="status"><strong>No beats found</strong>
           <LabButton onClick={() => { setSearch(""); setFilters({}); }}>Clear filters</LabButton></div>}
       </main>
-      <LabPlayer beat={beat} playing={playing} onToggle={toggle} coverMode={coverMode}
-        beats={DEMO_BEATS} onPlayBeat={selectBeat} variant="dock" />
+      <GalleryPlayer beat={beat} playing={playing} onToggle={toggle} onPlayBeat={selectBeat} coverMode={coverMode} />
     </div>
   );
 }

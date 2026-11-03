@@ -17,8 +17,9 @@ const PALETTE = [
 
 // DOM order follows visual order for focus and assistive technology.
 // FLIP preserves the current pixel position and velocity when interrupted.
-export default function TagNavigation({ visible, onVisibilityChange, filters, onCycleTag, onClear, tagColors, setTagColors }: {
+export default function TagNavigation({ visible, hasActiveFilters, onVisibilityChange, filters, onCycleTag, onClear, tagColors, setTagColors }: {
   visible: boolean;
+  hasActiveFilters: boolean;
   onVisibilityChange: (visible: boolean) => void;
   filters: Partial<Record<DemoTag, Filter>>;
   onCycleTag: (name: DemoTag, exclude: boolean) => void;
@@ -30,6 +31,7 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
   const [palettePosition, setPalettePosition] = useState({ left: 0, top: 0 });
   const [edges, setEdges] = useState({ left: false, right: false });
   const rootRef = useRef<HTMLDivElement>(null);
+  const pointerNearby = useRef(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -56,13 +58,18 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
   }, []);
   const show = useCallback(() => { clearHide(); onVisibilityChange(true); }, [clearHide, onVisibilityChange]);
   const scheduleHide = useCallback(() => {
-    if (editingTag || rootRef.current?.contains(document.activeElement)) return;
+    const focus = document.activeElement;
+    // Mouse clicks can leave a tag focused forever: only keyboard focus pins it.
+    const keyboardFocus = focus instanceof HTMLElement && focus.matches(":focus-visible") &&
+      !!rootRef.current?.contains(focus);
+    if (hasActiveFilters || editingTag || keyboardFocus ||
+      window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
     if (hideTimer.current !== null) return;
     hideTimer.current = setTimeout(() => {
       hideTimer.current = null;
       onVisibilityChange(false);
     }, CLOSE_DELAY);
-  }, [editingTag, onVisibilityChange]);
+  }, [editingTag, hasActiveFilters, onVisibilityChange]);
   const clearLongPress = () => {
     if (longPress.current !== null) clearTimeout(longPress.current);
     longPress.current = null;
@@ -153,13 +160,17 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
   }, [updateEdges, orderKey]);
 
   useEffect(() => {
-    // Touch and hybrid devices must always expose the navigation without hover.
+    // Fine-pointer media changes must not close a hovered or filtered bar.
     const media = window.matchMedia("(hover: none), (pointer: coarse)");
-    const update = () => onVisibilityChange(media.matches);
+    const update = () => { if (media.matches) show(); else if (!pointerNearby.current) scheduleHide(); };
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
-  }, [onVisibilityChange]);
+  }, [show, scheduleHide]);
+  useEffect(() => {
+    if (hasActiveFilters) show(); // Cancel an in-flight close on the first selection.
+    else if (!pointerNearby.current) scheduleHide();
+  }, [hasActiveFilters, show, scheduleHide]);
 
   useEffect(() => {
     const move = (event: PointerEvent) => {
@@ -167,18 +178,27 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
       const toolbar = document.querySelector(".studio-candidate.is-gallery .studio-candidate-toolbar") ?? document.querySelector(".lab-gallery-toolbar-float");
       const toolbarLeft = toolbar?.getBoundingClientRect().left ?? window.innerWidth;
       const inRevealZone = event.clientY <= 78 && event.clientX < toolbarLeft - 12;
-      if (inRevealZone || rootRef.current?.contains(event.target as Node) ||
-        (visible && toolbar?.contains(event.target as Node))) show();
+      pointerNearby.current = !!(inRevealZone || rootRef.current?.contains(event.target as Node) ||
+        (visible && toolbar?.contains(event.target as Node)));
+      if (pointerNearby.current) show();
       else scheduleHide();
     };
     const focus = (event: FocusEvent) => {
       if (rootRef.current?.contains(event.target as Node)) show();
       else scheduleHide();
     };
+    const leaveWindow = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && !event.relatedTarget) {
+        pointerNearby.current = false;
+        scheduleHide();
+      }
+    };
     document.addEventListener("pointermove", move, { passive: true });
+    document.addEventListener("pointerout", leaveWindow, { passive: true });
     document.addEventListener("focusin", focus);
     return () => {
       document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerout", leaveWindow);
       document.removeEventListener("focusin", focus);
     };
   }, [show, scheduleHide, visible]);
@@ -298,7 +318,7 @@ export default function TagNavigation({ visible, onVisibilityChange, filters, on
               return <div key={name} ref={node => { if (node) itemRefs.current.set(name, node); else itemRefs.current.delete(name); }}
                 className="lab-gallery-tag-wrap">
                 <button type="button" ref={node => { if (node) buttonRefs.current.set(name, node); else buttonRefs.current.delete(name); }}
-                  className={"lab-gallery-tag is-" + state}
+                  className={"lab-gallery-tag is-" + state + (color ? " is-custom" : "")}
                   data-label={name}
                   style={color ? { "--lab-tag-color": color } as CSSProperties : undefined}
                   aria-pressed={state === "include"}

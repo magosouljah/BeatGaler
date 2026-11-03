@@ -218,3 +218,11 @@
 
 /* On narrow canvases, reserve the full leftward search expansion inside the viewport. */
 @media(max-width:590px){.lab-master-toolbar-frame{justify-content:flex-end;}}
+
+/* Shared MASTER-to-Gallery experiment selector. */
+.lab-master-sidebar-nav .lab-master-tag-modes { display:grid; gap:var(--lab-space-1); padding:0 var(--lab-space-1) var(--lab-space-2); }
+.lab-master-sidebar-nav .lab-master-tag-modes button { font-size:12px; min-height:32px; padding-inline:var(--lab-space-2); }
+.lab-master-sidebar-nav .lab-master-tag-modes button[aria-pressed="true"] {
+ color:var(--lab-ink); background:var(--lab-hover); box-shadow:inset 2px 0 0 var(--lab-ink);
+}
+
