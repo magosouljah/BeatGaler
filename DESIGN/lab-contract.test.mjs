@@ -136,7 +136,7 @@ test("shared Toolbar has four icon references, five sort modes and anchored acce
   assert.match(css,/top:calc\(100% \+ 12px\);right:0/);
   assert.match(css,/prefers-reduced-motion:reduce/);
   assert.doesNotMatch(css,/transition:\\s*all/);
-  assert.match(gallery,/<LabToolbar/);
+  assert.match(gallery,/<StudioToolbarCandidate gallery/);
   assert.match(master,/<LabToolbar/);
   assert.match(gallery,/b\.stars - a\.stars/);
   assert.match(gallery,/b\.createdAt\.localeCompare/);
@@ -159,6 +159,7 @@ test("gallery uses 24 distinct one-word names, multi-tags and real covers", () =
   const data = read("./shared/data.ts");
   const gallery = read("./GALLERY/GalleryPage.tsx");
   const tile = read("./shared/components.tsx");
+  const navigation = read("./GALLERY/TagNavigation.tsx");
   const ids = [...data.matchAll(/id:"(demo-\d{2})"/g)].map(m => m[1]);
   const names = [...data.matchAll(/title:"([A-Za-z]+)"/g)].map(m => m[1]);
   assert.equal(ids.length, 24);
@@ -171,14 +172,20 @@ test("gallery uses 24 distinct one-word names, multi-tags and real covers", () =
   assert.ok(tags.every(group=>group.length>=1&&group.length<=3));
   assert.ok(tile.includes("beat.tags.map(tag =>"));
   assert.ok(gallery.includes("included.some(name => item.tags.includes(name))"));
+  assert.ok(gallery.includes("<StudioToolbarCandidate gallery"));
+  assert.ok(gallery.includes("<TagNavigation"));
+  assert.ok(!gallery.includes("lab-gallery-header"));
+  for (const piece of ["CLOSE_DELAY = 900","useLayoutEffect","beforeLayout","spring.velocity","prefers-reduced-motion","passive: false","ArrowRight","LONG_PRESS_DELAY"]) {
+    assert.ok(navigation.includes(piece), piece);
+  }
   assert.ok(gallery.includes("!excluded.some(name => item.tags.includes(name))"));
-  assert.ok(!gallery.includes("lab-tag-color-trigger"));
-  assert.ok(!gallery.includes("···"));
+  assert.ok(!navigation.includes("lab-tag-color-trigger"));
+  assert.ok(!navigation.includes("···"));
   assert.ok(!read("./GALLERY/gallery.css").includes(".lab-tag-color-trigger"));
-  assert.ok(gallery.includes("onContextMenu"));
-  assert.ok(gallery.includes("onPointerDown"));
-  assert.ok(gallery.includes("lab-tag-color-popover"));
-  assert.ok(gallery.includes("setTagColors"));
+  assert.ok(navigation.includes("onContextMenu"));
+  assert.ok(navigation.includes("onPointerDown"));
+  assert.ok(navigation.includes("lab-tag-color-popover"));
+  assert.ok(navigation.includes("setTagColors"));
   assert.ok(read("./App.tsx").includes("tagColors={tagColors} setTagColors={setTagColors}"));
   const covers = readdirSync(new URL("./shared/assets/real-covers/", import.meta.url));
   assert.equal(covers.filter(name => /^cover-\d{2}\.(jpg|avif)$/.test(name)).length, 24);

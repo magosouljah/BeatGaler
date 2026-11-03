@@ -6,7 +6,7 @@
 
 - **`MASTER/`** — Design System incremental: Playbar y Toolbar, navegación izquierda, reglas, Playbar tomada de la producción y sus 14 iconos originales. Márgenes horizontales aprobados de 32 px; Playbar de 68 px de alto, portada que se transforma una sola vez al comprimirse y seek reactivo sin latencia durante resize.
 - **`LANDING/`** — landing experimental y su órbita circular de portadas.
-- **`GALLERY/`** — galería ficticia de 24 beats con nombres de una palabra, combinaciones de 1–3 tags, filtros multietiqueta, Toolbar y reproductor de muestra. Los tres puntos de los tags superiores se eliminaron.
+- **`GALLERY/`** — galería ficticia de 24 beats con Toolbar Studio 44 WebGL flotante, sin header y navegación horizontal de tags grandes. Seleccionados se agrupan tras All con FLIP + spring interrumpible; la barra aparece al acercarse a la parte superior y espera 900 ms al salir. En táctil permanece visible. Mantiene filtros, colores, sorting, búsqueda, selección y reproducción simulada.
 - **`REFERENCES/TOOLBAR-GLASS/`** — cinco referencias visuales del botón Liquid Glass sobre fondos diferentes, para la futura Toolbar V2.
 - **`shared/`** — componentes, tokens, datos de 24 beats ficticios, generador original `bg-v1` y 24 carátulas locales (una portada por beat, sin repeticiones en modo Real). El selector **MASTER → PORTADAS**, situado encima de REGLAS, cambia entre Generadas y Reales para LANDING y GALLERY.
 - **`App.tsx`, `main.tsx`, `index.html`, `vite.config.ts`** — la única app y servidor aislados.
@@ -56,3 +56,9 @@ El build se escribe en `DESIGN/dist/` (ignorado por Git). Los 24 covers y los 14
 - `shared/Toolbar.tsx` permanece V1 intacta. `shared/ToolbarV2.tsx` usa GlassButton para Search, Sorting, Select y Profile con sus estados y menús. MASTER muestra ambas versiones y los cinco fondos ópticos.
 - Comprobación automatizada de V2 en Chrome real (incluye interacciones, escritorio/móvil, accesibilidad, movimiento reducido y capturas): `node DESIGN/toolbar-v2-browser-check.mjs`. GitHub Actions guarda las capturas junto a las referencias WebP en el artefacto `toolbar-v1-v2-chrome-visual-check`.
 - **Estado:** nueva candidata implementada en DESIGN; la aprobación visual final de V2 corresponde al propietario. No se modifica GALLERY, `src/` ni producción.
+
+## Gallery — navegación de tags
+
+Alt+T revela los tags desde teclado; flechas horizontales mueven el foco. En dispositivos táctiles la barra está visible para que se pueda descubrir. Clic alterna include → exclude → idle; All limpia filtros. La rueda vertical desplaza horizontalmente solo si hay tags fuera de pantalla. Clic derecho, Shift+F10 y pulsación larga abren la paleta, que flota fuera del área con scroll y actualiza también los tags de cada beat. Las animaciones respetan movimiento reducido. Solo DESIGN.
+
+La Toolbar de Gallery reutiliza `MASTER/StudioToolbarCandidate.tsx` en modo `gallery`: conserva sus cuatro lentes y motores del preset Studio 44, usa canvas transparente fuera de los lentes y muestrea las 24 portadas locales al desplazarlas bajo el cristal. MASTER mantiene el espécimen original con fondo fijo, sin cambios de apariencia. La demo no captura contenido externo al documento.

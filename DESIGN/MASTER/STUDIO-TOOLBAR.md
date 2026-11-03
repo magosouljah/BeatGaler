@@ -16,4 +16,8 @@ MASTER → **Toolbar · Studio 44** (candidato independiente).
 
 Para ver: `git fetch origin "+refs/heads/design/beatgaler-design-system-lab-v1:refs/remotes/origin/design/beatgaler-design-system-lab-v1"` y `git switch --detach origin/design/beatgaler-design-system-lab-v1`. Vite: `npx --no-install vite --config DESIGN/vite.config.ts --port 4175 --force`. Abre MASTER → Toolbar · Studio 44.
 
-No se ha tocado Toolbar V1/V2, Gallery, `src/`, `main` ni producción.
+Toolbar V1/V2, `src/`, `main` y producción siguen intactos.
+
+## Integración en Gallery (solo DESIGN)
+
+`StudioToolbarCandidate` acepta la variante `gallery` y callbacks de filtros de búsqueda, sorting, selección y perfil. Sin alterar el espécimen de MASTER ni el preset, monta la misma óptica Studio 44 en un canvas transparente fuera del contorno, con textura local generada a partir de las portadas visibles y refrescada al hacer scroll. El componente queda fijo arriba a la derecha, separado de los tags. La prueba sobre fondos de Gallery requiere validación Chrome/WebGL en una sesión local.

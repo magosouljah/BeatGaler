@@ -15,6 +15,7 @@ import presetText from "./studio-toolbar-44.json?raw";
 import "./studio-toolbar.css";
 // Reuse the exact popup visuals/keyboard treatment from Toolbar V2 · Glass.
 import "../shared/toolbar-v2.css";
+import type { LabSort } from "../shared/ToolbarV2";
 
 type Kind="search"|"sort"|"profile"|"close";
 type Menu="sort"|"profile"|null;
@@ -43,6 +44,13 @@ function include(source:string){
 }
 // Original Studio shader, no Fresnel guard rewrite and no postprocess color mix.
 const opticalShader=include(main);
+// Gallery mode preserves Studio optics but gives the compositor a transparent
+// canvas outside the glass SDF. The MASTER specimen keeps the upstream shader.
+const galleryShader=opticalShader.replace(
+  "  fragColor = outColor;\n}",
+  "  fragColor = vec4(outColor.rgb, 1.0 - smoothstep(-0.001, 0.001, merged));\n}"
+);
+if(galleryShader===opticalShader)throw Error("Studio gallery transparency shader was not applied");
 function gaussianWeights(radius:number){
   const sigma=Math.max(.001,radius/3);
   const a=Array.from({length:radius+1},(_,i)=>Math.exp(-.5*i*i/(sigma*sigma)));
@@ -59,6 +67,20 @@ function paintBackground(canvas:HTMLCanvasElement,color:string,w:number,h:number
   ctx.fillStyle=color;
   ctx.fillRect(0,0,w,h);
 }
+function paintGalleryBackdrop(canvas:HTMLCanvasElement,host:HTMLElement,w:number,h:number){
+  const ctx=canvas.getContext("2d");if(!ctx)return;
+  if(canvas.width!==w)canvas.width=w;
+  if(canvas.height!==h)canvas.height=h;
+  const stage=host.getBoundingClientRect();
+  ctx.fillStyle="#0c0c0c";ctx.fillRect(0,0,w,h);
+  // Only same-origin local Gallery covers; never capture other apps or windows.
+  document.querySelectorAll<HTMLImageElement>(".lab-gallery-grid .lab-artwork img").forEach(img=>{
+    if(!img.complete||!img.naturalWidth)return;
+    const r=img.getBoundingClientRect();
+    if(r.right<stage.left||r.left>stage.right||r.bottom<stage.top||r.top>stage.bottom)return;
+    try{ctx.drawImage(img,r.left-stage.left,r.top-stage.top,r.width,r.height);}catch{/* unloaded artwork */}
+  });
+}
 function Glyph({kind}:{kind:Kind}){
   const p={viewBox:"0 0 24 24",width:19,height:19,fill:"none",
     stroke:"currentColor",strokeWidth:1.85,strokeLinecap:"round" as const,
@@ -71,7 +93,16 @@ function Glyph({kind}:{kind:Kind}){
   }
 }
 
-export default function StudioToolbarCandidate(){
+export default function StudioToolbarCandidate({
+  gallery=false, search:controlledSearch, onSearchChange,
+  sort:controlledSort, onSortChange, selecting:controlledSelecting,
+  onToggleSelect, onProfileAction
+}:{
+  gallery?:boolean;search?:string;onSearchChange?:(value:string)=>void;
+  sort?:LabSort;onSortChange?:(value:LabSort)=>void;
+  selecting?:boolean;onToggleSelect?:()=>void;
+  onProfileAction?:(action:"settings"|"logout")=>void;
+}={}){
   const stage=useRef<HTMLDivElement>(null);
   const display=useRef<HTMLCanvasElement>(null);
   const controls=useRef<(HTMLDivElement|null)[]>([]);
@@ -95,6 +126,9 @@ export default function StudioToolbarCandidate(){
   const [theme,setTheme]=useState<Theme>("dark");
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
+  const searchValue=gallery&&controlledSearch!==undefined?controlledSearch:search;
+  const selectingValue=gallery&&controlledSelecting!==undefined?controlledSelecting:selecting;
+  const sortValue=gallery&&controlledSort!==undefined?controlledSort:sort.toLowerCase();
   searchOpenRef.current=searchOpen;
 
   const press=useCallback((index:number,down:boolean)=>{
@@ -197,7 +231,7 @@ export default function StudioToolbarCandidate(){
       ?Math.min(278,Math.max(170,(stage.current?.clientWidth||700)-190)):44;
     animate.current();
   },[searchOpen]);
-  useEffect(()=>{morphSprings.current.select.target=selecting?44:78;animate.current();},[selecting]);
+  useEffect(()=>{morphSprings.current.select.target=selectingValue?44:78;animate.current();},[selectingValue]);
   useEffect(()=>{
     const outside=(e:PointerEvent)=>{if(!toolbar.current?.contains(e.target as Node)){setMenu(null);setSearchOpen(false);}};
     const escape=(e:KeyboardEvent)=>{
@@ -219,13 +253,13 @@ export default function StudioToolbarCandidate(){
     const source=document.createElement("canvas");
     try{
       canvas.width=2;canvas.height=2;
-      gl=canvas.getContext("webgl2",{alpha:false,antialias:false});
+      gl=canvas.getContext("webgl2",{alpha:gallery,antialias:false,premultipliedAlpha:false});
       if(!gl)throw Error("WebGL2 no disponible");
       renderer=new MultiPassRenderer(canvas,[
         {name:"bgPass",shader:{vertex,fragment:include(bg)}},
         {name:"vBlurPass",shader:{vertex,fragment:blurV},inputs:{u_prevPassTexture:"bgPass"}},
         {name:"hBlurPass",shader:{vertex,fragment:blurH},inputs:{u_prevPassTexture:"vBlurPass"}},
-        {name:"mainPass",shader:{vertex,fragment:opticalShader},
+        {name:"mainPass",shader:{vertex,fragment:gallery?galleryShader:opticalShader},
           inputs:{u_blurredBg:"hBlurPass",u_bg:"bgPass"},outputToScreen:true}
       ]);
       texture=gl.createTexture();
@@ -275,7 +309,8 @@ export default function StudioToolbarCandidate(){
         canvas.width=w;canvas.height=h;renderer.resize(w,h);needsBackground=true;
       }
       if(needsBackground){
-        paintBackground(source,sceneTheme==="dark"?"#26262b":"#e7e7e9",w,h);
+        if(gallery)paintGalleryBackdrop(source,host,w,h);
+        else paintBackground(source,sceneTheme==="dark"?"#26262b":"#e7e7e9",w,h);
         gl.bindTexture(gl.TEXTURE_2D,texture);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
         needsBackground=false;
@@ -312,7 +347,7 @@ export default function StudioToolbarCandidate(){
       canvas.dataset.pressValues=pressSprings.current.map(s=>s.x.toFixed(5)).join(",");
       canvas.dataset.geometry="studio-original-rounded-rect";
       canvas.dataset.optics="studio-original-shader";
-      canvas.dataset.background=sceneTheme==="dark"?"#26262b":"#e7e7e9";
+      canvas.dataset.background=gallery?"gallery-artwork":sceneTheme==="dark"?"#26262b":"#e7e7e9";
       canvas.dataset.viewportHeight=String(h);
       gl.viewport(0,0,w,h);
       renderer.setUniforms({
@@ -352,6 +387,15 @@ export default function StudioToolbarCandidate(){
       needsBackground=true;animate.current();
     });
     observer.observe(host);
+    const refreshBackdrop=()=>{if(gallery){needsBackground=true;animate.current();}};
+    if(gallery){
+      window.addEventListener("scroll",refreshBackdrop,{passive:true});
+      window.addEventListener("resize",refreshBackdrop,{passive:true});
+      document.addEventListener("load",refreshBackdrop,true);
+    }
+    const grid=gallery?document.querySelector(".lab-gallery-grid"):null;
+    const mutations=new MutationObserver(refreshBackdrop);
+    if(grid)mutations.observe(grid,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});
     const themeListener=(e:Event)=>{
       const next=(e as CustomEvent<Theme>).detail;
       if(next!==sceneTheme){sceneTheme=next;needsBackground=true;animate.current();}
@@ -359,7 +403,8 @@ export default function StudioToolbarCandidate(){
     host.addEventListener("studio-theme",themeListener);
     animate.current();
     return()=>{
-      disposed=true;cancelAnimationFrame(frame);observer.disconnect();
+      disposed=true;cancelAnimationFrame(frame);observer.disconnect();mutations.disconnect();
+      if(gallery){window.removeEventListener("scroll",refreshBackdrop);window.removeEventListener("resize",refreshBackdrop);document.removeEventListener("load",refreshBackdrop,true);}
       host.removeEventListener("studio-theme",themeListener);
       animate.current=()=>{};renderer?.dispose();
       if(gl&&texture)gl.deleteTexture(texture);
@@ -374,7 +419,7 @@ export default function StudioToolbarCandidate(){
     animate.current();
   },[menu]);
 
-  return <div className="studio-candidate" data-studio-candidate>
+  return <div className={"studio-candidate"+(gallery?" is-gallery":"")} data-studio-candidate>
     <div className="studio-candidate-controls">
       <span>LIQUID GLASS STUDIO · 44 PX</span>
       <div className="studio-candidate-theme" role="group" aria-label="Fondo de prueba">
@@ -389,7 +434,7 @@ export default function StudioToolbarCandidate(){
           <div ref={node=>{controls.current[0]=node;}}
             className={"studio-lens studio-search"+(searchOpen?" is-open":"")}>
             <input ref={input} type="search" aria-label="Search beats" placeholder="Search beats"
-              tabIndex={searchOpen?0:-1} value={search} onChange={e=>setSearch(e.target.value)}/>
+              tabIndex={searchOpen?0:-1} value={searchValue} onChange={e=>{setSearch(e.target.value);onSearchChange?.(e.target.value);}}/>
             <button type="button" aria-label={searchOpen?"Close search":"Search beats"}
               aria-expanded={searchOpen}
               onClick={activate(0,()=>{setMenu(null);setSearchOpen(v=>!v);})}
@@ -403,10 +448,10 @@ export default function StudioToolbarCandidate(){
             {...handlers(1)}><Glyph kind="sort"/></button>
         </div>
         <div ref={node=>{controls.current[2]=node;}}
-          className={"studio-lens studio-select"+(selecting?" is-selecting":"")}>
-          <button type="button" aria-pressed={selecting}
-            aria-label={selecting?"Cancel selection":"Select beats"}
-            onClick={activate(2,()=>{setSearchOpen(false);setMenu(null);setSelecting(v=>!v);})}
+          className={"studio-lens studio-select"+(selectingValue?" is-selecting":"")}>
+          <button type="button" aria-pressed={selectingValue}
+            aria-label={selectingValue?"Cancel selection":"Select beats"}
+            onClick={activate(2,()=>{setSearchOpen(false);setMenu(null);if(gallery)onToggleSelect?.();else setSelecting(v=>!v);})}
             {...handlers(2)}>
             <span className="studio-select-label">Select</span>
             <span className="studio-select-x"><Glyph kind="close"/></span>
@@ -425,9 +470,9 @@ export default function StudioToolbarCandidate(){
           <div className="lab-toolbar-v2-menu-title">Sort by</div>
           <div className="lab-toolbar-v2-menu-divider"/>
           {options.map(option=><button key={option} type="button" role="menuitemradio"
-            aria-checked={sort===option} tabIndex={menu==="sort"?0:-1}
-            className={`lab-toolbar-v2-menu-item${sort===option?" is-current":""}`}
-            onClick={()=>{setSort(option);closeMenu("sort");}}>
+            aria-checked={sortValue===option.toLowerCase()} tabIndex={menu==="sort"?0:-1}
+            className={`lab-toolbar-v2-menu-item${sortValue===option.toLowerCase()?" is-current":""}`}
+            onClick={()=>{setSort(option);onSortChange?.(option.toLowerCase() as LabSort);closeMenu("sort");}}>
             {option}<span aria-hidden="true" className="lab-toolbar-v2-selected-dot"/>
           </button>)}
         </div>
@@ -441,11 +486,11 @@ export default function StudioToolbarCandidate(){
           <div className="lab-toolbar-v2-menu-divider"/>
           <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1}
             className="lab-toolbar-v2-menu-item"
-            onClick={()=>{setMessage("Settings · demo");closeMenu("profile");}}>Settings</button>
+            onClick={()=>{onProfileAction?.("settings");if(!gallery)setMessage("Settings · demo");closeMenu("profile");}}>Settings</button>
           <div className="lab-toolbar-v2-menu-divider"/>
           <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1}
             className="lab-toolbar-v2-menu-item"
-            onClick={()=>{setMessage("Log out · demo");closeMenu("profile");}}>Log out</button>
+            onClick={()=>{onProfileAction?.("logout");if(!gallery)setMessage("Log out · demo");closeMenu("profile");}}>Log out</button>
         </div>
       </div>
       {error&&<div className="studio-candidate-error" role="status">Studio: {error}. Se muestra fallback.</div>}
