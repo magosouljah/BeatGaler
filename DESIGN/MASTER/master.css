@@ -64,6 +64,26 @@
   background: var(--lab-hover);
   color: var(--lab-ink);
 }
+/* Fixture-only artwork toggle; shared coverMode also controls LANDING/GALLERY. */
+.lab-master-sidebar-nav .lab-master-cover-modes {
+  display: grid;
+  gap: var(--lab-space-1);
+  padding: 0 var(--lab-space-1) var(--lab-space-2);
+}
+.lab-master-sidebar-nav .lab-master-cover-modes button {
+  font-size: 12px;
+  min-height: 32px;
+  padding-inline: var(--lab-space-2);
+}
+.lab-master-sidebar-nav .lab-master-cover-modes button[aria-pressed="true"] {
+  color: var(--lab-ink);
+  background: var(--lab-hover);
+  box-shadow: inset 2px 0 0 var(--lab-ink);
+}
+.lab-master-sidebar-nav .lab-master-cover-modes button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
 .lab-master-resize-handle {
   position: absolute;
   top: 0;

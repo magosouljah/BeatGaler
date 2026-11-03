@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { REAL_COVER_COUNT } from "../shared/coverSources";
 import type { CoverMode } from "../shared/coverSources";
 import Player from "./Player";
 import LabToolbar from "../shared/Toolbar";
@@ -142,6 +143,16 @@ export default function MasterPage({ coverMode, setCoverMode }: {
             <button type="button" className="lab-master-sidebar-toggle" onClick={() => setSidebarOpen(false)} aria-label="Ocultar navegación" title="Ocultar navegación">‹</button>
           </div>
           <nav className="lab-master-sidebar-nav" aria-label="Secciones del Design System">
+            <div className="lab-master-sidebar-heading">PORTADAS</div>
+            <div className="lab-master-cover-modes" role="group" aria-label="Portadas de muestra">
+              <button type="button" aria-pressed={coverMode === "generated"}
+                className={coverMode === "generated" ? "is-active" : ""}
+                onClick={() => setCoverMode("generated")}>Generadas</button>
+              <button type="button" aria-pressed={coverMode === "real"}
+                className={coverMode === "real" ? "is-active" : ""}
+                disabled={REAL_COVER_COUNT === 0}
+                onClick={() => setCoverMode("real")}>Reales · {REAL_COVER_COUNT}</button>
+            </div>
             <div className="lab-master-sidebar-heading">REGLAS</div>
             <button type="button" className={section === "margins" ? "is-active" : ""} aria-current={section === "margins" ? "page" : undefined} onClick={() => openSection("margins")}>Márgenes</button>
             <div className="lab-master-sidebar-heading">COMPONENTES</div>
