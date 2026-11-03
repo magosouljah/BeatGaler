@@ -46,11 +46,14 @@ function include(source:string){
 const opticalShader=include(main);
 // Gallery mode preserves Studio optics but gives the compositor a transparent
 // canvas outside the glass SDF. The MASTER specimen keeps the upstream shader.
+// Source GLSL line endings differ on Windows (CRLF) and CI/Linux (LF).
+// Match the output assignment by syntax rather than exact newline bytes.
+const galleryOutput=/\bfragColor\s*=\s*outColor\s*;\s*\}\s*$/;
 const galleryShader=opticalShader.replace(
-  "  fragColor = outColor;\n}",
-  "  fragColor = vec4(outColor.rgb, 1.0 - smoothstep(-0.001, 0.001, merged));\n}"
+  galleryOutput,
+  "fragColor = vec4(outColor.rgb, 1.0 - smoothstep(-0.001, 0.001, merged));\n}"
 );
-if(galleryShader===opticalShader)throw Error("Studio gallery transparency shader was not applied");
+const galleryShaderAvailable=galleryShader!==opticalShader;
 function gaussianWeights(radius:number){
   const sigma=Math.max(.001,radius/3);
   const a=Array.from({length:radius+1},(_,i)=>Math.exp(-.5*i*i/(sigma*sigma)));
@@ -252,6 +255,7 @@ export default function StudioToolbarCandidate({
     let sceneTheme:Theme="dark";
     const source=document.createElement("canvas");
     try{
+      if(gallery&&!galleryShaderAvailable)throw Error("Studio Gallery shader unavailable");
       canvas.width=2;canvas.height=2;
       gl=canvas.getContext("webgl2",{alpha:gallery,antialias:false,premultipliedAlpha:false});
       if(!gl)throw Error("WebGL2 no disponible");

@@ -204,3 +204,20 @@ test("MASTER switches generated/real covers above REGLAS for Gallery and Landing
   assert.ok(app.includes("<LandingPage")&&app.includes("coverMode={coverMode}"));
   assert.ok(app.includes("<MasterPage coverMode={coverMode} setCoverMode={setCoverMode}"));
 });
+
+test("Studio gallery transparent shader supports Windows CRLF and Linux LF, with graceful fallback", () => {
+  const candidate = read("./MASTER/StudioToolbarCandidate.tsx");
+  const shader = read("./MASTER/engines/studio/fragment-main.glsl");
+  const output = /\bfragColor\s*=\s*outColor\s*;\s*\}\s*$/;
+  assert.ok(candidate.includes("const galleryOutput=" + String(output) + ";"));
+  assert.ok(candidate.includes("const galleryShaderAvailable=galleryShader!==opticalShader"));
+  assert.ok(candidate.includes("if(gallery&&!galleryShaderAvailable)throw Error("));
+  assert.doesNotMatch(candidate, /if\(galleryShader===opticalShader\)throw/);
+  for (const ending of ["\n", "\r\n"]) {
+    const source = shader.replace(/\r?\n/g, ending);
+    assert.match(source, output);
+    const patched = source.replace(output, "fragColor = vec4(outColor.rgb, 0.0);\n}");
+    assert.notEqual(patched, source);
+    assert.match(patched, /fragColor = vec4\(outColor.rgb, 0.0\)/);
+  }
+});
