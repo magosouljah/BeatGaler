@@ -9,6 +9,7 @@ import main from "./engines/studio/fragment-main.glsl?raw";
 import math from "./engines/studio/lib/math.glsl?raw";
 import color from "./engines/studio/lib/color.glsl?raw";
 import shape from "./studio-toolbar-shape.glsl?raw";
+import sdf from "./engines/studio/lib/sdf.glsl?raw";
 import {advanceSpring, makeSpring, PRESS_GROW, PRESS_RELEASE, MORPH_SPRING, moving} from "./studio-toolbar-spring";
 import presetText from "./studio-toolbar-44.json?raw";
 import "./studio-toolbar.css";
@@ -24,20 +25,22 @@ const preset=JSON.parse(presetText).controls as {
   glareOppositeFactor:number;glareAngle:number;blurRadius:number;blurEdge:boolean;
   tint:{r:number;g:number;b:number;a:number};shadowExpand:number;
   shadowFactor:number;shadowPosition:{x:number;y:number};step:number;
+  shapeWidth:number;shapeHeight:number;shapeRadius:number;shapeRoundness:number;
+  mergeRate:number;showShape1:boolean;bgType:number;
 };
 const options=["Manual","Name","BPM","Stars","Date"] as const;
+// Preserve the original Studio superellipseCornerSDF, roundedRectSDF and smin
+// literally. Only mainSDF is a multi-instance wrapper that evaluates the same
+// shape four times on the shared canvas. No artificial wobble or whitening.
+const upstreamMainSdf=/float mainSDF\(vec2 p1, vec2 p2, vec2 p\) \{[\s\S]*?\n\}/;
+if(!upstreamMainSdf.test(sdf))throw Error("Studio upstream SDF changed");
+const sharedSdf=sdf.replace(upstreamMainSdf,shape);
 function include(source:string){
   return source.replace(/^#include ['"]\.\/lib\/(sdf|math|color)\.glsl['"]\s*$/gm,
-    (_all:string,name:string)=>name==="sdf"?shape:name==="math"?math:color);
+    (_all:string,name:string)=>name==="sdf"?sharedSdf:name==="math"?math:color);
 }
-// Studio's custom Fresnel range may legitimately be 0; the denominator must
-// be guarded in this derived shader. The preset remains byte-for-byte separate.
-const opticalShader=include(main)
-  .replace(/500\.0\s*\/\s*u_refFresnelRange/g,"500.0 / max(u_refFresnelRange, 0.001)")
-  .replace("fragColor = outColor;",
-    "if (merged < 0.0) { float pressure = nearestPress(gl_FragCoord.xy/u_dpr);"+
-    "outColor.rgb = mix(outColor.rgb, vec3(1.0), .43*pressure); }"+
-    "fragColor = outColor;");
+// Original Studio shader, no Fresnel guard rewrite and no postprocess color mix.
+const opticalShader=include(main);
 function gaussianWeights(radius:number){
   const sigma=Math.max(.001,radius/3);
   const a=Array.from({length:radius+1},(_,i)=>Math.exp(-.5*i*i/(sigma*sigma)));
@@ -45,22 +48,14 @@ function gaussianWeights(radius:number){
   return a.map(x=>x/sum);
 }
 const blurWeights=gaussianWeights(preset.blurRadius);
-function paintBackground(canvas:HTMLCanvasElement,theme:Theme,w:number,h:number,dpr:number){
+function paintBackground(canvas:HTMLCanvasElement,color:string,w:number,h:number){
   const ctx=canvas.getContext("2d");if(!ctx)return;
   if(canvas.width!==w)canvas.width=w;
   if(canvas.height!==h)canvas.height=h;
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  const width=w/dpr,height=h/dpr;
-  ctx.fillStyle=theme==="dark"?"#26262b":"#e7e7e9";
-  ctx.fillRect(0,0,width,height);
-  // Plain page surface, intentionally not an asset attached to the glass.
-  ctx.fillStyle=theme==="dark"?"#303037":"#d5d5d9";
-  ctx.fillRect(0,height*.62,width,height*.38);
-  ctx.fillStyle=theme==="dark"?"#383840":"#c9c9ce";
-  ctx.fillRect(0,height*.62,width,1);
-  ctx.fillStyle=theme==="dark"?"#65656c":"#9b9ba3";
-  ctx.font="500 13px system-ui,sans-serif";
-  ctx.fillText("BEATGALER",24,height-20);
+  // This RGB texture is the stage background. There is NO image baked into
+  // the lenses. Studio's custom-background mode samples it as a texture.
+  ctx.fillStyle=color;
+  ctx.fillRect(0,0,w,h);
 }
 function Glyph({kind}:{kind:Kind}){
   const p={viewBox:"0 0 24 24",width:19,height:19,fill:"none",
@@ -187,49 +182,55 @@ export default function StudioToolbarCandidate(){
       if(controls.current[0])controls.current[0]!.style.width=Math.max(44,motion.search.x)+"px";
       if(controls.current[2])controls.current[2]!.style.width=Math.max(44,motion.select.x)+"px";
       const stageRect=host.getBoundingClientRect();
-      const dpr=Math.min(2,window.devicePixelRatio||1);
+      // Studio's original CanvasInfo defaults to DPR = 1.
+      // A 600px-tall stage matches the 600x600 approved reference geometry.
+      const dpr=1;
       const w=Math.max(2,Math.round(stageRect.width*dpr));
       const h=Math.max(2,Math.round(stageRect.height*dpr));
       if(w!==canvas.width||h!==canvas.height){
         canvas.width=w;canvas.height=h;renderer.resize(w,h);needsBackground=true;
       }
       if(needsBackground){
-        paintBackground(source,sceneTheme,w,h,dpr);
+        paintBackground(source,sceneTheme==="dark"?"#26262b":"#e7e7e9",w,h);
         gl.bindTexture(gl.TEXTURE_2D,texture);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
         needsBackground=false;
       }
-      const shapes:number[]=[],waves:number[]=[],pressures:number[]=[];
+      const shapes:number[]=[],pressures:number[]=[];
       for(let i=0;i<4;i++){
         const rect=controls.current[i]?.getBoundingClientRect();
-        if(!rect){shapes.push(-500,-500,1,1);waves.push(0,0);pressures.push(0);continue;}
+        if(!rect){shapes.push(-500,-500,1,1);pressures.push(0);continue;}
         shapes.push(rect.left-stageRect.left+rect.width*.5,
           stageRect.bottom-rect.top-rect.height*.5,rect.width,rect.height);
-        const morphSpeed=i===0?motion.search.v:i===2?motion.select.v:0;
-        // Material shear belongs to Search/Select morphing ONLY.
-        // A press changes uniform scale, never a jelly-like sideways wobble.
-        waves.push(reduce?0:clamp(morphSpeed*.0035,-2.6,2.6),0);
+        // PRESS: only a uniform, smooth size change; MORPH: only width.
+        // The original Studio SDF recalculates optics on each new shape.
         pressures.push(pressSprings.current[i].x);
-      // Icon grows slightly with the lens, while the hit target stays 44px.
-      const button=controls.current[i]?.querySelector<HTMLButtonElement>("button");
-      if(button)button.style.transform=`scale(${1+Math.max(0,pressSprings.current[i].x)*.06})`;
+        const button=controls.current[i]?.querySelector<HTMLButtonElement>("button");
+        if(button)button.style.transform=`scale(${1+clamp(pressSprings.current[i].x,-.2,1.1)*.06})`;
       }
       // Readable only in DESIGN tests: a long hold must approach 1, and its
       // release must overshoot through 0 before naturally settling.
       canvas.dataset.pressValues=pressSprings.current.map(s=>s.x.toFixed(5)).join(",");
+      canvas.dataset.geometry="studio-original-rounded-rect";
+      canvas.dataset.optics="studio-original-shader";
+      canvas.dataset.background=sceneTheme==="dark"?"#26262b":"#e7e7e9";
+      canvas.dataset.viewportHeight=String(h);
       gl.viewport(0,0,w,h);
       renderer.setUniforms({
-        u_resolution:[w,h],u_dpr:dpr,u_lenses:shapes,u_waves:waves,
+        u_resolution:[w,h],u_dpr:dpr,u_lenses:shapes,
         u_presses:pressures,u_blurWeights:blurWeights,u_blurRadius:preset.blurRadius,
-        u_shapeWidth:44,u_shapeHeight:44,u_shapeRadius:22,u_shapeRoundness:2,
-        u_mergeRate:0,u_showShape1:0,u_mouse:[0,0],u_mouseSpring:[0,0],
+        u_shapeWidth:preset.shapeWidth,u_shapeHeight:preset.shapeHeight,
+        u_shapeRadius:Math.min(preset.shapeWidth,preset.shapeHeight)*.5*preset.shapeRadius/100,
+        u_shapeRoundness:preset.shapeRoundness,
+        u_mergeRate:preset.mergeRate,u_showShape1:preset.showShape1?1:0,
+        u_mouse:[w/2,h/2],u_mouseSpring:[w/2,h/2],
         u_glareAngle:preset.glareAngle*Math.PI/180
       });
       renderer.render({
-        bgPass:{u_bgType:11,u_bgTexture:texture,u_bgTextureReady:1,
+        bgPass:{u_bgType:preset.bgType,u_bgTexture:texture,u_bgTextureReady:1,
           u_bgTextureRatio:w/h,u_shadowExpand:preset.shadowExpand,
           u_shadowFactor:preset.shadowFactor/100,
-          u_shadowPosition:[preset.shadowPosition.x,preset.shadowPosition.y]},
+          u_shadowPosition:[-preset.shadowPosition.x,-preset.shadowPosition.y]},
         mainPass:{u_tint:[preset.tint.r/255,preset.tint.g/255,preset.tint.b/255,preset.tint.a],
           u_refThickness:preset.refThickness,u_refDistance:preset.refDistance,
           u_refFactor:preset.refFactor,u_refDispersion:preset.refDispersion,
@@ -321,6 +322,6 @@ export default function StudioToolbarCandidate(){
       {error&&<div className="studio-candidate-error" role="status">Studio: {error}. Se muestra fallback.</div>}
       {message&&<div className="studio-candidate-message" role="status">{message}</div>}
     </div>
-    <p className="studio-candidate-hint">Mantén pulsado cualquier botón y suéltalo para probar el rebote. Search y Select tienen otro resorte más sutil; prueba invertir el morph antes de que termine.</p>
+    <p className="studio-candidate-hint">Material Studio original, sobre fondo plano. Pulsación: crecimiento uniforme y rebote al soltar. Search y Select: cambio de dimensiones con resorte sutil, sin deformaciones jelly.</p>
   </div>;
 }

@@ -1,38 +1,30 @@
-// Four independent SDF lenses, compositor for Studio shaders.
-// Original 44px optical preset remains untouched.
-// Units of lens/wave uniforms: CSS pixels; p is gl_FragCoord (device pixels).
-uniform vec4 u_lenses[4];      // center X/Y (Y bottom-up), width, height
-uniform vec2 u_waves[4];       // dynamic shear in CSS pixels
-uniform float u_presses[4];   // continuous, underdamped spring
-
-float lensSDF(vec2 pixel, int i) {
-  vec4 lens=u_lenses[i];
-  vec2 q=pixel-lens.xy;
-  float halfW=max(1.0,lens.z*0.5);
-  float halfH=max(1.0,lens.w*0.5);
-  float nx=clamp(q.x/halfW,-1.0,1.0);
-  float ny=clamp(q.y/halfH,-1.0,1.0);
-  // SDF shear applies ONLY to Search/Select morphing; press is uniform scale.
-  q.y-=u_waves[i].x*sin(nx*3.14159265)*max(0.0,1.0-nx*nx);
-  q.x-=u_waves[i].y*sin(ny*3.14159265)*max(0.0,1.0-ny*ny);
-  float grow=1.0+clamp(u_presses[i],-0.18,1.15)*0.115;
-  vec2 halfSize=vec2(halfW,halfH)*grow;
-  float radius=min(halfSize.x,halfSize.y);
-  vec2 d=abs(q)-halfSize+vec2(radius);
-  return length(max(d,0.0))+min(max(d.x,d.y),0.0)-radius;
-}
-float nearestPress(vec2 point) {
-  float distance=1.0e10;
-  float pressure=0.0;
+// Only the FOUR-LENS COMPOSITOR replaces upstream mainSDF().
+// The original Studio lib/sdf.glsl provides roundedRectSDF(),
+// superellipseCornerSDF() and all normal-distance helpers unchanged.
+//
+// One set of pixels -> 4 independent native Studio rounded rectangles.
+// No slicing, texture stretching, shear, waves, or additional glare.
+uniform vec4 u_lenses[4];    // center.xy in CSS/GL pixels (bottom-up); width/height in CSS pixels
+uniform float u_presses[4]; // smooth press spring: 0 resting, 1 held
+float mainSDF(vec2 p1, vec2 p2, vec2 p) {
+  float distanceToShape=1.0e10;
+  float baseRadiusRatio=u_shapeRadius/max(0.001,min(u_shapeWidth,u_shapeHeight)*0.5);
   for(int i=0;i<4;++i){
-    float d=lensSDF(point,i);
-    if(d<distance){distance=d;pressure=u_presses[i];}
+    vec4 item=u_lenses[i];
+    // Same geometry as Studio, with a single UNIFORM size factor.
+    float factor=1.0+clamp(u_presses[i],-0.20,1.10)*0.115;
+    float width=item.z*factor;
+    float height=item.w*factor;
+    float cornerRadius=0.5*min(width,height)*baseRadiusRatio;
+    // The original SDF normalizes ALL positions and dimensions by the
+    // canvas height; preserve this exact coordinate space and radius.
+    vec2 pLocal=(p-item.xy)/u_resolution.y;
+    float studioDistance=roundedRectSDF(
+      pLocal,vec2(0.0),
+      width/u_resolution.y,height/u_resolution.y,
+      cornerRadius/u_resolution.y,u_shapeRoundness
+    );
+    distanceToShape=min(distanceToShape,studioDistance);
   }
-  return clamp(pressure,0.0,1.0);
-}
-float mainSDF(vec2 p1,vec2 p2,vec2 p) {
-  float d=1.0e10;
-  vec2 px=p/u_dpr;
-  for(int i=0;i<4;++i){d=min(d,lensSDF(px,i));}
-  return d/max(1.0,u_resolution.y/u_dpr);
+  return distanceToShape;
 }

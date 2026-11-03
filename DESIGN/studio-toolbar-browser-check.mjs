@@ -104,6 +104,10 @@ try {
  }
  const engine=await evaluate("document.querySelector('.studio-candidate-canvas')?.dataset.engineReady");
  assert.equal(engine,"true","Original Studio WebGL shader did not compile / initialize");
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.geometry"),"studio-original-rounded-rect");
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.optics"),"studio-original-shader");
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.viewportHeight"),"600");
+ assert.equal(await evaluate("document.querySelector('.studio-candidate-canvas').dataset.background"),"#26262b");
  await evaluate("document.querySelector('.studio-candidate-stage').scrollIntoView({block:'center'})");
  await sleep(500);
  assert.equal(await evaluate("document.querySelectorAll('.studio-lens').length"),4);
