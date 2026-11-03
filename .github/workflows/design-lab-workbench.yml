@@ -23,6 +23,7 @@ jobs:
       - run: node DESIGN/playbar-browser-check.mjs
       - run: node DESIGN/toolbar-v2-browser-check.mjs
       - run: node DESIGN/studio-toolbar-browser-check.mjs
+      - run: node DESIGN/gallery-browser-check.mjs
       - name: Playbar screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -45,4 +46,11 @@ jobs:
         with:
           name: studio-toolbar-44-chrome
           path: DESIGN/studio-toolbar-visual-check/*.png
+          if-no-files-found: ignore
+      - name: Gallery 24-cover Chrome screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-24-covers-chrome
+          path: DESIGN/gallery-visual-check/*.png
           if-no-files-found: ignore
