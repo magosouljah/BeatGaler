@@ -107,7 +107,17 @@
 /* Gallery reserves room for only the 44px toolbar. When revealed, the
    full-width black tag strip pushes the glass toolbar down, but never
    reserves an empty 50px strip above the beats while collapsed. */
-.lab-gallery-page { position: relative; }
+.lab-gallery-page {
+  position: relative;
+  /* All overlay coordinates come from the viewport and the Gallery frame. */
+  --gallery-frame-width: min(1370px, calc(100vw - 2 * var(--lab-space-8)));
+  --gallery-tag-top: var(--lab-space-6);
+  --gallery-tag-height: var(--lab-space-24);
+  --gallery-toolbar-top: var(--lab-space-5);
+  --gallery-toolbar-inset: var(--lab-space-7);
+  --gallery-tag-gap: var(--lab-space-2);
+  --gallery-reveal-duration: var(--lab-normal);
+}
 .lab-gallery-page .lab-gallery-main { padding-top: 88px; }
 .lab-gallery-top-stack {
   --gallery-edge: max(28px, env(safe-area-inset-right, 0px));
@@ -117,8 +127,7 @@
   display: grid;
   grid-template-rows: 0fr;
   row-gap: 0;
-  transition: grid-template-rows var(--lab-slow) var(--lab-ease),
-    row-gap var(--lab-slow) var(--lab-ease);
+  transition: grid-template-rows var(--gallery-reveal-duration) var(--lab-ease);
   pointer-events: none;
 }
 .lab-gallery-top-stack[data-tags-open="true"] {
@@ -134,7 +143,7 @@
   pointer-events: auto;
 }
 .lab-gallery-tag-surface {
-  min-height: 50px; display: flex; align-items: center;
+  height: var(--gallery-tag-height); min-height: 0; display: flex; align-items: center;
   border: 0; border-radius: 0;
   background: #0c0c0c;
   box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
@@ -142,7 +151,7 @@
 }
 .lab-gallery-page .lab-gallery-tag-bar {
   position: relative; z-index: 1;
-  width: 100%; min-width: 0; min-height: 50px;
+  width: 100%; min-width: 0; height: var(--gallery-tag-height); min-height: 0;
   padding: 0 max(28px, env(safe-area-inset-left, 0px));
   border: 0; border-radius: 0; background: transparent;
   display: block; overflow-x: auto; overflow-y: hidden;
@@ -167,7 +176,7 @@
 .lab-gallery-tag-track {
   display: flex; align-items: center; gap: 8px;
   width: max-content; min-width: min-content;
-  height: 50px; white-space: nowrap;
+  height: var(--gallery-tag-height); white-space: nowrap;
 }
 .lab-gallery-page .lab-gallery-tag-wrap {
   position: relative; display: flex; flex: none; border-radius: 0;
@@ -221,12 +230,19 @@
   background: rgba(27, 27, 27, .97);
 }
 .lab-gallery-toolbar-float {
-  position: fixed; top: var(--lab-space-5); right: var(--lab-space-7); z-index: 77;
-  width: min(600px, calc(100vw - 56px));
+  position: fixed;
+  top: var(--gallery-toolbar-top);
+  right: calc((100vw - var(--gallery-frame-width)) / 2 + var(--gallery-toolbar-inset));
+  z-index: 77;
+  width: min(600px, calc(100vw - 2 * var(--lab-space-7)));
   height: 44px; min-height: 44px;
-  transform: translate3d(0, var(--gallery-tags-push, 0px), 0);
-  transition: transform var(--lab-slow) var(--lab-ease);
+  transform: translate3d(0, 0, 0);
+  transition: transform var(--gallery-reveal-duration) var(--lab-ease);
   pointer-events: none;
+}
+.lab-gallery-page[data-tags-open="true"] .lab-gallery-toolbar-float {
+  /* Tag top + actual band height + shared gap, never first-row artwork. */
+  transform: translate3d(0, calc(var(--gallery-tag-top) + var(--gallery-tag-height) + var(--gallery-tag-gap) - var(--gallery-toolbar-top)), 0);
 }
 .lab-gallery-toolbar-float .lab-toolbar-v2 { width: max-content; max-width: 100%; }
 .lab-gallery-toolbar-notice {
@@ -247,10 +263,10 @@
 @media (max-width: 750px) {
   .lab-gallery-page .lab-gallery-main { padding-top: 80px; }
   .lab-gallery-top-stack { --gallery-edge: max(16px, env(safe-area-inset-right, 0px)); top: env(safe-area-inset-top, 0px); }
-  .lab-gallery-toolbar-float { top: var(--lab-space-4); right: var(--lab-space-4); width: min(600px, calc(100vw - 32px)); }
-  .lab-gallery-tag-surface { min-height: 46px; }
-  .lab-gallery-page .lab-gallery-tag-bar { padding-inline: 16px; min-height: 46px; }
-  .lab-gallery-tag-track { gap: 8px; height: 46px; }
+  .lab-gallery-toolbar-float { width: min(600px, calc(100vw - 2 * var(--lab-space-4))); }
+  .lab-gallery-tag-surface { height: var(--gallery-tag-height); }
+  .lab-gallery-page .lab-gallery-tag-bar { padding-inline: var(--lab-space-4); height: var(--gallery-tag-height); min-height: 0; }
+  .lab-gallery-tag-track { gap: 8px; height: var(--gallery-tag-height); }
   .lab-gallery-page .lab-gallery-tag { height: 40px; min-height: 40px; font-size: clamp(19px, 5vw, 23px); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -309,9 +325,9 @@
 .lab-gallery-top-stack {
   position: fixed;
   z-index: 76;
-  top: var(--lab-space-6);
+  top: var(--gallery-tag-top);
   left: 50%; right: auto;
-  width: min(1370px, calc(100vw - 2 * var(--lab-space-8)));
+  width: var(--gallery-frame-width);
   transform: translateX(-50%);
 }
 .lab-gallery-top-stack .lab-gallery-tag-surface { background: #0c0c0c; }
@@ -325,10 +341,10 @@
   transform: translate3d(0,-6px,0);
 }
 .lab-gallery-tag-shadow {
-  position: fixed; z-index: 75; top: var(--lab-space-6);
+  position: fixed; z-index: 75; top: var(--gallery-tag-top);
   left:50%; transform:translateX(-50%);
-  width:min(1370px,calc(100vw - 2 * var(--lab-space-8)));
-  height:calc(var(--lab-space-12) + var(--lab-space-12));
+  width:var(--gallery-frame-width);
+  height:calc(var(--gallery-tag-height) + var(--lab-space-12));
   background:linear-gradient(180deg,
      rgba(12,12,12,.98) 0%,rgba(12,12,12,.88) 45%,
      rgba(12,12,12,.48) 72%,rgba(12,12,12,0) 100%);
@@ -338,28 +354,27 @@
   transition:opacity var(--lab-normal) var(--lab-ease);
 }
 .lab-gallery-top-stack[data-tags-open="true"] ~ .lab-gallery-tag-shadow { opacity:1; }
-.lab-gallery-toolbar-float {
-  transition:transform var(--lab-normal) var(--lab-ease);
-}
+/* Studio and Tag Bar reveal share the same motion token. */
 .lab-gallery-tag-cue {
   position:fixed; z-index:75;
-  left:50%; top:var(--lab-space-6);
+  left:50%; top:var(--gallery-tag-top);
   transform:translate3d(-50%,-6px,0);
-  width:min(1370px,calc(100vw - 2 * var(--lab-space-8)));
-  height:50px; padding-inline:var(--lab-space-7);
+  width:var(--gallery-frame-width);
+  height:var(--gallery-tag-height); padding-inline:var(--lab-space-7);
   display:flex;align-items:center;
   pointer-events:none;
   transition:opacity var(--lab-fast) var(--lab-ease);
 }
 @media(max-width:750px){
- .lab-gallery-top-stack,.lab-gallery-tag-shadow,.lab-gallery-tag-cue {
-   top:var(--lab-space-4);
-   width:calc(100vw - 2 * var(--lab-space-4));
- }
- .lab-gallery-top-stack .lab-gallery-tag-bar,.lab-gallery-tag-cue {
-   padding-inline:var(--lab-space-4);
- }
- .lab-gallery-tag-cue { height:46px; }
+  .lab-gallery-page {
+    --gallery-frame-width: calc(100vw - 2 * var(--lab-space-4));
+    --gallery-tag-top: var(--lab-space-4);
+    --gallery-toolbar-top: var(--lab-space-4);
+    --gallery-toolbar-inset: 0px;
+  }
+  .lab-gallery-top-stack .lab-gallery-tag-bar,.lab-gallery-tag-cue {
+    padding-inline:var(--lab-space-4);
+  }
 }
 @media(prefers-reduced-motion:reduce){
  .lab-gallery-toolbar-float,.lab-gallery-tag-shadow { transition:none; }
