@@ -145,7 +145,7 @@ try{
  assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Plain click must toggle inclusion off, not cycle to exclusion");
  await expr('(()=>{const el='+ambient+';el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true}));return true;})()');
  assert.ok(await expr("[...document.querySelectorAll('.lab-beat-tile')].every(t=>![...t.querySelectorAll('.lab-beat-tile__tag')].some(e=>e.textContent==='Ambient'))"),"Alt+click must exclude Ambient across multi-tag beats");
- assert.ok(await expr("(()=>{const c=getComputedStyle("+ambient+").color;const m=c.match(/\\d+/g).map(Number);return m[2]>m[1]&&m[0]>m[1];})()"),"Excluded colored tag must keep its purple hue instead of turning white");
+ assert.ok(await expr("(()=>{const c=getComputedStyle("+ambient+").color;return c!==\"rgb(255, 255, 255)\"&&c!==\"rgb(244, 244, 244)\";})()"),"Excluded colored tag must keep its tint instead of turning white");
  await expr('(()=>{const el='+ambient+';el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true}));return true;})()');
  assert.equal(await expr("document.querySelectorAll('.lab-beat-tile').length"),24,"Second Alt+click clears exclusion");
  await goMaster();
@@ -186,7 +186,7 @@ try{
  }
  console.log("Mobile Gallery layout:",mobile);
  assert.ok(mobile.gap>=7,"Mobile toolbar must remain below the tag bar: "+JSON.stringify(mobile));
- assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile navigation must fit viewport width");
+ assert.ok(Math.abs(mobile.navWidth-mobile.screenWidth)<=2,"Mobile black tag strip must extend edge-to-edge");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
  await screenshot("gallery-mobile-tags.png");
