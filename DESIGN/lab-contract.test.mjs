@@ -153,3 +153,45 @@ test("Toolbar search has no rectangular focus ring, keeps circular glass edge, a
   assert.doesNotMatch(css,/\.lab-toolbar-search-glass[^}]*transform:scaleX/);
   assert.doesNotMatch(css,/\.lab-toolbar-search\.is-open \.lab-toolbar-search-trigger\{[^}]*background:var\(--glass-bg\)/);
 });
+
+test("gallery has exactly 24 one-word beats, varied tag combinations and real covers", () => {
+  const data = read("./shared/data.ts");
+  const gallery = read("./GALLERY/GalleryPage.tsx");
+  const tile = read("./shared/components.tsx");
+  const cover = read("./shared/coverSources.ts");
+  const ids = [...data.matchAll(/id:"(demo-\\d{2})"/g)].map(m => m[1]);
+  const names = [...data.matchAll(/title:"([A-Za-z]+)"/g)].map(m => m[1]);
+  assert.equal(ids.length, 24);
+  assert.equal(new Set(ids).size, 24, "unique beat IDs and cover indices");
+  assert.deepEqual(ids, Array.from({length: 24}, (_, i) => `demo-${String(i + 1).padStart(2,"0")}`));
+  assert.equal(names.length, 24);
+  assert.equal(new Set(names).size, 24, "one-word unique names");
+  const combinations = [...data.matchAll(/tags:\[([^\\]]+)\\]/g)].map(m => m[1].split(","));
+  assert.equal(combinations.length, 24);
+  assert.ok(combinations.some(tags => tags.length === 1));
+  assert.ok(combinations.some(tags => tags.length === 2));
+  assert.ok(combinations.some(tags => tags.length === 3));
+  assert.ok(combinations.every(tags => tags.length >= 1 && tags.length <= 3));
+  assert.match(tile, /beat\\.tags\\.map\\(tag =>/);
+  assert.match(gallery, /included\\.some\\(name => item\\.tags\\.includes\\(name\\)\\)/);
+  assert.match(gallery, /!excluded\\.some\\(name => item\\.tags\\.includes\\(name\\)\\)/);
+  assert.doesNotMatch(gallery, /lab-tag-color-trigger|···|Change \\u0024\\{name\\} tag color/);
+  assert.doesNotMatch(read("./GALLERY/gallery.css"), /lab-tag-color-trigger/);
+  assert.match(cover, /Number\\.isFinite\\(index\\)/);
+  const dir = new URL("./shared/assets/real-covers/", import.meta.url);
+  assert.equal(readdirSync(dir).filter(name => /^cover-\\d{2}\\.(jpg|avif)$/.test(name)).length, 24);
+});
+
+test("MASTER provides a shared real/generated cover switch ABOVE Rules", () => {
+  const master = read("./MASTER/MasterPage.tsx");
+  const app = read("./App.tsx");
+  const nav = master.indexOf('<div className="lab-master-sidebar-heading">PORTADAS</div>');
+  const rules = master.indexOf('<div className="lab-master-sidebar-heading">REGLAS</div>');
+  assert.ok(nav > -1 && rules > nav);
+  assert.match(master, /aria-pressed=\\{coverMode === "real"\\}/);
+  assert.match(master, /onClick=\\{\\(\\) => setCoverMode\\("real"\\)\\}/);
+  assert.match(master, /onClick=\\{\\(\\) => setCoverMode\\("generated"\\)\\}/);
+  assert.match(app, /<GalleryPage coverMode=\\{coverMode\\}/);
+  assert.match(app, /<LandingPage[^>]*coverMode=\\{coverMode\\}/);
+  assert.match(app, /<MasterPage coverMode=\\{coverMode\\} setCoverMode=\\{setCoverMode\\}/);
+});
