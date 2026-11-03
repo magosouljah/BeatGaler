@@ -88,7 +88,7 @@ try{
    const nav=document.querySelector('.lab-gallery-tag-surface').getBoundingClientRect();
    const toolbar=document.querySelector('.studio-candidate.is-gallery .studio-candidate-toolbar').getBoundingClientRect();
    return {top:toolbar.top,right:toolbar.right,navTop:nav.top,navRight:nav.right,
-     navBottom:nav.bottom,navHeight:nav.height,scrollY:window.scrollY};
+     navBottom:nav.bottom,navHeight:nav.height,scrollY:window.scrollY,open:document.querySelector('.lab-gallery-page')?.dataset.tagsOpen};
  })()`);
  const assertSameOverlay=(before,after,step)=>{
    assert.ok(Math.abs(after.right-before.right)<=2,step+": toolbar right edge shifted");
@@ -289,11 +289,13 @@ try{
  // Headless SwiftShader may delay frames. Verify the settled frame rather
  // than assuming 180ms of CSS motion completed in 300ms of wall-clock time.
  for(let i=0;i<24&&Math.abs(medium.top-medium.navBottom-8)>2;i++){
+   // Re-send a genuine top-zone mouse hover after responsive scroll/resize.
+   await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:8,clientY:6,bubbles:true}))");
    await sleep(120);
    medium=await overlayGeometry();
  }
  console.log("Medium Gallery overlay geometry:",medium);
- assert.ok(Math.abs(medium.right-((840-(4*160+3*22))/2+10))<=2,"Medium viewport restores original four-column alignment");
+ assert.ok(Math.abs(medium.right-(840-((840-(4*160+3*22))/2+10)))<=2,"Medium viewport restores original four-column alignment");
  assert.ok(Math.abs(medium.top-medium.navBottom-8)<=2,"Medium viewport keeps 8px strip gap: "+JSON.stringify(medium));
  // Small screens keep the 600px optical viewport and thick Tag Bar.
  await command("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
@@ -319,7 +321,7 @@ try{
  assert.ok(Math.abs(mobile.gap-8)<=2,"Mobile toolbar preserves the 8px gap: "+JSON.stringify(mobile));
  const mobileOverlay=await overlayGeometry();
  assert.ok(Math.abs(mobileOverlay.navHeight-88)<=2,"Mobile Tag Bar matches the 88px reference");
- assert.ok(Math.abs(mobileOverlay.right-((390-(2*160+13))/2+10))<=2,"Mobile Toolbar restores two-column alignment");
+ assert.ok(Math.abs(mobileOverlay.right-(390-((390-(2*160+13))/2+10)))<=2,"Mobile Toolbar restores two-column alignment");
  assert.ok(mobile.navWidth<mobile.screenWidth,"Mobile strip retains inset margins");
  assert.equal(mobile.sceneHeight,600,"Mobile glass must preserve the 600px Studio scale");
  assert.ok(mobile.scrollable,"Mobile horizontal tag scroll must remain usable");
