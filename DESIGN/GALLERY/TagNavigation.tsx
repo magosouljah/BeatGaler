@@ -32,6 +32,9 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
   const [edges, setEdges] = useState({ left: false, right: false });
   const rootRef = useRef<HTMLDivElement>(null);
   const pointerNearby = useRef(false);
+  // Hybrid/touch-capable devices can report coarse input even while a
+  // physical mouse is in use. Use the actual last mouse interaction for hide.
+  const mousePresent = useRef(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -63,7 +66,7 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
     const keyboardFocus = focus instanceof HTMLElement && focus.matches(":focus-visible") &&
       !!rootRef.current?.contains(focus);
     if (hasActiveFilters || editingTag || keyboardFocus ||
-      window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
+      (!mousePresent.current && window.matchMedia("(hover: none), (pointer: coarse)").matches)) return;
     if (hideTimer.current !== null) return;
     hideTimer.current = setTimeout(() => {
       hideTimer.current = null;
@@ -161,7 +164,7 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
   useEffect(() => {
     // Fine-pointer media changes must not close a hovered or filtered bar.
     const media = window.matchMedia("(hover: none), (pointer: coarse)");
-    const update = () => { if (media.matches) show(); else if (!pointerNearby.current) scheduleHide(); };
+    const update = () => { if (media.matches && !mousePresent.current) show(); else if (!pointerNearby.current) scheduleHide(); };
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
@@ -174,6 +177,7 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
   useEffect(() => {
     const move = (event: PointerEvent) => {
       if (event.pointerType !== "mouse") return;
+      mousePresent.current = true;
       const toolbar = document.querySelector(".studio-candidate.is-gallery .studio-candidate-toolbar") ?? document.querySelector(".lab-gallery-toolbar-float");
       const toolbarLeft = toolbar?.getBoundingClientRect().left ?? window.innerWidth;
       const inRevealZone = event.clientY <= 78 && event.clientX < toolbarLeft - 12;
