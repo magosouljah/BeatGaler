@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { LabBeatTile, LabButton } from "../shared/components";
 import { DEMO_BEATS, DEMO_TAGS } from "../shared/data";
@@ -35,48 +35,7 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     try { sessionStorage.setItem("beatgaler.lab.tags-hint-seen","yes"); }
     catch { /* storage optional */ }
   }, [tagsVisible, hintSeen]);
-  const toolbarFloatRef = useRef<HTMLDivElement>(null);
-  const tagStackRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const toolbar = toolbarFloatRef.current;
-    const stack = tagStackRef.current;
-    if (!toolbar || !stack) return;
-    const sync = () => {
-      const style = getComputedStyle(toolbar);
-      const baseTop = parseFloat(style.top) || 20;
-      const tokenGap = parseFloat(getComputedStyle(document.documentElement)
-        .getPropertyValue("--lab-space-2")) || 8;
-      // Align the rightmost lens 10px inside the rightmost first-row beat,
-      // irrespective of the number of columns at this viewport size.
-      const grid = document.querySelector<HTMLElement>(".lab-gallery-grid");
-      const items = Array.from(grid?.children ?? []) as HTMLElement[];
-      const first = items[0]?.getBoundingClientRect();
-      if (first) {
-        const row = items.map(item => item.getBoundingClientRect())
-          .filter(rect => Math.abs(rect.top-first.top) <= 2);
-        const lastRight = Math.max(...row.map(rect => rect.right));
-        toolbar.style.right = Math.max(0, window.innerWidth - lastRight + 10) + "px";
-      }
-      const tagsBottom = stack.getBoundingClientRect().top + (window.matchMedia("(max-width: 750px)").matches ? 46 : 50);
-      const coverTarget = first ? first.top + 10 : baseTop;
-      const finalTop = tagsVisible ? Math.max(baseTop, tagsBottom + tokenGap, coverTarget) : baseTop;
-      // CSS transitions the transform from its current painted value, so
-      // rapidly closing/reopening the bar never teleports the Studio optics.
-      toolbar.style.setProperty("--gallery-tags-push", (finalTop - baseTop) + "px");
-    };
-    sync();
-    const observer = new ResizeObserver(sync);
-    const grid = document.querySelector(".lab-gallery-grid");
-    if (grid) observer.observe(grid);
-    window.addEventListener("resize",sync,{passive:true});
-    window.addEventListener("scroll",sync,{passive:true});
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize",sync);
-      window.removeEventListener("scroll",sync);
-    };
-  }, [tagsVisible]);
-  const [selectMode, setSelectMode] = useState(false);
+  const toolbarFloatRef =electMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -111,14 +70,14 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
     current.includes(id) ? current.filter(item => item !== id) : [...current, id]
   );
   return (
-    <div className="lab-gallery-page">
-      <div ref={tagStackRef} className="lab-gallery-top-stack" data-tags-open={tagsVisible ? "true" : "false"} data-tag-variant={tagBarVariant}>
+    <div className="lab-gallery-page" data-tags-open={tagsVisible ? "true" : "false"}>
+      <div className="lab-gallery-top-stack" data-tags-open={tagsVisible ? "true" : "false"} data-tag-variant={tagBarVariant}>
         <TagNavigation visible={tagsVisible} hasActiveFilters={hasActiveFilters} onVisibilityChange={setTagsOpen}
           filters={filters} onCycleTag={cycleTag} onClear={() => setFilters({})}
           tagColors={tagColors} setTagColors={setTagColors} />
       </div>
       <div className="lab-gallery-tag-shadow" aria-hidden="true" />
-      <div ref={toolbarFloatRef} className="lab-gallery-toolbar-float">
+      <div className="lab-gallery-toolbar-float">
           <StudioToolbarCandidate gallery galleryTagsOpen={tagsVisible} search={search} onSearchChange={setSearch}
             sort={sort} onSortChange={setSort}
             selecting={selectMode} onToggleSelect={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}
