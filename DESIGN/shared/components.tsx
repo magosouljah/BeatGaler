@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import type { DemoBeat } from "./data";
 import { getCoverSrc } from "./coverSources";
@@ -48,32 +48,70 @@ export function LabArtwork({ beat, coverMode, className = "" }: { beat: DemoBeat
 }
 
 
-export function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {} }: {
-  beat: DemoBeat; coverMode: CoverMode; tagColors?: Record<string, string>;
+
+/** Fixed 160px tile. Pure tag compaction: no DOM measurement or per-card observers. */
+function compactTileTags(tags: readonly string[], colors: Record<string,string>) {
+  const ordered = [...tags].sort((a,b)=>a.localeCompare(b));
+  const labelWidth = (tag:string) => Math.min(130, Math.ceil(tag.length * 5.6) + 14);
+  // A conservative, fixed width budget for the one-line metadata strip.
+  for(let named=ordered.length;named>=0;named--) {
+    const visible=ordered.slice(0,named), rest=ordered.slice(named);
+    const dots:string[]=[];
+    let unrepresented=0;
+    for(const tag of rest) {
+      const color=colors[tag]?.toLowerCase() || "";
+      if(!color) {unrepresented++;continue;}
+      if(!dots.includes(color)) dots.push(color);
+      else unrepresented++;
+    }
+    const used=visible.reduce((sum,tag)=>sum+labelWidth(tag),0)
+      + Math.max(0,visible.length-1)*4
+      + (visible.length&&dots.length?5:0)+dots.length*9
+      + (unrepresented?28:0);
+    if(used<=160 || named===0) return {visible,dots,unrepresented};
+  }
+  return {visible:[],dots:[],unrepresented:ordered.length};
+}
+function TilePlayIcon({pause=false}:{pause?:boolean}) {
+  return pause
+    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round"/></svg>
+    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5 20 12 8 19.5z" fill="currentColor"/></svg>;
+}
+export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {}, onTagPreview }: {
+  beat: DemoBeat; coverMode: CoverMode; tagColors?: Record<string,string>;
   selected: boolean; onPlay: (beat: DemoBeat) => void;
+  onTagPreview?: (beat: DemoBeat, anchor: HTMLElement) => void;
 }) {
+  const compact=compactTileTags(beat.tags,tagColors);
   return (
-    <article className="lab-beat-tile">
+    <article className="lab-beat-tile lab-beat-tile--v2" data-playing={selected}>
       <div className="lab-beat-tile__cover">
         <LabArtwork beat={beat} coverMode={coverMode} />
         <button type="button" className="lab-beat-tile__play"
           aria-label={selected ? `Pause ${beat.title} demo` : `Play ${beat.title} demo`}
           aria-pressed={selected} onClick={() => onPlay(beat)}>
-          {selected ? "Ⅱ" : "▶"}
+          <span className="lab-beat-tile__play-disc"><TilePlayIcon pause={selected}/></span>
         </button>
+        {selected && <span className="lab-beat-tile__playing-mark" aria-hidden="true"><span/><span/><span/></span>}
       </div>
       <div className="lab-beat-tile__meta">
-        <div className="lab-beat-tile__title" title={beat.title}>{beat.title}</div>
-        <div className="lab-beat-tile__tags">{beat.tags.map(tag => {
-          const color = tagColors[tag];
-          return <span key={tag} className="lab-beat-tile__tag"
-            style={color ? { color, borderColor: `${color}77`, background: `${color}19` } : undefined}>{tag}</span>;
-        })}</div>
-        <div className="lab-beat-tile__details">{beat.key}<span aria-hidden="true">·</span>{beat.bpm} BPM</div>
+        <div className="lab-beat-tile__heading">
+          <div className="lab-beat-tile__title" title={beat.title}>{beat.title}</div>
+          <button type="button" className="lab-beat-tile__more" aria-label={`More options for ${beat.title}`} onClick={event=>onTagPreview?.(beat,event.currentTarget)}>···</button>
+        </div>
+        <div className="lab-beat-tile__detail-row">
+          <span className="lab-beat-tile__stars" aria-label={`${beat.stars} out of 5 stars`}>{Array.from({length:5},(_,i)=><span key={i} className={i<beat.stars?"is-filled":""}>★</span>)}</span>
+          <span className="lab-beat-tile__details">{beat.bpm} BPM · {beat.key}</span>
+        </div>
+        <div className="lab-beat-tile__tags" onPointerEnter={event=>{if(compact.visible.length<beat.tags.length)onTagPreview?.(beat,event.currentTarget);}}>
+          {compact.visible.map(tag=><span key={tag} className="lab-beat-tile__tag" style={tagColors[tag]?{color:tagColors[tag]}:undefined}>{tag}</span>)}
+          {compact.dots.map(color=><span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} aria-label={`Hidden tag color ${color}`}/>)}
+          {compact.unrepresented>0&&<span className="lab-beat-tile__extra">+${compact.unrepresented}</span>}
+        </div>
       </div>
     </article>
   );
-}
+});
 
 type PlayerIconName = "shuffle"|"previous"|"play"|"pause"|"next"|"repeat"|"queue"|"volume"|"more";
 function PlayerIcon({ name }: { name: PlayerIconName }) {
