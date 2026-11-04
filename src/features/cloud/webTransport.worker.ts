@@ -2505,68 +2505,12 @@ async function getLibraryIndex(requestId: string | null = null, allowMissing = f
   }
 }
 
-function libraryIdentityIds(manifest: unknown): Set<string> {
-  const root = manifest && typeof manifest === "object" && !Array.isArray(manifest) ? manifest as Record<string, unknown> : {};
-  const ids = new Set<string>();
-  for (const value of Array.isArray(root.beats) ? root.beats : []) {
-    const id = String((value as Record<string, unknown>)?.id || "").trim();
-    if (id) ids.add(id);
-  }
-  for (const value of Array.isArray(root.trash) ? root.trash : []) {
-    const row = value as Record<string, unknown>;
-    const beat = row?.beat && typeof row.beat === "object" ? row.beat as Record<string, unknown> : row;
-    const id = String(beat?.id || "").trim();
-    if (id) ids.add(id);
-  }
-  for (const value of Array.isArray(root.deleted) ? root.deleted : []) {
-    const row = value as Record<string, unknown>;
-    const id = String(row?.beat_id || row?.id || "").trim();
-    if (id) ids.add(id);
-  }
-  return ids;
-}
-
-async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promise<WebTransportReplaceIndexResult> {
-  const active = requireReady();
-  const root = input.manifest && typeof input.manifest === "object" && !Array.isArray(input.manifest)
-    ? input.manifest as Record<string, unknown> : null;
-  if (!root || root.schema !== "beatgaler.telegram.library" || Number(root.version) !== 2) throw new Error("Galer Cloud refused an invalid library update.");
-  // Only an explicit empty-vault bootstrap may start without an INDEX. Network,
-  // corrupt-document and foreign-pin errors still fail closed.
-  playTrace("WORKER_REPLACE_INDEX_BEGIN", { expected_message_id: input.expectedMessageId || 0 });
-  const current = await getLibraryIndex(null, input.expectedMessageId === 0);
-  if (current.messageId !== input.expectedMessageId) throw new Error("Your library changed on another device. Retry Save to use the latest version.");
-  const candidateIds = libraryIdentityIds(root);
-  const missing = Array.from(libraryIdentityIds(current.manifest)).filter(id => !candidateIds.has(id));
-  if (missing.length > 0) throw new Error("Galer Cloud blocked a stale library update.");
-  const bytes = new TextEncoder().encode(JSON.stringify(root));
-  if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) throw new Error("Galer Cloud library update has an invalid size.");
-  const file = new File([bytes], `beatgaler-library-${Date.now()}.json`, { type: "application/json" });
-  const sent = await active.sendMedia(chatId, InputMedia.document(file, {
-    fileName: file.name, fileMime: file.type, fileSize: file.size, caption: LIBRARY_INDEX_CAPTION,
-  }), { silent: true });
-  const messageId = Number(sent?.id || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud returned incomplete library information.");
-  try {
-    await active.pinMessage({ chatId, message: messageId, notify: false });
-    let pinned = false;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const full = await active.getFullChat(chatId);
-      if (Number(full.pinnedMsgId || 0) === messageId) { pinned = true; break; }
-      await new Promise(resolve => setTimeout(resolve, 80 * (attempt + 1)));
-    }
-    if (!pinned) throw new Error("Galer Cloud could not verify the library update.");
-  } catch (error) {
-    await active.deleteMessagesById(chatId, [messageId]).catch(() => {});
-    throw error;
-  }
-  if (current.messageId && current.messageId !== messageId) await active.deleteMessagesById(chatId, [current.messageId]).catch(() => {});
-  const result = { messageId, previousMessageId: current.messageId, beatCount: Array.isArray(root.beats) ? root.beats.length : 0 };
-  // A later read in this live Worker must use the newly pinned document even
-  // before the asynchronous Cloud pointer acknowledgement returns.
-  knownIndexPointer = { messageId, revision: knownIndexPointer.revision };
-  playTrace("WORKER_REPLACE_INDEX_DONE", { message_id: result.messageId, previous_message_id: result.previousMessageId, beat_count: result.beatCount });
-  return result;
+async function replaceLibraryIndex(_input: WebTransportReplaceIndexInput): Promise<WebTransportReplaceIndexResult> {
+  // The Worker may READ the pinned INDEX, but it may never write/pin/delete it.
+  // Those changes require the server-authoritative PostgreSQL transaction and
+  // MASTER confirmation at /transport/index/publish. Otherwise a bot can pin a
+  // candidate and delete the committed predecessor before the ledger accepts it.
+  throw new Error("INDEX updates must be published through Galer Cloud.");
 }
 
 function sniffImageMime(bytes: Uint8Array): string {
