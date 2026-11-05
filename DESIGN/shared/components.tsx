@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import type { DemoBeat } from "./data";
-import { compactTileTags, isNeutralTagColor } from "./beatCardTags";
+import { compactTileTags } from "./beatCardTags";
 // Exact Web gallery PNG; static asset only (no production components/runtime).
 import webPlayFillPng from "../../src/assets/player-icons/play.fill.png";
 import { getCoverSrc } from "./coverSources";
@@ -90,7 +90,7 @@ export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, c
           data-hidden-colors={JSON.stringify(Object.fromEntries(compact.hidden.map(tag => [tag, tagColors[tag] || ""])))}
           tabIndex={compact.hidden.length ? 0 : undefined}
           aria-label={compact.hidden.length ? `Tags adicionales: ${compact.hidden.join(", ")}` : undefined}>
-          {compact.visible.map(tag=><span key={tag} className={`lab-beat-tile__tag${isNeutralTagColor(tagColors[tag]) ? " lab-beat-pill--neutral" : ""}`} style={tagColors[tag] ? { "--lab-beat-pill-color": tagColors[tag] } as CSSProperties : undefined}><span className="lab-beat-pill__label">{tag}</span></span>)}
+          {compact.visible.map(tag=><span key={tag} className="lab-beat-tile__tag" style={tagColors[tag] ? { "--lab-beat-pill-color": tagColors[tag] } as CSSProperties : undefined}><span className="lab-beat-pill__label">{tag}</span></span>)}
           {compact.dots.map(color=><span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} aria-label={`Color de tags ocultos ${color}`}/>)}
           {compact.unrepresented>0&&<span className="lab-beat-tile__extra">+{compact.unrepresented}</span>}
         </div>
