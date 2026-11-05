@@ -86,14 +86,14 @@ The “Tags ↑” hint aligns with the All tag and appears only until the first
 Studio 44 experiment preset: `tint #5e5e5eb0`, `shadowExpand 20`, `shadowFactor 20`. The original diagnostic preset remains unchanged; automated light-background ink detection has been removed in Gallery. The Tag Bar's horizontal scrolling, filters and material comparison remain as before.
 
 
-## BeatCard — tres maneras de consultar tags (candidatas, no aprobadas)
+## BeatCard — diseño A aprobado
 
-En `MASTER → BeatCard · 3 ideas` hay tres BeatCards **de 160 × 239 px**, con la misma portada, tags y colores para comparar solo el tratamiento de los tags ocultos:
+En `MASTER → BeatCard` queda **únicamente la variante A**, con portada 160 × 160 px y tarjeta de 160 × 239 px sin cambios de tamaño. Se eliminaron B (sobre portada) y C (extensión lateral).
 
-- **A · Línea discreta:** aparecen los tags faltantes justo bajo la fila, sin cuadro ni cambiar el tamaño de la tarjeta. **Esta es la candidata activa en Gallery.**
-- **B · Sobre portada:** los tags faltantes aparecen en una franja de degradado integrada en la parte inferior de la portada.
-- **C · Extensión lateral:** prolonga visualmente la línea de tags hacia el lado con espacio disponible, sin abrir una ficha nueva.
+- Los tags principales se presentan como pills de 11 px; el cálculo compartido del espacio disponible utiliza esa misma medida. Etiquetas alfabéticas, puntos agrupados por color y `+N` solo para tags no representados.
+- Al mantener el cursor sobre los tags ocultos **800 ms**, aparece una línea discreta **con pills del mismo diseño** bajo la tarjeta. Sin panel, sin texto seleccionable y sin desplazar tarjetas. Foco de teclado o toque: aparición inmediata. Un solo temporizador y un solo overlay compartidos.
+- BPM y tonalidad ahora se muestran más legibles. Se abrevia la tonalidad en la fila (por ejemplo, `D minor` → `Dm`) y se conserva el nombre completo en `title`.
+- **Play de Web real:** Studio carga solo el asset PNG original de `src/assets/player-icons/play.fill.png` (referencia estática sin importar componentes ni servicios de producción). Reproduce exactamente su icono de 26 px, overlay negro al 42 % y transición de opacidad de 150 ms. Al reproducir utiliza el overlay al 45 % y las cuatro barras blancas del `Artwork` Web, centradas, sin el indicador naranja inferior. Clic sobre la portada alterna Play/Pause en la simulación sin audio.
+- Probar: `node --test DESIGN/lab-contract.test.mjs DESIGN/beatcard-tags.test.mjs`, `npx --no-install tsc --project DESIGN/tsconfig.json --noEmit`, `npx --no-install vite build --config DESIGN/vite.config.ts` y `node DESIGN/gallery-browser-check.mjs` (genera imágenes en `DESIGN/gallery-visual-check/`).
 
-Pasa el cursor sobre los tags y déjalo **800 ms** para ver la opción; al salir desaparece. Foco de teclado o toque muestran la vista inmediatamente. La vista usa un **solo temporizador y un solo overlay para todas las tarjetas**, con eventos delegados, sin observadores/timers por BeatCard. En Gallery se corrigió el literal `+$N` a `+N`, se atenuó BPM/Key, la compactación usa medición de texto compartida/caché con ancho exacto y los grupos de color se condensan en un punto por color. El menú de tres puntos no abre la lista de tags. No hay indicador de reproducción debajo de la portada.
-
-Estado: **comparación experimental**. Validar en Chrome con `node DESIGN/gallery-browser-check.mjs` y `node --test DESIGN/lab-contract.test.mjs DESIGN/beatcard-tags.test.mjs`; comprobar manualmente el tamaño fijo y la apariencia de las tres opciones. No afecta `src/`, producción ni `main`.
+Toda la implementación es solo de DESIGN; los archivos de `src/` no fueron modificados y no se conectan a servicios reales.
