@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isNeutralTagColor } from "./beatCardTags";
 import type { CSSProperties, FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent } from "react";
 
 type Peek = {
@@ -109,8 +110,8 @@ export function BeatTagPeekLayer({ peek }: { peek: Peek | null }) {
       style={{ left: peek.left, top: peek.top, width: peek.width }}
       role="status" aria-label={`Tags adicionales: ${peek.hidden.join(", ")}`}
     >
-      {peek.hidden.map(tag => <span key={tag} className="lab-tag-peek__tag"
-        style={peek.colors[tag] ? { "--lab-beat-pill-color": peek.colors[tag] } as CSSProperties : undefined}>{tag}</span>)}
+      {peek.hidden.map(tag => <span key={tag} className={`lab-tag-peek__tag${isNeutralTagColor(peek.colors[tag]) ? " lab-beat-pill--neutral" : ""}`}
+        style={peek.colors[tag] ? { "--lab-beat-pill-color": peek.colors[tag] } as CSSProperties : undefined}><span className="lab-beat-pill__label">{tag}</span></span>)}
     </div>
   );
 }
