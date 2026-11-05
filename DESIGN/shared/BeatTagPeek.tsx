@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent } from "react";
 
-export type BeatTagPeekMode = "quiet-line" | "cover-overlay" | "edge-rail";
 type Peek = {
-  mode: BeatTagPeekMode;
+  colors: Record<string, string>;
   hidden: string[];
   left: number;
   top: number;
@@ -33,34 +32,16 @@ export function useBeatTagPeek() {
     let hidden: string[];
     try { hidden = JSON.parse(raw) as string[]; } catch { return; }
     if (!hidden.length) return;
-    const card = trigger.closest<HTMLElement>(".lab-beat-tile--v2");
-    const mode = (card?.dataset.peekMode || "quiet-line") as BeatTagPeekMode;
+    let colors: Record<string, string> = {};
+    try { colors = JSON.parse(trigger.dataset.hiddenColors || "{}") as Record<string,string>; } catch { /* fallback to neutral */ }
     const rect = trigger.getBoundingClientRect();
-    const cover = card?.querySelector<HTMLElement>(".lab-beat-tile__cover")?.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    let width = Math.min(270, viewportWidth - 16);
-    let left = Math.min(Math.max(8, rect.left), viewportWidth - width - 8);
-    let top = rect.bottom + 4;
-    if (mode === "cover-overlay" && cover) {
-      width = cover.width;
-      left = cover.left;
-      top = cover.bottom - 60;
-    } else if (mode === "edge-rail") {
-      width = Math.min(225, Math.max(110, viewportWidth - 16));
-      const rightSpace = viewportWidth - rect.right - 10;
-      if (rightSpace >= width) left = rect.right + 7;
-      else if (rect.left >= width + 10) left = rect.left - width - 7;
-      else {
-        width = Math.min(270, viewportWidth - 16);
-        left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
-        top = rect.bottom + 4;
-      }
-      if (top + 30 > viewportHeight) top = Math.max(8, rect.top - 31);
-    } else if (top + 35 > viewportHeight) {
-      top = Math.max(8, rect.top - 31);
-    }
-    setPeek({ mode, hidden, left, top, width, keyboard });
+    const width = Math.min(160, viewportWidth - 16);
+    const left = Math.min(Math.max(8, rect.left), viewportWidth - width - 8);
+    const top = rect.bottom + 3;
+    // This single overlay has no surrounding card and does not reflow the Gallery.
+    setPeek({ hidden, colors, left, top: Math.min(top, viewportHeight - 26), width, keyboard });
   }, []);
 
   const start = useCallback((trigger: HTMLElement, keyboard: boolean) => {
@@ -123,12 +104,13 @@ export function BeatTagPeekLayer({ peek }: { peek: Peek | null }) {
   if (!peek) return null;
   return (
     <div
-      className={`lab-tag-peek lab-tag-peek--${peek.mode}`}
+      className="lab-tag-peek lab-tag-peek--quiet-line"
       data-keyboard={peek.keyboard}
       style={{ left: peek.left, top: peek.top, width: peek.width }}
       role="status" aria-label={`Tags adicionales: ${peek.hidden.join(", ")}`}
     >
-      {peek.hidden.map(tag => <span key={tag} className="lab-tag-peek__tag">{tag}</span>)}
+      {peek.hidden.map(tag => <span key={tag} className="lab-tag-peek__tag"
+        style={peek.colors[tag] ? { color: peek.colors[tag] } : undefined}>{tag}</span>)}
     </div>
   );
 }
