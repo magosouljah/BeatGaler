@@ -95,6 +95,24 @@ try{
      && labels.every(el=>el&&getComputedStyle(el).lineHeight==="11px")
      && labels.every((el,i)=>Math.abs((el.getBoundingClientRect().top-boxes[i].top)-(labels[0].getBoundingClientRect().top-boxes[0].top))<.6);
  })()`),"gray and colored pills must align identically");
+
+ const beatPillMetrics=()=>expr(`(()=>{
+   const pill=document.querySelector(".lab-beat-tile--v2 .lab-beat-tile__tag");
+   if(!pill)return null;
+   const label=pill.querySelector(".lab-beat-pill__label");
+   if(!label)return null;
+   const p=getComputedStyle(pill),l=getComputedStyle(label);
+   const rect=pill.getBoundingClientRect(),inner=label.getBoundingClientRect();
+   const keys=["height","paddingTop","paddingBottom","paddingLeft","paddingRight",
+     "borderTopWidth","borderRadius","fontSize","fontFamily","fontWeight","lineHeight",
+     "alignItems","justifyContent","boxSizing","color","backgroundColor"];
+   return {text:pill.textContent,width:rect.width,height:rect.height,
+     labelOffset:Number((inner.top-rect.top).toFixed(3)),
+     pill:Object.fromEntries(keys.map(key=>[key,p[key]])),
+     label:{lineHeight:l.lineHeight,transform:l.transform}};
+ })()`);
+ const masterBeatPill=await beatPillMetrics();
+ assert.equal(masterBeatPill?.text,"Ambient","MASTER comparison baseline");
  await screenshot("beatcard-master-default.png");
  await expr("(()=>{const el=document.querySelector('.lab-master-beatcard-variant [data-beat-tag-trigger]');el.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));return true;})()");
  assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must not flash");
@@ -114,6 +132,11 @@ try{
  await until("document.querySelector('.lab-master-beatcard-variant .lab-beat-tile--v2')?.dataset.playing==='false'","pause toggle");
  await goGallery();
  await until("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas')?.dataset.engineReady==='true'","Gallery Studio WebGL ready");
+ // Equal content + default neutral color must produce identical dimensions and ink offsets
+ // in Gallery and MASTER. Reject style leakage from LANDING/GALLERY stylesheets.
+ const galleryBeatPill=await beatPillMetrics();
+ assert.deepEqual(galleryBeatPill,masterBeatPill,"Gallery and MASTER BeatCard pills diverged");
+
  assert.equal(await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas').dataset.viewportHeight"),"600","Gallery glass must use original 600px optics");
  await expr("document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:24,clientY:8,bubbles:true}))");
  await until("document.querySelector('.lab-gallery-top-stack')?.dataset.tagsOpen==='true'","tag bar reveal");
