@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { LabBeatTile, LabButton } from "../shared/components";
+import { BeatTagPeekLayer, useBeatTagPeek } from "../shared/BeatTagPeek";
 import { DEMO_BEATS, DEMO_TAGS } from "../shared/data";
 import type { DemoBeat, DemoTag } from "../shared/data";
 import type { CoverMode } from "../shared/coverSources";
@@ -17,8 +18,8 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
   setTagColors: Dispatch<SetStateAction<Record<string, string>>>;
 }) {
   const [search, setSearch] = useState("");
-  const [preview, setPreview] = useState<{title:string;tags:string[]}|null>(null);
-  const previewTags = useCallback((item: DemoBeat) => setPreview({title:item.title,tags:[...item.tags].sort((a,b)=>a.localeCompare(b))}),[]);
+  const tagPeek = useBeatTagPeek();
+  const openBeatActions = useCallback((item: DemoBeat) => setToolbarNotice(`Acciones de ${item.title}: pendientes en Studio.`), []);
 
   const [tagsOpen, setTagsOpen] = useState(() => typeof window !== "undefined" &&
     window.matchMedia("(hover: none), (pointer: coarse)").matches);
@@ -93,10 +94,11 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
         {selected.length} selected <button type="button" onClick={() => setSelected([])}>Clear selection</button>
       </div>}
       <main className="lab-gallery-main">
-        {filtered.length ? <div className="lab-gallery-grid">
+        {filtered.length ? <div className="lab-gallery-grid" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut}
+          onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
           {filtered.map(item => <div className="lab-gallery-item" key={item.id}>
             <LabBeatTile beat={item} coverMode={coverMode} tagColors={tagColors}
-              selected={playing && item.id === beat.id} onPlay={selectBeat} onTagPreview={previewTags} />
+              selected={playing && item.id === beat.id} onPlay={selectBeat} onMore={openBeatActions} />
             {selectMode && <label className="lab-gallery-select">
               <input type="checkbox" aria-label={`Select ${item.title}`} checked={selected.includes(item.id)} onChange={() => toggleSelection(item.id)} />
             </label>}
@@ -104,7 +106,7 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
         </div> : <div className="lab-empty" role="status"><strong>No beats found</strong>
           <LabButton onClick={() => { setSearch(""); setFilters({}); }}>Clear filters</LabButton></div>}
       </main>
-      {preview && <div role="dialog" aria-label={`Tags for ${preview.title}`} className="lab-beat-tag-preview" style={{position:"fixed",bottom:110,right:24,zIndex:99,background:"#202020",padding:14,borderRadius:12,maxWidth:260,boxShadow:"0 8px 32px #000b"}}><button type="button" onClick={()=>setPreview(null)} style={{float:"right",background:"none",color:"#fff",border:0}}>×</button><strong>{preview.title}</strong><p style={{fontSize:12,color:"#aaa"}}>{preview.tags.join(" · ")}</p></div>}
+      <BeatTagPeekLayer peek={tagPeek.peek} />
       <GalleryPlayer beat={beat} playing={playing} onToggle={toggle} onPlayBeat={selectBeat} coverMode={coverMode} />
     </div>
   );
