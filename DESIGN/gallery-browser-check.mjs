@@ -81,6 +81,7 @@ try{
  await click("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(b=>b.textContent.trim()==='BeatCard')");
  await until("document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile--v2').length===1","one MASTER BeatCard");
  assert.ok(await expr("(()=>{const card=document.querySelector('.lab-master-beatcard-variant .lab-beat-tile--v2').getBoundingClientRect();return card.width===160&&card.height===239;})()"),"MASTER card size is fixed");
+ await until("(()=>{const node=document.querySelector('.lab-beat-tile__web-play');return Boolean(node&&node.naturalWidth>0);})()","Web Play PNG loaded");
  assert.ok(await expr("(()=>{const node=document.querySelector('.lab-beat-tile__web-play');return node&&node.naturalWidth>0&&getComputedStyle(node).width==='26px';})()"),"Web Play PNG is loaded and 26px");
  assert.ok(await expr("(()=>{const el=document.querySelector('.lab-beat-tile__tags');return getComputedStyle(el).userSelect==='none';})()"),"tag row is not text selectable");
  await screenshot("beatcard-master-default.png");
