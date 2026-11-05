@@ -2,6 +2,8 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import type { DemoBeat } from "./data";
 import { compactTileTags } from "./beatCardTags";
+// Exact Web gallery PNG; static asset only (no production components/runtime).
+import webPlayFillPng from "../../src/assets/player-icons/play.fill.png";
 import { getCoverSrc } from "./coverSources";
 import type { CoverMode } from "./coverSources";
 
@@ -50,26 +52,26 @@ export function LabArtwork({ beat, coverMode, className = "" }: { beat: DemoBeat
 
 
 
-function TilePlayIcon({pause=false}:{pause?:boolean}) {
-  return pause
-    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round"/></svg>
-    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5 20 12 8 19.5z" fill="currentColor"/></svg>;
+// Same four white Web playback bars from Artwork/PulsingBars (DESIGN-local rendering).
+function WebPlayingBars() {
+  return <span className="lab-beat-tile__web-bars" aria-hidden="true">
+    {[1, 2, 3, 4].map(i => <span key={i} className={`lab-beat-tile__web-bar lab-beat-tile__web-bar--${i}`}/>)}
+  </span>;
 }
-export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {}, onMore, peekMode = "quiet-line" }: {
+export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {}, onMore }: {
   beat: DemoBeat; coverMode: CoverMode; tagColors?: Record<string,string>;
   selected: boolean; onPlay: (beat: DemoBeat) => void;
   onMore?: (beat: DemoBeat) => void;
-  peekMode?: "quiet-line" | "cover-overlay" | "edge-rail";
 }) {
   const compact=compactTileTags(beat.tags,tagColors);
   return (
-    <article className="lab-beat-tile lab-beat-tile--v2" data-playing={selected} data-beat-id={beat.id} data-peek-mode={peekMode}>
+    <article className="lab-beat-tile lab-beat-tile--v2" data-playing={selected} data-beat-id={beat.id}>
       <div className="lab-beat-tile__cover">
         <LabArtwork beat={beat} coverMode={coverMode} />
         <button type="button" className="lab-beat-tile__play"
           aria-label={selected ? `Pause ${beat.title} demo` : `Play ${beat.title} demo`}
           aria-pressed={selected} onClick={() => onPlay(beat)}>
-          <span className="lab-beat-tile__play-disc"><TilePlayIcon pause={selected}/></span>
+          {selected ? <WebPlayingBars/> : <img className="lab-beat-tile__web-play" src={webPlayFillPng} alt="" draggable={false}/>}
         </button>
       </div>
       <div className="lab-beat-tile__meta">
@@ -79,10 +81,14 @@ export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, c
         </div>
         <div className="lab-beat-tile__detail-row">
           <span className="lab-beat-tile__stars" aria-label={`${beat.stars} out of 5 stars`}>{Array.from({length:5},(_,i)=><span key={i} className={i<beat.stars?"is-filled":""}>★</span>)}</span>
-          <span className="lab-beat-tile__details">{beat.bpm} BPM · {beat.key}</span>
+          <span className="lab-beat-tile__details" title={`${beat.bpm} BPM · ${beat.key}`}>
+            {beat.bpm} BPM · {beat.key.replace(/ minor$/, "m").replace(/ major$/, "")}
+          </span>
         </div>
         <div className="lab-beat-tile__tags" data-beat-tag-trigger
-          data-hidden-tags={JSON.stringify(compact.hidden)} tabIndex={compact.hidden.length ? 0 : undefined}
+          data-hidden-tags={JSON.stringify(compact.hidden)}
+          data-hidden-colors={JSON.stringify(Object.fromEntries(compact.hidden.map(tag => [tag, tagColors[tag] || ""])))}
+          tabIndex={compact.hidden.length ? 0 : undefined}
           aria-label={compact.hidden.length ? `Tags adicionales: ${compact.hidden.join(", ")}` : undefined}>
           {compact.visible.map(tag=><span key={tag} className="lab-beat-tile__tag" style={tagColors[tag]?{color:tagColors[tag]}:undefined}>{tag}</span>)}
           {compact.dots.map(color=><span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} aria-label={`Color de tags ocultos ${color}`}/>)}
