@@ -53,14 +53,7 @@ button,input,select { font:inherit; }
 .lab-chip[aria-pressed="true"] { background:#eee; border-color:#eee; color:#101010; }
 .lab-artwork { width:100%; aspect-ratio:1; overflow:hidden; background:#0c0c0c; border-radius:10px; }
 .lab-artwork img { display:block; width:100%; height:100%; object-fit:cover; }
-.lab-beat-tile { min-width:0; }
-.lab-beat-tile__cover { position:relative; }
-.lab-beat-tile__play { position:absolute; right:10px; bottom:10px; width:44px; height:44px; border-radius:50%; border:1px solid rgba(255,255,255,.26); background:rgba(12,12,12,.8); color:white; font-size:16px; }
-.lab-beat-tile__play[aria-pressed="true"] { background:#f2f2f2; color:#101010; }
-.lab-beat-tile__meta { padding-top:11px; min-width:0; }
-.lab-beat-tile__title { font-size:14px; font-weight:650; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
-.lab-beat-tile__artist { font-size:12px; color:#a0a0a0; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.lab-beat-tile__details { display:flex; gap:9px; flex-wrap:wrap; color:#858585; font-size:11px; margin-top:5px; }
+/* BeatCard styles live exclusively in shared/beatCard.css; Landing has no BeatTile. */
 .lab-gallery-player { margin-top:56px; }
 .lab-player { display:flex; align-items:center; gap:18px; padding:12px 18px; border:1px solid #282828; border-radius:12px; background:var(--lab-surface); min-height:76px; }
 .lab-player__track { flex:1; display:flex; align-items:center; gap:12px; min-width:0; }
