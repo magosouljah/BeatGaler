@@ -76,3 +76,15 @@ test("MASTER uses a three-star specimen and both pill rows share a one-pixel-tal
  assert.match(tile, /"--lab-beat-pill-color": tagColors\[tag\]/);
  assert.match(peek, /"--lab-beat-pill-color": peek\.colors\[tag\]/);
 });
+
+
+test("neutral tag labels move up one pixel without shifting pills or colored labels", () => {
+ const helper = readFileSync(new URL("./shared/beatCardTags.ts", import.meta.url), "utf8");
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const tile = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+ const reveal = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
+ assert.match(helper, /export function isNeutralTagColor/);
+ assert.match(css, /\.lab-beat-pill--neutral \.lab-beat-pill__label\{transform:translateY\(-1px\)\}/);
+ assert.match(tile, /isNeutralTagColor\(tagColors\[tag\]\)/);
+ assert.match(reveal, /isNeutralTagColor\(peek\.colors\[tag\]\)/);
+});
