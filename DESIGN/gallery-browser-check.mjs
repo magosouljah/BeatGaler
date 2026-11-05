@@ -77,21 +77,29 @@ try{
  assert.ok(order,"PORTADAS should be above REGLAS");
  await click("document.querySelector('.lab-master-cover-modes button:nth-child(2)')");
  assert.equal(await expr("document.querySelector('.lab-master-cover-modes button:nth-child(2)').getAttribute('aria-pressed')"),"true");
- // All three preview treatments are real fixed-size cards in MASTER.
- await click("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(b=>b.textContent.includes('BeatCard · 3 ideas'))");
- await until("document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile--v2').length===3","three MASTER BeatCards");
- assert.ok(await expr("(()=>[...document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile--v2')].every(card=>card.getBoundingClientRect().width===160&&card.getBoundingClientRect().height===239))()"),"MASTER card size is fixed");
- for(const [index,mode] of ["quiet-line","cover-overlay","edge-rail"].entries()) {
-  const pointer=`(()=>{const el=document.querySelectorAll('.lab-master-beatcard-variant [data-beat-tag-trigger]')[${index}];el.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));return true;})()`;
-  await expr(pointer);
-  assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must not flash on pointer pass");
-  await sleep(450);
-  assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must wait 800 ms");
-  await until(`Boolean(document.querySelector('.lab-tag-peek--${mode}'))`,mode+" delayed reveal");
-  await screenshot("beatcard-master-"+mode+".png");
-  await expr(`(()=>{document.querySelectorAll('.lab-master-beatcard-variant [data-beat-tag-trigger]')[${index}].dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse',relatedTarget:document.body}));})()`);
-  await until("document.querySelectorAll('.lab-tag-peek').length===0","tooltip closes on pointer exit");
- }
+ // The approved A is the only BeatCard in MASTER; hover reveals pill tags.
+ await click("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(b=>b.textContent.trim()==='BeatCard')");
+ await until("document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile--v2').length===1","one MASTER BeatCard");
+ assert.ok(await expr("(()=>{const card=document.querySelector('.lab-master-beatcard-variant .lab-beat-tile--v2').getBoundingClientRect();return card.width===160&&card.height===239;})()"),"MASTER card size is fixed");
+ assert.ok(await expr("(()=>{const node=document.querySelector('.lab-beat-tile__web-play');return node&&node.naturalWidth>0&&getComputedStyle(node).width==='26px';})()"),"Web Play PNG is loaded and 26px");
+ assert.ok(await expr("(()=>{const el=document.querySelector('.lab-beat-tile__tags');return getComputedStyle(el).userSelect==='none';})()"),"tag row is not text selectable");
+ await screenshot("beatcard-master-default.png");
+ await expr("(()=>{const el=document.querySelector('.lab-master-beatcard-variant [data-beat-tag-trigger]');el.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));return true;})()");
+ assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must not flash");
+ await sleep(450);
+ assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must wait 800ms");
+ await until("Boolean(document.querySelector('.lab-tag-peek--quiet-line'))","approved A delayed pill reveal");
+ assert.ok(await expr("(()=>{const pill=document.querySelector('.lab-tag-peek__tag');return pill&&getComputedStyle(pill).borderRadius==='999px';})()"),"hidden tags use pills, not text");
+ await screenshot("beatcard-master-hover.png");
+ await expr("document.querySelector('.lab-master-beatcard-variant [data-beat-tag-trigger]').dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse',relatedTarget:document.body}))");
+ await until("document.querySelectorAll('.lab-tag-peek').length===0","tooltip closes");
+ // The Web artwork's playing state must use four animated white bars in the center.
+ await click("document.querySelector('.lab-master-beatcard-variant .lab-beat-tile__play')");
+ await until("document.querySelector('.lab-master-beatcard-variant .lab-beat-tile--v2')?.dataset.playing==='true'","playing toggle");
+ assert.equal(await expr("document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile__web-bar').length"),4,"Web playing bars");
+ await screenshot("beatcard-master-playing.png");
+ await click("document.querySelector('.lab-master-beatcard-variant .lab-beat-tile__play')");
+ await until("document.querySelector('.lab-master-beatcard-variant .lab-beat-tile--v2')?.dataset.playing==='false'","pause toggle");
  await goGallery();
  await until("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas')?.dataset.engineReady==='true'","Gallery Studio WebGL ready");
  assert.equal(await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas').dataset.viewportHeight"),"600","Gallery glass must use original 600px optics");
