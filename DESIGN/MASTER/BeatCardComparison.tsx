@@ -23,7 +23,7 @@ export default function BeatCardComparison({ coverMode }: { coverMode: CoverMode
   return (
     <div className="lab-master-beatcard-comparison" aria-label="Tres propuestas de BeatCard, revelar tags tras 800 milisegundos">
       <div className="lab-master-beatcard-variants"
-        onPointerOver={peek.onPointerOver} onPointerOut={peek.onPointerOut}
+        onPointerOver={peek.onPointerOver} onPointerOut={peek.onPointerOut} onPointerDown={peek.onPointerDown}
         onFocusCapture={peek.onFocusCapture} onBlurCapture={peek.onBlurCapture}>
         {variants.map((variant,index) => (
           <div key={variant.mode} className="lab-master-beatcard-variant">
