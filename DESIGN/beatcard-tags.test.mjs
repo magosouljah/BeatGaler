@@ -18,11 +18,11 @@ test("BeatCard tags sort alphabetically and use every available label slot", () 
 test("one dot per distinct color; +N counts only redundant or colorless hidden tags", () => {
   const long = ["LongAlphaTagExample", "LongBetaTagExample", "LongGammaTagExample", "LongDeltaTagExample"];
   const colors = Object.fromEntries(long.map((tag, index) => [tag, index < 2 ? "#888888" : "#ff0000"]));
-  const packed = compactTileTags(long, colors, 30);
+  const packed = compactTileTags(long, colors, 36);
   assert.deepEqual(packed.visible, []);
   assert.deepEqual(packed.dots, ["#888888", "#ff0000"]);
   assert.equal(packed.unrepresented, 2);
-  const noColors = compactTileTags(long, {}, 30);
+  const noColors = compactTileTags(long, {}, 36);
   assert.deepEqual(noColors.dots, []);
   assert.equal(noColors.unrepresented, 4);
 });
@@ -40,4 +40,18 @@ test("the preview is delegated and waits 800ms instead of opening on every card 
   assert.match(source, /}, 800\)/);
   assert.match(gallery, /onPointerOver=\{tagPeek\.onPointerOver\}/);
   assert.doesNotMatch(gallery, /position:"fixed",bottom:110,right:24/);
+});
+
+
+test("single approved BeatCard uses Web's real PNG and four playing bars", () => {
+ const source = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const master = readFileSync(new URL("./MASTER/MasterPage.tsx", import.meta.url), "utf8");
+ assert.match(source, /src\/assets\/player-icons\/play\.fill\.png/);
+ assert.match(css, /width:26px;height:26px/);
+ assert.match(css, /transition:opacity \.15s/);
+ assert.match(source, /WebPlayingBars/);
+ assert.match(master, /BeatCardSpecimen/);
+ assert.doesNotMatch(master, /BeatCard · 3 ideas/);
+ assert.doesNotMatch(css, /lab-tag-peek--cover-overlay|lab-tag-peek--edge-rail/);
 });
