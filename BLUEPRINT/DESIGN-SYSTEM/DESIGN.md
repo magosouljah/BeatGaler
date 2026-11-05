@@ -5,7 +5,7 @@
 - **[LAB]** `DESIGN/MASTER/bridge.tsx` sustituye únicamente la dependencia del artwork y las dos etiquetas por versiones locales equivalentes; el componente no ejecuta servicios de producción.
 - **[LAB]** `DESIGN/MASTER/MasterPage.tsx` ofrece fixtures, estado de play/seek, volumen, shuffle, repeat y cola; **no reproduce audio**.
 - **[LAB]** `DESIGN/LANDING/` y `DESIGN/GALLERY/` contienen las demos anteriores. Su comportamiento y diseño se preservaron al mover los archivos; no son autoridad sobre MASTER.
-- **[PENDIENTE]** Revisión visual del propietario, accesibilidad y pruebas manuales. Cualquier otro componente aún **no forma parte de MASTER**.
+- **[PENDIENTE]** Revisión visual del propietario, accesibilidad y pruebas manuales. BeatCard se evalúa ahora como componente **candidato**, sin aprobación final. Los demás componentes pendientes **no forman parte de MASTER**.
 
 [LAB] MASTER tiene menú lateral estrecho, redimensionable y ocultable; vista de márgenes del laboratorio (margen horizontal aprobado de 32 px, no regla universal aprobada) y área de muestras sin texto. Ver [MASTER.md](MASTER.md). No existen inspector, editor global de tokens, catálogo de 58 fichas ni laboratorio de física en esta versión. El objetivo es trabajar la Playbar antes de añadir otra pieza.
 
@@ -20,3 +20,5 @@
 - **[LAB — V2 candidata]** `DESIGN/shared/GlassButton.tsx` conserva el material `camera` original para CameraGlass y ofrece `liquid` para V2. `ShapeGlassSurface.tsx` adapta la refracción geométrica y reflejos del código MIT de Archis Vaze; recalcula contornos al animar ancho y respuesta al puntero. La V2 ya no utiliza los arcos circulares de la extracción original.
 - **[LAB — comparación]** `DESIGN/shared/ToolbarV2.tsx` implementa Search, Sorting, Select y Profile con GlassButton, mientras `Toolbar.tsx` V1 permanece intacto. MASTER muestra V1 y V2 sobre los cinco fondos visuales de `REFERENCES/TOOLBAR-GLASS/`.
 - **[VERIFICACIÓN AUTOMATIZADA]** `DESIGN/toolbar-v2-browser-check.mjs` prueba Chrome real, cuatro controles, menús, inversión de transformaciones, escritorio/móvil y preferencias de movimiento; publica capturas mediante el workflow Design Lab standalone. La aprobación visual de la nueva V2 sigue pendiente de la decisión del propietario.
+
+- **[LAB — BeatCard / 3 candidatas]** `DESIGN/MASTER/BeatCardComparison.tsx` muestra a tamaño real una misma BeatCard con tres tratamientos de tags ocultos: línea discreta debajo, degradado integrado en portada y extensión lateral. `DESIGN/shared/beatCardTags.ts` compacta al ancho fijo de 160 px mediante medidas de texto compartidas y un punto por color, con `+N` solo para tags no representados. `DESIGN/shared/BeatTagPeek.tsx` crea un solo preview para la galería completa tras 800 ms de hover; teclado y táctil no necesitan esperar. Gallery prueba por defecto la línea discreta, sin cuadro en la esquina. Estado: **experimento sin aprobación estética final**. Sin cambios en `src/` ni producción.
