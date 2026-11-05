@@ -1,4 +1,4 @@
-// Browser smoke: fixed 24 real covers, multiple tags, shared cover mode, no ellipsis.
+// Browser smoke: fixed 24 real covers, one-line compact tags, 800ms shared reveal, and three MASTER candidates.
 import assert from "node:assert/strict";
 import {spawn,spawnSync} from "node:child_process";
 import {existsSync} from "node:fs";
@@ -77,6 +77,21 @@ try{
  assert.ok(order,"PORTADAS should be above REGLAS");
  await click("document.querySelector('.lab-master-cover-modes button:nth-child(2)')");
  assert.equal(await expr("document.querySelector('.lab-master-cover-modes button:nth-child(2)').getAttribute('aria-pressed')"),"true");
+ // All three preview treatments are real fixed-size cards in MASTER.
+ await click("[...document.querySelectorAll('.lab-master-sidebar-nav button')].find(b=>b.textContent.includes('BeatCard · 3 ideas'))");
+ await until("document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile--v2').length===3","three MASTER BeatCards");
+ assert.ok(await expr("(()=>[...document.querySelectorAll('.lab-master-beatcard-variant .lab-beat-tile--v2')].every(card=>card.getBoundingClientRect().width===160&&card.getBoundingClientRect().height===239))()"),"MASTER card size is fixed");
+ for(const [index,mode] of ["quiet-line","cover-overlay","edge-rail"].entries()) {
+  const pointer=`(()=>{const el=document.querySelectorAll('.lab-master-beatcard-variant [data-beat-tag-trigger]')[${index}];el.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));return true;})()`;
+  await expr(pointer);
+  assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must not flash on pointer pass");
+  await sleep(450);
+  assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must wait 800 ms");
+  await until(`Boolean(document.querySelector('.lab-tag-peek--${mode}'))`,mode+" delayed reveal");
+  await screenshot("beatcard-master-"+mode+".png");
+  await expr(`(()=>{document.querySelectorAll('.lab-master-beatcard-variant [data-beat-tag-trigger]')[${index}].dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse',relatedTarget:document.body}));})()`);
+  await until("document.querySelectorAll('.lab-tag-peek').length===0","tooltip closes on pointer exit");
+ }
  await goGallery();
  await until("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas')?.dataset.engineReady==='true'","Gallery Studio WebGL ready");
  assert.equal(await expr("document.querySelector('.studio-candidate.is-gallery .studio-candidate-canvas').dataset.viewportHeight"),"600","Gallery glass must use original 600px optics");
@@ -147,17 +162,29 @@ try{
  assert.ok(await expr("document.querySelector('.lab-gallery-tag-track').children[1]?.textContent==='BoomBap'"),"Selected tag must move after All");
  assert.ok(Math.abs(await expr("document.querySelector('.lab-gallery-tag-bar').scrollLeft")-preservedScroll)<=2,"Far tag must move without moving the viewport");
  await click("document.querySelector('.lab-gallery-tag-all')");
- const tiles=await expr("[...document.querySelectorAll('.lab-beat-tile')].map(t=>({name:t.querySelector('.lab-beat-tile__title').textContent,tags:[...t.querySelectorAll('.lab-beat-tile__tag')].map(x=>x.textContent),cover:t.querySelector('.lab-artwork img').src}))");
+ const tiles=await expr("[...document.querySelectorAll('.lab-beat-tile')].map(t=>({name:t.querySelector('.lab-beat-tile__title').textContent,tags:[...t.querySelectorAll('.lab-beat-tile__tag')].map(x=>x.textContent),hidden:JSON.parse(t.querySelector('[data-beat-tag-trigger]').dataset.hiddenTags),extra:t.querySelector('.lab-beat-tile__extra')?.textContent||'',cover:t.querySelector('.lab-artwork img').src,width:t.getBoundingClientRect().width,height:t.getBoundingClientRect().height}))");
  assert.equal(tiles.length,24);
  assert.equal(new Set(tiles.map(t=>t.name)).size,24);
  assert.ok(tiles.every(t=>/^[a-z]+$/i.test(t.name)));
- assert.ok(tiles.every(t=>t.tags.length>=3&&t.tags.length<=6));
- assert.ok([4,5].every(n=>tiles.some(t=>t.tags.length===n)));
+ assert.ok(tiles.every(t=>t.tags.length+t.hidden.length>=3&&t.tags.length+t.hidden.length<=6));
+ assert.ok(tiles.some(t=>t.hidden.length>0),"compact layout must hide overflow tags");
+ assert.ok(tiles.every(t=>t.width===160&&t.height===239),"all cards retain the fixed size");
+ assert.ok(tiles.every(t=>!t.extra.includes("$")),"+N must never contain a dollar sign");
+ assert.ok(await expr("(()=>[...document.querySelectorAll('.lab-gallery-grid .lab-beat-tile__tags')].every(t=>t.clientHeight===25&&t.scrollHeight<=t.clientHeight+1))()"),"tags remain on one row");
  assert.equal(new Set(tiles.map(t=>t.cover)).size,24);
  assert.ok(tiles.every(t=>/\/real-covers\/cover-\d{2}\.(jpg|avif)/.test(t.cover)));
  assert.equal(await expr("document.querySelectorAll('.lab-tag-color-trigger').length"),0);
  await until("[...document.querySelectorAll('.lab-beat-tile .lab-artwork img')].every(i=>i.complete&&i.naturalWidth>0)","real cover image loads");
  await screenshot("gallery-24-real.png");
+ // Validate the actual Gallery treatment at its anchor, with the same 800ms dwell.
+ await expr("(()=>{const tag=document.querySelector('.lab-gallery-grid [data-beat-tag-trigger][data-hidden-tags]');tag.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));return true;})()");
+ await sleep(420);
+ assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"Gallery hover must not open immediately");
+ await until("Boolean(document.querySelector('.lab-tag-peek--quiet-line'))","Gallery anchored tag reveal");
+ assert.ok(await expr("(()=>{const peek=document.querySelector('.lab-tag-peek').getBoundingClientRect();const row=document.querySelector('.lab-gallery-grid [data-beat-tag-trigger]').getBoundingClientRect();return Math.abs(peek.left-row.left)<=4})()"),"Gallery tag reveal must align with its card");
+ await screenshot("beatcard-gallery-hover.png");
+ await expr("document.querySelector('.lab-gallery-grid [data-beat-tag-trigger]').dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerType:'mouse',relatedTarget:document.body}))");
+ await until("document.querySelectorAll('.lab-tag-peek').length===0","Gallery hover closes on leave");
  // Right-click on a tag opens its color editor without a visible three-dot
  // control. Both the top filter and every beat using the tag must update.
  await expr(`(()=>{
