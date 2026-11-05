@@ -85,3 +85,15 @@ The “Tags ↑” hint aligns with the All tag and appears only until the first
 
 Studio 44 experiment preset: `tint #5e5e5eb0`, `shadowExpand 20`, `shadowFactor 20`. The original diagnostic preset remains unchanged; automated light-background ink detection has been removed in Gallery. The Tag Bar's horizontal scrolling, filters and material comparison remain as before.
 
+
+## BeatCard — tres maneras de consultar tags (candidatas, no aprobadas)
+
+En `MASTER → BeatCard · 3 ideas` hay tres BeatCards **de 160 × 239 px**, con la misma portada, tags y colores para comparar solo el tratamiento de los tags ocultos:
+
+- **A · Línea discreta:** aparecen los tags faltantes justo bajo la fila, sin cuadro ni cambiar el tamaño de la tarjeta. **Esta es la candidata activa en Gallery.**
+- **B · Sobre portada:** los tags faltantes aparecen en una franja de degradado integrada en la parte inferior de la portada.
+- **C · Extensión lateral:** prolonga visualmente la línea de tags hacia el lado con espacio disponible, sin abrir una ficha nueva.
+
+Pasa el cursor sobre los tags y déjalo **800 ms** para ver la opción; al salir desaparece. Foco de teclado la muestra inmediatamente. La vista usa un **solo temporizador y un solo overlay para todas las tarjetas**, con eventos delegados, sin observadores/timers por BeatCard. En Gallery se corrigió el literal `+$N` a `+N`, se atenuó BPM/Key, la compactación usa medición de texto compartida/caché con ancho exacto y los grupos de color se condensan en un punto por color. El menú de tres puntos no abre la lista de tags. No hay indicador de reproducción debajo de la portada.
+
+Estado: **comparación experimental**. Validar en Chrome con `node DESIGN/gallery-browser-check.mjs` y `node --test DESIGN/lab-contract.test.mjs`; comprobar manualmente el tamaño fijo y la apariencia de las tres opciones. No afecta `src/`, producción ni `main`.
