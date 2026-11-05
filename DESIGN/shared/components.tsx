@@ -90,7 +90,7 @@ export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, c
           data-hidden-colors={JSON.stringify(Object.fromEntries(compact.hidden.map(tag => [tag, tagColors[tag] || ""])))}
           tabIndex={compact.hidden.length ? 0 : undefined}
           aria-label={compact.hidden.length ? `Tags adicionales: ${compact.hidden.join(", ")}` : undefined}>
-          {compact.visible.map(tag=><span key={tag} className="lab-beat-tile__tag" style={tagColors[tag]?{color:tagColors[tag]}:undefined}>{tag}</span>)}
+          {compact.visible.map(tag=><span key={tag} className="lab-beat-tile__tag" style={tagColors[tag] ? { "--lab-beat-pill-color": tagColors[tag] } as CSSProperties : undefined}>{tag}</span>)}
           {compact.dots.map(color=><span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} aria-label={`Color de tags ocultos ${color}`}/>)}
           {compact.unrepresented>0&&<span className="lab-beat-tile__extra">+{compact.unrepresented}</span>}
         </div>
