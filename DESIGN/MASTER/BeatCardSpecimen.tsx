@@ -4,7 +4,8 @@ import { DEMO_BEATS } from "../shared/data";
 import { LabBeatTile } from "../shared/components";
 import { BeatTagPeekLayer, useBeatTagPeek } from "../shared/BeatTagPeek";
 
-const example = DEMO_BEATS[0];
+// MASTER-only fixture: show a mid-rating example without altering Gallery data.
+const example = { ...DEMO_BEATS[0], stars: 3 };
 const exampleColors: Record<string, string> = {
   Ambient: "#929292", Dark: "#929292", Melodic: "#e56b70",
   Spacey: "#6c8ee8", Trap: "#6c8ee8",
