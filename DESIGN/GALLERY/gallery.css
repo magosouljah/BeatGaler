@@ -25,16 +25,8 @@
   justify-content:center;
 }
 .lab-gallery-item { position:relative; min-width:0; }
-.lab-gallery-page .lab-beat-tile { width:160px; }
 .lab-gallery-page .lab-artwork { border-radius:10px; }
-.lab-gallery-page .lab-beat-tile__cover { width:160px; height:160px; }
-.lab-gallery-page .lab-beat-tile__play { inset:0; width:100%; height:100%; border:none; border-radius:10px; background:rgba(0,0,0,.34); opacity:0; font-size:25px; transition:opacity var(--lab-fast) var(--lab-ease); }
-.lab-gallery-page .lab-beat-tile__play:hover,.lab-gallery-page .lab-beat-tile__play:focus-visible,.lab-gallery-page .lab-beat-tile__play[aria-pressed="true"] { opacity:1; }
-.lab-gallery-page .lab-beat-tile__meta { padding-top:9px; }
-.lab-gallery-page .lab-beat-tile__title { color:#e5e5e5; font-size:13px; font-weight:580; }
-.lab-beat-tile__tags { display:flex; gap:5px; flex-wrap:wrap; min-height:25px; margin-top:5px; }
-.lab-beat-tile__tag { display:inline-flex; align-items:center; width:max-content; border-radius:999px; border:1px solid #292929; padding:2px 7px; color:#929292; font-size:10px; line-height:1.5; }
-.lab-gallery-page .lab-beat-tile__details { color:#777; font-size:11px; gap:7px; margin-top:5px; font-variant-numeric:tabular-nums; }
+/* BeatCard geometry, typography, playback and pills are owned only by shared/beatCard.css. */
 .lab-gallery-select { position:absolute; top:7px; left:7px; z-index:6; border-radius:50%; background:#111b; width:34px; height:34px; display:grid; place-items:center; cursor:pointer; }
 .lab-gallery-select input { width:20px; height:20px; accent-color:#fff; cursor:pointer; }
 .lab-gallery-selection-status { display:flex; gap:16px; align-items:center; min-height:38px; padding:6px clamp(16px,3vw,42px); color:#b0b0b0; background:#141414; font-size:12px; }
@@ -93,15 +85,12 @@
 @media(max-width:590px) {
  .lab-gallery-header { height:auto; min-height:100px; padding-block:11px; align-items:flex-start; flex-direction:column; gap:9px; }
 
- .lab-gallery-page .lab-beat-tile { width:100%; }
- .lab-gallery-page .lab-beat-tile__cover { width:100%; height:auto; aspect-ratio:1; }
  .lab-player.lab-player--dock { width:calc(100vw - 12px); bottom:34px; }
  .lab-player__transport .lab-player__icon:first-child,.lab-player__transport .lab-player__icon:last-child,.lab-player__utilities { display:none; }
  .lab-player__now { gap:7px; }
  .lab-player__track-top span { display:none; }
 }
 
-@media(hover:none),(pointer:coarse) { .lab-gallery-page .lab-beat-tile__play { opacity:1; background:linear-gradient(transparent 65%,rgba(0,0,0,.6)); text-align:right; } }
 @media(prefers-reduced-transparency:reduce) { .lab-player.lab-player--dock { backdrop-filter:none; background:#202020; } }
 .lab-gallery-header .lab-toolbar{margin-left:auto;}
 .lab-gallery-toolbar-notice{display:flex;align-items:center;justify-content:center;gap:10px;padding:9px 16px;background:#181818;color:#ddd;font-size:12px;}
