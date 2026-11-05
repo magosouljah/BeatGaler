@@ -84,6 +84,17 @@ try{
  await until("(()=>{const node=document.querySelector('.lab-beat-tile__web-play');return Boolean(node&&node.naturalWidth>0);})()","Web Play PNG loaded");
  assert.ok(await expr("(()=>{const node=document.querySelector('.lab-beat-tile__web-play');return node&&node.naturalWidth>0&&getComputedStyle(node).width==='26px';})()"),"Web Play PNG is loaded and 26px");
  assert.ok(await expr("(()=>{const el=document.querySelector('.lab-beat-tile__tags');return getComputedStyle(el).userSelect==='none';})()"),"tag row is not text selectable");
+ // Neutral and colored pills must be the same height and share the same ink baseline.
+ assert.ok(await expr(`(()=>{
+   const pills=[...document.querySelectorAll(".lab-master-beatcard-variant .lab-beat-tile__tag")];
+   if(pills.length<2)return false;
+   const boxes=pills.map(el=>el.getBoundingClientRect());
+   const labels=pills.map(el=>el.querySelector(".lab-beat-pill__label"));
+   return boxes.every(b=>Math.abs(b.height-20)<.1)
+     && labels.every(el=>el&&getComputedStyle(el).transform==="none")
+     && labels.every(el=>el&&getComputedStyle(el).lineHeight==="11px")
+     && labels.every((el,i)=>Math.abs((el.getBoundingClientRect().top-boxes[i].top)-(labels[0].getBoundingClientRect().top-boxes[0].top))<.6);
+ })()`),"gray and colored pills must align identically");
  await screenshot("beatcard-master-default.png");
  await expr("(()=>{const el=document.querySelector('.lab-master-beatcard-variant [data-beat-tag-trigger]');el.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));return true;})()");
  assert.equal(await expr("document.querySelectorAll('.lab-tag-peek').length"),0,"tooltip must not flash");
