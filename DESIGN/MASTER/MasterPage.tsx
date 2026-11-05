@@ -189,7 +189,7 @@ export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, set
         <button type="button" className="lab-master-open-nav" aria-label="Mostrar navegación de MASTER"
           title="Mostrar navegación" onClick={() => setSidebarOpen(true)}>☰</button>
       )}
-      <main className="lab-master-workspace" aria-label={section === "playbar" ? "Vista del componente Playbar" : section === "toolbar" ? "Vista del componente Toolbar" : "Vista de la regla Márgenes"}>
+      <main className="lab-master-workspace" aria-label={section === "playbar" ? "Vista del componente Playbar" : section === "toolbar" ? "Vista del componente Toolbar" : section === "beatcard" ? "Comparación de BeatCard" : "Vista del laboratorio"}>
         {section === "playbar" ? (
           <div className="lab-master-specimens">
             <div className="lab-master-player-frame">
