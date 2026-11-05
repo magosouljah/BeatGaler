@@ -22,7 +22,7 @@
   filter:brightness(0) saturate(100%) invert(100%);opacity:.92;
 }
 @media(hover:hover) and (pointer:fine){
-  .lab-beat-tile--v2:hover .lab-beat-tile__play{opacity:1}
+  .lab-beat-tile--v2 .lab-beat-tile__cover:hover .lab-beat-tile__play{opacity:1}
 }
 .lab-beat-tile--v2 .lab-beat-tile__play:focus-visible{opacity:1;outline:2px solid #fff;outline-offset:-3px}
 .lab-beat-tile--v2[data-playing="true"] .lab-beat-tile__play{
