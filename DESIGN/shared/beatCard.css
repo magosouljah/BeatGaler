@@ -1,0 +1,106 @@
+/* BeatCard experiment shared by Gallery and MASTER. No production imports. */
+.lab-beat-tile--v2 {
+  display:flex; flex-direction:column;
+  width:160px; height:239px; min-width:160px; min-height:239px;
+  max-width:160px; max-height:239px;
+  overflow:hidden; color:#e5e5e5;
+}
+.lab-beat-tile--v2 .lab-beat-tile__cover {
+  position:relative; width:160px; height:160px; flex:none;
+  border-radius:10px; overflow:hidden; background:#171717;
+}
+.lab-beat-tile--v2 .lab-artwork { position:absolute; inset:0; width:100%; height:100%; border-radius:10px; overflow:hidden; }
+.lab-beat-tile--v2 .lab-artwork img {width:100%;height:100%;object-fit:cover;display:block}
+.lab-beat-tile--v2 .lab-beat-tile__play {
+  position:absolute; inset:0; width:100%; height:100%; padding:0;
+  border:0; border-radius:10px; display:grid;place-items:center;
+  opacity:0; background:rgba(0,0,0,.22);color:#fff;cursor:pointer;
+  transition:opacity var(--lab-fast) var(--lab-ease);
+}
+.lab-beat-tile--v2 .lab-beat-tile__play-disc {
+  display:grid;place-items:center;width:42px;height:42px;border-radius:50%;
+  background:rgba(10,10,10,.68);color:#fff;
+  box-shadow:0 2px 14px rgba(0,0,0,.55);
+  transform:scale(.94);transition:transform var(--lab-fast) var(--lab-ease);
+}
+.lab-beat-tile--v2 .lab-beat-tile__play-disc svg{width:20px;height:20px;display:block}
+@media(hover:hover) and (pointer:fine){
+ .lab-beat-tile--v2 .lab-beat-tile__play:hover,
+ .lab-beat-tile--v2 .lab-beat-tile__play:focus-visible{opacity:1}
+}
+.lab-beat-tile--v2 .lab-beat-tile__play:focus-visible{opacity:1;outline:2px solid #fff;outline-offset:-3px}
+.lab-beat-tile--v2 .lab-beat-tile__play:hover .lab-beat-tile__play-disc{transform:scale(1)}
+.lab-beat-tile--v2[data-playing="true"] .lab-beat-tile__play{
+ opacity:1;background:rgba(0,0,0,.14);
+}
+.lab-beat-tile--v2 .lab-beat-tile__meta {height:72px;min-height:72px; padding-top:7px}
+.lab-beat-tile--v2 .lab-beat-tile__heading {display:flex;align-items:center;height:22px;gap:4px}
+.lab-beat-tile--v2 .lab-beat-tile__title {
+ flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+ color:#e6e6e6;font:580 13px/1.2 var(--lab-font);
+}
+.lab-beat-tile--v2 .lab-beat-tile__more {
+ flex:none;width:24px;height:22px;padding:0;border:0;background:transparent;
+ color:#b2b2b2;font:20px/1 var(--lab-font);cursor:pointer;
+}
+.lab-beat-tile--v2 .lab-beat-tile__more:hover,.lab-beat-tile--v2 .lab-beat-tile__more:focus-visible{color:#fff}
+.lab-beat-tile--v2 .lab-beat-tile__detail-row {
+ height:19px;display:flex;align-items:center;justify-content:space-between;gap:3px;
+}
+.lab-beat-tile--v2 .lab-beat-tile__stars {white-space:nowrap;letter-spacing:-1px;font-size:11px;color:#454545}
+.lab-beat-tile--v2 .lab-beat-tile__stars .is-filled {color:#d4d4d4}
+.lab-beat-tile--v2 .lab-beat-tile__details{
+ margin:0;min-width:0;white-space:nowrap;color:#666;
+ font:400 9px/1 var(--lab-font);letter-spacing:-.3px;font-variant-numeric:tabular-nums;
+}
+.lab-beat-tile--v2 .lab-beat-tile__tags {
+ display:flex;flex-wrap:nowrap;align-items:center;
+ gap:3px;width:160px;height:25px;min-height:25px;max-height:25px;
+ margin:0;overflow:hidden;outline-offset:1px;
+}
+.lab-beat-tile--v2 .lab-beat-tile__tag{
+ display:inline-flex;align-items:center;flex:none;
+ min-width:0;max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+ padding:1px 3px;border:1px solid #2c2c2c;border-radius:999px;
+ background:transparent;color:#939393;font:400 10px/15px var(--lab-font);
+}
+.lab-beat-tile--v2 .lab-beat-tile__color-dot{flex:none;width:6px;height:6px;border-radius:50%}
+.lab-beat-tile--v2 .lab-beat-tile__extra {flex:none;color:#929292;font:400 10px/15px var(--lab-font);white-space:nowrap}
+.lab-beat-tile--v2 .lab-beat-tile__tags:focus-visible{outline:1px solid #666;border-radius:3px}
+@media(hover:none),(pointer:coarse){
+ .lab-beat-tile--v2 .lab-beat-tile__play{opacity:0;background:transparent}
+ .lab-beat-tile--v2[data-playing="true"] .lab-beat-tile__play{opacity:1}
+}
+@media(prefers-reduced-motion:reduce){
+ .lab-beat-tile--v2 .lab-beat-tile__play,
+ .lab-beat-tile--v2 .lab-beat-tile__play-disc{transition:none}
+}
+/* The tag reveal is a single lightweight overlay, not another card/popup.
+   There is no shift in BeatCard geometry. */
+.lab-tag-peek {
+ position:fixed;z-index:111;pointer-events:none;
+ display:flex;align-items:center;align-content:start;flex-wrap:wrap;gap:3px 7px;
+ color:#aaa;font:400 10px/15px var(--lab-font);
+ -webkit-font-smoothing:antialiased;
+ animation:lab-tag-peek-in 120ms cubic-bezier(.23,1,.32,1) both;
+}
+.lab-tag-peek__tag{display:inline-block;white-space:nowrap}
+.lab-tag-peek__tag:not(:last-child)::after{content:"·";margin-left:7px;color:#646464}
+.lab-tag-peek--quiet-line {
+ padding:2px 0 0;background:none;border:none;box-shadow:none;
+ max-height:34px;overflow:hidden;
+}
+.lab-tag-peek--cover-overlay {
+ padding:21px 9px 8px;align-items:flex-end;align-content:end;justify-content:flex-start;
+ min-height:60px;max-height:60px;border-radius:0 0 10px 10px;
+ color:#eee;background:linear-gradient(to bottom,transparent,rgba(0,0,0,.79));
+ overflow:hidden;
+}
+.lab-tag-peek--cover-overlay .lab-tag-peek__tag:not(:last-child)::after{color:#bcbcbc}
+.lab-tag-peek--edge-rail {
+ padding:4px 7px;min-height:22px;max-height:43px;overflow:hidden;
+ border-radius:5px;background:rgba(12,12,12,.93);color:#bdbdbd;
+}
+.lab-tag-peek[data-keyboard="true"]{animation:none}
+@keyframes lab-tag-peek-in{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.lab-tag-peek{animation:none}}
