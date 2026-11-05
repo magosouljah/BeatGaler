@@ -94,7 +94,7 @@ export default function GalleryPage({ playing, beat, toggle, selectBeat, coverMo
         {selected.length} selected <button type="button" onClick={() => setSelected([])}>Clear selection</button>
       </div>}
       <main className="lab-gallery-main">
-        {filtered.length ? <div className="lab-gallery-grid" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut}
+        {filtered.length ? <div className="lab-gallery-grid" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown}
           onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
           {filtered.map(item => <div className="lab-gallery-item" key={item.id}>
             <LabBeatTile beat={item} coverMode={coverMode} tagColors={tagColors}
