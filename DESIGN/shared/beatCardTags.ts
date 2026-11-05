@@ -1,7 +1,7 @@
 /**
  * BeatCard tag packing is shared by GALLERY and MASTER.
  * One cached canvas/font metric table, no ResizeObserver, no per-card DOM reads.
- * All widths correspond to the 160px / 10px font / 3px gap visual contract.
+ * All widths correspond to the 160px / 11px font / 3px gap visual contract.
  */
 const widthCache = new Map<string, number>();
 let measureContext: CanvasRenderingContext2D | null | undefined;
@@ -10,9 +10,9 @@ function textWidth(text: string): number {
   if (cached !== undefined) return cached;
   if (measureContext === undefined) {
     measureContext = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
-    if (measureContext) measureContext.font = "10px 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif";
+    if (measureContext) measureContext.font = "11px 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif";
   }
-  const width = Math.ceil(measureContext ? measureContext.measureText(text).width : [...text].length * 5.2);
+  const width = Math.ceil(measureContext ? measureContext.measureText(text).width : [...text].length * 6.1);
   if (widthCache.size >= 512) widthCache.clear();
   widthCache.set(text, width);
   return width;
@@ -35,9 +35,9 @@ export function compactTileTags(tags: readonly string[], colors: Readonly<Record
       if (!color || dots.includes(color)) unrepresented++;
       else dots.push(color);
     }
-    // The CSS uses 3px horizontal padding, 1px borders, 6px dots and 3px gap.
+    // The CSS uses 4px horizontal padding, 1px borders, 6px dots and 3px gap.
     const itemWidths = [
-      ...visible.map(tag => textWidth(tag) + 8),
+      ...visible.map(tag => textWidth(tag) + 10),
       ...dots.map(() => 6),
       ...(unrepresented ? [textWidth("+" + unrepresented)] : []),
     ];
