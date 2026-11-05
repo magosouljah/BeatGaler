@@ -77,12 +77,12 @@
 }
 .lab-beat-tile--v2 .lab-beat-tile__tags[data-hidden-tags]:not([data-hidden-tags="[]"]){cursor:pointer}
 .lab-beat-tile--v2 .lab-beat-tile__tag,.lab-tag-peek__tag{
-  display:inline-flex;align-items:center;flex:none;
-  max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:inline-flex;align-items:center;justify-content:center;flex:none;
+  width:max-content;max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   box-sizing:border-box;height:20px;padding:0 4px;border:1px solid #2c2c2c;border-radius:999px;
   background:color-mix(in srgb,var(--lab-beat-pill-color,#929292) 10%,transparent);
   border-color:color-mix(in srgb,var(--lab-beat-pill-color,#929292) 32%,#2c2c2c);
-  color:var(--lab-beat-pill-color,#a1a1a1);font:400 11px/1 var(--lab-font);
+  color:var(--lab-beat-pill-color,#929292);font:400 11px/1 var(--lab-font);
   user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:inherit;
 }
 /* One shared text baseline for every tag color, including gray.
