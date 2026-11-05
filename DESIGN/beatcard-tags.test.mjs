@@ -90,3 +90,16 @@ test("neutral and colored tag pills share an identical visual baseline", () => {
  assert.doesNotMatch(helper, /isNeutralTagColor/);
  assert.match(css, /box-sizing:border-box;height:20px;padding:0 4px/);
 });
+
+test("BeatCard CSS has a single owner; Gallery and Landing have no legacy override selectors", () => {
+ const gallery = readFileSync(new URL("./GALLERY/gallery.css", import.meta.url), "utf8");
+ const landing = readFileSync(new URL("./LANDING/landing.css", import.meta.url), "utf8");
+ const shared = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const entry = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+ assert.doesNotMatch(gallery, /\\.lab-beat-tile(?:__[-a-z]+)?/);
+ assert.doesNotMatch(landing, /\\.lab-beat-tile(?:__[-a-z]+)?/);
+ assert.match(shared, /\\.lab-beat-tile--v2 \\.lab-beat-tile__tag,\\.lab-tag-peek__tag\\{/);
+ assert.match(shared, /color:var\\(--lab-beat-pill-color,#929292\\)/);
+ assert.match(shared, /display:inline-flex;align-items:center;justify-content:center;flex:none/);
+ assert.ok(entry.indexOf('import "./GALLERY/gallery.css"') < entry.indexOf('import "./shared/beatCard.css"'));
+});
