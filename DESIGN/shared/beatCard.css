@@ -85,6 +85,10 @@
   color:var(--lab-beat-pill-color,#a1a1a1);font:400 11px/1 var(--lab-font);
   user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:inherit;
 }
+/* Glyphs in neutral pills sit optically 1px low in the 20px chip.
+   Shift only the ink, not the pill box or its measured width. */
+.lab-beat-pill__label{display:block}
+.lab-beat-pill--neutral .lab-beat-pill__label{transform:translateY(-1px)}
 .lab-beat-tile--v2 .lab-beat-tile__color-dot{flex:none;width:6px;height:6px;border-radius:50%}
 .lab-beat-tile--v2 .lab-beat-tile__extra{
   flex:none;color:#a1a1a1;font:400 11px/15px var(--lab-font);white-space:nowrap;
