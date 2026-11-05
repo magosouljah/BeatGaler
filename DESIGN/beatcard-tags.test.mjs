@@ -83,7 +83,7 @@ test("neutral and colored tag pills share an identical visual baseline", () => {
  const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
  const tile = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
  const reveal = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
- assert.match(css, /\\.lab-beat-pill__label\\{display:block;line-height:1;transform:none\\}/);
+ assert.ok(css.includes(".lab-beat-pill__label{display:block;line-height:1;transform:none}"));
  assert.doesNotMatch(css, /lab-beat-pill--neutral/);
  assert.doesNotMatch(tile, /isNeutralTagColor|lab-beat-pill--neutral/);
  assert.doesNotMatch(reveal, /isNeutralTagColor|lab-beat-pill--neutral/);
