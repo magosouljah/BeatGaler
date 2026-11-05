@@ -4,6 +4,7 @@ import App from "./App";
 import "./shared/tokens.css";
 import "./LANDING/landing.css";
 import "./GALLERY/gallery.css";
+import "./shared/beatCard.css";
 
 const root = document.getElementById("design-lab-root");
 if (!root) throw new Error("Design Lab root missing");
