@@ -55,3 +55,10 @@ test("single approved BeatCard uses Web's real PNG and four playing bars", () =>
  assert.doesNotMatch(master, /BeatCard · 3 ideas/);
  assert.doesNotMatch(css, /lab-tag-peek--cover-overlay|lab-tag-peek--edge-rail/);
 });
+
+
+test("Play hover only activates when pointer is on artwork, not on tags", () => {
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ assert.match(css, /\.lab-beat-tile--v2 \.lab-beat-tile__cover:hover \.lab-beat-tile__play\{opacity:1\}/);
+ assert.doesNotMatch(css, /\.lab-beat-tile--v2:hover \.lab-beat-tile__play/);
+});
