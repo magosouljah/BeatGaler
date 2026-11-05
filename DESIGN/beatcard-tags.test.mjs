@@ -62,3 +62,17 @@ test("Play hover only activates when pointer is on artwork, not on tags", () => 
  assert.match(css, /\.lab-beat-tile--v2 \.lab-beat-tile__cover:hover \.lab-beat-tile__play\{opacity:1\}/);
  assert.doesNotMatch(css, /\.lab-beat-tile--v2:hover \.lab-beat-tile__play/);
 });
+
+test("MASTER uses a three-star specimen and both pill rows share a one-pixel-taller color tint", () => {
+ const master = readFileSync(new URL("./MASTER/BeatCardSpecimen.tsx", import.meta.url), "utf8");
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const tile = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+ const peek = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
+ assert.match(master, /DEMO_BEATS\[0\], stars: 3/);
+ assert.match(css, /\.lab-beat-tile--v2 \.lab-beat-tile__tag,\.lab-tag-peek__tag\{/);
+ assert.match(css, /box-sizing:border-box;height:20px;padding:0 4px/);
+ assert.match(css, /background:color-mix\(in srgb,var\(--lab-beat-pill-color/);
+ assert.match(css, /border-color:color-mix\(in srgb,var\(--lab-beat-pill-color/);
+ assert.match(tile, /"--lab-beat-pill-color": tagColors\[tag\]/);
+ assert.match(peek, /"--lab-beat-pill-color": peek\.colors\[tag\]/);
+});
