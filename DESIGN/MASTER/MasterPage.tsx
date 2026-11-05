@@ -11,12 +11,13 @@ import ArchisOriginalSpecimen from "./ArchisOriginalSpecimen";
 import GlassThreeCompare from "./GlassThreeCompare";
 import StudioToolbarCandidate from "./StudioToolbarCandidate";
 import StudioExact44 from "./StudioExact44";
+import BeatCardComparison from "./BeatCardComparison";
 import type { LabSort } from "../shared/Toolbar";
 import { SAMPLE_BEATS } from "./fixtures";
 import type { Beat } from "./fixtures";
 import "./master.css";
 
-type Section = "margins" | "playbar" | "toolbar" | "glass-camera" | "glass-original" | "glass-compare" | "studio-toolbar" | "studio-exact";
+type Section = "margins" | "playbar" | "beatcard" | "toolbar" | "glass-camera" | "glass-original" | "glass-compare" | "studio-toolbar" | "studio-exact";
 const SIDEBAR_START = 192; // Lab navigation only; not a BeatGaler product design token.
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 300;
@@ -169,6 +170,7 @@ export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, set
             <button type="button" className={section === "margins" ? "is-active" : ""} aria-current={section === "margins" ? "page" : undefined} onClick={() => openSection("margins")}>Márgenes</button>
             <div className="lab-master-sidebar-heading">COMPONENTES</div>
             <button type="button" className={section === "playbar" ? "is-active" : ""} aria-current={section === "playbar" ? "page" : undefined} onClick={() => openSection("playbar")}>Playbar</button>
+            <button type="button" className={section === "beatcard" ? "is-active" : ""} aria-current={section === "beatcard" ? "page" : undefined} onClick={() => openSection("beatcard")}>BeatCard · 3 ideas</button>
             <button type="button" className={section === "toolbar" ? "is-active" : ""} aria-current={section === "toolbar" ? "page" : undefined} onClick={() => openSection("toolbar")}>Toolbar</button>
             <button type="button" className={section === "glass-camera" ? "is-active" : ""} aria-current={section === "glass-camera" ? "page" : undefined} onClick={() => openSection("glass-camera")}>Glass · Camera</button>
             <button type="button" className={section === "glass-original" ? "is-active" : ""} aria-current={section === "glass-original" ? "page" : undefined} onClick={() => openSection("glass-original")}>Glass · Original</button>
@@ -208,6 +210,8 @@ export default function MasterPage({ coverMode, setCoverMode, tagBarVariant, set
                     />
             </div>
           </div>
+        ) : section === "beatcard" ? (
+          <div className="lab-master-specimens" aria-label="Tres BeatCards comparables"><BeatCardComparison coverMode={coverMode}/></div>
         ) : section === "studio-exact" ? (
           <div className="lab-master-specimens" aria-label="Studio original 44 px estático"><StudioExact44/></div>
         ) : section === "studio-toolbar" ? (
