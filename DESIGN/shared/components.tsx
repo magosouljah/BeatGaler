@@ -71,7 +71,6 @@ export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, c
           aria-pressed={selected} onClick={() => onPlay(beat)}>
           <span className="lab-beat-tile__play-disc"><TilePlayIcon pause={selected}/></span>
         </button>
-        {selected && <span className="lab-beat-tile__playing-mark" aria-hidden="true"><span/><span/><span/></span>}
       </div>
       <div className="lab-beat-tile__meta">
         <div className="lab-beat-tile__heading">
