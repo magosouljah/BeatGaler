@@ -46,3 +46,15 @@ export function compactTileTags(tags: readonly string[], colors: Readonly<Record
   }
   return { visible: [], hidden: ordered, dots: [], unrepresented: ordered.length };
 }
+
+
+/** Identify neutral tag colors for a one-pixel optical glyph alignment. */
+export function isNeutralTagColor(color?: string): boolean {
+  if (!color) return true;
+  const hex = color.trim().toLowerCase();
+  const normalized = /^#[0-9a-f]{3}$/.test(hex)
+    ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
+  if (!/^#[0-9a-f]{6}$/.test(normalized)) return false;
+  const values = [1, 3, 5].map(i => parseInt(normalized.slice(i, i + 2), 16));
+  return Math.max(...values) - Math.min(...values) <= 12;
+}
