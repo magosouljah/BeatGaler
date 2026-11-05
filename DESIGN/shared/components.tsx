@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import type { DemoBeat } from "./data";
+import { compactTileTags } from "./beatCardTags";
 import { getCoverSrc } from "./coverSources";
 import type { CoverMode } from "./coverSources";
 
@@ -49,42 +50,20 @@ export function LabArtwork({ beat, coverMode, className = "" }: { beat: DemoBeat
 
 
 
-/** Fixed 160px tile. Pure tag compaction: no DOM measurement or per-card observers. */
-function compactTileTags(tags: readonly string[], colors: Record<string,string>) {
-  const ordered = [...tags].sort((a,b)=>a.localeCompare(b));
-  const labelWidth = (tag:string) => Math.min(130, Math.ceil(tag.length * 5.6) + 14);
-  // A conservative, fixed width budget for the one-line metadata strip.
-  for(let named=ordered.length;named>=0;named--) {
-    const visible=ordered.slice(0,named), rest=ordered.slice(named);
-    const dots:string[]=[];
-    let unrepresented=0;
-    for(const tag of rest) {
-      const color=colors[tag]?.toLowerCase() || "";
-      if(!color) {unrepresented++;continue;}
-      if(!dots.includes(color)) dots.push(color);
-      else unrepresented++;
-    }
-    const used=visible.reduce((sum,tag)=>sum+labelWidth(tag),0)
-      + Math.max(0,visible.length-1)*4
-      + (visible.length&&dots.length?5:0)+dots.length*9
-      + (unrepresented?28:0);
-    if(used<=160 || named===0) return {visible,dots,unrepresented};
-  }
-  return {visible:[],dots:[],unrepresented:ordered.length};
-}
 function TilePlayIcon({pause=false}:{pause?:boolean}) {
   return pause
     ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round"/></svg>
     : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5 20 12 8 19.5z" fill="currentColor"/></svg>;
 }
-export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {}, onTagPreview }: {
+export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, coverMode, tagColors = {}, onMore, peekMode = "quiet-line" }: {
   beat: DemoBeat; coverMode: CoverMode; tagColors?: Record<string,string>;
   selected: boolean; onPlay: (beat: DemoBeat) => void;
-  onTagPreview?: (beat: DemoBeat, anchor: HTMLElement) => void;
+  onMore?: (beat: DemoBeat) => void;
+  peekMode?: "quiet-line" | "cover-overlay" | "edge-rail";
 }) {
   const compact=compactTileTags(beat.tags,tagColors);
   return (
-    <article className="lab-beat-tile lab-beat-tile--v2" data-playing={selected}>
+    <article className="lab-beat-tile lab-beat-tile--v2" data-playing={selected} data-beat-id={beat.id} data-peek-mode={peekMode}>
       <div className="lab-beat-tile__cover">
         <LabArtwork beat={beat} coverMode={coverMode} />
         <button type="button" className="lab-beat-tile__play"
@@ -97,16 +76,18 @@ export const LabBeatTile = memo(function LabBeatTile({ beat, selected, onPlay, c
       <div className="lab-beat-tile__meta">
         <div className="lab-beat-tile__heading">
           <div className="lab-beat-tile__title" title={beat.title}>{beat.title}</div>
-          <button type="button" className="lab-beat-tile__more" aria-label={`More options for ${beat.title}`} onClick={event=>onTagPreview?.(beat,event.currentTarget)}>···</button>
+          <button type="button" className="lab-beat-tile__more" aria-label={`More options for ${beat.title}`} onClick={()=>onMore?.(beat)}>···</button>
         </div>
         <div className="lab-beat-tile__detail-row">
           <span className="lab-beat-tile__stars" aria-label={`${beat.stars} out of 5 stars`}>{Array.from({length:5},(_,i)=><span key={i} className={i<beat.stars?"is-filled":""}>★</span>)}</span>
           <span className="lab-beat-tile__details">{beat.bpm} BPM · {beat.key}</span>
         </div>
-        <div className="lab-beat-tile__tags" onPointerEnter={event=>{if(compact.visible.length<beat.tags.length)onTagPreview?.(beat,event.currentTarget);}}>
+        <div className="lab-beat-tile__tags" data-beat-tag-trigger
+          data-hidden-tags={JSON.stringify(compact.hidden)} tabIndex={compact.hidden.length ? 0 : undefined}
+          aria-label={compact.hidden.length ? `Tags adicionales: ${compact.hidden.join(", ")}` : undefined}>
           {compact.visible.map(tag=><span key={tag} className="lab-beat-tile__tag" style={tagColors[tag]?{color:tagColors[tag]}:undefined}>{tag}</span>)}
-          {compact.dots.map(color=><span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} aria-label={`Hidden tag color ${color}`}/>)}
-          {compact.unrepresented>0&&<span className="lab-beat-tile__extra">+${compact.unrepresented}</span>}
+          {compact.dots.map(color=><span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} aria-label={`Color de tags ocultos ${color}`}/>)}
+          {compact.unrepresented>0&&<span className="lab-beat-tile__extra">+{compact.unrepresented}</span>}
         </div>
       </div>
     </article>
