@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent } from "react";
 
 type Peek = {
   colors: Record<string, string>;
@@ -110,7 +110,7 @@ export function BeatTagPeekLayer({ peek }: { peek: Peek | null }) {
       role="status" aria-label={`Tags adicionales: ${peek.hidden.join(", ")}`}
     >
       {peek.hidden.map(tag => <span key={tag} className="lab-tag-peek__tag"
-        style={peek.colors[tag] ? { color: peek.colors[tag] } : undefined}>{tag}</span>)}
+        style={peek.colors[tag] ? { "--lab-beat-pill-color": peek.colors[tag] } as CSSProperties : undefined}>{tag}</span>)}
     </div>
   );
 }
