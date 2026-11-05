@@ -78,13 +78,15 @@ test("MASTER uses a three-star specimen and both pill rows share a one-pixel-tal
 });
 
 
-test("neutral tag labels move up one pixel without shifting pills or colored labels", () => {
+test("neutral and colored tag pills share an identical visual baseline", () => {
  const helper = readFileSync(new URL("./shared/beatCardTags.ts", import.meta.url), "utf8");
  const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
  const tile = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
  const reveal = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
- assert.match(helper, /export function isNeutralTagColor/);
- assert.match(css, /\.lab-beat-pill--neutral \.lab-beat-pill__label\{transform:translateY\(-1px\)\}/);
- assert.match(tile, /isNeutralTagColor\(tagColors\[tag\]\)/);
- assert.match(reveal, /isNeutralTagColor\(peek\.colors\[tag\]\)/);
+ assert.match(css, /\\.lab-beat-pill__label\\{display:block;line-height:1;transform:none\\}/);
+ assert.doesNotMatch(css, /lab-beat-pill--neutral/);
+ assert.doesNotMatch(tile, /isNeutralTagColor|lab-beat-pill--neutral/);
+ assert.doesNotMatch(reveal, /isNeutralTagColor|lab-beat-pill--neutral/);
+ assert.doesNotMatch(helper, /isNeutralTagColor/);
+ assert.match(css, /box-sizing:border-box;height:20px;padding:0 4px/);
 });
