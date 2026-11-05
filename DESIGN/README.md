@@ -97,3 +97,12 @@ En `MASTER → BeatCard` queda **únicamente la variante A**, con portada 160 ×
 - Probar: `node --test DESIGN/lab-contract.test.mjs DESIGN/beatcard-tags.test.mjs`, `npx --no-install tsc --project DESIGN/tsconfig.json --noEmit`, `npx --no-install vite build --config DESIGN/vite.config.ts` y `node DESIGN/gallery-browser-check.mjs` (genera imágenes en `DESIGN/gallery-visual-check/`).
 
 Toda la implementación es solo de DESIGN; los archivos de `src/` no fueron modificados y no se conectan a servicios reales.
+
+
+## BeatCard — aislamiento de estilos (5 nov 2026)
+
+La auditoría de discrepancias entre `GALLERY` y `MASTER` confirmó **una misma implementación de React** (`LabBeatTile`) y reglas históricas de BeatCard todavía globales en `LANDING/landing.css` y `GALLERY/gallery.css`. Ambas hojas se cargan para todas las vistas, por lo que esas reglas antiguas podían competir con las medidas, alineación, tipografía y estilos de `shared/beatCard.css`. Se eliminaron solo esas reglas obsoletas; se conservó la estructura, la grilla, la Tag Bar y el resto de estilos de las páginas.
+
+**Contrato único:** `DESIGN/shared/beatCard.css` determina el tamaño fijo de la tarjeta y de las pills, `DESIGN/shared/components.tsx` aporta exactamente el mismo DOM para Gallery y MASTER y `DESIGN/shared/BeatTagPeek.tsx` reutiliza las mismas pills al mostrar los tags ocultos. Gris sin color personalizado y gris de demostración `#929292` usan el mismo color base. Los tonos específicos de cada tag siguen dependiendo de los datos: MASTER muestra una paleta de ejemplo; Gallery usa la paleta del usuario.
+
+**Regresión:** `node --test DESIGN/beatcard-tags.test.mjs` impide que reaparezcan selectores antiguos. `node DESIGN/gallery-browser-check.mjs` compara propiedades CSS calculadas, tamaño y línea base entre la misma pill Ambient en MASTER y Gallery. Esta última comprobación requiere ejecutar la demo en Chrome; escribirla no demuestra que ya pasó.
