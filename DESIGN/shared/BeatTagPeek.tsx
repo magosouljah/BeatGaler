@@ -88,6 +88,14 @@ export function useBeatTagPeek() {
     const trigger = findTrigger(event.target);
     if (trigger && !trigger.contains(event.relatedTarget as Node)) hide();
   }, [hide]);
+  // Touch has no hover: tap the compact tag row to reveal, tap elsewhere to close.
+  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType !== "touch") return;
+    const trigger = findTrigger(event.target);
+    if (trigger) start(trigger, true);
+    else hide();
+  }, [start, hide]);
+
   const onFocusCapture = useCallback((event: ReactFocusEvent<HTMLElement>) => {
     const trigger = findTrigger(event.target);
     if (trigger) start(trigger, true);
@@ -108,7 +116,7 @@ export function useBeatTagPeek() {
     };
   }, [clearTimer, hide]);
 
-  return { peek, hide, onPointerOver, onPointerOut, onFocusCapture, onBlurCapture };
+  return { peek, hide, onPointerOver, onPointerOut, onPointerDown, onFocusCapture, onBlurCapture };
 }
 
 export function BeatTagPeekLayer({ peek }: { peek: Peek | null }) {
