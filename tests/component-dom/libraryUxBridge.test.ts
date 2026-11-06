@@ -206,4 +206,14 @@ describe("F2 / 12.2 library accessibility bridge", () => {
     expect(css).not.toMatch(/--bg-canvas\s*:/);
     expect(css).not.toMatch(/--focus-ring\s*:/);
   });
+
+  it("preserves approved Gallery geometry while enhancing real action menus", () => {
+    const shell=document.querySelector<HTMLElement>("#shell")!;
+    shell.classList.add("bg-product-gallery");
+    const scroll=shell.querySelector<HTMLElement>('[data-library-scroll="true"]')!;
+    expect(enhanceLibraryDom(document)).toBe(true);
+    expect(scroll.classList.contains("bg-library-scroll")).toBe(false);
+    expect(shell.classList.contains("bg-library-shell")).toBe(false);
+    expect(document.querySelector("#portal-menu")?.getAttribute("role")).toBe("menu");
+  });
 });

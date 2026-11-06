@@ -1,0 +1,537 @@
+import {useCallback,useEffect,useId,useLayoutEffect,useRef,useState} from "react";
+import type {KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent} from "react";
+import {MultiPassRenderer} from "./engines/studio/GLUtils";
+import vertex from "./engines/studio/vertex.glsl?raw";
+import bg from "./engines/studio/fragment-bg.glsl?raw";
+import blurV from "./engines/studio/fragment-bg-vblur.glsl?raw";
+import blurH from "./engines/studio/fragment-bg-hblur.glsl?raw";
+import main from "./engines/studio/fragment-main.glsl?raw";
+import math from "./engines/studio/lib/math.glsl?raw";
+import color from "./engines/studio/lib/color.glsl?raw";
+import shape from "./studio-toolbar-shape.glsl?raw";
+import sdf from "./engines/studio/lib/sdf.glsl?raw";
+import {advanceSpring, makeSpring, PRESS_GROW, PRESS_RELEASE, MORPH_SPRING, moving} from "./studio-toolbar-spring";
+import presetText from "./studio-toolbar-44.json?raw";
+import "./studio-toolbar.css";
+// Reuse the exact popup visuals/keyboard treatment from Toolbar V2 · Glass.
+import "../shared/toolbar-v2.css";
+type LabSort = "manual" | "name" | "bpm" | "rating";
+
+type Kind="search"|"sort"|"profile"|"close";
+type Menu="sort"|"profile"|null;
+type Theme="dark"|"light";
+const clamp=(n:number,min:number,max:number)=>Math.max(min,Math.min(max,n));
+const preset=JSON.parse(presetText).controls as {
+  refThickness:number;refDistance:number;refFactor:number;refDispersion:number;
+  refFresnelRange:number;refFresnelHardness:number;refFresnelFactor:number;
+  glareRange:number;glareHardness:number;glareFactor:number;glareConvergence:number;
+  glareOppositeFactor:number;glareAngle:number;blurRadius:number;blurEdge:boolean;
+  tint:{r:number;g:number;b:number;a:number};shadowExpand:number;
+  shadowFactor:number;shadowPosition:{x:number;y:number};step:number;
+  shapeWidth:number;shapeHeight:number;shapeRadius:number;shapeRoundness:number;
+  mergeRate:number;showShape1:boolean;bgType:number;
+};
+const options=["Manual","Name","BPM","Stars"] as const;
+const sortKey=(option:typeof options[number]):LabSort=>option==="Stars"?"rating":option.toLowerCase() as LabSort;
+// Preserve the original Studio superellipseCornerSDF, roundedRectSDF and smin
+// literally. Only mainSDF is a multi-instance wrapper that evaluates the same
+// shape four times on the shared canvas. No artificial wobble or whitening.
+const upstreamMainSdf=/float mainSDF\(vec2 p1, vec2 p2, vec2 p\) \{[\s\S]*?\n\}/;
+if(!upstreamMainSdf.test(sdf))throw Error("Studio upstream SDF changed");
+const sharedSdf=sdf.replace(upstreamMainSdf,shape);
+function include(source:string){
+  return source.replace(/^#include ['"]\.\/lib\/(sdf|math|color)\.glsl['"]\s*$/gm,
+    (_all:string,name:string)=>name==="sdf"?sharedSdf:name==="math"?math:color);
+}
+// Original Studio shader, no Fresnel guard rewrite and no postprocess color mix.
+const opticalShader=include(main);
+// Gallery mode preserves Studio optics but gives the compositor a transparent
+// canvas outside the glass SDF. The MASTER specimen keeps the upstream shader.
+// Source GLSL line endings differ on Windows (CRLF) and CI/Linux (LF).
+// Match the output assignment by syntax rather than exact newline bytes.
+const galleryOutput=/\bfragColor\s*=\s*outColor\s*;\s*\}\s*$/;
+const galleryShader=opticalShader.replace(
+  galleryOutput,
+  "fragColor = vec4(outColor.rgb, 1.0 - smoothstep(-0.001, 0.001, merged));\n}"
+);
+const galleryShaderAvailable=galleryShader!==opticalShader;
+function gaussianWeights(radius:number){
+  const sigma=Math.max(.001,radius/3);
+  const a=Array.from({length:radius+1},(_,i)=>Math.exp(-.5*i*i/(sigma*sigma)));
+  const sum=a.reduce((t,v,i)=>t+v*(i===0?1:2),0);
+  return a.map(x=>x/sum);
+}
+const blurWeights=gaussianWeights(preset.blurRadius);
+function paintBackground(canvas:HTMLCanvasElement,color:string,w:number,h:number){
+  const ctx=canvas.getContext("2d");if(!ctx)return;
+  if(canvas.width!==w)canvas.width=w;
+  if(canvas.height!==h)canvas.height=h;
+  // This RGB texture is the stage background. There is NO image baked into
+  // the lenses. Studio's custom-background mode samples it as a texture.
+  ctx.fillStyle=color;
+  ctx.fillRect(0,0,w,h);
+}
+function paintGalleryBackdrop(canvas:HTMLCanvasElement,host:HTMLElement,w:number,h:number){
+  const ctx=canvas.getContext("2d");if(!ctx)return;
+  if(canvas.width!==w)canvas.width=w;
+  if(canvas.height!==h)canvas.height=h;
+  const stage=host.getBoundingClientRect();
+  ctx.fillStyle="#0c0c0c";ctx.fillRect(0,0,w,h);
+  // Only same-origin local Gallery covers; never capture other apps or windows.
+  document.querySelectorAll<HTMLImageElement>('.lab-gallery-grid [data-beat-artwork-id] img:not([alt=""])').forEach(img=>{
+    if(!img.complete||!img.naturalWidth)return;
+    const url=new URL(img.src,location.href);
+    if(url.origin!==location.origin && url.protocol!=="data:" && url.protocol!=="blob:")return;
+    const r=img.getBoundingClientRect();
+    if(r.right<stage.left||r.left>stage.right||r.bottom<stage.top||r.top>stage.bottom)return;
+    try{ctx.drawImage(img,r.left-stage.left,r.top-stage.top,r.width,r.height);}catch{/* unloaded artwork */}
+  });
+}
+function Glyph({kind}:{kind:Kind}){
+  const p={viewBox:"0 0 24 24",width:19,height:19,fill:"none",
+    stroke:"currentColor",strokeWidth:1.85,strokeLinecap:"round" as const,
+    strokeLinejoin:"round" as const,"aria-hidden":true as const};
+  switch(kind){
+    case "search":return <svg {...p}><circle cx="10.7" cy="10.7" r="6.4"/><path d="m15.4 15.4 5.2 5.2"/></svg>;
+    case "sort":return <svg {...p}><path d="M3.6 6h16.8M3.6 12h11.6M3.6 18h6.4"/></svg>;
+    case "profile":return <svg {...p}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="9.1" r="2.6"/><path d="M6.7 18.1c.4-2.8 2.4-4.3 5.3-4.3s4.9 1.5 5.3 4.3"/></svg>;
+    case "close":return <svg {...p}><path d="M6.4 6.4 17.6 17.6M17.6 6.4 6.4 17.6"/></svg>;
+  }
+}
+
+export default function StudioToolbarCandidate({
+  gallery=false, galleryTagsOpen=false, search:controlledSearch, onSearchChange,
+  sort:controlledSort, onSortChange, selecting:controlledSelecting,
+  onToggleSelect, onProfileAction, onAddBeat, onReload, reloading=false
+}:{
+  onAddBeat?:()=>void; onReload?:()=>void; reloading?:boolean;
+  gallery?:boolean;galleryTagsOpen?:boolean;search?:string;onSearchChange?:(value:string)=>void;
+  sort?:LabSort;onSortChange?:(value:LabSort)=>void;
+  selecting?:boolean;onToggleSelect?:()=>void;
+  onProfileAction?:(action:"settings"|"logout")=>void;
+}={}){
+  const stage=useRef<HTMLDivElement>(null);
+  const display=useRef<HTMLCanvasElement>(null);
+  const controls=useRef<(HTMLDivElement|null)[]>([]);
+  const toolbar=useRef<HTMLDivElement>(null);
+  const input=useRef<HTMLInputElement>(null);
+  const sortButton=useRef<HTMLButtonElement>(null),profileButton=useRef<HTMLButtonElement>(null);
+  const sortMenu=useRef<HTMLDivElement>(null),profileMenu=useRef<HTMLDivElement>(null);
+  const sortId=useId(),profileId=useId();
+  const menuActiveRef=useRef<Menu>(null);
+  const heldPointers=useRef(new Map<number,number>()); // button index -> pointerId
+  const suppressCapturedClick=useRef(new Set<number>());
+  const pressSprings=useRef(Array.from({length:4},()=>makeSpring(0)));
+  const morphSprings=useRef({search:makeSpring(44),select:makeSpring(78)});
+  const animate=useRef<()=>void>(()=>{});
+  const refreshGallery=useRef<()=>void>(()=>{});
+  const searchOpenRef=useRef(false);
+  const [searchOpen,setSearchOpen]=useState(false);
+  const [search,setSearch]=useState("");
+  const [selecting,setSelecting]=useState(false);
+  const [menu,setMenu]=useState<Menu>(null);
+  const [sort,setSort]=useState<(typeof options)[number]>("Manual");
+  const [theme,setTheme]=useState<Theme>("dark");
+  const [error,setError]=useState("");
+  const [message,setMessage]=useState("");
+  const searchValue=gallery&&controlledSearch!==undefined?controlledSearch:search;
+  const selectingValue=gallery&&controlledSelecting!==undefined?controlledSelecting:selecting;
+  const sortValue=gallery&&controlledSort!==undefined?controlledSort:sort.toLowerCase();
+  searchOpenRef.current=searchOpen;
+
+  const press=useCallback((index:number,down:boolean)=>{
+    pressSprings.current[index].target=down?1:0;animate.current();
+  },[]);
+  const inside=(button:HTMLButtonElement,x:number,y:number)=>{
+    const r=button.getBoundingClientRect();
+    return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;
+  };
+  // Pointer capture keeps pointerup on the trigger even if mouseup occurs OUTSIDE.
+  // Reject that synthetic click explicitly instead of trusting captured events.
+  const handlers=(index:number)=>({
+    onPointerDown:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      if(e.button!==0||!e.isPrimary)return;
+      suppressCapturedClick.current.delete(index);
+      heldPointers.current.set(index,e.pointerId);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      press(index,true);
+    },
+    onPointerMove:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      if(heldPointers.current.get(index)!==e.pointerId)return;
+      press(index,inside(e.currentTarget,e.clientX,e.clientY));
+    },
+    onPointerUp:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      if(heldPointers.current.get(index)===e.pointerId){
+        // The button action remains deferred until click AFTER pointer release.
+        if(!inside(e.currentTarget,e.clientX,e.clientY))suppressCapturedClick.current.add(index);
+        heldPointers.current.delete(index);
+      }
+      press(index,false);
+      if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
+    },
+    onPointerCancel:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      heldPointers.current.delete(index);
+      suppressCapturedClick.current.add(index);
+      press(index,false);
+      if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
+    },
+    onLostPointerCapture:(e:ReactPointerEvent<HTMLButtonElement>)=>{
+      // Unexpected capture loss = canceled gesture, not a click.
+      if(heldPointers.current.get(index)===e.pointerId){
+        heldPointers.current.delete(index);
+        suppressCapturedClick.current.add(index);
+      }
+      press(index,false);
+    },
+    onKeyDown:(e:ReactKeyboardEvent<HTMLButtonElement>)=>{
+      if(e.key!=="Enter"&&e.key!==" ")return;
+      e.preventDefault(); // wait for keyup, even for Enter
+      if(!e.repeat)press(index,true);
+    },
+    onKeyUp:(e:ReactKeyboardEvent<HTMLButtonElement>)=>{
+      if(e.key!=="Enter"&&e.key!==" ")return;
+      e.preventDefault();
+      press(index,false);
+      e.currentTarget.click(); // keyboard activation after release
+    },
+    onBlur:()=>press(index,false)
+  });
+  const activate=(index:number,action:()=>void)=>(e:ReactMouseEvent<HTMLButtonElement>)=>{
+    if(e.detail>0&&suppressCapturedClick.current.has(index)){
+      suppressCapturedClick.current.delete(index);
+      e.preventDefault();e.stopPropagation();
+      return;
+    }
+    suppressCapturedClick.current.delete(index);
+    action();
+  };
+  const openMenu=(target:"sort"|"profile")=>{
+    setSearchOpen(false);
+    if(menu===target){setMenu(null);return;}
+    setMenu(target);
+    requestAnimationFrame(()=>{
+      (target==="sort"?sortMenu:profileMenu).current
+        ?.querySelector<HTMLButtonElement>('[role^="menuitem"]')?.focus({preventScroll:true});
+    });
+  };
+  const closeMenu=(target:"sort"|"profile")=>{
+    setMenu(null);
+    (target==="sort"?sortButton:profileButton).current?.focus({preventScroll:true});
+  };
+  const onMenuKeyDown=(e:ReactKeyboardEvent<HTMLDivElement>)=>{
+    if(!["Home","End","ArrowDown","ArrowUp"].includes(e.key))return;
+    const buttons=Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]'));
+    const current=buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next=e.key==="Home"?0:e.key==="End"?buttons.length-1:
+      e.key==="ArrowDown"?(current+1)%buttons.length:(current+buttons.length-1)%buttons.length;
+    e.preventDefault();buttons[next]?.focus();
+  };
+
+  useEffect(()=>{
+    const query=window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update=()=>animate.current();
+    query.addEventListener("change",update);
+    return()=>query.removeEventListener("change",update);
+  },[]);
+  useEffect(()=>{
+    if(searchOpen)input.current?.focus({preventScroll:true});
+    morphSprings.current.search.target=searchOpen
+      ?Math.min(278,Math.max(170,(stage.current?.clientWidth||700)-190)):44;
+    animate.current();
+  },[searchOpen]);
+  useEffect(()=>{morphSprings.current.select.target=selectingValue?44:78;animate.current();},[selectingValue]);
+  useEffect(()=>{
+    const outside=(e:PointerEvent)=>{if(!toolbar.current?.contains(e.target as Node)){setMenu(null);setSearchOpen(false);}};
+    const escape=(e:KeyboardEvent)=>{
+      if(e.key!=="Escape")return;
+      if(menu==="sort"||menu==="profile")closeMenu(menu);
+      else setSearchOpen(false);
+    };
+    document.addEventListener("pointerdown",outside);document.addEventListener("keydown",escape);
+    return()=>{document.removeEventListener("pointerdown",outside);document.removeEventListener("keydown",escape);};
+  },[menu]);
+
+  useEffect(()=>{
+    const host=stage.current,canvas=display.current;
+    if(!host||!canvas)return;
+    let gl:WebGL2RenderingContext|null=null;
+    let renderer:MultiPassRenderer|undefined,texture:WebGLTexture|null=null;
+    let frame=0,disposed=false,last=0,needsBackground=true;
+    let sceneTheme:Theme="dark";
+    const source=document.createElement("canvas");
+    try{
+      if(gallery&&!galleryShaderAvailable)throw Error("Studio Gallery shader unavailable");
+      canvas.width=2;canvas.height=2;
+      gl=canvas.getContext("webgl2",{alpha:gallery,antialias:false,premultipliedAlpha:false});
+      if(!gl)throw Error("WebGL2 no disponible");
+      renderer=new MultiPassRenderer(canvas,[
+        {name:"bgPass",shader:{vertex,fragment:include(bg)}},
+        {name:"vBlurPass",shader:{vertex,fragment:blurV},inputs:{u_prevPassTexture:"bgPass"}},
+        {name:"hBlurPass",shader:{vertex,fragment:blurH},inputs:{u_prevPassTexture:"vBlurPass"}},
+        {name:"mainPass",shader:{vertex,fragment:gallery?galleryShader:opticalShader},
+          inputs:{u_blurredBg:"hBlurPass",u_bg:"bgPass"},outputToScreen:true}
+      ]);
+      texture=gl.createTexture();
+      if(!texture)throw Error("Error al crear textura");
+      gl.bindTexture(gl.TEXTURE_2D,texture);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,1);
+      canvas.dataset.engineReady="true";
+    }catch(e){
+      const msg=e instanceof Error?e.message:String(e);
+      setError(msg);canvas.dataset.engineReady="error";
+      renderer?.dispose();if(gl&&texture)gl.deleteTexture(texture);
+      return;
+    }
+    const tick=(now:number)=>{
+      frame=0;
+      if(disposed||!gl||!texture||!renderer)return;
+      // The spring integration is analytical (closed form): do NOT cap elapsed time
+      // to 0.2s, which makes a long hold look unfinished on slower GPU frames.
+      // Never consume >1 frame of bounce at a time: WebGL may be slow.
+      // Once the spring settles, the next interaction starts at a NEW t=0.
+      const elapsed=last?Math.min(.3,(now-last)/1000):.016;last=now;
+      const pressDt=Math.min(.045,elapsed); // perceptible press bounce even on slow GPU
+      const morphDt=Math.min(.12,elapsed);  // fast, more damped width morph
+      const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      for(const s of pressSprings.current){
+        if(reduce){s.x=s.target;s.v=0;}
+        else advanceSpring(s,pressDt,s.target===1?PRESS_GROW:PRESS_RELEASE);
+      }
+      const motion=morphSprings.current;
+      for(const s of [motion.search,motion.select]){
+        if(reduce){s.x=s.target;s.v=0;}
+        else advanceSpring(s,morphDt,MORPH_SPRING);
+      }
+      if(controls.current[0])controls.current[0]!.style.width=Math.max(44,motion.search.x)+"px";
+      if(controls.current[2])controls.current[2]!.style.width=Math.max(44,motion.select.x)+"px";
+      const stageRect=host.getBoundingClientRect();
+      // Studio's original CanvasInfo defaults to DPR = 1.
+      // Gallery also uses the 600px-tall reference stage: the original
+      // normal, Fresnel and glare calculations depend on u_resolution.y.
+      const dpr=1;
+      const w=Math.max(2,Math.round(stageRect.width*dpr));
+      const h=Math.max(2,Math.round(stageRect.height*dpr));
+      if(w!==canvas.width||h!==canvas.height){
+        canvas.width=w;canvas.height=h;renderer.resize(w,h);needsBackground=true;
+      }
+      if(needsBackground){
+        if(gallery)paintGalleryBackdrop(source,host,w,h);
+        else paintBackground(source,sceneTheme==="dark"?"#26262b":"#e7e7e9",w,h);
+        gl.bindTexture(gl.TEXTURE_2D,texture);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
+        needsBackground=false;
+      }
+      const shapes:number[]=[],pressures:number[]=[];
+      for(let i=0;i<4;i++){
+        const rect=controls.current[i]?.getBoundingClientRect();
+        if(!rect){shapes.push(-500,-500,1,1);pressures.push(0);continue;}
+        shapes.push(rect.left-stageRect.left+rect.width*.5,
+          stageRect.bottom-rect.top-rect.height*.5,rect.width,rect.height);
+        // PRESS: only a uniform, smooth size change; MORPH: only width.
+        // The original Studio SDF recalculates optics on each new shape.
+        pressures.push(pressSprings.current[i].x);
+        const button=controls.current[i]?.querySelector<HTMLButtonElement>("button");
+        if(button)button.style.transform=`scale(${1+clamp(pressSprings.current[i].x,-.2,1.1)*.06})`;
+      }
+      // Readable only in DESIGN tests: a long hold must approach 1, and its
+      // release must overshoot through 0 before naturally settling.
+      // No entry/exit animation or lingering lens after close.
+      const shownMenu=menuActiveRef.current;
+      const menuElement=shownMenu==="sort"?sortMenu.current:
+        shownMenu==="profile"?profileMenu.current:null;
+      const menuRect=menuElement?.getBoundingClientRect();
+      const menuVisible=!!(menuRect&&menuRect.width>1&&menuRect.height>1);
+      const menuLens=menuVisible&&menuRect?[
+        menuRect.left-stageRect.left+menuRect.width*.5,
+        stageRect.bottom-menuRect.top-menuRect.height*.5,
+        menuRect.width,menuRect.height
+      ]:[-1000,-1000,1,1];
+      canvas.dataset.menuMaterial=menuVisible?"studio":"none";
+      canvas.dataset.menuShape=menuVisible&&menuRect
+        ?`${Math.round(menuRect.width)}x${Math.round(menuRect.height)}`:"none";
+      canvas.dataset.searchScaleAnchor="trigger-center";
+      canvas.dataset.pressValues=pressSprings.current.map(s=>s.x.toFixed(5)).join(",");
+      canvas.dataset.geometry="studio-original-rounded-rect";
+      canvas.dataset.optics="studio-original-shader";
+      canvas.dataset.background=gallery?"gallery-artwork":sceneTheme==="dark"?"#26262b":"#e7e7e9";
+      canvas.dataset.viewportHeight=String(h);
+      canvas.dataset.presetVariant="studio-44-soft-glare";
+      gl.viewport(0,0,w,h);
+      renderer.setUniforms({
+        u_resolution:[w,h],u_dpr:dpr,u_lenses:shapes,
+        u_menuLens:menuLens,u_menuVisible:menuVisible?1:0,
+        u_presses:pressures,u_blurWeights:blurWeights,u_blurRadius:preset.blurRadius,
+        u_shapeWidth:preset.shapeWidth,u_shapeHeight:preset.shapeHeight,
+        u_shapeRadius:Math.min(preset.shapeWidth,preset.shapeHeight)*.5*preset.shapeRadius/100,
+        u_shapeRoundness:preset.shapeRoundness,
+        u_mergeRate:preset.mergeRate,u_showShape1:preset.showShape1?1:0,
+        u_mouse:[w/2,h/2],u_mouseSpring:[w/2,h/2],
+        u_glareAngle:preset.glareAngle*Math.PI/180
+      });
+      renderer.render({
+        bgPass:{u_bgType:preset.bgType,u_bgTexture:texture,u_bgTextureReady:1,
+          u_bgTextureRatio:w/h,u_shadowExpand:preset.shadowExpand,
+          u_shadowFactor:preset.shadowFactor/100,
+          u_shadowPosition:[-preset.shadowPosition.x,-preset.shadowPosition.y]},
+        mainPass:{u_tint:[preset.tint.r/255,preset.tint.g/255,preset.tint.b/255,preset.tint.a],
+          u_refThickness:preset.refThickness,u_refDistance:preset.refDistance,
+          u_refFactor:preset.refFactor,u_refDispersion:preset.refDispersion,
+          u_refFresnelRange:preset.refFresnelRange,
+          u_refFresnelHardness:preset.refFresnelHardness/100,
+          u_refFresnelFactor:preset.refFresnelFactor/100,
+          u_glareRange:preset.glareRange,u_glareHardness:preset.glareHardness/100,
+          u_glareFactor:preset.glareFactor/100,u_glareConvergence:preset.glareConvergence/100,
+          u_glareOppositeFactor:preset.glareOppositeFactor/100,
+          u_blurEdge:preset.blurEdge?1:0,STEP:preset.step}
+      });
+      if([...pressSprings.current,motion.search,motion.select].some(moving))
+        frame=requestAnimationFrame(tick);
+      else last=0;
+    };
+    animate.current=()=>{if(!frame){last=0;frame=requestAnimationFrame(tick);}};
+    const observer=new ResizeObserver(()=>{
+      if(searchOpenRef.current)morphSprings.current.search.target=Math.min(278,Math.max(170,host.clientWidth-190));
+      needsBackground=true;animate.current();
+    });
+    observer.observe(host);
+    const refreshBackdrop=()=>{if(gallery){needsBackground=true;animate.current();}};
+    refreshGallery.current=refreshBackdrop;
+    const contextLost=(event:Event)=>{
+      event.preventDefault();disposed=true;cancelAnimationFrame(frame);
+      setError("Graphics unavailable");
+    };
+    canvas.addEventListener("webglcontextlost",contextLost);
+    if(gallery){
+      window.addEventListener("scroll",refreshBackdrop,{passive:true,capture:true});
+      window.addEventListener("resize",refreshBackdrop,{passive:true});
+      document.addEventListener("load",refreshBackdrop,true);
+    }
+    const grid=gallery?document.querySelector('[data-library-scroll="true"]'):null;
+    const mutations=new MutationObserver(refreshBackdrop);
+    if(grid)mutations.observe(grid,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});
+    const themeListener=(e:Event)=>{
+      const next=(e as CustomEvent<Theme>).detail;
+      if(next!==sceneTheme){sceneTheme=next;needsBackground=true;animate.current();}
+    };
+    host.addEventListener("studio-theme",themeListener);
+    animate.current();
+    return()=>{
+      disposed=true;cancelAnimationFrame(frame);observer.disconnect();mutations.disconnect();
+      canvas.removeEventListener("webglcontextlost",contextLost);
+      if(gallery){window.removeEventListener("scroll",refreshBackdrop,true);window.removeEventListener("resize",refreshBackdrop);document.removeEventListener("load",refreshBackdrop,true);}
+      host.removeEventListener("studio-theme",themeListener);
+      refreshGallery.current=()=>{};
+      animate.current=()=>{};renderer?.dispose();
+      if(gl&&texture)gl.deleteTexture(texture);
+    };
+  },[]);
+  useEffect(()=>{
+    if(!gallery)return;
+    // The tag bar changes the toolbar's DOM position without resizing the
+    // 600px WebGL canvas. Re-sample its geometry/background throughout the
+    // reversible grid-track transition, including mid-flight interruptions.
+    let raf=0;
+    const end=performance.now()+340;
+    const refresh=()=>{
+      refreshGallery.current();
+      if(performance.now()<end)raf=requestAnimationFrame(refresh);
+    };
+    raf=requestAnimationFrame(refresh);
+    return()=>cancelAnimationFrame(raf);
+  },[gallery,galleryTagsOpen]);
+  useEffect(()=>{stage.current?.dispatchEvent(new CustomEvent("studio-theme",{detail:theme}));},[theme]);
+  useLayoutEffect(()=>{
+    // After React commits the menu DOM but before browser paint, request a
+    // single WebGL frame with the new lens. No 220ms transition timer and
+    // no retained optical mask after closing.
+    menuActiveRef.current=menu;
+    animate.current();
+  },[menu]);
+
+  return <div className={"studio-candidate"+(gallery?" is-gallery":"")} data-studio-candidate>
+    <div className="studio-candidate-controls">
+      <span>LIQUID GLASS STUDIO · 44 PX</span>
+      <div className="studio-candidate-theme" role="group" aria-label="Fondo de prueba">
+        <button type="button" aria-pressed={theme==="dark"} onClick={()=>setTheme("dark")}>Oscuro</button>
+        <button type="button" aria-pressed={theme==="light"} onClick={()=>setTheme("light")}>Claro</button>
+      </div>
+    </div>
+    <div ref={stage} className={"studio-candidate-stage is-"+theme} data-glass-engine={error?"fallback":"studio"}>
+      <canvas ref={display} className="studio-candidate-canvas" aria-label="Studio WebGL2 lenses"/>
+      <div ref={toolbar} className="studio-candidate-toolbar" role="group" aria-label="Toolbar Studio">
+        <div className="studio-candidate-search-slot">
+          <div ref={node=>{controls.current[0]=node;}}
+            className={"studio-lens studio-search"+(searchOpen?" is-open":"")}>
+            <input ref={input} type="search" aria-label="Search beats" placeholder="Search beats"
+              tabIndex={searchOpen?0:-1} value={searchValue} onChange={e=>{setSearch(e.target.value);onSearchChange?.(e.target.value);}}/>
+            <button type="button" aria-label={searchOpen?"Close search":"Search beats"}
+              aria-expanded={searchOpen}
+              onClick={activate(0,()=>{setMenu(null);setSearchOpen(v=>!v);})}
+              {...handlers(0)}><Glyph kind="search"/></button>
+          </div>
+        </div>
+        <div ref={node=>{controls.current[1]=node;}} className="studio-lens">
+          <button ref={sortButton} type="button" aria-label="Sort beats" aria-haspopup="menu"
+            aria-controls={sortId} aria-expanded={menu==="sort"}
+            onClick={activate(1,()=>openMenu("sort"))}
+            {...handlers(1)}><Glyph kind="sort"/></button>
+        </div>
+        <div ref={node=>{controls.current[2]=node;}}
+          className={"studio-lens studio-select"+(selectingValue?" is-selecting":"")}>
+          <button type="button" aria-pressed={selectingValue}
+            aria-label={selectingValue?"Cancel selection":"Select beats"}
+            onClick={activate(2,()=>{setSearchOpen(false);setMenu(null);if(gallery)onToggleSelect?.();else setSelecting(v=>!v);})}
+            {...handlers(2)}>
+            <span className="studio-select-label">Select</span>
+            <span className="studio-select-x"><Glyph kind="close"/></span>
+          </button>
+        </div>
+        <div ref={node=>{controls.current[3]=node;}} className="studio-lens">
+          <button ref={profileButton} type="button" aria-label="Profile" aria-haspopup="menu"
+            aria-controls={profileId} aria-expanded={menu==="profile"}
+            onClick={activate(3,()=>openMenu("profile"))}
+            {...handlers(3)}><Glyph kind="profile"/></button>
+        </div>
+        {/* Exact Toolbar V2 · Glass popover classes and structure. */}
+        <div ref={sortMenu} id={sortId} role="menu" aria-label="Sort beats"
+          aria-hidden={menu!=="sort"} onKeyDown={onMenuKeyDown}
+          className={`lab-toolbar-v2-popover is-sort${menu==="sort"?" is-open":""}`}>
+          <div className="lab-toolbar-v2-menu-title">Sort by</div>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          {options.map(option=><button key={option} type="button" role="menuitemradio"
+            aria-checked={sortValue===sortKey(option)} tabIndex={menu==="sort"?0:-1}
+            className={`lab-toolbar-v2-menu-item${sortValue===sortKey(option)?" is-current":""}`}
+            onClick={()=>{setSort(option);onSortChange?.(sortKey(option));closeMenu("sort");}}>
+            {option}<span aria-hidden="true" className="lab-toolbar-v2-selected-dot"/>
+          </button>)}
+        </div>
+        <div ref={profileMenu} id={profileId} role="menu" aria-label="Profile"
+          aria-hidden={menu!=="profile"} onKeyDown={onMenuKeyDown}
+          className={`lab-toolbar-v2-popover is-profile${menu==="profile"?" is-open":""}`}>
+          <div className="lab-toolbar-v2-profile-name">
+            <span className="lab-toolbar-v2-avatar"><Glyph kind="profile"/></span>
+            <strong>Your Gallery</strong>
+          </div>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1} className="lab-toolbar-v2-menu-item" onClick={()=>{onAddBeat?.();closeMenu("profile");}}>Add beat</button>
+          <button type="button" role="menuitem" disabled={reloading} tabIndex={menu==="profile"?0:-1} className="lab-toolbar-v2-menu-item" onClick={()=>{onReload?.();closeMenu("profile");}}>Reload Library</button>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1}
+            className="lab-toolbar-v2-menu-item"
+            onClick={()=>{onProfileAction?.("settings");if(!gallery)setMessage("Settings · demo");closeMenu("profile");}}>Settings</button>
+          <div className="lab-toolbar-v2-menu-divider"/>
+          <button type="button" role="menuitem" tabIndex={menu==="profile"?0:-1}
+            className="lab-toolbar-v2-menu-item"
+            onClick={()=>{onProfileAction?.("logout");if(!gallery)setMessage("Log out · demo");closeMenu("profile");}}>Log out</button>
+        </div>
+      </div>
+      {error&&<div className="studio-candidate-error" role="status">Studio: {error}. Se muestra fallback.</div>}
+      {message&&<div className="studio-candidate-message" role="status">{message}</div>}
+    </div>
+    <p className="studio-candidate-hint">Material Studio original, sobre fondo plano. Pulsación: crecimiento uniforme y rebote al soltar. Search y Select: cambio de dimensiones con resorte sutil, sin deformaciones jelly.</p>
+  </div>;
+}

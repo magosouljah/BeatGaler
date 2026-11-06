@@ -1,0 +1,390 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { setTagColor } from "../../../lib/tagColors";
+type GalleryTag = string;
+
+type Filter = "include" | "exclude";
+type Spring = { x: number; velocity: number };
+const CLOSE_DELAY = 900;
+const LONG_PRESS_DELAY = 550;
+const PALETTE = [
+  { name: "Red", hex: "#FF3B30" }, { name: "Orange", hex: "#FF9500" },
+  { name: "Yellow", hex: "#FFCC00" }, { name: "Green", hex: "#34C759" },
+  { name: "Blue", hex: "#007AFF" }, { name: "Purple", hex: "#AF52DE" },
+  { name: "Gray", hex: "#8E8E93" }
+] as const;
+
+// DOM order follows visual order for focus and assistive technology.
+// FLIP preserves the current pixel position and velocity when interrupted.
+export default function TagNavigation({ visible, hasActiveFilters, onVisibilityChange, filters, onCycleTag, onClear, tagColors, onRename, tags: tags }: {
+  visible: boolean;
+  hasActiveFilters: boolean;
+  onVisibilityChange: (visible: boolean) => void;
+  filters: Partial<Record<GalleryTag, Filter>>;
+  onCycleTag: (name: GalleryTag, exclude: boolean) => void;
+  onClear: () => void;
+  tagColors: Record<string, string>;
+  tags: readonly string[];
+  onRename: (tag: string) => void;
+}) {
+  const [editingTag, setEditingTag] = useState<GalleryTag | null>(null);
+  const [palettePosition, setPalettePosition] = useState({ left: 0, top: 0 });
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pointerNearby = useRef(false);
+  // Hybrid/touch-capable devices can report coarse input even while a
+  // physical mouse is in use. Use the actual last mouse interaction for hide.
+  const mousePresent = useRef(false);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const buttonRefs = useRef(new Map<GalleryTag, HTMLButtonElement>());
+  const itemRefs = useRef(new Map<GalleryTag, HTMLDivElement>());
+  const beforeLayout = useRef<Map<GalleryTag, number> | null>(null);
+  const springs = useRef(new Map<GalleryTag, Spring>());
+  const frame = useRef<number | null>(null);
+  const lastFrame = useRef(0);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPress = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
+  const suppressClick = useRef<{ tag: GalleryTag; time: number } | null>(null);
+  const preserveScroll = useRef<number | null>(null);
+  const ordered = useMemo(() => [
+    ...tags.filter(name => filters[name] !== undefined),
+    ...tags.filter(name => filters[name] === undefined)
+  ], [filters]);
+  const orderKey = ordered.join("|");
+
+  const clearHide = useCallback(() => {
+    if (hideTimer.current !== null) clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  }, []);
+  const show = useCallback(() => { clearHide(); onVisibilityChange(true); }, [clearHide, onVisibilityChange]);
+  const scheduleHide = useCallback(() => {
+    const focus = document.activeElement;
+    // Mouse clicks can leave a tag focused forever: only keyboard focus pins it.
+    const keyboardFocus = focus instanceof HTMLElement && focus.matches(":focus-visible") &&
+      !!rootRef.current?.contains(focus);
+    if (hasActiveFilters || editingTag || keyboardFocus ||
+      (!mousePresent.current && window.matchMedia("(hover: none), (pointer: coarse)").matches)) return;
+    if (hideTimer.current !== null) return;
+    hideTimer.current = setTimeout(() => {
+      hideTimer.current = null;
+      onVisibilityChange(false);
+    }, CLOSE_DELAY);
+  }, [editingTag, hasActiveFilters, onVisibilityChange]);
+  const clearLongPress = () => {
+    if (longPress.current !== null) clearTimeout(longPress.current);
+    longPress.current = null;
+    pointerOrigin.current = null;
+  };
+  const saveLayout = () => {
+    // Reordering a selected tag must not jump the horizontal viewport.
+    preserveScroll.current = scrollerRef.current?.scrollLeft ?? null;
+    const positions = new Map<GalleryTag, number>();
+    itemRefs.current.forEach((node, name) => positions.set(name, node.getBoundingClientRect().left));
+    beforeLayout.current = positions;
+  };
+
+  const stepSpring = (time: number) => {
+    const dt = lastFrame.current ? Math.min((time - lastFrame.current) / 1000, 0.032) : 1 / 60;
+    lastFrame.current = time;
+    springs.current.forEach((spring, name) => {
+      // Critically damped mass=1 / stiffness=400 / damping=40, no rubber effect.
+      spring.velocity += (-400 * spring.x - 40 * spring.velocity) * dt;
+      spring.x += spring.velocity * dt;
+      const node = itemRefs.current.get(name);
+      if (Math.abs(spring.x) < 0.35 && Math.abs(spring.velocity) < 2) {
+        if (node) node.style.transform = "";
+        springs.current.delete(name);
+      } else if (node) {
+        node.style.transform = "translate3d(" + spring.x + "px, 0, 0)";
+      }
+    });
+    frame.current = springs.current.size ? requestAnimationFrame(stepSpring) : null;
+  };
+
+  useLayoutEffect(() => {
+    const before = beforeLayout.current;
+    if (!before) return;
+    beforeLayout.current = null;
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+    const previous = springs.current;
+    if (scrollerRef.current && preserveScroll.current !== null)
+      scrollerRef.current.scrollLeft = preserveScroll.current;
+    preserveScroll.current = null;
+    itemRefs.current.forEach(node => { node.style.transform = ""; });
+    const next = new Map<GalleryTag, Spring>();
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduced) itemRefs.current.forEach((node, name) => {
+      const oldLeft = before.get(name);
+      if (oldLeft === undefined) return;
+      const x = oldLeft - node.getBoundingClientRect().left;
+      if (Math.abs(x) < 0.5 && !previous.has(name)) return;
+      next.set(name, { x, velocity: previous.get(name)?.velocity ?? 0 });
+      node.style.transform = "translate3d(" + x + "px, 0, 0)";
+    });
+    springs.current = next;
+    lastFrame.current = 0;
+    if (next.size) frame.current = requestAnimationFrame(stepSpring);
+  }, [orderKey]);
+
+  const updateEdges = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setEdges(current => current.left === left && current.right === right ? current : { left, right });
+  }, []);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const wheel = (event: WheelEvent) => {
+      // Always consume wheel input, even at both ends of the horizontal track.
+      // Never allow the wheel gesture to chain into vertical Gallery scrolling.
+      event.preventDefault();
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientWidth : 1;
+      const delta = (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY) * scale;
+      el.scrollLeft = Math.max(0, Math.min(el.scrollWidth - el.clientWidth, el.scrollLeft + delta));
+    };
+    el.addEventListener("wheel", wheel, { passive: false });
+    el.addEventListener("scroll", updateEdges, { passive: true });
+    const observer = new ResizeObserver(updateEdges);
+    observer.observe(el);
+    if (contentRef.current) observer.observe(contentRef.current);
+    updateEdges();
+    return () => {
+      el.removeEventListener("wheel", wheel);
+      el.removeEventListener("scroll", updateEdges);
+      observer.disconnect();
+    };
+  }, [updateEdges, orderKey]);
+
+  useEffect(() => {
+    // Fine-pointer media changes must not close a hovered or filtered bar.
+    const media = window.matchMedia("(hover: none), (pointer: coarse)");
+    const update = () => { if (media.matches && !mousePresent.current) show(); else if (!pointerNearby.current) scheduleHide(); };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [show, scheduleHide]);
+  useEffect(() => {
+    if (hasActiveFilters) show(); // Cancel an in-flight close on the first selection.
+    else if (!pointerNearby.current) scheduleHide();
+  }, [hasActiveFilters, show, scheduleHide]);
+
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      mousePresent.current = true;
+      const toolbar = document.querySelector(".studio-candidate.is-gallery .studio-candidate-toolbar") ?? document.querySelector(".lab-gallery-toolbar-float");
+      const toolbarLeft = toolbar?.getBoundingClientRect().left ?? window.innerWidth;
+      const inRevealZone = event.clientY <= 78 && event.clientX < toolbarLeft - 12;
+      pointerNearby.current = !!(inRevealZone || rootRef.current?.contains(event.target as Node) ||
+        (visible && toolbar?.contains(event.target as Node)));
+      if (pointerNearby.current) show();
+      else scheduleHide();
+    };
+    const focus = (event: FocusEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) show();
+      else scheduleHide();
+    };
+    const touchDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") return;
+      // On hybrids, the most recent touch restores the permanently
+      // discoverable touch navigation; another mouse move opts into auto-hide.
+      mousePresent.current = false;
+      pointerNearby.current = false;
+      show();
+    };
+    const leaveWindow = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && !event.relatedTarget) {
+        pointerNearby.current = false;
+        scheduleHide();
+      }
+    };
+    document.addEventListener("pointermove", move, { passive: true });
+    document.addEventListener("pointerdown", touchDown, { passive: true });
+    document.addEventListener("pointerout", leaveWindow, { passive: true });
+    document.addEventListener("focusin", focus);
+    return () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerdown", touchDown);
+      document.removeEventListener("pointerout", leaveWindow);
+      document.removeEventListener("focusin", focus);
+    };
+  }, [show, scheduleHide, visible]);
+  useEffect(() => {
+    const onScroll = (event: Event) => {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      if (hasActiveFilters ||
+        (!mousePresent.current && window.matchMedia("(hover: none), (pointer: coarse)").matches)) return;
+      // Active filters and genuine touch input never hide the tag navigation.
+      pointerNearby.current = false;
+      clearHide();
+      onVisibilityChange(false);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [hasActiveFilters, clearHide, onVisibilityChange]);
+
+  useEffect(() => {
+    if (!editingTag) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setEditingTag(null);
+        buttonRefs.current.get(editingTag)?.focus({ preventScroll: true });
+      }
+    };
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!paletteRef.current?.contains(target) && !buttonRefs.current.get(editingTag)?.contains(target))
+        setEditingTag(null);
+    };
+    document.addEventListener("keydown", escape);
+    document.addEventListener("pointerdown", outside);
+    return () => {
+      document.removeEventListener("keydown", escape);
+      document.removeEventListener("pointerdown", outside);
+    };
+  }, [editingTag]);
+
+  useEffect(() => {
+    const reveal = (event: KeyboardEvent) => {
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "t") {
+        event.preventDefault();
+        show();
+        requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>(".lab-gallery-tag")?.focus({ preventScroll: true }));
+      }
+    };
+    document.addEventListener("keydown", reveal);
+    return () => document.removeEventListener("keydown", reveal);
+  }, [show]);
+
+  useEffect(() => () => {
+    clearHide();
+    clearLongPress();
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    itemRefs.current.forEach(node => { node.style.transform = ""; });
+  }, [clearHide]);
+
+  const openPalette = (name: GalleryTag) => {
+    clearLongPress();
+    const rect = buttonRefs.current.get(name)?.getBoundingClientRect();
+    if (!rect) return;
+    setPalettePosition({
+      left: Math.max(12, Math.min(rect.left, window.innerWidth - 196)),
+      top: Math.max(12, Math.min(rect.bottom + 10, window.innerHeight - 194))
+    });
+    setEditingTag(name);
+    show();
+  };
+  const beginLongPress = (name: GalleryTag, event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === "mouse") return;
+    clearLongPress();
+    pointerOrigin.current = { x: event.clientX, y: event.clientY };
+    longPress.current = setTimeout(() => {
+      suppressClick.current = { tag: name, time: Date.now() };
+      openPalette(name);
+    }, LONG_PRESS_DELAY);
+  };
+  const moveLongPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const origin = pointerOrigin.current;
+    if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 9)
+      clearLongPress();
+  };
+  const activate = (name: GalleryTag, exclude = false) => {
+    const suppress = suppressClick.current;
+    suppressClick.current = null;
+    if (suppress?.tag === name && Date.now() - suppress.time < 1800) return;
+    saveLayout();
+    onCycleTag(name, exclude);
+  };
+  const reset = () => { saveLayout(); onClear(); };
+  const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    if (event.target === scroller) {
+      if (event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        scroller.scrollTo({ left: event.key === "Home" ? 0 : scroller.scrollWidth, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      } else if (event.key === "ArrowRight" || event.key === "ArrowLeft" ||
+        event.key === "PageDown" || event.key === "PageUp") {
+        event.preventDefault();
+        const forward = event.key === "ArrowRight" || event.key === "PageDown";
+        scroller.scrollBy({ left: (forward ? 1 : -1) * (event.key.startsWith("Page") ? scroller.clientWidth * .8 : 160), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      }
+      return;
+    }
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+    const buttons = Array.from(scroller.querySelectorAll<HTMLButtonElement>(".lab-gallery-tag"));
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) return;
+    event.preventDefault();
+    buttons[(index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+  };
+  const allActive = !tags.some(name => filters[name] !== undefined);
+
+  return (
+    <>
+      <div ref={rootRef} className={"lab-gallery-tags-layer" + (visible ? " is-open" : "")}
+        {...(!visible ? { inert: "" } : {})} role="group" aria-label="Tag filters" onFocusCapture={show}>
+        <div className="lab-gallery-tag-surface">
+        <div ref={scrollerRef} className={"lab-gallery-tag-bar" + (edges.left ? " has-left" : "") + (edges.right ? " has-right" : "")}
+          onKeyDown={moveFocus} tabIndex={0} aria-label="Horizontal tag navigation">
+          <div ref={contentRef} className="lab-gallery-tag-track">
+            <button type="button" className={"lab-gallery-tag lab-gallery-tag-all" + (allActive ? " is-included" : "")}
+              data-label="All" aria-pressed={allActive} onClick={reset}><span className="lab-gallery-tag-label">All</span></button>
+            {ordered.map(name => {
+              const state = filters[name] ?? "idle";
+              const color = tagColors[name.trim().toLowerCase()];
+              return <div key={name} ref={node => { if (node) itemRefs.current.set(name, node); else itemRefs.current.delete(name); }}
+                className="lab-gallery-tag-wrap">
+                <button type="button" ref={node => { if (node) buttonRefs.current.set(name, node); else buttonRefs.current.delete(name); }}
+                  className={"lab-gallery-tag is-" + state + (color ? " is-custom" : "")}
+                  data-label={name}
+                  style={color ? { "--lab-tag-color": color } as CSSProperties : undefined}
+                  aria-pressed={state === "include"}
+                  aria-label={name + ": " + state + ". Click to include or clear; Alt+click to exclude or clear; right-click, long-press or Shift+F10 to change color."}
+                  title="Click: include/clear · Alt+click: exclude/clear · Right-click: color"
+                  onClick={event => activate(name, event.altKey)}
+                  onContextMenu={event => { event.preventDefault(); openPalette(name); }}
+                  onPointerDown={event => beginLongPress(name, event)}
+                  onPointerMove={moveLongPress}
+                  onPointerUp={clearLongPress}
+                  onPointerCancel={clearLongPress}
+                  onPointerLeave={clearLongPress}
+                  onKeyDown={event => {
+                    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+                      event.preventDefault();
+                      openPalette(name);
+                    }
+                  }}><span className="lab-gallery-tag-label">{name}</span></button>
+              </div>;
+            })}
+          </div>
+        </div>
+        </div>
+      </div>
+      {editingTag && createPortal(<div ref={paletteRef} className="bg-design lab-tag-color-popover lab-tag-color-popover--floating"
+        role="group" aria-label={"Colores de " + editingTag} style={palettePosition}>
+        <div className="lab-tag-color-swatches">
+          {PALETTE.map(option => <button type="button" key={option.hex}
+            className={tagColors[editingTag.trim().toLowerCase()] === option.hex ? "is-current" : ""}
+            style={{ background: option.hex }} title={option.name}
+            aria-label={option.name} aria-pressed={tagColors[editingTag.trim().toLowerCase()] === option.hex}
+            onClick={() => { setTagColor(editingTag, option.hex); setEditingTag(null); }}/>)}
+        </div>
+        <button type="button" className="lab-tag-color-none" onClick={() => {
+          setTagColor(editingTag, null);
+          // Remove only custom paint; existing inclusion/exclusion stays intact.
+          setEditingTag(null);
+        }}>Sin color</button>
+        <button type="button" className="lab-tag-color-none" onClick={() => { onRename(editingTag); setEditingTag(null); }}>Rename tag</button>
+      </div>, document.body)}
+    </>
+  );
+}

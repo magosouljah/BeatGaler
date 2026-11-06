@@ -245,11 +245,12 @@ export function TagEditor({
 
 // ── Artwork ──────────────────────────────────────────────────
 export function Artwork({
-  beat, size = 160, playing,
+  beat, size = 160, playing, gallery = false,
 }: {
   beat: { name: string; image_base64: string | null; image_preview_base64?: string | null; color: string; color2: string; id: string };
   size?: number;
   playing?: boolean;
+  gallery?: boolean;
 }) {
   const artworkSrc = beat.image_preview_base64 || beat.image_base64;
   const initials = beat.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
@@ -271,8 +272,8 @@ export function Artwork({
       boxShadow: playing ? "0 0 0 2px rgba(255,255,255,0.15)" : "none",
       transition: "box-shadow 0.2s",
     }}>
-      {artworkSrc ? (
-        <img src={artworkSrc ?? undefined} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={beat.name} />
+      {artworkSrc || (gallery && proceduralBackground) ? (
+        <img src={artworkSrc || proceduralBackground || undefined} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={beat.name} />
       ) : (
         <span style={{
           position: "absolute", bottom: 8, left: 10,

@@ -93,11 +93,13 @@ async function startWebOAuth(provider: OAuthProvider) {
   };
 }
 
-export default function AuthExperienceGate({ children }: { children: React.ReactNode }) {
+export default function AuthExperienceGate({ children, initialPhase = "login", onAuthenticated }: {
+  children: React.ReactNode; initialPhase?: "login" | "register"; onAuthenticated?: () => void;
+}) {
   const [account, setAccount] = useState<BeatGalerAccount | null>(null);
   const authRunRef = useRef(0);
   const [checking, setChecking] = useState(platform.kind === "web");
-  const [phase, setPhase] = useState<Phase>("login");
+  const [phase, setPhase] = useState<Phase>(initialPhase);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -217,6 +219,8 @@ export default function AuthExperienceGate({ children }: { children: React.React
       window.removeEventListener("offline", offline);
     };
   }, [phase]);
+
+  useEffect(() => { if (account?.id) onAuthenticated?.(); }, [account?.id, onAuthenticated]);
 
   if (platform.kind !== "web") return <>{children}</>;
   if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;
@@ -446,7 +450,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
 
   return <main className="bg-auth-shell" aria-labelledby="beatgaler-auth-title">
     <section className="bg-auth-card">
-      <div className="bg-auth-brand" aria-hidden="true">BG</div>
+      <a className="bg-auth-brand" href="/" aria-label="BeatGaler home">BG</a>
       <h1 ref={headingRef} tabIndex={-1} id="beatgaler-auth-title" className="bg-auth-title">{title}</h1>
       <p className="bg-auth-subtitle">
         {phase === "register" ? "Create one account for your BeatGaler library."
