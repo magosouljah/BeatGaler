@@ -247,3 +247,12 @@
 .lab-master-beatcard-variants{display:flex;align-items:flex-start;justify-content:center;gap:0;flex-wrap:wrap;width:100%;padding:24px 0 36px}
 .lab-master-beatcard-variant{flex:0 0 160px;display:flex;flex-direction:column;align-items:flex-start;gap:15px}
 .lab-master-beatcard-feedback{background:transparent;border:0;color:#888;font:11px var(--lab-font);cursor:pointer}
+
+/* MASTER-only BeatCard label optical alignment.
+   In the approved specimen the main-row text reads 1px lower than the
+   delayed reveal row. Move only main-row ink, never its 20px pill box.
+   No color-specific selectors and no changes to Gallery or shared CSS. */
+.lab-master-beatcard-variant .lab-beat-tile__tags .lab-beat-tile__tag .lab-beat-pill__label {
+  position: relative;
+  top: -1px;
+}
