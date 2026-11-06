@@ -1,33 +1,30 @@
-# Design System — BeatGaler
+# BeatGaler — Design System incremental
 
-> Guía viva de identidad y experiencia, no cronograma ni plan de ejecución. Estado: **dirección inicial de diseño**, sujeta a prototipos y aprobación visual.
+**Dirección aprobada:** MASTER es un taller minimalista de componentes reales con navegación lateral redimensionable, reglas primero y componentes después. Su contrato de interfaz y crecimiento está en **[MASTER.md](MASTER.md)**. No implementar dashboard, inspector, catálogo inventado, editor global ni simuladores Fluid/Tablet/Phone.
 
-## Identidad acordada
+## Fuente de verdad
 
-**Una sola marca, dos intensidades:**
+1. **Decisión del propietario:** define el siguiente componente a incorporar y su apariencia; se trabaja **uno por uno**.
+2. **Código de producción:** `src/` y el commit publicado son la fuente del componente original que se quiere replicar. No copiar solo su apariencia aproximada si se puede utilizar el código y sus assets reales.
+3. **Implementación en [`DESIGN/`](../../DESIGN/):** es la fuente de lo que efectivamente existe en la demo; la documentación describe el código y no crea obligaciones imaginarias.
+4. **Skills de `.agents/skills/`:** leer las relevantes antes de cambiar diseño, interacción, movimiento o responsividad. Orientan la calidad, sin imponer una arquitectura visual no autorizada.
+5. **[UI Collective — transcripción original](UI-COLLECTIVE-TRANSCRIPT-ORIGINAL.txt):** referencia metodológica sobre variables, colecciones, escalas, componentes, estados y variantes. Se consulta, sin implementar su estructura completa antes de necesitarla.
+6. `DESIGN.md` documenta lo existente; `ARCHITECTURE.md` explica la implementación; `REFERENCES.md` contiene referencias visuales; las notas del transcript son un resumen no normativo.
 
-- **Aplicación / Galería:** elegante, tranquila, rápida, precisa y predecible. Aprender de la claridad y el oficio de interfaces Apple, sin copiar la identidad de Apple.
-- **Landing:** artística, inmersiva y más atrevida; portadas y música como protagonistas, movimiento espacial deliberado. Compartir tipografía, colores, componentes y tono con la aplicación.
-- **Principio:** las portadas proporcionan la personalidad; la interfaz no compite con ellas.
+## Estado actual
 
-## Alcance de la exploración actual
+**MASTER:** ubicado en `DESIGN/MASTER/`, sidebar colapsable con **Reglas → Márgenes** y **Componentes → Playbar, Toolbar**. El área principal centra solo la muestra seleccionada, sin textos explicativos. Componentes en revisión: **Playbar** y **Toolbar**. El componente vive en `DESIGN/MASTER/Player.tsx`, basado en `src/components/Player.tsx` de producción `release/0.9.0-beta.2`, con sus iconos PNG originales y barra vertical de volumen. El adaptador ficticio usa portadas locales y botones que modifican estado de prueba, no audio.
 
-Solo **dos pantallas ficticias**: (1) Landing pública y (2) Galería / biblioteca. Usar datos y carátulas demostrativas autorizadas. Los prototipos no deben necesitar login, Telegram, MASTER, INDEX, Cloud, PostgreSQL, billing ni servicios reales. Un botón del prototipo puede cambiar de estado o navegar entre mocks, pero nunca ejecutar una acción real: debe ser evidente que es un demo.
+**Landing y Gallery:** están organizadas en `DESIGN/LANDING/` y `DESIGN/GALLERY/`; permanecen como prototipos independientes, con la órbita de portadas y la galería ficticia anteriores. El reproductor viejo de Gallery sigue siendo una simulación distinta; **la Playbar de MASTER** es la que estamos revisando con código real.
 
-La exploración debe correr **aislada de la aplicación y de producción**. No sustituir el frontend productivo, no editar un flujo real por conveniencia y no publicar en beatgaler.com sin decisión separada.
+**[PENDIENTE]:** aprobación visual y de comportamiento de Playbar y Toolbar, revisión manual en móvil/teclado y futuros componentes solicitados expresamente. No asumir que lo no añadido está aprobado o diseñado.
 
-## Documentos
+## Regla para el siguiente cambio
 
-- [DESIGN.md](DESIGN.md) — lenguaje visual, reglas iniciales, interacción, accesibilidad y límites de los mocks.
-- [REFERENCES.md](REFERENCES.md) — análisis consultados, procedencia, licencias y selección razonada.
+Primero estudiar el componente real, luego traerlo al laboratorio sin dependencias de cuentas, API o Cloud, probar sus estados reales y documentar solo lo verificado. Crear nuevas categorías o controles únicamente cuando el trabajo concreto los necesite.
 
-## Método de trabajo
+**Seguridad:** laboratorio local, sin llamadas de red, cuentas, datos privados ni audio. No modificar `src/`, `main` ni producción. No publicar carátulas de terceros sin revisar derechos.
 
-1. Consultar este directorio y el código real antes de decidir un cambio de diseño.
-2. Crear variantes **interactivas** de un componente o pantalla, compararlas en escritorio y móvil y dejar que el propietario elija.
-3. Convertir solo lo aprobado en tokens y componentes reutilizables; documentar desviaciones intencionales.
-4. Validar con contenido largo, biblioteca vacía, carga, errores, teclado, tacto, contraste y movimiento reducido antes de llevarlo al producto.
+## Ubicación y ejecución
 
-**Una sola fuente de verdad por etapa:** mientras experimentamos, este DESIGN.md expresa la dirección propuesta; los estilos y componentes que ya usa la aplicación son la realidad de `main`. Después de aprobar una decisión, sincronizar la documentación con su implementación efectiva, sin proclamar aplicado lo que solo existe en un mock.
-
-El objetivo es que BeatGaler se sienta coherente, simple y distinguible; no coleccionar guías externas ni mantener cientos de tareas.
+La app experimental, sus vistas y recursos viven únicamente en **[`DESIGN/`](../../DESIGN/)**. Ver [`DESIGN/README.md`](../../DESIGN/README.md) para iniciar el servidor. `BLUEPRINT/DESIGN-SYSTEM/` contiene decisiones, inventarios, metodología y referencias, no otra aplicación.

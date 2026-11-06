@@ -1,0 +1,116 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { compactTileTags } from "./shared/beatCardTags.ts";
+
+test("BeatCard tags sort alphabetically and use every available label slot", () => {
+  const short = compactTileTags(["Z", "A", "C"], {}, 160);
+  assert.deepEqual(short.visible, ["A", "C", "Z"]);
+  assert.deepEqual(short.hidden, []);
+  assert.equal(short.unrepresented, 0);
+  const labels = ["Ambient", "Cinematic", "Piano", "Sad"];
+  const wide = compactTileTags(labels, {}, 160);
+  const narrow = compactTileTags(labels, {}, 130);
+  assert.ok(wide.visible.length >= narrow.visible.length);
+  assert.equal(wide.visible.length + wide.hidden.length, labels.length);
+});
+
+test("one dot per distinct color; +N counts only redundant or colorless hidden tags", () => {
+  const long = ["LongAlphaTagExample", "LongBetaTagExample", "LongGammaTagExample", "LongDeltaTagExample"];
+  const colors = Object.fromEntries(long.map((tag, index) => [tag, index < 2 ? "#888888" : "#ff0000"]));
+  const packed = compactTileTags(long, colors, 36);
+  assert.deepEqual(packed.visible, []);
+  assert.deepEqual(packed.dots, ["#888888", "#ff0000"]);
+  assert.equal(packed.unrepresented, 2);
+  const noColors = compactTileTags(long, {}, 36);
+  assert.deepEqual(noColors.dots, []);
+  assert.equal(noColors.unrepresented, 4);
+});
+
+test("the BeatCard visibly prints +N without the old literal dollar sign", () => {
+  const source = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+  assert.match(source, />\+\{compact\.unrepresented\}<\/span>/);
+  assert.doesNotMatch(source, />\+\$\{compact\.unrepresented\}/);
+});
+
+test("the preview is delegated and waits 800ms instead of opening on every card hover", () => {
+  const source = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
+  const gallery = readFileSync(new URL("./GALLERY/GalleryPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /setTimeout\(\(\) =>/);
+  assert.match(source, /}, 800\)/);
+  assert.match(gallery, /onPointerOver=\{tagPeek\.onPointerOver\}/);
+  assert.doesNotMatch(gallery, /position:"fixed",bottom:110,right:24/);
+});
+
+
+test("single approved BeatCard uses Web's real PNG and four playing bars", () => {
+ const source = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const master = readFileSync(new URL("./MASTER/MasterPage.tsx", import.meta.url), "utf8");
+ assert.match(source, /src\/assets\/player-icons\/play\.fill\.png/);
+ assert.match(css, /width:26px;height:26px/);
+ assert.match(css, /transition:opacity \.15s/);
+ assert.match(source, /WebPlayingBars/);
+ assert.match(master, /BeatCardSpecimen/);
+ assert.doesNotMatch(master, /BeatCard · 3 ideas/);
+ assert.doesNotMatch(css, /lab-tag-peek--cover-overlay|lab-tag-peek--edge-rail/);
+});
+
+
+test("Play hover only activates when pointer is on artwork, not on tags", () => {
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ assert.match(css, /\.lab-beat-tile--v2 \.lab-beat-tile__cover:hover \.lab-beat-tile__play\{opacity:1\}/);
+ assert.doesNotMatch(css, /\.lab-beat-tile--v2:hover \.lab-beat-tile__play/);
+});
+
+test("MASTER uses a three-star specimen and both pill rows share a one-pixel-taller color tint", () => {
+ const master = readFileSync(new URL("./MASTER/BeatCardSpecimen.tsx", import.meta.url), "utf8");
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const tile = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+ const peek = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
+ assert.match(master, /DEMO_BEATS\[0\], stars: 3/);
+ assert.match(css, /\.lab-beat-tile--v2 \.lab-beat-tile__tag,\.lab-tag-peek__tag\{/);
+ assert.match(css, /box-sizing:border-box;height:20px;padding:0 4px/);
+ assert.match(css, /background:color-mix\(in srgb,var\(--lab-beat-pill-color/);
+ assert.match(css, /border-color:color-mix\(in srgb,var\(--lab-beat-pill-color/);
+ assert.match(tile, /"--lab-beat-pill-color": tagColors\[tag\]/);
+ assert.match(peek, /"--lab-beat-pill-color": peek\.colors\[tag\]/);
+});
+
+
+test("neutral and colored tag pills share an identical visual baseline", () => {
+ const helper = readFileSync(new URL("./shared/beatCardTags.ts", import.meta.url), "utf8");
+ const css = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const tile = readFileSync(new URL("./shared/components.tsx", import.meta.url), "utf8");
+ const reveal = readFileSync(new URL("./shared/BeatTagPeek.tsx", import.meta.url), "utf8");
+ assert.ok(css.includes(".lab-beat-pill__label{display:block;line-height:1;transform:none}"));
+ assert.doesNotMatch(css, /lab-beat-pill--neutral/);
+ assert.doesNotMatch(tile, /isNeutralTagColor|lab-beat-pill--neutral/);
+ assert.doesNotMatch(reveal, /isNeutralTagColor|lab-beat-pill--neutral/);
+ assert.doesNotMatch(helper, /isNeutralTagColor/);
+ assert.match(css, /box-sizing:border-box;height:20px;padding:0 4px/);
+});
+
+test("BeatCard CSS has a single owner; Gallery and Landing have no legacy override selectors", () => {
+ const gallery = readFileSync(new URL("./GALLERY/gallery.css", import.meta.url), "utf8");
+ const landing = readFileSync(new URL("./LANDING/landing.css", import.meta.url), "utf8");
+ const shared = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const entry = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+ assert.doesNotMatch(gallery, /\.lab-beat-tile(?:__[-a-z]+)?/);
+ assert.doesNotMatch(landing, /\.lab-beat-tile(?:__[-a-z]+)?/);
+ assert.ok(shared.includes(".lab-beat-tile--v2 .lab-beat-tile__tag,.lab-tag-peek__tag{"));
+ assert.ok(shared.includes("color:var(--lab-beat-pill-color,#929292)"));
+ assert.ok(shared.includes("display:inline-flex;align-items:center;justify-content:center;flex:none"));
+ assert.ok(entry.indexOf('import "./GALLERY/gallery.css"') < entry.indexOf('import "./shared/beatCard.css"'));
+});
+
+
+test("MASTER optical correction stays scoped to its first tag row", () => {
+ const master = readFileSync(new URL("./MASTER/master.css", import.meta.url), "utf8");
+ const shared = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const gallery = readFileSync(new URL("./GALLERY/gallery.css", import.meta.url), "utf8");
+ assert.ok(master.includes(".lab-master-beatcard-variant .lab-beat-tile__tags .lab-beat-tile__tag .lab-beat-pill__label {"));
+ assert.match(master, /position: relative;\s*top: -1px;/);
+ assert.doesNotMatch(shared, /lab-master-beatcard-variant/);
+ assert.doesNotMatch(gallery, /lab-beat-pill__label/);
+});

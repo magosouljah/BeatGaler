@@ -1,0 +1,167 @@
+/* Studio 44 candidate is isolated from Toolbar V1/V2, CameraGlass and Gallery. */
+.studio-candidate {
+  width:min(600px,100%);margin:0 auto;display:grid;gap:14px;
+  font:13px/1.45 var(--lab-font);color:var(--lab-ink);
+}
+.studio-candidate-controls{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+}
+.studio-candidate-controls>span{font-size:11px;letter-spacing:.065em;opacity:.62}
+.studio-candidate-theme{
+  display:flex;gap:5px;padding:3px;border:1px solid #39383e;border-radius:999px;
+}
+.studio-candidate-theme button{
+  border:0;border-radius:999px;background:transparent;padding:7px 12px;color:#ccc;
+  cursor:pointer;font:500 12px var(--lab-font);
+}
+.studio-candidate-theme button[aria-pressed=true]{background:#eee;color:#17171a}
+.studio-candidate-stage{
+  position:relative;width:100%;height:600px;border-radius:16px;
+  overflow:visible;isolation:isolate;background:#26262b;--studio-ink:#fff;
+}
+.studio-candidate-stage.is-light{background:#e7e7e9;--studio-ink:#16161a}
+.studio-candidate-canvas{
+  position:absolute;inset:0;display:block;width:100%;height:100%;
+  border-radius:16px;pointer-events:none;
+}
+.studio-candidate-toolbar{
+  position:absolute;right:36px;top:207px;z-index:3;display:flex;align-items:center;
+  justify-content:flex-end;gap:10px;min-height:44px;color:var(--studio-ink);
+}
+.studio-candidate-search-slot{position:relative;z-index:5;width:44px;height:44px;flex:none}
+.studio-lens{position:relative;width:44px;height:44px;flex:none;border-radius:999px}
+.studio-search{position:absolute;right:0;top:0;z-index:5;overflow:visible}
+.studio-lens>button{
+  border:0;background:transparent;padding:0;color:inherit;cursor:pointer;
+  display:grid;place-items:center;width:100%;height:100%;border-radius:999px;
+  touch-action:manipulation;-webkit-tap-highlight-color:transparent;position:relative;z-index:2;
+}
+.studio-lens svg{display:block;width:19px;height:19px}
+.studio-lens button:focus-visible{outline:2px solid currentColor;outline-offset:4px}
+.studio-select{width:78px}
+.studio-select button{font:600 12px var(--lab-font)}
+.studio-select-label,.studio-select-x{
+  position:absolute;inset:0;display:grid;place-items:center;
+  transition:opacity var(--lab-fast) ease,transform var(--lab-normal) var(--lab-ease);
+  pointer-events:none;
+}
+.studio-select-x{opacity:0;transform:scale(.84)}
+.studio-select.is-selecting .studio-select-label{opacity:0;transform:scale(.84)}
+.studio-select.is-selecting .studio-select-x{opacity:1;transform:none}
+.studio-search input{
+  position:absolute;top:0;left:16px;width:calc(100% - 72px);height:44px;
+  background:transparent;color:inherit;border:0;outline:0;padding:0;min-width:0;
+  font:500 13px var(--lab-font);opacity:0;pointer-events:none;
+  transition:opacity var(--lab-fast) ease;
+}
+.studio-search.is-open input{opacity:1;pointer-events:auto}
+.studio-search input::placeholder{color:color-mix(in srgb,var(--studio-ink) 55%,transparent)}
+/* The laboratory's generic input focus styles must not draw a rectangle in a glass pill. */
+.lab-root .studio-candidate .studio-search input:focus,
+.lab-root .studio-candidate .studio-search input:focus-visible{
+  outline:none;outline-offset:0;box-shadow:none;border-color:transparent;
+}
+
+.studio-search>button{position:absolute;right:0;top:0;width:44px;height:44px}
+/* Menu material/spacing/hover/animation are imported intact from Toolbar V2. */
+.studio-candidate-toolbar .lab-toolbar-v2-menu-item{
+  color:inherit;cursor:pointer;
+}
+.studio-candidate-toolbar .lab-toolbar-v2-popover{
+  z-index:20;
+  /* Keep V2 width, padding, 23px corners, typography and exact anchor.
+     No CSS tint, second blur material, or open/close animation. */
+  background:transparent;
+  border-color:transparent;
+  box-shadow:none;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+
+/* Studio popovers are instantaneous in both directions. V2's source
+   component keeps its existing transitions; only this sample overrides them.
+   Use higher specificity than .lab-toolbar-v2-popover.is-open even when
+   toolbar-v2.css is loaded after the candidate's local stylesheet. */
+.studio-candidate-stage .studio-candidate-toolbar .lab-toolbar-v2-popover,
+.studio-candidate-stage .studio-candidate-toolbar .lab-toolbar-v2-popover.is-open{
+  transition:none;
+  transition-delay:0s;
+  animation:none;
+  transform:none;
+  transform-origin:top right;
+}
+.studio-candidate-stage[data-glass-engine=fallback] .lab-toolbar-v2-popover{
+  background:rgba(28,28,32,.66);
+  border-color:rgba(255,255,255,.22);
+  box-shadow:inset 0 1px rgba(255,255,255,.20),0 20px 55px rgba(0,0,0,.35);
+  backdrop-filter:blur(30px) saturate(1.45);
+  -webkit-backdrop-filter:blur(30px) saturate(1.45);
+}
+.studio-candidate-hint{
+  max-width:720px;margin:0 auto;text-align:center;
+  color:var(--lab-secondary);font-size:12px;
+}
+.studio-candidate-error,.studio-candidate-message{
+  position:absolute;bottom:10px;left:12px;right:12px;
+  font-size:11px;color:#ff9ea4;pointer-events:none;
+}
+.studio-candidate-message{color:var(--studio-ink)}
+.studio-candidate-stage[data-glass-engine=fallback] .studio-lens{
+  background:#ffffff20;border:1px solid #ffffff30;
+}
+@media(max-width:600px){
+  .studio-candidate-stage{height:600px}
+  .studio-candidate-toolbar{right:15px;top:207px;gap:8px}
+  .studio-candidate-search-slot{z-index:6}
+  .studio-candidate-toolbar:has(.studio-search.is-open)>.studio-lens{opacity:.2;pointer-events:none}
+  .studio-search input{font-size:16px}
+}
+@media(prefers-reduced-motion:reduce){
+  .studio-select-label,.studio-select-x,.studio-search input{transition:none}
+}
+
+
+/* Gallery uses a transparent compositor ONLY outside the lenses.
+   Keep the approved 600px optical viewport and position it relative to
+   the toolbar row so the tag bar can move it without shader changes. */
+.studio-candidate.is-gallery {
+  position: absolute; top: -20px; right: 0; z-index: 3;
+  width: min(600px, calc(100vw - 32px)); height: 600px;
+  margin: 0; display: block; pointer-events: none;
+}
+.studio-candidate.is-gallery .studio-candidate-controls,
+.studio-candidate.is-gallery .studio-candidate-hint { display: none; }
+.studio-candidate.is-gallery .studio-candidate-stage {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  margin: 0; border: 0; border-radius: 0;
+  background: transparent; pointer-events: none;
+}
+.studio-candidate.is-gallery .studio-candidate-canvas {
+  border-radius: 0; background: transparent; pointer-events: none;
+}
+.studio-candidate.is-gallery .studio-candidate-toolbar {
+  top: 20px; right: 0; pointer-events: auto;
+}
+.studio-candidate.is-gallery .studio-candidate-error,
+.studio-candidate.is-gallery .studio-candidate-message { display: none; }
+@media (max-width: 750px) {
+  .studio-candidate.is-gallery { top: -16px; }
+  .studio-candidate.is-gallery .studio-candidate-toolbar {
+    top: 16px; right: 0; gap: 8px;
+  }
+}
+@media (max-width: 590px) {
+  .studio-candidate.is-gallery .studio-candidate-toolbar { flex-direction: row-reverse; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .studio-candidate.is-gallery .studio-lens { background: #29292dbb; }
+}
+
+
+
+/* Gallery ink stays white; material tint/shadow create the desired contrast.
+   No per-frame background detection or black-ink transitions. */
+.studio-candidate.is-gallery .studio-candidate-toolbar { color: #fff; --studio-ink: #fff; }
+.studio-candidate.is-gallery .studio-lens { color: #fff; }
+
