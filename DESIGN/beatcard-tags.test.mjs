@@ -103,3 +103,14 @@ test("BeatCard CSS has a single owner; Gallery and Landing have no legacy overri
  assert.ok(shared.includes("display:inline-flex;align-items:center;justify-content:center;flex:none"));
  assert.ok(entry.indexOf('import "./GALLERY/gallery.css"') < entry.indexOf('import "./shared/beatCard.css"'));
 });
+
+
+test("MASTER optical correction stays scoped to its first tag row", () => {
+ const master = readFileSync(new URL("./MASTER/master.css", import.meta.url), "utf8");
+ const shared = readFileSync(new URL("./shared/beatCard.css", import.meta.url), "utf8");
+ const gallery = readFileSync(new URL("./GALLERY/gallery.css", import.meta.url), "utf8");
+ assert.ok(master.includes(".lab-master-beatcard-variant .lab-beat-tile__tags .lab-beat-tile__tag .lab-beat-pill__label {"));
+ assert.match(master, /position: relative;\s*top: -1px;/);
+ assert.doesNotMatch(shared, /lab-master-beatcard-variant/);
+ assert.doesNotMatch(gallery, /lab-beat-pill__label/);
+});
