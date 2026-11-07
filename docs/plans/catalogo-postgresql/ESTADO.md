@@ -147,3 +147,7 @@ Se agregó el workflow acotado de **laboratorio PostgreSQL 16 efímero** en GitH
 ### G0 PostgreSQL Actions — primer run falló en lectura de locale
 
 Run `42416620409`, en LOCAL, PostgreSQL 16.15 inició y `pg_trgm` se instaló. Fallo exclusivo de SQL diagnóstico: `lc_collate` no es parámetro `current_setting` en PostgreSQL 16. La fuente correcta es `pg_database.datcollate/datctype`. Corrección hecha en workflow para nueva corrida, con marcador run verificado. **STOP-ENV sigue pendiente de run PASS.** Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).
+
+## G0 — descriptor PostgreSQL verificado en GitHub Actions (2026-11-07)
+
+Run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955), rama LOCAL SHA `758669a`, **PASS**: PostgreSQL **16.15**, UTF8, `datcollate/datctype=en_US.utf8`, `pg_trgm=1.6`, DB `beatgaler_catalog_g0_probe`, rol `catalog_g0_probe`, marker del run verificado; contenedores destruidos al finalizar. **STOP-ENV para descriptor G0 RESUELTO**, no equivale al arnés real T02. Las 68/68 pruebas T00 y 25/25 mutaciones también permanecen PASS. **T00 global/G0 NO APROBADOS por C12 STOP-DESIGN y restantes criterios formales**. T01 sigue bloqueada. Ver [G0-POSTGRES-VERIFIED-20261107.md](G0-POSTGRES-VERIFIED-20261107.md).

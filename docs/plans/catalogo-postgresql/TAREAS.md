@@ -349,3 +349,7 @@ El usuario comprobó 68/68 pruebas individuales y 25/25 casos de mutación Cloud
 ### Preparación concreta de G0 — PostgreSQL GitHub Actions y C12 IDE
 
 El probe aislado de solo entorno (`.github/workflows/catalog-g0-postgres-probe.yml`) se activa por cambios a su YAML en la rama LOCAL; no sustituye el arnés SQL de T02. `STOP-ENV` exige observar run PASS y descriptor concreto, no solo commit. La IDE puede cerrar C12 mediante [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md) sin ejecutar T01 o cambiar el producto. Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).
+
+### G0 entorno verificado en CI desechable
+
+G0-ENV descriptor `PASS` según run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955): PG16.15, UTF8, colación `en_US.utf8`, `pg_trgm` 1.6, DB/rol/marker del contenedor efímero confirmados. [Evidencia detallada](G0-POSTGRES-VERIFIED-20261107.md). El arnés T02 (roles limitados, rechazo de URL ajena, cleanup/verificación de DB por run, integraciones) **no existe todavía**. Falta cierre C12, luego dictamen formal T00/G0 y autorización antes de T01.

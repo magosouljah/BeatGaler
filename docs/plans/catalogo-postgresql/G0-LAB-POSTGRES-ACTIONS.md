@@ -24,3 +24,7 @@ Workflow **preparado**, ejecución real e identidad de DB **a confirmar** leyend
 ## Primera ejecución real G0 — run 42416620409
 
 El workflow se activó por `push` y terminó **FAIL** por un error del diagnóstico `ERROR: unrecognized configuration parameter "lc_collate"`. Los logs confirman contenedor PostgreSQL **16.15**, DB/rol esperados, guard previo PASS, `CREATE SCHEMA`, `CREATE TABLE`, `INSERT 0 1`, y `CREATE EXTENSION pg_trgm` PASS. Se corrigió la lectura con `pg_database.datcollate/datctype` y se añadió verificación exacta del run marker. [Ejecución fallida](https://github.com/magosouljah/BeatGaler/actions/runs/42416620409). Sin run posterior PASS, STOP-ENV permanece abierto.
+
+## Segunda ejecución real G0 — PASS
+
+El run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955) terminó **completed/success** en el SHA `758669a4ca0df1f0b3f5cce6abef703e3ab10047`. `G0_PROBE_PASS`, `G0_RUN_MARKER_VERIFIED`, `pg_trgm` 1.6 instalado, PostgreSQL 16.15, UTF8, collation/ctype `en_US.utf8`; todos los pasos del workflow PASS. `STOP-ENV` del descriptor G0 queda **resuelto**; T02 debe implementar el arnés SQL aislado real. Ver [G0-POSTGRES-VERIFIED-20261107.md](G0-POSTGRES-VERIFIED-20261107.md).

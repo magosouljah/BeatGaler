@@ -145,3 +145,7 @@ Se creó el workflow de `push` sobre LOCAL, archivo `.github/workflows/catalog-g
 ## E15. Primer run de PostgreSQL G0 — fallo de consulta de locale
 
 <https://github.com/magosouljah/BeatGaler/actions/runs/42416620409>. Job `postgres-g0-probe`: inicialización de contenedores PASS, guard de target PASS, `CREATE SCHEMA/TABLE/EXTENSION pg_trgm` PASS; servidor PostgreSQL 16.15 reportado. Falla en `current_setting('lc_collate')` porque no existe el parámetro; sustituido por `pg_database.datcollate/datctype` para siguiente run. No confundir con fallo de `pg_trgm` ni con descriptor completo validado. **Run FAIL; STOP-ENV abierto.**
+
+## E16. Entorno G0 PostgreSQL 16 efímero — PASS verificado
+
+[GitHub Actions 42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955), `completed/success`, job `postgres-g0-probe` PASS en todos los pasos. SQL: `G0_PROBE_PASS`, PG 16.15 Debian, `UTF8`, `en_US.utf8` collation y ctype por catálogo, `pg_trgm` 1.6 instalado, DB/rol exclusivos y `G0_RUN_MARKER_VERIFIED` para run ID/commit. Contenedores y network eliminados por Actions. El fallo del run previo (E15) quedó resuelto. **Descriptor de laboratorio G0 PASS; aún no hay esquema de catálogo, pruebas funcionales PostgreSQL ni T02.** Ver [G0-POSTGRES-VERIFIED-20261107.md](G0-POSTGRES-VERIFIED-20261107.md).

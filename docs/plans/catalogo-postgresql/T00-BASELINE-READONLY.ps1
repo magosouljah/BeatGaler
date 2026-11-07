@@ -166,4 +166,4 @@ if (@($results | Where-Object { $_.ExitCode -ne 0 }).Count -gt 0) {
     Write-Host 'STOP-TEST: hay fallos/no ejecutados. No iniciar T01.' -ForegroundColor Yellow
     exit 1
 }
-Write-Host 'Tests whitelist sin fallos. T00 NO ES PASS: falta descriptor DB, C12 y pruebas/validaciones restantes.'
+Write-Host 'Tests whitelist sin fallos. G0-ENV descriptor CI ya verificado en run 42416790955; T00 global NO ES PASS: falta cerrar C12 y validar G0 formal.'
