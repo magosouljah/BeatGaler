@@ -332,12 +332,13 @@ export function enhanceLibraryDom(root: ParentNode = document): boolean {
   const scroll = root.querySelector<HTMLElement>('[data-library-scroll="true"]');
   if (!scroll) return false;
 
-  scroll.classList.add("bg-library-scroll");
   scroll.setAttribute("role", "main");
   scroll.setAttribute("aria-label", "Beat library");
 
   const shell = scroll.parentElement;
   if (!shell) return false;
+  if (shell.classList.contains("bg-product-gallery")) { enhanceMenus(); return true; }
+  scroll.classList.add("bg-library-scroll");
   shell.classList.add("bg-library-shell");
   const header = enhanceHeader(shell);
   enhanceSelectionToolbar(shell, header);

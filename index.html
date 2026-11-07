@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Galer</title>
+    <title>BeatGaler</title>
+    <meta name="description" content="Your beats, organized. Store, tag and play your music with BeatGaler." />
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body, #root { height: 100%; }
@@ -60,7 +61,8 @@
         const dismissWhenSignedOutGateRenders = () => {
           const readyAuth = root.querySelector('.bg-auth-shell:not([aria-busy="true"])');
           const legacyDesktopAuth = root.querySelector(".bg-account-gate");
-          if (!readyAuth && !legacyDesktopAuth) return false;
+          const readyPublicPage = root.querySelector('[data-public-page-ready="true"]');
+          if (!readyAuth && !legacyDesktopAuth && !readyPublicPage) return false;
           document.getElementById("beatgaler-startup-loader")?.remove();
           return true;
         };

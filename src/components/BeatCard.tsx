@@ -1,3 +1,6 @@
+import { platform } from "../platform";
+import { compactTileTags } from "../features/design/shared/beatCardTags";
+import "../features/design/shared/beatCard.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import type { Beat } from "../types";
@@ -192,7 +195,7 @@ export default function BeatCard({
   const [slotUpdating, setSlotUpdating] = useState(false);
   const [slotUpdateComplete, setSlotUpdateComplete] = useState(false);
   const slotUpdateCompleteTimerRef = useRef<number | null>(null);
-  const dotsRef = useRef<HTMLDivElement>(null);
+  const dotsRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const onBeatUpdateDrag = (event: Event) => {
@@ -333,6 +336,9 @@ export default function BeatCard({
     [beat.tags, tagFrequency],
   );
 
+  const web = platform.kind === "web";
+  const displayColors = Object.fromEntries(beat.tags.map(tag => [tag, tagColors[tag.trim().toLowerCase()]]));
+  const compact = web ? compactTileTags(beat.tags, displayColors) : null;
   const sortableTransform = CSS.Transform.toString(transform);
   const liftTransform = isDragging ? "scale(0.985)" : hovered && !selectMode ? "translateY(-2px)" : "translateY(0)";
   const composedTransform = sortableTransform ? `${sortableTransform} ${liftTransform}` : liftTransform;
@@ -370,6 +376,7 @@ export default function BeatCard({
   return (
     <div
       ref={setCardNodeRef}
+      className={web ? "lab-beat-tile lab-beat-tile--v2" : undefined}
       data-beat-slot-id={beat.id}
       data-beat-card-id={visible ? beat.id : undefined}
       onMouseEnter={() => setHovered(true)}
@@ -398,6 +405,9 @@ export default function BeatCard({
       {/* Checkbox — only visible in select mode */}
       {selectMode && (
         <div
+          role={web ? "checkbox" : undefined} tabIndex={web ? 0 : undefined}
+          aria-label={`Select ${beat.name}`} aria-checked={selected}
+          onKeyDown={web ? e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.currentTarget.click(); } } : undefined}
           onClick={e => { e.stopPropagation(); onToggleSelect(beat, e); }}
           style={{
             position: "absolute", top: 6, left: 6, zIndex: 10,
@@ -423,10 +433,14 @@ export default function BeatCard({
         ref={setActivatorNodeRef}
         {...(dragEnabled && interactive ? attributes : {})}
         {...(dragEnabled && interactive ? listeners : {})}
+        role={web ? "button" : undefined}
+        tabIndex={web ? 0 : undefined}
+        aria-label={web ? `${playing ? "Pause" : "Play"} ${beat.name}` : undefined}
+        onKeyDown={web ? e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } : undefined}
         aria-disabled={playbackBlocked || !playbackInteractive}
         style={{
           position: "relative", cursor: playbackBlocked || !playbackInteractive ? "default" : (dragEnabled && interactive ? "grab" : "pointer"),
-          touchAction: "none",
+          touchAction: web ? "pan-y" : "none",
           opacity: selectMode && selected ? 0.7 : 1,
           transition: "opacity 0.15s, box-shadow 0.15s",
           // Slight ring when selected, dashed ring while dragging an image over it
@@ -459,7 +473,7 @@ export default function BeatCard({
       >
         <div style={{ borderRadius: 10, overflow: "hidden", position: "relative", display: "inline-block",
                       boxShadow: showIncompleteWarning ? "0 0 0 4px rgba(245,158,11,0.28)" : undefined }}>
-          <Artwork beat={beat} size={160} playing={playing} />
+          <Artwork beat={beat} size={160} playing={playing} gallery={web} />
           {(cloudBusy || visualUploadComplete || offlineBusy) && (
             <div
               aria-label={offlineBusy ? "Downloading beat for Offline mode" : cloudBusy ? "Updating beat in Galer Cloud" : "Update complete"}
@@ -649,8 +663,24 @@ export default function BeatCard({
         )}
       </div>
 
-      {/* Info */}
-      <div style={{ marginTop: 9 }}>
+      {/* Approved DESIGN metadata; all actions still use the real card handlers. */}
+      {web && compact ? <div className="lab-beat-tile__meta">
+        <div className="lab-beat-tile__heading">
+          <button type="button" className="lab-beat-tile__title bg-beat-detail" title={beat.name} onClick={e => { e.stopPropagation(); if (interactive) onDetail(beat); }}>{beat.name}</button>
+          <button type="button" ref={node => { dotsRef.current = node; }} className="lab-beat-tile__more" aria-label={`More options for ${beat.name}`} disabled={!interactive} onClick={openMenu}>···</button>
+        </div>
+        <div className="lab-beat-tile__detail-row">
+          <span className="lab-beat-tile__stars" aria-label={`${beat.rating} out of 5 stars`}>{[1,2,3,4,5].map(i => <span key={i} className={i <= beat.rating ? "is-filled" : ""}>★</span>)}</span>
+          <span className="lab-beat-tile__details" title={`${beat.bpm} BPM · ${beat.key}`}>{beat.bpm ? `${beat.bpm} BPM` : "—"} · {beat.key.replace(/ minor$/, "m").replace(/ major$/, "") || "—"}</span>
+        </div>
+        <div className="lab-beat-tile__tags" data-beat-tag-trigger data-hidden-tags={JSON.stringify(compact.hidden)}
+          data-hidden-colors={JSON.stringify(displayColors)} tabIndex={compact.hidden.length ? 0 : undefined}
+          aria-label={compact.hidden.length ? `Additional tags: ${compact.hidden.join(", ")}` : undefined}>
+          {compact.visible.map(tag => <span key={tag} className="lab-beat-tile__tag" style={{"--lab-beat-pill-color": displayColors[tag]} as React.CSSProperties}><span className="lab-beat-pill__label">{tag}</span></span>)}
+          {compact.dots.map(color => <span key={color} className="lab-beat-tile__color-dot" style={{backgroundColor:color}} />)}
+          {compact.unrepresented > 0 && <span className="lab-beat-tile__extra">+{compact.unrepresented}</span>}
+        </div>
+      </div> : <div style={{ marginTop: 9 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div
             onClick={e => { if (!selectMode) { e.stopPropagation(); onDetail(beat); } }}
@@ -675,7 +705,7 @@ export default function BeatCard({
             </span>
           )}
           {!selectMode && (
-            <div ref={dotsRef} onClick={openMenu}
+            <div ref={node => { dotsRef.current = node; }} onClick={openMenu}
               style={{ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 4, cursor: "pointer", color: "#555", fontSize: 15, letterSpacing: 2, opacity: hovered || menu ? 1 : 0, transition: "opacity 0.15s", background: menu ? "#2a2a2a" : "transparent", flexShrink: 0 }}>
               ···
             </div>
@@ -728,7 +758,7 @@ export default function BeatCard({
           </span>
           {playing && <PulsingBars color="#f59e0b" />}
         </div>
-      </div>
+      </div>}
 
       {menu && selectMode && selected && selectedCount > 1 ? (
         <BulkContextMenu

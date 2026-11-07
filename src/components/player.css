@@ -1,0 +1,49 @@
+.bg-playbar-frame {
+  --playbar-fast: 120ms;
+  --playbar-normal: 180ms;
+  --playbar-ease: cubic-bezier(.2, .7, .2, 1);
+  position: fixed; left: 50%; bottom: 24px; z-index: 90;
+  transform: translateX(-50%);
+  width: min(1100px, calc(100vw - 24px));
+}
+.bg-playbar { box-sizing: border-box; }
+@media (max-width: 590px) {
+  .bg-playbar-frame { width: calc(100vw - 12px); bottom: 34px; }
+}
+.bg-playbar-metadata-row { transform: translate3d(0, -4px, 0); }
+.bg-playbar-cover-slot {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.bg-playbar-cover-slot > div {
+  transform-origin: center center;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition: transform var(--playbar-normal) var(--playbar-ease);
+}
+.bg-playbar-cover-slot.is-condensed > div {
+  /* The 36px image ends above the track; no wrapper-height or padding jump. */
+  transform: translate3d(0, -4px, 0) scale(.75);
+}
+/*
+ * The cover keeps a 48px layout slot but visually shrinks by 6px on each side.
+ * Shift the metadata 6px left with exactly the SAME timing/easing as the cover:
+ * cover.right  label.left stays 12px throughout the animation, not only at rest.
+ * Keep the "More" control in place; only the reading content follows the cover.
+ */
+.bg-playbar-text-content {
+  transform: translate3d(0, 0, 0);
+  transition: transform var(--playbar-normal) var(--playbar-ease);
+}
+.bg-playbar-text-content.is-condensed {
+  transform: translate3d(-6px, 0, 0);
+}
+/* Extreme narrow preview: keep transport, artwork, volume and scrubber reachable. */
+.bg-playbar[data-layout="micro"] .bg-playbar-optional { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-playbar-cover-slot > div, .bg-playbar-text-content { transition: none; }
+}
+

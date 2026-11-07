@@ -8,12 +8,12 @@ import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 const API_KEY = "beatgaler:cloud-api:v1";
 const SAME_ORIGIN_API = `${window.location.origin}/beatgaler-api`;
 
-async function renderGate() {
+async function renderGate(props: Partial<React.ComponentProps<typeof AuthExperienceGate>> = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(<AuthExperienceGate><div data-testid="app">Authenticated application</div></AuthExperienceGate>);
+    root.render(<AuthExperienceGate {...props}><div data-testid="app">Authenticated application</div></AuthExperienceGate>);
     await Promise.resolve();
   });
   return { host, root };
@@ -52,6 +52,15 @@ describe("F2 11.2 complete Auth UI", () => {
 
     await act(async () => root.unmount());
     host.remove();
+  });
+
+  it("opens the Landing signup destination directly without exposing the private application", async () => {
+    const onAuthenticated = vi.fn();
+    const { host, root } = await renderGate({initialPhase: "register", onAuthenticated});
+    expect(host.querySelector("#beatgaler-auth-title")?.textContent).toBe("Create your account");
+    expect(host.querySelector('[data-testid="app"]')).toBeNull();
+    expect(onAuthenticated).not.toHaveBeenCalled();
+    await act(async () => root.unmount()); host.remove();
   });
 
   it("moves a pending signup to the six digit OTP form", async () => {
@@ -165,6 +174,7 @@ describe("F2 11.2 complete Auth UI", () => {
   });
 
   it("returns the Web auth gate to sign-in when the current account logs out", async () => {
+    const onAuthenticated = vi.fn();
     localStorage.setItem("beatgaler:web-session-present:v1", "1");
     sessionStorage.setItem("beatgaler:web-csrf:v1", "csrf-before-logout");
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -183,13 +193,14 @@ describe("F2 11.2 complete Auth UI", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { host, root } = await renderGate();
+    const { host, root } = await renderGate({onAuthenticated});
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(host.querySelector('[data-testid="app"]')?.textContent).toBe("Authenticated application");
+    expect(onAuthenticated).toHaveBeenCalledOnce();
 
     localStorage.removeItem("beatgaler:web-session-present:v1");
     sessionStorage.removeItem("beatgaler:web-csrf:v1");
