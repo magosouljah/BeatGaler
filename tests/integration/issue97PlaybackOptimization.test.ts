@@ -82,19 +82,25 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(coordinator).toContain('playTrace("INDEX_WAIT_DIRECT_READY"');
   });
 
-  it("starts Direct from remembered-session OPEN even when the local routing cache is empty", () => {
+  it("dispatches remembered Direct on authenticated Gallery mount, route-free and behind the CSRF guard", () => {
     const main = source("src/main.tsx");
+    const experience = source("src/app/WebExperience.tsx");
+    const galleryEntry = source("src/app/WebGalleryEntry.tsx");
+    const workspace = source("src/app/WebGalleryWorkspace.tsx");
+    const authGate = source("src/features/auth/AuthExperienceGate.tsx");
     const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
 
-    expect(main).toContain('import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";');
-    const startupDispatch = main.indexOf("preconnectRememberedWebDirect();");
-    const reactRender = main.indexOf("ReactDOM.createRoot(", startupDispatch);
-    expect(startupDispatch).toBeGreaterThanOrEqual(0);
-    expect(reactRender).toBeGreaterThan(startupDispatch);
+    expect(main).not.toContain("preconnectRememberedWebDirect();");
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
+    expect(experience).toContain('path === "/" ? <LandingPage />');
+    expect(galleryEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
+    expect(authGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
+    expect(workspace).toContain("useEffect(() => { preconnectRememberedWebDirect(); }, []);");
 
     expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
+    expect(rememberedPreconnect).toContain("if (!hasRememberedWebSessionMarker()) return;");
+    expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
     const coordinatorAcquire = rememberedPreconnect.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
     const coordinatorStart = rememberedPreconnect.indexOf("const startup = coordinator.prepareConnection();", coordinatorAcquire);
     const dispatched = rememberedPreconnect.indexOf('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")', coordinatorStart);

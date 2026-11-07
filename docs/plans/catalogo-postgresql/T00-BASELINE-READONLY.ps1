@@ -105,6 +105,8 @@ try {
             'tests/component-dom/galleryTagPacking.test.ts',
             'tests/component-dom/libraryUxBridge.test.ts',
             'tests/component-dom/publicStartupLoader.test.ts',
+            'tests/component-dom/webRememberedDirectPreconnect.behavior.test.ts',
+            'tests/component-dom/webGalleryDirectAuthBoundary.test.tsx',
             'tests/integration/libraryViewSelectors.test.ts',
             '--environment', 'jsdom'
         )
