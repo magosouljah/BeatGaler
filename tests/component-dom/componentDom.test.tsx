@@ -188,7 +188,7 @@ describe("Player real DOM", () => {
       onPlayQueueIndex={() => undefined} canAddBeat onAddBeat={() => undefined}
       onDetail={() => undefined} onEdit={() => undefined} onDelete={() => undefined}
       onAddToQueue={() => undefined} />);
-    const bar = host.firstElementChild?.children[1]?.children[1]?.children[1] as HTMLDivElement;
+    const bar = host.querySelector<HTMLElement>('[data-testid="player-scrubber"]')!;
     expect(bar).not.toBeNull();
     vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({ left: 100, width: 200 } as DOMRect);
     const pointer = (type: string, clientX: number, buttons: number) => {
@@ -441,3 +441,4 @@ describe("Review Beat / Drawer real DOM", () => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
 });
+
