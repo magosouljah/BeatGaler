@@ -43,6 +43,9 @@ try {
 
     Write-Host "Rama: $branch"
     Write-Host "HEAD: $head"
+    $localMain = (& git rev-parse main).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'STOP-BASE: referencia local main no legible.' }
+    Write-Host "main local (solo referencia, NO base): $localMain"
     Write-Host 'Cambios de archivos desde 31861e6: solo documentación del catálogo.'
     Write-Host 'Git status (los no rastreados NO serán modificados):'
     & git status --short
@@ -89,6 +92,9 @@ try {
         'cloud-server/tests/postgres-migration-runner.test.cjs',
         'cloud-server/tests/direct-persistent-assignment-runtime.test.cjs'
     )
+    # Guards de código: AST + mutaciones exclusivamente en memoria.
+    Run-NodeCheck -Label 'Cloud source guard (AST sin servicios)' -Arguments @('scripts/regression-direct-manager-only.mjs')
+    Run-NodeCheck -Label 'Cloud mutation guard (in-memory)' -Arguments @('scripts/regression-direct-manager-only.test.mjs')
 
     $vitest = Join-Path $repo 'node_modules\vitest\vitest.mjs'
     if (Test-Path -LiteralPath $vitest -PathType Leaf) {
@@ -102,8 +108,11 @@ try {
             'tests/integration/libraryViewSelectors.test.ts',
             '--environment', 'jsdom'
         )
-        Run-NodeCheck -Label 'Issue 97 legacy (diagnóstico; puede fallar por bootstrap antiguo)' -Arguments @(
-            $vitest, 'run', 'tests/integration/issue97RuntimeWebFollowup.test.ts',
+        Run-NodeCheck -Label 'Tres suites legacy de bootstrap (diagnóstico; pueden fallar)' -Arguments @(
+            $vitest, 'run',
+            'tests/integration/issue97RuntimeWebFollowup.test.ts',
+            'tests/integration/issue97PlaybackOptimization.test.ts',
+            'tests/integration/appStartupBootstrapExtraction.test.ts',
             '--environment', 'jsdom'
         )
     } else {

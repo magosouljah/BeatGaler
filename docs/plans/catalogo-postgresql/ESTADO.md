@@ -109,3 +109,7 @@ Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md).
 - **Resultado T00:** `EN CURSO / NO PASS` por `STOP-ENV` (sin descriptor PostgreSQL aislado), `STOP-TEST` (sin resultados Windows/Direct/Playbar actuales), `STOP-DESIGN` (C12 sin aceptación y fixtures Unicode/offset). No se declara ningún test aprobado en esta ejecución. **T01 continúa BLOQUEADA**.
 - **Comprobación segura preparada:** [T00-BASELINE-READONLY.ps1](T00-BASELINE-READONLY.ps1); únicamente comandos Git y tests locales permitidos. Tras inspeccionar resultados, completar T00 con evidencia; no promover PASS por omisión.
 - **Expediente técnico:** [T00-REVISION-20261107.md](T00-REVISION-20261107.md).
+
+### Actualización CI histórico (T00)
+
+Logs examinados del run `42353075806`: PostgreSQL persistent assignment PASS histórico; TypeScript Direct 3 FAIL/188 PASS por tres asserts de bootstrap antiguo; Cloud guard FAIL por ancla literal de mutación. La clasificación es de **fallo de aserción observado**, no prueba de equivalencia funcional ni PASS actual. El runner T00 incluye las suites afectadas y el guard. `STOP-TEST` permanece abierto.
