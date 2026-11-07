@@ -1,0 +1,16 @@
+.studio-exact{width:min(780px,100%);display:grid;gap:14px;margin:auto;color:var(--lab-ink);font:13px/1.5 var(--lab-font)}
+.studio-exact-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.studio-exact-controls>span{font-size:11px;letter-spacing:.045em;color:var(--lab-secondary)}
+.studio-exact-options{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.studio-exact-options button{border:1px solid var(--lab-border);border-radius:999px;padding:7px 12px;background:var(--lab-raised);color:var(--lab-ink);font:500 12px var(--lab-font);cursor:pointer}
+.studio-exact-options button[aria-pressed=true]{background:var(--lab-primary);color:var(--lab-on-primary)}
+.studio-exact-color{display:inline-flex;align-items:center;gap:7px;color:var(--lab-ink);font-size:12px}
+.studio-exact-color input{width:30px;height:28px;padding:0;border:1px solid var(--lab-border);background:transparent;cursor:pointer}
+.studio-exact-color code{color:var(--lab-secondary);font-size:11px}
+.studio-exact-stage{position:relative;isolation:isolate;border-radius:16px;overflow:hidden;background:#26262b;width:min(600px,100%);aspect-ratio:1;height:auto;justify-self:center}
+.studio-exact-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+.studio-exact-icon{position:absolute;inset:0;margin:auto;width:44px;height:44px;display:grid;place-items:center;pointer-events:none;color:#fff}
+.studio-exact-icon.is-dark{color:#19191d}
+.studio-exact-icon svg{display:block;width:19px;height:19px}
+.studio-exact-error{position:absolute;bottom:5px;left:12px;color:#ffb1b1;font-size:12px}
+.studio-exact-note{margin:0 auto;max-width:620px;text-align:center;font-size:12px;color:var(--lab-secondary)}

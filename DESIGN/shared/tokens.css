@@ -1,0 +1,84 @@
+/* [LAB] Experimental CSS tokens; most neutrals mirror src/styles/design-foundations.css.
+   Canvas deliberately matches src/lib/proceduralBeatBackground.ts #0c0c0c instead of product #090909.\n   Scoped to the standalone lab HTML. Do not import this file into src/ or production. */
+:root {
+  color-scheme: dark;
+  --lab-canvas: #0c0c0c;
+  --lab-surface: #101010;
+  --lab-raised: #151515;
+  --lab-hover: #1c1c1c;
+  --lab-pressed: #222222;
+  --lab-ink: #f2f2f2;
+  --lab-secondary: #b0b0b0;
+  --lab-muted: #8b8b8b;
+  --lab-disabled: #666666;
+  --lab-hairline: #242424;
+  --lab-border: #343434;
+  --lab-border-strong: #4a4a4a;
+  --lab-focus: #f2f2f2;
+  --lab-on-primary: #101010;
+  --lab-primary: #ececec;
+  --lab-primary-hover: #ffffff;
+  /* [LAB] Preserve landing CTA color while sizing follows button tokens. */
+  --lab-primary-hero: #f5f5f5;
+  --lab-primary-hero-border: #f3f3f3;
+  --lab-error-bg: #2a1111;
+  --lab-error-border: #6d3030;
+  --lab-error-text: #ffb4b4;
+  --lab-success-bg: #10261a;
+  --lab-success-border: #2d6844;
+  --lab-success-text: #a8e6bd;
+  --lab-info-bg: #121d2b;
+  --lab-info-border: #304b6d;
+  --lab-info-text: #b9d6ff;
+  /* [LAB] Pure experiment; NOT an approved BeatGaler brand color. */
+  --lab-accent: #c8b7ff;
+
+  --lab-radius-sm: 8px;
+  --lab-radius-md: 12px;
+  --lab-radius-lg: 16px;
+  --lab-radius-artwork: 12px;
+  --lab-radius-pill: 999px;
+
+  --lab-space-1: 4px;
+  --lab-space-2: 8px;
+  --lab-space-3: 12px;
+  --lab-space-4: 16px;
+  --lab-space-5: 20px;
+  --lab-space-6: 24px;
+  --lab-space-7: 28px;
+  --lab-space-8: 32px;
+  --lab-space-10: 40px;
+  --lab-space-12: 48px;
+  --lab-space-16: 64px;
+  --lab-space-24: 96px;
+
+  /* [LAB] width is intrinsic; no arbitrary fixed CTA width */
+  --lab-button-sm-height: 44px;
+  --lab-button-sm-font: 13px;
+  --lab-button-sm-pad: 12px;
+  --lab-button-sm-gap: 8px;
+  --lab-button-md-height: 48px;
+  --lab-button-md-font: 14px;
+  --lab-button-md-pad: 16px;
+  --lab-button-md-gap: 8px;
+  --lab-button-lg-height: 56px;
+  --lab-button-lg-font: 16px;
+  --lab-button-lg-pad: 20px;
+  --lab-button-lg-gap: 12px;
+  --lab-button-hero-height: 64px;
+  --lab-button-hero-font: 18px;
+  --lab-button-hero-pad: 24px;
+  --lab-button-hero-gap: 12px;
+  --lab-button-hero-mobile-height: 56px;
+  --lab-button-hero-mobile-font: 16px;
+  --lab-button-hero-mobile-pad: 20px;
+  --lab-control: 44px;
+  --lab-control-compact: 36px;
+  --lab-shadow-card: 0 24px 80px rgba(0, 0, 0, .55);
+  --lab-shadow-dialog: 0 28px 96px rgba(0, 0, 0, .7);
+  --lab-fast: 120ms;
+  --lab-normal: 180ms;
+  --lab-slow: 260ms;
+  --lab-ease: cubic-bezier(.2, .7, .2, 1);
+  --lab-font: "SF Pro Text", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+}
