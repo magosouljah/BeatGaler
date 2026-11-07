@@ -141,3 +141,7 @@ Salida aportada por el usuario con HEAD `5b199161351a05c62df79870d563cd7aceb5572
 ## E14. Preparación de probe G0 PostgreSQL y entrega C12 a IDE
 
 Se creó el workflow de `push` sobre LOCAL, archivo `.github/workflows/catalog-g0-postgres-probe.yml`: PostgreSQL 16 digest fijado en job y service aislados, DB de prueba/rol explícitos, protección de identidad y consulta de colación, UTF8, `pg_trgm`; agrega descriptor en run summary. **No se declara que haya ejecutado ni que sea PASS sin leer resultados del run**. Sin `checkout`, AWS, Telegram, migraciones ni base real. Se agregó `G0-C12-IDE-MASTER-PROMPT-20261107.md` para el diseño C12. Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).
+
+## E15. Primer run de PostgreSQL G0 — fallo de consulta de locale
+
+<https://github.com/magosouljah/BeatGaler/actions/runs/42416620409>. Job `postgres-g0-probe`: inicialización de contenedores PASS, guard de target PASS, `CREATE SCHEMA/TABLE/EXTENSION pg_trgm` PASS; servidor PostgreSQL 16.15 reportado. Falla en `current_setting('lc_collate')` porque no existe el parámetro; sustituido por `pg_database.datcollate/datctype` para siguiente run. No confundir con fallo de `pg_trgm` ni con descriptor completo validado. **Run FAIL; STOP-ENV abierto.**

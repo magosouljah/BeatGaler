@@ -143,3 +143,7 @@ El usuario ejecutó el runner actualizado completo: **68/68 pruebas individuales
 ## Entorno G0 e IDE C12 preparados (2026-11-07)
 
 Se agregó el workflow acotado de **laboratorio PostgreSQL 16 efímero** en GitHub Actions, activable en LOCAL únicamente por cambios a su propio YAML. No contiene rutas de producción, checkout, SQL destructivo ni deploy. El primer push del workflow **puede disparar un run**; comprobar resultado antes de afirmar `STOP-ENV` resuelto. Se agregó [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md). La IDE de alta capacidad puede cerrar las decisiones C12 desde [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md), sin implementar. T00 global/G0 no PASS hasta evidencias y dictamen explícitos; T01 bloqueada.
+
+### G0 PostgreSQL Actions — primer run falló en lectura de locale
+
+Run `42416620409`, en LOCAL, PostgreSQL 16.15 inició y `pg_trgm` se instaló. Fallo exclusivo de SQL diagnóstico: `lc_collate` no es parámetro `current_setting` en PostgreSQL 16. La fuente correcta es `pg_database.datcollate/datctype`. Corrección hecha en workflow para nueva corrida, con marcador run verificado. **STOP-ENV sigue pendiente de run PASS.** Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).

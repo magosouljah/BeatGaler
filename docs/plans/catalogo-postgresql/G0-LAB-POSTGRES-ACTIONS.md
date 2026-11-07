@@ -20,3 +20,7 @@ Verificar Actions → “Catalog G0 - Disposable PostgreSQL 16 Probe (LOCAL)” 
 ## Estado
 
 Workflow **preparado**, ejecución real e identidad de DB **a confirmar** leyendo el run. El baseline T00 pasó; C12 se delega por el documento [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md). No autoriza T01.
+
+## Primera ejecución real G0 — run 42416620409
+
+El workflow se activó por `push` y terminó **FAIL** por un error del diagnóstico `ERROR: unrecognized configuration parameter "lc_collate"`. Los logs confirman contenedor PostgreSQL **16.15**, DB/rol esperados, guard previo PASS, `CREATE SCHEMA`, `CREATE TABLE`, `INSERT 0 1`, y `CREATE EXTENSION pg_trgm` PASS. Se corrigió la lectura con `pg_database.datcollate/datctype` y se añadió verificación exacta del run marker. [Ejecución fallida](https://github.com/magosouljah/BeatGaler/actions/runs/42416620409). Sin run posterior PASS, STOP-ENV permanece abierto.
