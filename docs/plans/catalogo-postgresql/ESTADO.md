@@ -129,3 +129,9 @@ Corrección limitada a cuatro tests existentes, un test DOM nuevo y el runner do
 ### Reparación del guard de alcance del runner — 2026-11-07
 
 El usuario actualizó LOCAL a `b5d23fc`; el runner T00 se detuvo en `STOP-BASE` antes de ejecutar tests porque la revisión original permitía exclusivamente `docs/plans/catalogo-postgresql/`, pero las pruebas T00 autorizadas habían cambiado cinco archivos `tests/`/`scripts/`. **No es fallo de app, Cloud ni PostgreSQL.** Se sustituyó por una allowlist exacta de esos cinco paths; continúa el bloqueo para `src/`, `cloud-server/`, migraciones, `DESIGN/`, UI y cualquier otro archivo inesperado. Nueva ejecución Windows todavía PENDIENTE; T00 sin PASS, T01 bloqueada.
+
+### Nuevo baseline Windows de T00 — 2026-11-07 (HEAD `259b077`)
+
+Ejecución real aportada por el usuario, script completado: E4 6/6 PASS; PostgreSQL fake 3/3 PASS; guard AST PASS; guard 25 mutaciones PASS; DOM 31/32 PASS con **1 FAIL** en la suite nueva `webGalleryDirectAuthBoundary.test.tsx:134`; tres suites legacy de bootstrap 27/27 PASS; TypeScript `--noEmit` PASS. Entorno Windows: Node 22.23.2/npm 10.9.8, **sin docker/podman/psql en PATH**. No se ejecutó ningún servicio externo.
+
+Único fallo observado: la expectativa de UI tras confirmar sesión se evalúa después de solo un `flushLazy()`; el comportamiento de carga diferida de React puede requerir más de un turno. Se preparó una prueba que espera de forma acotada la carga real y confirma que el mock de restauración sí fue invocado antes de resolverlo; no se modificó ningún módulo de aplicación. **No se afirma que la causa sea solo timing hasta repetir el test**. T00/ G0 NO PASS, STOP-TEST por validar; STOP-ENV/STOP-DESIGN continúan. T01 bloqueada.

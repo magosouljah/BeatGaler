@@ -81,6 +81,15 @@ async function flushLazy() {
   });
 }
 
+// React.lazy imports are not guaranteed to settle in a single event-loop turn.
+// Poll only after flushing React work; never replace the auth gate with a mock.
+async function expectAfterLazyMount(assertion: () => void): Promise<void> {
+  await vi.waitFor(async () => {
+    await flushLazy();
+    assertion();
+  }, { timeout: 3000, interval: 20 });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
@@ -112,7 +121,7 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     const pending = deferred<TestAccount | null>();
     mocks.restore.mockReturnValueOnce(pending.promise);
     await mountAt("/gallery");
-    await flushLazy();
+    await expectAfterLazyMount(() => expect(mocks.restore).toHaveBeenCalledTimes(1));
     expect(host?.querySelector("[data-test-gallery-app]")).toBeNull();
     expect(mocks.preconnect).not.toHaveBeenCalled();
 
@@ -126,13 +135,14 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     const pending = deferred<TestAccount | null>();
     mocks.restore.mockReturnValueOnce(pending.promise);
     await mountAt("/gallery");
-    await flushLazy();
+    await expectAfterLazyMount(() => expect(mocks.restore).toHaveBeenCalledTimes(1));
     expect(mocks.preconnect).not.toHaveBeenCalled();
 
     await act(async () => { pending.resolve(account("user-a")); await pending.promise; });
-    await flushLazy();
-    expect(host?.querySelector("[data-test-gallery-app]")).not.toBeNull();
-    expect(mocks.preconnect).toHaveBeenCalledTimes(1);
+    await expectAfterLazyMount(() => {
+      expect(host?.querySelector("[data-test-gallery-app]")).not.toBeNull();
+      expect(mocks.preconnect).toHaveBeenCalledTimes(1);
+    });
 
     await act(async () => {
       window.dispatchEvent(new Event("beatgaler:account-logged-out"));
@@ -144,8 +154,9 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     await act(async () => {
       window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: account("user-b") }));
     });
-    await flushLazy();
-    expect(host?.querySelector("[data-test-gallery-app]")).not.toBeNull();
-    expect(mocks.preconnect).toHaveBeenCalledTimes(2);
+    await expectAfterLazyMount(() => {
+      expect(host?.querySelector("[data-test-gallery-app]")).not.toBeNull();
+      expect(mocks.preconnect).toHaveBeenCalledTimes(2);
+    });
   });
 });

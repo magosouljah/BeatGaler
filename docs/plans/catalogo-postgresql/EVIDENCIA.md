@@ -129,3 +129,7 @@ Los tres fallos del arranque son los esperados por asserts de import/call en `sr
 ## E11. T00 — correcciones de tests (pendientes de ejecución)
 
 La revisión del código confirmó `AuthExperienceGate` y `WebGalleryWorkspace` como frontera actual. Se reescribieron tres asserts heredados de ubicación en `main.tsx`, se añadió suite de comportamiento real de mount con fakes, y se repararon 4 anclas del mutation guard Cloud que aún defiende 25 escenarios. Ver [T00-TEST-CORRECTIONS-20261107.md](T00-TEST-CORRECTIONS-20261107.md). Las 25 anclas ya coinciden estáticamente con la fuente; **no hay nuevo PASS de ejecución**. Referencia de imagen de PG16 obtenida del workflow versionado, no de un servidor local.
+
+## E12. T00 Windows tras correcciones (HEAD 259b077)
+
+El usuario ejecutó el runner: 6/6 E4, 3/3 PostgreSQL simulado, 31/32 DOM, 27/27 legacy bootstrap; guard AST PASS, 25/25 mutaciones PASS, TypeScript PASS. El único FAIL fue `webGalleryDirectAuthBoundary.test.tsx:134`: `data-test-gallery-app` todavía nulo inmediatamente tras resolver `restoreBeatGalerSession` y un turno `setTimeout(0)`. El log no muestra error de red, pero tampoco permite concluir que el módulo dinámico de Gallery haya terminado de cargar. El test ahora espera la renderización asíncrona con timeout y comprueba que `restore` se invoque antes de resolver. Se requiere nueva ejecución para confirmar. El equipo reportó Docker, Podman y psql NO DISPONIBLES en PATH; no es prueba de inexistencia de un servidor real fuera de PATH. Estado T00 NO PASS.
