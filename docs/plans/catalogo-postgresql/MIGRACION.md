@@ -152,6 +152,10 @@ Si falta cualquier dato: NO-GO con código STOP. No sustituir una prueba ausente
 ## Salvaguardas del piloto LOCAL (2026-11-07)
 
 <!-- BG-PG-LOCAL-BASELINE-20261107 -->
-La migraciÃ³n inicia en **LOCAL con PostgreSQL descartable de pruebas** y Telegram falso, nunca la base/credenciales/Master/Vaults de producciÃ³n. Conservar gates G0â€“G4 y su evidencia. No ejecutar migraciÃ³n destructiva automÃ¡tica al arrancar. El corte por biblioteca conserva `authority_epoch`, fencing de escritores legacy, snapshots, comparaciÃ³n Ã­ntegra, export actual para rollback y prohibiciÃ³n de reescribir INDEX desde clientes viejos. AÃ±adir pruebas de rutas `/`, `/login`, `/signup`, `/gallery`, Playbar, filtros/paginaciÃ³n y cuentas por gate; no reemplazar frontend real por el antiguo `main`. Si falla Direct o CI, bloquear promociÃ³n hasta clasificar el fallo.
+La migración inicia en **LOCAL con PostgreSQL descartable de pruebas** y Telegram falso, nunca la base/credenciales/Master/Vaults de producción. Conservar gates G0–G4 y su evidencia. No ejecutar migración destructiva automática al arrancar. El corte por biblioteca conserva `authority_epoch`, fencing de escritores legacy, snapshots, comparación íntegra, export actual para rollback y prohibición de reescribir INDEX desde clientes viejos. Añadir pruebas de rutas `/`, `/login`, `/signup`, `/gallery`, Playbar, filtros/paginación y cuentas por gate; no reemplazar frontend real por el antiguo `main`. Si falla Direct o CI, bloquear promoción hasta clasificar el fallo.
 
-Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 4â€“5.
+Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 4–5.
+
+### Límite de pruebas en G0 (2026-11-07)
+
+G0/T00 requieren identificar y aprobar un descriptor seguro de PostgreSQL aislado y reproducir tests base no destructivos. T02 implementará las guardas y solo entonces creará DBs efímeras para pruebas SQL. La frase «establecer DB» en el anexo no habilita acceso a `DATABASE_URL` heredada ni ejecución de `postgres-live.integration.cjs`. G2/G4 y autorizaciones productivas siguen sin aprobación. Ver [G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md).

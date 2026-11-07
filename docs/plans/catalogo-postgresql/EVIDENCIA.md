@@ -97,11 +97,15 @@ SHA y configuración realmente desplegados; versión/extensiones PostgreSQL; tam
 Estas incógnitas son entradas de puertas concretas en TAREAS/MIGRACION. No invalidan construir el esquema y pruebas aisladas; impiden certificar o ejecutar el corte real.
 
 
-## ActualizaciÃ³n de evidencia LOCAL (2026-11-07)
+## Actualización de evidencia LOCAL (2026-11-07)
 
 <!-- BG-PG-LOCAL-BASELINE-20261107 -->
-- `HEAD` LOCAL comprobado durante esta actualizaciÃ³n: `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`; rama: `local/landing-gallery-unificada`.
-- La base del anÃ¡lisis original era `7f2dc5823a4d2cd87333ee3b6833ae46e9029b3b`. La integraciÃ³n `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b` agrega 7 commits/59 archivos. `cloud-server/` conserva el Ã¡rbol `bcb488ae3802dfd2bbe8f3fe6245b314a152c189`, al igual que `src-tauri/` y `package*.json` frente a esa base.
+- `HEAD` LOCAL comprobado durante esta actualización: `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`; rama: `local/landing-gallery-unificada`.
+- La base del análisis original era `7f2dc5823a4d2cd87333ee3b6833ae46e9029b3b`. La integración `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b` agrega 7 commits/59 archivos. `cloud-server/` conserva el árbol `bcb488ae3802dfd2bbe8f3fe6245b314a152c189`, al igual que `src-tauri/` y `package*.json` frente a esa base.
 - Nuevo frontend a inventariar: `src/app/WebExperience.tsx`, `WebGalleryEntry.tsx`, `WebGalleryWorkspace.tsx`, `AppShell.tsx`, `src/features/design/GALLERY/GalleryChrome.tsx`, `src/features/library/librarySelectors.ts`, `WebLibraryPagination.tsx`, `src/components/BeatCard.tsx` y `Player.tsx`.
-- Evidencia de GitHub no equivale a inspecciÃ³n de archivos modificados sin commit. Revisar `git status` y `git diff 31861e6..HEAD` antes de revalidar. CI histÃ³rico #151: Web build PASS; Direct persistent gate FAIL (causa pendiente de clasificaciÃ³n). No afirmar que G0 pasa.
-- VÃ©ase [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md).
+- Evidencia de GitHub no equivale a inspección de archivos modificados sin commit. Revisar `git status` y `git diff 31861e6..HEAD` antes de revalidar. CI histórico #151: Web build PASS; Direct persistent gate FAIL (causa pendiente de clasificación). No afirmar que G0 pasa.
+- Véase [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md).
+
+## E7. Evidencia de auditoría G0 remota (2026-11-07)
+
+HEAD remoto inicial `edabd715664f9564346e95b8553b68b4ac411da9` de `local/landing-gallery-unificada`: un commit y siete archivos exclusivamente documentales sobre `31861e6`. Se verificaron los siete documentos, T00–T25, G0–G4 y contratos C1–C12. El usuario aportó estado limpio salvo dos archivos/carpetas sin seguimiento ajenos al commit. Los seis PASS de E4 son históricos: esta auditoría no ha ejecutado nuevos tests, CI, DB ni Telegram. El FAIL histórico de Direct en PR #151 sigue por clasificar. Véase [G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md).

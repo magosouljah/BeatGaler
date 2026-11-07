@@ -61,7 +61,11 @@ Se puede construir y probar con dobles antes de G2; no se puede abrir un piloto 
 > Ejecuta únicamente la tarea T__ del plan `docs/plans/catalogo-postgresql/`. Lee README, ESTADO, CONTRATO y la tarea completa. Verifica SHA, dependencias y alcance antes de editar. Las instrucciones de la conversación y AGENTS.md aplicables prevalecen. No cambies el contrato ni toques producción, AWS, Telegram real o datos reales salvo autorización expresa para esa tarea y ese entorno. Usa únicamente comandos existentes o los creados y verificados por la tarea. Si falta una premisa, aparece una condición STOP o una prueba falla por causa no demostrada, no improvises: registra código STOP, evidencia sin secretos, estado de archivos y próxima decisión; detente para revisión por una inteligencia de alta capacidad. No hagas commit, push ni despliegue salvo que se te haya pedido. Al cerrar, actualiza ESTADO con PASS/STOP, comandos y artefactos. No empieces la siguiente tarea.
 
 
-## ActualizaciÃ³n de base LOCAL (2026-11-07)
+## Actualización de base LOCAL (2026-11-07)
 
 <!-- BG-PG-LOCAL-BASELINE-20261107 -->
-Este plan se ejecutarÃ¡ sobre BeatGaler **LOCAL**, verificando la rama y `HEAD` del checkout real; no se ejecutarÃ¡ sobre `main` ni PROD. La integraciÃ³n Landing/Gallery auditada es `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`. Consultar [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md) antes de G0/T01. El anexo prevalece para rutas, UI y versiÃ³n base; el contrato del catÃ¡logo existente permanece vigente. No se renumeran las 26 tareas.
+Este plan se ejecutará sobre BeatGaler **LOCAL**, verificando la rama y `HEAD` del checkout real; no se ejecutará sobre `main` ni PROD. La integración Landing/Gallery auditada es `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`. Consultar [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md) antes de G0/T01. El anexo prevalece para rutas, UI y versión base; el contrato del catálogo existente permanece vigente. No se renumeran las 26 tareas.
+
+## Resultado de revisión G0 (2026-11-07)
+
+[G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md) registra la revisión estática, riesgos, decisiones pendientes y correcciones. **G0 no aprobado; T00 pendiente y T01 bloqueada.** El descriptor seguro de PostgreSQL se aprueba en T00; las bases efímeras del arnés se crean en T02, no antes de T01. No se modificaron Landing, Gallery ni Playbar.

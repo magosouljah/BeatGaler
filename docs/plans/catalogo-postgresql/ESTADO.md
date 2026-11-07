@@ -84,11 +84,19 @@ No sustituir este expediente por “no pude”, “parece un problema de Telegra
 ## Estado actualizado al baseline LOCAL (2026-11-07)
 
 <!-- BG-PG-LOCAL-BASELINE-20261107 -->
-- Checkout auditado localmente por script: rama `local/landing-gallery-unificada`, commit `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b` (esto verifica solo identidad/parentesco, NO ejecuciÃ³n de tests).
-- Referencia visual/funcional de integraciÃ³n: `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`.
-- Ãrbol Cloud igual que base histÃ³rica en snapshot GitHub: `bcb488ae3802dfd2bbe8f3fe6245b314a152c189`.
-- **G0: PENDIENTE** de examen completo de documentos, DB test aislada (issue #133), baseline CI/Direct, DTO UI/API, equivalencia del INDEX, smoke local y revisiÃ³n de diffs no confirmados.
-- 26 tareas y gates G0â€“G4: **estados previos conservados**, no se declara ninguna completada mediante esta actualizaciÃ³n documental.
-- No hay implementaciÃ³n ni migraciÃ³n SQL realizada por este script.
+- Checkout auditado localmente por script: rama `local/landing-gallery-unificada`, commit `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b` (esto verifica solo identidad/parentesco, NO ejecución de tests).
+- Referencia visual/funcional de integración: `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`.
+- Árbol Cloud igual que base histórica en snapshot GitHub: `bcb488ae3802dfd2bbe8f3fe6245b314a152c189`.
+- **G0: PENDIENTE** de examen completo de documentos, DB test aislada (issue #133), baseline CI/Direct, DTO UI/API, equivalencia del INDEX, smoke local y revisión de diffs no confirmados.
+- 26 tareas y gates G0–G4: **estados previos conservados**, no se declara ninguna completada mediante esta actualización documental.
+- No hay implementación ni migración SQL realizada por este script.
 
 Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md).
+
+## Resultado de auditoría G0 estática — 2026-11-07
+
+- **G0: NO APROBADO** (`STOP-ENV`, `STOP-TEST`, `STOP-DESIGN`). **T00: PENDIENTE. T01: BLOQUEADA** por dependencia. Ninguna tarea se inició.
+- Rama `local/landing-gallery-unificada`; fuente remota de auditoría `edabd715664f9564346e95b8553b68b4ac411da9`; código de referencia `31861e6406ac10073d368aa5d8a4edcb5dfd2d2b`. Solo cambió documentación.
+- Evidencia: siete archivos y código remoto, salida Git del usuario. Los seis PASS E4 proceden de ejecución anterior; **cero tests nuevos ejecutados aquí**.
+- Pendientes antes de T01: T00 PASS autorizado, descriptor DB segura, baseline reproducible de Web/Cloud/Direct y clasificación de fallo #151, decisión C12 sobre orden/Unicode/compatibilidad `bgPage` y SLO, pruebas de Landing/Gallery/Playbar.
+- [Informe G0 completo](G0-AUDITORIA-20261107.md). No habilita AWS, Telegram, DB real ni despliegue.

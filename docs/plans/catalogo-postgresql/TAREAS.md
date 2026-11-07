@@ -326,6 +326,10 @@ Listas explícitas, máximo inicial 5 bibliotecas por cohorte; cada una repite s
 ## Dependencias transversales para las 26 tareas en LOCAL (2026-11-07)
 
 <!-- BG-PG-LOCAL-BASELINE-20261107 -->
-No renumerar, sustituir ni marcar como ejecutadas las 26 tareas existentes. Vincular dentro de las tareas pertinentes: (1) API/DTO desde `WebGalleryWorkspace`/bridge actual, sin importar AppShell viejo; (2) Gallery real con ANY/exclusiÃ³n, tags, stars y orden; (3) paginaciÃ³n cursor preservando URL `bgPage`; (4) sesiÃ³n/OTP/logout/cambio cuenta y cachÃ©s; (5) Player real, routing de media y Project/Direct; (6) bloqueo del Worker legacy para INDEX tras PG_ACTIVE; (7) smoke de Landing pÃºblica y Gallery autenticada en cada gate. Documentar IDs de tarea exactos al revisar el archivo original. G0 requiere evidencia real de pruebas de frontend y Postgres descartable antes de T01.
+No renumerar, sustituir ni marcar como ejecutadas las 26 tareas existentes. Vincular dentro de las tareas pertinentes: (1) API/DTO desde `WebGalleryWorkspace`/bridge actual, sin importar AppShell viejo; (2) Gallery real con ANY/exclusión, tags, stars y orden; (3) paginación cursor preservando URL `bgPage`; (4) sesión/OTP/logout/cambio cuenta y cachés; (5) Player real, routing de media y Project/Direct; (6) bloqueo del Worker legacy para INDEX tras activar POSTGRES; (7) smoke de Landing pública y Gallery autenticada en cada gate. Documentar IDs de tarea exactos al revisar el archivo original. G0 requiere evidencia real de pruebas de frontend y Postgres descartable antes de T01.
 
-Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 3â€“5.
+Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 3–5.
+
+### Dependencias aclaradas por G0 estático (2026-11-07)
+
+T00 permanece PENDIENTE y **T01 depende de T00 PASS**. La revisión documental no autoriza comenzar T00 como implementación. El descriptor PostgreSQL seguro es una entrada de G0/T00; la creación y limpieza de DBs efímeras con guardas ocurre exclusivamente en T02, posterior a T01. Así se elimina la dependencia circular de exigir el arnés de T02 antes de T01. T01 trabaja sobre código/fixtures, sin PostgreSQL real. El baseline no destructivo y decisiones C12 pertenecen a T00. Ver [G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md).

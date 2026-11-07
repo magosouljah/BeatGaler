@@ -94,7 +94,7 @@ Presupuesto reversible: `rollback_max_bytes = 15 * 1024 * 1024` inicialmente (pr
 
 ## C5. Contrato HTTP y cliente
 
-Autenticación Cloud existente, sin exigir conexión Telegram para catálogo. Cada endpoint de escritura requiere `Idempotency-Key` y `X-Catalog-Epoch`. PATCH/trash/restore/reemplazo exigen versión por beat, mediante `If-Match` de detalle o `expectedVersion` en comandos. Si ambas formas se envían deben coincidir. Época y versión no son intercambiables.
+Autenticación Cloud existente, sin exigir conexión Telegram para catálogo. Cada endpoint de escritura requiere `Idempotency-Key`, `X-Catalog-Epoch` y `X-Catalog-Era` conforme a C1. PATCH/trash/restore/reemplazo exigen versión por beat, mediante `If-Match` de detalle o `expectedVersion` en comandos. Si ambas formas se envían deben coincidir. Época y versión no son intercambiables.
 
 | Endpoint propuesto | Entrada / salida |
 | --- | --- |
@@ -231,8 +231,12 @@ G0 puede aprobar estas propuestas en conjunto o revisarlas con un razonamiento d
 ## Contrato del frontend LOCAL (2026-11-07)
 
 <!-- BG-PG-LOCAL-BASELINE-20261107 -->
-El catÃ¡logo PostgreSQL debe respetar las rutas `/` (Landing pÃºblica), `/gallery` (Gallery autenticada), `/login` y `/signup`; preserva redirecciones, `bgPage` antiguo y carga diferida. `preconnectRememberedWebDirect()` se invoca desde `WebGalleryWorkspace` autenticado; no reponerlo automÃ¡ticamente en `src/main.tsx` solo para satisfacer tests viejos. Listas de catÃ¡logo, metadata, trash y restore lÃ³gico no necesitan Telegram; el audio/portadas y media se resuelven bajo demanda.
+El catálogo PostgreSQL debe respetar las rutas `/` (Landing pública), `/gallery` (Gallery autenticada), `/login` y `/signup`; preserva redirecciones, `bgPage` antiguo y carga diferida. `preconnectRememberedWebDirect()` se invoca desde `WebGalleryWorkspace` autenticado; no reponerlo automáticamente en `src/main.tsx` solo para satisfacer tests viejos. Listas de catálogo, metadata, trash y restore lógico no necesitan Telegram; el audio/portadas y media se resuelven bajo demanda.
 
-La Web usa inclusiÃ³n **ANY** de tags, exclusiÃ³n prioritaria y bÃºsqueda insensible a mayÃºsculas; conservar orden `manual`/`name`/`bpm`/`rating` y desempate estable; implementar compatibilidad URL con `bgPage`/offset durante paso a cursores opacos. Mantener versiones de beat/asset, identity/owner, cachÃ©s por sesiÃ³n, BeatCard de altura fija y Player funcional sin copiar la antigua UI de `main`. El resto del contrato y la semÃ¡ntica de INDEX legacy se preservan hasta cutover autorizado.
+La Web usa inclusión **ANY** de tags, exclusión prioritaria y búsqueda insensible a mayúsculas; conservar orden `manual`/`name`/`bpm`/`rating` y desempate estable según posición manual actual (C12, propuesta no aprobada); implementar compatibilidad URL con `bgPage`/offset durante paso a cursores opacos. Mantener versiones de beat/asset, identity/owner, cachés por sesión, BeatCard de altura fija y Player funcional sin copiar la antigua UI de `main`. El resto del contrato y la semántica de INDEX legacy se preservan hasta cutover autorizado.
 
 Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 2, 4 y 5.
+
+### Corrección de interpretación tras G0 estático (2026-11-07)
+
+El Web actual usa sort manual preservando el orden recibido, rating con desempate por posición manual y nombre mediante `localeCompare`. La propuesta C12 `lower(name) COLLATE "C"` es un cambio deliberado **pendiente de aprobación explícita**, no paridad demostrada. T01 debe probar Unicode, empates y cuatro sorts; T00 decide si se mantiene paridad exacta o se aprueba el cambio. Para `bgPage` antiguo frente a cursor HMAC, definir equivalencia o degradación visible y acotada; no volver a procesar INDEX entero ni paginar indefinidamente para resolver un offset profundo. Ninguna decisión C12 se da por aprobada por este documento.
