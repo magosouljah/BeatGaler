@@ -125,3 +125,7 @@ Logs examinados del run `42353075806`: PostgreSQL persistent assignment PASS his
 ## Reparación de pruebas T00 enviada (2026-11-07)
 
 Corrección limitada a cuatro tests existentes, un test DOM nuevo y el runner documental; 25 anclas de mutación verificadas por lectura estática, **sin ejecutar la nueva suite todavía**. PostgreSQL 16 Docker digest de CI es solo referente para laboratorio, no servidor Windows verificado. C12 sigue STOP-DESIGN y entorno STOP-ENV. T00 NO PASS; T01 BLOQUEADA. Ver [T00-TEST-CORRECTIONS-20261107.md](T00-TEST-CORRECTIONS-20261107.md).
+
+### Reparación del guard de alcance del runner — 2026-11-07
+
+El usuario actualizó LOCAL a `b5d23fc`; el runner T00 se detuvo en `STOP-BASE` antes de ejecutar tests porque la revisión original permitía exclusivamente `docs/plans/catalogo-postgresql/`, pero las pruebas T00 autorizadas habían cambiado cinco archivos `tests/`/`scripts/`. **No es fallo de app, Cloud ni PostgreSQL.** Se sustituyó por una allowlist exacta de esos cinco paths; continúa el bloqueo para `src/`, `cloud-server/`, migraciones, `DESIGN/`, UI y cualquier otro archivo inesperado. Nueva ejecución Windows todavía PENDIENTE; T00 sin PASS, T01 bloqueada.

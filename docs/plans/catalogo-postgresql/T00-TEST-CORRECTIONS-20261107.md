@@ -51,3 +51,7 @@ Nueva suite DOM y tests de guard reparados publicados. **No hay resultados de CI
 **T00 = EN CURSO / NO PASS; G0 = NO APROBADO; T01 = BLOQUEADA.**
 
 **Siguiente verificación:** actualizar rama LOCAL con `git pull --ff-only origin local/landing-gallery-unificada`, ejecutar `T00-BASELINE-READONLY.ps1`; si el guard mutante o las nuevas suites fallan, conservar salida y revisar. No ejecutar `postgres-live.integration.cjs`.
+
+## 6. Corrección del guard de alcance del ejecutor
+
+La ejecución Windows de `b5d23fc` paró antes de pruebas con `STOP-BASE: cambio de código ajeno al plan: scripts/regression-direct-manager-only.test.mjs`. Causa: el script comparaba `31861e6..HEAD` y admitía únicamente documentación, un supuesto anterior a las correcciones T00. Se permite ahora solo la documentación del plan y **los cinco paths exactos** de tests aprobados; código de aplicación, Cloud y migraciones siguen prohibidos. Se conserva el rechazo de modificaciones tracked sin commit; los dos archivos sin seguimiento siguen intactos. No se interpreta esta parada como FAIL de pruebas ni se declara PASS sin una nueva ejecución.

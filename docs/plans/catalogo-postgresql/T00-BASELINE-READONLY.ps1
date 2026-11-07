@@ -31,10 +31,19 @@ try {
     & git merge-base --is-ancestor $baseline HEAD
     if ($LASTEXITCODE -ne 0) { throw 'STOP-BASE: falta ancestro 31861e6.' }
     $files = @(& git diff --name-only $baseline HEAD)
+    # T00 now includes five reviewed test-only paths. Keep the allowlist exact;
+    # application, Cloud runtime, migrations, DESIGN and other tests stay blocked.
+    $approvedTestFiles = @(
+        'scripts/regression-direct-manager-only.test.mjs',
+        'tests/component-dom/webGalleryDirectAuthBoundary.test.tsx',
+        'tests/integration/appStartupBootstrapExtraction.test.ts',
+        'tests/integration/issue97PlaybackOptimization.test.ts',
+        'tests/integration/issue97RuntimeWebFollowup.test.ts'
+    )
     foreach ($file in $files) {
-        if (-not $file.StartsWith('docs/plans/catalogo-postgresql/', [StringComparison]::Ordinal)) {
-            throw "STOP-BASE: cambio de código ajeno al plan: $file"
-        }
+        if ($file.StartsWith('docs/plans/catalogo-postgresql/', [StringComparison]::Ordinal)) { continue }
+        if ($approvedTestFiles -ccontains $file) { continue }
+        throw "STOP-BASE: cambio no autorizado fuera de documentación/pruebas T00: $file"
     }
     & git diff --quiet
     if ($LASTEXITCODE -ne 0) { throw 'STOP-BASE: hay cambios trackeados sin commit; no ejecutar.' }
@@ -46,7 +55,7 @@ try {
     $localMain = (& git rev-parse main).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'STOP-BASE: referencia local main no legible.' }
     Write-Host "main local (solo referencia, NO base): $localMain"
-    Write-Host 'Cambios de archivos desde 31861e6: solo documentación del catálogo.'
+    Write-Host 'Cambios desde 31861e6: solo documentación y cinco archivos de pruebas T00 permitidos.'
     Write-Host 'Git status (los no rastreados NO serán modificados):'
     & git status --short
 
