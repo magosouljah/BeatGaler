@@ -36,7 +36,7 @@ function GalleryFixture() {
   const [search,setSearch]=useState("");const [sortBy,setSortBy]=useState<SortKey>("manual");
   const [selectMode,setSelectMode]=useState(false);const [selectedIds,setSelected]=useState(new Set<string>());
   const [currentBeat,setCurrentBeat]=useState<Beat|null>(beats[0]);const [playing,setPlaying]=useState(false);
-  const [progress,setProgress]=useState(30);const [volume,setVolume]=useState(.7);
+  const [progress,setProgress]=useState(1/6);const [volume,setVolume]=useState(.7);
   const [notice,setNotice]=useState("");
   const filtered=selectFilteredAndSortedBeats(beats,search,filter.includedTags,filter.excludedTags,sortBy,"any");
   const selectedBeats=beats.filter(beat=>selectedIds.has(beat.id));
@@ -52,7 +52,7 @@ function GalleryFixture() {
     toggleSelectAll:()=>setSelected(current=>current.size===filtered.length?new Set():new Set(filtered.map(beat=>beat.id))),
     finishSelection,clearSelection:finishSelection,handleWarm:noop,
     handlePlay:(beat:Beat)=>{setCurrentBeat(beat);setPlaying(beat.id===currentBeat?.id?!playing:true);},
-    togglePause:()=>setPlaying(value=>!value),seek:(ratio:number)=>setProgress(ratio*180),setVolume,
+    togglePause:()=>setPlaying(value=>!value),seek:(ratio:number)=>setProgress(ratio),setVolume,
     handleNext:()=>setCurrentBeat(beats[(beats.indexOf(currentBeat!)+1)%beats.length]),handlePrev:()=>setCurrentBeat(beats[(beats.indexOf(currentBeat!)+23)%beats.length]),
     cycleRepeat:noop,toggleShuffle:noop,toggleQueue:noop,repeatMode:"off",shuffleEnabled:false,
     rejectOfflineMutation:()=>false,reloadLibrary:()=>setNotice("Reload handler invoked (fixture only)"),
@@ -60,6 +60,7 @@ function GalleryFixture() {
     handleDisconnectTelegramAccount:()=>setNotice("Logout handler invoked (fixture only)"),openTagRename:()=>setNotice("Rename handler invoked (fixture only)"),
     setDrawer:()=>setNotice("Detail handler invoked (fixture only)"),handleEditBulk:noop,handleRemoveBulk:noop,
   };
-  return <><LibraryUxBridge/><AppShell scope={scope}/><div role="status" style={{position:"fixed",bottom:0,left:0,zIndex:20000,fontSize:10,padding:"3px 8px",color:"#888",background:"#0c0c0c"}}>Visual QA · isolated state · no Cloud/audio {notice}</div></>;
+  return <><LibraryUxBridge/><AppShell scope={scope}/><div role="status" style={{position:"fixed",bottom:0,left:0,zIndex:20000,fontSize:10,padding:"3px 8px",color:"#888",background:"#0c0c0c"}}>Visual QA � isolated state � no Cloud/audio {notice}</div></>;
 }
 createRoot(document.getElementById("root")!).render(<GalleryFixture/>);
+
