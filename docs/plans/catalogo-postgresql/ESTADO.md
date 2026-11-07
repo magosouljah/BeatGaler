@@ -100,3 +100,12 @@ Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md).
 - Evidencia: siete archivos y código remoto, salida Git del usuario. Los seis PASS E4 proceden de ejecución anterior; **cero tests nuevos ejecutados aquí**.
 - Pendientes antes de T01: T00 PASS autorizado, descriptor DB segura, baseline reproducible de Web/Cloud/Direct y clasificación de fallo #151, decisión C12 sobre orden/Unicode/compatibilidad `bgPage` y SLO, pruebas de Landing/Gallery/Playbar.
 - [Informe G0 completo](G0-AUDITORIA-20261107.md). No habilita AWS, Telegram, DB real ni despliegue.
+
+## T00 — iniciado, sin PASS (2026-11-07)
+
+- **Autorización:** el usuario indicó «go» para continuar con T00 en LOCAL; no autorizó infraestructura, credenciales, Telegram, PostgreSQL real, migración ni T01.
+- **Base:** usuario confirmó `f90b488` en `local/landing-gallery-unificada`, fast-forward sin cambios de aplicación; dos elementos ajenos sin seguimiento permanecen intactos.
+- **Evidencia estática nueva:** 25 migraciones 0001–0025; 1211 entradas del árbol GitHub; sin `AGENTS.md` versionados; manifests/lockfiles leídos; seis pruebas E4 históricas y otras suites inspeccionadas **sin reejecutar**.
+- **Resultado T00:** `EN CURSO / NO PASS` por `STOP-ENV` (sin descriptor PostgreSQL aislado), `STOP-TEST` (sin resultados Windows/Direct/Playbar actuales), `STOP-DESIGN` (C12 sin aceptación y fixtures Unicode/offset). No se declara ningún test aprobado en esta ejecución. **T01 continúa BLOQUEADA**.
+- **Comprobación segura preparada:** [T00-BASELINE-READONLY.ps1](T00-BASELINE-READONLY.ps1); únicamente comandos Git y tests locales permitidos. Tras inspeccionar resultados, completar T00 con evidencia; no promover PASS por omisión.
+- **Expediente técnico:** [T00-REVISION-20261107.md](T00-REVISION-20261107.md).

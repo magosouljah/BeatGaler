@@ -333,3 +333,7 @@ Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 3–5.
 ### Dependencias aclaradas por G0 estático (2026-11-07)
 
 T00 permanece PENDIENTE y **T01 depende de T00 PASS**. La revisión documental no autoriza comenzar T00 como implementación. El descriptor PostgreSQL seguro es una entrada de G0/T00; la creación y limpieza de DBs efímeras con guardas ocurre exclusivamente en T02, posterior a T01. Así se elimina la dependencia circular de exigir el arnés de T02 antes de T01. T01 trabaja sobre código/fixtures, sin PostgreSQL real. El baseline no destructivo y decisiones C12 pertenecen a T00. Ver [G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md).
+
+### Estado de T00 tras autorización (2026-11-07)
+
+Se inició **únicamente T00** con comprobaciones estáticas de GitHub y preparación de pruebas locales sin efectos externos. No se completó: faltan resultados de test del checkout, descriptor PostgreSQL aislado y cierre de C12. Registrar el resultado del runner seguro y detenerse ante cualquier fallo no clasificado. No iniciar T01 hasta T00 PASS registrado y autorizado. Ver [T00-REVISION-20261107.md](T00-REVISION-20261107.md).

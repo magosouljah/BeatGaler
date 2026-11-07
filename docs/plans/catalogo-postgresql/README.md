@@ -69,3 +69,7 @@ Este plan se ejecutará sobre BeatGaler **LOCAL**, verificando la rama y `HEAD` 
 ## Resultado de revisión G0 (2026-11-07)
 
 [G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md) registra la revisión estática, riesgos, decisiones pendientes y correcciones. **G0 no aprobado; T00 pendiente y T01 bloqueada.** El descriptor seguro de PostgreSQL se aprueba en T00; las bases efímeras del arnés se crean en T02, no antes de T01. No se modificaron Landing, Gallery ni Playbar.
+
+## T00 — Base congelada y pruebas limitadas
+
+Se inició T00 por instrucción del usuario tras actualizar la rama LOCAL. [T00-REVISION-20261107.md](T00-REVISION-20261107.md) contiene la evidencia estática y sus bloqueos. [T00-BASELINE-READONLY.ps1](T00-BASELINE-READONLY.ps1) ejecuta solo pruebas previamente inspeccionadas con variables sensibles retiradas del proceso de prueba. No ejecuta la base real, AWS, Telegram ni pruebas destructivas. **T00 sigue sin PASS** hasta registrar su salida y cerrar STOP-ENV/STOP-TEST/STOP-DESIGN; T01 permanece bloqueada.
