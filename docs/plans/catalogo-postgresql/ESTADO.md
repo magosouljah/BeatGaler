@@ -139,3 +139,7 @@ Ejecución real aportada por el usuario, script completado: E4 6/6 PASS; Postgre
 ## T00 — Siete fases del baseline Windows PASS (HEAD 5b19916)
 
 El usuario ejecutó el runner actualizado completo: **68/68 pruebas individuales PASS, 25/25 mutaciones Cloud peligrosas rechazadas, AST Cloud PASS, TypeScript PASS, todos los 7 exit codes 0**. Advertencia no bloqueante de React `act(...)` en fixture de Suspense. `STOP-TEST` del baseline queda **resuelto**, pero esto no certifica smoke real con Telegram/Player ni PostgreSQL conectado. Docker, Podman y psql no disponibles en PATH. **T00 global: NO PASS por STOP-ENV y STOP-DESIGN**; G0 no aprobado y T01 bloqueada. [Informe final del baseline](T00-BASELINE-PASS-20261107.md).
+
+## Entorno G0 e IDE C12 preparados (2026-11-07)
+
+Se agregó el workflow acotado de **laboratorio PostgreSQL 16 efímero** en GitHub Actions, activable en LOCAL únicamente por cambios a su propio YAML. No contiene rutas de producción, checkout, SQL destructivo ni deploy. El primer push del workflow **puede disparar un run**; comprobar resultado antes de afirmar `STOP-ENV` resuelto. Se agregó [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md). La IDE de alta capacidad puede cerrar las decisiones C12 desde [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md), sin implementar. T00 global/G0 no PASS hasta evidencias y dictamen explícitos; T01 bloqueada.

@@ -40,10 +40,12 @@ try {
         'tests/integration/issue97PlaybackOptimization.test.ts',
         'tests/integration/issue97RuntimeWebFollowup.test.ts'
     )
+    $approvedLabWorkflow = '.github/workflows/catalog-g0-postgres-probe.yml'
     foreach ($file in $files) {
         if ($file.StartsWith('docs/plans/catalogo-postgresql/', [StringComparison]::Ordinal)) { continue }
         if ($approvedTestFiles -ccontains $file) { continue }
-        throw "STOP-BASE: cambio no autorizado fuera de documentación/pruebas T00: $file"
+        if ($file -ceq $approvedLabWorkflow) { continue }
+        throw "STOP-BASE: cambio no autorizado fuera de documentación/pruebas T00 + workflow de ensayo G0: $file"
     }
     & git diff --quiet
     if ($LASTEXITCODE -ne 0) { throw 'STOP-BASE: hay cambios trackeados sin commit; no ejecutar.' }
@@ -55,7 +57,7 @@ try {
     $localMain = (& git rev-parse main).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'STOP-BASE: referencia local main no legible.' }
     Write-Host "main local (solo referencia, NO base): $localMain"
-    Write-Host 'Cambios desde 31861e6: solo documentación y cinco archivos de pruebas T00 permitidos.'
+    Write-Host 'Cambios desde 31861e6: documentación, cinco pruebas T00 y workflow G0 de laboratorio permitidos.'
     Write-Host 'Git status (los no rastreados NO serán modificados):'
     & git status --short
 

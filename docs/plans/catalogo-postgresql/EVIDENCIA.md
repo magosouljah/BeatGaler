@@ -137,3 +137,7 @@ El usuario ejecutó el runner: 6/6 E4, 3/3 PostgreSQL simulado, 31/32 DOM, 27/27
 ## E13. T00 baseline Windows completo — 68 PASS / 0 FAIL
 
 Salida aportada por el usuario con HEAD `5b199161351a05c62df79870d563cd7aceb5572f`. E4 6/6, fake Postgres/Direct 3/3, DOM 32/32, integración Direct 27/27; 7/7 fases del runner exit 0. Además guard Cloud AST PASS, **25/25 mutaciones rechazadas**, TypeScript `--noEmit` PASS. La suite DOM imprime warning React de Suspense fuera de `act` para un caso signed-out; prueba PASS y warning registrado. Ningún servicio o DB real fue accedido. Docker/Podman/psql no encontrados en PATH Windows. EVIDENCIA E12 permanece como antecedente de fallo ya corregido. Ver [T00-BASELINE-PASS-20261107.md](T00-BASELINE-PASS-20261107.md).
+
+## E14. Preparación de probe G0 PostgreSQL y entrega C12 a IDE
+
+Se creó el workflow de `push` sobre LOCAL, archivo `.github/workflows/catalog-g0-postgres-probe.yml`: PostgreSQL 16 digest fijado en job y service aislados, DB de prueba/rol explícitos, protección de identidad y consulta de colación, UTF8, `pg_trgm`; agrega descriptor en run summary. **No se declara que haya ejecutado ni que sea PASS sin leer resultados del run**. Sin `checkout`, AWS, Telegram, migraciones ni base real. Se agregó `G0-C12-IDE-MASTER-PROMPT-20261107.md` para el diseño C12. Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).

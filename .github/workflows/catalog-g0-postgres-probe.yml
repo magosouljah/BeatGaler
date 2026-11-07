@@ -1,0 +1,136 @@
+# LAB ONLY. Ephemeral database service; no secrets, checkout, AWS, Telegram or deploy.
+# Push trigger works on the LOCAL branch even when this workflow is absent from main.
+# workflow_dispatch won't be exposed by GitHub until a workflow exists on main.
+name: Catalog G0 - Disposable PostgreSQL 16 Probe (LOCAL)
+
+on:
+  push:
+    branches:
+      - local/landing-gallery-unificada
+    paths:
+      - .github/workflows/catalog-g0-postgres-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-g0-probe:
+    if: github.repository == 'magosouljah/BeatGaler' && github.ref == 'refs/heads/local/landing-gallery-unificada'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_DB: beatgaler_catalog_g0_probe
+          POSTGRES_USER: catalog_g0_probe
+          # Dummy password for a runner-local disposable service; never a real credential.
+          POSTGRES_PASSWORD: catalog_g0_ephemeral_only
+        options: >-
+          --health-cmd "pg_isready -U catalog_g0_probe -d beatgaler_catalog_g0_probe"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: beatgaler_catalog_g0_probe
+      PGUSER: catalog_g0_probe
+      PGPASSWORD: catalog_g0_ephemeral_only
+      PGCONNECT_TIMEOUT: "5"
+    steps:
+      - name: Fail closed on unexpected source, target or inherited service URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "magosouljah/BeatGaler"
+          test "$GITHUB_REF" = "refs/heads/local/landing-gallery-unificada"
+          test "$PGHOST" = "postgres"
+          test "$PGPORT" = "5432"
+          test "$PGDATABASE" = "beatgaler_catalog_g0_probe"
+          test "$PGUSER" = "catalog_g0_probe"
+          if env | cut -d= -f1 | grep -Eq '^(DATABASE_URL|RESTORE_DATABASE_URL|CATALOG_TEST_ADMIN_URL|AWS_|TELEGRAM_|BEATGALER_CLOUD_API|POLAR_|SMTP_)'; then
+            echo "STOP-ENV: inherited external service variable present"
+            exit 1
+          fi
+          echo "G0 local-only isolated database service target confirmed."
+      - name: Prove PostgreSQL server identity, locale and pg_trgm
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -v run_id="$GITHUB_RUN_ID" -v head_sha="$GITHUB_SHA" <<'SQL'
+          DO $guard$
+          BEGIN
+            IF current_database() <> 'beatgaler_catalog_g0_probe'
+               OR current_user <> 'catalog_g0_probe'
+               OR inet_server_addr() IS NULL THEN
+              RAISE EXCEPTION 'G0 STOP-ENV: unexpected PostgreSQL connection identity';
+            END IF;
+            IF current_setting('server_version_num')::integer / 10000 <> 16 THEN
+              RAISE EXCEPTION 'G0 STOP-ENV: PostgreSQL 16 required for the disposable probe';
+            END IF;
+            IF current_setting('server_encoding') <> 'UTF8' THEN
+              RAISE EXCEPTION 'G0 STOP-ENV: non-UTF8 database';
+            END IF;
+          END
+          $guard$;
+          CREATE SCHEMA catalog_g0_probe;
+          CREATE TABLE catalog_g0_probe.run_marker (
+            run_id text PRIMARY KEY,
+            head_sha text NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT now()
+          );
+          INSERT INTO catalog_g0_probe.run_marker (run_id, head_sha)
+          VALUES (:'run_id', :'head_sha');
+          CREATE EXTENSION pg_trgm;
+          DO $extension$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+              RAISE EXCEPTION 'G0 STOP-ENV: pg_trgm not installed';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM catalog_g0_probe.run_marker
+              WHERE run_id = current_setting('application_name', true)) THEN
+              -- Not an authorization check; marker is verified below using psql variables.
+              NULL;
+            END IF;
+          END
+          $extension$;
+          SELECT 'G0_PROBE_PASS' AS gate,
+                 current_database() AS db,
+                 current_user AS role,
+                 current_setting('server_version') AS version,
+                 current_setting('server_encoding') AS encoding,
+                 current_setting('lc_collate') AS lc_collate,
+                 current_setting('lc_ctype') AS lc_ctype;
+          SELECT name, default_version, installed_version
+          FROM pg_available_extensions WHERE name = 'pg_trgm';
+          SELECT run_id, head_sha, created_at FROM catalog_g0_probe.run_marker
+          WHERE run_id = :'run_id' AND head_sha = :'head_sha';
+          SQL
+      - name: Add non-sensitive environment descriptor to run summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## BeatGaler Catalog G0 — disposable PostgreSQL environment"
+            echo ""
+            echo "Only the ephemeral GitHub Actions service was accessed. No checkout, migrations, production database, AWS or Telegram."
+            echo ""
+            echo "| Property | Observed value |"
+            echo "| --- | --- |"
+            echo "| Run | $GITHUB_RUN_ID |"
+            echo "| Source | $GITHUB_SHA |"
+            echo "| DB | $(psql -X -Atc 'SELECT current_database()') |"
+            echo "| Role | $(psql -X -Atc 'SELECT current_user') |"
+            echo "| Version | $(psql -X -Atc 'SHOW server_version') |"
+            echo "| Version num | $(psql -X -Atc 'SHOW server_version_num') |"
+            echo "| Encoding | $(psql -X -Atc 'SHOW server_encoding') |"
+            echo "| LC_COLLATE | $(psql -X -Atc 'SHOW lc_collate') |"
+            echo "| LC_CTYPE | $(psql -X -Atc 'SHOW lc_ctype') |"
+            echo "| pg_trgm installed | $(psql -X -Atc "SELECT extversion FROM pg_extension WHERE extname='pg_trgm'") |"
+            echo "| DB marker | $(psql -X -Atc "SELECT run_id FROM catalog_g0_probe.run_marker") |"
+            echo "| Storage | GitHub Actions ephemeral service only; deleted with runner |"
+          } >> "$GITHUB_STEP_SUMMARY"

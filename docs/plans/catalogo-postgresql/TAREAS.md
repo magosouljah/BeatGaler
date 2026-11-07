@@ -345,3 +345,7 @@ La salida PowerShell de LOCAL confirma los tests del baseline, 3 fallos de aserc
 ### Baseline de T00 ya PASS en Windows
 
 El usuario comprobó 68/68 pruebas individuales y 25/25 casos de mutación Cloud rechazados en `5b19916`; las siete fases completaron exit 0. En términos de tests del runner whitelist, `STOP-TEST` ya no bloquea, pero aún no se dispone de smoke real ni de PostgreSQL de catálogo aislado. **T00 global NO PASS por STOP-ENV y STOP-DESIGN**; no iniciar T01. Ver [T00-BASELINE-PASS-20261107.md](T00-BASELINE-PASS-20261107.md).
+
+### Preparación concreta de G0 — PostgreSQL GitHub Actions y C12 IDE
+
+El probe aislado de solo entorno (`.github/workflows/catalog-g0-postgres-probe.yml`) se activa por cambios a su YAML en la rama LOCAL; no sustituye el arnés SQL de T02. `STOP-ENV` exige observar run PASS y descriptor concreto, no solo commit. La IDE puede cerrar C12 mediante [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md) sin ejecutar T01 o cambiar el producto. Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).
