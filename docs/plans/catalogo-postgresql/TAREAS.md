@@ -341,3 +341,7 @@ Se inició **únicamente T00** con comprobaciones estáticas de GitHub y prepara
 ### T00 — STOP documentado tras ejecución real del baseline LOCAL
 
 La salida PowerShell de LOCAL confirma los tests del baseline, 3 fallos de aserciones heredadas y un fallo del guard de mutaciones cuya fixture literal no coincide con `server.js`. No relajar los guards, no reinstalar preconnect global, no tocar Cloud para superar asserts de texto. T00 se detiene en **STOP-TEST** y permanecen STOP-ENV/STOP-DESIGN hasta resolver precondiciones. Ver [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md).
+
+### Baseline de T00 ya PASS en Windows
+
+El usuario comprobó 68/68 pruebas individuales y 25/25 casos de mutación Cloud rechazados en `5b19916`; las siete fases completaron exit 0. En términos de tests del runner whitelist, `STOP-TEST` ya no bloquea, pero aún no se dispone de smoke real ni de PostgreSQL de catálogo aislado. **T00 global NO PASS por STOP-ENV y STOP-DESIGN**; no iniciar T01. Ver [T00-BASELINE-PASS-20261107.md](T00-BASELINE-PASS-20261107.md).

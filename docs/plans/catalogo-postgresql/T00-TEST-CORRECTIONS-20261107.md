@@ -59,3 +59,7 @@ La ejecución Windows de `b5d23fc` paró antes de pruebas con `STOP-BASE: cambio
 ## 7. Falla en test DOM nuevo (segunda ejecución Windows, 259b077)
 
 Resultado: el guard Cloud ya ejecutó sus 25 mutaciones y todas fueron rechazadas; los 27 tests legacy Direct pasaron. La única prueba que falló fue `webGalleryDirectAuthBoundary.test.tsx:134` al evaluar la marca del DOM después de un único `flushLazy()` tras resolver la sesión. Esta salida no permite distinguir de forma definitiva latencia de `React.lazy` de un problema de autenticación/montaje; por ello la nueva versión **no elimina aserciones**, sino que primero exige ver invocación del mock `restoreBeatGalerSession`, después espera con `vi.waitFor` (máximo 3 s) a que el árbol real de Gallery monte y Direct se invoque una sola vez; tras logout se mantiene el rechazo inmediato y al cambiar a B vuelve a exigir una única invocación adicional. Si el problema persiste, fallará con un timeout informativo sin falsear PASS. Pendiente nueva ejecución en PC LOCAL. Docker/Podman/psql no aparecen en PATH, por lo que STOP-ENV sigue.
+
+## 8. Resultado posterior, ejecución en 5b19916
+
+Todas las fases del runner terminaron en exit 0. Las tres pruebas del `webGalleryDirectAuthBoundary.test.tsx` pasaron; 32/32 DOM y 27/27 legacy Direct. El mock de preconnect se verifica detrás del Auth gate. Hay warning de Suspense/`act` no bloqueante. Ver [T00-BASELINE-PASS-20261107.md](T00-BASELINE-PASS-20261107.md).
