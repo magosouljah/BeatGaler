@@ -65,6 +65,18 @@ try {
     $nodeRaw = (& node --version).Trim()
     $npmRaw = (& npm.cmd --version).Trim()
     Write-Host "Node: $nodeRaw | npm: $npmRaw"
+    # Inspección local sin hablar con ningún daemon, PostgreSQL o Docker remoto.
+    $dockerExe = Get-Command docker -ErrorAction SilentlyContinue
+    $podmanExe = Get-Command podman -ErrorAction SilentlyContinue
+    $psqlExe = Get-Command psql -ErrorAction SilentlyContinue
+    if ($dockerExe) { Write-Host ("Docker CLI: " + ((& docker --version) -join ' ')) }
+    else { Write-Host "Docker CLI: NO DISPONIBLE (solo inspección de PATH)" }
+    if ($podmanExe) { Write-Host ("Podman CLI: " + ((& podman --version) -join ' ')) }
+    else { Write-Host "Podman CLI: NO DISPONIBLE" }
+    if ($psqlExe) { Write-Host ("psql CLI: " + ((& psql --version) -join ' ')) }
+    else { Write-Host "psql CLI: NO DISPONIBLE" }
+    Write-Host "No se ha consultado Docker Engine, PostgreSQL, contenedores ni extensiones."
+
     $nodeVersion = [version]($nodeRaw.TrimStart('v'))
     $npmVersion = [version]$npmRaw
     if ($nodeVersion.Major -ne 22 -or $nodeVersion -lt [version]'22.23.2' -or

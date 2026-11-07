@@ -121,3 +121,7 @@ Logs examinados del run `42353075806`: PostgreSQL persistent assignment PASS his
 - **FAIL:** 3 tests de integración de arranque Direct, todos por exigir `src/main.tsx` anterior; script de mutaciones de guard Cloud exit 1 al faltar ancla literal con 2 argumentos (el runtime tiene `indexPinAuthority` como tercero). El guard AST original PASÓ, de modo que el fallo del test mutante es de preparación de fixture, no evidencia de ruptura del guard real. Con todo, no demuestra que la nueva ruta de Direct sea funcionalmente equivalente.
 - **Dictamen:** `T00 = STOP-TEST / NO PASS`; `STOP-ENV` por falta de descriptor PostgreSQL aislado, `STOP-DESIGN` por falta de cierre C12. `G0 = NO APROBADO`; `T01 = BLOQUEADA`. No se iniciaron T01 ni T02 y no se autorizan servicios reales.
 - **Expediente detallado:** [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md). Evidencia obtenida de salida aportada por el usuario, no ejecutada remotamente por GitHub.
+
+## Reparación de pruebas T00 enviada (2026-11-07)
+
+Corrección limitada a cuatro tests existentes, un test DOM nuevo y el runner documental; 25 anclas de mutación verificadas por lectura estática, **sin ejecutar la nueva suite todavía**. PostgreSQL 16 Docker digest de CI es solo referente para laboratorio, no servidor Windows verificado. C12 sigue STOP-DESIGN y entorno STOP-ENV. T00 NO PASS; T01 BLOQUEADA. Ver [T00-TEST-CORRECTIONS-20261107.md](T00-TEST-CORRECTIONS-20261107.md).
