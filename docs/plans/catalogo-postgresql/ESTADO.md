@@ -151,3 +151,7 @@ Run `42416620409`, en LOCAL, PostgreSQL 16.15 inició y `pg_trgm` se instaló. F
 ## G0 — descriptor PostgreSQL verificado en GitHub Actions (2026-11-07)
 
 Run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955), rama LOCAL SHA `758669a`, **PASS**: PostgreSQL **16.15**, UTF8, `datcollate/datctype=en_US.utf8`, `pg_trgm=1.6`, DB `beatgaler_catalog_g0_probe`, rol `catalog_g0_probe`, marker del run verificado; contenedores destruidos al finalizar. **STOP-ENV para descriptor G0 RESUELTO**, no equivale al arnés real T02. Las 68/68 pruebas T00 y 25/25 mutaciones también permanecen PASS. **T00 global/G0 NO APROBADOS por C12 STOP-DESIGN y restantes criterios formales**. T01 sigue bloqueada. Ver [G0-POSTGRES-VERIFIED-20261107.md](G0-POSTGRES-VERIFIED-20261107.md).
+
+## C12 — acta técnica inicial para IDE (2026-11-07)
+
+Se creó [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) sobre la fuente LOCAL `894f486`, documentando semántica ANY/ALL, sort `localeCompare`, `bgPage` offset y pruebas de contrato. **STOP-DESIGN-A** Unicode y **STOP-DESIGN-B** URLs antiguas requieren resolución/aceptación por IDE y pruebas. El baseline T00 y descriptor G0 PostgreSQL PASS no equivalen a aprobación global. **T00/G0 no PASS; T01 bloqueada**.

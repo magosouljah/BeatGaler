@@ -149,3 +149,7 @@ Se creó el workflow de `push` sobre LOCAL, archivo `.github/workflows/catalog-g
 ## E16. Entorno G0 PostgreSQL 16 efímero — PASS verificado
 
 [GitHub Actions 42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955), `completed/success`, job `postgres-g0-probe` PASS en todos los pasos. SQL: `G0_PROBE_PASS`, PG 16.15 Debian, `UTF8`, `en_US.utf8` collation y ctype por catálogo, `pg_trgm` 1.6 instalado, DB/rol exclusivos y `G0_RUN_MARKER_VERIFIED` para run ID/commit. Contenedores y network eliminados por Actions. El fallo del run previo (E15) quedó resuelto. **Descriptor de laboratorio G0 PASS; aún no hay esquema de catálogo, pruebas funcionales PostgreSQL ni T02.** Ver [G0-POSTGRES-VERIFIED-20261107.md](G0-POSTGRES-VERIFIED-20261107.md).
+
+## E17. C12 — lectura de implementación LOCAL
+
+Ver [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md). Fuentes del commit `894f486`: `useBeatGalerComposition.ts:103–118` ANY Web/ALL Desktop; `librarySelectors.ts:15–33` filtros/sort; `webLibrary.ts:13,238–316` página 240 y slice INDEX; `webLibraryNavigation.ts:1–26` bgPage offset; `WebLibraryPagination.tsx:24–32` navegación. Faltan paridad Unicode/SQL y resolución de bookmarks profundos; no se corrieron esas pruebas ni se cambió el producto.

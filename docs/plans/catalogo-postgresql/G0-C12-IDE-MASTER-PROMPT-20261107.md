@@ -74,3 +74,7 @@ La IDE puede investigar, comparar, decidir y **cerrar las decisiones técnicas d
 ## Evidencia actualizada para IDE — laboratorio verificado
 
 No se trata solo de preparación: GitHub Actions [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955), HEAD `758669a4ca0df1f0b3f5cce6abef703e3ab10047`, **PASS** en un contenedor efímero PostgreSQL `16.15`, `UTF8`, `datcollate/datctype=en_US.utf8`, `pg_trgm=1.6`. El marcador de run y rol/DB se verificaron. El run no contiene catálogo real ni prueba de performance, pero cierra `STOP-ENV` para el descriptor G0. Consultar [G0-POSTGRES-VERIFIED-20261107.md](G0-POSTGRES-VERIFIED-20261107.md). La IDE no debe inferir que `en_US.utf8` garantiza equivalencia con `localeCompare` de todos los navegadores.
+
+## Acta inicial para completar
+
+Leer primero [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md), fuente `894f486`; enfocarse en `STOP-DESIGN-A` (Unicode y orden SQL) y `STOP-DESIGN-B` (conversión `bgPage`/cursor). No afirmar paridad sin fixtures, ni declarar C12 cerrado sin decisión documentada sobre diferencias visibles.

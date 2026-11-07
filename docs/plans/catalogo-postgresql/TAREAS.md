@@ -353,3 +353,7 @@ El probe aislado de solo entorno (`.github/workflows/catalog-g0-postgres-probe.y
 ### G0 entorno verificado en CI desechable
 
 G0-ENV descriptor `PASS` según run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955): PG16.15, UTF8, colación `en_US.utf8`, `pg_trgm` 1.6, DB/rol/marker del contenedor efímero confirmados. [Evidencia detallada](G0-POSTGRES-VERIFIED-20261107.md). El arnés T02 (roles limitados, rechazo de URL ajena, cleanup/verificación de DB por run, integraciones) **no existe todavía**. Falta cierre C12, luego dictamen formal T00/G0 y autorización antes de T01.
+
+### C12 — trabajo de la IDE pendiente de cierre
+
+Acta nueva [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) con contratos, evidencia y casos a probar. Falta resolver `STOP-DESIGN-A/B` (Unicode y `bgPage`); la IDE puede cerrar decisiones técnicas usando el [prompt maestro](G0-C12-IDE-MASTER-PROMPT-20261107.md). Sin aceptación de cambios visibles no declarar G0 ni empezar T01.
