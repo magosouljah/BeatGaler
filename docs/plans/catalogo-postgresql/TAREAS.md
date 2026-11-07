@@ -337,3 +337,7 @@ T00 permanece PENDIENTE y **T01 depende de T00 PASS**. La revisión documental n
 ### Estado de T00 tras autorización (2026-11-07)
 
 Se inició **únicamente T00** con comprobaciones estáticas de GitHub y preparación de pruebas locales sin efectos externos. No se completó: faltan resultados de test del checkout, descriptor PostgreSQL aislado y cierre de C12. Registrar el resultado del runner seguro y detenerse ante cualquier fallo no clasificado. No iniciar T01 hasta T00 PASS registrado y autorizado. Ver [T00-REVISION-20261107.md](T00-REVISION-20261107.md).
+
+### T00 — STOP documentado tras ejecución real del baseline LOCAL
+
+La salida PowerShell de LOCAL confirma los tests del baseline, 3 fallos de aserciones heredadas y un fallo del guard de mutaciones cuya fixture literal no coincide con `server.js`. No relajar los guards, no reinstalar preconnect global, no tocar Cloud para superar asserts de texto. T00 se detiene en **STOP-TEST** y permanecen STOP-ENV/STOP-DESIGN hasta resolver precondiciones. Ver [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md).

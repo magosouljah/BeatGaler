@@ -10,7 +10,7 @@ La ejecución de seis pruebas locales en EVIDENCIA/E4 terminó PASS. No es PASS 
 
 | Tarea | Estado | Evidencia de implementación |
 | --- | --- | --- |
-| T00 Base/contrato | PENDIENTE | — |
+| T00 Base/contrato | **STOP-TEST / NO PASS** | [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md): 56 tests PASS, 3 FAIL; guard Cloud in-memory exit 1. STOP-ENV/DESIGN pendientes. |
 | T01 Campos/consumidores | PENDIENTE | — |
 | T02 Arnés aislado | PENDIENTE | — |
 | T03 Esquema | PENDIENTE | — |
@@ -113,3 +113,11 @@ Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md).
 ### Actualización CI histórico (T00)
 
 Logs examinados del run `42353075806`: PostgreSQL persistent assignment PASS histórico; TypeScript Direct 3 FAIL/188 PASS por tres asserts de bootstrap antiguo; Cloud guard FAIL por ancla literal de mutación. La clasificación es de **fallo de aserción observado**, no prueba de equivalencia funcional ni PASS actual. El runner T00 incluye las suites afectadas y el guard. `STOP-TEST` permanece abierto.
+
+## T00 — Resultado ejecutado en Windows LOCAL (2026-11-07)
+
+- Usuario ejecutó `T00-BASELINE-READONLY.ps1` después de fast-forward a `da735bed34733b5ed1e5e22a9d2e389d78bbad43`, rama correcta. `git status`: solo `Claude outputs/` y `beatgaler-console.jpg` sin seguimiento. 25 migraciones, Node 22.23.2 y npm 10.9.8 confirmados.
+- **PASS:** 6 pruebas E4, 3 de config/runner/Direct simulado, 23 de DOM/Gallery y 24 de 27 de tests de arranque heredado; check AST Cloud exit 0 y TypeScript `--noEmit` exit 0.
+- **FAIL:** 3 tests de integración de arranque Direct, todos por exigir `src/main.tsx` anterior; script de mutaciones de guard Cloud exit 1 al faltar ancla literal con 2 argumentos (el runtime tiene `indexPinAuthority` como tercero). El guard AST original PASÓ, de modo que el fallo del test mutante es de preparación de fixture, no evidencia de ruptura del guard real. Con todo, no demuestra que la nueva ruta de Direct sea funcionalmente equivalente.
+- **Dictamen:** `T00 = STOP-TEST / NO PASS`; `STOP-ENV` por falta de descriptor PostgreSQL aislado, `STOP-DESIGN` por falta de cierre C12. `G0 = NO APROBADO`; `T01 = BLOQUEADA`. No se iniciaron T01 ni T02 y no se autorizan servicios reales.
+- **Expediente detallado:** [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md). Evidencia obtenida de salida aportada por el usuario, no ejecutada remotamente por GitHub.

@@ -119,3 +119,9 @@ No se ejecutaron tests en el checkout Windows desde GitHub; tampoco se invocaron
 ## E9. Logs de CI histórico revisados en T00
 
 Se consultó el run de GitHub Actions [42353075806](https://github.com/magosouljah/BeatGaler/actions/runs/42353075806) en su commit fuente `31861e6`. El gate PostgreSQL persistent assignment **PASS histórico**. Direct TypeScript: **188 PASS y 3 FAIL**; los tres archivos de test buscan inicialización Direct en `src/main.tsx` cuando la nueva Gallery la monta tras Auth. Cloud guard: **FAIL** por ancla literal de mutación en memoria en `regression-direct-manager-only.test.mjs:76`. Se amplió el runner seguro para reproducir esos cuatro casos; aún **no hay ejecución nueva** ni diagnóstico funcional definitivo. Ver [T00-REVISION-20261107.md](T00-REVISION-20261107.md), sección 6.
+
+## E10. Resultados reales del runner T00 en LOCAL
+
+El usuario entregó salida del ejecutor `T00-BASELINE-READONLY.ps1` desde `E:\777\app\BeatGaler`, HEAD `da735bed34733b5ed1e5e22a9d2e389d78bbad43`. SHA-256 del archivo de salida original recibido: `4d3d3f1962efe5e1c99cafeb6b8d5a49bb1015d93d143835dd88958bb6a4864e`. **Pruebas contadas:** E4 6/6 PASS, config 3/3 PASS, seis suites DOM 23/23 PASS y tres suites de arranque 24/27 PASS, 3 FAIL (56 PASS, 3 FAIL). Además, guard AST exit 0, guard de mutación exit 1, TypeScript `--noEmit` exit 0.
+
+Los tres fallos del arranque son los esperados por asserts de import/call en `src/main.tsx` (ubicación antigua); el guard mutante usa un literal viejo de `installPersistentDirectSessionStart` que omite `indexPinAuthority`, aunque el guard principal reconoce la instalación con ese argumento. No se alteraron tests ni código; el reporte se limita a diagnóstico reproducible. Ver [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md).
