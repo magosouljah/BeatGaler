@@ -1,0 +1,89 @@
+# T02 — Arnés del catálogo PostgreSQL. Ejecución autorizada por el usuario (2026-11-08) solo en la rama LOCAL.
+# GitHub no expone workflow_dispatch mientras el workflow no exista en main (y no se hace merge), así que,
+# igual que el probe G0, se dispara con push a LOCAL que cambie este YAML. Ningún otro path ni rama lo activa.
+# Instancia dedicada: service container desechable, sin puertos publicados al host,
+# misma imagen que el descriptor G0 (run 42416790955). Sin secretos, AWS, Telegram ni DATABASE_URL.
+name: catalog-checks
+
+on:
+  push:
+    branches:
+      - local/landing-gallery-unificada
+    paths:
+      - .github/workflows/catalog-checks.yml
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Suite de scripts/catalog-check.cjs"
+        required: true
+        default: "unit"
+        type: choice
+        options: [unit, faults, integration]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-checks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  catalog-checks:
+    if: github.repository == 'magosouljah/BeatGaler' && github.ref == 'refs/heads/local/landing-gallery-unificada'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: node:22.23.2-bookworm@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_USER: catalog_lab_admin
+          # Contenedor efímero sin puertos publicados; no es credencial de ningún entorno real.
+          POSTGRES_PASSWORD: catalog-lab-ephemeral
+          POSTGRES_DB: catalog_lab_sentinel
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8"
+        options: >-
+          --health-cmd "pg_isready -U catalog_lab_admin -d catalog_lab_sentinel"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CI: "true"
+      SUITES: ${{ github.event_name == 'push' && 'unit faults integration' || inputs.suite }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Instalar dependencias de cloud-server sin scripts
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+      - name: Sentinel de identidad de la instancia
+        if: contains(env.SUITES, 'integration')
+        run: |
+          id="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(node -e "process.stdout.write(require('crypto').randomBytes(16).toString('hex'))")"
+          echo "CATALOG_TEST_INSTANCE_ID=$id" >> "$GITHUB_ENV"
+          CATALOG_TEST_INSTANCE_ID="$id" node -e "
+            const { Client } = require('./cloud-server/node_modules/pg');
+            const c = new Client({ host: 'postgres', port: 5432, user: 'catalog_lab_admin', password: 'catalog-lab-ephemeral', database: 'catalog_lab_sentinel' });
+            (async () => { await c.connect();
+              await c.query('CREATE SCHEMA catalog_lab');
+              await c.query('CREATE TABLE catalog_lab.lab_identity(instance_id text PRIMARY KEY)');
+              await c.query('INSERT INTO catalog_lab.lab_identity VALUES (\$1)', [process.env.CATALOG_TEST_INSTANCE_ID]);
+              const r = await c.query(\"SELECT current_setting('server_version') v, (SELECT datcollate FROM pg_database WHERE datname=current_database()) coll\");
+              console.log('sentinel ok', r.rows[0]); await c.end(); })().catch((e) => { console.error(e.message); process.exit(1); });"
+      - name: catalog-check
+        run: |
+          status=0
+          for suite in $SUITES; do
+            if [ "$suite" = "integration" ]; then
+              CATALOG_TEST_ADMIN_URL='postgres://catalog_lab_admin:catalog-lab-ephemeral@postgres:5432/catalog_lab_sentinel'                 node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1
+            else
+              node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1
+            fi
+          done
+          exit $status
+      - name: Artefactos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-check-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/catalog-check/
+          retention-days: 7

@@ -1,0 +1,51 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-u1",
+      "sort_order": 0,
+      "name": "Árbol",
+      "bpm": "120",
+      "key": "C",
+      "tags": [
+        "Trap",
+        "trap",
+        " Trap ",
+        "Trap",
+        "Ñandú",
+        "🌙"
+      ],
+      "rating": 0
+    },
+    {
+      "id": "b-u2",
+      "sort_order": 1,
+      "name": "árbol",
+      "bpm": "120",
+      "key": "C",
+      "tags": [
+        "TRAP",
+        "Lo-fi",
+        "lo‑fi"
+      ],
+      "rating": 0
+    },
+    {
+      "id": "b-u3",
+      "sort_order": 2,
+      "name": "ß",
+      "bpm": "120",
+      "key": "C",
+      "tags": [
+        1,
+        true,
+        null,
+        "ss"
+      ],
+      "rating": 0
+    }
+  ],
+  "trash": []
+}

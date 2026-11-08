@@ -1,0 +1,32 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-null",
+      "sort_order": 0,
+      "name": null,
+      "bpm": null,
+      "key": null,
+      "tags": null,
+      "artwork": null,
+      "master": null
+    },
+    {
+      "id": "b-absent",
+      "sort_order": 1
+    },
+    {
+      "id": "b-art-nullfields",
+      "sort_order": 2,
+      "name": "Desktop sin artwork",
+      "artwork": {
+        "telegram_file_id": null,
+        "telegram_message_id": null,
+        "hash": null
+      }
+    }
+  ],
+  "trash": []
+}

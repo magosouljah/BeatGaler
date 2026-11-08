@@ -1,0 +1,31 @@
+{
+  "index": {
+    "schema": "beatgaler.telegram.library",
+    "version": 2,
+    "updated_at": 1762560000,
+    "beats": [
+      {
+        "id": "b-keep",
+        "sort_order": 0,
+        "name": "Beat b-keep",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0
+      }
+    ],
+    "trash": []
+  },
+  "sql_tombstones": [
+    {
+      "beat_id": "b-purged",
+      "state": "CONFIRMED",
+      "confirmed_at": 1762000000
+    },
+    {
+      "beat_id": "b-legacy",
+      "state": "LEGACY_TOMBSTONE",
+      "confirmed_at": null
+    }
+  ]
+}

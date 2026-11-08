@@ -1,0 +1,22 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [],
+  "trash": [],
+  "deleted": [
+    {
+      "beat_id": "b-d1",
+      "id": "b-d2",
+      "deleted_at": 1761000000
+    },
+    {
+      "deleted_at": 1761000001
+    },
+    {
+      "beat_id": "b-d3",
+      "id": "b-d3",
+      "deleted_at": 1761000002
+    }
+  ]
+}

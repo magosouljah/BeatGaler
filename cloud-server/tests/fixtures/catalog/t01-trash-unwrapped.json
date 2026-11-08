@@ -1,0 +1,17 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [],
+  "trash": [
+    {
+      "id": "b-loose",
+      "sort_order": 0,
+      "name": "Beat b-loose",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    }
+  ]
+}

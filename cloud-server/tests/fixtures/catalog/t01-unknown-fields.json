@@ -1,0 +1,26 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-x",
+      "sort_order": 0,
+      "name": "Beat b-x",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "x_ext": {
+        "nested": [
+          1,
+          {
+            "a": null
+          }
+        ]
+      }
+    }
+  ],
+  "trash": [],
+  "x_root_ext": "keep"
+}

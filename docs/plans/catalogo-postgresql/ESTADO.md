@@ -1,6 +1,59 @@
 # Estado de ejecución y transferencia
 
+**T01 PASS (LOCAL, 2026-11-08):** se registra por encargo explícito del usuario (Purp), que pidió registrarlo si se cumplían los criterios. T01-C (MEDIA) cerró FX-01, FX-02, COV-01 y COV-02 ([E20](EVIDENCIA.md), [cobertura](consumer-map.md)). Criterios de TAREAS T01 y MATRIZ-T:
+
+- 69/69 JSON paths con destino, regla y fixture.
+- 53 fixtures reproducibles; los 41 previos conservan sus oracles.
+- 0 consumidores sin clase y 0 globales sin contrato.
+- Cada consumidor tiene test con evidencia o `test_gap` con tarea propietaria.
+- Rutas inversas verificadas desde `server.js` y `main.tsx`.
+- C12-U01/U02/N01/F01/F02/D01 y V01-A tienen fixture.
+- Contrato T01-B cerrado.
+- NUL sin pérdida silenciosa: `raw_index` bytea, `legacy_json` TEXT con escapes y nunca jsonb, REVIEW si cae en campo proyectado.
+
+**Reglas aprobadas por el usuario (Purp, 2026-11-08):** (1) `catalog_legacy_fields` y los extras legacy se guardan en TEXT JSON con escapes ASCII seguros, nunca en jsonb, y sustituyen el `root_extras jsonb` de T01-A; (2) CS-050 (`uploadedFiles`, `messageRedirects`) solo se coteja con C4:99 y no se importa. G1 no está completo sin T04.
+
+**T02 (MEDIA, 2026-11-08): NO PASS por STOP-APPROVAL.** El arnés está construido ([E21](EVIDENCIA.md)): `unit` PASS (34 tests, 0 skips, 0 red externa), `faults` PASS, `web` PASS (V01-B, Gallery LOCAL real con dobles en Chrome headless) y V01-C completo. Falta el PASS de `integration` (DB efímera real, cleanup verificado y rechazo de borrado ajeno contra PostgreSQL): la única instancia aprobada es el service del job `catalog-checks.yml`, que nunca se ha ejecutado. Para ejecutarlo hace falta autorización explícita de commit y push de los archivos T02 a LOCAL, fijar el digest de `node:22-bookworm` y lanzar `workflow_dispatch` con suite `integration`. No se usó la PostgreSQL de trabajo en WSL (TAREAS T02 §4). T03 no iniciada.
+
+**T01-B ALTA (2026-11-08), sin PASS:** cerrados con C1–C12/r4 los 18 hallazgos de T01-A (D-01…D-10, C-01…C-06, S-01/S-02); ningún STOP-DATA/STOP-CONTRACT de T01-A queda abierto y no se tomó ninguna decisión de producto nueva. C-01 y C-04 no eran STOP: drag-reorder y upload YouTube están apagados en Web por capability. D-05 se rebaja: el colector incompleto es código muerto. Contrato de filas/locks/fases DDL y reglas de codec en [contract-map.json](contract-map.json) (`stops[*].t01b`, `contracts`, `t01b`) y [consumer-map.md](consumer-map.md). **Pendiente para T01-C (MEDIA):** FX-01 fixtures con `schema` incorrecto (`generate-fixtures.cjs:42`), FX-02 fixtures de reglas nuevas, COV-01/COV-02 cobertura. **T01 NO PASS; T02 no iniciada.**
+
+
+**Cierre T00/G0 LOCAL (2026-11-08):** dictamen independiente GPT-6 (Sol) sobre `G0-REVISION-FINAL-v2.zip`: **G0 cumple técnicamente para LOCAL; T00 PASS (LOCAL).** Evidencias citadas por el dictamen: 48/48 hashes, baseline 68/68, smoke de rutas 6/6, smoke autenticado simulado 5/5, PostgreSQL verificado (run 42416790955) y C12-r4 cerrado. Límite: el smoke simulado no demuestra transporte real ni producción. Autorización del usuario (Purp) para cerrar documentalmente T00/G0 y abrir **T01 (en curso)**. T02 no iniciada; sin migraciones ni servicios reales. Los bloques siguientes quedan como antecedentes.
+
+
+**Vigencia C12-r4 (2026-11-07):** [cierre C12-r4](C12-V00-CIERRE-20261107.md) integra el [acta I1/I2/I3 aprobada](C12-V00-INTERACCIONES-APROBADAS-20261107.md) de `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` y las respuestas explícitas del usuario de este encargo. **A1/A2/B-legacy e I1/I2/I3 aprobados; decisiones C12/V00 cerradas para diseño.** Shuffle sin repetición por ronda, aviso de selección solo si existía y rename también en papelera sin alterar su estado. Las menciones pendientes r2/r3 quedan como antecedentes, sustituidas por r4. **T00/G0 no PASS; T01 bloqueada; T02 no iniciada.** No hay autorización de implementar.
+
+
+**Cierre de integración documental r3:** diff whitespace/enlaces/fences PASS; caracterización r2 intacta byte a byte,5/5 MD remotos exactos. Inventario de7 MD modificados y6 incorporados en [plan B sección11](C12-B-INTEGRACION-Y-PLAN-20261107.md). Sin nuevas pruebas de producto/SQL/performance, sin runtime ni servicios reales. B-experiencia aprobada; C12/T00/G0 continúan NO PASS y T01 bloqueada por decisiones pendientes, no por falta de aprobación del scroll infinito.
+
+
 Actualizado: 7 de noviembre de 2026.
+
+## Estado histórico — C12-r3 / B-scroll-v1
+
+**B-experiencia APROBADA:** Gallery POSTGRES continua con infinite scroll virtualizado, sin paginador visible. Autoridad: [anexo oficial](C12-B-GALLERY-INFINITA-VIRTUALIZADA-20261107.md), remoto `b585540a3a82bc8604d8d6de603514af48b5feb4`. **B-legacy PENDIENTE:** cota10.000, copy y destino de links no resolubles; Ir al inicio sigue como recomendación. **A1/A2 siguen pendientes** según evidencia r2. El [plan V00–V11](C12-B-INTEGRACION-Y-PLAN-20261107.md) identifica además STOP-INTERACTION de selección/cola/facetas antes de conectarlas, sin reabrir la aprobación del infinite scroll.
+
+**C12 NO CERRADO, T00 NO PASS, G0 NO APROBADO, T01 BLOQUEADA, T02 NO INICIADA.** Solo se autorizó documentar/diseñar. Los estados históricos siguientes no prevalecen sobre este bloque.
+
+HEAD local continúa `a4462191aea29ffdae136f04e1fdc2e4024291d1`, rama LOCAL. Se guardó copia versionada de15 documentos con hashes verificados antes de editar: `E:\777\app\BeatGaler-c12-document-backups\20261107-185609-a446219`; también snapshot remoto. Fetch genérico falló por refspec release inexistente; fetch explícito LOCAL pasó. No merge/pull/checkout/commit/push; no se integró workflow ni runner remoto. [Reconciliación, evidencia V01–V14 y alcance](C12-B-INTEGRACION-Y-PLAN-20261107.md).
+
+## Registro histórico — revisión C12-r2
+
+Base local observada: `a4462191aea29ffdae136f04e1fdc2e4024291d1`, `local/landing-gallery-unificada`; no se movió HEAD. [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) y [caracterización](C12-CARACTERIZACION-20261107.md) contienen decisiones, evidencia y transferencia. Los registros anteriores del trabajo conservados debajo son **históricos** y no sustituyen este estado.
+
+- **T00 NO PASS / STOP-DESIGN; G0 NO APROBADO; T01 BLOQUEADA; T02 NO INICIADA.**
+- STOP-TEST del baseline está resuelto por el informe histórico Windows `5b19916`: 68/68 + 25/25 mutaciones. No se repitió aquí.
+- STOP-ENV del descriptor G0 está resuelto: run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790955), job `128536516538`, estado/pasos/logs verificados. PostgreSQL16.15, UTF8, en_US.utf8, pg_trgm1.6 y marcador correctos; no equivale al arnés T02 ni a pruebas SQL de catálogo.
+- Decisiones técnicas C12 cerradas según tabla del acta. **Pendientes de producto:** A1 orden ICU fijo; A2 BPM inválidos; B transición global de bgPage, filtros, contador y navegación. Ninguna aceptación inferida.
+- Nuevos experimentos: selector/parser puros en Node y orden de nombres en Chrome sintético; no DB, Edge ni aplicación integrada. Resultados y límites en caracterización. No se ejecutó la suite postgres-live ni se usaron servicios reales.
+
+Próximo paso permitido: decidir A1/A2/B con el protocolo de sección9 del acta, consolidar el contrato y revisar formalmente T00/G0. No iniciar tareas de implementación como consecuencia automática de esta documentación.
+
+Paths documentales de esta entrega: nuevos `C12-DECISION-RECORD.md`, `C12-CARACTERIZACION-20261107.md`; actualizados `README.md`, `CONTRATO.md`, `ESTADO.md`, `EVIDENCIA.md`, `TAREAS.md`. Todos bajo este directorio. Sin cambios a producto/tests/workflows, sin commit/push. No rastreados ajenos preservados: `Claude outputs/`, `beatgaler-console.jpg`.
+
+Verificación documental: `git diff --check`, enlaces locales/fences y alcance de archivos PASS. El resultado final de C12 sigue **STOP-DESIGN**, no PASS por haber pasado estos checks. Evidencia de comandos/resultados en EVIDENCIA y anexo de caracterización.
+
+## Registro histórico del plan inicial
 
 **Entregable actual:** plan documental terminado. **Implementación:** no iniciada. **Migraciones reales:** ninguna. **Autorización actual:** análisis y elaboración del plan; no implementación ni servicios reales.
 
@@ -10,8 +63,8 @@ La ejecución de seis pruebas locales en EVIDENCIA/E4 terminó PASS. No es PASS 
 
 | Tarea | Estado | Evidencia de implementación |
 | --- | --- | --- |
-| T00 Base/contrato | **STOP-TEST / NO PASS** | [T00-LOCAL-RESULTADOS-20261107.md](T00-LOCAL-RESULTADOS-20261107.md): 56 tests PASS, 3 FAIL; guard Cloud in-memory exit 1. STOP-ENV/DESIGN pendientes. |
-| T01 Campos/consumidores | PENDIENTE | — |
+| T00 Base/contrato | **STOP-DESIGN / NO PASS** | C12-r4: decisiones cerradas para diseño; falta dictamen formal T00/G0. Sin implementación. |
+| T01 Campos/consumidores | **BLOQUEADA** | Requiere T00/G0 formal y autorización; no iniciada. |
 | T02 Arnés aislado | PENDIENTE | — |
 | T03 Esquema | PENDIENTE | — |
 | T04 Codec/import/export | PENDIENTE | — |
@@ -140,6 +193,11 @@ Ejecución real aportada por el usuario, script completado: E4 6/6 PASS; Postgre
 
 El usuario ejecutó el runner actualizado completo: **68/68 pruebas individuales PASS, 25/25 mutaciones Cloud peligrosas rechazadas, AST Cloud PASS, TypeScript PASS, todos los 7 exit codes 0**. Advertencia no bloqueante de React `act(...)` en fixture de Suspense. `STOP-TEST` del baseline queda **resuelto**, pero esto no certifica smoke real con Telegram/Player ni PostgreSQL conectado. Docker, Podman y psql no disponibles en PATH. **T00 global: NO PASS por STOP-ENV y STOP-DESIGN**; G0 no aprobado y T01 bloqueada. [Informe final del baseline](T00-BASELINE-PASS-20261107.md).
 
+
+## Antecedentes remotos reconciliados (históricos)
+
+Importados de `b585540a3a82bc8604d8d6de603514af48b5feb4`; no reemplazan C12-r2/r3 ni el estado vigente.
+
 ## Entorno G0 e IDE C12 preparados (2026-11-07)
 
 Se agregó el workflow acotado de **laboratorio PostgreSQL 16 efímero** en GitHub Actions, activable en LOCAL únicamente por cambios a su propio YAML. No contiene rutas de producción, checkout, SQL destructivo ni deploy. El primer push del workflow **puede disparar un run**; comprobar resultado antes de afirmar `STOP-ENV` resuelto. Se agregó [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md). La IDE de alta capacidad puede cerrar las decisiones C12 desde [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md), sin implementar. T00 global/G0 no PASS hasta evidencias y dictamen explícitos; T01 bloqueada.
@@ -155,3 +213,30 @@ Run [42416790955](https://github.com/magosouljah/BeatGaler/actions/runs/42416790
 ## C12 — acta técnica inicial para IDE (2026-11-07)
 
 Se creó [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) sobre la fuente LOCAL `894f486`, documentando semántica ANY/ALL, sort `localeCompare`, `bgPage` offset y pruebas de contrato. **STOP-DESIGN-A** Unicode y **STOP-DESIGN-B** URLs antiguas requieren resolución/aceptación por IDE y pruebas. El baseline T00 y descriptor G0 PostgreSQL PASS no equivalen a aprobación global. **T00/G0 no PASS; T01 bloqueada**.
+
+## Transferencia normativa vigente C12-r4
+
+[cierre C12-r4](C12-V00-CIERRE-20261107.md) integra las aprobaciones explícitas y sustituye pendientes/recomendaciones incompatibles r2/r3. A1 ICU fijo, A2 binary64/clase y B-legacy <=10.000 quedan aprobados. I1 selección global con aviso solo si había selección; I2 audio continuo, nuevo query y cola prioritaria, Shuffle sin repetición por ronda; I3 rename ACTIVE/TRASH sin modificar estado. Se descarta fijar permanentemente la búsqueda musical al pulsar Play.
+
+Aplicar las dependencias, algoritmos, alternativas y STOP de sección 7 del cierre a T01/T03/T06/T07/T13/T14/T20 y V00–V11. Membresías SQL persistidas, selección CAS, facetas, journal y swaps Shuffle no son memoria global del cliente. T01/T06 deben producir inventario y contratos tipados completos en sus tareas futuras. T00 revisa formalmente base/descriptor/baseline/contrato, sin volver a solicitar las aprobaciones resueltas. T01 permanece bloqueada; ningún paso de implementación iniciado.
+
+## Verificación documental r4 ejecutada
+
+`git diff --check`: PASS. Comprobación local de enlaces, fences y caracteres de sustitución: **22 Markdown, 0 errores**. Caracterización r2 idéntica byte a byte al snapshot previo; nuevo anexo I1/I2/I3 idéntico al blob remoto c6d7b7c. Backup previo verificado: 21 archivos con manifiesto SHA256. HEAD permanece a4462191aea29ffdae136f04e1fdc2e4024291d1. Diff de producto entre HEAD/remoto vacío. No cambios de runtime, tests, workflows ni runner; no commit/push. `Claude outputs/` y `beatgaler-console.jpg` preservados.
+
+Entrega r4: nuevo `C12-V00-CIERRE-20261107.md` y anexo remoto `C12-V00-INTERACCIONES-APROBADAS-20261107.md`; actualizados acta C12, plan B, README, CONTRATO, TAREAS, ESTADO y EVIDENCIA. Los demás cambios Git preceden este encargo. Se corrigió un fallo del script documental por lectura Python cp1252 usando UTF-8 explícito; se validaron después todos los MD. No hubo pérdida/restauración de contenido ni ejecución de producto.
+
+Decisiones C12/V00 cerradas para diseño conforme a respuestas del usuario, incluyendo corrección de Shuffle sin repeticiones. No tests de aplicación, SQL, browser, uniformidad RNG, benchmarks ni despliegues ejecutados. G0/T00 requieren dictamen formal independiente; T01 bloqueada, T02 no iniciada.
+
+## Plan N1 por niveles completado — documental (2026-11-07)
+
+**Alcance:** solo documentación en este directorio. Continúa el trabajo N1 de la IDE anterior; no ejecuta T00/G0, T01 ni T02 y no emite PASS de tareas, subtareas ni gates.
+
+- **Conservado sin cambios:** [matriz T](MATRIZ-T-NIVELES-20261107.md) (26 fichas T00–T25, byte a byte igual) y el contenido previo del [manual N1](EJECUCION-POR-NIVELES-20261107.md).
+- **Nuevo:** [matriz V](MATRIZ-V-NIVELES-20261107.md): 12 fichas V00–V11 con 20 campos cada una, T padre, paquetes por nivel, intervenciones ALTA concretas, PASS/STOP/handoff. Relación con las tareas originales: cada V subdivide una o varias T (V00→T00/T01, V01→T01/T02, V02→T06, V03–V05→T08, V06→T14, V07→T13/T14, V08→T16, V09→T16 con consumo T21, V10→T20, V11→T21/T22/T23); no es una T nueva.
+- **Ampliado:** N1 §3 con cinco reconciliaciones RV1–RV5 detectadas al construir la matriz V (copy legacy r4, I2/Shuffle frente a plan B §6, raíz única de módulos cliente, flags de selección en DTO, citas históricas «pendiente»). README con enlaces y regla de uso; TAREAS con referencia normativa N1 sin renumerar.
+- **Reparto final:** T — BAJA 8, MEDIA 16, ALTA 2; V — Chat 1, BAJA 3, MEDIA 8. ALTA interviene solo en T01-B, T06-A/V02-A, T11 y T21-B, más STOP-SHUFFLE-PERF o contrato incompatible.
+- **Verificación documental real:** validador propio de cobertura/consistencia/enlaces/fences/UTF-8/espacios/alcance: PASS sobre 26 archivos (25 MD, 157 enlaces locales); 4/4 defectos inyectados detectados. Detalle en EVIDENCIA.
+- **Limitaciones:** el shell del equipo no arrancó en esta sesión; el estado Git se obtuvo leyendo `.git` (HEAD, refs, índice) y calculando hashes de blobs, y `git diff --check` se sustituyó por una comprobación equivalente de líneas añadidas. Debe repetirse `git status --short` y `git diff --check` en Windows antes del próximo encargo. No se ejecutaron tests de producto, SQL, navegador ni benchmarks.
+- **Estados sin cambio:** C12-r4 cerrado para decisiones de producto/diseño (no implementado). **T00 global NO PASS; G0 NO APROBADO; T01 BLOQUEADA; T02 NO INICIADA.**
+- **Siguiente paso permitido:** encargo independiente de revisión formal T00/G0 (N1 §10): IDE BAJA prepara T00-A y el paquete V00-A0; GPT-6 Sol dictamina V00-A/G0. No se inicia sin autorización separada.

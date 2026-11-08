@@ -1,0 +1,34 @@
+{
+  "index": {
+    "schema": "beatgaler.telegram.library",
+    "version": 2,
+    "updated_at": 1762560000,
+    "beats": [
+      {
+        "id": "b-r1",
+        "sort_order": 0,
+        "name": "Beat b-r1",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "master": {
+          "telegram_file_id": "direct:1500",
+          "telegram_message_id": 1500
+        }
+      }
+    ],
+    "trash": []
+  },
+  "link": {
+    "installation_id": "inst-A",
+    "user_id": "u-1",
+    "verified_against_vaults": true
+  },
+  "cloud_data": {
+    "messageRedirects": {
+      "inst-A:1500": 1501,
+      "inst-A:1510": 1511
+    }
+  }
+}

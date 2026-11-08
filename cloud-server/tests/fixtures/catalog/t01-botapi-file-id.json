@@ -1,0 +1,21 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-bot",
+      "sort_order": 0,
+      "name": "Beat b-bot",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "master": {
+        "telegram_file_id": "AgACAgEAAxkBAAI-synthetic",
+        "telegram_message_id": 960
+      }
+    }
+  ],
+  "trash": []
+}

@@ -1,0 +1,89 @@
+{
+  "index": {
+    "schema": "beatgaler.telegram.library",
+    "version": 2,
+    "updated_at": 1762560000,
+    "beats": [
+      {
+        "id": "red",
+        "sort_order": 0,
+        "name": "Árbol",
+        "bpm": "120",
+        "key": "C",
+        "tags": [
+          "Trap"
+        ],
+        "rating": 0
+      },
+      {
+        "id": "blue",
+        "sort_order": 1,
+        "name": "Beat blue",
+        "bpm": "120",
+        "key": "C",
+        "tags": [
+          "trap",
+          "Dark"
+        ],
+        "rating": 0
+      },
+      {
+        "id": "green",
+        "sort_order": 2,
+        "name": "Beat green",
+        "bpm": "120",
+        "key": "C",
+        "tags": [
+          " Trap",
+          "Dark",
+          "Dark"
+        ],
+        "rating": 0
+      },
+      {
+        "id": "none",
+        "sort_order": 3,
+        "name": "Beat none",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0
+      }
+    ],
+    "trash": []
+  },
+  "queries": [
+    {
+      "include": [],
+      "exclude": []
+    },
+    {
+      "include": [
+        "Trap"
+      ],
+      "mode": "ANY"
+    },
+    {
+      "include": [
+        "Trap",
+        "Dark"
+      ],
+      "mode": "ALL"
+    },
+    {
+      "include": [
+        "Dark"
+      ],
+      "exclude": [
+        "Dark"
+      ]
+    },
+    {
+      "include": [
+        "Trap",
+        "Trap"
+      ],
+      "mode": "ANY"
+    }
+  ]
+}

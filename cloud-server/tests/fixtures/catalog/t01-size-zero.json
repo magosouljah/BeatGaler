@@ -1,0 +1,22 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-z",
+      "sort_order": 0,
+      "name": "Beat b-z",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "master": {
+        "telegram_file_id": "direct:950",
+        "telegram_message_id": 950,
+        "size": 0
+      }
+    }
+  ],
+  "trash": []
+}

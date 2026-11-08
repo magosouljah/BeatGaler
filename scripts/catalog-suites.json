@@ -1,0 +1,78 @@
+{
+  "schema": "beatgaler.catalog-suites",
+  "version": 1,
+  "task": "T02",
+  "note": "Manifiesto de suites del runner scripts/catalog-check.cjs. Una suite 'pending' no tiene casos todavía: el runner la rechaza con exit 4 hasta que su tarea propietaria registre casos reales. No se finge ninguna suite.",
+  "allowed_case_roots": [
+    "cloud-server/tests/catalog-harness/",
+    "cloud-server/tests/fixtures/catalog/",
+    "tests/catalog-harness/"
+  ],
+  "forbidden_case_files": [
+    "cloud-server/tests/postgres-live.integration.cjs"
+  ],
+  "prerequisites": {
+    "catalog-test-db": "CATALOG_TEST_ADMIN_URL y CATALOG_TEST_INSTANCE_ID válidos contra cloud-server/tests/helpers/catalog-test-descriptor.json (se valida antes de cualquier conexión)",
+    "chrome": "Chrome local (CHROME_BIN o ruta estándar) y node_modules/@wdio/cli instalado"
+  },
+  "suites": {
+    "unit": {
+      "status": "active",
+      "network": "deny",
+      "requires": [],
+      "cases": [
+        { "id": "fixtures-reproducible", "cmd": ["node", "cloud-server/tests/fixtures/catalog/generate-fixtures.cjs", "--check"], "kind": "plain" },
+        { "id": "harness-net-guard", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/net-guard.test.cjs"], "kind": "node-test" },
+        { "id": "harness-runner", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/runner.test.cjs"], "kind": "node-test" },
+        { "id": "harness-test-db-guards", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/test-db-guards.test.cjs"], "kind": "node-test" },
+        { "id": "harness-fake-transport", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/fake-transport.test.cjs"], "kind": "node-test" },
+        { "id": "harness-fake-catalog-server", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/fake-catalog-server.test.cjs"], "kind": "node-test", "network": "loopback" }
+      ]
+    },
+    "faults": {
+      "status": "active",
+      "network": "deny",
+      "requires": [],
+      "cases": [
+        { "id": "fake-transport-faults", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/fake-transport.test.cjs"], "kind": "node-test" }
+      ]
+    },
+    "integration": {
+      "status": "active",
+      "network": "descriptor",
+      "requires": ["catalog-test-db"],
+      "cases": [
+        { "id": "test-db-lifecycle", "cmd": ["node", "--test", "--test-reporter=tap", "cloud-server/tests/catalog-harness/catalog-test-db.integration.cjs"], "kind": "node-test" }
+      ]
+    },
+    "web": {
+      "status": "active",
+      "network": "loopback",
+      "requires": ["chrome"],
+      "cases": [
+        { "id": "v01b-browser-harness", "cmd": ["node", "tests/catalog-harness/run-browser-harness.mjs"], "kind": "plain" }
+      ]
+    },
+    "perf": { "status": "pending", "owner": "T20" },
+    "T03": { "status": "pending", "owner": "T03" },
+    "T04": { "status": "pending", "owner": "T04" },
+    "T05": { "status": "pending", "owner": "T05" },
+    "T06": { "status": "pending", "owner": "T06" },
+    "T07": { "status": "pending", "owner": "T07" },
+    "T08": { "status": "pending", "owner": "T08" },
+    "T09": { "status": "pending", "owner": "T09" },
+    "T10": { "status": "pending", "owner": "T10" },
+    "T11": { "status": "pending", "owner": "T11" },
+    "T12": { "status": "pending", "owner": "T12" },
+    "T13": { "status": "pending", "owner": "T13" },
+    "T14": { "status": "pending", "owner": "T14" },
+    "T15": { "status": "pending", "owner": "T15" },
+    "T16": { "status": "pending", "owner": "T16" },
+    "T17": { "status": "pending", "owner": "T17" },
+    "T18": { "status": "pending", "owner": "T18" },
+    "T19": { "status": "pending", "owner": "T19" },
+    "T20": { "status": "pending", "owner": "T20" },
+    "T21": { "status": "pending", "owner": "T21" },
+    "all-local": { "status": "aggregate", "includes": ["unit", "faults", "integration", "web"] }
+  }
+}

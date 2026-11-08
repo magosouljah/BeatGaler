@@ -1,0 +1,26 @@
+{
+  "n": 239,
+  "block": 240,
+  "blocks": [
+    {
+      "start": 0,
+      "end": 239,
+      "forward_boundary": false,
+      "backward_boundary": false
+    }
+  ],
+  "ordinal_of": {
+    "first": 0,
+    "last": 238
+  },
+  "rows_by_columns": {
+    "1": 239,
+    "2": 120,
+    "3": 80,
+    "4": 60,
+    "5": 48,
+    "6": 40,
+    "7": 35
+  },
+  "item_id": "w{ordinal} (generado, no materializado en cliente)"
+}

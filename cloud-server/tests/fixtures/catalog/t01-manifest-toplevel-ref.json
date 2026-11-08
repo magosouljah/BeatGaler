@@ -1,0 +1,73 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-mt",
+      "sort_order": 0,
+      "name": "Beat b-mt",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "master": {
+        "filename": "m.wav",
+        "manifest": {
+          "telegram_file_id": "direct:1600",
+          "telegram_message_id": 1600,
+          "filename": "m.wav",
+          "original_size": 9,
+          "transport": "direct-web",
+          "parts": [
+            {
+              "index": 0,
+              "size": 9,
+              "filename": "m.wav",
+              "telegram_file_id": "direct:1601",
+              "telegram_message_id": 1601
+            }
+          ]
+        }
+      },
+      "files": [
+        {
+          "cloud_file_id": "f-mt",
+          "type": "stems",
+          "filename": "s.zip",
+          "manifest": {
+            "telegram_file_id": "direct:1602",
+            "telegram_message_id": 1602,
+            "parts": [
+              {
+                "index": 0,
+                "telegram_file_id": "direct:1602",
+                "telegram_message_id": 1602
+              }
+            ]
+          }
+        }
+      ],
+      "project": {
+        "size": 5,
+        "manifest": {
+          "telegram_file_id": "direct:1603",
+          "telegram_message_id": 1603,
+          "filename": "p.zip",
+          "original_size": 5,
+          "transport": "direct-web",
+          "parts": [
+            {
+              "index": 0,
+              "size": 5,
+              "filename": "p.zip",
+              "telegram_file_id": "direct:1603",
+              "telegram_message_id": 1603
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "trash": []
+}

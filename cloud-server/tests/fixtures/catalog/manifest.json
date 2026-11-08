@@ -1,0 +1,499 @@
+{
+  "generator": "cloud-server/tests/fixtures/catalog/generate-fixtures.cjs",
+  "generator_version": 2,
+  "seed": 777,
+  "head": "a4462191",
+  "note": "Fixtures sintéticos T01/V01-A. No cubren todas las bibliotecas reales. expected: actual=HEAD observado, candidato-r4=contrato aprobado, review=debe ir a REVIEW.",
+  "fixtures": [
+    {
+      "id": "t01-empty-certified",
+      "file": "t01-empty-certified.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "roundtrip idéntico; 0 beats; biblioteca vacía certificada (distinto de puntero ausente)",
+      "bytes": 119,
+      "sha256": "71e7df18b2d8a1edc4aa7e18c40be6f05118256b00ef5b0b2155037b4eb83ec0"
+    },
+    {
+      "id": "t01-beat-minimal",
+      "file": "t01-beat-minimal.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "roundtrip idéntico; campos ausentes siguen ausentes",
+      "bytes": 198,
+      "sha256": "96d1f4628a8348094edec575f3943a5d60c5731213059e1be97aadd4d64bba61"
+    },
+    {
+      "id": "t01-all-slots",
+      "file": "t01-all-slots.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "todos los slots conocidos; cada referencia física inventariada (master, artwork, metadata, files, project parts)",
+      "bytes": 2083,
+      "sha256": "e7ffe72edd51c38266e961d01e2d078c0f050db1c465f6f51180071642b0aaa1"
+    },
+    {
+      "id": "t01-null-vs-absent",
+      "file": "t01-null-vs-absent.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "null y ausente se conservan distintos en raw; DTO actual los colapsa (pérdida documentada, no importador)",
+      "note": "b-art-nullfields: codificación Desktop de \"sin artwork\"; purge actual la rechaza (STOP-DATA D-04)",
+      "bytes": 584,
+      "sha256": "0fdfa22642b234f748e8c066fc88681399000155c8d26beab2a82edc1a28cf16"
+    },
+    {
+      "id": "t01-unicode-tags",
+      "file": "t01-unicode-tags.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "tags repetidos/case/espacios preservados en raw; Web rename usa Set exacto, Desktop trim+lowercase",
+      "note": "tags no string: DTO actual los descarta; importador debe conservarlos raw",
+      "bytes": 804,
+      "sha256": "1f7f5a8b89c50b2462ea1785f11a39b33d4d8e1f166608955fe5f2009bf0c931"
+    },
+    {
+      "id": "t01-id-256",
+      "file": "t01-id-256.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "id 256 chars válido en INDEX/SQL CHECK; >192 rechazado por capability scope; 257 inválido",
+      "bytes": 2513,
+      "sha256": "be5e30a16781d60bee5a91b9f0f1d1bd525c52a26ab4e09fc03790e66285e98d"
+    },
+    {
+      "id": "t01-id-collisions",
+      "file": "t01-id-collisions.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "REVIEW: \" a\"/\"a\" y 1/\"1\" colisionan tras trim/String (library-beat-quota.js:17-18); IDs duplicados",
+      "bytes": 1031,
+      "sha256": "79ad003a1baeb0bdc4fc910c35c22988b8cb17063bd2e6454e8b6df93025e7d8"
+    },
+    {
+      "id": "t01-metadata-message-id",
+      "file": "t01-metadata-message-id.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "metadata_message_id es referencia física (retención/purge)",
+      "bytes": 429,
+      "sha256": "b820108ec9e27eda4b51b7a26713dc6dcce00fcb0e936552ee393a8653871a9f"
+    },
+    {
+      "id": "t01-multipart",
+      "file": "t01-multipart.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "legacy multipart en master/files/project preservado; DTO actual toma solo parte 0 (pérdida)",
+      "note": "files[*].parts top-level (legacy) vs files[*].manifest.parts: el colector vivo server-core.js:2632 solo lee el primero (STOP-DATA D-05)",
+      "bytes": 1950,
+      "sha256": "c8255026ffb13a747c236040c28bab65f31728f42578301894bd135162b1ad46"
+    },
+    {
+      "id": "t01-repeated-unknown-files",
+      "file": "t01-repeated-unknown-files.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "tipos repetidos y desconocidos preservados; DTO actual toma el primero por tipo",
+      "bytes": 847,
+      "sha256": "268a11668504a00aa509afa67208af24a0b3e112330905c567a3cb9c29163f1b"
+    },
+    {
+      "id": "t01-trash-deleted-garbage",
+      "file": "t01-trash-deleted-garbage.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "wrapper trash, deleted[] (beat_id/deleted_at y alias id/at OPAQUE), garbage[] (marked_at ISO vs epoch)",
+      "note": "trash sin wrapper (beat suelto) se cubre en t01-trash-unwrapped",
+      "bytes": 1277,
+      "sha256": "21c116085f8cfde01b4c2a927063ccf134d436995d8c8a3f578346f2e2710ec9"
+    },
+    {
+      "id": "t01-trash-unwrapped",
+      "file": "t01-trash-unwrapped.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "beat suelto en trash: Rust/Web lo aceptan, servidor (library-beat-quota.js:39) lo rechaza",
+      "bytes": 284,
+      "sha256": "6d4c4d8ba34586899482aa8864c14dc2f297719aa0a4ae89388b0bd7e2af004f"
+    },
+    {
+      "id": "t01-shared-reference",
+      "file": "t01-shared-reference.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "misma referencia física en beat activo y en trash: purge no debe borrarla",
+      "bytes": 735,
+      "sha256": "d9e8f6a50f50c456bf87ca0cd5a9af497c1e9f5ad6fc17ec965201eb93f973b5"
+    },
+    {
+      "id": "t01-unknown-fields",
+      "file": "t01-unknown-fields.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "campos desconocidos en root/beat/wrapper se conservan",
+      "bytes": 415,
+      "sha256": "895609b818e6525ba930d12080fc87e85b8e653a19aaddfa2e9df0f6d27dc59c"
+    },
+    {
+      "id": "t01-v1-implicit",
+      "file": "t01-v1-implicit.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "v1 (version ausente): source-roundtrip exacto; authoritative-export v2 añade version:2 y trash:[] como delta listado",
+      "bytes": 138,
+      "sha256": "0cb76d1f567bccd2b7c6a5753bb27dca4045b58ccd9241af8b61cd846afb0404"
+    },
+    {
+      "id": "t01-version-null",
+      "file": "t01-version-null.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "version:null → Rust as_i64 None→1, Web null??1→1, commands.rs:1805 lee 0; REVIEW",
+      "bytes": 79,
+      "sha256": "a77270b8e6cd6d8624cab7e58b3e744a4b1dc8e30cc2b3f0f3cbb5524140b309"
+    },
+    {
+      "id": "t01-version-future",
+      "file": "t01-version-future.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "version 3 → rechazo explícito (no soportada)",
+      "bytes": 76,
+      "sha256": "186fe5f247742773075e01d46fc2f62c98ed64e0628d5abf8bb7234233dea000"
+    },
+    {
+      "id": "t01-source-order-ne-sort",
+      "file": "t01-source-order-ne-sort.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "orden del array ≠ sort_order: preservar ambos; export regenera contiguo solo tras cambios (delta permitido C4)",
+      "bytes": 580,
+      "sha256": "2fa58a4805147337f30d051dbc74dbcd0ea06d249de926fcb6111be6607e196b"
+    },
+    {
+      "id": "t01-pointer-absent-nonempty",
+      "file": "t01-pointer-absent-nonempty.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "descriptor: biblioteca con beats en SQL/quota pero sin puntero de INDEX → REVIEW, nunca vacío certificado",
+      "bytes": 125,
+      "sha256": "8b2cbb839b4ea42ac6ecddbf2f5717b17385053da127ce1c556eb1887205bda6"
+    },
+    {
+      "id": "t01-tombstone-sql-only",
+      "file": "t01-tombstone-sql-only.json",
+      "kind": "index-valid",
+      "expected": "candidato-r4",
+      "oracle": "tombstone en library_trash_purges sin entrada en INDEX: aparece solo en authoritative-export como delta; sin timestamp → null, no fecha actual",
+      "bytes": 562,
+      "sha256": "74cac07fea3b52310c79abb000a946086e257c08d832d97687386426f03951b5"
+    },
+    {
+      "id": "t01-invalid-json",
+      "file": "t01-invalid-json.json",
+      "kind": "index-invalid-json",
+      "expected": "review",
+      "oracle": "JSON inválido → REVIEW (no reparar)",
+      "bytes": 74,
+      "sha256": "9290fddccf2b713f9e68d039bc8d073df6a3560049f77ed6d6661f7eaddc34bd"
+    },
+    {
+      "id": "t01-duplicate-keys",
+      "file": "t01-duplicate-keys.json",
+      "kind": "index-raw-review",
+      "expected": "review",
+      "oracle": "claves duplicadas → REVIEW (JSON.parse se queda con la última: pérdida silenciosa)",
+      "bytes": 108,
+      "sha256": "860043e7f34af708abc0510f8a6d01be6c13330bad206ae0a17d8ea2f91f0b94"
+    },
+    {
+      "id": "t01-unsafe-int",
+      "file": "t01-unsafe-int.json",
+      "kind": "index-raw-review",
+      "expected": "review",
+      "oracle": "entero no seguro en message_id → REVIEW",
+      "bytes": 124,
+      "sha256": "90e872bc6760ca161dc24d99fe09e6202207a6e3e2203c663954e7c1dd5a5fd9"
+    },
+    {
+      "id": "t01-nul-surrogates",
+      "file": "t01-nul-surrogates.json",
+      "kind": "index-raw-review",
+      "expected": "review",
+      "oracle": "NUL y surrogates sueltos: JSON.parse acepta, PG jsonb/text rechaza NUL → conservar bytes raw (bytea) + REVIEW",
+      "bytes": 160,
+      "sha256": "99e19dff15f6d3eaa50670864fbf505965f5ca07b44acf059a575830a43f0c81"
+    },
+    {
+      "id": "t01-beathash-key-order",
+      "file": "t01-beathash-key-order.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "mismo beat, distinto orden de claves → beatHash (sha256(JSON.stringify)) distinto; reserializar rompe PENDING purges (STOP-DATA D-03)",
+      "bytes": 129,
+      "sha256": "514c14e01268f431f8ec61c296db0e2d40094df3c9513a42cff60ec32aba417b"
+    },
+    {
+      "id": "t01-size-zero",
+      "file": "t01-size-zero.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "size 0: ¿desconocido o vacío? (commands.rs unwrap_or(0)) → preservar raw, no inferir",
+      "bytes": 399,
+      "sha256": "d515748b75561c7e0bfaac7e9bff8abca4b83caebb44ddbc9b6264e1259a76c9"
+    },
+    {
+      "id": "t01-botapi-file-id",
+      "file": "t01-botapi-file-id.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "telegram_file_id histórico sin forma direct: → OPAQUE; bloquea operaciones que lo interpreten (purge)",
+      "bytes": 399,
+      "sha256": "74b285432befb50cf469571da3870f53ddea150d0d70356ecd9fb8e81a3e3e3b"
+    },
+    {
+      "id": "t01-garbage-intersects-live",
+      "file": "t01-garbage-intersects-live.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-02: garbage[] con message_id que coincide con referencia viva (1100 master activo) y de trash anidada (1102 parte de project) => REVIEW; 1199 sin referencia se preserva verbatim y por sí solo no es REVIEW (ver 9901 en t01-trash-deleted-garbage). El catálogo no borra nada por estar en garbage[]",
+      "note": "colector completo recursivo (master/artwork/project/files, manifest.parts y parts top-level, metadata_message_id), no collectManifestMediaMessageIds (D-05)",
+      "bytes": 1367,
+      "sha256": "721b3a073c68b22e5464941528c72ec7b6eb25e945c58e21e72bf2553cbd7f91"
+    },
+    {
+      "id": "t01-topic-map-mismatch",
+      "file": "t01-topic-map-mismatch.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-09: beatTopics de cloud-data.json (clave topicKey instalación:beat, server-core.js:189) con enlace instalación→users.id verificado; b-t1 coincide (solo evidencia, catalog_legacy_fields scope=topic_map), b-t2 mapa 9555 != beat.telegram_topic_id 9002 => REVIEW. Ningún topic se borra",
+      "bytes": 1048,
+      "sha256": "e3fd817cb9c7aa4fb281fde48452629e3b98835c5f6e5a92f689864b584968fe"
+    },
+    {
+      "id": "t01-topic-map-link-ambiguous",
+      "file": "t01-topic-map-link-ambiguous.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-09: entradas beatTopics cuya instalación enlaza a dos users.id (ambiguo) o a otro usuario => REVIEW; cloud-data.json nunca es fuente de tenant",
+      "bytes": 966,
+      "sha256": "5a91323b35df32e1772fb18d2324cf39e4f2a22b941eb9a96be522c58e6b3ba1"
+    },
+    {
+      "id": "t01-id-trim-unpaired",
+      "file": "t01-id-trim-unpaired.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-06: id !== id.trim() => REVIEW aunque no exista la pareja recortada (\" solo\", \"tail \", \"\\t tab\"); nunca recortar",
+      "note": "ok es control válido",
+      "bytes": 753,
+      "sha256": "5047d977fd6a78f562c8a4105dfe581419b039fe62389617a033d91fbaf9f1ac"
+    },
+    {
+      "id": "t01-id-astral",
+      "file": "t01-id-astral.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-06: astral 😀×128 = 256 UTF-16 / 128 chars PG => válido con direct_scope_compatible=false; 😀×129 = 258 UTF-16 => REVIEW; \"a\"×255+😀 = 257 UTF-16 / 256 chars PG => REVIEW (ambas métricas deben estar en 1..256)",
+      "bytes": 3142,
+      "sha256": "3b989852ab65db778e26c08e18cc8f9ef8e193a8d640d52a6674b808d4caedf0"
+    },
+    {
+      "id": "t01-trash-beat-nonobject",
+      "file": "t01-trash-beat-nonobject.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-07: item de trash con clave beat cuyo valor no es objeto (string, null, array, número) => REVIEW; distinto de fila desnuda sin clave beat (t01-trash-unwrapped)",
+      "bytes": 464,
+      "sha256": "eb6d468b92e9043a2b90f1e2fe0b0dadb36f6cefc1f570696f3d297afa94f042"
+    },
+    {
+      "id": "t01-deleted-alias-conflict",
+      "file": "t01-deleted-alias-conflict.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "catalog_tombstones T01-B: deleted[] con beat_id e id distintos => REVIEW; ambos ausentes => REVIEW; beat_id e id iguales => no REVIEW (raw_key verbatim)",
+      "note": "b-d3 es control no-REVIEW",
+      "bytes": 360,
+      "sha256": "8feff37e8a1c177645bb2c824e94991b1b270b18b8cfbeaab559915c443f4692"
+    },
+    {
+      "id": "t01-live-vs-tombstone",
+      "file": "t01-live-vs-tombstone.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "D-10/C1.11: beat vivo con mismo ID que tombstone SQL (CONFIRMED) o que deleted[] del INDEX => REVIEW; nunca resucitar ni descartar el tombstone",
+      "bytes": 719,
+      "sha256": "16b4f4d047e3edb3a9705be3eb9b7e986747dcfde7e22ebf937f0f027faf91cc"
+    },
+    {
+      "id": "t01-manifest-toplevel-ref",
+      "file": "t01-manifest-toplevel-ref.json",
+      "kind": "index-valid",
+      "expected": "actual",
+      "oracle": "referencia física a nivel manifest (manifest.telegram_file_id/telegram_message_id, forma direct-web de project-access.integration.cjs:20) además de parts[*] y distinta de ellas (1600 vs 1601) en master/files/project: ambas se inventarían como referencias; preservadas verbatim",
+      "bytes": 1740,
+      "sha256": "1b9223b4f1310e28f81ceeccd804a683510d04150c1817176cd0f793e59d355e"
+    },
+    {
+      "id": "t01-uploaded-files-beat-mismatch",
+      "file": "t01-uploaded-files-beat-mismatch.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "COV-01/C4 (CONTRATO:99 referencias inconsistentes): uploadedFiles de cloud-data.json (server-core.js:2379/2934) no es autoridad ni se importa; solo se coteja. direct:1400 en INDEX bajo b-u1 y en uploadedFiles bajo b-u2 => REVIEW. direct:1401 coincide (no-op). direct:1402 sin referencia en INDEX = upload huérfano: fuga, no pérdida, no REVIEW, nunca se barre (D-01/D-02)",
+      "note": "kind no se compara con el slot (sin contrato kind↔slot): se registra verbatim",
+      "bytes": 1549,
+      "sha256": "b0c7811f2669ddea367f2eac893f9cf86b9acba14b9e010a1c246a82fa911d5f"
+    },
+    {
+      "id": "t01-message-redirect-stale",
+      "file": "t01-message-redirect-stale.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "COV-01/C4: messageRedirects (server-core.js:475, migración legacy a topics) con clave instalación:oldId cuyo oldId 1500 sigue referenciado en el INDEX => REVIEW; el catálogo nunca aplica redirects en silencio. Redirect 1510→1511 sin referencia en INDEX: sin efecto",
+      "bytes": 655,
+      "sha256": "c43694832e4ce27b92856c42a8553f1222187de96cc17b05334210cd00b58ccd"
+    },
+    {
+      "id": "t01-nul-unprojected",
+      "file": "t01-nul-unprojected.json",
+      "kind": "index-valid",
+      "expected": "candidato-r4",
+      "oracle": "D-08: NUL y surrogate suelto solo en campos NO proyectados (beat.x_ext, clave anidada, wrapper de trash, extra de root, extra de garbage) => biblioteca elegible; legacy_json y catalog_legacy_fields guardan TEXT con los escapes ASCII (\\u0000, \\ud800) sin byte NUL ni pérdida; nunca jsonb (si una columna legacy fuese jsonb => REVIEW, nunca strip); raw_index bytea exacto; proyecciones no afectadas. Contraste: t01-nul-surrogates (campos proyectados => REVIEW)",
+      "note": "el archivo es ASCII en esos valores: JSON.stringify escapa U+0000 y surrogates sueltos (ES2019 well-formed)",
+      "bytes": 881,
+      "sha256": "fe8ac03c6ba2a6680b3fb27724bf0b0abc8b44638d5bdddea048118babc6b0cc"
+    },
+    {
+      "id": "t01-over-rollback-budget",
+      "file": "t01-over-rollback-budget.json",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "ON-DEMAND (no se versiona; regenerar con --big). UTF-8 bytes > 15 MiB (rollback_max_bytes) y < 16 MiB: biblioteca fuera del piloto reversible (ROLLBACK_CAPACITY_EXCEEDED); bytes=16240147",
+      "bytes": 16240147,
+      "sha256": "6ea0fc69db0057a45d94a99eec038a54c5f6cb6816e474f202daf95ead87db54",
+      "on_demand": true
+    },
+    {
+      "id": "c12-u01-names",
+      "file": "c12-u01-names.json",
+      "kind": "oracle-input",
+      "expected": "actual",
+      "oracle": "U01: 20 nombres anexo + Z,10,2,-,_,🌙,ß,ss + ausente/null/vacío + duplicados. Oráculo actual (Node22/Chrome152 es-MX) para b0..b19: 9,8,2,3,4,5,1,10,13,12,11,17,14,15,16,7,6,18,19,0. Candidato ICU und: lo fija T06 (no inventado aquí)",
+      "note": "b0 duplicado a propósito → REVIEW de identidad",
+      "bytes": 3022,
+      "sha256": "8ca2e06b36c72e0318bb0ad31a98c9068dbe9980a2160d6f944f90ca69ed083b"
+    },
+    {
+      "id": "c12-u02-nfc-nfd",
+      "file": "c12-u02-nfc-nfd.json",
+      "kind": "oracle-input",
+      "expected": "candidato-r4",
+      "oracle": "U02: NFC/NFD en ambos órdenes manuales; T06 verifica 4 sorts × limit 1/2/240 sin saltos/duplicados",
+      "bytes": 637,
+      "sha256": "5001895cf945ac5503dde00415e9eb10d19480077935638d3912dce7c1268c4e"
+    },
+    {
+      "id": "c12-n01-bpm",
+      "file": "c12-n01-bpm.json",
+      "kind": "oracle-input",
+      "expected": "candidato-r4",
+      "oracle": "N01/A2: raw preservado; clase −Inf, finitos, +Inf, NaN/no numérico al final; sin NaN en JSON. Oráculo actual p0..p9 Node: p0,p1,p8,p3,p4,p2,p6,p5,p7,p9 (sin orden total)",
+      "note": "-0 numérico serializa como 0 en JSON.stringify: se documenta como límite del fixture JSON",
+      "bytes": 1604,
+      "sha256": "0aa14545601a9674c0a04f29ae6be38a5a30bfe0bbb3d74f7805cb674afecf79"
+    },
+    {
+      "id": "c12-f01-tags",
+      "file": "c12-f01-tags.json",
+      "kind": "oracle-input",
+      "expected": "actual",
+      "oracle": "F01: ANY/ALL, include∩exclude, sets vacíos, case/espacios/duplicados; predicados igual al selector real (ANY desde composition)",
+      "bytes": 1412,
+      "sha256": "e13d6f6167a6da07bc039a9c316b29f7ee3edd6a0a9eb2e3f256ac08853d3a96"
+    },
+    {
+      "id": "c12-f02-search",
+      "file": "c12-f02-search.json",
+      "kind": "oracle-input",
+      "expected": "candidato-r4",
+      "oracle": "F02: substring literal global (match solo en beat 241 = s240 fuera de la primera ventana de 240), sin unaccent, sin cruce entre campos, BPM case literal",
+      "bytes": 36176,
+      "sha256": "7c5dea08cfbf44a67b188e5bfc0df675275969eb1776ad57196609bd09e7cbf4"
+    },
+    {
+      "id": "v01a-window-n0",
+      "file": "v01a-window-n0.json",
+      "kind": "window",
+      "expected": "candidato-r4",
+      "oracle": "N=0: bloques de 240 en ambas direcciones con boundary y ordinal esperados; filas por columnas 1..7",
+      "bytes": 282,
+      "sha256": "7443a87e1548b4cd3ad4840da5f5da2957edb7b47d2895eb2f371d6c53167f01"
+    },
+    {
+      "id": "v01a-window-n1",
+      "file": "v01a-window-n1.json",
+      "kind": "window",
+      "expected": "candidato-r4",
+      "oracle": "N=1: bloques de 240 en ambas direcciones con boundary y ordinal esperados; filas por columnas 1..7",
+      "bytes": 391,
+      "sha256": "92e67ddf7d7413264b91b3461285e6f6f09c1159f04862da635dc20b6af7a362"
+    },
+    {
+      "id": "v01a-window-n239",
+      "file": "v01a-window-n239.json",
+      "kind": "window",
+      "expected": "candidato-r4",
+      "oracle": "N=239: bloques de 240 en ambas direcciones con boundary y ordinal esperados; filas por columnas 1..7",
+      "bytes": 406,
+      "sha256": "954fd2f5aa3b01908cdccc5a8dd0ffc52020f40296cf80db70cf9bccb6b1ecce"
+    },
+    {
+      "id": "v01a-window-n240",
+      "file": "v01a-window-n240.json",
+      "kind": "window",
+      "expected": "candidato-r4",
+      "oracle": "N=240: bloques de 240 en ambas direcciones con boundary y ordinal esperados; filas por columnas 1..7",
+      "bytes": 406,
+      "sha256": "f36e3a39d4c68d3dc163719d40acf52eefaaa08bad6c994268a84778c2c26c2e"
+    },
+    {
+      "id": "v01a-window-n241",
+      "file": "v01a-window-n241.json",
+      "kind": "window",
+      "expected": "candidato-r4",
+      "oracle": "N=241: bloques de 240 en ambas direcciones con boundary y ordinal esperados; filas por columnas 1..7",
+      "bytes": 521,
+      "sha256": "07eafa08b78a84d3255f43caf5956fc9d7831901944ab380a623937b1ff1e41a"
+    },
+    {
+      "id": "v01a-long-metadata",
+      "file": "v01a-long-metadata.json",
+      "kind": "window",
+      "expected": "candidato-r4",
+      "oracle": "metadata larga ejerce límites C5/C12-L01 sin superar 2 MiB por bloque de 240; artwork con retardo 2 s y con error",
+      "note": "campos x_fixture_* los interpreta solo el servidor fake de T02",
+      "bytes": 442591,
+      "sha256": "099c3db6c06bc31c8b0ab2509c4694b6c232c44699375c1f97439a61c96cb327"
+    },
+    {
+      "id": "v01a-external-state",
+      "file": "v01a-external-state.json",
+      "kind": "external-state",
+      "expected": "candidato-r4",
+      "oracle": "currentBeat fuera de ventana, selección y borrador offscreen, cola con IDs no cargados, cuenta A→B distinguible; evicción ≠ borrado",
+      "bytes": 619,
+      "sha256": "b98f38613af2acb42e51d5992c25fb7c55ecacf3a3f6382377cbe3fbe8f582e4"
+    },
+    {
+      "id": "v01a-big-generator",
+      "file": "v01a-big-generator.json",
+      "kind": "oracle-input",
+      "expected": "candidato-r4",
+      "oracle": "digest incremental de la secuencia completa para V10; bloques bajo demanda en el servidor fake, nunca array en cliente",
+      "bytes": 291,
+      "sha256": "56f5e88c00381a8057fbc096e7979624e3e5d176fb0372039a3f4c7120988774"
+    }
+  ]
+}

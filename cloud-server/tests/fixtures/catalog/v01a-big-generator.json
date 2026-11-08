@@ -1,0 +1,8 @@
+{
+  "seed": 777,
+  "line_format": "g{ordinal}|{bpm=floor(r*200)}|{nameKey=floor(r*1e6)}\\n (mulberry32)",
+  "digests": {
+    "100000": "c9a2cd5ef19aed0942e0de2cbfea2554c23cc4ba4e6b91597871fd820d4c3096",
+    "1000000": "8d177d7715f95ece05871aeeafde3f66fb490e2dbb368f44be166c396112ba8a"
+  }
+}

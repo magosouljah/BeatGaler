@@ -1,5 +1,32 @@
 # Evidencia y límites
 
+**Cierre T00/G0 LOCAL (2026-11-08):** registrado por dictamen GPT-6 sobre `G0-REVISION-FINAL-v2.zip` (48/48 hashes, baseline 68/68, smoke rutas 6/6, smoke autenticado simulado 5/5, PostgreSQL G0 verificado, C12-r4 cerrado). No se repitieron pruebas ni se generó nuevo ZIP/informe. El smoke simulado no prueba transporte real, Telegram ni producción. Evidencia T01 en `consumer-map.md` / `contract-map.json`.
+
+
+**Vigencia C12-r4 (2026-11-07):** [cierre C12-r4](C12-V00-CIERRE-20261107.md) integra el [acta I1/I2/I3 aprobada](C12-V00-INTERACCIONES-APROBADAS-20261107.md) de `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` y las respuestas explícitas del usuario de este encargo. **A1/A2/B-legacy e I1/I2/I3 aprobados; decisiones C12/V00 cerradas para diseño.** Shuffle sin repetición por ronda, aviso de selección solo si existía y rename también en papelera sin alterar su estado. Las menciones pendientes r2/r3 quedan como antecedentes, sustituidas por r4. **T00/G0 no PASS; T01 bloqueada; T02 no iniciada.** No hay autorización de implementar.
+
+
+**Cierre de integración documental r3:** diff whitespace/enlaces/fences PASS; caracterización r2 intacta byte a byte,5/5 MD remotos exactos. Inventario de7 MD modificados y6 incorporados en [plan B sección11](C12-B-INTEGRACION-Y-PLAN-20261107.md). Sin nuevas pruebas de producto/SQL/performance, sin runtime ni servicios reales. B-experiencia aprobada; C12/T00/G0 continúan NO PASS y T01 bloqueada por decisiones pendientes, no por falta de aprobación del scroll infinito.
+
+
+## Evidencia vigente C12-r3 — reconciliación e infinite scroll
+
+Local HEAD `a4462191aea29ffdae136f04e1fdc2e4024291d1`; remoto obtenido `b585540a3a82bc8604d8d6de603514af48b5feb4`. Sin diferencias runtime src/cloud-server entre ambos. Fetch genérico falló por rama release del refspec inexistente; fetch explícito de LOCAL pasó sin cambiar configuración ni HEAD. Copia local15/15 archivos verificada con SHA256 antes de editar, snapshot remoto19 archivos y reconciliación append-only descritos en [plan B sección1](C12-B-INTEGRACION-Y-PLAN-20261107.md). Caracterización r2 conservada sin cambios, con su SHA y resultados históricos.
+
+Se incorporó exactamente el [anexo oficial B](C12-B-GALLERY-INFINITA-VIRTUALIZADA-20261107.md): experiencia continua aprobada, detalles legacy no. V01–V14 del plan B citan fuentes reales: grid monta todo filteredBeats, currentBeat depende del array, queue releaseFile y selección podan ausentes, estilos declaran239px/columnas responsive, Web manualLibraryReorder=false. Es lectura estática, no medición visual ni prueba de virtualización.
+
+No se ejecutaron nuevas suites de producto/SQL, browser fixtures, performance, producción, AWS o Telegram. No se instaló virtualizador ni se modificaron runtime/CSS/DESIGN/tests/lockfiles. Las fuentes técnicas React/ResizeObserver/WAI/CSS se enlazan donde fundamentan el diseño; no certifican compatibilidad ejecutada. Baseline y probe previos siguen históricos; no se relanzaron workflows. Resultado de checks documentales al cierre más abajo.
+
+## Antecedente C12-r2 — evidencia histórica conservada
+
+El análisis C12 se hizo sobre `a4462191aea29ffdae136f04e1fdc2e4024291d1` en LOCAL. Ver [C12-CARACTERIZACION-20261107.md](C12-CARACTERIZACION-20261107.md): índice E01–E14 con rutas/líneas y callers, comparación con remoto sin mover HEAD, baseline histórico, verificación independiente del run PostgreSQL G0 y resultados sintéticos Node/Chrome. Los registros siguientes conservan su SHA/fecha originales; no son una certificación nueva del catálogo.
+
+Hechos que corrigen la simplificación inicial: Gallery filtra/ordena después de recortar240; BPM se busca como texto sin lowercase; normalizador de DTO descarta tipos no string de BPM/key, que el importador debe conservar raw; localeCompare depende del entorno; NaN en sort BPM no implica inválidos al final; bgPage no tiene límite seguro y el window reubica offsets fuera de rango en última página. Una firma no hace equivalente una ventana legacy y un resultado ordenado globalmente.
+
+El [acta C12-r2](C12-DECISION-RECORD.md) fija decisiones técnicas y deja A1/A2/B **STOP-DESIGN**. Probe PG16.15/UTF8/en_US.utf8/pg_trgm1.6 verificado resuelve descriptor G0, no ICU SQL, Edge, T02, performance ni G0 global. No se ejecutaron consultas DB ni pruebas de servicios; el experimento inicial de tags con target incorrecto se descartó y se repitió con ES2022, como registra el anexo.
+
+Verificación de esta entrega: `git diff --check` PASS; revisión de enlaces locales y fences Markdown de los siete documentos PASS; `git status --short` contiene únicamente cinco documentos rastreados modificados, dos documentos C12 nuevos y los dos no rastreados preexistentes. Comparación `git diff 31861e6406ac10073d368aa5d8a4edcb5dfd2d2b HEAD --stat -- src cloud-server` sin diferencias. Estos checks documentales no equivalen a ejecutar las pruebas del producto ni a aceptar G0.
+
 ## E1. Base reproducible
 
 Inspección local realizada el 7 de noviembre de 2026:
@@ -138,6 +165,11 @@ El usuario ejecutó el runner: 6/6 E4, 3/3 PostgreSQL simulado, 31/32 DOM, 27/27
 
 Salida aportada por el usuario con HEAD `5b199161351a05c62df79870d563cd7aceb5572f`. E4 6/6, fake Postgres/Direct 3/3, DOM 32/32, integración Direct 27/27; 7/7 fases del runner exit 0. Además guard Cloud AST PASS, **25/25 mutaciones rechazadas**, TypeScript `--noEmit` PASS. La suite DOM imprime warning React de Suspense fuera de `act` para un caso signed-out; prueba PASS y warning registrado. Ningún servicio o DB real fue accedido. Docker/Podman/psql no encontrados en PATH Windows. EVIDENCIA E12 permanece como antecedente de fallo ya corregido. Ver [T00-BASELINE-PASS-20261107.md](T00-BASELINE-PASS-20261107.md).
 
+
+## Antecedentes remotos reconciliados (históricos)
+
+Importados de `b585540a3a82bc8604d8d6de603514af48b5feb4`; no reemplazan C12-r2/r3 ni el estado vigente.
+
 ## E14. Preparación de probe G0 PostgreSQL y entrega C12 a IDE
 
 Se creó el workflow de `push` sobre LOCAL, archivo `.github/workflows/catalog-g0-postgres-probe.yml`: PostgreSQL 16 digest fijado en job y service aislados, DB de prueba/rol explícitos, protección de identidad y consulta de colación, UTF8, `pg_trgm`; agrega descriptor en run summary. **No se declara que haya ejecutado ni que sea PASS sin leer resultados del run**. Sin `checkout`, AWS, Telegram, migraciones ni base real. Se agregó `G0-C12-IDE-MASTER-PROMPT-20261107.md` para el diseño C12. Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).
@@ -153,3 +185,119 @@ Se creó el workflow de `push` sobre LOCAL, archivo `.github/workflows/catalog-g
 ## E17. C12 — lectura de implementación LOCAL
 
 Ver [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md). Fuentes del commit `894f486`: `useBeatGalerComposition.ts:103–118` ANY Web/ALL Desktop; `librarySelectors.ts:15–33` filtros/sort; `webLibrary.ts:13,238–316` página 240 y slice INDEX; `webLibraryNavigation.ts:1–26` bgPage offset; `WebLibraryPagination.tsx:24–32` navegación. Faltan paridad Unicode/SQL y resolución de bookmarks profundos; no se corrieron esas pruebas ni se cambió el producto.
+
+## Transferencia normativa vigente C12-r4
+
+[cierre C12-r4](C12-V00-CIERRE-20261107.md) integra las aprobaciones explícitas y sustituye pendientes/recomendaciones incompatibles r2/r3. A1 ICU fijo, A2 binary64/clase y B-legacy <=10.000 quedan aprobados. I1 selección global con aviso solo si había selección; I2 audio continuo, nuevo query y cola prioritaria, Shuffle sin repetición por ronda; I3 rename ACTIVE/TRASH sin modificar estado. Se descarta fijar permanentemente la búsqueda musical al pulsar Play.
+
+Aplicar las dependencias, algoritmos, alternativas y STOP de sección 7 del cierre a T01/T03/T06/T07/T13/T14/T20 y V00–V11. Membresías SQL persistidas, selección CAS, facetas, journal y swaps Shuffle no son memoria global del cliente. T01/T06 deben producir inventario y contratos tipados completos en sus tareas futuras. T00 revisa formalmente base/descriptor/baseline/contrato, sin volver a solicitar las aprobaciones resueltas. T01 permanece bloqueada; ningún paso de implementación iniciado.
+
+## Verificación documental r4 ejecutada
+
+`git diff --check`: PASS. Comprobación local de enlaces, fences y caracteres de sustitución: **22 Markdown, 0 errores**. Caracterización r2 idéntica byte a byte al snapshot previo; nuevo anexo I1/I2/I3 idéntico al blob remoto c6d7b7c. Backup previo verificado: 21 archivos con manifiesto SHA256. HEAD permanece a4462191aea29ffdae136f04e1fdc2e4024291d1. Diff de producto entre HEAD/remoto vacío. No cambios de runtime, tests, workflows ni runner; no commit/push. `Claude outputs/` y `beatgaler-console.jpg` preservados.
+
+Entrega r4: nuevo `C12-V00-CIERRE-20261107.md` y anexo remoto `C12-V00-INTERACCIONES-APROBADAS-20261107.md`; actualizados acta C12, plan B, README, CONTRATO, TAREAS, ESTADO y EVIDENCIA. Los demás cambios Git preceden este encargo. Se corrigió un fallo del script documental por lectura Python cp1252 usando UTF-8 explícito; se validaron después todos los MD. No hubo pérdida/restauración de contenido ni ejecución de producto.
+
+Decisiones C12/V00 cerradas para diseño conforme a respuestas del usuario, incluyendo corrección de Shuffle sin repeticiones. No tests de aplicación, SQL, browser, uniformidad RNG, benchmarks ni despliegues ejecutados. G0/T00 requieren dictamen formal independiente; T01 bloqueada, T02 no iniciada.
+
+## E18. Plan N1 — matriz V y verificación documental (2026-11-07)
+
+Comprobaciones ejecutadas en esta sesión. No se atribuyen aquí pruebas de otras IDE ni del usuario.
+
+| Comprobación | Método exacto | Resultado |
+| --- | --- | --- |
+| Shell Windows | `device_bash` | No disponible: «Workspace unavailable». No se ejecutó ningún comando `git` |
+| Rama y HEAD | lectura de `.git/HEAD` y `.git/refs/heads/local/landing-gallery-unificada` | rama `local/landing-gallery-unificada`, HEAD `a4462191aea29ffdae136f04e1fdc2e4024291d1` |
+| Remoto registrado | `.git/refs/remotes/origin/local/landing-gallery-unificada` y `FETCH_HEAD` | `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` (sin fetch nuevo; no se afirma sincronía) |
+| Estado del directorio del plan antes de editar | parseo de `.git/index` v2 (1.090 entradas) y SHA-1 de blob de cada archivo, también con CRLF→LF | 13 rastreados, 12 sin seguimiento; con CRLF normalizado, modificados respecto al índice: CONTRATO, ESTADO, EVIDENCIA, README, T00-REVISION, TAREAS; resto igual |
+| Protección previa | copia de los 25 archivos del plan en el espacio de trabajo de la sesión + SHA256 por archivo | 25/25 hashes registrados antes de editar; originales en disco no tocados hasta la copia final |
+| Existencia de archivos futuros | listado de `src/`, `scripts/`, `cloud-server/` | no existen `scripts/catalog-check.cjs`, `cloud-server/catalog/`, `src/features/catalog/`, `src/features/library/catalog/` |
+| AGENTS.md | listado de raíz, `docs/` e índice Git | ninguno encontrado |
+| Validación documental | `python3 -I validate_plan.py <plan_nuevo> <copia_previa>` | PASS. 26 archivos UTF-8 estricto sin U+FFFD y EOL homogéneo; 25 MD con fences pares; 157 enlaces locales existentes; 725 líneas añadidas sin espacios finales ni marcadores; T00–T25 = 26 fichas con nombres iguales a TAREAS y responsables iguales a N1 (8/16/2); V00–V11 = 12 fichas con nombres iguales a plan B §8, 20 campos cada una y responsables iguales a N1 (1/3/8); gates solo G0–G4; sin IDs T>25 ni V>14; dependencias V sin padre posterior; cambios solo en los 5 archivos autorizados más 1 nuevo, todos aditivos; matriz T intacta |
+| Correcciones durante la validación | primer run FAIL con 3 fallos | 2 eran defectos del script (orden V numérico tomado como orden topológico; fila «G0 antiguo» de N1 §3 contada como gate) y se corrigieron; 1 real (comando futuro sin etiqueta en V01 campo 10) corregido en la matriz V; segundo run PASS |
+| Prueba negativa del validador | copia temporal con 4 defectos inyectados (campo faltante, enlace roto, espacio final, matriz T alterada) | FAIL con los 4 detectados |
+
+No comprobado: `git status --short` y `git diff --check` reales, árbol completo fuera de este directorio, consistencia semántica más allá de la revisión manual registrada en la matriz V §2.
+
+## E19. T01-B — cierre de contrato de hallazgos T01-A (2026-11-08)
+
+Nivel ALTA, HEAD `a4462191aea29ffdae136f04e1fdc2e4024291d1`, rama LOCAL. Solo documentación del plan; sin código de producto, tests, fixtures, DDL, DB, red, Telegram ni `.env`. Respaldo previo verificado con SHA-256: `E:\777\app\BeatGaler-plan-backups\T01B-pre-20261108-124215` (4 archivos, `MANIFEST.sha256` OK).
+
+Lectura estática que fundamenta las resoluciones: `library-trash-assets.js:7-48`, `library-beat-quota.js:16-45`, `library-index-publication.js:80-150`, `server-core.js:349-352,405-430,2620-2673,2738-2742`, migraciones `0001:167-189`, `0015:20-45`, `0018`, `direct-capability-boundary.js:12`, `capabilities.ts:40-80`, `AppShell.tsx:202,322-372,558-564`, `BeatCard.tsx:112,162,258`, `useLibraryReorder.ts`, `useTagRename.ts`, `usePlaybackQueue.ts`, `tauri.ts:402-406,563`, `webTransport.worker.ts:2545-2610`. `rg` de llamadores de `mergeCopyOnWriteGarbage(`: solo su definición; de `.deleteMessages(` en `src`: ninguno.
+
+Hallazgo nuevo FX-01: `generate-fixtures.cjs:42` emite `schema: "galer-t-library"` en 24 fixtures; los lectores exigen `beatgaler.telegram.library` (`library-beat-quota.js:28`, `server-core.js:2561`, `webLibrary.ts:11`). No corregido en T01-B.
+
+Artefactos: `contract-map.json` v2 sha256 `031001283303035c816870f90428a825130b7681ada17dcf882d94516a4a448c`; `consumer-map.md` sha256 `04efb0a1653e62a8d4389a2e4102fa945cb22a9de1b25d75f88ad689b927cc89`. Validación: JSON parsea, 18/18 stops con `t01b`, 69/69 paths con `sql_destination_c3`. No es PASS de T01; cobertura bidireccional pendiente de T01-C.
+
+## E20. T01-C — fixtures y cobertura (2026-11-08)
+
+Nivel MEDIA. HEAD `a4462191aea29ffdae136f04e1fdc2e4024291d1`, rama LOCAL. Solo se modificaron el generador, los fixtures sintéticos y los mapas del plan. No se tocó código de producto ni tests existentes, ni se usaron DDL, DB, red, Telegram o `.env`. Respaldo previo verificado con SHA-256: `E:\777\app\BeatGaler-plan-backups\T01C-20261108-130149` (fixtures + 5 docs).
+
+| Comprobación | Comando o método | Resultado |
+|---|---|---|
+| Reproducibilidad | `node cloud-server/tests/fixtures/catalog/generate-fixtures.cjs --check` | `OK 53 fixtures reproducibles` |
+| FX-01 contra el lector real | `library-beat-quota.indexRows` sobre cada INDEX de fixture, con entorno vacío (`env -i PATH`) | antes 30/30 rechazados por schema; después 0/41. Todos los `index-valid` son aceptados. Los REVIEW que el lector ya rechaza siguen rechazados (id-256, id-collisions, trash-unwrapped, id-astral, trash-beat-nonobject) |
+| Oracles conservados | comparación de kind/expected/oracle/note de los 41 previos | 41/41 iguales. Única diferencia: el conteo `bytes=` embebido en `t01-over-rollback-budget` (16240136→16240147, dentro de (15 MiB, 16 MiB)) |
+| Versión por lector | reglas de `versioning.rs:17-40` y `webTransport.worker.ts:2409` | v1: Rust ok, Web rechaza; null: Rust→v1, Web rechaza; v3: ambos rechazan. Coincide con los oracles |
+| NUL | parse + `JSON.stringify` de `t01-nul-unprojected` | el archivo y `legacy_json` no tienen byte NUL; el roundtrip es exacto y el valor se recupera |
+| JSON paths | recorrido de los paths de los fixtures contra los patrones de `json_paths` | 69/69 con fixture (46 enlazados en T01-C) y 0 sin destino |
+| Rutas inversas | grafo require/import (312 módulos) desde `cloud-server/server.js` y `src/main.tsx` | 100/102 alcanzables; CS-045 (solo tests) y CS-046 (SQL) explicados. Las 13 alertas de línea se revisaron a mano: todas correctas |
+| test_owner | referencia en 339 archivos de test, más revisión manual de CS-019, de los 8 nulos de Cloud y de CS-038 | 0 consumidores sin test ni `test_gap`; ningún valor previo borrado |
+| COV-01 | lectura completa de `postgres-rollback-preparation.js`, `legacy-exporter.js`, `cutover-snapshot-bundle.js` y de sus callers | sin símbolos INDEX; CS-048/CS-049/CS-050; `unclassified=[]`, `global_without_contract=[]` |
+
+Artefactos (SHA-256):
+
+- `contract-map.json`: `4153c155e68cca38a85c73d024f8605f889f52df7bc393095589aae544dca9eb`
+- `consumer-map.md`: `fd84d68dba981d6ab0098d464823a01b74e1a11197493e38ecc2c1023d8b4100`
+- `manifest.json`: `9c99bc472ede70880ba5d1a6f2545b69ed9f66a6ae80fde3b970076aa2ff047e`
+- `generate-fixtures.cjs`: `c9eff0f6329f02da83da20669351362c4e83b74b121c05fbd824a302db1a33cc`
+
+Los scripts de validación quedaron fuera del repo (scratchpad de la sesión); no se añadieron auditorías ni ZIP.
+
+No comprobado:
+
+- Bibliotecas reales: requieren autorización y se miden en T22.
+- Ejecución de tests que requieren PG (`project-access.integration.cjs`, `postgres-cutover.integration.cjs`): corresponde al arnés T02.
+- La evidencia mecánica de tests no prueba cobertura de comportamiento; por eso existen los `test_gap`.
+
+## E21. T02 — arnés aislado y comandos de verificación (2026-11-08)
+
+Nivel MEDIA. HEAD `a4462191aea29ffdae136f04e1fdc2e4024291d1`, rama LOCAL. Archivos nuevos:
+
+- Runner y manifiesto: `scripts/catalog-check.cjs`, `scripts/catalog-suites.json`.
+- Helpers en `cloud-server/tests/helpers/`: `catalog-net-guard.cjs`, `catalog-test-db.cjs`, `catalog-test-descriptor.json`, `catalog-fake-transport.cjs` (con reloj fake), `catalog-fake-server.cjs`.
+- Pruebas en `cloud-server/tests/catalog-harness/`: 5 de unit y 1 de integración.
+- Harness de navegador en `tests/catalog-harness/`: doble del coordinator, instrumentación, config vite, wdio, spec y orquestador.
+- Workflow `.github/workflows/catalog-checks.yml`: solo `workflow_dispatch`, no se disparó.
+
+No se tocó código de producto ni tests existentes. Tampoco se usaron DB reales, `.env`, Telegram, AWS ni red externa, y no hubo commit ni push. Respaldo: `E:\777\app\BeatGaler-plan-backups\T02-pre-20261108-133527`.
+
+| Comando | Resultado |
+|---|---|
+| `node scripts/catalog-check.cjs unit` | PASS: 6 casos, 34 tests, 0 fallos, 0 skips. Red: 0 intentos en los casos `deny`; el caso del servidor fake solo usó 127.0.0.1. Con `DATABASE_URL`/`PGPASSWORD` en el padre, ambos se descartan y solo se registra su nombre |
+| `node scripts/catalog-check.cjs faults` | PASS: 9 tests del transporte fake (pausa, respuesta perdida, 403/404, recibo duplicado, worker muerto, retardo con reloj fake, metadata prohibida) |
+| `node scripts/catalog-check.cjs web` | PASS (V01-B): build del harness + Chrome 152 headless. Login simulado y Gallery LOCAL real con 240 BeatCards del fixture `c12-f02-search` (paginador «1–240 of 241»). Registra UA, viewport 1424×749, DPR 1, zoom 1 y fuentes. Hosts observados: solo `127.0.0.1:4284`. Contadores de fetch, listeners, timers, observers, blob URLs y montaje de cards. Guard: 6 procesos, 0 bloqueos |
+| `node scripts/catalog-check.cjs integration` | exit 3: `CATALOG_TEST_URL_MISSING`. No hay instancia dedicada fuera del job |
+| `T03` y `perf` / `nope` | exit 4 (suite registrada sin casos) / exit 2 (suite inexistente) |
+| `all-local` | exit 3: unit y faults pasan; se detiene en el prerequisito de integration |
+
+Pruebas negativas V01-C cubiertas por la suite unit:
+
+- Entorno contaminado: no llega al hijo y ningún valor se imprime.
+- URL ajena: localhost, túnel 127.0.0.1, otro puerto, rol, base, parámetros o protocolo.
+- Instance id ausente o libre.
+- `DATABASE_URL`/`RESTORE_DATABASE_URL`/`PG*` → rechazo con 0 conexiones.
+- Identidad de instancia distinta → 0 `CREATE`.
+- Cleanup de DB ajena, doble, o con system_identifier/owner/marcador/sentinel distinto → 0 `DROP`.
+- Suite inexistente, pending o aggregate con pending.
+- Casos fuera de raíz, `postgres-live`, `--env-file`, `-r` o no-node.
+- Skip, todo, archivo sin tests, fallo y exit ≠ 0.
+- Red en suite `deny`: fetch, net, http, https, dns, dns.promises y tls bloqueados y contados.
+
+Límites:
+
+- El guard cubre las API de red de Node en procesos que heredan `NODE_OPTIONS`. Chrome queda limitado por `--host-resolver-rules`, que no bloquea IP literales; H4 verifica los hosts observados.
+- El harness no prueba transporte real ni rendimiento.
+- La Gallery LOCAL todavía lee metadata por la ruta legacy `getLibraryIndex`, que queda contada. La prohibición de metadata vía transporte se aplica en el fake de Node; en navegador aplica cuando la Gallery lea del catálogo (T08).
+- La imagen `node:22-bookworm` del workflow se fija por tag; hay que fijar el digest antes del primer dispatch.
+- `CATALOG_TEST_INSTANCE_ID` y la contraseña del service son de un contenedor efímero sin puertos publicados.
