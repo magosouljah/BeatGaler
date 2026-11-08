@@ -13,7 +13,15 @@
 
 **Reglas aprobadas por el usuario (Purp, 2026-11-08):** (1) `catalog_legacy_fields` y los extras legacy se guardan en TEXT JSON con escapes ASCII seguros, nunca en jsonb, y sustituyen el `root_extras jsonb` de T01-A; (2) CS-050 (`uploadedFiles`, `messageRedirects`) solo se coteja con C4:99 y no se importa. G1 no está completo sin T04.
 
-**T02 (MEDIA, 2026-11-08): NO PASS por STOP-APPROVAL.** El arnés está construido ([E21](EVIDENCIA.md)): `unit` PASS (34 tests, 0 skips, 0 red externa), `faults` PASS, `web` PASS (V01-B, Gallery LOCAL real con dobles en Chrome headless) y V01-C completo. Falta el PASS de `integration` (DB efímera real, cleanup verificado y rechazo de borrado ajeno contra PostgreSQL): la única instancia aprobada es el service del job `catalog-checks.yml`, que nunca se ha ejecutado. Para ejecutarlo hace falta autorización explícita de commit y push de los archivos T02 a LOCAL, fijar el digest de `node:22-bookworm` y lanzar `workflow_dispatch` con suite `integration`. No se usó la PostgreSQL de trabajo en WSL (TAREAS T02 §4). T03 no iniciada.
+**T02 PASS (LOCAL, 2026-11-08):** se registra con la autorización del usuario (Purp) para finalizar T02. Commits `eebb7ea` y `6a7e4b0`, con push fast-forward solo a `local/landing-gallery-unificada` y sin merge. Resultados ([E21](EVIDENCIA.md)):
+
+- CI [run 42519548345](https://github.com/magosouljah/BeatGaler/actions/runs/42519548345), PostgreSQL 16.15 efímero de GitHub Actions: `unit` 34/34, `faults` 9/9 e `integration` 2/2, sin skips.
+- Guard de red del job: solo `postgres:5432`, 0 bloqueos.
+- DB nueva con rol propio no privilegiado y marcador; cleanup tras verificar identidad, owner y marcador; DB borrada, doble cleanup rechazado y DB ajena intacta.
+- Local: `web` (V01-B) PASS.
+- El primer run (42519400428) falló porque el rol de prueba no podía leer su marcador (42501). Se corrigió con `GRANT SELECT` y se repitió.
+
+Como `workflow_dispatch` no existe fuera de `main`, el workflow se dispara con push a LOCAL de su YAML o del arnés, igual que el probe G0. Solo se activó `catalog-checks`. **T03 en curso (MEDIA).**
 
 **T01-B ALTA (2026-11-08), sin PASS:** cerrados con C1–C12/r4 los 18 hallazgos de T01-A (D-01…D-10, C-01…C-06, S-01/S-02); ningún STOP-DATA/STOP-CONTRACT de T01-A queda abierto y no se tomó ninguna decisión de producto nueva. C-01 y C-04 no eran STOP: drag-reorder y upload YouTube están apagados en Web por capability. D-05 se rebaja: el colector incompleto es código muerto. Contrato de filas/locks/fases DDL y reglas de codec en [contract-map.json](contract-map.json) (`stops[*].t01b`, `contracts`, `t01b`) y [consumer-map.md](consumer-map.md). **Pendiente para T01-C (MEDIA):** FX-01 fixtures con `schema` incorrecto (`generate-fixtures.cjs:42`), FX-02 fixtures de reglas nuevas, COV-01/COV-02 cobertura. **T01 NO PASS; T02 no iniciada.**
 

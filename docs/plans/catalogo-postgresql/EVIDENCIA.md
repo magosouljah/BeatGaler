@@ -301,3 +301,12 @@ Límites:
 - La Gallery LOCAL todavía lee metadata por la ruta legacy `getLibraryIndex`, que queda contada. La prohibición de metadata vía transporte se aplica en el fake de Node; en navegador aplica cuando la Gallery lea del catálogo (T08).
 - La imagen `node:22-bookworm` del workflow se fija por tag; hay que fijar el digest antes del primer dispatch.
 - `CATALOG_TEST_INSTANCE_ID` y la contraseña del service son de un contenedor efímero sin puertos publicados.
+
+### E21-b. T02 integration en CI (2026-11-08)
+
+- Push autorizado `c6d7b7c..eebb7ea..6a7e4b0` a LOCAL: 78 archivos de T01/T02 y la corrección de 2 archivos. Se construyó con índice temporal sobre el remoto, sin checkout, merge ni reset; HEAD local sin mover. Escaneo de secretos: 0 hallazgos. Blobs de fixtures = SHA del manifiesto.
+- Workflows activados por el push: solo `catalog-checks` (`f0-0.20-secret-scan` es solo de `main`; el probe G0, solo de su propio YAML).
+- Imagen Node fijada: `node:22.23.2-bookworm@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844`.
+- Run 42519400428: unit y faults PASS, integration 1/2 (`42501 permission denied for table run_marker`). Corrección: `GRANT SELECT` al rol de prueba.
+- [Run 42519548345](https://github.com/magosouljah/BeatGaler/actions/runs/42519548345): sentinel `16.15`/`en_US.utf8`; unit 34/34, faults 9/9, integration 2/2; red del caso: `dns.lookup postgres` + `net.connect postgres:5432`, 0 bloqueos; URL enmascarada en el log.
+- Aviso: el runner histórico `T00-BASELINE-READONLY.ps1` del remoto solo admite el workflow G0. Si se reejecutara sobre este árbol, marcaría `catalog-checks.yml` como STOP-BASE. No se modificó (es una guarda).
