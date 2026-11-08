@@ -117,3 +117,12 @@ test('instrumentPool cuenta clientes y transacciones por operación', async () =
   assert.deepEqual(s.byOperation.patch, { acquired: 1, queries: 3, begin: 1, commit: 1, released: 1 });
   assert.equal(s.byOperation.trash.released, undefined, 'fuga de cliente visible por operación');
 });
+
+test('instrumentPool no apila envoltorios cuando el pool reutiliza el mismo cliente', async () => {
+  const client = { async query() { return { rows: [] }; } };
+  const fakePool = { async connect() { client.release = () => {}; return client; } }; // como pg-pool: release nuevo por checkout
+  const ip = db.instrumentPool(fakePool);
+  for (let i = 0; i < 5; i++) { const c = await ip.pool.connect(); await c.query('BEGIN'); await c.query('COMMIT'); c.release(); }
+  const s = ip.stats();
+  assert.deepEqual([s.acquired, s.released, s.open, s.begin, s.commit, s.queries], [5, 5, 0, 5, 5, 10]);
+});

@@ -159,17 +159,23 @@ function instrumentPool(pool) {
   let current = null;
   const bump = (k) => { stats[k]++; if (current) current[k] = (current[k] || 0) + 1; };
   const origConnect = pool.connect.bind(pool);
+  const WRAPPED = Symbol('catalogInstrumented');
   pool.connect = async (...a) => {
     const client = await origConnect(...a); bump('acquired');
+    // pg reutiliza el mismo objeto cliente entre checkouts: query se envuelve una sola vez;
+    // release lo reasigna pg-pool en cada checkout, así que se envuelve cada vez.
     const origRelease = client.release.bind(client); let released = false;
     client.release = (...r) => { if (!released) { released = true; bump('released'); } return origRelease(...r); };
-    const origQuery = client.query.bind(client);
-    client.query = (text, ...rest) => {
-      bump('queries');
-      const t = typeof text === 'string' ? text.trim().toUpperCase() : '';
-      if (/^BEGIN\b/.test(t)) bump('begin'); else if (/^COMMIT\b/.test(t)) bump('commit'); else if (/^ROLLBACK\b/.test(t)) bump('rollback');
-      return origQuery(text, ...rest);
-    };
+    if (!client[WRAPPED]) {
+      const origQuery = client.query.bind(client);
+      client.query = (text, ...rest) => {
+        bump('queries');
+        const t = typeof text === 'string' ? text.trim().toUpperCase() : '';
+        if (/^BEGIN\b/.test(t)) bump('begin'); else if (/^COMMIT\b/.test(t)) bump('commit'); else if (/^ROLLBACK\b/.test(t)) bump('rollback');
+        return origQuery(text, ...rest);
+      };
+      client[WRAPPED] = true;
+    }
     return client;
   };
   return {

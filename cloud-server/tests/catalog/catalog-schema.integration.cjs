@@ -50,16 +50,16 @@ test('fresh: 26 migraciones, idempotente y catálogo vacío en LEGACY', (t) => w
   assert.equal(first.applied.length, 26); assert.equal(first.applied.at(-1), '0026');
   const again = await mig.applyMigrations(pool);
   assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, 26);
-  const t = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
-  assert.equal(t.rows[0].n, mig.CATALOG_REQUIRED_TABLES.length);
+  const tables = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
+  assert.equal(tables.rows[0].n, mig.CATALOG_REQUIRED_TABLES.length);
   const types = await pool.query("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_name LIKE 'catalog\\_%' AND data_type IN ('jsonb','json')");
   assert.deepEqual(types.rows, [], 'ninguna columna JSON binaria en el catálogo');
   const size = await pool.query("SELECT sum(pg_total_relation_size(c.oid))::bigint AS bytes, count(*)::int AS rels FROM pg_class c WHERE c.relname LIKE 'catalog\\_%' AND c.relkind IN ('r','i')");
   t.diagnostic(`tamaño inicial catálogo: ${size.rows[0].bytes} bytes en ${size.rows[0].rels} relaciones (no es benchmark T20)`);
 }));
 
-test('aplicación concurrente desde DB vacía: un solo ledger, sin duplicados', () => withDb(async (pool) => {
-  const pool2 = new Pool({ ...pool.options, max: 2 });
+test('aplicación concurrente desde DB vacía: un solo ledger, sin duplicados', () => withDb(async (pool, h) => {
+  const pool2 = new Pool({ ...h.config, max: 2 });
   try {
     const [a, b] = await Promise.all([mig.applyMigrations(pool), mig.applyMigrations(pool2)]);
     assert.equal(a.applied.length + b.applied.length, 26);
@@ -205,7 +205,7 @@ test('restricciones de beats, tags, papelera, tombstones, archivos y conjuntos',
   assert.equal(await qs('s2', 'BUILDING', 'g1', sha('other')), '23505', 'una preparación por cuenta');
   assert.equal(await qs('s3', 'READY', 'g9'), '23503', 'generación de otro usuario');
   await pool.query("INSERT INTO catalog_query_members VALUES ('u1','s1',0,'g1','b1',1), ('u1','s1',1,'g1','b2',1)");
-  assert.equal(await one(pool, "INSERT INTO catalog_query_members VALUES ('u1','s1',2,'g2','b1',1)"), '23503', 'miembro de otra generación');
+  assert.equal(await one(pool, "INSERT INTO catalog_query_members VALUES ('u1','s1',2,'g2','b-nul',1)"), '23503', 'miembro de otra generación');
   assert.equal(await one(pool, "INSERT INTO catalog_query_members VALUES ('u1','s1',2,'g1','b1',1)"), '23505', 'beat repetido');
   assert.equal(await one(pool, "UPDATE catalog_query_sets SET status='READY', member_count=3 WHERE set_id='s1'"), '23514', 'READY con conteo incorrecto');
   assert.equal(await one(pool, "UPDATE catalog_query_sets SET status='READY', member_count=2 WHERE set_id='s1'"), 'OK');
