@@ -15,6 +15,10 @@ on:
       - scripts/catalog-suites.json
       - cloud-server/tests/helpers/catalog-*
       - cloud-server/tests/catalog-harness/**
+      - cloud-server/tests/catalog/**
+      - cloud-server/catalog/**
+      - cloud-server/migrations/0026_catalog_core.sql
+      - cloud-server/postgres-migrations.js
   workflow_dispatch:
     inputs:
       suite:
@@ -22,7 +26,7 @@ on:
         required: true
         default: "unit"
         type: choice
-        options: [unit, faults, integration]
+        options: [unit, faults, integration, T03]
 
 permissions:
   contents: read
@@ -52,7 +56,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       CI: "true"
-      SUITES: ${{ github.event_name == 'push' && 'unit faults integration' || inputs.suite }}
+      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03' || inputs.suite }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,7 +81,7 @@ jobs:
         run: |
           status=0
           for suite in $SUITES; do
-            if [ "$suite" = "integration" ]; then
+            if [ "$suite" = "integration" ] || [ "$suite" = "T03" ]; then
               CATALOG_TEST_ADMIN_URL='postgres://catalog_lab_admin:catalog-lab-ephemeral@postgres:5432/catalog_lab_sentinel'                 node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1
             else
               node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1

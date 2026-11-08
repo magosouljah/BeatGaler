@@ -90,7 +90,41 @@ function assertInitialSchemaContract(migrations = listMigrations()) {
   if (!/state\s+text\s+NOT NULL\s+CHECK\s*\(state IN \('pending', 'retrying', 'blocked', 'done'\)\)/i.test(sql)) {
     throw new Error('Garbage journal state constraint is missing.');
   }
+  if (/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?catalog_/i.test(sql)) assertCatalogSchemaContract(sql);
   return migrations;
+}
+
+// T03: contrato del catálogo (CONTRATO C3 + T01-B). Solo se evalúa cuando existen tablas catalog_*.
+// No relaja nada de lo anterior: los nombres catalog_* no eluden las prohibiciones de beats/trash/deleted.
+const CATALOG_REQUIRED_TABLES = Object.freeze([
+  'catalog_libraries', 'catalog_generations', 'catalog_beats', 'catalog_beat_tags', 'catalog_beat_tag_groups',
+  'catalog_facets', 'catalog_trash_entries', 'catalog_tombstones', 'catalog_file_versions', 'catalog_file_parts',
+  'catalog_media_objects', 'catalog_part_locations', 'catalog_current_files', 'catalog_legacy_fields',
+  'catalog_query_sets', 'catalog_query_set_leases', 'catalog_query_members',
+]);
+function assertCatalogSchemaContract(sql) {
+  for (const table of CATALOG_REQUIRED_TABLES) {
+    if (!new RegExp(`CREATE TABLE\\s+${table}\\s*\\(`, 'i').test(sql)) throw new Error(`Missing required catalog table: ${table}`);
+  }
+  const required = [
+    [/authority text NOT NULL DEFAULT 'LEGACY' CHECK \(authority IN \('LEGACY', 'POSTGRES'\)\)/i, 'catalog libraries must default to LEGACY authority'],
+    [/cleanup_enabled boolean NOT NULL DEFAULT false/i, 'catalog cleanup must default to disabled'],
+    [/CHECK \(NOT cleanup_enabled OR authority = 'POSTGRES'\)/i, 'catalog cleanup must be impossible under LEGACY'],
+    [/restore_hold boolean NOT NULL DEFAULT true/i, 'catalog restore hold must default to true'],
+    [/legacy_json text NOT NULL/i, 'catalog legacy_json must be TEXT'],
+    [/value_json text NOT NULL/i, 'catalog legacy fields must be TEXT'],
+    [/raw_index bytea/i, 'catalog raw INDEX must be bytea'],
+    [/FOREIGN KEY \(user_id, vault_id\) REFERENCES vaults\(user_id, id\)/i, 'catalog library must reference its vault by (user_id, id)'],
+    [/FOREIGN KEY \(user_id, active_generation_id, active_generation_status\)\s+REFERENCES catalog_generations\(user_id, generation_id, status\)/i, 'catalog active generation must belong to the same user and be ACTIVE'],
+  ];
+  for (const [pattern, message] of required) if (!pattern.test(sql)) throw new Error(`Catalog schema contract: ${message}.`);
+  const forbidden = [
+    /legacy_json\s+jsonb/i, /value_json\s+jsonb/i, /wrapper_json\s+jsonb/i, /original_json\s+jsonb/i, /raw_index\s+jsonb/i,
+    /descriptor_json\s+jsonb/i, /predicate_json\s+jsonb/i, /CREATE\s+TABLE\s+catalog_\w*\s*\([^;]*\bdata\s+jsonb/i,
+  ];
+  for (const pattern of forbidden) {
+    if (pattern.test(sql)) throw new Error(`Forbidden catalog legacy storage pattern (TEXT required, D-08): ${pattern}`);
+  }
 }
 
 async function ensureMigrationLedger(client) {
@@ -163,5 +197,7 @@ module.exports = {
   listMigrations,
   migrationBody,
   assertInitialSchemaContract,
+  assertCatalogSchemaContract,
+  CATALOG_REQUIRED_TABLES,
   applyMigrations,
 };

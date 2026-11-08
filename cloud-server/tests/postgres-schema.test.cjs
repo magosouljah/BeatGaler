@@ -48,6 +48,22 @@ for (const forbidden of ['CREATE TABLE beats', 'CREATE TABLE trash', 'CREATE TAB
   assert(!sql.includes(forbidden), `forbidden PostgreSQL authority/secret token: ${forbidden}`);
 }
 
+// T03: contrato del catálogo (C3 + T01-B) reconocido explícitamente.
+const catalogMigration = migrations.find(item => item.name === '0026_catalog_core.sql');
+assert(catalogMigration, 'catalog core migration 0026 is required');
+for (const token of [
+  'ALTER TABLE vaults ADD CONSTRAINT vaults_user_id_id_key UNIQUE (user_id, id)',
+  "authority text NOT NULL DEFAULT 'LEGACY'",
+  'cleanup_enabled boolean NOT NULL DEFAULT false',
+  'legacy_json text NOT NULL',
+  'value_json text NOT NULL',
+  'raw_index bytea',
+  "CHECK (legacy_sha256 = encode(sha256(convert_to(legacy_json, 'UTF8')), 'hex'))",
+]) {
+  assert(catalogMigration.sql.includes(token), `missing catalog contract token: ${token}`);
+}
+assert(!/\bjsonb\b/i.test(catalogMigration.sql), 'catalog core migration must not use jsonb (D-08)');
+
 const migrationDir = path.join(__dirname, '..', 'migrations');
 for (const file of fs.readdirSync(migrationDir).filter(name => name.endsWith('.sql'))) {
   const contents = fs.readFileSync(path.join(migrationDir, file), 'utf8');

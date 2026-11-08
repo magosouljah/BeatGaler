@@ -21,7 +21,16 @@
 - Local: `web` (V01-B) PASS.
 - El primer run (42519400428) falló porque el rol de prueba no podía leer su marcador (42501). Se corrigió con `GRANT SELECT` y se repitió.
 
-Como `workflow_dispatch` no existe fuera de `main`, el workflow se dispara con push a LOCAL de su YAML o del arnés, igual que el probe G0. Solo se activó `catalog-checks`. **T03 en curso (MEDIA).**
+Como `workflow_dispatch` no existe fuera de `main`, el workflow se dispara con push a LOCAL de su YAML o del arnés, igual que el probe G0. Solo se activó `catalog-checks`.
+
+**T03 (MEDIA, 2026-11-08): implementado en local, NO PASS (STOP-APPROVAL).**
+
+- `cloud-server/migrations/0026_catalog_core.sql`: aditiva, sin tocar 0001–0025 ni checksums. Contiene `UNIQUE vaults(user_id,id)`, 17 tablas `catalog_*` de fase T03, CHECKs, FKs compuestas por usuario y generación, generación activa obligatoriamente ACTIVE y de la misma cuenta, transiciones por trigger, vivo vs tombstone imposible y READY con conteo exacto. Contenido legacy siempre en TEXT y raw en bytea. Default LEGACY y cleanup imposible bajo LEGACY.
+- Guard de `postgres-migrations.js` y `postgres-schema.test.cjs` reconocen el contrato; no se relajó nada anterior.
+- `cloud-server/catalog/{contract,repository}.js`: tenant y generación obligatorios, un solo cliente por transacción con `release` en `finally`, sin transporte.
+- Suite `T03` registrada. Local: `unit` 40/40 y `T03` exit 3 (requiere PG).
+- Precisión respecto a C3: `bpm_sort` es `double precision` con `bpm_sort_class`, conforme a A2 r4 (binary64), no `numeric`.
+- **Falta:** autorización para commit y push a LOCAL, que añade la migración 0026 al remoto, y la ejecución de `T03` en el PostgreSQL efímero de CI. Ningún workflow de despliegue reacciona a pushes en LOCAL.
 
 **T01-B ALTA (2026-11-08), sin PASS:** cerrados con C1–C12/r4 los 18 hallazgos de T01-A (D-01…D-10, C-01…C-06, S-01/S-02); ningún STOP-DATA/STOP-CONTRACT de T01-A queda abierto y no se tomó ninguna decisión de producto nueva. C-01 y C-04 no eran STOP: drag-reorder y upload YouTube están apagados en Web por capability. D-05 se rebaja: el colector incompleto es código muerto. Contrato de filas/locks/fases DDL y reglas de codec en [contract-map.json](contract-map.json) (`stops[*].t01b`, `contracts`, `t01b`) y [consumer-map.md](consumer-map.md). **Pendiente para T01-C (MEDIA):** FX-01 fixtures con `schema` incorrecto (`generate-fixtures.cjs:42`), FX-02 fixtures de reglas nuevas, COV-01/COV-02 cobertura. **T01 NO PASS; T02 no iniciada.**
 
