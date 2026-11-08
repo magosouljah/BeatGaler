@@ -111,6 +111,8 @@ async function createCatalogTestDb({ env = process.env, descriptor, clientFactor
     await c.query(`CREATE SCHEMA catalog_test_meta AUTHORIZATION ${ident(role)}`);
     await c.query('CREATE TABLE catalog_test_meta.run_marker(nonce text PRIMARY KEY, run_id text, created_at timestamptz NOT NULL DEFAULT now())');
     await c.query('INSERT INTO catalog_test_meta.run_marker(nonce, run_id) VALUES($1,$2)', [nonce, String(env.CATALOG_CHECK_RUN_ID || 'adhoc')]);
+    // El rol de prueba puede leer su marcador pero no alterarlo (la tabla es del admin).
+    await c.query(`GRANT SELECT ON catalog_test_meta.run_marker TO ${ident(role)}`);
   });
   const internal = { name, role, nonce, systemIdentifier: ident0.systemIdentifier, target, admin, clientFactory, cleaned: false };
   created.set(name, internal);

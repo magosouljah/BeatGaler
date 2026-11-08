@@ -1,6 +1,6 @@
 # T02 — Arnés del catálogo PostgreSQL. Ejecución autorizada por el usuario (2026-11-08) solo en la rama LOCAL.
 # GitHub no expone workflow_dispatch mientras el workflow no exista en main (y no se hace merge), así que,
-# igual que el probe G0, se dispara con push a LOCAL que cambie este YAML. Ningún otro path ni rama lo activa.
+# igual que el probe G0, se dispara con push a LOCAL que cambie este YAML o el propio arnés. Ninguna otra rama lo activa.
 # Instancia dedicada: service container desechable, sin puertos publicados al host,
 # misma imagen que el descriptor G0 (run 42416790955). Sin secretos, AWS, Telegram ni DATABASE_URL.
 name: catalog-checks
@@ -11,6 +11,10 @@ on:
       - local/landing-gallery-unificada
     paths:
       - .github/workflows/catalog-checks.yml
+      - scripts/catalog-check.cjs
+      - scripts/catalog-suites.json
+      - cloud-server/tests/helpers/catalog-*
+      - cloud-server/tests/catalog-harness/**
   workflow_dispatch:
     inputs:
       suite:
