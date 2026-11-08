@@ -1,5 +1,12 @@
 # Estado de ejecución y transferencia
 
+**T04 PASS (LOCAL, 2026-11-08, BAJA):** registrado por encargo explícito del usuario (Purp). CI catalog-checks run 42530209790 sobre commit 3d291d5 (fast-forward desde b6df121, solo LOCAL), PostgreSQL 16 efímero:
+
+- T04/t04-catalog-codec 5/5 y T04/catalog-roundtrip-integration 3/3, sin skips: 22 fixtures elegibles con source-roundtrip exacto en SQL, authoritative-export con solo deltas C4 (V1_TO_V2, SQL_ONLY_TOMBSTONE), VALIDATED sin autoridad (bibliotecas LEGACY/IDLE, época y revisión intactas, library_* sin cambios); lotes de 250 con crash/replay sin duplicados; snapshot cambiado exige generación nueva; REVIEW no escribe.
+- Regresión: unit 46/46, faults 9/9, integration 2/2, T03 14/14.
+- Decisión aprobada: el conflicto sintético 1600/1601 (t01-manifest-toplevel-ref) es REVIEW por C4 (referencias inconsistentes). Corregido solo su oracle (index-review/review) y su registro en contract-map (t04.fixture_oracle_fix_20261108); contenido del fixture sin cambios (sha256 idéntico). Sin 0027 ni cambio de contrato.
+- Para Sol: ningún fixture importable cubre la forma real de los escritores (manifest.ref == parts[0]); registrado como test_gap en los 2 paths de manifest de contract-map. Siguen pendientes de revisión los 4 fixtures review→importable-con-flag y la nota A2 de bpm_sort.
+
 **T01 PASS (LOCAL, 2026-11-08):** se registra por encargo explícito del usuario (Purp), que pidió registrarlo si se cumplían los criterios. T01-C (MEDIA) cerró FX-01, FX-02, COV-01 y COV-02 ([E20](EVIDENCIA.md), [cobertura](consumer-map.md)). Criterios de TAREAS T01 y MATRIZ-T:
 
 - 69/69 JSON paths con destino, regla y fixture.
@@ -32,7 +39,14 @@ Como `workflow_dispatch` no existe fuera de `main`, el workflow se dispara con p
 - El run 42520640249 falló por 3 errores de preparación de la prueba y un bug del helper T02 `instrumentPool`, que contaba de más cuando pg reutilizaba el mismo cliente. Corregidos, con prueba de regresión.
 - Solo se activó `catalog-checks`.
 
-**T04 en curso (BAJA, codec conforme al mapa cerrado).**
+**T04 (BAJA, 2026-11-08): implementado en local, NO PASS: STOP-CONTRACT + STOP-APPROVAL.**
+
+- Archivos: `cloud-server/catalog/legacy-codec.js`, `migration.js` (solo transformación) y `staging.js` (STAGING en lotes de 250 con checkpoint `(snapshot_hash, ordinal)`, export y VALIDATED; sin autoridad ni `library_*`). Pruebas `catalog-codec.test.cjs` (5/5 local) y `catalog-roundtrip.integration.cjs` (pendiente de CI); suite `T04` registrada. `unit` local 46/46.
+- Oráculo independiente por fixture: 22 INDEX elegibles con roundtrip profundo source exacto (527 beats); authoritative solo con los deltas listados (V1→V2, tombstones SQL-only); 17 REVIEW y 3 rechazos de parser según C4/T01-B; cota de export ≥ bytes reales, también con `sort_order` regenerado; límite exacto probado.
+- Interpretación aplicada: `t01-trash-unwrapped`, `t01-size-zero`, `t01-botapi-file-id` y `t01-shared-reference` tienen la etiqueta `expected=review` de T01-A, pero sus oracles y las reglas T01-B (D-07, D-10, C3) las hacen importables con flags (TRASH_UNWRAPPED, SIZE_ZERO, OPAQUE_LOCATOR, SHARED_REFERENCE). Para revisión de Sol.
+- A2: `bpm_sort` es NULL en clases no finitas, en lugar del 0 de §3.3; el orden (clase, valor) es equivalente.
+- **STOP-CONTRACT:** una referencia a nivel `manifest.telegram_*` distinta de todas sus `parts` (fixture `t01-manifest-toplevel-ref`) no tiene representación en C3. `catalog_part_locations` solo admite PRIMARY/BACKUP por parte, y sin fila SQL la protección de purge de T15 no la vería. Hoy va a REVIEW (fail-closed), lo que contradice el oracle `actual` del fixture. Decisión requerida (ALTA/Sol): (a) migración aditiva con un tipo de ubicación propio para la referencia de manifest, o (b) confirmar REVIEW y corregir el oracle.
+- **STOP-APPROVAL:** commit y push de T04 a LOCAL para ejecutar `T04` en el PostgreSQL efímero de CI.
 
 **T01-B ALTA (2026-11-08), sin PASS:** cerrados con C1–C12/r4 los 18 hallazgos de T01-A (D-01…D-10, C-01…C-06, S-01/S-02); ningún STOP-DATA/STOP-CONTRACT de T01-A queda abierto y no se tomó ninguna decisión de producto nueva. C-01 y C-04 no eran STOP: drag-reorder y upload YouTube están apagados en Web por capability. D-05 se rebaja: el colector incompleto es código muerto. Contrato de filas/locks/fases DDL y reglas de codec en [contract-map.json](contract-map.json) (`stops[*].t01b`, `contracts`, `t01b`) y [consumer-map.md](consumer-map.md). **Pendiente para T01-C (MEDIA):** FX-01 fixtures con `schema` incorrecto (`generate-fixtures.cjs:42`), FX-02 fixtures de reglas nuevas, COV-01/COV-02 cobertura. **T01 NO PASS; T02 no iniciada.**
 
