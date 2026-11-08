@@ -310,3 +310,10 @@ Límites:
 - Run 42519400428: unit y faults PASS, integration 1/2 (`42501 permission denied for table run_marker`). Corrección: `GRANT SELECT` al rol de prueba.
 - [Run 42519548345](https://github.com/magosouljah/BeatGaler/actions/runs/42519548345): sentinel `16.15`/`en_US.utf8`; unit 34/34, faults 9/9, integration 2/2; red del caso: `dns.lookup postgres` + `net.connect postgres:5432`, 0 bloqueos; URL enmascarada en el log.
 - Aviso: el runner histórico `T00-BASELINE-READONLY.ps1` del remoto solo admite el workflow G0. Si se reejecutara sobre este árbol, marcaría `catalog-checks.yml` como STOP-BASE. No se modificó (es una guarda).
+
+## E22. T03 — esquema base y repositorio (2026-11-08)
+
+- Commits `fb7ff97` y `8a192e6` sobre `b23ea3f`, con push fast-forward solo a LOCAL. Checksums 0001–0025 sin cambios; ninguna guarda histórica modificada. Workflows activados: solo `catalog-checks`.
+- Run 42520640249: T03 integración 2/6 (bug `instrumentPool` + 3 errores de prueba).
+- [Run 42520961552](https://github.com/magosouljah/BeatGaler/actions/runs/42520961552): unit 41/41, faults, integration y T03 PASS (integración 6/6, 0 skips).
+- Precisión: `bpm_sort` en `double precision` + `bpm_sort_class` (A2 r4) en lugar del `numeric` de C3.
