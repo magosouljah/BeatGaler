@@ -330,9 +330,9 @@
     {
       "id": "t01-manifest-toplevel-ref",
       "file": "t01-manifest-toplevel-ref.json",
-      "kind": "index-valid",
-      "expected": "actual",
-      "oracle": "referencia física a nivel manifest (manifest.telegram_file_id/telegram_message_id, forma direct-web de project-access.integration.cjs:20) además de parts[*] y distinta de ellas (1600 vs 1601) en master/files/project: ambas se inventarían como referencias; preservadas verbatim",
+      "kind": "index-review",
+      "expected": "review",
+      "oracle": "C4 (referencias inconsistentes => REVIEW): master.manifest.telegram_file_id/telegram_message_id (direct:1600) distinta de todas sus parts (direct:1601); los escritores reales (webTransport.worker.ts:3291, project-upload-route.js:71, commands.rs:2141) emiten la referencia de manifest igual a parts[0], como files/project de este mismo fixture (1602, 1603). Sintético: no corregir, no importar; MANIFEST_REF_UNREPRESENTED en master. Decisión aprobada 2026-11-08",
       "bytes": 1740,
       "sha256": "1b9223b4f1310e28f81ceeccd804a683510d04150c1817176cd0f793e59d355e"
     },

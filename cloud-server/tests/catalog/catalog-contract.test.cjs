@@ -62,7 +62,7 @@ test('catalog/ no importa transporte ni red', () => {
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     const reqs = [...src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
-    for (const r of reqs) assert.ok(['crypto', './contract'].includes(r), `${f} requiere ${r}`);
+    for (const r of reqs) assert.ok(['crypto', './contract', './legacy-codec', './migration'].includes(r), `${f} requiere ${r}`);
   }
 });
 

@@ -93,6 +93,16 @@
             "cloud-server/tests/catalog/catalog-contract.test.cjs"
           ],
           "kind": "node-test"
+        },
+        {
+          "id": "t04-catalog-codec",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-codec.test.cjs"
+          ],
+          "kind": "node-test"
         }
       ]
     },
@@ -205,8 +215,37 @@
       ]
     },
     "T04": {
-      "status": "pending",
-      "owner": "T04"
+      "status": "active",
+      "owner": "T04",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t04-catalog-codec",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-codec.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-roundtrip-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-roundtrip.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 600000
+        }
+      ]
     },
     "T05": {
       "status": "pending",
