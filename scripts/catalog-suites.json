@@ -866,8 +866,63 @@
       ]
     },
     "T13": {
-      "status": "pending",
-      "owner": "T13"
+      "status": "active",
+      "owner": "T13",
+      "network": "loopback",
+      "requires": [],
+      "note": "Cliente de mutaciones sin INDEX y V07-A (InteractionStore) con doble de comandos a nivel fetch; la composición de producto sigue apagada (T16). Encargo con fakes: etiqueta FAKE; sin activación de Gallery. Requiere node_modules raíz (vitest, typescript); vitest abre IPC loopback.",
+      "cases": [
+        {
+          "id": "t13-catalog-mutations",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogMutations.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t13-catalog-interaction-store",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogInteractionStore.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t12-catalog-transfer-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogTransfer.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-api",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogApi.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t13-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        }
+      ]
     },
     "T14": {
       "status": "pending",
