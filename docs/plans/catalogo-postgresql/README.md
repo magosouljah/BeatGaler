@@ -1,6 +1,13 @@
 # Catálogo PostgreSQL por beat: plan de ejecución
 
+**Rediseño nativo (2026-11-08, PROPUESTA pendiente de aprobación):** [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md). Sin usuarios reales: las bibliotecas nacen en PostgreSQL, sin import, sombra, corte ni reversión a INDEX. Telegram queda solo para medios. Se redefinen las tareas y los gates T05–T25 (§9–§10). El estado vigente está en [ESTADO](ESTADO.md).
+
+**Vigencia C12-r4 (2026-11-07):** [cierre C12-r4](C12-V00-CIERRE-20261107.md) integra el [acta I1/I2/I3 aprobada](C12-V00-INTERACCIONES-APROBADAS-20261107.md) de `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` y las respuestas explícitas del usuario de este encargo. **A1/A2/B-legacy e I1/I2/I3 aprobados; decisiones C12/V00 cerradas para diseño.** Shuffle sin repetición por ronda, aviso de selección solo si existía y rename también en papelera sin alterar su estado. Las menciones pendientes r2/r3 quedan como antecedentes, sustituidas por r4. **T00/G0 no PASS; T01 bloqueada; T02 no iniciada.** No hay autorización de implementar.
+
+
 Fecha: 7 de noviembre de 2026. Estado: **plan elaborado; implementación no iniciada**.
+
+**Revisión vigente C12-r4:** [acta](C12-DECISION-RECORD.md), [cierre V00](C12-V00-CIERRE-20261107.md) y [plan V00–V11](C12-B-INTEGRACION-Y-PLAN-20261107.md). Decisiones aprobadas integradas; pruebas y revisión formal T00/G0 pendientes. HEAD sigue a446219; remoto documental c6d7b7c. Sin implementación.
 
 ## Qué se pretende conseguir
 
@@ -14,7 +21,7 @@ La idea proporcionada por el usuario es contexto, no una especificación aprobad
 
 1. Entregar este directorio completo, no un resumen de arquitectura.
 2. Usar el prompt al final de este documento y asignar **una sola tarea** de [TAREAS.md](TAREAS.md).
-3. La IA lee primero [ESTADO.md](ESTADO.md), [CONTRATO.md](CONTRATO.md) y su tarea. Consulta [EVIDENCIA.md](EVIDENCIA.md) para comprobar las premisas.
+3. La IA lee primero [ESTADO.md](ESTADO.md), [CONTRATO.md](CONTRATO.md), el acta C12-r4, el cierre V00 y su tarea; si afecta Gallery, también el plan B V00–V11. Consulta [EVIDENCIA.md](EVIDENCIA.md) para comprobar las premisas.
 4. Ejecuta únicamente si sus dependencias están `PASS` con evidencia. No interpreta `PENDIENTE`, `SKIP` ni “parece funcionar” como aprobación.
 5. Termina con cambios, comandos, resultados y siguiente tarea habilitada. Si encuentra una condición de parada, entrega el expediente de escalamiento y se detiene.
 
@@ -29,6 +36,13 @@ No se permite a la IA ejecutora sustituir componentes, inventar una política de
 | [TAREAS.md](TAREAS.md) | Trabajo ordenado, archivos, verificaciones y condiciones de parada por tarea. |
 | [MIGRACION.md](MIGRACION.md) | Sombra, corte, reversión, recuperación y puertas de lanzamiento. |
 | [ESTADO.md](ESTADO.md) | Registro inicial de ejecución y formato para transferir el trabajo. |
+| [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) | Decisiones técnicas, cambios visibles pendientes, contratos precisos y matriz para ejecutores. |
+| [C12-CARACTERIZACION-20261107.md](C12-CARACTERIZACION-20261107.md) | Evidencia local/remota, callers y experimentos Node/Chrome; límites de lo verificado. |
+| [C12-B-GALLERY-INFINITA-VIRTUALIZADA-20261107.md](C12-B-GALLERY-INFINITA-VIRTUALIZADA-20261107.md) | Aprobación de la experiencia continua y fronteras de lo no aprobado. |
+| [C12-B-INTEGRACION-Y-PLAN-20261107.md](C12-B-INTEGRACION-Y-PLAN-20261107.md) | Reconciliación segura, arquitectura por filas, estado/memoria, tareas dependientes y pruebas. |
+| [EJECUCION-POR-NIVELES-20261107.md](EJECUCION-POR-NIVELES-20261107.md) | Manual N1: reparto entre Chat normal, IDE BAJA/MEDIA/ALTA, gates, STOP, escalamiento y plantilla de handoff. |
+| [MATRIZ-T-NIVELES-20261107.md](MATRIZ-T-NIVELES-20261107.md) | Ficha ampliada por nivel de cada tarea T00–T25: responsable, paquetes, orden, PASS, STOP y handoff. |
+| [MATRIZ-V-NIVELES-20261107.md](MATRIZ-V-NIVELES-20261107.md) | Ficha ampliada por nivel de cada subtarea V00–V11 del plan B, con su T padre y reconciliaciones RV1–RV5. |
 
 ## Decisiones de esta propuesta
 
@@ -73,3 +87,15 @@ Este plan se ejecutará sobre BeatGaler **LOCAL**, verificando la rama y `HEAD` 
 ## T00 — Base congelada y pruebas limitadas
 
 Se inició T00 por instrucción del usuario tras actualizar la rama LOCAL. [T00-REVISION-20261107.md](T00-REVISION-20261107.md) contiene la evidencia estática y sus bloqueos. [T00-BASELINE-READONLY.ps1](T00-BASELINE-READONLY.ps1) ejecuta solo pruebas previamente inspeccionadas con variables sensibles retiradas del proceso de prueba. No ejecuta la base real, AWS, Telegram ni pruebas destructivas. **T00 sigue sin PASS** hasta registrar su salida y cerrar STOP-ENV/STOP-TEST/STOP-DESIGN; T01 permanece bloqueada.
+
+## Transferencia normativa vigente C12-r4
+
+[cierre C12-r4](C12-V00-CIERRE-20261107.md) integra las aprobaciones explícitas y sustituye pendientes/recomendaciones incompatibles r2/r3. A1 ICU fijo, A2 binary64/clase y B-legacy <=10.000 quedan aprobados. I1 selección global con aviso solo si había selección; I2 audio continuo, nuevo query y cola prioritaria, Shuffle sin repetición por ronda; I3 rename ACTIVE/TRASH sin modificar estado. Se descarta fijar permanentemente la búsqueda musical al pulsar Play.
+
+Aplicar las dependencias, algoritmos, alternativas y STOP de sección 7 del cierre a T01/T03/T06/T07/T13/T14/T20 y V00–V11. Membresías SQL persistidas, selección CAS, facetas, journal y swaps Shuffle no son memoria global del cliente. T01/T06 deben producir inventario y contratos tipados completos en sus tareas futuras. T00 revisa formalmente base/descriptor/baseline/contrato, sin volver a solicitar las aprobaciones resueltas. T01 permanece bloqueada; ningún paso de implementación iniciado.
+
+## Reparto por nivel de inteligencia (N1)
+
+- **Para ejecutar una tarea:** la ficha original de [TAREAS.md](TAREAS.md) (y, para Gallery, la V de [plan B](C12-B-INTEGRACION-Y-PLAN-20261107.md) §8) más su ficha ampliada en [matriz T](MATRIZ-T-NIVELES-20261107.md) o [matriz V](MATRIZ-V-NIVELES-20261107.md). Las fichas ampliadas no sustituyen a las originales.
+- **Para repartir trabajo entre inteligencias:** [manual N1](EJECUCION-POR-NIVELES-20261107.md) §§2 y 5–8 (quién posee cada T/V, qué paquetes hace IDE BAJA, cuándo interviene IDE ALTA y cómo se escala un STOP).
+- Recuento: 26 T (BAJA 8, MEDIA 16, ALTA 2) y 12 V que subdividen T existentes (Chat 1, BAJA 3, MEDIA 8). No suman 38 implementaciones. Ninguna T/V tiene PASS por existir estas matrices; T00/G0 siguen pendientes de revisión formal.

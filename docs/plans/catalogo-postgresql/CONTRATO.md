@@ -1,6 +1,24 @@
 # Contrato técnico propuesto
 
+**Enmiendas nativas (2026-11-08, PROPUESTA pendiente de aprobación):** [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md) §8 enmienda C1.2–C1.4, C1.9, flags, C3 (0027 aditiva), C4 (importador inactivo, sin cota reversible), C5 (`LIBRARY_RESET_REQUIRED`), C9, C10 (cerco por vault y por entorno), C12 (*Rollback* sin objeto) y MIGRACION. No hay usuarios reales: las bibliotecas nacen POSTGRES y nunca hay fallback a legacy. El resto de C1–C12 y C12-B sigue vigente.
+
+**Vigencia C12-r4 (2026-11-07):** [cierre C12-r4](C12-V00-CIERRE-20261107.md) integra el [acta I1/I2/I3 aprobada](C12-V00-INTERACCIONES-APROBADAS-20261107.md) de `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` y las respuestas explícitas del usuario de este encargo. **A1/A2/B-legacy e I1/I2/I3 aprobados; decisiones C12/V00 cerradas para diseño.** Shuffle sin repetición por ronda, aviso de selección solo si existía y rename también en papelera sin alterar su estado. Las menciones pendientes r2/r3 quedan como antecedentes, sustituidas por r4. **T00/G0 no PASS; T01 bloqueada; T02 no iniciada.** No hay autorización de implementar.
+
+
 Versión del plan: 1. Las reglas C1–C12 son decisiones de diseño, no afirmaciones sobre capacidades existentes. La IA ejecutora las implementa después de G0; si una resulta incompatible, se detiene y pide revisión de alta capacidad mediante ESTADO.
+
+**Precisiones vigentes C12-r4:** [acta](C12-DECISION-RECORD.md), [cierre V00](C12-V00-CIERRE-20261107.md) y [plan B](C12-B-INTEGRACION-Y-PLAN-20261107.md). A1/A2/B/I1/I2/I3 aprobados. C3 bpm_sort numeric se sustituye en el diseño por proyecciones binary64/clase; raw separado permanece. T01 mapa exhaustivo antes de tablas; G0 no aprobado. En C5 página significa bloque interno, nunca pager POSTGRES.
+
+
+## C12-B. Contrato de Gallery continua aprobado (integración r3)
+
+- POSTGRES usa virtualización por filas dentro del scroller de AppShell, sin números de página ni Previous/Next visibles.100/240 siguen como límites de bloques SQL/keyset. Búsqueda/ANY/exclusión/orden son globales antes de LIMIT; no selector local de la ventana.
+- Preservar geometría declarada LOCAL y medir altura/columnas/gaps/padding reales; propuestas de overscan/budgets del plan B se verifican, no se declaran medidas. DOM, bloques, cursores, artwork y recursos acotados; recuperar atrás por boundary, sin INDEX ni recorrer desde inicio.
+- Identidad/estado de Player, audio, selección, editor y operaciones independientes de tarjetas/evicción. No podar ni releaseFile por ausencia en windowItems. Hover/menu/listeners se limpian; media conserva ownership por versión.
+- Cambiar query resetea al inicio; prepend/evict/resize/detalle con revisión vigente conserva anchor. Account switch invalida datos/cursores anteriores. Sin fallback a legacy por error.
+- Pager y WebLibraryWindowConsumer actuales solo LEGACY; Desktop fuera del catálogo. Manual reorder Web sigue desactivado por capability, no introducirlo. OS file drop conserva target por ID/version.
+- Ancla de bgPage no produce pager. Cota10.000/copy/fallback legacy no aprobados. Alcances Select All, cola automática/shuffle y facetas/rename se cierran con los STOP específicos del plan B antes de activar; no adoptar scope de la cache por silencio.
+- No modificar DESIGN ni reemplazar la Playbar; futura adaptación de props de GalleryChrome mediante composición y CSS producto scoped. Todos los gates y límites C1–C11 conservados.
 
 ## C1. Autoridad e invariantes
 
@@ -118,7 +136,7 @@ Idempotencia: hash canónico de tipo+target+payload+expectedVersion; UNIQUE por 
 
 Validación de nuevos valores: trasladar con pruebas de paridad las reglas de `src/lib/metadataValidation.ts` para BPM, tonalidad y tags al contrato compartido con Cloud. Hoy BPM admite vacío o 60–300 con hasta dos decimales; tags usan reglas de 40 caracteres y hasta 30 entradas. No llamar `cleanTags` del lado servidor para eliminar valores silenciosamente: rechazar una lista inválida y devolver detalles. El PATCH transmite únicamente campos modificados; un campo legacy no editado, aunque no cumpla validaciones nuevas, permanece intacto. Rating conserva dominio entero 0–255 del lector actual; name debe ser string no vacío tras trim; colores y crop usan el contrato UI inventariado en T01. Si T01 encuentra dos validadores incompatibles, STOP-DESIGN con casos concretos antes de implementar T07. En edición masiva, enviar versiones por beat y mostrar resultados/conflictos por operación; no informar éxito de toda la selección si solo se guardó una parte.
 
-Cursor opaco validado con firma HMAC y versión; contiene tenant, epoch, revision, hash de filtros, sort y última tupla. Búsqueda determinista keyset, no OFFSET creciente. Una revisión cambiada invalida el cursor con 409 y UI vuelve a la primera página conservando filtros. Es una semántica deliberada, sin prometer snapshot duradero entre páginas.
+Cursor opaco validado con firma HMAC y versión; contiene tenant, epoch, revision, hash de filtros, sort y última tupla. Búsqueda determinista keyset, no OFFSET creciente. Una revisión cambiada invalida el cursor con409 y UI vuelve al primer bloque del scroll conservando filtros, sin pager; ver política stale r3. Es una semántica deliberada, sin prometer snapshot duradero entre páginas.
 
 Consultas: índices `(user,generation,state,manual_rank,beat_id)`, equivalentes para rating/bpm/nombre y tags; LIMIT+1. `pg_trgm` para substring se incorpora solo si G0 confirma extensión disponible; de lo contrario STOP-DESIGN para fijar la alternativa, no un filtro global en JS. q de 1–2 caracteres sigue siendo válido y se mide con timeout; no prometer O(página) para todos los filtros. Respuestas y memoria sí deben estar acotadas. GET lista no selecciona legacy_json ni manifests grandes.
 
@@ -215,7 +233,7 @@ Estas son elecciones explícitas, no huecos para que una IA pequeña elija:
 
 | Tema | Propuesta que debe quedar aceptada antes de activar comportamiento |
 | --- | --- |
-| Búsqueda/orden | Buscar globalmente por name/tags/key/bpm; incluye tags exactos all/any y excluye cualquiera. Nombre: `lower(name) COLLATE "C"`, empate por manual_rank/id; BPM numérico ascendente, vacío→0 e inválido al final; rating descendente, empate manual. Es una normalización deliberada respecto de localeCompare variable y del filtrado por página actual. Aprobarla en G0 con fixtures Unicode; si se exige otra colación, revisión de alta capacidad antes de T06. |
+| Búsqueda/orden | C12-r2 fija filtros ANY Web/exclusión exacta, búsqueda JS versionada y manual/rating. Preferencia pendiente A1: ICU und fijo con empate manual; A2: BPM total con NaN al final. lower+C se retira como opción preferente y nunca se declara equivalente. Alcance global y experiencia continua aprobados; detalles bgPage pendientes B-legacy. El plan B sustituye paginador visible por bloques internos. Ver acta, secciones3–5 y9. |
 | Capacidad API | Páginas 100/240, lotes 50, límites C5. No cambiar cuotas comerciales. |
 | Versiones | Una versión del beat para cualquier edición; conflicto incluso en campos distintos. No merge automático en esta entrega. |
 | Retención | Mantener 14 días como dato de papelera; sin auto-purge. 35 días de retención física mínima propuesta, extensible por backups/rollback. |
@@ -240,3 +258,9 @@ Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 2, 4 y 5
 ### Corrección de interpretación tras G0 estático (2026-11-07)
 
 El Web actual usa sort manual preservando el orden recibido, rating con desempate por posición manual y nombre mediante `localeCompare`. La propuesta C12 `lower(name) COLLATE "C"` es un cambio deliberado **pendiente de aprobación explícita**, no paridad demostrada. T01 debe probar Unicode, empates y cuatro sorts; T00 decide si se mantiene paridad exacta o se aprueba el cambio. Para `bgPage` antiguo frente a cursor HMAC, definir equivalencia o degradación visible y acotada; no volver a procesar INDEX entero ni paginar indefinidamente para resolver un offset profundo. Ninguna decisión C12 se da por aprobada por este documento.
+
+## Transferencia normativa vigente C12-r4
+
+[cierre C12-r4](C12-V00-CIERRE-20261107.md) integra las aprobaciones explícitas y sustituye pendientes/recomendaciones incompatibles r2/r3. A1 ICU fijo, A2 binary64/clase y B-legacy <=10.000 quedan aprobados. I1 selección global con aviso solo si había selección; I2 audio continuo, nuevo query y cola prioritaria, Shuffle sin repetición por ronda; I3 rename ACTIVE/TRASH sin modificar estado. Se descarta fijar permanentemente la búsqueda musical al pulsar Play.
+
+Aplicar las dependencias, algoritmos, alternativas y STOP de sección 7 del cierre a T01/T03/T06/T07/T13/T14/T20 y V00–V11. Membresías SQL persistidas, selección CAS, facetas, journal y swaps Shuffle no son memoria global del cliente. T01/T06 deben producir inventario y contratos tipados completos en sus tareas futuras. T00 revisa formalmente base/descriptor/baseline/contrato, sin volver a solicitar las aprobaciones resueltas. T01 permanece bloqueada; ningún paso de implementación iniciado.

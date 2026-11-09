@@ -1,5 +1,29 @@
 # Estado de ejecución y transferencia
 
+**Rediseño nativo r2.1 VIGENTE y bloque T05–T21 autorizado (2026-11-08):** [CLAUDE.md](../../../CLAUDE.md) (actualizado 2026-11-08) declara [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md) r2.1 como arquitectura nativa vigente y autoriza un bloque continuo de implementación T05–T21 **solo en LOCAL y CI efímero aislado**, sin push, despliegues, borrados ni servicios reales; T23–T25 requieren permisos independientes. El encabezado "PROPUESTA pendiente" de NATIVO r2.1 queda como texto histórico del documento: su vigencia la fija CLAUDE.md.
+
+- Reconciliación Git **PASS**: HEAD `83b5abf983c4f51c0fddd71a45f3cbd755330fa9` (T04 PASS por CI 42530209790 sobre `3d291d5`; `83b5abf` solo documentación). 112/112 hashes preservados; `backup/pre-recon-20261108` → `a446219`. `stash@{0}` y `backup/autostash-20261028-011451` intactos.
+- C12-r4 (acta, cierre V00, matrices y manual N1) y NATIVO r2.1 verificados presentes y completos en el checkout antes de T05-N.
+- **T05-N en implementación** conforme a NATIVO r2.1 §3, §5–§7, §12 y §15. T18 y T22 **sin objeto** (identificadores conservados). T06–T17 y T19–T21 pendientes según dependencias.
+- Este bloque se registra en el commit documental LOCAL autorizado por CLAUDE.md §5.A (solo documentos de plan y CLAUDE.md; sin código).
+
+**Rediseño nativo PostgreSQL (2026-11-08), PROPUESTA r2.1 pendiente de aprobación:** [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md). La r2.1 corrige los bloqueantes de Sol:
+
+- cerco de credenciales (rol DB y rotación de tokens) antes de cualquier efecto externo; la capa 0 SQL solo defiende el ledger;
+- gateway de medios sin `bot_token` en los clientes nativos, con impacto de costo y latencia medido en T20 y decisión D-N6;
+- borrado de cuenta controlado y deshabilitado;
+- cuarentena por usuario en el flush;
+- C12-r4 local vigente durante la reconciliación.
+
+Respaldo previo: `E:\777\app\BeatGaler-plan-backups\NATIVO-r2_1-pre-20261108-180350`. Antecedente r2: la r2 corrige el orden de inserción y los ids frente a 0026, separa GET/provision, añade la capa 0 en DB, las guardas de cascada y rebind, el aislamiento por chat nuevo (bot_token en cliente Direct), la recuperación sin INDEX, las dependencias T19/T23 y la reconciliación Git detallada (§14). Respaldo previo: `E:\777\app\BeatGaler-plan-backups\NATIVO-r2-pre-20261108-172953`.
+
+- Decisión del propietario (Purp): no hay usuarios reales que migrar; se autoriza descartar los INDEX, beats, metadatos y archivos de prueba, pero **no** ejecutar borrados.
+- Bibliotecas nuevas directamente en PostgreSQL. Telegram queda solo para bytes.
+- **T05 detenido** hasta aprobar el rediseño. Se redefinen T05, T17 y T23; T18 y T22 quedan sin objeto; T07–T09, T11, T13, T15, T16, T24 y T25 se simplifican.
+- T00–T04 siguen en PASS, sin reabrir.
+- Antes de T05 hay que resolver R2 (base Git): HEAD local `a446219` no contiene los commits T02–T04, y `3d291d5` existe solo como objeto.
+- Solo se cambió documentación; sin código, servicios, datos ni Git de escritura. Respaldo verificado (SHA-256, 5/5): `E:\777\app\BeatGaler-plan-backups\NATIVO-pre-20261108-170039`.
+
 **T04 PASS (LOCAL, 2026-11-08, BAJA):** registrado por encargo explícito del usuario (Purp). CI catalog-checks run 42530209790 sobre commit 3d291d5 (fast-forward desde b6df121, solo LOCAL), PostgreSQL 16 efímero:
 
 - T04/t04-catalog-codec 5/5 y T04/catalog-roundtrip-integration 3/3, sin skips: 22 fixtures elegibles con source-roundtrip exacto en SQL, authoritative-export con solo deltas C4 (V1_TO_V2, SQL_ONLY_TOMBSTONE), VALIDATED sin autoridad (bibliotecas LEGACY/IDLE, época y revisión intactas, library_* sin cambios); lotes de 250 con crash/replay sin duplicados; snapshot cambiado exige generación nueva; REVIEW no escribe.

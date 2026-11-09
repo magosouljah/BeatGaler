@@ -1,5 +1,55 @@
 # Tareas para ejecución controlada
 
+**Rediseño nativo (2026-11-08, PROPUESTA pendiente de aprobación):** [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md) §9 fija la disposición de T05–T25 sin renumerar. Una vez aprobado, prevalece sobre las fichas T05–T25 de este documento:
+
+- **Redefinidas:** T05 (autoridad nativa, inicialización y cerco del INDEX), T17 (CLI `inspect`/`activate`/`reset`) y T23 (activación de un entorno).
+- **Sin objeto:** T18 y T22.
+- **Simplificadas:** T07, T08, T09, T11, T13, T15, T16, T24 y T25.
+- **Conservadas:** T06, T10, T12, T14, T19, T20 y T21.
+
+Hasta la aprobación no se ejecuta ninguna.
+
+**Vigencia C12-r4 (2026-11-07):** [cierre C12-r4](C12-V00-CIERRE-20261107.md) integra el [acta I1/I2/I3 aprobada](C12-V00-INTERACCIONES-APROBADAS-20261107.md) de `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` y las respuestas explícitas del usuario de este encargo. **A1/A2/B-legacy e I1/I2/I3 aprobados; decisiones C12/V00 cerradas para diseño.** Shuffle sin repetición por ronda, aviso de selección solo si existía y rename también en papelera sin alterar su estado. Las menciones pendientes r2/r3 quedan como antecedentes, sustituidas por r4. **T00/G0 no PASS; T01 bloqueada; T02 no iniciada.** No hay autorización de implementar.
+
+
+## Descomposición r3 integrada por gate documental r4
+
+B-experiencia, A1/A2/B-legacy e I1/I2/I3 aprobados. El [cierre r4](C12-V00-CIERRE-20261107.md) resuelve alcance y diseño pendiente; pruebas futuras conservan STOP de integridad/rendimiento. T00/G0 no PASS, T01 bloqueada: no ejecutar subtareas aún.
+
+| Subtarea | Tarea padre / dependencia | Entrega y condición crítica |
+| --- | --- | --- |
+| V00 | Diseño T00; inventario T01 solo tras gate | Decisiones pendientes y clasificación de cada consumidor del array |
+| V01 | T01→T02 | Fixtures/arnés aislado; sin red/DB real |
+| V02 | T06 tras T05/A1/A2 | resumeCursor inclusivo, keyset bidireccional, último bloque y legacy→ancla |
+| V03 | T08 tras V01/V02 | Medición CSS real, geometría por filas y anchor≤1px |
+| V04 | T08 tras V03 | Store/cache limitada; evicción≠eliminación, singleflight/generaciones |
+| V05 | T08 tras V04 | Grid/scroll aislados, sin pager ni selector local; no activar producto aún |
+| V06 | T14 tras T13/V04 | PlaybackSession, cleanup/resources, audio independiente de ventana |
+| V07 | T13/T14 tras V00/V04 | Selección/editor/drop/facetas con política cerrada |
+| V08 | T16 tras T15/V05/V06/V07 | Composición por autoridad, flags off, legacy intacto |
+| V09 | T16 tras V08; evidencia para T21 | Regresión navegador/foco/lector/layout,0 skips obligatorios |
+| V10 | T20 tras T19/V09 |100k/1M,scroll atrás,soak,métricas y budgets reales |
+| V11 | T21→T23 tras V10/G0–G4 | Candidato/rollback/piloto con autorización independiente |
+
+No se renumeran las26 tareas. Leer la ficha completa correspondiente en el plan B; esta tabla no la reemplaza. Los nombres de módulos/casos/comandos futuros no existen por haber sido documentados. Subtarea PASS no implica tarea padre PASS ni autorización de la siguiente. El descriptor del probe no sustituye T02; rollback con escrituras sigue T17/T18 y rendimiento T20. Los bloques anteriores de r2 quedan como antecedentes técnicos, reemplazados donde proponen pager visible o dicen que B-experiencia sigue pendiente.
+
+## Antecedente técnico C12-r2 (estado superado por r3)
+
+Leer [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) y [caracterización](C12-CARACTERIZACION-20261107.md) antes de ejecutar. Base local de esta revisión: `a4462191aea29ffdae136f04e1fdc2e4024291d1`. **T00 NO PASS / STOP-DESIGN; G0 NO APROBADO; T01 BLOQUEADA.** Baseline histórico y descriptor PostgreSQL G0 resueltos; no son pruebas de catálogo. A1/A2/B ya tienen aceptación explícita registrada en cierre r4. La tabla de decisiones y matriz de sección8 del acta complementan cada tarea sin renumerarlas.
+
+Obligaciones por tarea futura:
+
+- T00: comprobar aceptaciones registradas r4 y emitir revisión formal de gate; no repetir la consulta de producto. No hace falta crear DB ni implementar T02 para decidir el contrato.
+- T01: incorporar C12-U01/U02/N01/F01/F02/D01 al mapa/fixtures, distinguendo actual y candidato aprobado. Completar mapa DTO/consumidores, límites UTF8 y diferencias de routing/drag/facetas; no «corregir» raw ni alterar expected para ocultar deltas.
+- T02: arnés seguro independiente del probe; descriptor real ICU/versión/perfil antes de usarlo en T06. Si falta soporte, STOP; no sustituir colación.
+- T06: C12-Q01/Q02/Q03/B01/B02/L01, SQL real y paridad de proyecciones, cursor y resolver legacy acotado. Los endpoints y comandos del acta son entregables futuros, no existen todavía.
+- T08: C12-B03 y UI de errores/reset de sección5, solo tras aprobar B; auth/lazy/eventos/cachés y navegación real intactos. No alterar DESIGN para este encargo documental.
+- T14: C12-P01/P02 de media,14 referencias startup y cuenta/versiones, sin fallback INDEX. No es tarea de benchmark ni aprobación de conflictos SQL.
+- T17: C12-M01/M02 de CLI/guardas/rollback, respetando decisión A/B y manifiesto de ejecución. T18 demuestra rollback con escrituras nuevas; T19 restore/retención.
+- T20: C12-X01 con C11-LAB-v1 completo, EXPLAIN y SLO; no asignar estos resultados a T14/T17 ni al probe.
+
+Ante cualquier diferencia no aprobada o prueba no demostrada, usar STOP-DESIGN/STOP-DATA/STOP-PERF según el acta y el expediente de ESTADO. **No iniciar T01 desde esta entrega.** Las notas cronológicas de STOP-ENV/STOP-TEST más abajo describen su momento histórico; el estado vigente es el de arriba.
+
 **No ejecutadas.** La autorización recibida en esta conversación es producir el plan. Estas instrucciones no constituyen autorización actual para implementarlo ni para acceder a servicios reales.
 
 ## Reglas de cada tarea
@@ -346,6 +396,11 @@ La salida PowerShell de LOCAL confirma los tests del baseline, 3 fallos de aserc
 
 El usuario comprobó 68/68 pruebas individuales y 25/25 casos de mutación Cloud rechazados en `5b19916`; las siete fases completaron exit 0. En términos de tests del runner whitelist, `STOP-TEST` ya no bloquea, pero aún no se dispone de smoke real ni de PostgreSQL de catálogo aislado. **T00 global NO PASS por STOP-ENV y STOP-DESIGN**; no iniciar T01. Ver [T00-BASELINE-PASS-20261107.md](T00-BASELINE-PASS-20261107.md).
 
+
+## Antecedentes remotos reconciliados (históricos)
+
+Importados de `b585540a3a82bc8604d8d6de603514af48b5feb4`; no reemplazan C12-r2/r3 ni el estado vigente.
+
 ### Preparación concreta de G0 — PostgreSQL GitHub Actions y C12 IDE
 
 El probe aislado de solo entorno (`.github/workflows/catalog-g0-postgres-probe.yml`) se activa por cambios a su YAML en la rama LOCAL; no sustituye el arnés SQL de T02. `STOP-ENV` exige observar run PASS y descriptor concreto, no solo commit. La IDE puede cerrar C12 mediante [G0-C12-IDE-MASTER-PROMPT-20261107.md](G0-C12-IDE-MASTER-PROMPT-20261107.md) sin ejecutar T01 o cambiar el producto. Ver [G0-LAB-POSTGRES-ACTIONS.md](G0-LAB-POSTGRES-ACTIONS.md).
@@ -357,3 +412,13 @@ G0-ENV descriptor `PASS` según run [42416790955](https://github.com/magosouljah
 ### C12 — trabajo de la IDE pendiente de cierre
 
 Acta nueva [C12-DECISION-RECORD.md](C12-DECISION-RECORD.md) con contratos, evidencia y casos a probar. Falta resolver `STOP-DESIGN-A/B` (Unicode y `bgPage`); la IDE puede cerrar decisiones técnicas usando el [prompt maestro](G0-C12-IDE-MASTER-PROMPT-20261107.md). Sin aceptación de cambios visibles no declarar G0 ni empezar T01.
+
+## Transferencia normativa vigente C12-r4
+
+[cierre C12-r4](C12-V00-CIERRE-20261107.md) integra las aprobaciones explícitas y sustituye pendientes/recomendaciones incompatibles r2/r3. A1 ICU fijo, A2 binary64/clase y B-legacy <=10.000 quedan aprobados. I1 selección global con aviso solo si había selección; I2 audio continuo, nuevo query y cola prioritaria, Shuffle sin repetición por ronda; I3 rename ACTIVE/TRASH sin modificar estado. Se descarta fijar permanentemente la búsqueda musical al pulsar Play.
+
+Aplicar las dependencias, algoritmos, alternativas y STOP de sección 7 del cierre a T01/T03/T06/T07/T13/T14/T20 y V00–V11. Membresías SQL persistidas, selección CAS, facetas, journal y swaps Shuffle no son memoria global del cliente. T01/T06 deben producir inventario y contratos tipados completos en sus tareas futuras. T00 revisa formalmente base/descriptor/baseline/contrato, sin volver a solicitar las aprobaciones resueltas. T01 permanece bloqueada; ningún paso de implementación iniciado.
+
+## Reparto por nivel N1 (referencia normativa)
+
+El [manual N1](EJECUCION-POR-NIVELES-20261107.md) fija responsable principal, paquetes, escalamiento y STOP por nivel; las fichas ampliadas están en [matriz T](MATRIZ-T-NIVELES-20261107.md) (T00–T25) y [matriz V](MATRIZ-V-NIVELES-20261107.md) (V00–V11). Complementan estas 26 tareas sin renumerarlas ni sustituir sus pasos, archivos, verificaciones o PASS. En la tabla r3 de V00–V11 de este documento, la fila V00 «Decisiones pendientes» se lee como cerrada por r4 (RV5 de la matriz V); V07 se divide en V07-A (T13) y V07-B (T14) y V09 se ejecuta en T16 con consumo en T21 (N1 §3). No ejecutar ninguna V/T por haber leído estas referencias.
