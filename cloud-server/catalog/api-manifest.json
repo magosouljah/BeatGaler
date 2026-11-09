@@ -1,7 +1,7 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 8,
-  "task": "T06/T07/T09/T10/T12/T14/T15/T16",
+  "version": 9,
+  "task": "T06/T07/T09/T10/T12/T14/T15/T16/T17",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint de metadata toca Telegram; en T12 los bytes de una parte pasan por el gateway del servidor (§8.6) mediante una capacidad opaca: el cliente nunca recibe chat, message_id, random_id ni credenciales. Encargo T12 con fakes: T11 sigue NO PASS y G2 NOT_PROVEN.",
   "prefix": "/catalog/v1",
@@ -815,5 +815,13 @@
     "flagOff": "interruptor no destructivo: la capa 2 no actúa, la capa 1 (410 en entradas C10) y la capa 0 (triggers 0027) siguen",
     "forwardGuard": "el arranque se niega con CATALOG_SCHEMA_AHEAD si schema_migrations tiene versiones desconocidas (NATIVO §11)",
     "mounted": "routes /catalog/v1 con operations, transport, playback, media y purge; sin gateway real → 503 TRANSFER_UNAVAILABLE y jobs en reintento (fail-closed); BEATGALER_CATALOG_GATEWAY_ENABLED=true sin adaptador real → STOP-ENV en el arranque"
+  },
+  "cli": {
+    "task": "T17",
+    "entry": "node cloud-server/scripts/catalog-native.cjs --database-url <url> <inspect|activate|rebind-chat|reset> [--manifest f] [--apply]",
+    "dryRun": "activate/rebind-chat/reset solo leen sin --apply (BEGIN READ ONLY); inspect es solo lectura y exige rol sin UPDATE salvo --allow-write-role",
+    "activate": "única fila catalog_native_activation con precondiciones §3.1/§5.0 en SQL (cutover READY, JSON-compat = SQL, 0 cuarentena, inventario = inspect aprobado, sin R12, rol antiguo NOLOGIN con 0 backends, bots listos, instancias paradas); idempotente por environment_id+manifest_sha256",
+    "rebindChat": "única vía de cambio de vaults.telegram_chat_id para vaults con catálogo o en reset; catalog_chat_rebinds OPEN→APPLIED, CURRENT→RETIRED, época+1, auditoría append-only catalog_vault_rebind_audit (0034), cuarentena resuelta REBIND",
+    "reset": "biblioteca POSTGRES con generación reset-<uuid> origin RESET; exige hash de inventario bajo lock, 0 operaciones legacy en vuelo y chat nuevo puesto por rebind-chat; LEGACY_ABANDONED para el chat legacy; nunca vacía una biblioteca nativa (LIBRARY_ALREADY_NATIVE) ni borra filas legacy, medios o INDEX"
   }
 }

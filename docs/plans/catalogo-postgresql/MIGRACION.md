@@ -161,3 +161,63 @@ Ver [LOCAL-BASELINE-20261107.md](LOCAL-BASELINE-20261107.md), secciones 4–5.
 ### Límite de pruebas en G0 (2026-11-07)
 
 G0/T00 requieren identificar y aprobar un descriptor seguro de PostgreSQL aislado y reproducir tests base no destructivos. T02 implementará las guardas y solo entonces creará DBs efímeras para pruebas SQL. La frase «establecer DB» en el anexo no habilita acceso a `DATABASE_URL` heredada ni ejecución de `postgres-live.integration.cjs`. G2/G4 y autorizaciones productivas siguen sin aprobación. Ver [G0-AUDITORIA-20261107.md](G0-AUDITORIA-20261107.md).
+
+## T17-N. CLI nativa: `inspect`, `activate`, `rebind-chat`, `reset` (2026-11-09, con fakes; sin entorno real)
+
+Runbook vigente de NATIVO r2.1 §3.1 y §4 en lugar de M0–M6/R1–R2. Entrada: `cloud-server/scripts/catalog-native.cjs` (módulo `cloud-server/catalog/native-cli.js`). La URL de PostgreSQL se pasa siempre con `--database-url`; `DATABASE_URL` heredada se ignora. Todos los comandos salvo `inspect` son dry-run por defecto; `--apply` exige un manifiesto revisado sin placeholders ni secretos. **Ningún comando borra filas legacy, medios ni INDEX; `reset` nunca vacía una biblioteca nativa.** Secuencia: `inspect` → el propietario marca descartables → `rebind-chat --apply` → `inspect` (hash posterior) → `reset --apply`. `activate` solo tras el cerco §5.0 verificable en SQL (rol antiguo NOLOGIN con 0 backends, bots listos, instancias paradas) y con `--auth-json` del estado JSON-compat. **No ejecutar sobre servicios o datos reales sin autorización específica (T23–T25).**
+
+Salida exacta de `node cloud-server/scripts/catalog-native.cjs --help` (copiada del binario; prueba `t17-catalog-native-cli`):
+
+```text
+catalog-native — CLI nativa del catálogo PostgreSQL (T17-N (NATIVO r2.1))
+
+Uso:
+  node cloud-server/scripts/catalog-native.cjs --database-url <url> <comando> [opciones]
+  node cloud-server/scripts/catalog-native.cjs --help
+
+La URL de PostgreSQL se pasa SIEMPRE de forma explícita con --database-url; DATABASE_URL y el resto del entorno se ignoran.
+Todos los comandos salvo inspect son dry-run por defecto: solo leen y muestran el plan. Aplicar exige --apply y un manifiesto
+JSON revisado sin placeholders ni secretos (bot_token, api_hash, password, URLs con credenciales se rechazan).
+Salida: JSON en stdout. Códigos: 0 ok/no-op, 2 uso, 3 STOP-* (detalle en stderr), 4 error SQL.
+
+Comandos:
+  inspect --environment <id> [--user <id>] [--auth-json <accounts-data.json>] [--out <manifiesto.json>] [--allow-write-role]
+      Solo lectura (BEGIN READ ONLY) con un rol sin permiso de escritura; --allow-write-role solo en un laboratorio desechable.
+      Por vault: puntero/pin, library_beats, cuota, purges, operaciones Direct/PROJECT en vuelo, capacidades vivas, chat, bot,
+      fila de catálogo y divergencia vaults.id/chat JSON↔SQL (R12) si se pasa --auth-json. Telegram no se consulta
+      (telegram: "NOT_QUERIED"). Devuelve un manifiesto con inventory_sha256 por vault y global; el propietario rellena
+      "discardable" fuera de la CLI. Sin inventario marcado no hay reset.
+  activate --manifest <activate.json> --auth-json <accounts-data.json> [--apply]
+      Inserta la única fila de catalog_native_activation (§3.1). Precondiciones en la misma transacción: ninguna activación
+      previa (misma environment_id + mismo manifiesto → no-op ALREADY_ACTIVATED; otra → STOP), control-plane postgres
+      (cutover READY), JSON-compat = SQL en número y hash de users y vaults, 0 usuarios en cuarentena, inventario igual al
+      del inspect aprobado (inspect.inventory_sha256), sin divergencias R12, catalog_libraries vacía salvo staging LEGACY
+      listado, cerco §5.0 verificado en SQL (rol antiguo NOLOGIN con 0 backends, bots conocidos sin rotación pendiente,
+      inventario de instancias todas paradas, direct_token_exposure ROTATED|FRESH_BOTS; WAIVED_TEST_ONLY no existe).
+      Manifiesto: { environment_id, run_id, transport_bot_ids[], direct_token_exposure, instance_inventory[{id, stopped}],
+        inspect{inventory_sha256, approval_ref}, credential_fence{old_db_role, token_rotation_proof_ref,
+        transport_fence_proof_ref}, staging_libraries[]? }
+  rebind-chat --manifest <rebind.json> [--auth-json <accounts-data.json>] [--apply]
+      Única vía para cambiar vaults.telegram_chat_id de un vault con catálogo o en reset (§4.3). Con biblioteca: abre
+      catalog_chat_rebinds (OPEN → APPLIED en la misma transacción), el chat anterior pasa a RETIRED (solo lectura) y el nuevo
+      a CURRENT, época +1. Siempre deja una fila append-only en catalog_vault_rebind_audit y resuelve la cuarentena del flush
+      del usuario (resolution REBIND). Con --auth-json actualiza storageChatId del JSON-compat antes del COMMIT.
+      Rechaza: vault_id distinto (R12), from_chat distinto, chat destino ya usado (biblioteca, otro vault o abandonado),
+      operaciones en vuelo. Manifiesto: { environment_id, user_id, vault_id, from_chat_id, to_chat_id, approval_ref, rebind_id? }
+  reset --manifest <reset.json> [--apply]
+      Reinicio nativo de un vault de prueba descartable (§4.2), en una transacción con el vault bloqueado: recalcula el hash
+      del inventario (distinto → STOP-DATA), exige 0 operaciones legacy en vuelo, biblioteca POSTGRES existente → no-op
+      ALREADY_APPLIED solo con el mismo manifiesto (si no, LIBRARY_ALREADY_NATIVE: un reset nunca vacía una biblioteca
+      nativa), exige que el vault ya apunte al chat nuevo puesto por rebind-chat (auditoría) y no registrado; generaciones
+      LEGACY → RETIRED sin DELETE; generación reset-<uuid> origin RESET con descriptor de lo abandonado; biblioteca POSTGRES
+      con era nueva y época +1; chat nuevo CURRENT y chat legacy LEGACY_ABANDONED; capacidades Direct revocadas;
+      index_bootstrap_pending=false. No borra filas legacy, medios ni INDEX (eso es T24-N, con autorización propia).
+      Secuencia: inspect → marcar descartable → rebind-chat --apply → inspect (hash posterior al rebind) → reset --apply.
+      Manifiesto: { environment_id, run_id, user_id, vault_id, inventory_sha256, legacy_chat_id, new_chat_id,
+        approval{marked_discardable: true, ref} }
+
+STOP: STOP-ENV (entorno/activación/rol/bots), STOP-DATA (inventario, divergencias, chats, operaciones en vuelo),
+STOP-CONTRACT (manifiesto inválido o incompatible), STOP-APPROVAL (vault no marcado como descartable).
+```
+
+Evidencia: [E35](EVIDENCIA.md), [T17-CLI-NATIVA-20261109.md](T17-CLI-NATIVA-20261109.md). Pendiente real: ejecución con rol de solo lectura y entorno autorizado (R1), prueba de proveedor (T11 fase B) y G4 (T19) antes de activar.

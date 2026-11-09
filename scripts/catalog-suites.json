@@ -258,6 +258,17 @@
           ],
           "kind": "node-test",
           "network": "deny"
+        },
+        {
+          "id": "t17-catalog-native-cli",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-native-cli.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
         }
       ]
     },
@@ -1215,8 +1226,58 @@
       ]
     },
     "T17": {
-      "status": "pending",
-      "owner": "T17"
+      "status": "active",
+      "owner": "T17",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "CLI nativa (NATIVO r2.1 §3.1, §4): inspect solo lectura, activate/rebind-chat/reset dry-run por defecto; precondiciones §3.1/§5.0 verificables en SQL; reset nunca vacía una biblioteca nativa ni borra filas legacy/medios. FAKE: sin Telegram ni entorno real.",
+      "cases": [
+        {
+          "id": "t17-catalog-native-cli",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-native-cli.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-native-cli-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-native-cli.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T18": {
       "status": "pending",

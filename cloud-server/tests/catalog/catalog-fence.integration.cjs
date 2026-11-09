@@ -58,7 +58,7 @@ test('dos bibliotecas (nativa + RESET_REQUIRED + flag apagado) y una legacy: cap
   const native = await user(pool); const legacy = await user(pool, { native: false }); const reset = await user(pool, { native: false });
   // RESET_REQUIRED: vault con historial legacy (no elegible: index_bootstrap_pending=false por defecto y ledger legacy presente) y sin fila de catálogo.
   // 0027 prohíbe filas LEGACY en un entorno nativo: el "reinicio requerido" lo declara la provisión nativa, no una fila.
-  await pool.query("INSERT INTO library_quota_state(user_id, index_message_id) VALUES ($1, 77)", [reset.userId]).catch(() => {});
+  await pool.query("INSERT INTO library_quota_state(user_id, index_message_id, index_sha256) VALUES ($1, 77, $2)", [reset.userId, H]);
   const fence = createLegacyFence({ pool });
   for (const entry of C10_ENTRIES) {
     await rejects(fence.assertLegacyEntryAllowed({ userId: native.userId, entry }), 'LEGACY_CLIENT_UNSUPPORTED', (e) => e.status === 410 && e.detail.by === 'user' && e.detail.entry === entry);
