@@ -349,3 +349,9 @@ Límites:
 - Observación LAB: cargar 100k tags justo tras 100k beats sin `ANALYZE` cachea un plan FK con seq scan (horas); la prueba analiza entre cargas. Anotado para T19/T20 (cargas masivas/restores).
 - Decisiones D-T06-1..5 en el contrato T06 (sin pg_trgm hasta T20; claves de cursor por entorno con fallback efímero hasta T16; backfill SQL solo para filas de laboratorio; provision 201/200; ETag débil por versión).
 - **No ejecutado aún:** `catalog-checks` en CI (PostgreSQL 16 del descriptor) con la suite T06; se lanza con el push de este bloque (E24-b).
+
+### E24-b. T06 en CI (2026-11-09)
+
+- Commit `6af369c` (25 archivos) y push fast-forward `5af54aa..6af369c` a `local/landing-gallery-unificada` (modo continuo autorizado por Sol). Solo se activó `catalog-checks`.
+- [Run 42556542173](https://github.com/magosouljah/BeatGaler/actions/runs/42556542173), PostgreSQL 16 efímero del descriptor: **PASS** unit 72/72 (incluye t06-cursor 4, t06-queries 6, t06-routes 2), faults 9/9, integration 2/2, T03 14/14, T04 8/8, T05 24/24, **T06 23/23** (`catalog-queries-integration` 10/10: ICU und real en PG16, Q01/Q02, F01/F02/N01, facetas, B01/B02, L01, conjuntos, EXPLAIN 100k sin Sort). 0 skips; red solo `postgres:5432` (T06 integración: 108 intentos, 0 bloqueos).
+- PASS técnico de T06 (TAREAS §T06: respuesta acotada, datos globales correctos, 0 transporte; MATRIZ-V V02 §15: casos + EXPLAIN + contratos V02-A). Los gates G3/G4 siguen pendientes de sus tareas. Siguiente: T07.
