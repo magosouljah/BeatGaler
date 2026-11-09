@@ -477,3 +477,8 @@ Límites:
 - LOCAL: `catalog-check unit` 106/106 (19 casos), `faults` 16/16, `T13` PASS, `runner.test` 9/9, esquema 32 migraciones, vitest 6/6 (medios + sesión), `TYPECHECK_PASS`.
 - LAB (PostgreSQL 18 WSL, copias generadas): `catalog-playback.integration` **6/6** — rondas N=0/1/2/240 (cada miembro una vez; m=0 sin RNG; mapping vacío al final), replay/CAS/5 concurrentes → 1, consume explícito sin doble descuento, equivalencia SQL↔oráculo con RNG inyectado, N=20 000 con 300 avances distintos y ≤300 filas (12,5 ms/avance: métrica inicial, no SLO), STALE + reconstrucción preservando consumidos (unión = biblioteca), vecino por slot y por rating, medios (concesión por parte sin chat/message, stream/Range/HEAD/416, multipart con hash completo, otra cuenta, época, TRASH→403/restore, caducidad, revocación, proveedor falla antes del primer byte → 502, objeto no PRESENT → 403).
 - Calificación: implementación aislada con fakes (FAKE). N=100k/1M y latencias → T20; V06/V07-B en navegador real → V09; composición → T16. T11 NO PASS; G2 NOT_PROVEN; ningún gate superado. Pendiente CI con suite T14 (E32-b).
+
+## E32-b. T14 — CI aislado `catalog-checks` con la suite T14 (2026-11-09) — PASS técnico aislado, FAKE
+
+- Run **`42591718372`** sobre `0a5ffb4`: **PASS** `unit`, `faults`, `integration`, `T03`…`T14`. T14: `catalog-playback-integration` 6/6 (PG efímero; N=20k incluido), `t14-catalog-playback` 5/5, `t14-catalog-media-client` y `t14-catalog-playback-session` (vitest) PASS, `t14-typecheck` PASS, `t11-transport-gateway` 7/7, esquema 32 migraciones.
+- Calificación: **PASS técnico aislado con fakes** del encargo T14. N=100k/1M, p95 y coste de preparación → T20; V06/V07-B en navegador real → V09; montaje → T16. T11 NO PASS; G2 NOT_PROVEN; ningún gate superado.
