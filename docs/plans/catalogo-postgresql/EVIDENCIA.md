@@ -417,3 +417,9 @@ Límites:
 - Commit `ed72cd8`, [run 42564262593](https://github.com/magosouljah/BeatGaler/actions/runs/42564262593): todas las suites PASS salvo `T10/catalog-worker-integration` test 2 con `SASL: client password must be a string`.
 - Causa: el test construía un segundo pool con `{ ...pool.options }`; `pg` define `password` como propiedad no enumerable en `Pool.options`, así que el spread la pierde. En el LAB (autenticación local) no se manifestó; en CI (SCRAM) sí. Corrección: el test usa `h.config` del arnés (`withDb(async (pool, h) => …)`), como ya hacían T07/T09. Sin cambios en `worker.js`.
 - LAB tras la corrección: `catalog-worker.integration` 4/4. Se relanza CI (E28-b).
+
+### E28-b. T10 en CI (2026-11-09)
+
+- Commit `7ed48a2` (corrección de arnés E28-a sobre `ed72cd8`) y push fast-forward a `local/landing-gallery-unificada`. Solo se activó `catalog-checks`.
+- [Run 42564674616](https://github.com/magosouljah/BeatGaler/actions/runs/42564674616), PostgreSQL 16 efímero del descriptor: **PASS** en todas las suites del push (unit 86/86 en 16 casos, faults 13/13, integration 2/2, T03 14/14, T04 8/8, T05 24/24, T06 25/25, T07 16/16, T08 6/6, T09 13/13, **T10 9/9**: t10-catalog-worker 4/4, postgres-schema-contract 1/1, catalog-worker-integration 4/4), sin skips.
+- PASS técnico de T10 (TAREAS §T10: claim/lease/backoff C8, adquisición única entre procesos y fencing de token viejo, fake lento sin SQL retenida, caídas en cada frontera con RECONCILE sin reenvío, health con backlog/BLOCKED). No equivale a G2 real. Siguiente: T11 (fakes cerrados; sandbox real requiere STOP-APPROVAL).
