@@ -1,10 +1,11 @@
 # BeatGaler — Instrucciones para Claude Code
 
-**Actualizado:** 2026-11-08  
+**Actualizado:** 2026-11-09  
 **Proyecto:** `magosouljah/BeatGaler`  
 **Rama exclusiva:** `local/landing-gallery-unificada`  
 **Directorio LOCAL:** `E:\777\app\BeatGaler`  
-**HEAD reconciliado (reportado y dictaminado):** `83b5abf983c4f51c0fddd71a45f3cbd755330fa9`
+**HEAD reconciliado (reportado y dictaminado):** `83b5abf983c4f51c0fddd71a45f3cbd755330fa9`  
+**T05-N PASS (dictamen de Sol, 2026-11-09):** `5392b2f`, run `42549450777`.
 
 ## 1. Misión
 
@@ -33,7 +34,7 @@ Antes de ejecutar una tarea, leer *solo las secciones aplicables*, evitando rele
 - **Claude Code:** ejecutor. **MEDIA** por defecto; **BAJA** para tareas mecánicas, fixtures y verificaciones; **ALTA** solo para problemas arquitectónicos nuevos o revisión crítica expresamente necesaria.
 - **Propietario (Purp):** autoriza operaciones reales, borrados, despliegues y decisiones de producto/arquitectura que alteren el contrato.
 
-**Autorización de trabajo acordada:** un **bloque continuo de implementación T05–T21 exclusivamente en LOCAL y CI efímero aislado**, condicionado a dependencias y gates. Claude puede completar varias tareas consecutivas sin pedir permiso humano para cada paso rutinario. **No se amplía automáticamente a T23–T25, sistemas reales ni eliminación física.**
+**Autorización de trabajo acordada (modo de ejecución continua, Sol 2026-11-09):** un **bloque continuo de implementación T06–T21 exclusivamente en LOCAL y CI efímero aislado**, condicionado a dependencias y gates. Claude verifica los criterios PASS de cada tarea con pruebas y evidencia, registra resultados en `ESTADO.md`/`EVIDENCIA.md` y **continúa automáticamente** con la siguiente tarea sin pedir dictamen por cada tarea rutinaria ni detenerse por un CI verde. Quedan autorizados los **commits normales y el push fast-forward exclusivamente a `local/landing-gallery-unificada`** para ejecutar el CI aislado, con verificación previa de archivos y ausencia de secretos. **No se amplía a T23–T25, sistemas reales, `main`, despliegues, borrados, force-push ni eliminación física.** Los gates que exigen aprobación independiente (G2 sandbox real, G4, activación) siguen requiriendo STOP y dictamen.
 
 Después de cada T, registrar evidencia y estado; si las dependencias de la siguiente están satisfechas y no existe STOP, **continuar autónomamente**. No reiniciar chats, auditorías completas ni suites ya verificadas sin una causa técnica nueva. Una prueba obligatoria afectada sí se ejecuta.
 
@@ -47,8 +48,8 @@ Después de cada T, registrar evidencia y estado; si las dependencias de la sigu
 | T03 | **PASS** |
 | T04 | **PASS** — CI `42530209790` sobre `3d291d5`; `83b5abf` solo cambió documentación |
 | Git LOCAL | Reconciliación **PASS**, HEAD `83b5abf` |
-| T05-N | **PENDIENTE de implementación**, arquitectura NATIVO r2.1 |
-| T06–T17, T19–T21 | Pendientes según dependencias |
+| T05-N | **PASS** — dictamen de Sol sobre CI `42549450777` (`5392b2f`); evidencia E23/E23-b |
+| T06–T17, T19–T21 | En ejecución continua según dependencias (T06 en curso desde 2026-11-09) |
 | T18 y T22 | **NO APLICA** en ruta nativa; mantener identificadores y justificación histórica |
 | T23–T25 | Fuera de autorización actual; requieren permisos independientes |
 
@@ -62,7 +63,7 @@ El árbol ejecutable de `83b5abf` es equivalente al probado en CI para T04. **No
 
 **A. Cierre documental LOCAL (permiso de commit limitado):** actualizar este `CLAUDE.md`; conservar completos C12-r4 y NATIVO r2.1; reconciliar únicamente los documentos canónicos que aún describan el flujo histórico como vigente. Revisar lista exacta y diff, verificar respaldos SHA-256. Autorizar solo un **commit documental LOCAL** de archivos de plan seleccionados y este `CLAUDE.md`; **nunca incluir** `Claude outputs/`, imágenes o secretos. **No push** sin permiso separado. No alterar código para este commit.
 
-**B. T05-N:** implementar autoridad nativa, provisionamiento explícito idempotente mediante `POST` y guardas fail-closed conforme a NATIVO r2.1. `GET /context` **solo lee**; ausencia de datos/error SQL nunca implica catálogo vacío. No crear INDEX ni consultar Telegram para inicialización. La ruta nativa debe impedir operaciones antiguas incompatibles *antes* de cualquier efecto externo; triggers SQL son defensa adicional, no cerco suficiente.
+**B. T05-N (PASS):** implementó autoridad nativa, provisionamiento explícito idempotente mediante `POST` y guardas fail-closed conforme a NATIVO r2.1. `GET /context` **solo lee**; ausencia de datos/error SQL nunca implica catálogo vacío. No crear INDEX ni consultar Telegram para inicialización. La ruta nativa debe impedir operaciones antiguas incompatibles *antes* de cualquier efecto externo; triggers SQL son defensa adicional, no cerco suficiente.
 
 **C. T06–T17 y T19–T21:** seguir dependencias y requisitos nativos, ejecutar pruebas específicas y reutilizar evidencia válida. Tras T05, avanzar en lectura SQL, mutaciones, operaciones, worker, integración Web/Gallery/Playbar, transporte, backup/restore y rendimiento. No omitir integridad, concurrencia, aislamiento, retención ni recuperación para acelerar.
 
@@ -86,8 +87,8 @@ El árbol ejecutable de `83b5abf` es equivalente al probado en CI para T04. **No
 
 ## 7. Seguridad operativa y Git
 
-- **Permitido:** cambios de código y documentación necesarios para T05–T21 **solo en LOCAL**, tests controlados y CI PostgreSQL efímero/aislado; commit documental LOCAL del paso A.
-- **Prohibido sin autorización adicional:** `push`, merge, rebase, reset, clean, stash, cambios de rama, borrados, despliegues, migraciones en DB no efímeras, AWS, bots/cuentas/chats/Telegram reales, producción o `main`/`DESIGN/`.
+- **Permitido:** cambios de código y documentación necesarios para T06–T21 **solo en LOCAL**, tests controlados y CI PostgreSQL efímero/aislado; commits normales y push fast-forward solo a `local/landing-gallery-unificada` (autorización de Sol 2026-11-09), con preflight de archivos y secretos.
+- **Prohibido sin autorización adicional:** force-push, merge, rebase, reset, clean, stash, cambios de rama, push a cualquier otra rama, borrados, despliegues, migraciones en DB no efímeras, AWS, bots/cuentas/chats/Telegram reales, producción o `main`/`DESIGN/`.
 - No ejecutar pruebas destructivas ni `postgres-live.integration.cjs` con variables heredadas. El arnés de T02 debe demostrar ownership de DB efímera y bloquear conexiones externas. No ejecutar suites agregadas de alcance desconocido.
 - No leer, copiar, registrar ni mostrar `.env`, `.env.*`, credenciales o secretos. Usar los mecanismos seguros ya diseñados para mocks y laboratorios.
 - No desactivar tests, checks, runner T00 ni guardas para forzar PASS. Nuevas pruebas deben medir el comportamiento, no acomodar resultados.
@@ -96,7 +97,7 @@ El árbol ejecutable de `83b5abf` es equivalente al probado en CI para T04. **No
 
 ## 8. Evidencia mínima y STOP
 
-Por tarea entregar **resumen breve**: `Txx`, SHA/rama, archivos, comandos/pruebas y resultados, `PASS` técnico o `STOP`, y siguiente dependencia. Distinguir PASS aislado de evidencia real de proveedor; **Sol conserva el dictamen formal de gates**. No generar ZIP, reportes largos ni volver a auditar lo ya certificado, salvo necesidad técnica.
+Por tarea registrar en `ESTADO.md`/`EVIDENCIA.md` un **resumen breve**: `Txx`, SHA/rama, archivos, comandos/pruebas y resultados, `PASS` técnico o `STOP`, y siguiente dependencia; no entregar handoffs rutinarios al cerrar cada tarea ni por un CI verde. Distinguir PASS aislado de evidencia real de proveedor; **Sol conserva el dictamen formal de los gates que exigen aprobación independiente**. No generar ZIP, reportes largos ni volver a auditar lo ya certificado, salvo necesidad técnica.
 
 **Detenerse y escalar** ante: decisiones no resueltas de arquitectura/producto, riesgo real de integridad o seguridad, acceso a servicio real, prueba obligatoria fallida que no pueda corregirse de modo seguro, migración/borrado no autorizado o incompatibilidad contractual. Usar `STOP-BASE`, `STOP-ENV`, `STOP-TEST`, `STOP-DESIGN`, `STOP-CONTRACT`, `STOP-DATA`, `STOP-GATE` o `STOP-APPROVAL` con evidencia precisa.
 
