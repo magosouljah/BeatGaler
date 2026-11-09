@@ -1,5 +1,7 @@
 # Estado de ejecución y transferencia
 
+**T08 PASS técnico en CI (2026-11-09):** commit `767460b`, [run 42561000973](https://github.com/magosouljah/BeatGaler/actions/runs/42561000973) PASS: unit 77/77, faults 9/9, integration 2/2, T03 14/14, T04 8/8, T05 24/24, T06 23/23, T07 15/15, T08 6/6 (26 vitest + typecheck), sin skips ([E26-b](EVIDENCIA.md)). **T09 en curso** (0030 operaciones de transferencia/partes/reservas/jobs, `catalog/operations.js`).
+
 **T08 implementada en LOCAL (2026-11-09), PASS técnico LOCAL, CI pendiente del push:** ver [E26](EVIDENCIA.md) y [T08-CLIENTE](T08-CLIENTE-20261109.md). Módulos del cliente en `src/features/library/catalog/` (API, geometría V03, store acotado V04, grid/hook/navegación V05, composición por flag apagada), 26 tests vitest + typecheck en la suite `T08`. Siguiente: CI con T08; luego T09 (intenciones, reservas y máquina de estados C7).
 
 **T07 PASS técnico en CI (2026-11-09):** commit `6c3dadb`, [run 42559084665](https://github.com/magosouljah/BeatGaler/actions/runs/42559084665) PASS: unit 77/77, faults 9/9, integration 2/2, T03 14/14, T04 8/8, T05 24/24, T06 23/23, T07 15/15, sin skips ([E25-b](EVIDENCIA.md)). **T08 en curso** (cliente de lectura: `src/features/library/catalog/` — API, geometría V03, store V04, grid/navegación V05 en fixture; composición de producto apagada hasta T16).
