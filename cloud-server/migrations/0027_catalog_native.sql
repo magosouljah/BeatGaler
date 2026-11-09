@@ -1,7 +1,7 @@
 BEGIN;
 
 -- T05-N — Catálogo nativo PostgreSQL (NATIVO-POSTGRES-20261108 r2.1 §3, §5.1 capa 0, §6, §6.1, §6.2, §7).
--- Aditiva: 0026 no se modifica. Solo tablas, columnas con default, funciones y triggers. Sin jsonb (D-08).
+-- Aditiva: 0026 no se modifica. Solo tablas, columnas con default, funciones y triggers. Solo TEXT para JSON (D-08).
 -- Toda guarda se activa únicamente si existe la fila de catalog_native_activation o si la biblioteca/generación
 -- es nativa (origin NATIVE o RESET): T03/T04 (bibliotecas LEGACY sin activación) quedan intactas por construcción.
 -- La capa 0 es defensa en profundidad del ledger legacy, no cerco: no impide efectos externos ya enviados (§5 B1).
