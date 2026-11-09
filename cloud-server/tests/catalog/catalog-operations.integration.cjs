@@ -218,15 +218,16 @@ test('cancel tras despacho → RECONCILE con objetos retenidos y reserva HELD; c
   assert.equal((await ops.commitOperation({ ...hdr, operationId: op.operationId })).status, 200);
   // jobs: claim con lease, renew, callback viejo fenced, complete, fail con backoff y BLOCKED al octavo transitorio
   const j1 = await ops.enqueueJob({ userId: lib.userId, kind: 'TRANSFER_VERIFY', operationId: op.operationId, payload: { partKey: 'm0' } });
-  await ops.enqueueJob({ userId: lib.userId, kind: 'TRANSFER_VERIFY', operationId: op.operationId, payload: { partKey: 'x' } });
-  const a = await ops.claimJobs({ owner: 'worker-a', limit: 1 });
+  await ops.enqueueJob({ userId: lib.userId, kind: 'TRANSFER_VERIFY', operationId: op.operationId, payload: { partKey: 'x' }, jobId: 'job-x' });
+  await pool.query("UPDATE catalog_jobs SET state = 'DONE', completed_at = now() WHERE user_id = $1 AND job_id NOT IN ($2, $3) AND state = 'QUEUED'", [lib.userId, j1.jobId, 'job-x']); // T10: los hooks encolan verify/commit/reconcile; aquí solo probamos las primitivas con los dos jobs manuales
+  const a = await ops.claimJobs({ owner: 'worker-a', limit: 1, kinds: ['TRANSFER_VERIFY'] });
   assert.deepEqual([a.length, a[0].lease.owner, a[0].lease.generation, a[0].attempts], [1, 'worker-a', '1', 1]);
-  const b = await ops.claimJobs({ owner: 'worker-b', limit: 10 });
+  const b = await ops.claimJobs({ owner: 'worker-b', limit: 10, kinds: ['TRANSFER_VERIFY'] });
   assert.equal(b.length, 1, 'SKIP LOCKED: el job arrendado no se reparte dos veces');
   await ops.renewJobLease({ jobId: a[0].jobId, lease: a[0].lease });
   // lease vencido → otro worker lo reclama con generación +1; el callback del worker viejo queda fenced
   await pool.query("UPDATE catalog_jobs SET lease_until = now() - interval '1 second' WHERE job_id = $1", [a[0].jobId]);
-  const c = await ops.claimJobs({ owner: 'worker-c', limit: 10 });
+  const c = await ops.claimJobs({ owner: 'worker-c', limit: 10, kinds: ['TRANSFER_VERIFY'] });
   assert.deepEqual([c.length, c[0].jobId, c[0].lease.generation], [1, a[0].jobId, '2']);
   await assert.rejects(ops.completeJob({ jobId: a[0].jobId, lease: a[0].lease }), (e) => e.code === 'LEASE_FENCED');
   await assert.rejects(ops.renewJobLease({ jobId: a[0].jobId, lease: a[0].lease }), (e) => e.code === 'LEASE_FENCED');
@@ -234,10 +235,10 @@ test('cancel tras despacho → RECONCILE con objetos retenidos y reserva HELD; c
   assert.deepEqual(await ops.completeJob({ jobId: a[0].jobId, lease: c[0].lease }), { jobId: a[0].jobId, state: 'DONE' });
   let f = await ops.failJob({ jobId: b[0].jobId, lease: b[0].lease, error: 'FLOOD_WAIT', transient: true, retryAfterMs: 30_000 });
   assert.deepEqual([f.state, f.delayMs >= 30_000], ['QUEUED', true]);
-  for (let i = 0; i < 8; i++) { const cl = (await pool.query("UPDATE catalog_jobs SET next_attempt_at = now() WHERE job_id = $1", [b[0].jobId])) && await ops.claimJobs({ owner: 'w', limit: 10 }); if (!cl.length) break; f = await ops.failJob({ jobId: b[0].jobId, lease: cl[0].lease, error: 'timeout', transient: true }); if (f.state === 'BLOCKED') break; }
+  for (let i = 0; i < 8; i++) { const cl = (await pool.query("UPDATE catalog_jobs SET next_attempt_at = now() WHERE job_id = $1", [b[0].jobId])) && await ops.claimJobs({ owner: 'w', limit: 10, kinds: ['TRANSFER_VERIFY'] }); if (!cl.length) break; f = await ops.failJob({ jobId: b[0].jobId, lease: cl[0].lease, error: 'timeout', transient: true }); if (f.state === 'BLOCKED') break; }
   assert.equal(f.state, 'BLOCKED', 'ocho fallos transitorios → BLOCKED visible, no descartado');
   await pool.query("UPDATE catalog_jobs SET state = 'QUEUED', next_attempt_at = now() WHERE job_id = $1", [b[0].jobId]).catch(() => {});
-  const perm = await ops.claimJobs({ owner: 'w2', limit: 10 });
+  const perm = await ops.claimJobs({ owner: 'w2', limit: 10, kinds: ['TRANSFER_VERIFY'] });
   if (perm.length) assert.equal((await ops.failJob({ jobId: perm[0].jobId, lease: perm[0].lease, error: 'permission', transient: false })).state, 'BLOCKED', 'permanente → BLOCKED inmediato');
   void j1;
   // época vieja → commit stale

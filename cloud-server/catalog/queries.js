@@ -518,6 +518,8 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
           throw new CatalogQueryError('QUERY_SET_BUILDING_BUSY', 409, 'another query set is already building for this library', { set_id: null, race: true });
         }
       }
+      // T10: la construcción la programa el worker (job idempotente por set); la lectura de Gallery no espera a READY (r4 §3).
+      if (created) await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-qs-${setId}`, uid, 'QUERY_SET_BUILD', null, canonicalJson({ setId })]);
       await client.query(`INSERT INTO catalog_query_set_leases(user_id, set_id, consumer_id, consumer_kind, lease_until) VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5::int))
         ON CONFLICT (user_id, set_id, consumer_id) DO UPDATE SET lease_until = EXCLUDED.lease_until, consumer_kind = EXCLUDED.consumer_kind`, [uid, setId, consumerId, consumerKind, LEASE_MINUTES]);
       const s = (await client.query(SET_SQL, [uid, setId])).rows[0];

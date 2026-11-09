@@ -286,6 +286,8 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       await client.query(`UPDATE catalog_operation_parts SET dispatch_state = 'RECEIPT', dispatched_at = coalesce(dispatched_at, now()), receipt_json = $4, receipt_hash = $5, provider_message_id = $6::bigint, provider_document_id = $7
         WHERE user_id = $1 AND operation_id = $2 AND part_key = $3`, [uid, operationId, partKey, canonical, hash, messageId, documentId]);
       if (o.status !== 'VERIFYING') await client.query("UPDATE catalog_transfer_operations SET status = 'VERIFYING' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
+      // T10: el worker verifica con el proveedor fuera de SQL; el job nace en la misma transacción que el recibo.
+      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-verify-${operationId}-${partKey}`, uid, 'TRANSFER_VERIFY', operationId, canonicalJson({ partKey })]);
       return opDto(client, uid, operationId, { replay: false, partKey });
     });
   }
@@ -333,7 +335,11 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       if (o.status === 'COMMITTED') return { status: 200, operation: await opDto(client, uid, operationId, { replay: true }) };
       if (['CANCELED', 'FAILED', 'CONFLICT', 'BLOCKED'].includes(o.status)) throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
       const parts = (await client.query(PARTS_SQL, [uid, operationId])).rows;
-      if (parts.some((p) => p.dispatch_state !== 'VERIFIED')) return { status: 202, operation: await opDto(client, uid, operationId, { pending: parts.filter((p) => p.dispatch_state !== 'VERIFIED').map((p) => p.part_key) }) };
+      if (parts.some((p) => p.dispatch_state !== 'VERIFIED')) {
+        // T10: el commit solicitado se completa por el worker cuando todas las partes estén verificadas (202 ahora).
+        await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-commit-${operationId}`, uid, 'TRANSFER_COMMIT', operationId, canonicalJson({ reason: 'CLIENT_COMMIT' })]);
+        return { status: 202, operation: await opDto(client, uid, operationId, { pending: parts.filter((p) => p.dispatch_state !== 'VERIFIED').map((p) => p.part_key) }) };
+      }
       if (o.status !== 'READY') await client.query("UPDATE catalog_transfer_operations SET status = 'READY' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
       const gen = o.generation_id;
       if (gen !== ctx.generation_id || o.authority_epoch !== ctx.authority_epoch) throw new CatalogQueryError('CATALOG_EPOCH_STALE', 409, 'operation belongs to a previous epoch/generation', {});
@@ -458,6 +464,9 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       if (sent > 0 && o.status !== 'RECONCILE') {
         // Pudo haber envío: RECONCILE con objetos retenidos; la reserva sigue HELD hasta resolver (nada se borra, C7).
         await client.query("UPDATE catalog_transfer_operations SET status = 'RECONCILE', last_error = 'CANCEL_AFTER_DISPATCH' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
+        // T10: reconciliación por parte con envío incierto (nunca reenvío automático).
+        const uncertain = (await client.query("SELECT part_key FROM catalog_operation_parts WHERE user_id = $1 AND operation_id = $2 AND dispatch_state IN ('DISPATCHED', 'RECEIPT')", [uid, operationId])).rows;
+        for (const p of uncertain) await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-reconcile-${operationId}-${p.part_key}`, uid, 'TRANSFER_RECONCILE', operationId, canonicalJson({ partKey: p.part_key })]);
         return opDto(client, uid, operationId, { changed: true });
       }
       if (sent > 0 && o.status === 'RECONCILE') return opDto(client, uid, operationId, { changed: false });

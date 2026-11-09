@@ -22,6 +22,7 @@ on:
       - cloud-server/migrations/0028_catalog_queries.sql
       - cloud-server/migrations/0029_catalog_commands.sql
       - cloud-server/migrations/0030_catalog_transfer_operations.sql
+      - cloud-server/catalog-worker.js
       - src/lib/metadataValidation.ts
       - src/features/library/catalog/**
       - tests/component-dom/catalog*
@@ -44,7 +45,7 @@ on:
         required: true
         default: "unit"
         type: choice
-        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08, T09]
+        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08, T09, T10]
 
 permissions:
   contents: read
@@ -74,7 +75,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       CI: "true"
-      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08 T09' || inputs.suite }}
+      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08 T09 T10' || inputs.suite }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,7 +103,7 @@ jobs:
         run: |
           status=0
           for suite in $SUITES; do
-            if [ "$suite" = "integration" ] || [ "$suite" = "T03" ] || [ "$suite" = "T04" ] || [ "$suite" = "T05" ] || [ "$suite" = "T06" ] || [ "$suite" = "T07" ] || [ "$suite" = "T09" ]; then
+            if [ "$suite" = "integration" ] || [ "$suite" = "T03" ] || [ "$suite" = "T04" ] || [ "$suite" = "T05" ] || [ "$suite" = "T06" ] || [ "$suite" = "T07" ] || [ "$suite" = "T09" ] || [ "$suite" = "T10" ]; then
               CATALOG_TEST_ADMIN_URL='postgres://catalog_lab_admin:catalog-lab-ephemeral@postgres:5432/catalog_lab_sentinel'                 node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1
             else
               node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1

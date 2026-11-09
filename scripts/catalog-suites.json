@@ -178,6 +178,16 @@
             "cloud-server/tests/catalog/catalog-operations.test.cjs"
           ],
           "kind": "node-test"
+        },
+        {
+          "id": "t10-catalog-worker",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test"
         }
       ]
     },
@@ -193,6 +203,16 @@
             "--test",
             "--test-reporter=tap",
             "cloud-server/tests/catalog-harness/fake-transport.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t10-catalog-worker-faults",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
           ],
           "kind": "node-test"
         }
@@ -617,8 +637,46 @@
       ]
     },
     "T10": {
-      "status": "pending",
-      "owner": "T10"
+      "status": "active",
+      "owner": "T10",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t10-catalog-worker",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-worker-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-worker.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T11": {
       "status": "pending",

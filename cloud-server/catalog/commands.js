@@ -460,6 +460,8 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
         extra = { ...extra, setId: s.set_id, selectionId, selectionVersion: s.selection_version, totalFrozen: s.selected_count };
       }
       const operationId = await recordOperation(client, uid, ctx, { kind, key: idempotencyKey, hash, payload, result: null, status: 'QUEUED', extra });
+      // T10: los lotes los ejecuta el worker (job idempotente por operación).
+      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-op-${operationId}`, uid, 'OPERATION_STEP', operationId, canonicalJson({ operationId })]);
       const o = (await client.query(OP_SQL, [uid, operationId])).rows[0];
       return opDto(o, { replay: false, created: true });
     });
@@ -616,6 +618,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       if (o.status !== 'CONFLICT') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
       if (String(revision) !== ctx.revision) throw new CatalogQueryError('REVISION_MISMATCH', 409, 'revision provided is not the current one', { current_revision: ctx.revision });
       await client.query(`UPDATE catalog_operations SET status = 'RUNNING', expected_revision = $3::bigint, conflict_batch_seq = NULL WHERE user_id = $1 AND operation_id = $2`, [uid, operationId, ctx.revision]);
+      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-op-${operationId}-resume-${ctx.revision}`, uid, 'OPERATION_STEP', operationId, canonicalJson({ operationId, resumedAt: ctx.revision })]);
       return opDto((await client.query(OP_SQL, [uid, operationId])).rows[0], { resumed: true });
     });
   }

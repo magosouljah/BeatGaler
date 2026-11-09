@@ -1,7 +1,7 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 3,
-  "task": "T06/T07/T09",
+  "version": 4,
+  "task": "T06/T07/T09/T10",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint toca Telegram.",
   "prefix": "/catalog/v1",
@@ -584,5 +584,6 @@
     "Q4_musical": "Comandos next/previous/consume con sequence CAS e idempotencyKey; resultado persistido en la misma transacción que el swap; ronda nueva por filtros, reconstrucción por revisión preservando consumidos por ID. Implementación T14.",
     "Q5_reanchor": "Por defecto stale (409 CURSOR_STALE → recarga del primer bloque conservando filtros). No se reancla por ID en T06: exigiría COUNT/posición por revisión nueva cuyo coste solo T20 puede justificar con EXPLAIN; si T20 lo demuestra, se añade `anchorBeatId` como extensión compatible, sin endpoint nuevo."
   },
-  "writeHeaders": "Idempotency-Key (1–128 [A-Za-z0-9_.:-]), X-Catalog-Era, X-Catalog-Epoch obligatorias en escrituras → 428 PRECONDITION_REQUIRED si faltan; era/época distintas → 409 CATALOG_ERA_MISMATCH / CATALOG_EPOCH_STALE; misma clave con otro contenido → 409 IDEMPOTENCY_MISMATCH; misma clave y contenido → resultado persistido (replay:true)."
+  "writeHeaders": "Idempotency-Key (1–128 [A-Za-z0-9_.:-]), X-Catalog-Era, X-Catalog-Epoch obligatorias en escrituras → 428 PRECONDITION_REQUIRED si faltan; era/época distintas → 409 CATALOG_ERA_MISMATCH / CATALOG_EPOCH_STALE; misma clave con otro contenido → 409 IDEMPOTENCY_MISMATCH; misma clave y contenido → resultado persistido (replay:true).",
+  "worker": "T10: `cloud-server/catalog-worker.js` (apagado salvo BEATGALER_CATALOG_WORKER_ENABLED=true + postgres + flag nativo + activación). Jobs encolados en la misma transacción que su causa: QUERY_SET_BUILD (createQuerySet), OPERATION_STEP (bulk create/resume), TRANSFER_VERIFY (recibo), TRANSFER_COMMIT (commit 202 o READY), TRANSFER_RECONCILE (cancel tras despacho). Claim ≤10 SKIP LOCKED, lease 60 s/generación, 2 global / 1 por biblioteca, backoff ≤15 min, 8 transitorios → BLOCKED; dispatch incierto → RECONCILE sin reenvío; health {backlog, oldestAgeMs, blocked, leased, running}."
 }
