@@ -30,7 +30,9 @@ test('caption: marcador no ambiguo op/part, parse estricto, ids inválidos recha
   assert.equal(g.parseCaption('catalog:v1 op=top-abc part=m0 bot_token=x'), null);
   assert.equal(g.parseCaption('catalog:v0 op=a part=b'), null);
   assert.throws(() => g.captionFor({ operationId: 'top abc', partKey: 'm0' }), (e) => e.code === 'OPERATION_ID_INVALID');
-  assert.throws(() => g.captionFor({ operationId: 'top-abc', partKey: 'm 0' }), (e) => e.code === 'PART_KEY_INVALID');
+  assert.throws(() => g.captionFor({ operationId: 'top-abc', partKey: 'm 0' }), (e) => e.code === 'PART_KEY_INVALID' && e.effectPossible === false && e.classification.kind === 'PERMANENT');
+  // T16/V09: la gramática del cliente real ('MASTER:0', 'FILES:0:0', 'ARTWORK:0') es la de operations.js y hace roundtrip exacto
+  for (const partKey of ['MASTER:0', 'FILES:0:0', 'ARTWORK:0', 'PROJECT:0', 'a.b-c_d']) assert.deepEqual(g.parseCaption(g.captionFor({ operationId: 'top-abc', partKey })), { operationId: 'top-abc', partKey });
 });
 
 test('peticiones TL del SDK instalado: SendMedia con randomId explícito y forceFile, Search con filtro documento y límite ≤100, GetMessages por tipo de peer; serializan', () => {

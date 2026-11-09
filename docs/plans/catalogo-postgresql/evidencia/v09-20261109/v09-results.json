@@ -1,0 +1,476 @@
+{
+  "at": "2026-11-09T20:29:04.203Z",
+  "results": [
+    {
+      "id": "ENV",
+      "status": "RECORDED",
+      "at": 2647,
+      "browser": "chrome 152.0.7977.65",
+      "refreshHz": 62,
+      "dpr": 1
+    },
+    {
+      "id": "MOUNT",
+      "status": "PASS",
+      "at": 6391,
+      "mode": "postgres",
+      "composition": "catalog",
+      "chrome": true,
+      "toolbar": true,
+      "tagBar": true,
+      "pager": false,
+      "cards": 35,
+      "setsize": "300",
+      "legacyIndexRequests": 0,
+      "catalogRequests": 3
+    },
+    {
+      "id": "C12-V-GEOM",
+      "status": "PASS",
+      "at": 13498,
+      "widths": [
+        {
+          "w": 1440,
+          "innerWidth": 1440,
+          "ok": true,
+          "columns": 7,
+          "cssCols": "7",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 42,
+          "horizontalScroll": null
+        },
+        {
+          "w": 1401,
+          "innerWidth": 1401,
+          "ok": true,
+          "columns": 7,
+          "cssCols": "7",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 36,
+          "horizontalScroll": null
+        },
+        {
+          "w": 1400,
+          "innerWidth": 1400,
+          "ok": true,
+          "columns": 6,
+          "cssCols": "6",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 36,
+          "horizontalScroll": null
+        },
+        {
+          "w": 1161,
+          "innerWidth": 1161,
+          "ok": true,
+          "columns": 6,
+          "cssCols": "6",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 30,
+          "horizontalScroll": null
+        },
+        {
+          "w": 1160,
+          "innerWidth": 1160,
+          "ok": true,
+          "columns": 5,
+          "cssCols": "5",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 30,
+          "horizontalScroll": null
+        },
+        {
+          "w": 941,
+          "innerWidth": 941,
+          "ok": true,
+          "columns": 5,
+          "cssCols": "5",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 24,
+          "horizontalScroll": null
+        },
+        {
+          "w": 940,
+          "innerWidth": 940,
+          "ok": true,
+          "columns": 4,
+          "cssCols": "4",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 24,
+          "horizontalScroll": null
+        },
+        {
+          "w": 768,
+          "innerWidth": 768,
+          "ok": true,
+          "columns": 4,
+          "cssCols": "4",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 24,
+          "horizontalScroll": null
+        },
+        {
+          "w": 751,
+          "innerWidth": 751,
+          "ok": true,
+          "columns": 4,
+          "cssCols": "4",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 267,
+          "rowGap": "28px",
+          "cards": 18,
+          "horizontalScroll": null
+        },
+        {
+          "w": 750,
+          "innerWidth": 750,
+          "ok": true,
+          "columns": 3,
+          "cssCols": "3",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 263,
+          "rowGap": "24px",
+          "cards": 18,
+          "horizontalScroll": null
+        },
+        {
+          "w": 591,
+          "innerWidth": 591,
+          "ok": true,
+          "columns": 3,
+          "cssCols": "3",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 263,
+          "rowGap": "24px",
+          "cards": 12,
+          "horizontalScroll": null
+        },
+        {
+          "w": 590,
+          "innerWidth": 590,
+          "ok": true,
+          "columns": 2,
+          "cssCols": "2",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 261,
+          "rowGap": "22px",
+          "cards": 12,
+          "horizontalScroll": null
+        },
+        {
+          "w": 375,
+          "innerWidth": 375,
+          "ok": true,
+          "columns": 2,
+          "cssCols": "2",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 261,
+          "rowGap": "22px",
+          "cards": 12,
+          "horizontalScroll": null
+        },
+        {
+          "w": 360,
+          "innerWidth": 360,
+          "ok": true,
+          "columns": 2,
+          "cssCols": "2",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 261,
+          "rowGap": "22px",
+          "cards": 6,
+          "horizontalScroll": null
+        },
+        {
+          "w": 359,
+          "innerWidth": 359,
+          "ok": true,
+          "columns": 1,
+          "cssCols": "1",
+          "cardWidth": 160,
+          "cardHeight": 239,
+          "pitch": 261,
+          "rowGap": "22px",
+          "cards": 6,
+          "horizontalScroll": null
+        }
+      ],
+      "horizontalOverflow": false
+    },
+    {
+      "id": "C12-V-GEOM-DPR2",
+      "status": "PASS",
+      "at": 14096,
+      "dpr": 2,
+      "columns": 7,
+      "cardWidth": 160
+    },
+    {
+      "id": "C12-V-SCROLL",
+      "status": "PASS",
+      "at": 24489,
+      "stepsRun": 24,
+      "maxMountedCards": 63,
+      "maxDomNodes": 1614,
+      "uniqueSeen": 300,
+      "lastOrdinal": 299,
+      "homeFirst": 0,
+      "endLast": 299,
+      "pageUpMoved": true,
+      "placeholdersSeen": true
+    },
+    {
+      "id": "C12-V-BORDER",
+      "status": "PASS",
+      "at": 24490,
+      "lastRowColumns": 7,
+      "dupAtEnd": 0,
+      "placeholderBeforeSeen": false,
+      "placeholderAfterSeen": true
+    },
+    {
+      "id": "C12-V-FOCUS",
+      "status": "PASS",
+      "at": 25447,
+      "focusSeq": [
+        {
+          "tag": "BUTTON",
+          "inCard": true,
+          "card": "0",
+          "body": false
+        },
+        {
+          "tag": "BUTTON",
+          "inCard": true,
+          "card": "0",
+          "body": false
+        },
+        {
+          "tag": "DIV",
+          "inCard": true,
+          "card": "1",
+          "body": false
+        },
+        {
+          "tag": "BUTTON",
+          "inCard": true,
+          "card": "1",
+          "body": false
+        },
+        {
+          "tag": "BUTTON",
+          "inCard": true,
+          "card": "1",
+          "body": false
+        },
+        {
+          "tag": "DIV",
+          "inCard": true,
+          "card": "2",
+          "body": false
+        }
+      ],
+      "back": {
+        "body": false,
+        "inCard": true
+      },
+      "esc": {
+        "body": true,
+        "menus": 2
+      },
+      "aria": {
+        "feed": true,
+        "feedBusy": "false",
+        "article": "ARTICLE",
+        "posinset": "1",
+        "setsize": "300",
+        "status": "polite"
+      },
+      "screenReader": "NOT_RUN (no disponible)"
+    },
+    {
+      "id": "C12-V-QUERY",
+      "status": "PASS",
+      "at": 40255,
+      "searchTotal": "10",
+      "searchRequests": 1,
+      "tagTotal": "46",
+      "tagRequests": 1,
+      "sortChosen": "name",
+      "sortRequests": 1,
+      "url": "http://127.0.0.1:1430/gallery?bgSort=name&bgAnchor=eyJib3VuZGFyeSI6eyJpbmNsdXNpdmUiOnRydWUsInR1cGxlIjpbIlYwOSBCZWF0IDAwMCIsIjAiLCJiLWY1Y2Y2NzAzLTEyYTktNDliMS1hMWM0LTJhMWZiNTBiN2ViMyJdfSwiZGlyZWN0aW9uIjoiZm9yd2FyZCIsImVwb2NoIjoiMSIsImVyYSI6IjQyNDFiYWRiLThhNDUtNDFkYS05NDViLWY1NTA5YmZkNzJkOCIsImZpbHRlckhhc2giOiJlY2EyN2MzMmRlNWIzZjgyNmI4ODFjZWExNTQzN2NlNDg0ZDIwY2M1YTZiYWM5NzRmYWI4M2FiYzIwYWNjMGFlIiwiZ2VuZXJhdGlvbklkIjoibmF0aXZlLTY2NGIyZmZkLTI2OGEtNDZiYy1hZDdjLWM3ZmNiNTI2MDFmZCIsImtpZCI6ImVwaGVtZXJhbCIsImtpbmQiOiJiZWF0cyIsImxpbWl0IjoyNDAsInJldmlzaW9uIjoiMzAzIiwic2VhcmNoUHJvZmlsZSI6InNlYXJjaC1qcy12MSIsInNvcnQiOiJuYW1lIiwic29ydFByb2ZpbGUiOiJjYXRhbG9nLW9yZGVyLXYxIiwic3RhcnRPcmRpbmFsIjowLCJ0ZW5hbnRJZCI6InYwOXUtNWIxYjM1MWYiLCJ0b3RhbE1hdGNoZWQiOjMwMCwidiI6MSwidmF1bHRJZCI6InZsdF84MmY3OWY0MzA2YzhkZTMwZWIyNTgwNjYifQ.kUbDnX69N4873LHkTihGrm4gPdniBeX9zG-IEQAHOS0"
+    },
+    {
+      "id": "C12-V-INTERACTION",
+      "status": "PASS",
+      "at": 57405,
+      "preparingSeen": "active",
+      "count2": "2",
+      "selectAll": "300",
+      "flagsOnResidentCards": true,
+      "externalPatch": 200,
+      "conflictStatus": "conflict",
+      "staleReloadCopy": true,
+      "editAllDisabledInConflict": true,
+      "notice": "Selección borrada al cambiar los filtros×"
+    },
+    {
+      "id": "C12-V-DRAWER",
+      "status": "PASS",
+      "at": 58982,
+      "beat": "V09 Beat 000",
+      "drawerOpen": true,
+      "closedWithEscape": true
+    },
+    {
+      "id": "C12-V-MEDIA",
+      "status": "PASS",
+      "at": 70740,
+      "startedAt": 0.29,
+      "srcScheme": "blob:",
+      "continuedOrAdvanced": true,
+      "evictedCardMounted": false,
+      "audioWhileEvicted": [
+        {
+          "paused": false,
+          "t": 2.59,
+          "src": "blob:",
+          "ready": 4,
+          "error": null,
+          "ended": false
+        }
+      ],
+      "audioLater": [
+        {
+          "paused": false,
+          "t": 4.1,
+          "src": "blob:",
+          "ready": 4,
+          "error": null,
+          "ended": false
+        }
+      ],
+      "playerMounted": true,
+      "afterNext": {
+        "current": null,
+        "audio": [
+          {
+            "paused": false,
+            "t": 1.29,
+            "src": "blob:",
+            "ready": 4,
+            "error": null,
+            "ended": false
+          }
+        ]
+      },
+      "afterShuffle": {
+        "audio": [
+          {
+            "paused": false,
+            "t": 2.24,
+            "src": "blob:",
+            "ready": 4,
+            "error": null,
+            "ended": false
+          }
+        ],
+        "status": "playing"
+      },
+      "afterPrev": [
+        {
+          "paused": false,
+          "t": 1.49,
+          "src": "blob:",
+          "ready": 4,
+          "error": null,
+          "ended": false
+        }
+      ],
+      "mediaRequests": 206
+    },
+    {
+      "id": "C12-V-RESOURCES",
+      "status": "PASS",
+      "at": 78859,
+      "cycles": 25,
+      "baseNodes": 965,
+      "afterNodes": 1156,
+      "baseHeapMB": 65,
+      "afterHeapMB": 43,
+      "mountedCards": 42,
+      "note": "soak corto; V10 mide capacidad real"
+    },
+    {
+      "id": "C12-V-LEGACY-POSTGRES",
+      "status": "PASS",
+      "at": 85306,
+      "bgPage100FirstOrdinal": 100,
+      "pager": false,
+      "farResolution": {
+        "cards": 40,
+        "firstOrdinal": 240,
+        "copyLast": true,
+        "copyUnresolvable": false,
+        "url": "http://127.0.0.1:1430/gallery?bgPage=999999"
+      },
+      "autoJumpToStart": false
+    },
+    {
+      "id": "C12-V-AUTH",
+      "status": "PASS",
+      "at": 90297,
+      "mediaRequestsAfterSwitch": 0,
+      "catalogRequestsAfterSwitch": 3,
+      "accountA": 42,
+      "accountB": {
+        "cards": 0,
+        "storeStatus": "empty",
+        "dataAccount": "v09b-f931f73a"
+      },
+      "leakedIds": 0,
+      "blobUrlsVisible": 0,
+      "emptyCopy": true
+    },
+    {
+      "id": "C12-V-LEGACY-FLAGOFF",
+      "status": "PASS",
+      "at": 96002,
+      "composition": "legacy",
+      "catalogRequests": 0,
+      "pager": false,
+      "mode": null,
+      "bodySample": "Poor connection. BeatGaler is retrying automatically; cloud actions may take longer.\nAll\nSelect\nTags ↑\nNo offline beats available\nReconnect to verify your Galer"
+    }
+  ]
+}

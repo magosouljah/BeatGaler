@@ -95,3 +95,14 @@ test('beatIdIssues coincide con D-06 y el fixture t01-id-astral', () => {
   assert.deepEqual(contract.beatIdIssues(1), ['NOT_STRING']);
   assert.equal(contract.DIRECT_SCOPE_ID_RE.test(ok), false);
 });
+
+test('partJobId (T16/V09): ids válidos para catalog_jobs con partKeys del cliente real, distintos por parte y nunca recortados con colisión', () => {
+  const { partJobId } = require('../../catalog/contract.js');
+  const op = 'top-' + 'a'.repeat(36);
+  const ids = ['MASTER:0', 'FILES:0:0', 'FILES:1:0', 'ARTWORK:0', 'PROJECT:0', 'x'.repeat(64)].map((k) => partJobId('verify', op, k));
+  for (const id of ids) assert.match(id, /^[A-Za-z0-9_-]{1,64}$/, id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(partJobId('verify', 'op1', 'MASTER:0'), 'job-verify-op1-MASTER_0');
+  assert.notEqual(partJobId('verify', op, 'FILES:0:0'), partJobId('verify', op, 'FILES:1:0'));
+  assert.notEqual(partJobId('verify', op, 'y'.repeat(60)), partJobId('verify', op, 'y'.repeat(59) + 'z'));
+});

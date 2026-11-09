@@ -1,7 +1,15 @@
 /* T08 / V05 — Geometría de filas virtuales del catálogo. Solo selectores scoped por modo POSTGRES (plan B §3).
    No cambia tokens, tamaño de tarjeta ni DESIGN; reutiliza las variables del grid de gallery.css. */
 .bg-product-gallery[data-catalog-mode="postgres"] [data-library-scroll] { overflow-anchor: none; }
-.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-track { position: relative; width: 100%; overflow-anchor: none; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-track { position: relative; width: 100%; overflow-anchor: none; row-gap: var(--gallery-grid-row-gap); }
+/* T16/V08: el host del track ocupa el lugar de `.lab-gallery-grid` dentro de `.lab-gallery-main` (mismo ancho útil y centrado). */
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-grid-host { width: 100%; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-notice { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-track-notice { padding: 0 0 12px; color: #888; }
+/* Región de avisos del shell (selección/importación/errores): sin el padding del estado vacío; vacía no ocupa altura (paridad con la Gallery LOCAL). */
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-shell-status { text-align: center; color: #888; font-size: 12px; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-shell-status:empty { display: none; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-shell-status .bg-catalog-notice { padding: 0 0 12px; }
 .bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-row {
   position: absolute; left: 0; right: 0;
   display: grid;

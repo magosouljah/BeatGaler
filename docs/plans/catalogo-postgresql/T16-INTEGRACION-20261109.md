@@ -36,4 +36,21 @@
 - **LAB** (PG 18 WSL): `catalog-fence.integration` **4/4**.
 - **No demostrado / pendiente:** V09 (navegador real, lector de pantalla, capturas vs LOCAL, 0 skips) → **T16 no PASS**; G3 (dictamen de Sol) pendiente; gateway real y G2 (T11 fase B); paridad visual de la rama POSTGRES; consumer-map T01 no se regeneró (su generador no está en el repositorio); V09-C.
 
-**Siguiente:** T17 (CLI nativa `inspect`/`activate`/`reset`/`rebind-chat`, dry-run por defecto) con fakes; V09 cuando exista el entorno de navegador real.
+## 5. V08 completa y V09 ejecutada (2026-11-09, encargo de Sol)
+
+**V08-A completa (sustituye a la «V08 simplificada» de §1):** la rama POSTGRES monta el **mismo shell aprobado** que el AppShell web (GalleryChrome con Tag Bar y Studio Toolbar, barra de selección, `lab-gallery-main` como único scroller, BeatCard real, botón «Add beat», Drawer, Player, TagPeek, TagColorMenu/TagRenameDialog, SettingsPanel, AddBeatModal) sobre los servicios del catálogo:
+
+| Pieza | Archivo | Qué hace |
+| --- | --- | --- |
+| Scope POSTGRES | `src/features/library/catalog/useCatalogGalleryScope.ts` | Contrato de datos del AppShell alimentado por el store V04 (query global, URL `bgPage`/`bgAnchor`/`bgSort`/`bgQ`, historial acotado), el InteractionStore V07-A (selección en servidor, bulk, rename), la sesión musical V06/T14 (ronda Shuffle, vecino, cola) **sobre el mismo motor `useAudio`** (blob del media manager), medios T14 (artwork perezoso por tarjeta), mutaciones T13/T12 (PATCH por versión, reemplazo de artwork, papelera, importación desde «Add beat»), facetas T06 → Tag Bar y los atajos aprobados (`useAppShortcuts`). Sin selector local, sin cache global de beats, sin INDEX, sin pager. |
+| Shell | `CatalogAppShell.tsx` | Misma composición y clases que el AppShell web; filas virtuales V05 dentro de `.lab-gallery-main` con las variables de columnas/gaps de `gallery.css`; atributos estables `data-card`/`data-ordinal`/`data-selected`/`data-playing` en la celda. Retira el overlay de arranque. |
+| Gate | `LibraryCompositionGate.tsx` | El estado bloqueado también retira el overlay de arranque. |
+| Virtual gallery | `CatalogVirtualGallery.tsx` (prop `cardAttributes`), `catalog-gallery.css` | Avisos de recarga/enlace antiguo fuera del track; región de avisos del shell sin altura cuando está vacía. |
+| Web adapter | `src/platform/webAdapter.ts` | Con el flag de catálogo no precalienta el transporte legacy (`/transport/session/start`). |
+| Diseño aprobado | `TagNavigation.tsx` | Solo dependencias del memo (`tags`), sin cambio visual. |
+
+**Límites declarados:** el reemplazo de archivos desde el Drawer (web `pendingWebEdit`) no está cableado al catálogo (solo metadata y artwork); «añadir/quitar» tags en lote muestra aviso (BULK_PATCH solo reemplaza); la importación «Add beat» usa `importer.fileForBeat` (MASTER) sin revisión previa; no hay poll del feed `/changes` (la revisión se observa al cargar bloques o al refrescar flags).
+
+**V09:** ejecutada en Chrome real contra un LAB aislado (servidor real + gateway fake + PG efímero): **14/14 casos PASS**; Edge, lector de pantalla, zoom 200 %, táctil y reduced-motion **NO EJECUTADOS** (STOP-ENV parcial). Ocho hallazgos reales corregidos con prueba (H1–H8). Informe: [V09-INFORME-20261109.md](V09-INFORME-20261109.md); evidencia en `evidencia/v09-20261109/`.
+
+**Dictamen:** T16 sigue sin PASS formal hasta que Sol (G3/MEDIA) valore esta evidencia y hasta cubrir Edge/lector; ningún gate superado.

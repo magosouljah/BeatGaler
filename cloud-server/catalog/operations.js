@@ -14,7 +14,7 @@
 // PURGE se adscribe a T15 (501 en la API hasta entonces). Sin transporte: solo SQL + crypto.
 
 const crypto = require('crypto');
-const { requireUserId } = require('./contract');
+const { requireUserId, partJobId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
 const codec = require('./legacy-codec');
@@ -310,7 +310,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         WHERE user_id = $1 AND operation_id = $2 AND part_key = $3`, [uid, operationId, partKey, canonical, hash, messageId, documentId]);
       if (o.status !== 'VERIFYING') await client.query("UPDATE catalog_transfer_operations SET status = 'VERIFYING' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
       // T10: el worker verifica con el proveedor fuera de SQL; el job nace en la misma transacción que el recibo.
-      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-verify-${operationId}-${partKey}`, uid, 'TRANSFER_VERIFY', operationId, canonicalJson({ partKey })]);
+      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [partJobId('verify', operationId, partKey), uid, 'TRANSFER_VERIFY', operationId, canonicalJson({ partKey })]);
       return opDto(client, uid, operationId, { replay: false, partKey });
     });
   }
@@ -489,7 +489,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         await client.query("UPDATE catalog_transfer_operations SET status = 'RECONCILE', last_error = 'CANCEL_AFTER_DISPATCH' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
         // T10: reconciliación por parte con envío incierto (nunca reenvío automático).
         const uncertain = (await client.query("SELECT part_key FROM catalog_operation_parts WHERE user_id = $1 AND operation_id = $2 AND dispatch_state IN ('DISPATCHED', 'RECEIPT')", [uid, operationId])).rows;
-        for (const p of uncertain) await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-reconcile-${operationId}-${p.part_key}`, uid, 'TRANSFER_RECONCILE', operationId, canonicalJson({ partKey: p.part_key })]);
+        for (const p of uncertain) await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [partJobId('reconcile', operationId, p.part_key), uid, 'TRANSFER_RECONCILE', operationId, canonicalJson({ partKey: p.part_key })]);
         return opDto(client, uid, operationId, { changed: true });
       }
       if (sent > 0 && o.status === 'RECONCILE') return opDto(client, uid, operationId, { changed: false });

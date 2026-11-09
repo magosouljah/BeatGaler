@@ -21,6 +21,8 @@ export interface CatalogVirtualGalleryProps {
   onMountCard?: (id: string) => void;
   onUnmountCard?: (id: string) => void;
   statusCopy?: Partial<Record<CatalogStoreSnapshot["status"], string>>;
+  /** Atributos estables (data-*) sobre la celda de cada tarjeta, para pruebas DOM/e2e sin añadir nodos visibles (T16/V08). */
+  cardAttributes?: (item: CatalogBeatDto, ordinal: number) => Record<string, string>;
 }
 
 const DEFAULT_COPY: Record<string, string> = {
@@ -70,10 +72,12 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
   const error = snapshot.edgeError;
 
   return (
+    <>
+    {/* Avisos de recarga/enlace antiguo fuera del track (V09: dentro se superponían a las filas absolutas). */}
+    {snapshot.staleReset && <div role="status" className="bg-catalog-status bg-catalog-track-notice" data-catalog-stale-reset="true">La biblioteca cambió; se recargó el inicio con tus filtros.</div>}
+    {snapshot.legacy && snapshot.legacy.resolution === "last" && <div role="status" className="bg-catalog-status bg-catalog-track-notice" data-catalog-legacy="last">La posición del enlace antiguo ya no existe; se abrió el último bloque.</div>}
     <div ref={trackRef} className="bg-catalog-track" role="feed" aria-busy={snapshot.status === "loading" || snapshot.status === "resolving" || snapshot.loadingForward || snapshot.loadingBackward}
       data-catalog-generation={snapshot.queryGeneration} data-catalog-revision={snapshot.revision ?? ""} data-resident-rows={residentRows} style={{ height: statusLike ? undefined : height }}>
-      {snapshot.staleReset && <div role="status" className="bg-catalog-status" data-catalog-stale-reset="true">La biblioteca cambió; se recargó el inicio con tus filtros.</div>}
-      {snapshot.legacy && snapshot.legacy.resolution === "last" && <div role="status" className="bg-catalog-status" data-catalog-legacy="last">La posición del enlace antiguo ya no existe; se abrió el último bloque.</div>}
       {statusLike && (
         <div className="bg-catalog-status" role="status" data-catalog-state={snapshot.status}>
           <div>{snapshot.status === "error" && error?.code === "LEGACY_OFFSET_UNRESOLVABLE" ? LEGACY_UNRESOLVABLE_COPY : copy[snapshot.status] ?? copy.error}</div>
@@ -100,7 +104,7 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
               if (!item) return <div key={`gap-${ordinal}`} aria-hidden="true" />;
               const ref = globalRow === range.start && col === 0 ? sampleRef : undefined;
               return (
-                <article key={`${tenantKey}:${item.id}`} ref={ref} className="lab-gallery-item" data-catalog-ordinal={ordinal} aria-posinset={ordinal + 1} aria-setsize={total ?? -1}>
+                <article key={`${tenantKey}:${item.id}`} ref={ref} className="lab-gallery-item" data-catalog-ordinal={ordinal} aria-posinset={ordinal + 1} aria-setsize={total ?? -1} {...(props.cardAttributes ? props.cardAttributes(item, ordinal) : {})}>
                   <Card id={item.id} onMount={props.onMountCard} onUnmount={props.onUnmountCard}>{renderCard(item, ordinal)}</Card>
                 </article>
               );
@@ -114,6 +118,7 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
         </div>
       )}
     </div>
+    </>
   );
 }
 export default CatalogVirtualGallery;

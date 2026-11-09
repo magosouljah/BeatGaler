@@ -176,6 +176,14 @@ function createCatalogMedia({ pool = null, authority = null, gateway = null, gra
       if (!first.done) await push(first.value);
       if (sent < length && !first.done) for await (const chunk of iterator) { await push(chunk); if (sent >= length) break; }
     } catch (error) { log('[catalog-media] stream interrupted', { fileId: g.fileId, part: g.partIndex, sent, code: error?.code }); res.destroy(error); return { bytes: sent, partial: range.partial, interrupted: true }; }
+    // V09 hallazgo: si el proveedor entrega menos bytes que el tamaño declarado, la respuesta no puede quedar abierta con un
+    // Content-Length mayor (el cliente esperaría indefinidamente). Fail-closed: se corta el socket y el cliente ve un error de red.
+    if (sent < length) {
+      metrics.providerErrors++;
+      log('[catalog-media] short read from provider', { fileId: g.fileId, part: g.partIndex, sent, expected: length });
+      res.destroy(Object.assign(new Error(`media short read: ${sent} of ${length} bytes`), { code: 'MEDIA_SHORT_READ' }));
+      return { bytes: sent, partial: range.partial, interrupted: true, shortRead: true };
+    }
     res.end(); metrics.streams++;
     pool.query('UPDATE catalog_media_grants SET uses = uses + 1, last_used_at = now() WHERE grant_hash = $1', [g.hash]).catch(() => {});
     return { bytes: sent, partial: range.partial, start: range.start, end: range.end };

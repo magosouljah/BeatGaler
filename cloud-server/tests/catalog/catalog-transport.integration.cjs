@@ -372,3 +372,35 @@ test('capacidad vencida → 403 CAPABILITY_EXPIRED (marcada EXPIRED); capacidad 
   assert.equal(cap2.attempt, 2);
   assert.equal((await put(transport, hdr, cap2.token, b)).status, 200);
 }));
+
+// T16/V09 (hallazgo con el cliente real): las partKeys del cliente web ('MASTER:0', 'FILES:0:0', 'ARTWORK:0') deben atravesar
+// gateway (caption), job ids (catalog_jobs_job_id_check) y commit. Antes: PART_KEY_INVALID en el gateway → UNCERTAIN y 23514 en jobs.
+test('IMPORT con partKeys del cliente real (MASTER:0, FILES:0:0, ARTWORK:0): recibo GATEWAY, job ids válidos, verificación y commit', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool); const server = createFakeTelegramServer();
+  const { ops, transport, worker } = modules(pool, { maxBeats: 10, server });
+  const hdr = hdrOf(lib);
+  const master = bytesOf('m', 2000); const wav = bytesOf('w', 3000); const art = bytesOf('a', 300);
+  const parts = [
+    partOf('MASTER:0', master),
+    partOf('FILES:0:0', wav, { slotKey: 'FILES:0', role: 'WAV', filename: 'beat.wav', mime: 'audio/wav' }),
+    partOf('ARTWORK:0', art, { slotKey: 'ARTWORK', role: 'ARTWORK', filename: 'cover.png', mime: 'image/png' }),
+  ];
+  const op = await ops.createOperation({ ...hdr, idempotencyKey: key(), intent: { kind: 'IMPORT', parts, metadata: { name: 'Client keys' } } });
+  for (const [p, bytes] of [[parts[0], master], [parts[1], wav], [parts[2], art]]) {
+    const cap = await transport.issueUploadCapability({ ...hdr, operationId: op.operationId, partKey: p.partKey });
+    const r = await put(transport, hdr, cap.token, bytes);
+    assert.equal(r.status, 200, `${p.partKey} → ${JSON.stringify(r.body.upload)}`);
+    assert.equal(r.body.upload.state, 'RECEIPT');
+  }
+  const jobs = await jobsOf(pool, lib.userId);
+  assert.equal(jobs.length, 3);
+  for (const j of jobs) assert.match(j.job_id, /^[A-Za-z0-9_-]{1,64}$/, j.job_id);
+  assert.equal(new Set(jobs.map((j) => j.job_id)).size, 3, 'un job id distinto por parte');
+  assert.deepEqual(server.messages().map((m) => m.caption).sort(), [`catalog:v1 op=${op.operationId} part=ARTWORK:0`, `catalog:v1 op=${op.operationId} part=FILES:0:0`, `catalog:v1 op=${op.operationId} part=MASTER:0`]);
+  await drain(worker, pool, lib.userId, { kinds: VERIFY_ONLY });
+  assert.equal(await opStatus(pool, lib.userId, op.operationId), 'READY');
+  const c = await ops.commitOperation({ ...hdr, operationId: op.operationId });
+  assert.equal(c.operation.status, 'COMMITTED');
+  const fv = (await pool.query('SELECT role, status FROM catalog_file_versions WHERE user_id = $1 AND beat_id = $2 ORDER BY role', [lib.userId, op.beatId])).rows;
+  assert.deepEqual(fv, [{ role: 'ARTWORK', status: 'VERIFIED' }, { role: 'MASTER', status: 'VERIFIED' }, { role: 'WAV', status: 'VERIFIED' }]);
+}));

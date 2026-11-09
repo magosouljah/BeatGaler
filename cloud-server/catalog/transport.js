@@ -22,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const { Transform } = require('stream');
 const { pipeline } = require('stream/promises');
-const { requireUserId } = require('./contract');
+const { requireUserId, partJobId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
 const { STATEMENT_TIMEOUT_MS } = require('./queries');
@@ -152,7 +152,7 @@ function createCatalogTransport({ pool = null, authority = null, operations = nu
     const r = await client.query(`SELECT capability_hash, status, outcome FROM catalog_transfer_capabilities WHERE user_id = $1 AND operation_id = $2 AND part_key = $3
       AND ((status = 'CONSUMED' AND outcome = 'UNCERTAIN') OR (status = 'REDEEMED' AND $4 = 'DISPATCHED'))`, [uid, operationId, partKey, part.dispatch_state]);
     if (!r.rows.length) return;
-    await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'TRANSFER_RECONCILE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [`job-reconcile-${operationId}-${partKey}`.slice(0, 64), uid, operationId, canonicalJson({ partKey })]);
+    await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'TRANSFER_RECONCILE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [partJobId('reconcile', operationId, partKey), uid, operationId, canonicalJson({ partKey })]);
     throw Object.assign(new CatalogQueryError('PART_UNCERTAIN', 409, 'a previous dispatch of this part is uncertain or still in flight; reconciliation is pending and no resend is allowed', { partKey, reconcile: true, attempts: r.rows.length }), { commit: true });
   }
   async function nextAttempt(client, uid, operationId, partKey) {
@@ -163,7 +163,7 @@ function createCatalogTransport({ pool = null, authority = null, operations = nu
       WHERE capability_hash = $1 AND status IN ('ISSUED', 'REDEEMED')`, [hash, status, outcome, bytes ? bytes.size : null, bytes ? bytes.sha256 : null, error ? String(error.code || error.message || error).slice(0, 1000) : null]);
   }
   async function enqueueReconcile(uid, operationId, partKey) {
-    await journal(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'TRANSFER_RECONCILE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [`job-reconcile-${operationId}-${partKey}`.slice(0, 64), uid, operationId, canonicalJson({ partKey })]);
+    await journal(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'TRANSFER_RECONCILE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [partJobId('reconcile', operationId, partKey), uid, operationId, canonicalJson({ partKey })]);
   }
   const drain = (stream) => { if (stream && typeof stream.resume === 'function') { try { stream.resume(); } catch { /* ignore */ } } };
 

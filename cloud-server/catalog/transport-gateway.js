@@ -12,10 +12,11 @@ class GatewayError extends Error {
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 const RANDOM_ID_RE = /^-?(0|[1-9][0-9]{0,18})$/;
-const PART_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// Misma gramática que operations.js (createOperation): el cliente usa 'MASTER:0', 'FILES:0:0', 'ARTWORK:0' (T12/T16 hallazgo V09).
+const PART_KEY_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const OPERATION_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const CAPTION_PREFIX = 'catalog:v1';
-const CAPTION_RE = /^catalog:v1 op=([A-Za-z0-9_-]{1,80}) part=([A-Za-z0-9_-]{1,64})$/;
+const CAPTION_RE = /^catalog:v1 op=([A-Za-z0-9_-]{1,80}) part=([A-Za-z0-9._:-]{1,64})$/;
 
 const SDK_CONTRACT = Object.freeze({
   package: 'telegram',
@@ -56,8 +57,9 @@ function randomIdToLong(text, bigInt) {
 function newRandomId() { return crypto.randomBytes(8).readBigInt64BE(0).toString(); }
 
 function captionFor({ operationId, partKey } = {}) {
-  if (typeof operationId !== 'string' || !OPERATION_ID_RE.test(operationId)) throw new GatewayError('OPERATION_ID_INVALID', 'operationId is required for the caption marker', { transient: false });
-  if (typeof partKey !== 'string' || !PART_KEY_RE.test(partKey)) throw new GatewayError('PART_KEY_INVALID', 'partKey is required for the caption marker', { transient: false });
+  // Validación previa a cualquier efecto: se declara sin efecto posible y permanente (nunca UNCERTAIN ni reconcile).
+  if (typeof operationId !== 'string' || !OPERATION_ID_RE.test(operationId)) throw new GatewayError('OPERATION_ID_INVALID', 'operationId is required for the caption marker', { transient: false, effectPossible: false, classification: { kind: 'PERMANENT', effectPossible: false } });
+  if (typeof partKey !== 'string' || !PART_KEY_RE.test(partKey)) throw new GatewayError('PART_KEY_INVALID', 'partKey is required for the caption marker', { transient: false, effectPossible: false, classification: { kind: 'PERMANENT', effectPossible: false } });
   return `${CAPTION_PREFIX} op=${operationId} part=${partKey}`;
 }
 function parseCaption(text) { const m = typeof text === 'string' ? CAPTION_RE.exec(text.trim()) : null; return m ? { operationId: m[1], partKey: m[2] } : null; }

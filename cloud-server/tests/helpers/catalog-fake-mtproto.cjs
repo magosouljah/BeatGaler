@@ -109,6 +109,8 @@ function createFakeTelegramServer({ dedupWindowMs = null, legacyCanDelete = true
     revokeBot(selfId) { state.revokedBots.add(String(selfId)); },
     messages() { return state.messages.filter((m) => !m.deleted).map((m) => ({ id: m.id, peer: m.peer, randomId: m.randomId, caption: m.message, size: m.media.document.size, fileName: m.media.document.attributes[0].fileName, sender: m.fromId.userId })); },
     counters() { return { ...state.counters }; },
+    // T16/V09: simula un proveedor que entrega menos bytes de los declarados (lectura corta) sin cambiar el tamaño anunciado.
+    truncateDocument(messageId, keepBytes) { const m = state.messages.find((x) => x.id === Number(messageId)); if (!m) throw new Error('no message'); const id = String(m.media.document.id); const bytes = state.documents.get(id); state.documents.set(id, bytes.subarray(0, Math.max(0, Math.min(bytes.length, Number(keepBytes))))); return bytes.length; },
     dedupWindowMs,
   });
 }

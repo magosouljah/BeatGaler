@@ -50,10 +50,11 @@ export default function TagNavigation({ visible, hasActiveFilters, onVisibilityC
   const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef<{ tag: GalleryTag; time: number } | null>(null);
   const preserveScroll = useRef<number | null>(null);
+  // T16/V09: `tags` también es dependencia; en la rama POSTGRES llegan de forma asíncrona (facetas globales) y antes quedaban fuera del memo.
   const ordered = useMemo(() => [
     ...tags.filter(name => filters[name] !== undefined),
     ...tags.filter(name => filters[name] === undefined)
-  ], [filters]);
+  ], [filters, tags]);
   const orderKey = ordered.join("|");
 
   const clearHide = useCallback(() => {

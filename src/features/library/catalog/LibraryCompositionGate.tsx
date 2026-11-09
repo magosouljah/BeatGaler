@@ -2,8 +2,19 @@
 // LEGACY conserva su árbol actual intacto (children); POSTGRES monta el workspace del catálogo (Gallery virtualizada, sin pager, sin
 // cache global de beats ni reload/reconcile INDEX); un contexto bloqueado o desconocido NUNCA monta el camino LEGACY: muestra el estado
 // con el copy de plan B §7 (fail-closed). El cambio de autoridad/cuenta remonta de forma controlada mediante la clave de composición.
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { compositionMessage, type LibraryComposition } from "./catalogComposition";
+import { dismissBeatGalerStartupLoader } from "../../startup/startupLoader";
+
+// Estado bloqueado visible: también retira el overlay de arranque (solo el pipeline LEGACY lo hacía; hallazgo V09).
+function BlockedState({ composition }: { composition: Extract<LibraryComposition, { mode: "blocked" }> }) {
+  useEffect(() => { dismissBeatGalerStartupLoader(); }, []);
+  return (
+    <main className="bg-product-gallery" data-catalog-mode="postgres" data-library-composition="blocked" data-blocked-status={composition.resolution.status} role="status" aria-live="polite">
+      <p className="bg-catalog-state">{compositionMessage(composition)}</p>
+    </main>
+  );
+}
 
 export type LibraryCompositionState = { status: "resolving" } | { status: "resolved"; composition: LibraryComposition; key: string };
 
@@ -23,9 +34,5 @@ export function LibraryCompositionGate({ state, legacy, catalog }: LibraryCompos
   if (c.mode === "legacy") return <div data-library-composition="legacy" key={state.key}>{legacy}</div>;
   if (c.mode === "catalog") return <div data-library-composition="catalog" data-catalog-epoch={c.resolution.context.authority_epoch} key={state.key}>{catalog(c)}</div>;
   // blocked: unknown/reset/quarantine/unauthenticated/offline → estado visible, ningún fallback a INDEX
-  return (
-    <main className="bg-product-gallery" data-catalog-mode="postgres" data-library-composition="blocked" data-blocked-status={c.resolution.status} role="status" aria-live="polite">
-      <p className="bg-catalog-state">{compositionMessage(c)}</p>
-    </main>
-  );
+  return <BlockedState composition={c} key={state.key} />;
 }

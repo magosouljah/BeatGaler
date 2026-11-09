@@ -78,22 +78,58 @@ describe("useLibraryComposition", () => {
   });
 });
 
-describe("CatalogGalleryWorkspace", () => {
-  it("monta tarjetas virtualizadas desde el store (sin pager ni INDEX), toggle de selección por clic y aviso condicional al cambiar filtros; espías legacy = 0", async () => {
+// jsdom no implementa layout ni medios: polyfills mínimos para montar el shell aprobado (StudioToolbar usa matchMedia/canvas; el motor de audio usa HTMLMediaElement).
+function installDomPolyfills() {
+  if (typeof window.matchMedia !== "function") (window as unknown as { matchMedia: unknown }).matchMedia = (q: string) => ({ matches: false, media: q, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } });
+  if (typeof (globalThis as { ResizeObserver?: unknown }).ResizeObserver === "undefined") (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  if (typeof (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver === "undefined") (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class { constructor(private cb: (entries: unknown[]) => void) {} observe(el: Element) { this.cb([{ target: el, isIntersecting: true, intersectionRatio: 1 }]); } unobserve() {} disconnect() {} takeRecords() { return []; } };
+  const canvas = HTMLCanvasElement.prototype as unknown as { getContext: unknown };
+  // Contexto 2D inerte: cualquier método es no-op; las lecturas de píxeles devuelven buffers vacíos del tamaño pedido.
+  const image = (w: number, h: number) => ({ data: new Uint8ClampedArray(Math.max(1, w | 0) * Math.max(1, h | 0) * 4), width: w | 0, height: h | 0 });
+  canvas.getContext = () => new Proxy({}, { get(_t, key) {
+    if (key === "measureText") return () => ({ width: 0 });
+    if (key === "createLinearGradient" || key === "createRadialGradient" || key === "createPattern") return () => ({ addColorStop() {} });
+    if (key === "createImageData" || key === "getImageData") return (a: number | { width: number; height: number }, b?: number, c?: number, d?: number) => (typeof a === "object" ? image(a.width, a.height) : image(c ?? a, d ?? (b ?? 1)));
+    if (key === "canvas") return document.createElement("canvas");
+    if (typeof key === "string") return () => undefined;
+    return undefined;
+  }, set() { return true; } });
+  (HTMLCanvasElement.prototype as unknown as { toDataURL: unknown }).toDataURL = () => "data:image/png;base64,";
+  const media = HTMLMediaElement.prototype as unknown as { play: unknown; pause: unknown; load: unknown };
+  media.play = () => Promise.resolve(); media.pause = () => {}; media.load = () => {};
+  const url = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+  if (!url.createObjectURL) { url.createObjectURL = () => `blob:fake/${Math.random().toString(36).slice(2)}`; url.revokeObjectURL = () => {}; }
+}
+
+describe("CatalogGalleryWorkspace (shell aprobado sobre servicios del catálogo)", () => {
+  it("monta GalleryChrome + BeatCards virtualizadas desde el store (sin pager ni INDEX), la selección del servidor marca las tarjetas y la barra de selección, el aviso condicional aparece al cambiar filtros y la sesión musical marca la tarjeta en reproducción; espías legacy = 0", async () => {
+    installDomPolyfills();
     const api = createCatalogFakeApi({ n: 30 });
     const server = createCatalogFakeCommands({ beats: fakeBeats(30) });
     const services = createCatalogServices({ api: api as never, accountId: "u1", context: { authority_era: "e1", authority_epoch: "1" }, fetchImpl: server.fetchImpl, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c" });
     const el = mount(<div style={{ height: 800 }}><CatalogGalleryWorkspace services={services} accountId="u1" context={{ authority_era: "e1", authority_epoch: "1", revision: "1" }} viewportHeightFallback={800} /></div>);
     await flush(10);
+    // chrome aprobado y scroller único
+    expect(el.querySelector(".bg-gallery-chrome")).not.toBeNull(); expect(el.querySelector(".lab-gallery-main[data-library-scroll]")).not.toBeNull();
+    expect(el.querySelector("[data-catalog-mode='postgres']")).not.toBeNull(); expect(document.querySelector(".bg-web-pagination, [data-web-pagination]")).toBeNull();
     const cards = el.querySelectorAll("[data-card]"); expect(cards.length).toBeGreaterThan(0); expect(cards.length).toBeLessThanOrEqual(30);
-    expect(el.querySelector("[data-catalog-mode='postgres']")).not.toBeNull(); expect(el.querySelector("[data-library-scroll]")).not.toBeNull();
-    expect(document.querySelector(".bg-web-pagination, [data-web-pagination]")).toBeNull();
+    expect(el.querySelectorAll("[data-beat-card-id]").length).toBe(cards.length); // BeatCard real dentro de cada celda virtual
     expect(api.fake.counters.listBeats).toBeGreaterThan(0);
-    await act(async () => { (cards[0] as HTMLElement).click(); await new Promise((r) => setTimeout(r, 0)); }); await flush(6);
-    const status = el.querySelector(".bg-catalog-status")!;
+    // selección global (servidor): el flag llega a la tarjeta y a la barra de selección
+    const firstId = cards[0].getAttribute("data-card")!;
+    const query = { filters: services.store.getSnapshot().filters, sort: services.store.getSnapshot().sort, revision: server.revision() };
+    await act(async () => { await services.interaction.toggle(firstId, { shiftKey: false, ordinal: 0, query }); }); await flush(4);
+    expect(el.querySelector(`[data-card='${firstId}']`)?.getAttribute("data-selected")).toBe("true");
+    const status = el.querySelector(".bg-catalog-shell-status")!;
     expect(status.getAttribute("data-selection-count")).toBe("1"); expect(status.getAttribute("data-selection-status")).toBe("active");
+    expect(el.querySelector(".bg-gallery-selection-actions")?.textContent).toContain("1 selected");
+    // aviso condicional r4 al cambiar filtros
     await act(async () => { await services.interaction.onFiltersChanged({ filters: { state: "ACTIVE", q: "Beat 1", includeTags: [], excludeTags: [], includeMode: "any" }, sort: "rating", revision: server.revision() }); }); await flush(2);
-    expect(el.querySelector(".bg-catalog-notice")?.textContent).toBe("Selección borrada al cambiar los filtros");
+    expect(el.querySelector(".bg-catalog-notice")?.textContent).toContain("Selección borrada al cambiar los filtros");
+    // reproducción: la sesión decide y la tarjeta refleja el beat actual
+    await act(async () => { await services.playback.play({ beatId: firstId, version: null, fileId: null }); }); await flush(6);
+    expect(services.playback.getSnapshot().current?.beatId).toBe(firstId);
+    expect(el.querySelector(`[data-card='${firstId}']`)?.getAttribute("data-playing")).toBe("true");
     expect(server.legacy).toEqual({ getLibraryIndex: 0, replaceLibraryIndex: 0 });
     await services.teardown();
   });

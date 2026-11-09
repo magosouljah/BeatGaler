@@ -257,6 +257,11 @@ test('medios: acceso por referencia (concesión por parte, caché por época/rev
   const rAll = fakeRes(); await media.stream({ userId: lib.userId, token: access.parts[1].token, res: rAll });
   assert.equal(sha(Buffer.concat([r0.bytes(), rAll.bytes()])), sha(Buffer.concat([b0, b1])), 'todas las partes en orden: hash del archivo completo');
   assert.ok(server.counters().downloads >= 4, 'la concesión es reutilizable dentro de su vigencia (Range)');
+  // V09 hallazgo: proveedor con lectura corta (menos bytes que el tamaño declarado) → la respuesta se corta (socket destruido), nunca queda abierta esperando
+  const msg0 = server.messages().find((m) => m.size === 300_000); server.truncateDocument(msg0.id, 1000);
+  const rShort = fakeRes(); const sShort = await media.stream({ userId: lib.userId, token: access.parts[0].token, res: rShort });
+  assert.deepEqual([sShort.shortRead, sShort.interrupted, sShort.bytes, rShort.headers['content-length'], Boolean(rShort.destroyed), rShort.destroyed && rShort.destroyed.code], [true, true, 1000, '300000', true, 'MEDIA_SHORT_READ']);
+  assert.ok(media.metrics.providerErrors >= 1);
   const h = fakeRes(); await media.stream({ userId: lib.userId, token: access.parts[0].token, rangeHeader: 'bytes=0-9', res: h, method: 'HEAD' });
   assert.deepEqual([h.statusCode, h.bytes().length, h.headers['content-range']], [206, 0, 'bytes 0-9/300000']);
   await rejects(media.stream({ userId: lib.userId, token: access.parts[0].token, rangeHeader: 'bytes=999999-', res: fakeRes() }), 'RANGE_NOT_SATISFIABLE');

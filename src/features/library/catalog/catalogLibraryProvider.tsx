@@ -4,6 +4,7 @@
 // mutaciones T13, transferencias T12); cualquier otro estado → bloqueado (fail-closed, sin fallback a INDEX). El cambio de cuenta
 // invalida y remonta: todos los servicios tienen teardown por cuenta.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
 import { createCatalogApi, type CatalogApi } from "./catalogApi";
 import { chooseLibraryComposition, isCatalogClientEnabled, type LibraryComposition } from "./catalogComposition";
 import { createCatalogCommandsApi } from "./catalogCommandsApi";
@@ -44,11 +45,15 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
   const media = createCatalogMediaClient({ ...common, accountId: () => accountId });
   const mutations = createCatalogMutations({ commands, transfer, accountId: () => accountId });
   // Comandos musicales del servidor (T14) sobre el mismo transporte HTTP que los comandos (sin RNG en cliente).
-  const base = baseUrl ?? (() => "");
+  // V09 hallazgo: sin `baseUrl` explícito debe resolverse la misma base del Cloud que el resto de clientes (misma origin del proxy web);
+  // antes el default "" enviaba rounds/neighbor a la origin de Vite (404) y Next/Shuffle/Prev no avanzaban.
+  const base = baseUrl ?? (() => getResolvedCloudApiBase());
+  const bearerOf = token ?? (() => getBeatGalerAuthToken());
+  const csrfOf = csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
   const call = async <T,>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> => {
     const headers: Record<string, string> = { Accept: "application/json" };
-    const bearer = token ? token() : null; if (bearer) headers.Authorization = `Bearer ${bearer}`;
-    if (method === "POST") { headers["Content-Type"] = "application/json"; headers["X-Catalog-Era"] = context.authority_era; headers["X-Catalog-Epoch"] = context.authority_epoch; const c = csrf ? csrf() : null; if (c) headers["X-BeatGaler-CSRF"] = c; }
+    const bearer = bearerOf(); if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    if (method === "POST") { headers["Content-Type"] = "application/json"; headers["X-Catalog-Era"] = context.authority_era; headers["X-Catalog-Epoch"] = context.authority_epoch; const c = csrfOf(); if (c) headers["X-BeatGaler-CSRF"] = c; }
     const f = fetchImpl ?? fetch;
     const r = await f(`${base()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body) });
     const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
