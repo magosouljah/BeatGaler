@@ -52,6 +52,7 @@ const libraryIndexPublication = require("./library-index-publication");
 const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority");
 const catalogAuthority = require("./catalog/authority");
 const catalogQueries = require("./catalog/queries");
+const catalogCommands = require("./catalog/commands");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -84,6 +85,7 @@ async function start() {
   const nativeAuthority = catalogAuthority.configureCatalogAuthority(cutover.authority === 'postgres' && pool
     ? { pool, env: process.env, controlPlaneAuthority: cutover.authority } : null);
   const nativeQueries = catalogQueries.configureCatalogQueries(nativeAuthority ? { pool, authority: nativeAuthority, env: process.env } : null);
+  catalogCommands.configureCatalogCommands(nativeAuthority ? { pool, authority: nativeAuthority } : null);
   console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'}`);
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
   const indexPinAuthority = cutover.authority === 'postgres'

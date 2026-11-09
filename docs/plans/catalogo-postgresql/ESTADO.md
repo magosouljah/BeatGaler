@@ -1,5 +1,7 @@
 # Estado de ejecución y transferencia
 
+**T07 implementada en LOCAL (2026-11-09), PASS técnico LOCAL+LAB, CI pendiente del push:** ver [E25](EVIDENCIA.md) y [T07-COMANDOS](T07-COMANDOS-20261109.md). 0029 (operaciones idempotentes, eventos, lotes ≤50, selección CAS), `commands.js` (PATCH/trash/restore atómicos, selección con rangos por sort, bulk por lotes con journal y conflicto externo, rename global, feed `/changes`), rutas de escritura con cabeceras C5. LAB: T07 6/6; regresión T03 6/6, T04 3/3, T05 9/9, T06 10/10. Siguiente: CI con T07; luego T08 (cliente de lectura/navegación/feed; V03–V05 en fixture).
+
 **T06 PASS técnico en CI (2026-11-09):** commit `6af369c`, [run 42556542173](https://github.com/magosouljah/BeatGaler/actions/runs/42556542173) PASS: unit 72/72, faults 9/9, integration 2/2, T03 14/14, T04 8/8, T05 24/24, T06 23/23, sin skips ([E24-b](EVIDENCIA.md)). **T07 en curso** (0029 operaciones/eventos/selección, `catalog/commands.js`).
 
 **T06 implementada en LOCAL (2026-11-09), PASS técnico LOCAL+LAB, CI pendiente del push:** ver [E24](EVIDENCIA.md) y [T06-API-CONTRATO](T06-API-CONTRATO-20261109.md). 0028 (ICU A1 real, proyecciones, índices de tupla), `/catalog/v1` montado (context, provision, beats keyset con resumeCursor/edge=last, detalle, files, navigation/legacy, facets, query-sets), cursores HMAC, EXPLAIN sobre 100k sin Sort. LAB: T06 10/10, regresión T03 6/6, T04 3/3, T05 9/9. Siguiente: CI `catalog-checks` con T06; luego T07 (PATCH/trash/restore, selección, rename, feed) sobre `requireLibraryForMutation`.

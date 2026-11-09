@@ -144,6 +144,28 @@
           ],
           "kind": "node-test",
           "network": "loopback"
+        },
+        {
+          "id": "t07-metadata-rules",
+          "cmd": [
+            "node",
+            "--experimental-strip-types",
+            "--no-warnings",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-metadata-rules.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t07-catalog-commands",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-commands.test.cjs"
+          ],
+          "kind": "node-test"
         }
       ]
     },
@@ -395,8 +417,70 @@
       ]
     },
     "T07": {
-      "status": "pending",
-      "owner": "T07"
+      "status": "active",
+      "owner": "T07",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t07-metadata-rules",
+          "cmd": [
+            "node",
+            "--experimental-strip-types",
+            "--no-warnings",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-metadata-rules.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t07-catalog-commands",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-commands.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-commands-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-commands.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T08": {
       "status": "pending",

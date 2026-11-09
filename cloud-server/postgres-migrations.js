@@ -103,6 +103,8 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_query_sets', 'catalog_query_set_leases', 'catalog_query_members',
   // T05-N (0027_catalog_native.sql): tablas nativas; las guardas solo actúan con activación u origin NATIVE/RESET.
   'catalog_native_activation', 'catalog_library_chats', 'catalog_chat_rebinds', 'catalog_account_deletions',
+  // T07 (0029_catalog_commands.sql): operaciones, eventos, lotes, selección.
+  'catalog_operations', 'catalog_events', 'catalog_operation_batches', 'catalog_operation_batch_items', 'catalog_selections', 'catalog_selection_ops', 'catalog_selection_op_ids',
 ]);
 // Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
 const CATALOG_NATIVE_REQUIRED = Object.freeze([
@@ -151,6 +153,16 @@ function assertCatalogSchemaContract(sql) {
   if (/CREATE COLLATION catalog_name_icu_und_v1/i.test(sql)) {
     for (const [pattern, message] of CATALOG_QUERIES_REQUIRED) if (!pattern.test(sql)) throw new Error(`Catalog queries schema contract: ${message}.`);
     if (/CREATE COLLATION[^;]*provider\s*=\s*libc/i.test(sql)) throw new Error('Catalog queries schema contract: libc collations are not an A1 substitute.');
+  }
+  if (/CREATE TABLE catalog_operations \(/i.test(sql)) {
+    for (const [pattern, message] of [
+      [/UNIQUE \(user_id, idempotency_key\)/, 'operations must be idempotent per user and key'],
+      [/CREATE TRIGGER catalog_operations_transition BEFORE UPDATE ON catalog_operations/, 'operation transition trigger is required'],
+      [/CREATE TABLE catalog_events \(/, 'durable events table is required'],
+      [/item_count integer NOT NULL CHECK \(item_count BETWEEN 0 AND 50\)/, 'batches are limited to 50 items'],
+      [/selection_version bigint NOT NULL DEFAULT 0/, 'selection CAS version is required'],
+    ]) if (!pattern.test(sql)) throw new Error(`Catalog commands schema contract: ${message}.`);
+    if (/CREATE TABLE catalog_(?:operations|events|operation_batches|operation_batch_items|selections|selection_ops|selection_op_ids) \([^;]*\bjsonb\b/i.test(sql)) throw new Error('Catalog commands schema contract: no jsonb (D-08).');
   }
   if (/CREATE TABLE catalog_native_activation/i.test(sql)) {
     for (const [pattern, message] of CATALOG_NATIVE_REQUIRED) if (!pattern.test(sql)) throw new Error(`Catalog native schema contract: ${message}.`);

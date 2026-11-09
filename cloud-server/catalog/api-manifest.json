@@ -1,62 +1,512 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 1,
-  "task": "T06",
+  "version": 2,
+  "task": "T06/T07",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint toca Telegram.",
   "prefix": "/catalog/v1",
   "auth": "Cloud bearer existente (server-side). El tenant es users.id; installationId/chatId/vault del cliente nunca eligen propietario.",
-  "profiles": { "sortProfile": "catalog-order-v1", "searchProfile": "search-js-v1", "nameCollation": "catalog_name_icu_und_v1 (ICU und, no determinista)" },
-  "limits": { "listDefault": 100, "listMax": 240, "filesMax": 100, "facetsMax": 240, "batchMax": 50, "qMaxBytes": 65536, "pageMaxBytes": 2097152, "bodyMetadataBytes": 65536, "bodyBatchBytes": 262144, "statementTimeoutMs": 1000, "apiTimeoutMs": 2000, "legacyOffsetMax": 10000, "legacyBlock": 240, "querySetBatchMax": 240, "cursorMaxBytes": 16384 },
+  "profiles": {
+    "sortProfile": "catalog-order-v1",
+    "searchProfile": "search-js-v1",
+    "nameCollation": "catalog_name_icu_und_v1 (ICU und, no determinista)"
+  },
+  "limits": {
+    "listDefault": 100,
+    "listMax": 240,
+    "filesMax": 100,
+    "facetsMax": 240,
+    "batchMax": 50,
+    "qMaxBytes": 65536,
+    "pageMaxBytes": 2097152,
+    "bodyMetadataBytes": 65536,
+    "bodyBatchBytes": 262144,
+    "statementTimeoutMs": 1000,
+    "apiTimeoutMs": 2000,
+    "legacyOffsetMax": 10000,
+    "legacyBlock": 240,
+    "querySetBatchMax": 240,
+    "cursorMaxBytes": 16384
+  },
   "errors": {
-    "400": ["INPUT_INVALID", "CURSOR_INVALID", "LEGACY_OFFSET_INVALID", "CATALOG_ERA_REQUIRED"],
-    "401": ["UNAUTHENTICATED"],
-    "404": ["LIBRARY_NOT_PROVISIONED", "NOT_FOUND"],
-    "409": ["LIBRARY_RESET_REQUIRED", "VAULT_QUARANTINED", "CURSOR_STALE", "LEGACY_OFFSET_UNRESOLVABLE", "QUERY_SET_BUILDING_BUSY", "QUERY_SET_TRANSITION_INVALID", "QUERY_SET_FRONTIER_LOST", "CATALOG_ERA_MISMATCH", "CATALOG_EPOCH_STALE", "VERSION_CONFLICT", "EPOCH_MISMATCH", "IDEMPOTENCY_MISMATCH", "SELECTION_CONFLICT"],
-    "410": ["LEGACY_CLIENT_UNSUPPORTED", "RESYNC_REQUIRED"],
-    "413": ["CATALOG_PAGE_TOO_LARGE", "QUERY_SET_PREDICATE_TOO_LARGE"],
-    "428": ["PRECONDITION_REQUIRED"],
-    "501": ["NOT_IMPLEMENTED"],
-    "503": ["CATALOG_UNAVAILABLE", "CATALOG_QUERY_TIMEOUT"]
+    "400": [
+      "INPUT_INVALID",
+      "CURSOR_INVALID",
+      "LEGACY_OFFSET_INVALID",
+      "CATALOG_ERA_REQUIRED"
+    ],
+    "401": [
+      "UNAUTHENTICATED"
+    ],
+    "404": [
+      "LIBRARY_NOT_PROVISIONED",
+      "NOT_FOUND"
+    ],
+    "409": [
+      "LIBRARY_RESET_REQUIRED",
+      "VAULT_QUARANTINED",
+      "CURSOR_STALE",
+      "LEGACY_OFFSET_UNRESOLVABLE",
+      "QUERY_SET_BUILDING_BUSY",
+      "QUERY_SET_TRANSITION_INVALID",
+      "QUERY_SET_FRONTIER_LOST",
+      "CATALOG_ERA_MISMATCH",
+      "CATALOG_EPOCH_STALE",
+      "VERSION_CONFLICT",
+      "EPOCH_MISMATCH",
+      "IDEMPOTENCY_MISMATCH",
+      "SELECTION_CONFLICT",
+      "BEAT_NOT_ACTIVE",
+      "OPERATION_TRANSITION_INVALID",
+      "REVISION_MISMATCH",
+      "CATALOG_NATIVE_RULE"
+    ],
+    "410": [
+      "LEGACY_CLIENT_UNSUPPORTED",
+      "RESYNC_REQUIRED"
+    ],
+    "413": [
+      "CATALOG_PAGE_TOO_LARGE",
+      "QUERY_SET_PREDICATE_TOO_LARGE",
+      "PAYLOAD_TOO_LARGE"
+    ],
+    "428": [
+      "PRECONDITION_REQUIRED"
+    ],
+    "501": [
+      "NOT_IMPLEMENTED"
+    ],
+    "503": [
+      "CATALOG_UNAVAILABLE",
+      "CATALOG_QUERY_TIMEOUT"
+    ]
   },
   "cursor": {
     "format": "base64url(payloadCanonico).base64url(HMAC-SHA256(payloadCanonico))",
-    "payload": ["v", "kid", "kind", "tenantId", "vaultId", "generationId", "era", "epoch", "revision", "searchProfile", "sortProfile", "filterHash", "sort", "limit", "direction", "boundary{tuple[],inclusive}", "startOrdinal", "totalMatched"],
-    "directions": ["first", "forward", "backward"],
+    "payload": [
+      "v",
+      "kid",
+      "kind",
+      "tenantId",
+      "vaultId",
+      "generationId",
+      "era",
+      "epoch",
+      "revision",
+      "searchProfile",
+      "sortProfile",
+      "filterHash",
+      "sort",
+      "limit",
+      "direction",
+      "boundary{tuple[],inclusive}",
+      "startOrdinal",
+      "totalMatched"
+    ],
+    "directions": [
+      "first",
+      "forward",
+      "backward"
+    ],
     "rules": "firma/kid/tenant/filtros/sort/limit incongruentes → 400 CURSOR_INVALID; propio con revisión/era/época/generación/perfil viejos o kid retirado → 409 CURSOR_STALE; cursor+edge → 400 INPUT_INVALID; resumeCursor reabre por GET /beats con boundary inclusiva.",
     "keys": "BEATGALER_CATALOG_CURSOR_KEYS = JSON [{kid, secret(hex|utf8 ≥32 bytes), retired?}]; sin variable, clave efímera por proceso (solo LOCAL/CI; T16 la exige en entornos activados)."
   },
   "endpoints": [
-    { "method": "GET", "path": "/context", "status": "delivered", "task": "T05/T06", "response": "{authority, user_id, vault_id, chat_id, authority_era, authority_epoch, revision, generation_id, generation_origin, migration_state, counts, restore_hold, cleanup_enabled, capabilities, limits}", "errors": ["404 LIBRARY_NOT_PROVISIONED", "409 LIBRARY_RESET_REQUIRED", "409 VAULT_QUARANTINED", "503 CATALOG_UNAVAILABLE"], "writes": false },
-    { "method": "POST", "path": "/library/provision", "status": "delivered", "task": "T05/T06", "idempotent": "por user_id (PK); sin Idempotency-Key", "response": "201 {created:true, context} | 200 {created:false, context}", "errors": ["409 LIBRARY_RESET_REQUIRED", "409 VAULT_QUARANTINED", "503 CATALOG_UNAVAILABLE"] },
-    { "method": "GET", "path": "/beats", "status": "delivered", "task": "T06", "query": { "state": "ACTIVE|TRASH (ACTIVE)", "sort": "manual|rating|name|bpm (rating)", "q": "texto; q lógico = trim().toLowerCase()", "includeTag": "repetible, exacto", "excludeTag": "repetible, exacto, vence", "includeMode": "any|all (any)", "limit": "1..240 (100)", "includeTotal": "true|false", "cursor": "token propio", "edge": "last" }, "response": "{items[], authorityEra, epoch, revision, generationId, sortProfile, searchProfile, totalLibrary, totalMatched|null, startOrdinal, nextCursor|null, previousCursor|null, resumeCursor}", "item": "{id, version, state, name, bpm, key, tags[], rating, color, color2, artwork{fileId,revision}|null, playback{fileId,revision}|null, hasArtwork, hasWav, hasStems, hasProject, fileCount}", "errors": ["400 INPUT_INVALID", "400 CURSOR_INVALID", "409 CURSOR_STALE", "413 CATALOG_PAGE_TOO_LARGE", "503 CATALOG_QUERY_TIMEOUT"], "notes": "LIMIT+1; keyset con tupla completa (manual_rank, beat_id C | 255-rating, rank, id | name ICU, rank, id | bpm_class, bpm_value, rank, id); sin legacy_json ni bytes." },
-    { "method": "GET", "path": "/beats/:id", "status": "delivered", "task": "T06", "response": "item + {manualRank, trash{trashId,trashedAt,purgeAfter}|null, updatedAt, etag, authorityEra, epoch, revision, generationId}; cabecera ETag débil", "errors": ["404 NOT_FOUND (también tenant ajeno)"] },
-    { "method": "GET", "path": "/beats/:id/files", "status": "delivered", "task": "T06", "query": { "limit": "1..100 (100)", "after": "file_id frontera" }, "response": "{items[{fileId, role, revision, filename, mime, sizeBytes, status, verified, slot, partCount, current}], nextAfter|null, revision, epoch, authorityEra}", "errors": ["404 NOT_FOUND"], "notes": "sin locators ni ids de Telegram" },
-    { "method": "GET", "path": "/navigation/legacy", "status": "delivered", "task": "T06", "query": { "offset": "entero decimal seguro ≥0 (canónico)", "sort": "manual|rating|name|bpm (rating)", "limit": "240" }, "response": "página de /beats + {resolution: exact|last|empty, resolvedOffset, requestedOffset, anchorOrdinal}", "errors": ["400 LEGACY_OFFSET_INVALID", "400 INPUT_INVALID (cursor/q/tags/edge/state presentes)", "409 LEGACY_OFFSET_UNRESOLVABLE (10.000 < offset < N)", "503 CATALOG_QUERY_TIMEOUT"], "copy": "«Este enlace antiguo no se puede abrir en esta posición.» + acción «Ir al inicio» (C12-r4 §2 B-legacy)" },
-    { "method": "GET", "path": "/facets", "status": "delivered", "task": "T06", "query": { "scope": "ACTIVE|TRASH (ACTIVE)", "q": "substring sobre norm_key (trim+lower)", "limit": "1..240 (240)", "cursor": "token kind=facets" }, "response": "{items[{key, label, count, representativeBeatId}], startOrdinal, totalFacets, nextCursor|null, revision, epoch, authorityEra}", "order": "count DESC, label (ICU und), key (binario)" },
-    { "method": "GET", "path": "/facets/active", "status": "delivered", "task": "T06", "query": { "key": "repetible (norm_key)", "scope": "ACTIVE|TRASH" }, "response": "{items[], missing[], revision}" },
-    { "method": "POST", "path": "/query-sets", "status": "delivered", "task": "T06 (scheduling de pasos: T10)", "body": "{query:{state,q,includeTag[],excludeTag[],includeMode}, consumer:{id, kind: SELECTION|SHUFFLE|OPERATION|BUILD}}", "response": "201|200 {setId, status BUILDING|READY, scope, generationId, authorityEra, epoch, baseRevision, memberCount, checkpointSeq, predicateHash, created, reused}", "errors": ["400 INPUT_INVALID", "409 QUERY_SET_BUILDING_BUSY", "413 QUERY_SET_PREDICATE_TOO_LARGE"], "notes": "reuso por (generación, predicado, revisión) en BUILDING/READY; un BUILDING por biblioteca; lease 30 min por consumidor" },
-    { "method": "GET", "path": "/query-sets/:id", "status": "delivered", "task": "T06", "response": "{…set, activeLeases, currentRevision, stale}" },
-    { "method": "POST", "path": "/query-sets/:id/cancel", "status": "delivered", "task": "T06", "response": "set (BUILDING→CANCELLED)", "errors": ["409 QUERY_SET_TRANSITION_INVALID"] },
-    { "method": "POST", "path": "/query-sets/:id/release", "status": "delivered", "task": "T06", "response": "set (READY|STALE|FAILED|CANCELLED→RELEASED), leases eliminados" },
-    { "method": "module", "path": "queries.stepQuerySet({userId,setId,batch≤240})", "status": "delivered", "task": "T06 (invocable por arnés; T10 lo programa con leases/recuperación)", "notes": "lote en orden manual con checkpoint atómico (members+frontier+count+seq); contexto cambiado → STALE; publicación READY bajo FOR UPDATE de catalog_libraries con revisión re-comprobada; trigger READY valida count = slots densos" },
-    { "method": "PATCH", "path": "/beats/:id", "status": "contract", "task": "T07", "headers": ["Idempotency-Key", "X-Catalog-Era", "X-Catalog-Epoch", "If-Match (opcional, debe coincidir con expectedVersion)"], "body": "set explícito de name,bpm,key,tags,rating,color,color2,crop; expectedVersion", "response": "{beat, version, revision}", "errors": ["409 VERSION_CONFLICT", "409 EPOCH_MISMATCH", "409 IDEMPOTENCY_MISMATCH", "409 LIBRARY_FROZEN", "428 PRECONDITION_REQUIRED", "413"] },
-    { "method": "POST", "path": "/beats/trash", "status": "contract", "task": "T07", "body": "{items:[{beatId, expectedVersion}] ≤50}", "notes": "lote atómico; todo falla ante un conflicto" },
-    { "method": "POST", "path": "/beats/restore", "status": "contract", "task": "T07", "body": "{items:[{beatId, expectedVersion}] ≤50}" },
-    { "method": "POST", "path": "/selections", "status": "contract", "task": "T07", "body": "{setId, defaultSelected, includes[], excludes[], ranges[{fromBeatId,toBeatId,fromOrdinal,toOrdinal}], selectionVersion (CAS), idempotencyKey}", "response": "{selectionId, selectionVersion, count, setStatus}", "errors": ["409 SELECTION_CONFLICT", "409 CURSOR_STALE"], "notes": "V02-A Q2: conjunto READY + defaultSelected + excepciones; rangos inclusivos por slot de membresía normalizados en servidor con precedencia de la última operación confirmada; Deseleccionar todo invalida (count=0) sin enumerar IDs; flags selected se devuelven por DTO residente vía GET /selections/:id/flags?beatId=…" },
-    { "method": "GET", "path": "/selections/:id", "status": "contract", "task": "T07", "response": "{selectionId, selectionVersion, count, setId, baseRevision, status: VALID|CONFLICT}" },
-    { "method": "POST", "path": "/operations", "status": "contract", "task": "T09", "body": "{kind: IMPORT|REPLACE|PURGE|BULK_PATCH|BULK_TRASH|BULK_RESTORE|TAG_RENAME, intent, selectionId?, selectionVersion?, declared sizes/versions}", "response": "{operationId, status}" },
-    { "method": "PUT", "path": "/operations/:id/parts/:partKey/receipt", "status": "contract", "task": "T09/T11 (gateway)" },
-    { "method": "POST", "path": "/operations/:id/commit", "status": "contract", "task": "T09", "response": "202 | 200 | 409" },
-    { "method": "POST", "path": "/operations/:id/cancel", "status": "contract", "task": "T09" },
-    { "method": "GET", "path": "/operations/:id", "status": "contract", "task": "T09", "response": "{status, progress: {total, confirmed, pending, conflictBatch, cancelled}, detailsCursor}" },
-    { "method": "POST", "path": "/tags/rename/preview", "status": "contract", "task": "T07", "body": "{from (norm_key), to}", "response": "{countActive, countTrash, target, revision, epoch}" },
-    { "method": "POST", "path": "/tags/rename", "status": "contract", "task": "T07→T10", "body": "{from, to, revision, idempotencyKey}", "response": "{operationId}" },
-    { "method": "POST", "path": "/playback/rounds", "status": "contract", "task": "T14", "body": "{setId, currentBeatId?, sequence}", "response": "{roundId, remaining, sequence}", "notes": "V02-A Q4: ronda Shuffle sobre conjunto READY; Fisher–Yates perezoso persistido (C12-r4 §5); RNG inyectable solo en tests" },
-    { "method": "POST", "path": "/playback/rounds/:id/next", "status": "contract", "task": "T14", "body": "{sequence (CAS), idempotencyKey}", "response": "{beatId|null, remaining, sequence, roundComplete}", "errors": ["409 SEQUENCE_CONFLICT", "409 CURSOR_STALE"], "notes": "replay del mismo idempotencyKey devuelve el mismo beat sin consumir otro; commit antes de resolver medios" },
-    { "method": "POST", "path": "/playback/rounds/:id/consume", "status": "contract", "task": "T14", "body": "{beatId, sequence}", "notes": "play directo/cola: marca consumido por índice beat→slot sin descontar dos veces" },
-    { "method": "GET", "path": "/changes", "status": "contract", "task": "T07/T08", "query": { "after": "cursor del feed" }, "response": "≤240 eventos; 410 RESYNC_REQUIRED fuera de retención" },
-    { "method": "POST", "path": "/files/:fileId/access", "status": "contract", "task": "T14 (gateway §8.6)", "notes": "capacidad de transferencia opaca, de vida corta; nunca messageId ni token" }
+    {
+      "method": "GET",
+      "path": "/context",
+      "status": "delivered",
+      "task": "T05/T06",
+      "response": "{authority, user_id, vault_id, chat_id, authority_era, authority_epoch, revision, generation_id, generation_origin, migration_state, counts, restore_hold, cleanup_enabled, capabilities, limits}",
+      "errors": [
+        "404 LIBRARY_NOT_PROVISIONED",
+        "409 LIBRARY_RESET_REQUIRED",
+        "409 VAULT_QUARANTINED",
+        "503 CATALOG_UNAVAILABLE"
+      ],
+      "writes": false
+    },
+    {
+      "method": "POST",
+      "path": "/library/provision",
+      "status": "delivered",
+      "task": "T05/T06",
+      "idempotent": "por user_id (PK); sin Idempotency-Key",
+      "response": "201 {created:true, context} | 200 {created:false, context}",
+      "errors": [
+        "409 LIBRARY_RESET_REQUIRED",
+        "409 VAULT_QUARANTINED",
+        "503 CATALOG_UNAVAILABLE"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/beats",
+      "status": "delivered",
+      "task": "T06",
+      "query": {
+        "state": "ACTIVE|TRASH (ACTIVE)",
+        "sort": "manual|rating|name|bpm (rating)",
+        "q": "texto; q lógico = trim().toLowerCase()",
+        "includeTag": "repetible, exacto",
+        "excludeTag": "repetible, exacto, vence",
+        "includeMode": "any|all (any)",
+        "limit": "1..240 (100)",
+        "includeTotal": "true|false",
+        "cursor": "token propio",
+        "edge": "last"
+      },
+      "response": "{items[], authorityEra, epoch, revision, generationId, sortProfile, searchProfile, totalLibrary, totalMatched|null, startOrdinal, nextCursor|null, previousCursor|null, resumeCursor}",
+      "item": "{id, version, state, name, bpm, key, tags[], rating, color, color2, artwork{fileId,revision}|null, playback{fileId,revision}|null, hasArtwork, hasWav, hasStems, hasProject, fileCount}",
+      "errors": [
+        "400 INPUT_INVALID",
+        "400 CURSOR_INVALID",
+        "409 CURSOR_STALE",
+        "413 CATALOG_PAGE_TOO_LARGE",
+        "503 CATALOG_QUERY_TIMEOUT"
+      ],
+      "notes": "LIMIT+1; keyset con tupla completa (manual_rank, beat_id C | 255-rating, rank, id | name ICU, rank, id | bpm_class, bpm_value, rank, id); sin legacy_json ni bytes."
+    },
+    {
+      "method": "GET",
+      "path": "/beats/:id",
+      "status": "delivered",
+      "task": "T06",
+      "response": "item + {manualRank, trash{trashId,trashedAt,purgeAfter}|null, updatedAt, etag, authorityEra, epoch, revision, generationId}; cabecera ETag débil",
+      "errors": [
+        "404 NOT_FOUND (también tenant ajeno)"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/beats/:id/files",
+      "status": "delivered",
+      "task": "T06",
+      "query": {
+        "limit": "1..100 (100)",
+        "after": "file_id frontera"
+      },
+      "response": "{items[{fileId, role, revision, filename, mime, sizeBytes, status, verified, slot, partCount, current}], nextAfter|null, revision, epoch, authorityEra}",
+      "errors": [
+        "404 NOT_FOUND"
+      ],
+      "notes": "sin locators ni ids de Telegram"
+    },
+    {
+      "method": "GET",
+      "path": "/navigation/legacy",
+      "status": "delivered",
+      "task": "T06",
+      "query": {
+        "offset": "entero decimal seguro ≥0 (canónico)",
+        "sort": "manual|rating|name|bpm (rating)",
+        "limit": "240"
+      },
+      "response": "página de /beats + {resolution: exact|last|empty, resolvedOffset, requestedOffset, anchorOrdinal}",
+      "errors": [
+        "400 LEGACY_OFFSET_INVALID",
+        "400 INPUT_INVALID (cursor/q/tags/edge/state presentes)",
+        "409 LEGACY_OFFSET_UNRESOLVABLE (10.000 < offset < N)",
+        "503 CATALOG_QUERY_TIMEOUT"
+      ],
+      "copy": "«Este enlace antiguo no se puede abrir en esta posición.» + acción «Ir al inicio» (C12-r4 §2 B-legacy)"
+    },
+    {
+      "method": "GET",
+      "path": "/facets",
+      "status": "delivered",
+      "task": "T06",
+      "query": {
+        "scope": "ACTIVE|TRASH (ACTIVE)",
+        "q": "substring sobre norm_key (trim+lower)",
+        "limit": "1..240 (240)",
+        "cursor": "token kind=facets"
+      },
+      "response": "{items[{key, label, count, representativeBeatId}], startOrdinal, totalFacets, nextCursor|null, revision, epoch, authorityEra}",
+      "order": "count DESC, label (ICU und), key (binario)"
+    },
+    {
+      "method": "GET",
+      "path": "/facets/active",
+      "status": "delivered",
+      "task": "T06",
+      "query": {
+        "key": "repetible (norm_key)",
+        "scope": "ACTIVE|TRASH"
+      },
+      "response": "{items[], missing[], revision}"
+    },
+    {
+      "method": "POST",
+      "path": "/query-sets",
+      "status": "delivered",
+      "task": "T06 (scheduling de pasos: T10)",
+      "body": "{query:{state,q,includeTag[],excludeTag[],includeMode}, consumer:{id, kind: SELECTION|SHUFFLE|OPERATION|BUILD}}",
+      "response": "201|200 {setId, status BUILDING|READY, scope, generationId, authorityEra, epoch, baseRevision, memberCount, checkpointSeq, predicateHash, created, reused}",
+      "errors": [
+        "400 INPUT_INVALID",
+        "409 QUERY_SET_BUILDING_BUSY",
+        "413 QUERY_SET_PREDICATE_TOO_LARGE"
+      ],
+      "notes": "reuso por (generación, predicado, revisión) en BUILDING/READY; un BUILDING por biblioteca; lease 30 min por consumidor"
+    },
+    {
+      "method": "GET",
+      "path": "/query-sets/:id",
+      "status": "delivered",
+      "task": "T06",
+      "response": "{…set, activeLeases, currentRevision, stale}"
+    },
+    {
+      "method": "POST",
+      "path": "/query-sets/:id/cancel",
+      "status": "delivered",
+      "task": "T06",
+      "response": "set (BUILDING→CANCELLED)",
+      "errors": [
+        "409 QUERY_SET_TRANSITION_INVALID"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/query-sets/:id/release",
+      "status": "delivered",
+      "task": "T06",
+      "response": "set (READY|STALE|FAILED|CANCELLED→RELEASED), leases eliminados"
+    },
+    {
+      "method": "module",
+      "path": "queries.stepQuerySet({userId,setId,batch≤240})",
+      "status": "delivered",
+      "task": "T06 (invocable por arnés; T10 lo programa con leases/recuperación)",
+      "notes": "lote en orden manual con checkpoint atómico (members+frontier+count+seq); contexto cambiado → STALE; publicación READY bajo FOR UPDATE de catalog_libraries con revisión re-comprobada; trigger READY valida count = slots densos"
+    },
+    {
+      "method": "PATCH",
+      "path": "/beats/:id",
+      "status": "delivered",
+      "task": "T07",
+      "headers": [
+        "Idempotency-Key",
+        "X-Catalog-Era",
+        "X-Catalog-Epoch",
+        "If-Match (opcional, debe coincidir con expectedVersion)"
+      ],
+      "body": "{expectedVersion, patch:{name?,bpm?,key?,tags?,rating?,color?,color2?,crop?}}; If-Match opcional (W/\"<len>-<version>\", debe coincidir)",
+      "response": "{noop, beat, revision, eventSeq?, operationId, replay}",
+      "errors": [
+        "400 INPUT_INVALID (errors[] por campo)",
+        "404 NOT_FOUND",
+        "409 VERSION_CONFLICT",
+        "409 BEAT_NOT_ACTIVE",
+        "409 IDEMPOTENCY_MISMATCH",
+        "409 LIBRARY_FROZEN",
+        "413 PAYLOAD_TOO_LARGE",
+        "428 PRECONDITION_REQUIRED"
+      ],
+      "notes": "tags deben llegar normalizados (trim+lower, 40 chars, <=30, sin duplicados); el servidor no limpia en silencio. No-op = sin versión ni revisión nuevas."
+    },
+    {
+      "method": "POST",
+      "path": "/beats/trash",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{items:[{beatId, expectedVersion}] <=50}",
+      "notes": "lote atómico; todo falla ante un conflicto",
+      "response": "{items[{beatId, version}], revision, operationId, replay}",
+      "errors": [
+        "409 VERSION_CONFLICT {conflicts[]} (todo falla, nada aplicado)",
+        "413 PAYLOAD_TOO_LARGE"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/beats/restore",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{items:[{beatId, expectedVersion}] <=50}",
+      "response": "{items[{beatId, version}], revision, operationId, replay}",
+      "errors": [
+        "409 VERSION_CONFLICT {conflicts[]}",
+        "409 PURGE_PENDING"
+      ],
+      "notes": "restore añade al final del orden manual (C6)"
+    },
+    {
+      "method": "POST",
+      "path": "/selections",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{setId (READY en la revisión actual), sort, defaultSelected, consumerId}",
+      "response": "201 selection {selectionId, setId, sort, defaultSelected, selectionVersion, status, count, baseRevision}",
+      "errors": [
+        "409 CURSOR_STALE (conjunto no READY o de otra revisión)"
+      ],
+      "notes": "V02-A Q2: conjunto READY + defaultSelected + excepciones; rangos inclusivos por slot de membresía normalizados en servidor con precedencia de la última operación confirmada; Deseleccionar todo invalida (count=0) sin enumerar IDs; flags selected se devuelven por DTO residente vía GET /selections/:id/flags?beatId=…"
+    },
+    {
+      "method": "GET",
+      "path": "/selections/:id",
+      "status": "delivered",
+      "task": "T07",
+      "response": "selection + {currentRevision, stale, flags{beatId:boolean}}",
+      "query": {
+        "beatId": "repetible <=240 → flags"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/operations",
+      "status": "delivered",
+      "task": "T07 (BULK_PATCH|BULK_TRASH|BULK_RESTORE|TAG_RENAME); IMPORT/REPLACE/PURGE → 501 hasta T09",
+      "body": "{kind, selectionId, selectionVersion, patch?|rename?}",
+      "response": "201|200 operation {operationId, kind, status QUEUED, progress{total,confirmed,notExecuted,cancelled,conflictBatchSeq}, expectedRevision}",
+      "errors": [
+        "409 SELECTION_CONFLICT",
+        "409 IDEMPOTENCY_MISMATCH"
+      ],
+      "notes": "congela selectionVersion y payload; la selección pasa a FROZEN y se INVALIDA al terminar"
+    },
+    {
+      "method": "PUT",
+      "path": "/operations/:id/parts/:partKey/receipt",
+      "status": "contract",
+      "task": "T09/T11 (gateway)"
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/commit",
+      "status": "contract",
+      "task": "T09",
+      "response": "202 | 200 | 409"
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/cancel",
+      "status": "delivered",
+      "task": "T07",
+      "response": "operation CANCELLED (QUEUED/CONFLICT/BLOCKED) o CANCELLING (RUNNING: el siguiente paso cierra); no revierte lotes confirmados"
+    },
+    {
+      "method": "GET",
+      "path": "/operations/:id",
+      "status": "delivered",
+      "task": "T07",
+      "response": "operation + {batches[], details[<=50], detailsNext}",
+      "query": {
+        "detailsAfter": "cursor \"batchSeq:beatId\""
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/tags/rename/preview",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{from (norm_key), to}",
+      "response": "{from, to, countActive, countTrash, mergesInto, revision, epoch, authorityEra}"
+    },
+    {
+      "method": "POST",
+      "path": "/tags/rename",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{from, to}",
+      "response": "201|200 operation TAG_RENAME (QUEUED)",
+      "notes": "operación por lotes <=50 sobre ACTIVE y TRASH; sustituye solo coincidencias trim+lower; deduplica exactos preservando orden; status/fechas/referencias intactos"
+    },
+    {
+      "method": "POST",
+      "path": "/playback/rounds",
+      "status": "contract",
+      "task": "T14",
+      "body": "{setId, currentBeatId?, sequence}",
+      "response": "{roundId, remaining, sequence}",
+      "notes": "V02-A Q4: ronda Shuffle sobre conjunto READY; Fisher–Yates perezoso persistido (C12-r4 §5); RNG inyectable solo en tests"
+    },
+    {
+      "method": "POST",
+      "path": "/playback/rounds/:id/next",
+      "status": "contract",
+      "task": "T14",
+      "body": "{sequence (CAS), idempotencyKey}",
+      "response": "{beatId|null, remaining, sequence, roundComplete}",
+      "errors": [
+        "409 SEQUENCE_CONFLICT",
+        "409 CURSOR_STALE"
+      ],
+      "notes": "replay del mismo idempotencyKey devuelve el mismo beat sin consumir otro; commit antes de resolver medios"
+    },
+    {
+      "method": "POST",
+      "path": "/playback/rounds/:id/consume",
+      "status": "contract",
+      "task": "T14",
+      "body": "{beatId, sequence}",
+      "notes": "play directo/cola: marca consumido por índice beat→slot sin descontar dos veces"
+    },
+    {
+      "method": "GET",
+      "path": "/changes",
+      "status": "delivered",
+      "task": "T07",
+      "query": {
+        "after": "event_seq (0 = desde el inicio)"
+      },
+      "response": "{events[<=240 {seq, revision, kind, beatId, version, operationId, payload, at}], next, hasMore, latest, revision, epoch, authorityEra, generationId}",
+      "errors": [
+        "400 INPUT_INVALID (after > latest)",
+        "410 RESYNC_REQUIRED (fuera de retención: 10.000 eventos)"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/files/:fileId/access",
+      "status": "contract",
+      "task": "T14 (gateway §8.6)",
+      "notes": "capacidad de transferencia opaca, de vida corta; nunca messageId ni token"
+    },
+    {
+      "method": "POST",
+      "path": "/selections/:id/ops",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{selectionVersion (CAS), op:{kind: INCLUDE_IDS|EXCLUDE_IDS (beatIds <=50) | INCLUDE_RANGE|EXCLUDE_RANGE (fromBeatId,toBeatId) | CLEAR}}",
+      "response": "selection {selectionVersion+1, count, replay}",
+      "errors": [
+        "409 SELECTION_CONFLICT (CAS, revisión nueva o estado no ACTIVE)",
+        "409 IDEMPOTENCY_MISMATCH"
+      ],
+      "notes": "rango inclusivo evaluado con el sort de la selección (tupla completa); precedencia de la última op confirmada; CLEAR → default=false y count 0"
+    },
+    {
+      "method": "POST",
+      "path": "/selections/:id/release",
+      "status": "delivered",
+      "task": "T07",
+      "response": "selection RELEASED",
+      "errors": [
+        "409 SELECTION_CONFLICT (FROZEN)"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/resume",
+      "status": "delivered",
+      "task": "T07",
+      "body": "{revision (actual, explícita)}",
+      "response": "operation RUNNING",
+      "errors": [
+        "409 OPERATION_TRANSITION_INVALID",
+        "409 REVISION_MISMATCH"
+      ]
+    },
+    {
+      "method": "module",
+      "path": "commands.stepOperation({userId,era,epoch,operationId,batch<=50})",
+      "status": "delivered",
+      "task": "T07 (T10 programa los pasos)",
+      "notes": "lote <=50: miembros seleccionados desde next_slot (o beats con el tag desde frontier); journal batches+items, checkpoint, revisión y eventos en la misma transacción; revisión externa → CONFLICT sin ejecutar; versión distinta en un miembro → CONFLICT del lote completo; CANCELLING → CANCELLED en el siguiente paso"
+    }
   ],
   "v02a_decisions": {
     "Q1_sets": "Recurso propio POST /query-sets (no creación implícita): permite reuso por (owner, generación, predicado, revisión), un BUILDING por biblioteca, leases por consumidor y cancel/release explícitos. Los pasos (≤240, orden manual) son función de módulo; T10 añade scheduling, recuperación y limpieza ≤240 filas/transacción.",
@@ -64,5 +514,6 @@
     "Q3_facets": "Keyset (count DESC, rep_label ICU und, norm_key binario) con cursor kind=facets; activos por identidad en /facets/active. Entregado en T06 sobre catalog_facets (T03/T07 mantienen agregados en la misma transacción).",
     "Q4_musical": "Comandos next/previous/consume con sequence CAS e idempotencyKey; resultado persistido en la misma transacción que el swap; ronda nueva por filtros, reconstrucción por revisión preservando consumidos por ID. Implementación T14.",
     "Q5_reanchor": "Por defecto stale (409 CURSOR_STALE → recarga del primer bloque conservando filtros). No se reancla por ID en T06: exigiría COUNT/posición por revisión nueva cuyo coste solo T20 puede justificar con EXPLAIN; si T20 lo demuestra, se añade `anchorBeatId` como extensión compatible, sin endpoint nuevo."
-  }
+  },
+  "writeHeaders": "Idempotency-Key (1–128 [A-Za-z0-9_.:-]), X-Catalog-Era, X-Catalog-Epoch obligatorias en escrituras → 428 PRECONDITION_REQUIRED si faltan; era/época distintas → 409 CATALOG_ERA_MISMATCH / CATALOG_EPOCH_STALE; misma clave con otro contenido → 409 IDEMPOTENCY_MISMATCH; misma clave y contenido → resultado persistido (replay:true)."
 }

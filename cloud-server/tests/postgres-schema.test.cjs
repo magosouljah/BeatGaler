@@ -105,13 +105,13 @@ for (const token of [
 ]) {
   assert(queriesMigration.sql.includes(token), `missing catalog queries contract token: ${token}`);
 }
-assert(!/jsonb/i.test(queriesMigration.sql), 'catalog queries migration must not use jsonb (D-08)');
+assert(!/\bjsonb\b/i.test(queriesMigration.sql), 'catalog queries migration must not use jsonb (D-08)');
 assert(!/DROP TABLE|DROP TRIGGER|DROP FUNCTION|DROP COLUMN|DROP INDEX|DROP COLLATION/i.test(queriesMigration.sql), '0028 must not drop anything');
-for (const m of queriesMigration.sql.matchAll(/ALTER TABLE (w+) ALTER COLUMN (w+) SET NOT NULL/g)) {
+for (const m of queriesMigration.sql.matchAll(/ALTER TABLE (\w+) ALTER COLUMN (\w+) SET NOT NULL/g)) {
   assert(queriesMigration.sql.includes(`ALTER TABLE ${m[1]} ADD COLUMN ${m[2]} `), `0028 may only SET NOT NULL on columns it adds: ${m[1]}.${m[2]}`);
 }
-assert(!/ALTER TABLE w+ ALTER COLUMN w+ (TYPE|DROP|SET DEFAULT)/i.test(queriesMigration.sql), '0028 must not retype or default existing columns');
-assert(!/providers*=s*libc/i.test(queriesMigration.sql), '0028 must not substitute A1 with a libc collation');
+assert(!/ALTER TABLE \w+ ALTER COLUMN \w+ (TYPE|DROP|SET DEFAULT)/i.test(queriesMigration.sql), '0028 must not retype or default existing columns');
+assert(!/provider\s*=\s*libc/i.test(queriesMigration.sql), '0028 must not substitute A1 with a libc collation');
 
 const migrationDir = path.join(__dirname, '..', 'migrations');
 for (const file of fs.readdirSync(migrationDir).filter(name => name.endsWith('.sql'))) {
@@ -121,3 +121,12 @@ for (const file of fs.readdirSync(migrationDir).filter(name => name.endsWith('.s
 }
 
 console.log(`PASS PostgreSQL schema contract: ${migrations.length} migration(s)`);
+
+// T07: 0029 aditiva (operaciones, eventos, lotes <=50, seleccion CAS). Solo TEXT para JSON.
+const commandsMigration = migrations.find(item => item.name === '0029_catalog_commands.sql');
+assert(commandsMigration, 'catalog commands migration 0029 is required');
+for (const token of ['CREATE TABLE catalog_operations (', 'UNIQUE (user_id, idempotency_key)', 'CREATE TABLE catalog_events (', 'CREATE TABLE catalog_operation_batches (', 'item_count integer NOT NULL CHECK (item_count BETWEEN 0 AND 50)', 'CREATE TABLE catalog_operation_batch_items (', 'CREATE TABLE catalog_selections (', 'selection_version bigint NOT NULL DEFAULT 0', 'CREATE TABLE catalog_selection_ops (', 'CREATE TABLE catalog_selection_op_ids (', 'CREATE TRIGGER catalog_operations_transition BEFORE UPDATE ON catalog_operations']) {
+  assert(commandsMigration.sql.includes(token), `missing catalog commands contract token: ${token}`);
+}
+assert(!/[j]sonb/i.test(commandsMigration.sql), 'catalog commands migration must not use jsonb (D-08)');
+assert(!/ALTER TABLE|DROP /i.test(commandsMigration.sql), '0029 only creates new objects');

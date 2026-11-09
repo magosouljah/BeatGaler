@@ -9,6 +9,25 @@ const { createCatalogRouter, API_LIMITS } = require('../../catalog/routes.js');
 const { CatalogAuthorityError } = require('../../catalog/authority.js');
 const { CatalogQueryError } = require('../../catalog/cursor.js');
 
+function fakeCommands(calls) {
+  const sel = { selectionId: 'sel-1', status: 'ACTIVE', selectionVersion: '1', count: 3 };
+  return {
+    async patchBeat(a) { calls.push(['patch', a]); if (a.expectedVersion === '9') throw new CatalogQueryError('VERSION_CONFLICT', 409, 'v', { current_version: '2' }); return { noop: false, beat: { id: a.beatId, version: '2' }, revision: '3', operationId: 'op-1', replay: false }; },
+    async trashBeats(a) { calls.push(['trash', a]); return { items: a.items, revision: '4', operationId: 'op-2', replay: false }; },
+    async restoreBeats(a) { calls.push(['restore', a]); return { items: a.items, revision: '5', operationId: 'op-3', replay: false }; },
+    async createSelection(a) { calls.push(['sel-create', a]); return { ...sel, created: true }; },
+    async getSelection(a) { calls.push(['sel-get', a]); return { ...sel, flags: Object.fromEntries((a.beatIds || []).map((b) => [b, true])) }; },
+    async applySelectionOp(a) { calls.push(['sel-op', a]); return { ...sel, selectionVersion: '2' }; },
+    async releaseSelection(a) { calls.push(['sel-release', a]); return { ...sel, status: 'RELEASED' }; },
+    async previewTagRename(a) { calls.push(['rename-preview', a]); return { from: a.from, to: a.to, countActive: 1, countTrash: 0 }; },
+    async createOperation(a) { calls.push(['op-create', a]); return { operationId: 'op-9', kind: a.kind, status: 'QUEUED', created: true }; },
+    async getOperation(a) { calls.push(['op-get', a]); return { operationId: a.operationId, status: 'RUNNING' }; },
+    async cancelOperation(a) { calls.push(['op-cancel', a]); return { operationId: a.operationId, status: 'CANCELLING' }; },
+    async resumeOperation(a) { calls.push(['op-resume', a]); return { operationId: a.operationId, status: 'RUNNING' }; },
+    async listChanges(a) { calls.push(['changes', a]); return { events: [], next: a.query.after }; },
+  };
+}
+
 const USERS = { 'tok-a': { id: 'ua' }, 'tok-b': { id: 'ub' } };
 function authenticate(req, res) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
@@ -42,11 +61,12 @@ async function serve(router) {
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const port = server.address().port;
   const call = async (method, p, { token = 'tok-a', body } = {}) => {
     const res = await fetch(base + p, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     return { status: res.status, headers: res.headers, body: await res.json() };
   };
-  return { call, close: () => new Promise((r) => server.close(r)) };
+  return { call, port, close: () => new Promise((r) => server.close(r)) };
 }
 
 test('autenticación server-side, contexto, provision 201/200 y mapeo estable de errores; el tenant es el usuario autenticado, nunca la query', async () => {
@@ -89,6 +109,46 @@ test('autenticación server-side, contexto, provision 201/200 y mapeo estable de
     assert.deepEqual([ni.status, ni.body.code], [501, 'NOT_IMPLEMENTED'], 'contrato T07 sin implementar: 501 explícito, nunca éxito ficticio');
     assert.equal((await s.call('POST', '/catalog/v1/operations')).status, 501);
     assert.ok(calls.every((c) => c[1] === 'ua' || c[1] === 'ub'));
+  } finally { await s.close(); }
+});
+
+test('T07: rutas de escritura exigen Idempotency-Key + X-Catalog-Era + X-Catalog-Epoch (428), pasan cabeceras y cuerpo, mapean 409 y exponen ETag; kinds no implementados → 501', async () => {
+  const calls = [];
+  const s = await serve(createCatalogRouter({ authority: fakeAuthority(calls), queries: fakeQueries(calls), commands: fakeCommands(calls), authenticate }));
+  const W = { 'idempotency-key': 'k-1', 'x-catalog-era': 'era-1', 'x-catalog-epoch': '1' };
+  const E = { 'x-catalog-era': 'era-1', 'x-catalog-epoch': '1' };
+  const callH = async (method, p, headers, body) => {
+    const res = await fetch(`http://127.0.0.1:${s.port}${p}`, { method, headers: { authorization: 'Bearer tok-a', 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, headers: res.headers, body: await res.json() };
+  };
+  try {
+    const missing = await callH('PATCH', '/catalog/v1/beats/b1', {}, { expectedVersion: '1', patch: { name: 'x' } });
+    assert.deepEqual([missing.status, missing.body.code, missing.body.detail.missing], [428, 'PRECONDITION_REQUIRED', ['Idempotency-Key', 'X-Catalog-Era', 'X-Catalog-Epoch']]);
+    assert.ok(!calls.some((c) => c[0] === 'patch'), 'sin cabeceras no se invoca el comando');
+    const ok = await callH('PATCH', '/catalog/v1/beats/b1', { ...W, 'if-match': 'W/"2-1"' }, { expectedVersion: '1', patch: { name: 'x' } });
+    assert.deepEqual([ok.status, ok.headers.get('etag'), ok.body.revision], [200, 'W/"2-2"', '3']);
+    const p = calls.find((c) => c[0] === 'patch')[1];
+    assert.deepEqual([p.userId, p.beatId, p.idempotencyKey, p.era, p.epoch, p.expectedVersion, p.ifMatch, p.patch], ['ua', 'b1', 'k-1', 'era-1', '1', '1', 'W/"2-1"', { name: 'x' }]);
+    const conflict = await callH('PATCH', '/catalog/v1/beats/b1', W, { expectedVersion: '9', patch: { name: 'x' } });
+    assert.deepEqual([conflict.status, conflict.body.code, conflict.body.detail.current_version], [409, 'VERSION_CONFLICT', '2']);
+    assert.equal((await callH('POST', '/catalog/v1/beats/trash', W, { items: [{ beatId: 'b1', expectedVersion: '1' }] })).status, 200);
+    assert.equal((await callH('POST', '/catalog/v1/beats/restore', W, { items: [{ beatId: 'b1', expectedVersion: '2' }] })).status, 200);
+    assert.equal((await callH('POST', '/catalog/v1/selections', E, { setId: 'qs-1', sort: 'manual', defaultSelected: true, consumerId: 'tab' })).status, 201);
+    assert.equal((await callH('POST', '/catalog/v1/selections', {}, { setId: 'qs-1' })).status, 428);
+    const flags = await callH('GET', '/catalog/v1/selections/sel-1?beatId=a&beatId=b', {});
+    assert.deepEqual([flags.status, flags.body.flags], [200, { a: true, b: true }]);
+    assert.equal((await callH('POST', '/catalog/v1/selections/sel-1/ops', W, { selectionVersion: '1', op: { kind: 'CLEAR' } })).body.selectionVersion, '2');
+    assert.equal((await callH('POST', '/catalog/v1/selections/sel-1/release', E)).body.status, 'RELEASED');
+    assert.equal((await callH('POST', '/catalog/v1/tags/rename/preview', {}, { from: 'a', to: 'b' })).body.countActive, 1);
+    assert.equal((await callH('POST', '/catalog/v1/tags/rename', W, { from: 'a', to: 'b' })).status, 201);
+    const notImpl = await callH('POST', '/catalog/v1/operations', W, { kind: 'IMPORT' });
+    assert.deepEqual([notImpl.status, notImpl.body.code], [501, 'NOT_IMPLEMENTED']);
+    assert.equal((await callH('POST', '/catalog/v1/operations', W, { kind: 'BULK_TRASH', selectionId: 'sel-1', selectionVersion: '1' })).status, 201);
+    assert.equal((await callH('GET', '/catalog/v1/operations/op-9?detailsAfter=1:b', {})).status, 200);
+    assert.equal((await callH('POST', '/catalog/v1/operations/op-9/cancel', E)).body.status, 'CANCELLING');
+    assert.equal((await callH('POST', '/catalog/v1/operations/op-9/resume', E, { revision: '4' })).body.status, 'RUNNING');
+    assert.equal((await callH('GET', '/catalog/v1/changes?after=0', {})).status, 200);
+    assert.ok(calls.filter((c) => c[1] && c[1].userId).every((c) => c[1].userId === 'ua'), 'tenant siempre del token');
   } finally { await s.close(); }
 });
 

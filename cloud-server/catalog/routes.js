@@ -28,7 +28,20 @@ function respondError(res, error) {
   return res.status(500).json({ error: 'catalog request failed', code: 'CATALOG_INTERNAL_ERROR' });
 }
 
-function createCatalogRouter({ authority = null, queries = null, authenticate, log = () => {} } = {}) {
+// Cabeceras de escritura C5: Idempotency-Key, X-Catalog-Era, X-Catalog-Epoch (ausentes → 428 PRECONDITION_REQUIRED).
+function writeHeaders(req) {
+  const key = req.get('idempotency-key'); const era = req.get('x-catalog-era'); const epoch = req.get('x-catalog-epoch');
+  if (!key || !era || !epoch) throw new CatalogQueryError('PRECONDITION_REQUIRED', 428, 'Idempotency-Key, X-Catalog-Era and X-Catalog-Epoch headers are required', { missing: [!key && 'Idempotency-Key', !era && 'X-Catalog-Era', !epoch && 'X-Catalog-Epoch'].filter(Boolean) });
+  return { idempotencyKey: key, era, epoch };
+}
+function eraHeaders(req) {
+  const era = req.get('x-catalog-era'); const epoch = req.get('x-catalog-epoch');
+  if (!era || !epoch) throw new CatalogQueryError('PRECONDITION_REQUIRED', 428, 'X-Catalog-Era and X-Catalog-Epoch headers are required', {});
+  return { era, epoch };
+}
+const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
+
+function createCatalogRouter({ authority = null, queries = null, commands = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -81,6 +94,36 @@ function createCatalogRouter({ authority = null, queries = null, authenticate, l
   router.get(`${CATALOG_PREFIX}/query-sets/:id`, handle(async (req, _res, userId) => ({ body: await queries.getQuerySet({ userId, setId: req.params.id }) })));
   router.post(`${CATALOG_PREFIX}/query-sets/:id/cancel`, handle(async (req, _res, userId) => ({ body: await queries.cancelQuerySet({ userId, setId: req.params.id }) })));
   router.post(`${CATALOG_PREFIX}/query-sets/:id/release`, handle(async (req, _res, userId) => ({ body: await queries.releaseQuerySet({ userId, setId: req.params.id }) })));
+  if (commands) {
+    // T07 — mutaciones (C5/C6, r4 §4/§6). Validación antes de la transacción; errores estables; nunca Telegram.
+    router.patch(`${CATALOG_PREFIX}/beats/:id`, handle(async (req, res, userId) => {
+      const h = writeHeaders(req); const b = body(req);
+      const r = await commands.patchBeat({ userId, beatId: req.params.id, ...h, expectedVersion: b.expectedVersion, ifMatch: req.get('if-match') || null, patch: b.patch ?? b.set });
+      if (r.beat) res.setHeader('ETag', `W/"${r.beat.id.length}-${r.beat.version}"`);
+      return { body: r };
+    }));
+    router.post(`${CATALOG_PREFIX}/beats/trash`, handle(async (req, _res, userId) => ({ body: await commands.trashBeats({ userId, ...writeHeaders(req), items: body(req).items }) })));
+    router.post(`${CATALOG_PREFIX}/beats/restore`, handle(async (req, _res, userId) => ({ body: await commands.restoreBeats({ userId, ...writeHeaders(req), items: body(req).items }) })));
+    router.post(`${CATALOG_PREFIX}/selections`, handle(async (req, _res, userId) => { const b = body(req); return { status: 201, body: await commands.createSelection({ userId, ...eraHeaders(req), setId: b.setId, sort: b.sort ?? 'rating', defaultSelected: b.defaultSelected ?? false, consumerId: b.consumerId }) }; }));
+    router.get(`${CATALOG_PREFIX}/selections/:id`, handle(async (req, _res, userId) => {
+      const beatIds = req.query.beatId === undefined ? [] : Array.isArray(req.query.beatId) ? req.query.beatId : [req.query.beatId];
+      return { body: await commands.getSelection({ userId, selectionId: req.params.id, beatIds }) };
+    }));
+    router.post(`${CATALOG_PREFIX}/selections/:id/ops`, handle(async (req, _res, userId) => { const b = body(req); return { body: await commands.applySelectionOp({ userId, ...writeHeaders(req), selectionId: req.params.id, selectionVersion: b.selectionVersion, op: b.op }) }; }));
+    router.post(`${CATALOG_PREFIX}/selections/:id/release`, handle(async (req, _res, userId) => ({ body: await commands.releaseSelection({ userId, ...eraHeaders(req), selectionId: req.params.id }) })));
+    router.post(`${CATALOG_PREFIX}/tags/rename/preview`, handle(async (req, _res, userId) => { const b = body(req); return { body: await commands.previewTagRename({ userId, from: b.from, to: b.to }) }; }));
+    router.post(`${CATALOG_PREFIX}/tags/rename`, handle(async (req, _res, userId) => { const b = body(req); const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: 'TAG_RENAME', rename: { from: b.from, to: b.to } }); return { status: r.created ? 201 : 200, body: r }; }));
+    router.post(`${CATALOG_PREFIX}/operations`, handle(async (req, res, userId) => {
+      const b = body(req);
+      if (!['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE', 'TAG_RENAME'].includes(b.kind)) return { status: 501, body: { error: `operation kind ${String(b.kind)} is not implemented yet (T09)`, code: 'NOT_IMPLEMENTED' } };
+      const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: b.kind, selectionId: b.selectionId, selectionVersion: b.selectionVersion, patch: b.patch, rename: b.rename });
+      return { status: r.created ? 201 : 200, body: r };
+    }));
+    router.get(`${CATALOG_PREFIX}/operations/:id`, handle(async (req, _res, userId) => ({ body: await commands.getOperation({ userId, operationId: req.params.id, detailsAfter: typeof req.query.detailsAfter === 'string' ? req.query.detailsAfter : null }) })));
+    router.post(`${CATALOG_PREFIX}/operations/:id/cancel`, handle(async (req, _res, userId) => ({ body: await commands.cancelOperation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
+    router.post(`${CATALOG_PREFIX}/operations/:id/resume`, handle(async (req, _res, userId) => ({ body: await commands.resumeOperation({ userId, ...eraHeaders(req), operationId: req.params.id, revision: body(req).revision }) })));
+    router.get(`${CATALOG_PREFIX}/changes`, handle(async (req, _res, userId) => ({ body: await commands.listChanges({ userId, query: req.query }) })));
+  }
   // Rutas del contrato aún no implementadas (T07/T09/T10/T14): 501 explícito, nunca un éxito ficticio.
   router.use(CATALOG_PREFIX, (req, res) => res.status(501).json({ error: `${req.method} ${req.originalUrl.split('?')[0]} is not implemented yet`, code: 'NOT_IMPLEMENTED' }));
   return router;

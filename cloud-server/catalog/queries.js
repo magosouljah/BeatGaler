@@ -34,7 +34,7 @@ const STATES = Object.freeze(['ACTIVE', 'TRASH']);
 const SORTS = Object.freeze(['manual', 'rating', 'name', 'bpm']);
 const INCLUDE_MODES = Object.freeze(['any', 'all']);
 
-const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { reason, ...extra });
+const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const unavailable = (reason, extra = {}) => new CatalogQueryError('CATALOG_UNAVAILABLE', 503, `catalog is unavailable (${reason})`, { reason, ...extra });
 const sha256Hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
 

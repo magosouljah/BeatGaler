@@ -50,10 +50,10 @@ async function seedUsers(pool) {
 // T05-N: 0027_catalog_native.sql se aplica junto con 0026; las guardas de 0027 no actúan sin activación ni origin nativo,
 // así que estas pruebas (bibliotecas LEGACY, LEGACY→POSTGRES y DELETE de LEGACY) conservan su resultado.
 const MIGRATIONS = mig.listMigrations().length;
-test('fresh: todas las migraciones (0001–0028), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
+test('fresh: todas las migraciones (0001–0029), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
   const first = await mig.applyMigrations(pool);
-  assert.equal(MIGRATIONS, 28);
-  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0028');
+  assert.equal(MIGRATIONS, 29);
+  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0029');
   const again = await mig.applyMigrations(pool);
   assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, MIGRATIONS);
   const tables = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
@@ -83,7 +83,7 @@ test('upgrade 0001-0025 → 0026 conserva datos legacy y no importa nada', () =>
   await pool.query("INSERT INTO library_beats(user_id, beat_id, state) VALUES ('u1','b1','ACTIVE'), ('u1','b2','TRASH'), ('u2','b1','ACTIVE')");
   const before = await legacyDigest(pool);
   const up = await mig.applyMigrations(pool, all);
-  assert.deepEqual(up.applied, ['0026', '0027', '0028']); // T06 añade 0028 (colación ICU, proyecciones, índices)
+  assert.deepEqual(up.applied, ['0026', '0027', '0028', '0029']); // T06 añade 0028 (colación ICU, proyecciones, índices); T07 añade 0029 (operaciones/eventos/selección)
   assert.deepEqual(await legacyDigest(pool), before);
   const cat = await pool.query('SELECT (SELECT count(*) FROM catalog_libraries)::int + (SELECT count(*) FROM catalog_generations)::int + (SELECT count(*) FROM catalog_beats)::int AS n');
   assert.equal(cat.rows[0].n, 0, 'la migración no crea bibliotecas ni importa');
