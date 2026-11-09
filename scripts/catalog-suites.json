@@ -1284,8 +1284,60 @@
       "owner": "T18"
     },
     "T19": {
-      "status": "pending",
-      "owner": "T19"
+      "status": "active",
+      "owner": "T19",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Backup/restore PostgreSQL (NATIVO r2.1 §11): snapshot verificable, restore aislado con restore_hold + época+1 + workers apagados, reconciliación del journal externo, verificación de bytes, backup corrupto/ausente, proveedor inaccesible, STOP-DATA previo a activación. Etiqueta FAKE/LAB; NO es G4.",
+      "cases": [
+        {
+          "id": "t19-catalog-backup",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-backup.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t03-catalog-contract",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-contract.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-backup-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-backup.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T20": {
       "status": "pending",

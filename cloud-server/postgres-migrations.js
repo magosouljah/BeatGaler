@@ -115,6 +115,8 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_purges', 'catalog_purge_items', 'catalog_purge_objects',
   // T17 (0034_catalog_native_cli.sql): auditoría append-only de rebind-chat (vaults con o sin fila de catálogo).
   'catalog_vault_rebind_audit',
+  // T19-N (0035_catalog_restore.sql): corridas de restore y hallazgos de reconciliación del journal externo.
+  'catalog_restore_runs', 'catalog_restore_findings',
 ]);
 // Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
 const CATALOG_NATIVE_REQUIRED = Object.freeze([

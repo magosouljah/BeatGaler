@@ -569,7 +569,9 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         const params = [n]; let kindSql = '';
         if (kinds) { params.push(kinds); kindSql = ' AND kind = ANY($2::text[])'; }
         // T12: paréntesis explícitos; sin ellos el filtro de tipos solo aplicaba a los leases vencidos y un claim por tipo reclamaba cualquier QUEUED.
+        // T19-N: una corrida de restore sin reconciliar (HELD/BLOCKED) apaga el reclamo de jobs en toda la instancia (§11: workers apagados).
         const picked = (await client.query(`SELECT job_id FROM catalog_jobs WHERE ((state = 'QUEUED' AND next_attempt_at <= now()) OR (state = 'LEASED' AND lease_until <= now()))${kindSql}
+          AND NOT EXISTS (SELECT 1 FROM catalog_restore_runs r WHERE r.status <> 'RECONCILED')
           ORDER BY next_attempt_at, created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, params)).rows.map((r) => r.job_id);
         const claimed = [];
         for (const jobId of picked) {
