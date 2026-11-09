@@ -280,7 +280,7 @@ test('medios: acceso por referencia (concesión por parte, caché por época/rev
   await rejects(media.stream({ userId: lib.userId, token: access2.parts[1].token, res: fakeRes() }), 'MEDIA_GRANT_INVALID', (e) => e.detail.reason === 'REVOKED');
   // objeto no PRESENT → denegado; fallo del proveedor antes del primer byte → 502 estable (no se interpreta como borrado)
   const access3 = await media.issueAccess({ userId: lib.userId, fileId });
-  gateway.client.script({ type: 'downloadFail' });
+  gateway.client.script({ type: 'noop' }).script({ type: 'downloadFail' }); // GetMessages consume el primer fault (neutro); iterDownload, el segundo
   await rejects(media.stream({ userId: lib.userId, token: access3.parts[0].token, res: fakeRes() }), 'MEDIA_UNAVAILABLE', (e) => e.status === 502);
   await pool.query("UPDATE catalog_media_objects SET status = 'DELETING' WHERE user_id = $1", [lib.userId]);
   await rejects(media.issueAccess({ userId: lib.userId, fileId }), 'ACCESS_DENIED', (e) => e.detail.reason === 'OBJECT_NOT_PRESENT');
