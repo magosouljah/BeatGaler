@@ -255,7 +255,23 @@ async function applyMigrations(pool, migrations = listMigrations()) {
   }
 }
 
+// T16 (NATIVO r2.1 §11): un binario más viejo que la DB no arranca. Si schema_migrations contiene versiones que este código no conoce,
+// se lanza CATALOG_SCHEMA_AHEAD y el arranque se niega (fail-closed). No modifica la DB.
+async function assertKnownMigrations(pool, migrations = listMigrations()) {
+  if (!pool || typeof pool.query !== 'function') throw new Error('PostgreSQL pool with query() is required.');
+  const known = new Set(migrations.map((m) => m.version));
+  const rows = (await pool.query('SELECT version FROM schema_migrations ORDER BY version')).rows;
+  const unknown = rows.map((r) => String(r.version)).filter((v) => !known.has(v));
+  if (unknown.length) {
+    const error = new Error(`CATALOG_SCHEMA_AHEAD: the database has migrations this binary does not know (${unknown.join(', ')}); refusing to start with an older binary.`);
+    error.code = 'CATALOG_SCHEMA_AHEAD'; error.unknown = unknown;
+    throw error;
+  }
+  return Object.freeze({ known: known.size, applied: rows.length, unknown: [] });
+}
+
 module.exports = {
+  assertKnownMigrations,
   MIGRATIONS_DIR,
   MIGRATION_LOCK_KEY,
   listMigrations,

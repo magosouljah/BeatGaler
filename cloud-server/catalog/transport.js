@@ -346,4 +346,8 @@ function createCatalogTransport({ pool = null, authority = null, operations = nu
   return Object.freeze({ issueUploadCapability, uploadPart, uploadProjectPart, listAttempts, metrics, admission: directAdmission, projectAdmission: masterAdmission, limits: Object.freeze({ CAPABILITY_TTL_MS: capabilityTtlMs, TOKEN_BYTES }) });
 }
 
-module.exports = { CAPABILITY_TTL_MS, TOKEN_BYTES, TOKEN_RE, EVIDENCE_LEVELS, INFLIGHT, newCapabilityToken, capabilityHash, createMeasuringStream, spoolToFile, createTempAdmission, classifySendFailure, createCatalogTransport };
+let configured = null;
+function configureCatalogTransport(options = null) { configured = options && options.pool && options.authority && options.operations && options.tempDir ? createCatalogTransport(options) : null; return configured; }
+function currentCatalogTransport() { return configured; }
+
+module.exports = { CAPABILITY_TTL_MS, TOKEN_BYTES, TOKEN_RE, EVIDENCE_LEVELS, INFLIGHT, newCapabilityToken, capabilityHash, createMeasuringStream, spoolToFile, createTempAdmission, classifySendFailure, createCatalogTransport, configureCatalogTransport, currentCatalogTransport };

@@ -54,6 +54,12 @@ const catalogAuthority = require("./catalog/authority");
 const catalogQueries = require("./catalog/queries");
 const catalogCommands = require("./catalog/commands");
 const catalogOperations = require("./catalog/operations");
+const catalogPlayback = require("./catalog/playback");
+const catalogMedia = require("./catalog/media");
+const catalogPurge = require("./catalog/purge");
+const catalogTransport = require("./catalog/transport");
+const catalogSessionGuard = require("./catalog/session-guard");
+const { createFileDeletionJournal } = require("./catalog-deletion-journal");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -89,7 +95,18 @@ async function start() {
   catalogCommands.configureCatalogCommands(nativeAuthority ? { pool, authority: nativeAuthority } : null);
   // T09: la cuota del catálogo usa el resolver Access vigente (quotas.max_beats; null = sin límite); nunca library_beats ni INDEX.
   catalogOperations.configureCatalogOperations(nativeAuthority ? { pool, authority: nativeAuthority, resolveAccess: async (userId) => { const access = await accessRuntime.resolveUserAccess({ id: userId }); const max = access && access.quotas ? access.quotas.max_beats : null; return { maxBeats: max === undefined ? null : max }; } } : null);
-  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'}`);
+  // T16 (capa 2 + montaje): sesión con protocolo catalog-v1 para dueños nativos; rondas, medios, purge y transferencias montados SIN gateway
+  // real (fail-closed: 503 TRANSFER_UNAVAILABLE / jobs en reintento) hasta que T11 fase B lo autorice. El journal de borrados en disco solo si
+  // el propietario fija su destino (BEATGALER_CATALOG_JOURNAL_DIR); sin él, ningún delete puede ejecutarse (C9).
+  if (String(process.env.BEATGALER_CATALOG_GATEWAY_ENABLED || '').toLowerCase() === 'true') throw new Error('STOP-ENV: BEATGALER_CATALOG_GATEWAY_ENABLED=true but the real media gateway is not implemented (T11 phase B pending); refusing to start.');
+  const nativeOperations = catalogOperations.currentCatalogOperations();
+  catalogSessionGuard.configureCatalogSessionGuard(nativeAuthority ? { pool, authority: nativeAuthority } : null);
+  catalogPlayback.configureCatalogPlayback(nativeAuthority ? { pool, authority: nativeAuthority } : null);
+  catalogMedia.configureCatalogMedia(nativeAuthority ? { pool, authority: nativeAuthority, gateway: null } : null);
+  const journalDir = String(process.env.BEATGALER_CATALOG_JOURNAL_DIR || '').trim();
+  catalogPurge.configureCatalogPurge(nativeAuthority ? { pool, authority: nativeAuthority, gateway: null, journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null } : null);
+  catalogTransport.configureCatalogTransport(nativeAuthority && nativeOperations ? { pool, authority: nativeAuthority, operations: nativeOperations, gateway: null, master: null, resolveProjectAccess: null, tempDir: process.env.BEATGALER_PROJECT_UPLOAD_TEMP_DIR || 'uploads-tmp/' } : null);
+  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'} gateway=none journal=${journalDir ? 'file' : 'none'}`);
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
   const indexPinAuthority = cutover.authority === 'postgres'
     ? createDirectIndexPinAuthority({ pool, transport: require('./direct-transport-control') }) : null;

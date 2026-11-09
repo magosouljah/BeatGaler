@@ -1,7 +1,7 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 7,
-  "task": "T06/T07/T09/T10/T12/T14/T15",
+  "version": 8,
+  "task": "T06/T07/T09/T10/T12/T14/T15/T16",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint de metadata toca Telegram; en T12 los bytes de una parte pasan por el gateway del servidor (§8.6) mediante una capacidad opaca: el cliente nunca recibe chat, message_id, random_id ni credenciales. Encargo T12 con fakes: T11 sigue NO PASS y G2 NOT_PROVEN.",
   "prefix": "/catalog/v1",
@@ -808,5 +808,12 @@
     "proof": "solo MessageEmpty del id en el peer autorizado demuestra ausencia; 403/404 sin entrada/timeout/genérico → UNCERTAIN con reintento acotado (8) → BLOCKED PROVIDER_UNCERTAIN",
     "quota": "PURGING ocupa cuota; se libera una sola vez al PURGED del beat; items BLOCKED no liberan nada",
     "realCleanup": "apagado (cleanup_enabled=false por defecto; habilitación por biblioteca en T24 con autorización); G2 y G4 siguen necesarios"
+  },
+  "session": {
+    "task": "T16",
+    "layer2": "con BEATGALER_CATALOG_NATIVE_ENABLED=true, POST /transport/session/start de un dueño con fila de catálogo exige body.protocol = \"catalog-v1\" (410 LEGACY_CLIENT_UNSUPPORTED antes de Direct/Telegram); la respuesta catalog-v1 lleva catalog{protocol, authority_era, authority_epoch} y nunca bot_token/api_id/api_hash",
+    "flagOff": "interruptor no destructivo: la capa 2 no actúa, la capa 1 (410 en entradas C10) y la capa 0 (triggers 0027) siguen",
+    "forwardGuard": "el arranque se niega con CATALOG_SCHEMA_AHEAD si schema_migrations tiene versiones desconocidas (NATIVO §11)",
+    "mounted": "routes /catalog/v1 con operations, transport, playback, media y purge; sin gateway real → 503 TRANSFER_UNAVAILABLE y jobs en reintento (fail-closed); BEATGALER_CATALOG_GATEWAY_ENABLED=true sin adaptador real → STOP-ENV en el arranque"
   }
 }

@@ -35,6 +35,11 @@ const { assertVaultRebindAllowedIfConfigured, currentCatalogAuthority } = requir
 const { currentCatalogQueries } = require("./catalog/queries");
 const { currentCatalogCommands } = require("./catalog/commands");
 const { currentCatalogOperations } = require("./catalog/operations");
+const { currentCatalogPlayback } = require("./catalog/playback");
+const { currentCatalogMedia } = require("./catalog/media");
+const { currentCatalogPurge } = require("./catalog/purge");
+const { currentCatalogTransport } = require("./catalog/transport");
+const { assertCatalogSessionProtocolIfConfigured } = require("./catalog/session-guard");
 const { createCatalogRouter } = require("./catalog/routes");
 const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
@@ -124,7 +129,8 @@ app.use('/transport/index/publish', express.json({ limit: '24mb' }));
 installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
 app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
-app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
+// T16: rondas, medios, purge y transferencias montados; sin gateway real responden 503 TRANSFER_UNAVAILABLE / jobs en reintento (fail-closed).
+app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), transport: currentCatalogTransport(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
 const upload = multer({
   dest: "uploads-tmp/",
   limits: {
@@ -1952,6 +1958,12 @@ app.post("/transport/session/start", async (req, res) => {
       vault_chat_id: vaultChatId,
       channel_id: String(vaultChatId || "").startsWith("-100") ? String(vaultChatId).slice(4) : null,
     });
+    // T16 capa 2 (NATIVO §5.1): con el flag nativo encendido, un dueño con catálogo debe declarar protocol catalog-v1 (410 antes de Direct/Telegram).
+    let catalogSession = { catalog: false };
+    try { catalogSession = await assertCatalogSessionProtocolIfConfigured({ userId: auth.user.id, protocol: typeof req.body?.protocol === "string" ? req.body.protocol : null }); } catch (error) {
+      if (respondLegacyFence(res, error)) { startupTrace.publish(res, "legacy_fenced"); return; }
+      throw error;
+    }
     try {
       await libraryIndexPublication.migrateLegacyProjects({ userId: auth.user.id, chatId: vaultChatId });
     } catch (error) {
@@ -1985,6 +1997,8 @@ app.post("/transport/session/start", async (req, res) => {
     res.locals.beatGalerDurabilityBypass = true;
     res.json(wrapWebTransportSession({
       ...session,
+      // T16: era/época del catálogo para clientes catalog-v1 (nunca credenciales: §8.5)
+      ...(catalogSession && catalogSession.catalog ? { catalog: { protocol: catalogSession.protocol, authority_era: catalogSession.authority_era, authority_epoch: catalogSession.authority_epoch } } : {}),
       user_id: account?.beatgalerAccountId || null,
       index_pointer: indexPointer?.message_id
         ? { message_id: indexPointer.message_id, revision: indexPointer.revision }

@@ -378,4 +378,8 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   return Object.freeze({ requestPurge, enumerateStep, deleteStep, step, getPurge, cancelPurge, releaseRestoreHold, metrics, PurgeStepError, limits: Object.freeze({ ENUMERATE_BATCH, OBJECT_MAX_ATTEMPTS }) });
 }
 
-module.exports = { ENUMERATE_BATCH, OBJECT_MAX_ATTEMPTS, BLOCK_REASONS, PurgeStepError, evaluateObjectBlock, classifyProviderError, createCatalogPurge };
+let configured = null;
+function configureCatalogPurge(options = null) { configured = options && options.pool && options.authority ? createCatalogPurge(options) : null; return configured; }
+function currentCatalogPurge() { return configured; }
+
+module.exports = { ENUMERATE_BATCH, OBJECT_MAX_ATTEMPTS, BLOCK_REASONS, PurgeStepError, evaluateObjectBlock, classifyProviderError, createCatalogPurge, configureCatalogPurge, currentCatalogPurge };

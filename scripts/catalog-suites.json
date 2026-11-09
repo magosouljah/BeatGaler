@@ -14,7 +14,8 @@
     "tests/helpers/",
     "cloud-server/tests/project-upload-route.test.cjs",
     "cloud-server/tests/project-upload-admission.test.cjs",
-    "cloud-server/tests/project-master-message.test.cjs"
+    "cloud-server/tests/project-master-message.test.cjs",
+    "cloud-server/tests/direct-session-start-index-degraded.test.cjs"
   ],
   "forbidden_case_files": [
     "cloud-server/tests/postgres-live.integration.cjs"
@@ -235,6 +236,28 @@
           ],
           "kind": "node-test",
           "network": "loopback"
+        },
+        {
+          "id": "t16-catalog-fence",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-fence.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-session-start-handler",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/direct-session-start-index-degraded.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
         }
       ]
     },
@@ -1107,8 +1130,89 @@
       ]
     },
     "T16": {
-      "status": "pending",
-      "owner": "T16"
+      "status": "active",
+      "owner": "T16",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Capa 2 (session/start exige catalog-v1 con el flag encendido), guarda de compatibilidad hacia delante, montaje de todos los módulos con gateway nulo (fail-closed) y composición por autoridad en el cliente (V08 simplificada). Dos bibliotecas (nativa + RESET_REQUIRED + flag apagado). V09 requiere navegador real: fuera de este CI. Etiqueta FAKE.",
+      "cases": [
+        {
+          "id": "t16-catalog-fence",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-fence.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-session-start-handler",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/direct-session-start-index-degraded.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "t16-catalog-composition",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogLibraryComposition.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        },
+        {
+          "id": "catalog-fence-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-fence.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T17": {
       "status": "pending",

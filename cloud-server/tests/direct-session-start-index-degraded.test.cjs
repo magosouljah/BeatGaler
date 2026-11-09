@@ -40,6 +40,9 @@ function sessionStartWithMigrationFailure(failure, { sessionFailure } = {}) {
       },
     },
     vaultIndexPointers: { async getForChat() { return null; } },
+    // T16: capa 2 (guard de sesión) sin catálogo configurado → sesión legacy como hoy; respondLegacyFence (T05-N) no aplica a errores no-fence
+    assertCatalogSessionProtocolIfConfigured: async () => ({ catalog: false, outcome: 'UNCONFIGURED' }),
+    respondLegacyFence: () => false,
     wrapWebTransportSession(session) { return session; },
     console: {
       warn(...args) { calls.warnings.push(args); },

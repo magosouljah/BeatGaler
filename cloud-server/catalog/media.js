@@ -189,4 +189,8 @@ function createCatalogMedia({ pool = null, authority = null, gateway = null, gra
   return Object.freeze({ issueAccess, resolveGrant, stream, revokeGrants, metrics, limits: Object.freeze({ GRANT_TTL_MS: grantTtlMs, CHUNK_BYTES }) });
 }
 
-module.exports = { GRANT_TTL_MS, CHUNK_BYTES, TOKEN_RE, newToken, tokenHash, parseRange, createCatalogMedia };
+let configured = null;
+function configureCatalogMedia(options = null) { configured = options && options.pool && options.authority ? createCatalogMedia(options) : null; return configured; }
+function currentCatalogMedia() { return configured; }
+
+module.exports = { GRANT_TTL_MS, CHUNK_BYTES, TOKEN_RE, newToken, tokenHash, parseRange, createCatalogMedia, configureCatalogMedia, currentCatalogMedia };

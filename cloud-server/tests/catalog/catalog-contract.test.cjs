@@ -75,6 +75,7 @@ test('catalog/ no importa transporte ni red', () => {
     if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
     if (f === 'transport.js') allowed.push('fs', 'path', 'stream', 'stream/promises', './transport-gateway'); // T12: temporal acotado en disco; gateway y MASTER inyectados
+    if (f === 'session-guard.js') allowed.push('./legacy-fence'); // T16: capa 2 reutiliza el error 410 de la capa 1
     if (f === 'routes.js') allowed.push('express');
     for (const r of reqs) assert.ok(allowed.includes(r), `${f} requiere ${r}`);
   }

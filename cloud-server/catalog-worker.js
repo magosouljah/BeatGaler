@@ -11,6 +11,8 @@ const catalogQueries = require('./catalog/queries');
 const catalogCommands = require('./catalog/commands');
 const catalogOperations = require('./catalog/operations');
 const { createCatalogWorker } = require('./catalog/worker');
+const catalogPurge = require('./catalog/purge');
+const { createFileDeletionJournal } = require('./catalog-deletion-journal');
 const accessRuntime = require('./access-runtime');
 
 const WORKER_FLAG = 'BEATGALER_CATALOG_WORKER_ENABLED';
@@ -28,7 +30,10 @@ async function main() {
   const queries = catalogQueries.configureCatalogQueries({ pool, authority, env: process.env });
   const commands = catalogCommands.configureCatalogCommands({ pool, authority });
   const operations = catalogOperations.configureCatalogOperations({ pool, authority, resolveAccess: async (userId) => { const a = await accessRuntime.resolveUserAccess({ id: userId }); const max = a && a.quotas ? a.quotas.max_beats : null; return { maxBeats: max === undefined ? null : max }; } });
-  const worker = createCatalogWorker({ pool, operations, queries, commands, transport: null, log: (...a) => console.warn(...a), options: { pollMs: Number(process.env.BEATGALER_CATALOG_WORKER_POLL_MS || 1000) } });
+  const journalDir = String(process.env.BEATGALER_CATALOG_JOURNAL_DIR || '').trim();
+  // T16: purge durable montado sin gateway real: los pasos de borrado quedan en reintento/bloqueo explícito; cleanup real sigue apagado.
+  const purge = catalogPurge.configureCatalogPurge({ pool, authority, gateway: null, journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null });
+  const worker = createCatalogWorker({ pool, operations, queries, commands, transport: null, purge, log: (...a) => console.warn(...a), options: { pollMs: Number(process.env.BEATGALER_CATALOG_WORKER_POLL_MS || 1000) } });
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return; shuttingDown = true;
