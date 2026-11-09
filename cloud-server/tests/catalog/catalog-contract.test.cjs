@@ -70,6 +70,7 @@ test('catalog/ no importa transporte ni red', () => {
     // T06: ./cursor y ./queries son módulos internos (SQL + HMAC); routes.js es el único que requiere express (servidor HTTP, no cliente de red).
     const allowed = ['crypto', './contract', './legacy-codec', './migration', './authority', './cursor', './queries', './metadata-rules', './commands'];
     if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
+    if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
     if (f === 'routes.js') allowed.push('express');
     for (const r of reqs) assert.ok(allowed.includes(r), `${f} requiere ${r}`);
   }

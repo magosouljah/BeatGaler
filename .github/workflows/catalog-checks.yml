@@ -45,7 +45,7 @@ on:
         required: true
         default: "unit"
         type: choice
-        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08, T09, T10]
+        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08, T09, T10, T11]
 
 permissions:
   contents: read
@@ -75,7 +75,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       CI: "true"
-      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08 T09 T10' || inputs.suite }}
+      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08 T09 T10 T11' || inputs.suite }}
     steps:
       - uses: actions/checkout@v4
         with:

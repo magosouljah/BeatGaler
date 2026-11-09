@@ -19,6 +19,7 @@ class WorkerJobError extends Error {
 }
 const isTransient = (error) => {
   if (error instanceof WorkerJobError) return error.transient;
+  if (error && typeof error.transient === 'boolean') return error.transient; // GatewayError (T11): clasificación explícita del proveedor
   const code = error && error.code;
   if (['CATALOG_QUERY_TIMEOUT', 'CATALOG_UNAVAILABLE', 'LEASE_FENCED', 'FAKE_RESPONSE_LOST', 'FAKE_WORKER_KILLED', 'ECONNRESET', 'ETIMEDOUT'].includes(code)) return true;
   if (error && (error.status === 403 || error.status === 404 || error.code === 'FAKE_PERMISSION_DENIED' || error.code === 'FAKE_NOT_FOUND')) return false; // permisos/esquema/integridad → BLOCKED inmediato
@@ -88,7 +89,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
       const partKey = job.payload.partKey;
       const part = await partIdentity(job.userId, job.operationId, partKey);
       if (part.dispatch_state === 'VERIFIED') return { skipped: 'ALREADY_VERIFIED' };
-      const found = await remote(job.userId, () => transport.searchByRandomId({ chatId: part.chat_id, senderId: part.sender_id, randomId: part.random_id, declaredSize: Number(part.declared_size), declaredSha256: part.declared_sha256 }));
+      const found = await remote(job.userId, () => transport.searchByRandomId({ chatId: part.chat_id, senderId: part.sender_id, randomId: part.random_id, declaredSize: Number(part.declared_size), declaredSha256: part.declared_sha256, operationId: job.operationId, partKey }));
       const matches = Array.isArray(found) ? found : [];
       if (matches.length > 1) throw new WorkerJobError('RECONCILE_AMBIGUOUS', 'multiple provider matches for the same random_id', { transient: false });
       if (matches.length === 0) { metrics.reconcileUncertain++; throw new WorkerJobError('RECONCILE_UNCERTAIN', 'no provider evidence yet; dispatch stays uncertain (no resend)', { transient: true, retryAfterMs: 60_000 }); }
