@@ -45,7 +45,7 @@ on:
         required: true
         default: "unit"
         type: choice
-        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13]
+        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14]
 
 permissions:
   contents: read
@@ -75,7 +75,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       CI: "true"
-      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13' || inputs.suite }}
+      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14' || inputs.suite }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,7 +83,7 @@ jobs:
       - name: Instalar dependencias de cloud-server sin scripts
         run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
       - name: Instalar dependencias raíz sin scripts (vitest/tsc para T08)
-        if: contains(env.SUITES, 'T08') || contains(env.SUITES, 'T12') || contains(env.SUITES, 'T13')
+        if: contains(env.SUITES, 'T08') || contains(env.SUITES, 'T12') || contains(env.SUITES, 'T13') || contains(env.SUITES, 'T14')
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Sentinel de identidad de la instancia
         if: contains(env.SUITES, 'integration')
@@ -103,7 +103,7 @@ jobs:
         run: |
           status=0
           for suite in $SUITES; do
-            if [ "$suite" = "integration" ] || [ "$suite" = "T03" ] || [ "$suite" = "T04" ] || [ "$suite" = "T05" ] || [ "$suite" = "T06" ] || [ "$suite" = "T07" ] || [ "$suite" = "T09" ] || [ "$suite" = "T10" ] || [ "$suite" = "T12" ]; then
+            if [ "$suite" = "integration" ] || [ "$suite" = "T03" ] || [ "$suite" = "T04" ] || [ "$suite" = "T05" ] || [ "$suite" = "T06" ] || [ "$suite" = "T07" ] || [ "$suite" = "T09" ] || [ "$suite" = "T10" ] || [ "$suite" = "T12" ] || [ "$suite" = "T14" ]; then
               CATALOG_TEST_ADMIN_URL='postgres://catalog_lab_admin:catalog-lab-ephemeral@postgres:5432/catalog_lab_sentinel'                 node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1
             else
               node scripts/catalog-check.cjs "$suite" --out "tmp/catalog-check/$suite" || status=1

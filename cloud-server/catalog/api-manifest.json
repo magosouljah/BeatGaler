@@ -1,7 +1,7 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 5,
-  "task": "T06/T07/T09/T10/T12",
+  "version": 6,
+  "task": "T06/T07/T09/T10/T12/T14",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint de metadata toca Telegram; en T12 los bytes de una parte pasan por el gateway del servidor (§8.6) mediante una capacidad opaca: el cliente nunca recibe chat, message_id, random_id ni credenciales. Encargo T12 con fakes: T11 sigue NO PASS y G2 NOT_PROVEN.",
   "prefix": "/catalog/v1",
@@ -42,11 +42,15 @@
     "403": [
       "CAPABILITY_INVALID",
       "CAPABILITY_EXPIRED",
-      "SEND_REJECTED_PERMANENT"
+      "SEND_REJECTED_PERMANENT",
+      "ACCESS_DENIED",
+      "MEDIA_GRANT_INVALID",
+      "MEDIA_GRANT_EXPIRED"
     ],
     "404": [
       "LIBRARY_NOT_PROVISIONED",
-      "NOT_FOUND"
+      "NOT_FOUND",
+      "MEDIA_UNAVAILABLE"
     ],
     "409": [
       "LIBRARY_RESET_REQUIRED",
@@ -75,7 +79,11 @@
       "LEASE_FENCED",
       "PART_UNCERTAIN",
       "PART_BYTES_MISMATCH",
-      "LIBRARY_FROZEN"
+      "LIBRARY_FROZEN",
+      "SEQUENCE_MISMATCH",
+      "ROUND_STALE",
+      "ROUND_BUILDING",
+      "ROUND_RELEASED"
     ],
     "410": [
       "LEGACY_CLIENT_UNSUPPORTED",
@@ -87,11 +95,17 @@
       "PAYLOAD_TOO_LARGE",
       "PROJECT_TOO_LARGE"
     ],
+    "416": [
+      "RANGE_NOT_SATISFIABLE"
+    ],
     "428": [
       "PRECONDITION_REQUIRED"
     ],
     "501": [
       "NOT_IMPLEMENTED"
+    ],
+    "502": [
+      "MEDIA_UNAVAILABLE"
     ],
     "503": [
       "CATALOG_UNAVAILABLE",
@@ -461,32 +475,43 @@
     {
       "method": "POST",
       "path": "/playback/rounds",
-      "status": "contract",
+      "status": "delivered",
       "task": "T14",
-      "body": "{setId, currentBeatId?, sequence}",
-      "response": "{roundId, remaining, sequence}",
-      "notes": "V02-A Q4: ronda Shuffle sobre conjunto READY; Fisher–Yates perezoso persistido (C12-r4 §5); RNG inyectable solo en tests"
+      "headers": "X-Catalog-Era, X-Catalog-Epoch",
+      "body": "{setId (READY en la revisión actual), currentBeatId?, consumerId, fromRoundId?}",
+      "response": "201 {roundId, setId, status ACTIVE|BUILDING, memberCount, remaining, sequence \"0\", baseRevision, currentConsumed, created}",
+      "errors": [
+        "409 CURSOR_STALE (conjunto no READY o de otra revisión/época)"
+      ],
+      "notes": "Fisher–Yates perezoso persistido (r4 §5): mapping disperso + inverso; la canción actual se consume si es miembro y N>1; fromRoundId reconstruye en lotes ≤240 preservando consumidos (BUILDING → ACTIVE). El cliente nunca recibe la permutación ni los IDs."
     },
     {
       "method": "POST",
       "path": "/playback/rounds/:id/next",
-      "status": "contract",
+      "status": "delivered",
       "task": "T14",
-      "body": "{sequence (CAS), idempotencyKey}",
-      "response": "{beatId|null, remaining, sequence, roundComplete}",
+      "body": "{sequence (CAS), idempotencyKey (o cabecera Idempotency-Key)}",
+      "response": "{roundId, beatId|null, version, slot, remaining, sequence, roundComplete, replay?}",
       "errors": [
-        "409 SEQUENCE_CONFLICT",
-        "409 CURSOR_STALE"
+        "409 SEQUENCE_MISMATCH {current_sequence}",
+        "409 ROUND_STALE (revisión/época cambió: reconstruir)",
+        "409 ROUND_BUILDING",
+        "409 ROUND_RELEASED"
       ],
-      "notes": "replay del mismo idempotencyKey devuelve el mismo beat sin consumir otro; commit antes de resolver medios"
+      "notes": "Sorteo uniforme por rejection sampling en el servidor (RNG inyectable solo en pruebas); resultado persistido en la misma transacción que el swap; retry = mismo beat; m=0 → beatId null sin RNG."
     },
     {
       "method": "POST",
       "path": "/playback/rounds/:id/consume",
-      "status": "contract",
+      "status": "delivered",
       "task": "T14",
-      "body": "{beatId, sequence}",
-      "notes": "play directo/cola: marca consumido por índice beat→slot sin descontar dos veces"
+      "body": "{beatId, sequence, idempotencyKey}",
+      "response": "{roundId, beatId, consumed, member, remaining, sequence, roundComplete}",
+      "errors": [
+        "409 SEQUENCE_MISMATCH",
+        "409 ROUND_STALE"
+      ],
+      "notes": "play directo / cola: retira el miembro de los candidatos por el inverso; un consumido no se descuenta dos veces."
     },
     {
       "method": "GET",
@@ -505,9 +530,16 @@
     {
       "method": "POST",
       "path": "/files/:fileId/access",
-      "status": "contract",
+      "status": "delivered",
       "task": "T14 (gateway §8.6)",
-      "notes": "capacidad de transferencia opaca, de vida corta; nunca messageId ni token"
+      "headers": "X-Catalog-Epoch opcional (409 si difiere)",
+      "response": "201 {fileId, beatId, role, slotKey, revision, filename, mime, sizeBytes, partsTotalBytes, sha256|null, declaredSha256, cacheKey \"(user:epoch:beat:file:revision)\", epoch, parts[{partIndex, size, sha256, hashVerified, verificationLevel, token, url \"/catalog/v1/media/<token>\", expiresAt}], ttlMs}",
+      "errors": [
+        "403 ACCESS_DENIED (BEAT_NOT_ACTIVE|PURGE_PENDING|FILE_NOT_CURRENT|FILE_NOT_VERIFIED|PART_OPAQUE|OBJECT_NOT_PRESENT|PART_SIZE_UNKNOWN)",
+        "404 NOT_FOUND",
+        "409 CATALOG_EPOCH_STALE"
+      ],
+      "notes": "Solo el hash de cada concesión se guarda (catalog_media_grants); el cliente nunca recibe chat ni message_id. Caché del cliente invalidada por versión/época, no por id de beat."
     },
     {
       "method": "POST",
@@ -653,6 +685,54 @@
       "task": "T12",
       "response": "{operationId, attempts[{partKey, direction UPLOAD|PROJECT_UPLOAD, attempt, status ISSUED|REDEEMED|CONSUMED|FAILED|EXPIRED|REVOKED, outcome SENT|UNCERTAIN|REJECTED|UPLOAD_FAILED|BYTES_MISMATCH|ABORTED|PERMANENT|REVOKED|ACCESS_DENIED|SUPERSEDED|null, bytesSize, bytesSha256, level GATEWAY|null}]}",
       "notes": "Journal de intentos sin token ni hash de capacidad."
+    },
+    {
+      "method": "POST",
+      "path": "/playback/rounds/:id/rebuild",
+      "status": "delivered",
+      "task": "T14",
+      "response": "{roundId, status, remaining, processed, scanned}",
+      "notes": "Un lote ≤240 de la reconstrucción; el servidor ya itera hasta 64 lotes al crear la ronda."
+    },
+    {
+      "method": "POST",
+      "path": "/playback/rounds/:id/release",
+      "status": "delivered",
+      "task": "T14",
+      "response": "round RELEASED (libera el lease SHUFFLE del conjunto)"
+    },
+    {
+      "method": "GET",
+      "path": "/playback/rounds/:id",
+      "status": "delivered",
+      "task": "T14",
+      "response": "round + consumedCount"
+    },
+    {
+      "method": "GET",
+      "path": "/query-sets/:id/neighbor",
+      "status": "delivered",
+      "task": "T14",
+      "query": "beatId?, direction next|previous, sort manual|rating|name|bpm",
+      "response": "{setId, beatId|null, version, slot, member, total, revision, sort, edge?}",
+      "notes": "I2: Next/Previous globales por la tupla del sort vigente sobre los miembros del conjunto; fuera del query → primero/último; bordes → beatId null con edge."
+    },
+    {
+      "method": "GET",
+      "path": "/media/:token",
+      "status": "delivered",
+      "task": "T14 (gateway §8.6)",
+      "headers": "Range opcional (bytes=a-b | a- | -n); también HEAD",
+      "response": "200 | 206 (Content-Range, Accept-Ranges, Content-Length, ETag por archivo/parte/revisión, Cache-Control private no-store); bytes en streaming por trozos desde el gateway",
+      "errors": [
+        "403 MEDIA_GRANT_INVALID / MEDIA_GRANT_EXPIRED",
+        "403 ACCESS_DENIED (objeto no PRESENT)",
+        "404 MEDIA_UNAVAILABLE (el proveedor no tiene el documento: no prueba borrado)",
+        "416 RANGE_NOT_SATISFIABLE",
+        "502 MEDIA_UNAVAILABLE (fallo del gateway antes del primer byte)",
+        "503 CREDENTIAL_REVOKED"
+      ],
+      "notes": "Multipart: el cliente descarga todas las partes en orden y verifica tamaño total y hash cuando existe."
     }
   ],
   "v02a_decisions": {
@@ -674,5 +754,12 @@
     "resend": "RESEND_POLICY.uncertain = BLOCKED: 202/PART_UNCERTAIN nunca reenvían; solo un rechazo explícito sin efecto admite otra capacidad con la misma identidad",
     "project": "PROJECT por MASTER con intención durable antes de publicar; ruta legacy /transport/project/upload intacta",
     "g2": "NOT_PROVEN (fakes); T11 fase B pendiente de sandbox autorizado"
+  },
+  "playback": {
+    "task": "T14",
+    "shuffle": "Fisher–Yates perezoso persistido (r4 §5) con mapping disperso, inverso UNIQUE(slot), consumidos por beatId, comandos idempotentes y sequence CAS; sin RNG en el cliente (RV2)",
+    "media": "acceso por referencia SQL con concesión por parte (hash) y bytes por HTTP Range desde el gateway; verification_level PROVIDER; BYTES solo si el cliente verifica el hash completo",
+    "perf": "N=100k/1M, p95 de avances y coste de preparación se miden en T20 (STOP-SHUFFLE-PERF si incumple); la prueba de T14 registra una métrica inicial con N=20k que no es SLO",
+    "g2": "NOT_PROVEN (fakes)"
   }
 }

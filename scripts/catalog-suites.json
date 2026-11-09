@@ -213,6 +213,17 @@
           ],
           "kind": "node-test",
           "network": "loopback"
+        },
+        {
+          "id": "t14-catalog-playback",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-playback.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
         }
       ]
     },
@@ -925,8 +936,88 @@
       ]
     },
     "T14": {
-      "status": "pending",
-      "owner": "T14"
+      "status": "active",
+      "owner": "T14",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Rondas Shuffle persistidas (r4 §5), vecinos de orden (I2), acceso a medios por gateway con Range (§8.6) y cliente (sesión musical V06, media manager con refcount, artwork LRU). Fakes: etiqueta FAKE; N=100k/1M se miden en T20. Requiere node_modules raíz (vitest, typescript).",
+      "cases": [
+        {
+          "id": "t14-catalog-playback",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-playback.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t11-transport-gateway",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "t14-catalog-media-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogMediaClient.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t14-catalog-playback-session",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogPlaybackSession.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t14-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        },
+        {
+          "id": "catalog-playback-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-playback.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T15": {
       "status": "pending",

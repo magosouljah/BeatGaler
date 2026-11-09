@@ -228,7 +228,20 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     return matchCandidates(res && res.messages, { operationId, partKey, senderId: expectedSender, declaredSize: Number.isSafeInteger(size) ? size : undefined }).map((c) => ({ messageId: c.messageId, documentId: c.documentId, size: c.size, sha256: null }));
   }
 
-  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
+  // T14 (§8.6): bytes de una parte por rangos. Resuelve el mensaje (sin exponer ids al cliente) y devuelve un iterable de trozos del SDK
+  // (`client.iterDownload`): el servidor los transmite al cliente HTTP sin bufferizar la parte. "No encontrado" no prueba borrado (C9).
+  async function downloadPart({ chatId, messageId, offset = 0, limit = null, requestSize = 512 * 1024 } = {}) {
+    if (typeof client.iterDownload !== 'function') throw new GatewayError('DOWNLOAD_UNSUPPORTED', 'client.iterDownload is required', { transient: false });
+    const { peer, channel } = await resolvePeer(chatId);
+    let res;
+    try { res = await client.invoke(buildGetMessages(sdk, { peer, messageId, channel: Boolean(channel) })); } catch (error) { throw failFromProvider(error, 'DOWNLOAD'); }
+    const id = toInt(messageId);
+    const msg = (Array.isArray(res && res.messages) ? res.messages : []).find((m) => m && toInt(m.id) === id && m.media && m.media.document);
+    if (!msg) throw new GatewayError('PROVIDER_MESSAGE_NOT_FOUND', 'the provider has no document message with that id', { transient: false, status: 404 });
+    metrics.downloads = (metrics.downloads || 0) + 1;
+    return client.iterDownload({ file: msg.media, offset, limit, requestSize });
+  }
+  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, downloadPart, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
 }
 
 module.exports = Object.freeze({

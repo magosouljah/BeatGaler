@@ -148,3 +148,12 @@ for (const token of ['CREATE TABLE catalog_transfer_capabilities (', "capability
 }
 assert(!/ALTER TABLE|DROP /i.test(capabilityMigration.sql), '0031 only creates new objects');
 assert(!/bytea/i.test(capabilityMigration.sql), '0031 stores no file bytes');
+
+// T14: 0032 aditiva (rondas Shuffle con mapping disperso + inverso UNIQUE(slot), consumidos, comandos idempotentes; concesiones de medios por hash).
+const playbackMigration = migrations.find(item => item.name === '0032_catalog_playback.sql');
+assert(playbackMigration, 'catalog playback migration 0032 is required');
+for (const token of ['CREATE TABLE catalog_playback_rounds (', 'CREATE TABLE catalog_round_mapping (', 'UNIQUE (user_id, round_id, slot)', 'CREATE TABLE catalog_round_consumed (', 'CREATE TABLE catalog_round_commands (', 'CREATE TABLE catalog_media_grants (', "grant_hash text PRIMARY KEY CHECK (grant_hash ~ '^[0-9a-f]{64}$')", 'CHECK (remaining <= member_count)']) {
+  assert(playbackMigration.sql.includes(token), `0032 must contain: ${token}`);
+}
+assert(!/ALTER TABLE|DROP /i.test(playbackMigration.sql), '0032 only creates new objects');
+assert(!/bytea/i.test(playbackMigration.sql), '0032 stores no file bytes');

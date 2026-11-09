@@ -107,7 +107,7 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
 
   // ---- conjuntos READY (preparación visible; una por cuenta) ----
   async function ensureReadySet(query: InteractionQuery, gen: number): Promise<{ setId: string; memberCount: number }> {
-    const created = await commands.createQuerySet({ state: query.filters.state, q: query.filters.q, includeTags: [...query.filters.includeTags], excludeTags: [...query.filters.excludeTags], includeMode: query.filters.includeMode, sort: query.sort }, { consumerId, kind: "selection" });
+    const created = await commands.createQuerySet({ state: query.filters.state, q: query.filters.q, includeTags: [...query.filters.includeTags], excludeTags: [...query.filters.excludeTags], includeMode: query.filters.includeMode, sort: query.sort }, { id: consumerId, kind: "SELECTION" });
     assertAccount(gen);
     let setState = created; const started = now();
     while (setState.status === "BUILDING") {

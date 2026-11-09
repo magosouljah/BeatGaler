@@ -109,6 +109,8 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_transfer_operations', 'catalog_operation_parts', 'catalog_reservations', 'catalog_jobs',
   // T12 (0031_catalog_transfer_capabilities.sql): capacidades de transferencia (solo hash) y journal de intentos por parte.
   'catalog_transfer_capabilities',
+  // T14 (0032_catalog_playback.sql): rondas Shuffle persistidas (mapping disperso, consumidos, comandos idempotentes) y concesiones de medios.
+  'catalog_playback_rounds', 'catalog_round_mapping', 'catalog_round_consumed', 'catalog_round_commands', 'catalog_media_grants',
 ]);
 // Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
 const CATALOG_NATIVE_REQUIRED = Object.freeze([

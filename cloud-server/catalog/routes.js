@@ -45,7 +45,7 @@ function eraHeaders(req) {
 }
 const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, transport = null, authenticate, log = () => {} } = {}) {
+function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, transport = null, playback = null, media = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -163,7 +163,30 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
     router.post(`${CATALOG_PREFIX}/operations/:id/resume`, handle(async (req, _res, userId) => ({ body: await commands.resumeOperation({ userId, ...eraHeaders(req), operationId: req.params.id, revision: body(req).revision }) })));
     router.get(`${CATALOG_PREFIX}/changes`, handle(async (req, _res, userId) => ({ body: await commands.listChanges({ userId, query: req.query }) })));
   }
-  // Rutas del contrato aún no implementadas (T07/T09/T10/T14): 501 explícito, nunca un éxito ficticio.
+  if (playback) {
+    // T14 — rondas Shuffle persistidas (r4 §5) y vecinos de orden (I2). El cliente nunca recibe la permutación ni los IDs del conjunto.
+    router.post(`${CATALOG_PREFIX}/playback/rounds`, handle(async (req, _res, userId) => { const b = body(req); return { status: 201, body: await playback.startRound({ userId, ...eraHeaders(req), setId: b.setId, currentBeatId: b.currentBeatId ?? null, consumerId: b.consumerId, fromRoundId: b.fromRoundId ?? null }) }; }));
+    router.get(`${CATALOG_PREFIX}/playback/rounds/:id`, handle(async (req, _res, userId) => ({ body: await playback.getRound({ userId, roundId: req.params.id }) })));
+    router.post(`${CATALOG_PREFIX}/playback/rounds/:id/next`, handle(async (req, _res, userId) => { const b = body(req); return { body: await playback.nextInRound({ userId, ...eraHeaders(req), roundId: req.params.id, sequence: b.sequence, idempotencyKey: b.idempotencyKey ?? req.get('idempotency-key') }) }; }));
+    router.post(`${CATALOG_PREFIX}/playback/rounds/:id/consume`, handle(async (req, _res, userId) => { const b = body(req); return { body: await playback.consumeInRound({ userId, ...eraHeaders(req), roundId: req.params.id, beatId: b.beatId, sequence: b.sequence, idempotencyKey: b.idempotencyKey ?? req.get('idempotency-key') }) }; }));
+    router.post(`${CATALOG_PREFIX}/playback/rounds/:id/rebuild`, handle(async (req, _res, userId) => ({ body: await playback.rebuildRound({ userId, ...eraHeaders(req), roundId: req.params.id }) })));
+    router.post(`${CATALOG_PREFIX}/playback/rounds/:id/release`, handle(async (req, _res, userId) => ({ body: await playback.releaseRound({ userId, ...eraHeaders(req), roundId: req.params.id }) })));
+    router.get(`${CATALOG_PREFIX}/query-sets/:id/neighbor`, handle(async (req, _res, userId) => ({ body: await playback.neighbor({ userId, setId: req.params.id, beatId: typeof req.query.beatId === 'string' ? req.query.beatId : null, direction: req.query.direction, sort: typeof req.query.sort === 'string' ? req.query.sort : 'manual' }) })));
+  }
+  if (media) {
+    // T14 — acceso a medios por referencia SQL (§8.6): concesión opaca por parte; bytes por HTTP con Range desde el gateway.
+    router.post(`${CATALOG_PREFIX}/files/:fileId/access`, handle(async (req, _res, userId) => ({ status: 201, body: await media.issueAccess({ userId, fileId: req.params.fileId, epoch: req.get('x-catalog-epoch') || null }) })));
+    const serve = async (req, res) => {
+      const user = authenticate(req, res); if (!user) return;
+      try { await media.stream({ userId: String(user.id), token: req.params.token, rangeHeader: req.get('range') || null, res, method: req.method }); } catch (error) {
+        if (!(error instanceof CatalogAuthorityError) && !(error instanceof CatalogQueryError)) log('[catalog] media stream error', error?.message || error);
+        if (!res.headersSent) { if (error && error.status === 416) res.setHeader('Content-Range', `bytes */${error.detail?.size ?? '*'}`); respondError(res, error); } else res.destroy();
+      }
+    };
+    router.get(`${CATALOG_PREFIX}/media/:token`, serve);
+    router.head(`${CATALOG_PREFIX}/media/:token`, serve);
+  }
+  // Rutas del contrato aún no implementadas (T15/T16): 501 explícito, nunca un éxito ficticio.
   router.use(CATALOG_PREFIX, (req, res) => res.status(501).json({ error: `${req.method} ${req.originalUrl.split('?')[0]} is not implemented yet`, code: 'NOT_IMPLEMENTED' }));
   return router;
 }

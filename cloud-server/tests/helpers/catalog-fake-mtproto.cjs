@@ -10,11 +10,13 @@ function netError(message, code) { return Object.assign(new Error(message), { co
 const peerKey = (peer) => peer?.className === 'InputPeerChannel' ? `channel:${String(peer.channelId)}` : peer?.className === 'InputPeerUser' ? `user:${String(peer.userId)}` : 'self';
 
 function createFakeTelegramServer({ dedupWindowMs = null, legacyCanDelete = true, clock = () => Date.now() } = {}) {
-  const state = { messages: [], nextId: 1000, nextDocId: 5000, uploads: new Map(), revokedBots: new Set(), counters: { sends: 0, searches: 0, gets: 0, deletes: 0, uploads: 0, effects: 0 } };
+  const state = { messages: [], nextId: 1000, nextDocId: 5000, uploads: new Map(), documents: new Map(), revokedBots: new Set(), counters: { sends: 0, searches: 0, gets: 0, deletes: 0, uploads: 0, effects: 0, downloads: 0, downloadBytes: 0 } };
 
   function mkMessage({ peer, request, upload, selfId }) {
     const id = state.nextId++;
-    const m = { className: 'Message', id, out: true, fromId: { className: 'PeerUser', userId: selfId }, peer: peerKey(peer), message: request.message, date: Math.floor(clock() / 1000), media: { className: 'MessageMediaDocument', document: { className: 'Document', id: String(state.nextDocId++), size: upload.size, sha256: upload.sha256, attributes: [{ className: 'DocumentAttributeFilename', fileName: upload.name }] } }, randomId: request.randomId.toString(), deleted: false };
+    const docId = String(state.nextDocId++);
+    const m = { className: 'Message', id, out: true, fromId: { className: 'PeerUser', userId: selfId }, peer: peerKey(peer), message: request.message, date: Math.floor(clock() / 1000), media: { className: 'MessageMediaDocument', document: { className: 'Document', id: docId, size: upload.size, sha256: upload.sha256, attributes: [{ className: 'DocumentAttributeFilename', fileName: upload.name }] } }, randomId: request.randomId.toString(), deleted: false };
+    state.documents.set(docId, upload.bytes); // bytes solo en el fake (T14: descargas por rangos)
     state.messages.push(m); state.counters.effects++;
     return m;
   }
@@ -30,8 +32,24 @@ function createFakeTelegramServer({ dedupWindowMs = null, legacyCanDelete = true
         if (state.revokedBots.has(self)) throw rpcError('AUTH_KEY_UNREGISTERED', 401);
         const bytes = Buffer.isBuffer(file?.buffer) ? file.buffer : typeof file?.path === 'string' ? fs.readFileSync(file.path) : Buffer.from(file?.buffer || '');
         const id = String(state.uploads.size + 1); state.counters.uploads++;
-        state.uploads.set(id, { name: String(file?.name || 'file.bin'), size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+        state.uploads.set(id, { name: String(file?.name || 'file.bin'), size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), bytes: Buffer.from(bytes) });
         return { className: 'InputFile', id: { toString: () => id }, parts: 1, name: String(file?.name || 'file.bin'), md5Checksum: '' };
+      },
+      // T14: descarga por rangos con la forma de gramjs (`for await (const chunk of client.iterDownload({ file, offset, limit, requestSize }))`).
+      // `file` es el media del mensaje (MessageMediaDocument) o el propio Document. Trozos ≤ requestSize; respeta scripts 'downloadFail'.
+      iterDownload({ file, offset = 0, limit = null, requestSize = 512 * 1024 } = {}) {
+        const doc = file && file.className === 'MessageMediaDocument' ? file.document : file;
+        const f = nextFault();
+        const bytes = doc && state.documents.get(String(doc.id));
+        async function* gen() {
+          if (state.revokedBots.has(self)) throw rpcError('AUTH_KEY_UNREGISTERED', 401);
+          if (f?.type === 'downloadFail') throw netError('Connection lost', 'ECONNRESET');
+          if (!bytes) throw rpcError('FILE_REFERENCE_EXPIRED', 400);
+          state.counters.downloads++;
+          const start = Number(offset); const end = limit == null ? bytes.length : Math.min(bytes.length, start + Number(limit));
+          for (let pos = start; pos < end; pos += requestSize) { const chunk = bytes.subarray(pos, Math.min(end, pos + requestSize)); state.counters.downloadBytes += chunk.length; yield Buffer.from(chunk); }
+        }
+        return gen();
       },
       async invoke(request) {
         if (state.revokedBots.has(self)) throw rpcError('AUTH_KEY_UNREGISTERED', 401);
