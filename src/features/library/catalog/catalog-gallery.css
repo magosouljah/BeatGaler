@@ -1,0 +1,16 @@
+/* T08 / V05 — Geometría de filas virtuales del catálogo. Solo selectores scoped por modo POSTGRES (plan B §3).
+   No cambia tokens, tamaño de tarjeta ni DESIGN; reutiliza las variables del grid de gallery.css. */
+.bg-product-gallery[data-catalog-mode="postgres"] [data-library-scroll] { overflow-anchor: none; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-track { position: relative; width: 100%; overflow-anchor: none; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-row {
+  position: absolute; left: 0; right: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--gallery-grid-columns), minmax(0, var(--gallery-tile-width)));
+  column-gap: var(--gallery-grid-column-gap);
+  justify-content: center;
+}
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-placeholder {
+  position: absolute; left: 0; right: 0; display: grid; place-items: center; color: #555; font-size: 12px;
+}
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-placeholder button { margin-top: 8px; }
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-status { text-align: center; padding-top: 92px; color: #383838; font-size: 13px; }

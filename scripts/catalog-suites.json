@@ -9,7 +9,9 @@
     "tests/catalog-harness/",
     "cloud-server/tests/catalog/",
     "cloud-server/tests/postgres-schema.test.cjs",
-    "cloud-server/tests/postgres-migration-runner.test.cjs"
+    "cloud-server/tests/postgres-migration-runner.test.cjs",
+    "tests/component-dom/",
+    "tests/helpers/"
   ],
   "forbidden_case_files": [
     "cloud-server/tests/postgres-live.integration.cjs"
@@ -483,8 +485,73 @@
       ]
     },
     "T08": {
-      "status": "pending",
-      "owner": "T08"
+      "status": "active",
+      "owner": "T08",
+      "network": "loopback",
+      "requires": [],
+      "note": "Cliente de lectura en fixture (V03/V04/V05 + C(T08)); la composición de producto sigue apagada hasta T16. Requiere node_modules raíz (vitest, typescript). vitest abre un canal IPC/loopback interno: política loopback, ningún host externo.",
+      "cases": [
+        {
+          "id": "t08-catalog-geometry",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogRowGeometry.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-navigation",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogNavigation.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-api",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogApi.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-store",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogQueryStore.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-gallery",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogVirtualGallery.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        }
+      ]
     },
     "T09": {
       "status": "pending",

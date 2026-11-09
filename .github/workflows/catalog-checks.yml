@@ -22,6 +22,11 @@ on:
       - cloud-server/migrations/0028_catalog_queries.sql
       - cloud-server/migrations/0029_catalog_commands.sql
       - src/lib/metadataValidation.ts
+      - src/features/library/catalog/**
+      - tests/component-dom/catalog*
+      - tests/helpers/catalogFakeApi.ts
+      - tests/catalog-harness/run-vitest.mjs
+      - tests/catalog-harness/run-typecheck.mjs
       - cloud-server/server-core.js
       - cloud-server/server.js
       - cloud-server/library-index-publication.js
@@ -38,7 +43,7 @@ on:
         required: true
         default: "unit"
         type: choice
-        options: [unit, faults, integration, T03, T04, T05, T06, T07]
+        options: [unit, faults, integration, T03, T04, T05, T06, T07, T08]
 
 permissions:
   contents: read
@@ -68,13 +73,16 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       CI: "true"
-      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07' || inputs.suite }}
+      SUITES: ${{ github.event_name == 'push' && 'unit faults integration T03 T04 T05 T06 T07 T08' || inputs.suite }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Instalar dependencias de cloud-server sin scripts
         run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+      - name: Instalar dependencias raíz sin scripts (vitest/tsc para T08)
+        if: contains(env.SUITES, 'T08')
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Sentinel de identidad de la instancia
         if: contains(env.SUITES, 'integration')
         run: |
