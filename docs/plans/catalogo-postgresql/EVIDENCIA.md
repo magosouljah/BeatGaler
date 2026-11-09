@@ -491,3 +491,9 @@ Límites:
 - LOCAL: `catalog-check unit` 111/111 (20 casos), `faults` 21/21 (4 casos), `runner.test` 9/9, esquema 33 migraciones, vitest cliente PASS, `TYPECHECK_PASS`.
 - LAB (PostgreSQL 18 WSL, copias generadas): `catalog-purge.integration` **4/4** (límite por revisión, 4 objetos enumerados incl. REPLACE en conflicto, journal antes de cada delete, PURGED con cuota liberada una vez, tombstones CATALOG al PURGED, eventos, repeated purge; bloqueos SHARED/OPAQUE/RETENTION/PENDING_OPERATION/CLEANUP_DISABLED/RESTORE_HOLD con 0 borrados; journal no disponible → 0 delete; 403/sin entrada/timeout → UNCERTAIN y recuperación exacta; tope → BLOCKED; lease viejo fenced; PURGING rechaza restore/REPLACE/acceso; cancel revierte solo lo no borrado; restore_hold); regresión LAB worker 4/4, operaciones 5/5, transporte 7/7.
 - Calificación: implementación aislada con fakes (FAKE). Cleanup real apagado (`cleanup_enabled=false`); destino real del journal, borrado real y tabla de errores del SDK → T11 fase B / C12 / G4; restore anterior a purge → T19; §6.1 → T24. T11 NO PASS; G2 NOT_PROVEN; ningún gate superado. Pendiente CI con suite T15 (E33-b).
+
+## E33-b. T15 — CI aislado `catalog-checks` con la suite T15 (2026-11-09) — PASS técnico aislado, FAKE
+
+- Run `42595475480` sobre `73de948`: T15 PASS; **FAIL** solo en `T14/catalog-playback-integration` 1/6 (el fake `GetMessages` ahora consume un fault por `invoke`, así que el `downloadFail` del caso de medios lo consumía la consulta previa). Corrección `d6ff236` (solo el test: fault neutro antes de `downloadFail`).
+- Run **`42596072903`** sobre `d6ff236`: **PASS** `unit`, `faults`, `integration`, `T03`…`T15`. T15: `catalog-purge-integration` 4/4 (PG efímero), `t15-catalog-purge` 5/5, `t10-catalog-worker`, `t09-catalog-operations`, esquema 33 migraciones.
+- Calificación: **PASS técnico aislado con fakes** del encargo T15. Cleanup real apagado; G2/G4 NOT_PROVEN; T11 NO PASS; ningún gate superado.
