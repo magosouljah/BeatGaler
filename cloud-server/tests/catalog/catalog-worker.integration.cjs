@@ -138,7 +138,7 @@ test('dos workers: cada job lo adquiere exactamente uno; lease vencido → gener
   } finally { await Promise.all(pools.map((p) => p.end())); }
 }));
 
-test('fake lento: con el proveedor pausado, una mutación de metadata de otra biblioteca completa en paralelo y el pool del worker no retiene clientes; FLOOD_WAIT respeta Retry-After', () => withDb(async (pool) => {
+test('fake lento: con el proveedor pausado, una mutación de metadata de otra biblioteca completa en paralelo y el pool del worker no retiene clientes; FLOOD_WAIT respeta Retry-After', () => withDb(async (pool, h) => {
   const a = await nativeLibrary(pool); const b = await nativeLibrary(pool);
   const { ops, cmd } = modules(pool, 10);
   await seedBeats(pool, b, 3);
@@ -147,7 +147,7 @@ test('fake lento: con el proveedor pausado, una mutación de metadata de otra bi
   const op = await ops.createOperation({ ...hdrA, idempotencyKey: key(), intent: { kind: 'IMPORT', parts: [master()], metadata: { name: 'Slow' } } });
   await ops.markDispatched({ ...hdrA, operationId: op.operationId, partKey: 'm0' });
   await ops.putReceipt({ ...hdrA, operationId: op.operationId, partKey: 'm0', receipt: { messageId: 7, size: 1000 } });
-  const wpool = new Pool({ ...pool.options, max: 2 });
+  const wpool = new Pool({ ...h.config, max: 2 });
   try {
     const w = createCatalogWorker({ pool: wpool, operations: operations.createCatalogOperations({ pool: wpool, authority: auth(wpool), resolveAccess: async () => ({ maxBeats: 10 }) }), transport: gw, owner: 'slow', options: { renewEveryMs: 30 } });
     gw.hold();

@@ -411,3 +411,9 @@ Límites:
 - **LAB (PostgreSQL 18.3 efímero propio en WSL, no es CI):** `catalog-worker.integration` 4/4 (adquisición única entre dos workers, lease vencido → generación 2 y `LEASE_FENCED` para el retrasado, recibo → verificación → commit automático; fake pausado con metadata de otra biblioteca completando y 0 clientes SQL retenidos, FLOOD_WAIT respeta Retry-After; caídas en cada frontera con RECONCILE sin reenvío (0 = incierto, 1 = adopta); conjuntos 240→700 sin recalcular miembros, bulk 50 → CONFLICT externo → resume → conflicto de miembro en lote 15 con 650 confirmados → cancel → CANCELLED 700, PURGE BLOCKED visible). Regresión LAB: schema 6/6, roundtrip 3/3, authority 9/9, queries 10/10, commands 6/6, operations 5/5.
 - Correcciones durante T10: ids de continuación acotados (`<root>-c<n>`; antes crecían por anidamiento y superaban 64 chars → el job fallaba); aserciones de pool muestreadas (la renovación de lease usa un cliente breve).
 - **No ejecutado aún:** `catalog-checks` en CI con la suite T10; se lanza con el push de este bloque (E28-b). No es G2: transporte fake.
+
+### E28-a. T10 primer CI: fallo de arnés, no de worker (2026-11-09)
+
+- Commit `ed72cd8`, [run 42564262593](https://github.com/magosouljah/BeatGaler/actions/runs/42564262593): todas las suites PASS salvo `T10/catalog-worker-integration` test 2 con `SASL: client password must be a string`.
+- Causa: el test construía un segundo pool con `{ ...pool.options }`; `pg` define `password` como propiedad no enumerable en `Pool.options`, así que el spread la pierde. En el LAB (autenticación local) no se manifestó; en CI (SCRAM) sí. Corrección: el test usa `h.config` del arnés (`withDb(async (pool, h) => …)`), como ya hacían T07/T09. Sin cambios en `worker.js`.
+- LAB tras la corrección: `catalog-worker.integration` 4/4. Se relanza CI (E28-b).
