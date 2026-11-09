@@ -463,3 +463,8 @@ Límites:
 - Modificados: `scripts/catalog-suites.json` (suite `T13` loopback: vitest + typecheck), workflow (T13 en push; node_modules raíz), `runner.test` (T03..T13 activas, T14..T21 pendientes). **Sin cambios** en AppShell, Drawer, GalleryChrome, `webAdapter.ts` ni módulos legacy (`webBeatEdit`, `webImportCommit`, `webTrash`): la rama POSTGRES se monta en T16 (D-T13-1).
 - LOCAL: `catalog-check T13` PASS (t13-catalog-mutations, t13-catalog-interaction-store, t12-catalog-transfer-client, t08-catalog-api, t13-typecheck); vitest 12/12; `TYPECHECK_PASS`; `runner.test` 9/9. Espías legacy `get_index`/`replace_index` = 0 en todas las mutaciones POSTGRES probadas (criterio P de TAREAS §T13).
 - Calificación: implementación aislada con fakes (etiqueta FAKE). **V07-A implementada en módulos, no montada ni activada**; T11 sigue NO PASS, G2 NOT_PROVEN; ningún gate superado. Pendiente CI con suite T13 (E31-b).
+
+## E31-b. T13 — CI aislado `catalog-checks` con la suite T13 (2026-11-09) — PASS técnico aislado, FAKE
+
+- Run **`42587853433`** sobre `349bd9a`: **PASS** `unit`, `faults`, `integration`, `T03`…`T13`. T13: `t13-catalog-mutations`, `t13-catalog-interaction-store`, `t12-catalog-transfer-client`, `t08-catalog-api` (vitest, red loopback interna) y `t13-typecheck` PASS.
+- Calificación: **PASS técnico aislado con fakes** del encargo T13 (V07-A implementada en módulos, sin montar). T11 sigue NO PASS; G2 NOT_PROVEN; ningún gate superado.
