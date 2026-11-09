@@ -6,6 +6,7 @@ const { createProjectAccess } = require('./project-access');
 const { createProjectUploadAuthority } = require('./project-upload-authority');
 const { beatAssets, beatHash, messageIds } = require('./library-trash-assets');
 const { skipMissingVault } = require('./startup-vault-recovery');
+const { createLegacyFence } = require('./catalog/legacy-fence');
 
 function fail(message, code) { throw new LibraryQuotaError(message, code); }
 function messageId(value) {
@@ -23,10 +24,14 @@ function deletedIds(manifest) {
     .map(row => String(row?.beat_id || row?.id || '').trim()).filter(Boolean));
 }
 
-function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
+function createLibraryIndexPublication({ pool, transport, readIndex, fence = null } = {}) {
   if (!pool?.connect || !transport?.getPinnedMessage || !transport?.publishIndexBuffer || !transport?.downloadMessageBuffer) {
     throw new Error('PostgreSQL and MASTER INDEX transport are required.');
   }
+  // T05-N capa 1 (NATIVO r2.1 §5.1): toda entrada C10 se rechaza con 410 antes del primer efecto externo si el dueño
+  // tiene fila de catálogo, y se vuelve a comprobar bajo el lock del vault antes del primer efecto en la transacción.
+  const legacyFence = fence || createLegacyFence({ pool });
+  const fenceEntry = (entry, input) => legacyFence.assertLegacyEntryAllowed({ userId: input?.userId, chatId: input?.chatId, entry });
   const quota = createLibraryBeatQuota({ pool, ...(readIndex ? { readIndex } : {}) });
   const projectUploads = transport.publishProjectFile && transport.verifyProjectMessage
     ? createProjectUploadAuthority({ pool, transport }) : null;
@@ -70,6 +75,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   }
 
   async function reserve({ userId, beatId }) {
+    await fenceEntry('quota/reserve', { userId });
     // A brand-new vault has no INDEX yet. Its empty INDEX is initialized by
     // publish; imports wait for that bootstrap to finish.
     // Existing vaults must enter the quota-state lock directly: reading a pin
@@ -81,6 +87,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   }
 
   async function ensureBootstrap(userId) {
+    await fenceEntry('index/ensure-bootstrap', { userId });
     const state = (await pool.query('SELECT 1 FROM library_quota_state WHERE user_id=$1', [String(userId || '').trim()])).rows[0];
     if (!state) await quota.bootstrap(userId);
   }
@@ -108,6 +115,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       const owner = (await client.query('SELECT id FROM vaults WHERE user_id=$1 AND telegram_chat_id=$2 FOR UPDATE',
         [uid, String(chatId)])).rows[0];
       if (!owner) fail('Vault ownership could not be verified.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
+      await legacyFence.assertLegacyEntryAllowed({ userId: uid, chatId, client, entry: 'index/recover' });
       const state = (await client.query('SELECT index_message_id,index_sha256 FROM library_quota_state WHERE user_id=$1 FOR UPDATE',
         [uid])).rows[0];
       if (!state) { await client.query('COMMIT'); return { status: 'uninitialized' }; }
@@ -152,9 +160,11 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   }
 
   async function recoverAll() {
+    // T05-N: los vaults con catálogo se saltan en el arranque (capa 2 anticipada, §5.1): recover/migrate son entradas C10.
     const rows = (await pool.query(`SELECT s.user_id,v.telegram_chat_id,s.index_message_id,
       p.predecessor_message_id FROM library_quota_state s JOIN vaults v ON v.user_id=s.user_id
-      LEFT JOIN vault_index_pointers p ON p.vault_id=v.id`)).rows;
+      LEFT JOIN vault_index_pointers p ON p.vault_id=v.id
+      WHERE NOT EXISTS (SELECT 1 FROM catalog_libraries l WHERE l.user_id=s.user_id)`)).rows;
     let recovered = 0;
     for (const row of rows) {
       try {
@@ -173,7 +183,8 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       }
     }
     const uninitialized = (await pool.query(`SELECT v.user_id,v.telegram_chat_id FROM vaults v
-      LEFT JOIN library_quota_state s ON s.user_id=v.user_id WHERE s.user_id IS NULL`)).rows;
+      LEFT JOIN library_quota_state s ON s.user_id=v.user_id WHERE s.user_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM catalog_libraries l WHERE l.user_id=v.user_id)`)).rows;
     for (const row of uninitialized) {
       try { await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id }); recovered += 1; }
       catch (error) {
@@ -184,6 +195,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   }
 
   async function verifyCommitted({ userId, chatId, messageId: requested }) {
+    await fenceEntry('index/commit', { userId, chatId });
     const current = await pinned(chatId);
     const state = (await pool.query('SELECT index_message_id,index_sha256 FROM library_quota_state WHERE user_id=$1',
       [String(userId || '').trim()])).rows[0];
@@ -200,6 +212,8 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     const candidate = indexRows({ messageId: 1, raw: bytes, manifest, serverVerified: true });
     const expected = messageId(expectedMessageId);
     const uid = String(userId || '').trim();
+    // Capa 1, punto 1 (§5.1): antes de `pinned`, `bootstrap` y el camino `same`.
+    await fenceEntry('index/publish', { userId: uid, chatId });
     if (!(await pool.query('SELECT 1 FROM library_quota_state WHERE user_id=$1', [uid])).rows[0]) {
       if (await pinned(chatId)) await quota.bootstrap(uid);
     }
@@ -212,6 +226,9 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       if (!owner || String(owner.telegram_chat_id) !== String(chatId)) {
         fail('Vault ownership could not be verified.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
       }
+      // Capa 1, punto 2: bajo el lock del vault, antes de `pinned`, `deleteAndVerifyMessages` y `publishIndexBuffer`.
+      // Una provisión concurrente entre la entrada y el lock falla aquí, cerrada y sin efectos.
+      await legacyFence.assertLegacyEntryAllowed({ userId: uid, chatId, client, entry: 'index/publish' });
       const state = (await client.query('SELECT * FROM library_quota_state WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
       const current = await pinned(chatId);
       const currentId = current?.messageId || 0;
@@ -420,6 +437,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     const uid = String(userId || '').trim();
     const ids = [...new Set((beatIds || []).map(id => String(id || '').trim()))];
     if (!ids.length || ids.some(id => !id || id.length > 256)) fail('Trash beat IDs are required.', 'LIBRARY_PURGE_INVALID_INPUT');
+    await fenceEntry('trash/purge', { userId: uid, chatId });
     await recover({ userId: uid, chatId });
     const client = await pool.connect();
     try {
@@ -427,6 +445,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
       const owner = (await client.query('SELECT id FROM vaults WHERE user_id=$1 AND telegram_chat_id=$2 FOR UPDATE',
         [uid, String(chatId)])).rows[0];
       if (!owner) fail('Vault ownership could not be verified.', 'LIBRARY_QUOTA_INDEX_UNVERIFIED');
+      await legacyFence.assertLegacyEntryAllowed({ userId: uid, chatId, client, entry: 'trash/purge' });
       const state = (await client.query('SELECT index_message_id,index_sha256 FROM library_quota_state WHERE user_id=$1 FOR UPDATE', [uid])).rows[0];
       const current = await pinned(chatId);
       if (!state || current?.messageId !== Number(state.index_message_id) || current.sha256 !== state.index_sha256) {
@@ -506,6 +525,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   async function assertPurged({ userId, beatIds }) {
     const ids = [...new Set((beatIds || []).map(id => String(id || '').trim()))];
     if (!ids.length || ids.some(id => !id || id.length > 256)) fail('Beat IDs are required.', 'LIBRARY_PURGE_INVALID_INPUT');
+    await fenceEntry('topic/delete', { userId });
     const count = Number((await pool.query(`SELECT count(*)::int AS n FROM library_trash_purges
       WHERE user_id=$1 AND beat_id=ANY($2::text[]) AND state='CONFIRMED'`, [String(userId || '').trim(), ids])).rows[0].n);
     if (count !== ids.length) fail('Topic cleanup requires confirmed purge.', 'LIBRARY_PURGE_REQUIRED');
@@ -513,6 +533,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
   }
 
   async function migrateLegacyProjectsOnce({ userId, chatId }) {
+    // Capa 1: `recover` comprueba el cerco bajo el lock del vault antes de leer el pin; nada externo ocurre antes.
     await recover({ userId, chatId });
     let state = (await pool.query('SELECT index_message_id,index_sha256 FROM library_quota_state WHERE user_id=$1', [userId])).rows[0];
     if (!state) {
@@ -601,15 +622,17 @@ function createLibraryIndexPublication({ pool, transport, readIndex } = {}) {
     }
   }
 
-  return Object.freeze({ reserve, ensureBootstrap, recover, recoverAll, purgeTrash, assertPurged, migrateLegacyProjects, renew: ({ userId, beatId }) =>
-    quota.renew({ userId, reservationId: `new:${beatId}` }),
-    cancel: ({ userId, beatId }) => quota.cancel({ userId, reservationId: `new:${beatId}` }),
-    authorizeProject: ({ userId, declaredBytes }) => projects.authorize({ userId, declaredBytes }),
+  return Object.freeze({ reserve, ensureBootstrap, recover, recoverAll, purgeTrash, assertPurged, migrateLegacyProjects,
+    renew: async ({ userId, beatId }) => { await fenceEntry('quota/renew', { userId }); return quota.renew({ userId, reservationId: `new:${beatId}` }); },
+    cancel: async ({ userId, beatId }) => { await fenceEntry('quota/cancel', { userId }); return quota.cancel({ userId, reservationId: `new:${beatId}` }); },
+    authorizeProject: async ({ userId, declaredBytes }) => { await fenceEntry('project/authorize', { userId }); return projects.authorize({ userId, declaredBytes }); },
     uploadProject: async input => {
+      await fenceEntry('project/upload', { userId: input?.userId, chatId: input?.chatId });
       if (!projectUploads) fail('PROJECT MASTER upload is unavailable.', 'PROJECT_ACCESS_UNAVAILABLE');
       const { maxBytes } = await projects.authorize({ userId: input.userId });
       return projectUploads.upload({ ...input, maxBytes });
     },
+    assertLegacyEntryAllowed: (input) => legacyFence.assertLegacyEntryAllowed(input),
     publish, pinned, verifyCommitted });
 }
 
@@ -670,6 +693,12 @@ module.exports = {
   verifyCommitted(input) {
     if (!configured) fail('Library quota requires PostgreSQL.', 'LIBRARY_QUOTA_UNAVAILABLE');
     return configured.verifyCommitted(input);
+  },
+  // T05-N capa 1 para entradas C10 que viven en server-core (topic/ensure, delete-topic). Sin PostgreSQL no hay catálogo
+  // posible, así que no hay nada que cercar.
+  assertLegacyEntryAllowed(input) {
+    if (!configured) return Promise.resolve();
+    return configured.assertLegacyEntryAllowed(input);
   },
   _resetForTests() { configured = null; },
 };

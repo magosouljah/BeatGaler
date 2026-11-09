@@ -101,6 +101,18 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_facets', 'catalog_trash_entries', 'catalog_tombstones', 'catalog_file_versions', 'catalog_file_parts',
   'catalog_media_objects', 'catalog_part_locations', 'catalog_current_files', 'catalog_legacy_fields',
   'catalog_query_sets', 'catalog_query_set_leases', 'catalog_query_members',
+  // T05-N (0027_catalog_native.sql): tablas nativas; las guardas solo actúan con activación u origin NATIVE/RESET.
+  'catalog_native_activation', 'catalog_library_chats', 'catalog_chat_rebinds', 'catalog_account_deletions',
+]);
+// Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
+const CATALOG_NATIVE_REQUIRED = Object.freeze([
+  [/ALTER TABLE vaults ADD COLUMN catalog_native_eligible boolean NOT NULL DEFAULT false/i, 'vault native eligibility must default to false'],
+  [/ALTER TABLE catalog_generations ADD COLUMN origin text NOT NULL DEFAULT 'LEGACY_IMPORT'\s+CHECK \(origin IN \('LEGACY_IMPORT', 'NATIVE', 'RESET'\)\)/i, 'generation origin must default to LEGACY_IMPORT'],
+  [/CREATE TABLE control_plane_flush_quarantine \(/i, 'flush quarantine table is required'],
+  [/CREATE TRIGGER vaults_catalog_native_eligible BEFORE INSERT ON vaults/i, 'vault eligibility trigger is required'],
+  [/CREATE TRIGGER catalog_libraries_delete_guard BEFORE DELETE ON catalog_libraries/i, 'library delete guard is required'],
+  [/CREATE TRIGGER vaults_catalog_rebind_guard BEFORE UPDATE OF telegram_chat_id, id, user_id ON vaults/i, 'vault rebind guard is required'],
+  [/ERRCODE = 'BGL01'/, 'legacy write fence SQLSTATE is required'],
 ]);
 function assertCatalogSchemaContract(sql) {
   for (const table of CATALOG_REQUIRED_TABLES) {
@@ -124,6 +136,12 @@ function assertCatalogSchemaContract(sql) {
   ];
   for (const pattern of forbidden) {
     if (pattern.test(sql)) throw new Error(`Forbidden catalog legacy storage pattern (TEXT required, D-08): ${pattern}`);
+  }
+  if (/CREATE TABLE catalog_native_activation/i.test(sql)) {
+    for (const [pattern, message] of CATALOG_NATIVE_REQUIRED) if (!pattern.test(sql)) throw new Error(`Catalog native schema contract: ${message}.`);
+    if (/CREATE TABLE (?:catalog_native_activation|catalog_library_chats|catalog_chat_rebinds|catalog_account_deletions|control_plane_flush_quarantine) \([^;]*\bjsonb\b/i.test(sql)) {
+      throw new Error('Catalog native schema contract: native tables must not use jsonb (D-08).');
+    }
   }
 }
 
@@ -199,5 +217,6 @@ module.exports = {
   assertInitialSchemaContract,
   assertCatalogSchemaContract,
   CATALOG_REQUIRED_TABLES,
+  CATALOG_NATIVE_REQUIRED,
   applyMigrations,
 };

@@ -12,9 +12,11 @@ const all = mig.listMigrations();
 const core = all.find((m) => m.name === '0026_catalog_core.sql');
 const withCore = (sql) => [...all.filter((m) => m !== core), { ...core, sql }];
 
-test('0026 es la siguiente migración y el guard reconoce el contrato', () => {
-  assert.equal(all.length, 26);
-  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 26 }, (_, i) => String(i + 1).padStart(4, '0')));
+test('0026 (T03) y 0027 (T05-N) son las migraciones del catálogo y el guard reconoce el contrato', () => {
+  // T05-N añade 0027_catalog_native.sql (aditiva, condicionada). 0026 sigue intacta: su checksum lo verifica el runner.
+  assert.equal(all.length, 27);
+  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 27 }, (_, i) => String(i + 1).padStart(4, '0')));
+  assert.equal(all.at(-1).name, '0027_catalog_native.sql');
   mig.assertInitialSchemaContract(all);
 });
 
@@ -62,7 +64,8 @@ test('catalog/ no importa transporte ni red', () => {
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
     const reqs = [...src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
-    for (const r of reqs) assert.ok(['crypto', './contract', './legacy-codec', './migration'].includes(r), `${f} requiere ${r}`);
+    // T05-N: ./authority es módulo interno del catálogo (solo SQL + crypto); sigue prohibido importar transporte o red.
+    for (const r of reqs) assert.ok(['crypto', './contract', './legacy-codec', './migration', './authority'].includes(r), `${f} requiere ${r}`);
   }
 });
 

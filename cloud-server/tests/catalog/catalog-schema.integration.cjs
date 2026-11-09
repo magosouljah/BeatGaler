@@ -45,11 +45,15 @@ async function seedUsers(pool) {
   await pool.query("INSERT INTO vaults(id, user_id, telegram_chat_id) VALUES ('v1','u1','-1001'), ('v2','u2','-1002')");
 }
 
-test('fresh: 26 migraciones, idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
+// T05-N: 0027_catalog_native.sql se aplica junto con 0026; las guardas de 0027 no actúan sin activación ni origin nativo,
+// así que estas pruebas (bibliotecas LEGACY, LEGACY→POSTGRES y DELETE de LEGACY) conservan su resultado.
+const MIGRATIONS = mig.listMigrations().length;
+test('fresh: todas las migraciones (0001–0027), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
   const first = await mig.applyMigrations(pool);
-  assert.equal(first.applied.length, 26); assert.equal(first.applied.at(-1), '0026');
+  assert.equal(MIGRATIONS, 27);
+  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0027');
   const again = await mig.applyMigrations(pool);
-  assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, 26);
+  assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, MIGRATIONS);
   const tables = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
   assert.equal(tables.rows[0].n, mig.CATALOG_REQUIRED_TABLES.length);
   const types = await pool.query("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_name LIKE 'catalog\\_%' AND data_type IN ('jsonb','json')");
@@ -62,10 +66,10 @@ test('aplicación concurrente desde DB vacía: un solo ledger, sin duplicados', 
   const pool2 = new Pool({ ...h.config, max: 2 });
   try {
     const [a, b] = await Promise.all([mig.applyMigrations(pool), mig.applyMigrations(pool2)]);
-    assert.equal(a.applied.length + b.applied.length, 26);
-    assert.equal(a.skipped.length + b.skipped.length, 26);
+    assert.equal(a.applied.length + b.applied.length, MIGRATIONS);
+    assert.equal(a.skipped.length + b.skipped.length, MIGRATIONS);
     const r = await pool.query('SELECT count(*)::int AS n, count(DISTINCT version)::int AS d FROM schema_migrations');
-    assert.deepEqual(r.rows[0], { n: 26, d: 26 });
+    assert.deepEqual(r.rows[0], { n: MIGRATIONS, d: MIGRATIONS });
   } finally { await pool2.end(); }
 }));
 
@@ -77,7 +81,7 @@ test('upgrade 0001-0025 → 0026 conserva datos legacy y no importa nada', () =>
   await pool.query("INSERT INTO library_beats(user_id, beat_id, state) VALUES ('u1','b1','ACTIVE'), ('u1','b2','TRASH'), ('u2','b1','ACTIVE')");
   const before = await legacyDigest(pool);
   const up = await mig.applyMigrations(pool, all);
-  assert.deepEqual(up.applied, ['0026']);
+  assert.deepEqual(up.applied, ['0026', '0027']);
   assert.deepEqual(await legacyDigest(pool), before);
   const cat = await pool.query('SELECT (SELECT count(*) FROM catalog_libraries)::int + (SELECT count(*) FROM catalog_generations)::int + (SELECT count(*) FROM catalog_beats)::int AS n');
   assert.equal(cat.rows[0].n, 0, 'la migración no crea bibliotecas ni importa');

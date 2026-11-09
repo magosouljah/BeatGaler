@@ -30,6 +30,8 @@ const { withTelegramFloodWait } = require("./telegram-retry");
 const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
+const { respondLegacyFence } = require("./catalog/legacy-fence");
+const { assertVaultRebindAllowedIfConfigured } = require("./catalog/authority");
 const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
@@ -1235,6 +1237,8 @@ const userStorageLifecycle = createUserStorageLifecycle({
   clearStorageBindingsForUser,
   rebindStorageBindingsForUser,
   ensureEmptyIndexForStorage,
+  // T05-N (NATIVO r2.1 §6.2.1): rechazo en origen del cambio de chat de un vault con biblioteca nativa.
+  assertVaultRebindAllowed: input => assertVaultRebindAllowedIfConfigured(input),
   logger: console,
 });
 
@@ -1945,6 +1949,8 @@ app.post("/transport/session/start", async (req, res) => {
     try {
       await libraryIndexPublication.migrateLegacyProjects({ userId: auth.user.id, chatId: vaultChatId });
     } catch (error) {
+      // T05-N capa 1: una biblioteca con catálogo no admite el arranque Direct legacy (410, sin efectos).
+      if (respondLegacyFence(res, error)) { startupTrace.publish(res, "legacy_fenced"); return; }
       if (!['TELEGRAM_MESSAGE_MISSING', 'TELEGRAM_MESSAGE_NO_MEDIA'].includes(error?.code)) throw error;
       console.warn('[vault-recovery]', {
         event: 'vault_recovery_degraded', phase: 'session_start_legacy_projects',
@@ -1955,6 +1961,8 @@ app.post("/transport/session/start", async (req, res) => {
       startupTrace,
       installationId: beatgalerUserId,
       chatId: vaultChatId,
+      // T05-N (§8.5): con protocolo catalog-v1 la respuesta no lleva credenciales de Telegram.
+      protocol: typeof req.body?.protocol === "string" ? req.body.protocol : null,
     }));
     // PostgreSQL is only a pointer cache. A missing value intentionally leaves
     // recovery to the authoritative Telegram pin/history path in the Worker.
@@ -2177,6 +2185,7 @@ app.post("/transport/index/bootstrap-state", async (req, res) => {
       bootstrap_pending: pointer.bootstrap_pending === true && !pinnedMessageId,
     });
   } catch (error) {
+    if (respondLegacyFence(res, error)) return;
     console.warn('[direct] INDEX bootstrap state unavailable:', error?.message || error);
     res.status(503).json({ error: 'Galer Cloud could not verify the library INDEX state.' });
   }
@@ -2201,6 +2210,7 @@ app.post("/transport/index/commit", async (req, res) => {
       return res.json({ ok: true, pointer_status: "conflict", index_message_id: committed.message_id || null });
     }
   } catch (error) {
+    if (respondLegacyFence(res, error)) return;
     console.warn("[direct] PostgreSQL index pointer persistence failed:", error?.message || error);
     return res.status(503).json({ error: "Galer Cloud could not persist the library INDEX pointer." });
   }
@@ -2353,9 +2363,12 @@ app.post("/transport/topic/ensure", async (req, res) => {
   const beatName = String(req.body?.beatName || beatId);
   if (!beatId) return res.status(400).json({ error: "beatId is required." });
   try {
+    // T05-N capa 1: topic/ensure legacy es una entrada C10; se cerca antes de tocar Telegram.
+    await libraryIndexPublication.assertLegacyEntryAllowed({ userId: auth.user.id, entry: 'topic/ensure' });
     const messageThreadId = await ensureBeatTopic(account, beatgalerUserId, beatId, beatName);
     res.json({ ok: true, message_thread_id: messageThreadId });
   } catch (error) {
+    if (respondLegacyFence(res, error)) return;
     console.error("[direct] topic ensure failed:", error?.message || error);
     res.status(500).json({ error: "Could not prepare BeatGaler Cloud storage for this beat." });
   }
@@ -3080,7 +3093,10 @@ app.post("/beats/delete-topics-batch", async (req, res) => {
     return res.status(400).json({ error: "At least one beatId is required." });
   }
   try { await libraryIndexPublication.assertPurged({ userId: auth.user.id, beatIds: uniqueBeatIds }); }
-  catch (error) { return res.status(409).json({ code: error?.code || 'LIBRARY_PURGE_REQUIRED', error: error?.message }); }
+  catch (error) {
+    if (respondLegacyFence(res, error)) return;
+    return res.status(409).json({ code: error?.code || 'LIBRARY_PURGE_REQUIRED', error: error?.message });
+  }
 
   // The server has already removed each beat from the INDEX and quota ledger
   // after MASTER verified the referenced assets are absent.
@@ -3133,6 +3149,7 @@ app.post("/beats/delete-topic", async (req, res) => {
     const deleteResult = await deleteBeatTopic(account, beatgalerUserId, beatId, telegramTopicId);
     res.json({ ok: true, ...deleteResult, index_updated: false, index_owner: "desktop-transport-bot" });
   } catch (error) {
+    if (respondLegacyFence(res, error)) return;
     res.status(500).json({ error: `Could not permanently delete beat storage data: ${error?.message || error}` });
   }
 });

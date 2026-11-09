@@ -7,6 +7,8 @@ const {
   encryptionCallbacks,
 } = require('./postgres-control-plane-runtime');
 
+const quarantine = require('./catalog/flush-quarantine');
+
 const SECRET_KEY_VERSION_COLUMN = ['secret', 'key', 'version'].join('_');
 
 function clone(value) {
@@ -49,13 +51,25 @@ async function deleteIds(client, table, column, values) {
   return Number(result.rowCount || 0);
 }
 
-async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousAuth) {
+// T05-N (NATIVO r2.1 §6.2): `excludedUsers` saca del flush los vaults en cuarentena; `maxQuarantinedUsers` es el umbral
+// de parada sistémica. Devuelve además `quarantined` (usuarios cuyo vault no se volcó) para que la base del delta no avance.
+async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousAuth, options = {}) {
+  const excludedUsers = new Set([...(options.excludedUsers || [])].map(String));
+  const maxQuarantinedUsers = Number(options.maxQuarantinedUsers ?? quarantine.DEFAULT_MAX_QUARANTINED_USERS);
   const delta = authSnapshotDelta(previousAuth, currentAuth);
   const rows = delta.current;
   const encrypt = encryptionCallbacks(cryptoConfig).encrypt;
   const originalUsers = new Map((currentAuth?.users || []).map(user => [String(user.id), user]));
   const client = await pool.connect();
+  const quarantined = new Set();
   try {
+    // §6.2.2 Cuarentena por usuario antes de BEGIN: los vaults nativos en conflicto salen de la transacción.
+    const changedVaults = changedRows(delta.previous.vaults, rows.vaults, 'user_id');
+    const conflicts = await quarantine.precheckVaultRows(client, changedVaults);
+    if (conflicts.length) {
+      await quarantine.recordQuarantine(client, conflicts);
+      for (const c of conflicts) quarantined.add(c.userId);
+    }
     await client.query('BEGIN');
 
     const previousUsers = new Map(delta.previous.users.map(row => [String(row.id), row]));
@@ -113,7 +127,8 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
       [row.id,row.user_id,row.factor_type,encrypted.ciphertext,encrypted.nonce,encrypted.keyVersion,row.enabled]);
     }
 
-    for (const row of changedRows(delta.previous.vaults, rows.vaults, 'user_id')) {
+    for (const row of changedVaults) {
+      if (quarantined.has(String(row.user_id)) || excludedUsers.has(String(row.user_id))) continue;
       await client.query(`INSERT INTO vaults(id,user_id,telegram_chat_id,title,created_at,index_bootstrap_pending,updated_at)
         VALUES($1,$2,$3,$4,$5,true,now())
         ON CONFLICT(user_id) DO UPDATE SET telegram_chat_id=EXCLUDED.telegram_chat_id,title=EXCLUDED.title,updated_at=now()`,
@@ -121,6 +136,10 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
     }
 
     await client.query('COMMIT');
+    const open = quarantined.size ? await quarantine.countOpenQuarantine(client) : 0;
+    if (open > maxQuarantinedUsers) {
+      throw new quarantine.ControlPlaneFlushHalted(`${open} users quarantined exceeds the threshold ${maxQuarantinedUsers} (STOP-ENV).`, { open, maxQuarantinedUsers });
+    }
     return {
       users: rows.users.length,
       sessions: rows.sessions.length,
@@ -130,9 +149,19 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
       removed_sessions: delta.removed_sessions.length,
       removed_providers: delta.removed_providers.length,
       removed_mfa: delta.removed_mfa.length,
+      quarantined: [...quarantined, ...excludedUsers].sort(),
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    // §6.2.4 Respaldo del trigger 0027: cuarentena del usuario del DETAIL y un único reintento sin él.
+    const triggered = quarantine.triggerQuarantineUser(error);
+    if (triggered && !excludedUsers.has(triggered) && !options.__retried) {
+      await quarantine.recordQuarantine(client, [{ userId: triggered, field: 'telegram_chat_id', value: `trigger:${error.message}` }]);
+      client.release();
+      return mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousAuth,
+        { ...options, excludedUsers: [...excludedUsers, ...quarantined, triggered], __retried: true });
+    }
+    if (triggered) throw new quarantine.ControlPlaneFlushHalted(`vault rebind rejected again after one retry (${error.message}).`, { userId: triggered });
     throw error;
   } finally {
     client.release();
@@ -147,12 +176,30 @@ async function installMultiprocessAuthSnapshotCompatibility(runtime, pool, { ini
   if (runtime.__beatgalerMultiprocessAuthDeltaInstalled) return runtime;
 
   let desired = clone(initialAuth || await loadAuthSnapshot(pool, runtime.cryptoConfig));
+  // §6.2.2 La base del delta no avanza para los usuarios en cuarentena: se conserva su vault "previo" hasta resolver.
+  const quarantinedBase = new Map(); // userId -> campos de vault del último estado volcado
+  const VAULT_FIELDS = ['storageChatId', 'storageChatTitle', 'storageCreatedAt'];
   runtime.__beatgalerMultiprocessAuthDeltaInstalled = true;
+  runtime.__beatgalerFlushQuarantine = quarantinedBase;
   runtime.saveAuthSnapshot = function saveAuthSnapshotDelta(snapshot) {
     const captured = clone(snapshot);
-    const previous = desired;
+    const previous = clone(desired);
+    for (const [userId, base] of quarantinedBase) {
+      const user = (previous.users || []).find(item => String(item?.id) === userId);
+      if (user) for (const field of VAULT_FIELDS) { if (base[field] === undefined) delete user[field]; else user[field] = base[field]; }
+    }
     desired = captured;
-    return runtime.enqueue('auth snapshot delta', () => mergeAuthSnapshotDelta(pool, captured, runtime.cryptoConfig, previous));
+    return runtime.enqueue('auth snapshot delta', async () => {
+      const result = await mergeAuthSnapshotDelta(pool, captured, runtime.cryptoConfig, previous);
+      for (const userId of result.quarantined || []) {
+        if (!quarantinedBase.has(userId)) {
+          const user = (previous.users || []).find(item => String(item?.id) === userId) || {};
+          quarantinedBase.set(userId, Object.fromEntries(VAULT_FIELDS.map(field => [field, user[field]])));
+        }
+      }
+      for (const userId of [...quarantinedBase.keys()]) if (!(result.quarantined || []).includes(userId)) quarantinedBase.delete(userId);
+      return result;
+    });
   };
   return runtime;
 }

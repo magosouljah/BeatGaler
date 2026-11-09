@@ -34,6 +34,7 @@ function memoryPool() {
       pointers.set(vaultId, row);
       return { rows: [row] };
     }
+    if (/catalog-legacy-fence/.test(sql)) return { rows: [] }; // T05-N capa 1: chats sin catálogo
     if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(sql)) return { rows: [] };
     throw new Error(`unexpected SQL: ${sql}`);
   };

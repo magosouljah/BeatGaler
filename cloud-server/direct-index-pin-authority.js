@@ -1,11 +1,14 @@
 'use strict';
 
 const { skipMissingVault } = require('./startup-vault-recovery');
+const { createLegacyFence } = require('./catalog/legacy-fence');
 
-function createDirectIndexPinAuthority({ pool, transport }) {
+function createDirectIndexPinAuthority({ pool, transport, fence = null }) {
   if (!pool?.connect || typeof transport?.restrictBotPinRights !== 'function') {
     throw new Error('PostgreSQL and MASTER bot-rights control are required.');
   }
+  // T05-N capa 1: la pin authority legacy (0016) no toca Telegram para un chat con catálogo.
+  const legacyFence = fence || createLegacyFence({ pool });
   async function ensure({ chatId, botId, membershipState }) {
     if (String(membershipState) !== 'ready') return;
     const client = await pool.connect();
@@ -16,6 +19,7 @@ function createDirectIndexPinAuthority({ pool, transport }) {
       if (!row || String(row.transport_bot_id) !== String(botId)) {
         throw new Error('INDEX pin restriction does not match the assigned bot.');
       }
+      await legacyFence.assertChatNotCatalog(chatId, { client, entry: 'index/pin-authority' });
       if (String(row.index_pin_restricted_bot_id || '') !== String(botId) ||
           String(row.project_media_restricted_bot_id || '') !== String(botId)) {
         await transport.restrictBotPinRights(chatId, botId);
@@ -32,8 +36,10 @@ function createDirectIndexPinAuthority({ pool, transport }) {
   return Object.freeze({
     ensure,
     async ensureAll() {
+      // Capa 2 anticipada (§5.1): los vaults con catálogo se saltan en el arranque.
       const rows = (await pool.query(`SELECT telegram_chat_id,transport_bot_id,transport_membership_state
-        FROM vaults WHERE transport_bot_id IS NOT NULL AND transport_membership_state='ready'`)).rows;
+        FROM vaults WHERE transport_bot_id IS NOT NULL AND transport_membership_state='ready'
+          AND NOT EXISTS (SELECT 1 FROM catalog_libraries l WHERE l.user_id = vaults.user_id)`)).rows;
       let recovered = 0;
       for (const row of rows) {
         try {

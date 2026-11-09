@@ -11,6 +11,7 @@ const { ProjectAccessError } = require('./project-access');
 const { withTelegramFloodWait } = require('./telegram-retry');
 
 const { noDirectStartupTrace } = require('./direct-startup-trace');
+const { CATALOG_SESSION_PROTOCOL, stripDirectCredentials } = require('./catalog/authority');
 
 const ROOT = __dirname;
 function backendPath(value, fallbackName) {
@@ -1011,7 +1012,15 @@ async function runtimeForLease(
   return runtime;
 }
 
-function sessionPublic(runtime, leaseState = null) {
+function sessionPublic(runtime, leaseState = null, { protocol = null } = {}) {
+  const session = sessionPublicLegacy(runtime, leaseState);
+  // T05-N (NATIVO r2.1 §8.5): un cliente catalog-v1 nunca recibe bot_token, api_id ni api_hash. El plano de datos
+  // nativo va por el gateway del servidor (§8.6, T11/T12); aquí solo se garantiza que la respuesta no lleva credenciales.
+  if (String(protocol || '') === CATALOG_SESSION_PROTOCOL) return { ...stripDirectCredentials(session), mode: 'catalog-v1-gateway', protocol: CATALOG_SESSION_PROTOCOL };
+  return session;
+}
+
+function sessionPublicLegacy(runtime, leaseState = null) {
   return {
     ok: true,
     mode: 'telegram-direct-botapi-local',
@@ -1046,7 +1055,7 @@ function getLeaseChecked({ installationId, sessionId, generation, allowExpired =
   return { pool, state, lease };
 }
 
-async function startSession({ installationId, chatId, startupTrace = noDirectStartupTrace }) {
+async function startSession({ installationId, chatId, protocol = null, startupTrace = noDirectStartupTrace }) {
   if (!enabled()) throw new Error('Telegram Direct transport is not configured on this server.');
   startMaintenance();
   const installation = String(installationId || '').trim();
@@ -1068,7 +1077,7 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
           state.leases[existing.session_id].last_heartbeat_at = nowIso();
         }
       });
-      return sessionPublic(runtime, existing.status);
+      return sessionPublic(runtime, existing.status, { protocol });
     }
   }
 
@@ -2061,6 +2070,7 @@ module.exports = {
   poolStatus,
   cleanupExpiredSessions,
   __test: {
+    sessionPublic,
     pinMasterIndexMessage,
     commitIndexCopyOnWriteWithMaster,
     normalizeState,

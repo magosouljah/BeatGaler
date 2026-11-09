@@ -5,6 +5,8 @@ const fs = require("fs");
 const path = require("path");
 const directTransport = require("./direct-transport-capability-view");
 const criticalPathTrace = require("./stage1-critical-path-trace");
+const { createLegacyFence, isLegacyFenceError } = require("./catalog/legacy-fence");
+const { INDEX_OPERATION_TYPES } = require("./catalog/authority");
 
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_CLOCK_SKEW_MS = 5 * 1000;
@@ -460,6 +462,9 @@ function installDirectCapabilityBoundary(express, options = {}) {
   const clockSkewMs = Math.max(0, Math.min(30_000, Number(env.BEATGALER_DIRECT_CAPABILITY_CLOCK_SKEW_MS || DEFAULT_CLOCK_SKEW_MS)));
   const maxActivePerTenant = Math.max(1, Math.min(16, Number(env.BEATGALER_DIRECT_TENANT_ACTIVE_CAP || DEFAULT_TENANT_ACTIVE_CAP)));
   const store = options.store || (options.pool ? createPostgresStore(options.pool, { maxActivePerTenant }) : createMemoryStore({ now, maxActivePerTenant }));
+  // T05-N capa 1 (NATIVO r2.1 §5.1): la emisión de get_index/replace_index/delete_messages se rechaza con 410 para un
+  // dueño con fila de catálogo, antes de que el handler cree la operación Direct. Sin PostgreSQL no existe catálogo.
+  const legacyFence = options.legacyFence || (options.pool ? createLegacyFence({ pool: options.pool }) : null);
   installedRuntime = { store, ttlMs, clockSkewMs, maxActivePerTenant };
   const originalPost = express.application.post;
 
@@ -501,6 +506,19 @@ function installDirectCapabilityBoundary(express, options = {}) {
       kind = normalizeOperationKind(req.body?.kind);
       scope = normalizeScope(kind, req.body?.scope);
     } catch (error) { return responseError(res, error); }
+    if (legacyFence && INDEX_OPERATION_TYPES.includes(kind)) {
+      legacyFence.assertUserNotCatalog(claims.userId, { entry: `operation/begin:${kind}` })
+        .then(() => beginCapabilityAuthorized(req, res, next, { claims, kind, scope }))
+        .catch(error => {
+          if (isLegacyFenceError(error)) return res.status(error.status).json({ ok: false, code: error.code, error: error.message });
+          return responseError(res, codedError("DIRECT_CAPABILITY_FENCE_UNAVAILABLE", "catalog fence could not be evaluated.", 503));
+        });
+      return undefined;
+    }
+    return beginCapabilityAuthorized(req, res, next, { claims, kind, scope });
+  }
+
+  function beginCapabilityAuthorized(req, res, next, { claims, kind, scope }) {
     const originalJson = res.json.bind(res);
     res.json = payload => {
       if (!(Number(res.statusCode || 200) < 300 && payload?.ok === true && payload?.operation_id)) return originalJson(payload);

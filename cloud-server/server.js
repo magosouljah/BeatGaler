@@ -50,6 +50,7 @@ const { installStartupRoutingIndex } = require("./startup-routing-index");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
 const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority");
+const catalogAuthority = require("./catalog/authority");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -77,6 +78,11 @@ async function start() {
   vaultIndexPointers.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
+  // T05-N: autoridad nativa (solo lectura + provision explícita). Exige control-plane postgres; en json no se monta (§12.1).
+  // El flag BEATGALER_CATALOG_NATIVE_ENABLED se evalúa dentro: sin él, GET /context y provision responden 503.
+  const nativeAuthority = catalogAuthority.configureCatalogAuthority(cutover.authority === 'postgres' && pool
+    ? { pool, env: process.env, controlPlaneAuthority: cutover.authority } : null);
+  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'}`);
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
   const indexPinAuthority = cutover.authority === 'postgres'
     ? createDirectIndexPinAuthority({ pool, transport: require('./direct-transport-control') }) : null;

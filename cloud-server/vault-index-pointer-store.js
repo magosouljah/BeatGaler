@@ -1,5 +1,7 @@
 'use strict';
 
+const { createLegacyFence } = require('./catalog/legacy-fence');
+
 function positiveMessageId(value) {
   const id = Number(value || 0);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
@@ -21,10 +23,13 @@ function normalizeSource(value) {
  * addresses a Telegram chat through its owning vault row, so callers cannot
  * select another vault by presenting an arbitrary vault id.
  */
-function createVaultIndexPointerStore(pool) {
+function createVaultIndexPointerStore(pool, { fence = null } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('PostgreSQL pool is required for vault INDEX pointers.');
+  // T05-N capa 1 (NATIVO r2.1 §5.1): el puntero INDEX es una entrada C10 (bootstrap-state, commit).
+  const legacyFence = fence || createLegacyFence({ pool });
 
   async function getForChat(telegramChatId) {
+    await legacyFence.assertChatNotCatalog(telegramChatId, { entry: 'index/bootstrap-state' });
     const result = await pool.query(`
       SELECT v.id AS vault_id, v.index_bootstrap_pending, s.user_id AS quota_user_id,
              p.index_message_id, p.predecessor_message_id,
@@ -52,6 +57,7 @@ function createVaultIndexPointerStore(pool) {
     const next = positiveMessageId(messageId);
     if (!next) throw new Error('A positive INDEX message id is required.');
     const expected = nullableMessageId(expectedMessageId);
+    await legacyFence.assertChatNotCatalog(telegramChatId, { entry: 'index/commit' });
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -62,6 +68,8 @@ function createVaultIndexPointerStore(pool) {
         [String(telegramChatId || '').trim()],
       );
       if (!vault.rows[0]) throw new Error('No vault owns this Telegram chat.');
+      // Revalidación bajo el lock: una provisión concurrente entre la entrada y el lock falla cerrada.
+      await legacyFence.assertChatNotCatalog(telegramChatId, { client, entry: 'index/commit' });
       const vaultId = String(vault.rows[0].id);
       const current = await client.query(
         'SELECT index_message_id, revision FROM vault_index_pointers WHERE vault_id = $1 FOR UPDATE',

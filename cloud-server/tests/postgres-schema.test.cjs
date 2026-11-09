@@ -64,6 +64,29 @@ for (const token of [
 }
 assert(!/\bjsonb\b/i.test(catalogMigration.sql), 'catalog core migration must not use jsonb (D-08)');
 
+// T05-N: 0027 aditiva y condicionada (NATIVO r2.1 §3.2, §5.1 capa 0, §6, §7). 0026 no cambia (checksum del runner).
+const nativeMigration = migrations.find(item => item.name === '0027_catalog_native.sql');
+assert(nativeMigration, 'catalog native migration 0027 is required');
+for (const token of [
+  'CREATE TABLE catalog_native_activation (',
+  'ALTER TABLE vaults ADD COLUMN catalog_native_eligible boolean NOT NULL DEFAULT false',
+  "ALTER TABLE catalog_generations ADD COLUMN origin text NOT NULL DEFAULT 'LEGACY_IMPORT'",
+  'CREATE TABLE catalog_library_chats (',
+  'CREATE TABLE catalog_chat_rebinds (',
+  'CREATE TABLE catalog_account_deletions (',
+  'CREATE TABLE control_plane_flush_quarantine (',
+  'CREATE TRIGGER vaults_catalog_native_eligible BEFORE INSERT ON vaults',
+  'CREATE TRIGGER catalog_libraries_delete_guard BEFORE DELETE ON catalog_libraries',
+  'CREATE TRIGGER vaults_catalog_rebind_guard BEFORE UPDATE OF telegram_chat_id, id, user_id ON vaults',
+  "current_setting('beatgaler.account_deletion_id', true)",
+  "ERRCODE = 'BGL01'",
+]) {
+  assert(nativeMigration.sql.includes(token), `missing catalog native contract token: ${token}`);
+}
+assert(!/\bjsonb\b/i.test(nativeMigration.sql), 'catalog native migration must not use jsonb (D-08)');
+assert(!/ALTER TABLE catalog_\w+ (DROP|ALTER COLUMN)/i.test(nativeMigration.sql), '0027 must be additive: no DROP or ALTER COLUMN on 0026 tables');
+assert(!/DROP TABLE|DROP TRIGGER|DROP FUNCTION/i.test(nativeMigration.sql), '0027 must not drop anything');
+
 const migrationDir = path.join(__dirname, '..', 'migrations');
 for (const file of fs.readdirSync(migrationDir).filter(name => name.endsWith('.sql'))) {
   const contents = fs.readFileSync(path.join(migrationDir, file), 'utf8');

@@ -14,6 +14,7 @@ function harness({ bootstrapPending, pointerExists = false }) {
     }
     if (/SELECT \* FROM library_quota_state/.test(sql)) return { rows: [] };
     if (/SELECT 1 FROM vault_index_pointers/.test(sql)) return { rows: pointerExists ? [{ '?column?': 1 }] : [] };
+    if (/catalog-legacy-fence/.test(sql)) return { rows: [] }; // T05-N capa 1: vault sin catálogo
     if (/^(BEGIN|ROLLBACK)$/.test(sql)) return { rows: [] };
     throw new Error(`Unexpected SQL: ${sql}`);
   };
@@ -57,6 +58,7 @@ test('a marked fresh vault publishes and clears eligibility in the same transact
     if (/SELECT beat_id,state FROM library_beats|SELECT beat_id,state,asset_message_ids,beat_sha256 FROM library_trash_purges/.test(sql)) return { rows: [] };
     if (/^(BEGIN|COMMIT)$/.test(sql)) return { rows: [] };
     if (/INSERT INTO library_quota_state|INSERT INTO vault_index_pointers|UPDATE vaults SET index_bootstrap_pending=false/.test(sql)) return { rows: [] };
+    if (/catalog-legacy-fence/.test(sql)) return { rows: [] }; // T05-N capa 1: vault sin catálogo
     throw new Error(`Unexpected SQL: ${sql}`);
   };
   const pool = { query, async connect() { return { query, release() {} }; } };

@@ -2,6 +2,7 @@
 
 const { parseLegacyJson, snapshotManifest, planLegacyImport } = require('./legacy-import-plan');
 const { replaceLegacyEntitlementsForCutover } = require('./access-grant-store');
+const { assertNoNativeActivation } = require('./catalog/authority');
 const {
   CUTOVER_ID,
   replaceAuthSnapshot,
@@ -61,6 +62,8 @@ async function stagePostgresCutover(pool, { authRaw, persistentRaw, cryptoConfig
   // Full source validation happens before any database mutation. Invalid input
   // belongs in the external quarantine workflow, never in a partial import.
   const validated = validateSource({ authRaw, persistentRaw });
+  // T05-N (NATIVO r2.1 §12.3): el re-cutover JSON→PG se niega con activación nativa, antes de cualquier escritura.
+  await assertNoNativeActivation(pool, 'JSON→PostgreSQL cutover staging');
   await assertNoActiveReadyCutover(pool);
 
   await replaceAuthSnapshot(pool, validated.auth, cryptoConfig);

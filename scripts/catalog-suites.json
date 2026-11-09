@@ -103,6 +103,16 @@
             "cloud-server/tests/catalog/catalog-codec.test.cjs"
           ],
           "kind": "node-test"
+        },
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test"
         }
       ]
     },
@@ -248,8 +258,46 @@
       ]
     },
     "T05": {
-      "status": "pending",
-      "owner": "T05"
+      "status": "active",
+      "owner": "T05",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-authority-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-authority.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 600000
+        }
+      ]
     },
     "T06": {
       "status": "pending",
