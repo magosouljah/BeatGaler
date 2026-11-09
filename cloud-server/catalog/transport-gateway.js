@@ -159,12 +159,15 @@ function receiptFromUpdates(result, { randomId } = {}) {
 }
 
 // ---------- Gateway: implementa la interfaz de transporte del worker (T10) ----------
-function createTelegramGateway({ client, sdk, senderId, resolvePeer, resolveSenderPeer = null, log = null } = {}) {
+function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePeer, resolveSenderPeer = null, log = null } = {}) {
   if (!client || typeof client.invoke !== 'function') throw new GatewayError('CLIENT_INVALID', 'client.invoke is required', { transient: false });
   if (!sdk || !sdk.Api || typeof sdk.bigInt !== 'function') throw new GatewayError('SDK_INVALID', 'sdk { Api, bigInt } is required', { transient: false });
   if (typeof resolvePeer !== 'function') throw new GatewayError('PEER_RESOLVER_INVALID', 'resolvePeer(chatId) is required', { transient: false });
   if (senderId == null || !/^[0-9]{1,20}$/.test(String(senderId))) throw new GatewayError('SENDER_INVALID', 'senderId must be the numeric Telegram id of the gateway bot', { transient: false });
   const sid = String(senderId);
+  // T12: la identidad persistida en SQL para partes Direct es transport_bots.id (p. ej. 'Bot20'); el proveedor reporta el id numérico del bot.
+  // Un remitente esperado igual al botId o vacío se compara contra el id numérico propio; cualquier otro (MASTER numérico) se compara literal.
+  const expectedOf = (expected) => (expected == null || String(expected) === sid || (botId != null && String(expected) === String(botId)) ? sid : String(expected));
   const metrics = { sends: 0, uncertain: 0, rejected: 0, permanent: 0, revoked: 0, verifies: 0, searches: 0 };
 
   function failFromProvider(error, stage) {
@@ -181,7 +184,9 @@ function createTelegramGateway({ client, sdk, senderId, resolvePeer, resolveSend
     randomIdToLong(randomId, sdk.bigInt);
     const { peer } = await resolvePeer(chatId);
     let inputFile;
-    try { inputFile = await client.uploadFile({ file, workers: 1 }); } catch (error) {
+    // T12: el transporte entrega { name, size, path } (temporal acotado); con el SDK real se envuelve en CustomFile sin cargar el archivo en memoria.
+    const upload = sdk.CustomFile && file && typeof file === 'object' && typeof file.path === 'string' && !(file instanceof sdk.CustomFile) ? new sdk.CustomFile(file.name, file.size, file.path) : file;
+    try { inputFile = await client.uploadFile({ file: upload, workers: 1 }); } catch (error) {
       // La subida de partes no crea mensajes: fallar aquí nunca es incierto respecto al envío.
       const c = classifyError(error);
       throw new GatewayError(c.kind === 'REVOKED' ? 'CREDENTIAL_REVOKED' : 'UPLOAD_FAILED', `upload: ${c.code}`, { classification: { ...c, effectPossible: false }, transient: c.kind !== 'REVOKED' && c.kind !== 'PERMANENT', retryAfterMs: c.retryAfterMs, resend: false });
@@ -196,7 +201,8 @@ function createTelegramGateway({ client, sdk, senderId, resolvePeer, resolveSend
   }
 
   // Verificación del proveedor independiente del recibo (C7.4–C7.5). sha256 remoto no se calcula aquí (bytes no descargados).
-  async function verifyMessage({ chatId, messageId, senderId: expectedSender = sid } = {}) {
+  async function verifyMessage({ chatId, messageId, senderId: expectedSenderRaw = sid } = {}) {
+    const expectedSender = expectedOf(expectedSenderRaw);
     const { peer, channel } = await resolvePeer(chatId);
     metrics.verifies++;
     let res;
@@ -209,8 +215,9 @@ function createTelegramGateway({ client, sdk, senderId, resolvePeer, resolveSend
   }
 
   // Reconciliación (C7.7): búsqueda por marcador caption + remitente + tamaño. random_id no es consultable a posteriori (SDK_CONTRACT).
-  async function searchByRandomId({ chatId, senderId: expectedSender = sid, declaredSize, operationId, partKey } = {}) {
+  async function searchByRandomId({ chatId, senderId: expectedSenderRaw = sid, declaredSize, operationId, partKey } = {}) {
     if (!operationId || !partKey) throw new GatewayError('RECONCILE_IDENTITY_INCOMPLETE', 'operationId and partKey are required to reconcile', { transient: false });
+    const expectedSender = expectedOf(expectedSenderRaw);
     const caption = captionFor({ operationId, partKey });
     const { peer } = await resolvePeer(chatId);
     const fromId = typeof resolveSenderPeer === 'function' ? await resolveSenderPeer(expectedSender) : undefined;
@@ -221,7 +228,7 @@ function createTelegramGateway({ client, sdk, senderId, resolvePeer, resolveSend
     return matchCandidates(res && res.messages, { operationId, partKey, senderId: expectedSender, declaredSize: Number.isSafeInteger(size) ? size : undefined }).map((c) => ({ messageId: c.messageId, documentId: c.documentId, size: c.size, sha256: null }));
   }
 
-  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, metrics, senderId: sid, SDK_CONTRACT, RESEND_POLICY });
+  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
 }
 
 module.exports = Object.freeze({

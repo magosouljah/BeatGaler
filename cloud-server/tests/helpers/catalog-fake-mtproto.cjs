@@ -3,6 +3,7 @@
 // contrato de envío necesita y deja como PARÁMETRO (dedupWindowMs, legacyCanDelete) lo que el sandbox real debe demostrar.
 // Sin red. Varias "sesiones" comparten el estado del servidor; la revocación de un bot cierra todas sus sesiones (hipótesis a probar).
 const crypto = require('crypto');
+const fs = require('fs');
 
 function rpcError(errorMessage, code, extra = {}) { const e = new Error(errorMessage); e.errorMessage = errorMessage; e.code = code; return Object.assign(e, extra); }
 function netError(message, code) { return Object.assign(new Error(message), { code }); }
@@ -27,7 +28,7 @@ function createFakeTelegramServer({ dedupWindowMs = null, legacyCanDelete = true
       script(fault) { scripts.push(fault); return client; },
       async uploadFile({ file } = {}) {
         if (state.revokedBots.has(self)) throw rpcError('AUTH_KEY_UNREGISTERED', 401);
-        const bytes = Buffer.isBuffer(file?.buffer) ? file.buffer : Buffer.from(file?.buffer || '');
+        const bytes = Buffer.isBuffer(file?.buffer) ? file.buffer : typeof file?.path === 'string' ? fs.readFileSync(file.path) : Buffer.from(file?.buffer || '');
         const id = String(state.uploads.size + 1); state.counters.uploads++;
         state.uploads.set(id, { name: String(file?.name || 'file.bin'), size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
         return { className: 'InputFile', id: { toString: () => id }, parts: 1, name: String(file?.name || 'file.bin'), md5Checksum: '' };

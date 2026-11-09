@@ -9,6 +9,8 @@
 //  - GET  /catalog/v1/navigation/legacy            resolver bgPage acotado (C12 §5.2) → 200 | 400 LEGACY_OFFSET_INVALID | 409 LEGACY_OFFSET_UNRESOLVABLE
 //  - GET  /catalog/v1/facets, GET /catalog/v1/facets/active?key=…  facetas globales (C12-r4 §6)
 //  - POST /catalog/v1/query-sets, GET /:id, POST /:id/cancel, POST /:id/release   conjuntos (C12-r4 §3); los pasos los programa T10
+//  - T12: POST /operations/:id/parts/:partKey/capability (capacidad opaca de subida), PUT /transfer/upload/:token (bytes de la parte),
+//    PUT /operations/:id/parts/:partKey/project (PROJECT por MASTER), GET /operations/:id/attempts. El cuerpo de los PUT es el stream crudo.
 // Todo error se responde como JSON {error, code, detail}; nunca 200 vacío ante error (C5).
 // Cualquier entrada con cerco legacy (410 LEGACY_CLIENT_UNSUPPORTED) no pasa por aquí: estas rutas son solo nativas.
 
@@ -21,6 +23,8 @@ const API_LIMITS = Object.freeze({ listDefault: 100, listMax: 240, filesMax: 100
 
 function respondError(res, error) {
   if (error instanceof CatalogAuthorityError || error instanceof CatalogQueryError) {
+    const ra = error.detail && Number(error.detail.retry_after_ms);
+    if (Number.isFinite(ra) && ra > 0) res.setHeader('Retry-After', String(Math.max(1, Math.ceil(ra / 1000))));
     return res.status(error.status).json({ error: error.message, code: error.code, detail: error.detail || {} });
   }
   if (error && error.code === 'CATALOG_TENANT_REQUIRED') return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'UNAUTHENTICATED' });
@@ -41,7 +45,7 @@ function eraHeaders(req) {
 }
 const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, authenticate, log = () => {} } = {}) {
+function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, transport = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -140,6 +144,21 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
       router.post(`${CATALOG_PREFIX}/operations/:id/reservation/renew`, handle(async (req, _res, userId) => ({ body: await operations.renewReservation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
       router.post(`${CATALOG_PREFIX}/operations/:id/reservation/readmit`, handle(async (req, _res, userId) => ({ body: await operations.readmitReservation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
       router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/dispatch`, handle(async (req, _res, userId) => ({ body: await operations.markDispatched({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey }) })));
+    }
+    if (operations && transport) {
+      // T12 — transferencias por capacidad (§8.6) y PROJECT por MASTER. Los bytes llegan como stream crudo (nunca JSON); el módulo drena
+      // el cuerpo ante un rechazo temprano. Errores con detail.retry_after_ms llevan Retry-After.
+      router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/capability`, handle(async (req, _res, userId) => ({ status: 201, body: await transport.issueUploadCapability({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey }) })));
+      router.get(`${CATALOG_PREFIX}/operations/:id/attempts`, handle(async (req, _res, userId) => ({ body: await transport.listAttempts({ userId, operationId: req.params.id }) })));
+      router.put(`${CATALOG_PREFIX}/transfer/upload/:token`, handle(async (req, _res, userId) => {
+        const h = eraHeaders(req);
+        return transport.uploadPart({ userId, ...h, token: req.params.token, stream: req, contentLength: req.get('content-length') || null });
+      }));
+      router.put(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/project`, handle(async (req, _res, userId) => {
+        const h = eraHeaders(req);
+        const filename = req.get('x-catalog-filename');
+        return transport.uploadProjectPart({ userId, ...h, operationId: req.params.id, partKey: req.params.partKey, stream: req, contentLength: req.get('content-length') || null, filename: typeof filename === 'string' && filename.length <= 512 ? filename : null });
+      }));
     }
     router.post(`${CATALOG_PREFIX}/operations/:id/resume`, handle(async (req, _res, userId) => ({ body: await commands.resumeOperation({ userId, ...eraHeaders(req), operationId: req.params.id, revision: body(req).revision }) })));
     router.get(`${CATALOG_PREFIX}/changes`, handle(async (req, _res, userId) => ({ body: await commands.listChanges({ userId, query: req.query }) })));

@@ -258,6 +258,24 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     });
   }
 
+  // T12 (D-T09-4): el gateway/MASTER puede fijar el remitente real de una parte solo ANTES del primer despacho; nueva identidad = nuevo random_id.
+  async function assignSender({ userId, era, epoch, operationId, partKey, senderId } = {}) {
+    if (typeof operationId !== 'string' || !ID_RE.test(operationId) || typeof partKey !== 'string') throw inputInvalid('OPERATION_OR_PART');
+    if (typeof senderId !== 'string' || !/^[A-Za-z0-9_:-]{1,128}$/.test(senderId)) throw inputInvalid('SENDER_ID');
+    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+      const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
+      if (!o) throw notFound('operation');
+      if (!['PREPARED', 'TRANSFERRING', 'VERIFYING'].includes(o.status)) throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
+      const p = (await client.query('SELECT dispatch_state, attempts, sender_id, random_id FROM catalog_operation_parts WHERE user_id = $1 AND operation_id = $2 AND part_key = $3 FOR UPDATE', [uid, operationId, partKey])).rows[0];
+      if (!p) throw notFound('part');
+      if (p.sender_id === senderId) return { operationId, partKey, senderId, randomId: p.random_id, changed: false };
+      if (p.dispatch_state !== 'PENDING' || p.attempts > 0) throw new CatalogQueryError('PART_STATE_CONFLICT', 409, 'sender identity is frozen after the first dispatch', { dispatch_state: p.dispatch_state, attempts: p.attempts });
+      const randomId = randomInt64String(randomBytes);
+      await client.query('UPDATE catalog_operation_parts SET sender_id = $4, random_id = $5 WHERE user_id = $1 AND operation_id = $2 AND part_key = $3', [uid, operationId, partKey, senderId, randomId]);
+      return { operationId, partKey, senderId, randomId, changed: true };
+    });
+  }
+
   // ---------- PUT /operations/:id/parts/:partKey/receipt (recibo candidato, no prueba) ----------
   async function putReceipt({ userId, era, epoch, operationId, partKey, receipt } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId) || typeof partKey !== 'string') throw inputInvalid('OPERATION_OR_PART');
@@ -267,7 +285,10 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     if (!Number.isSafeInteger(size) || size <= 0) throw inputInvalid('RECEIPT_SIZE');
     const documentId = receipt.documentId == null ? null : String(receipt.documentId);
     if (documentId !== null && !/^-?[0-9]{1,20}$/.test(documentId)) throw inputInvalid('RECEIPT_DOCUMENT_ID');
-    const canonical = canonicalJson({ messageId, documentId, size, senderId: receipt.senderId == null ? null : String(receipt.senderId), chatId: receipt.chatId == null ? null : String(receipt.chatId) });
+    // T12: hash calculado por el gateway sobre los bytes entregados al proveedor (nivel GATEWAY). No es verificación de bytes remotos.
+    const bytesSha256 = receipt.bytesSha256 == null ? null : String(receipt.bytesSha256);
+    if (bytesSha256 !== null && !SHA_RE.test(bytesSha256)) throw inputInvalid('RECEIPT_BYTES_SHA256');
+    const canonical = canonicalJson({ messageId, documentId, size, senderId: receipt.senderId == null ? null : String(receipt.senderId), chatId: receipt.chatId == null ? null : String(receipt.chatId), bytesSha256 });
     const hash = sha256Hex(canonical);
     return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
@@ -277,6 +298,8 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       // Recibo de otra cuenta/vault/parte se rechaza: sender y chat deben coincidir con la identidad persistida (C7.5).
       if (receipt.senderId != null && !/^-?[0-9]{1,20}$/.test(String(receipt.senderId))) throw inputInvalid('RECEIPT_SENDER_ID');
       if (receipt.chatId != null && String(receipt.chatId) !== p.chat_id) throw new CatalogQueryError('RECEIPT_CONFLICT', 409, 'receipt chat does not match the operation chat', {});
+      // T12: si la identidad persistida ya es un id numérico del proveedor (p. ej. MASTER asignado), el remitente del recibo debe coincidir.
+      if (receipt.senderId != null && /^-?[0-9]{1,20}$/.test(p.sender_id) && String(receipt.senderId) !== p.sender_id) throw new CatalogQueryError('RECEIPT_CONFLICT', 409, 'receipt sender does not match the persisted sender identity', {});
       if (p.receipt_hash) {
         if (p.receipt_hash === hash) return opDto(client, uid, operationId, { replay: true, partKey });
         throw new CatalogQueryError('RECEIPT_CONFLICT', 409, 'a different receipt was already recorded for this part', { partKey });
@@ -545,7 +568,8 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       try {
         const params = [n]; let kindSql = '';
         if (kinds) { params.push(kinds); kindSql = ' AND kind = ANY($2::text[])'; }
-        const picked = (await client.query(`SELECT job_id FROM catalog_jobs WHERE (state = 'QUEUED' AND next_attempt_at <= now()) OR (state = 'LEASED' AND lease_until <= now())${kindSql}
+        // T12: paréntesis explícitos; sin ellos el filtro de tipos solo aplicaba a los leases vencidos y un claim por tipo reclamaba cualquier QUEUED.
+        const picked = (await client.query(`SELECT job_id FROM catalog_jobs WHERE ((state = 'QUEUED' AND next_attempt_at <= now()) OR (state = 'LEASED' AND lease_until <= now()))${kindSql}
           ORDER BY next_attempt_at, created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, params)).rows.map((r) => r.job_id);
         const claimed = [];
         for (const jobId of picked) {
@@ -593,7 +617,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   }
 
   return Object.freeze({
-    createOperation, markDispatched, putReceipt, recordVerification, commitOperation, cancelOperation, renewReservation, readmitReservation, expireReservations, getOperation,
+    createOperation, markDispatched, assignSender, putReceipt, recordVerification, commitOperation, cancelOperation, renewReservation, readmitReservation, expireReservations, getOperation,
     enqueueJob, claimJobs, renewJobLease, completeJob, failJob, backoffMs,
     limits: Object.freeze({ RESERVATION_TTL_MS, RESERVATION_MAX_MS, JOB_LEASE_MS, JOB_CLAIM_MAX, JOB_BACKOFF_MAX_MS, JOB_TRANSIENT_FAILURES_TO_BLOCK, PARTS_MAX }),
   });

@@ -1812,13 +1812,14 @@ async function verifyLegacyProjectCopy({ chatId, beatId, sourceMessageId, messag
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
-async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, sizeBytes, threadId }) {
+async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, sizeBytes, threadId, caption = null }) {
   const masterInfo = await masterForVault(chatId);
   try {
     const sent = await masterInfo.client.sendFile(masterInfo.vault, {
       file: new CustomFile(path.basename(String(filename || 'project.zip')), sizeBytes, filePath),
       forceDocument: true,
-      caption: projectCaption(beatId, sha256),
+      // T12: el catálogo nativo pasa su marcador `catalog:v1 op= part=`; sin `caption` se conserva el formato legacy.
+      caption: typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256),
       ...(Number.isSafeInteger(Number(threadId)) && Number(threadId) > 0 ? { replyTo: Number(threadId) } : {}),
       workers: 1,
     });
@@ -1827,13 +1828,27 @@ async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, 
     if (!Number.isSafeInteger(id) || id <= 0 || !documentId) {
       throw new ProjectAccessError('MASTER returned no PROJECT document.', 'PROJECT_BYTES_UNVERIFIED', 503);
     }
-    return { messageId: id, documentId };
+    const senderId = sent?.fromId?.userId != null ? String(sent.fromId.userId) : null;
+    const sentSize = Number(sent?.media?.document?.size);
+    return { messageId: id, documentId, senderId, sizeBytes: Number.isSafeInteger(sentSize) && sentSize > 0 ? sentSize : null };
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
-async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes }) {
+// T12: identidad numérica del MASTER que publica PROJECT en el vault (remitente persistido antes del primer despacho, D-T09-4).
+async function masterSenderId(chatId) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const me = await masterInfo.client.getMe();
+    const id = String(me?.id ?? '');
+    if (!/^[0-9]{1,20}$/.test(id)) throw new ProjectAccessError('MASTER identity is unavailable.', 'PROJECT_ACCESS_UNAVAILABLE', 503);
+    return id;
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes, caption = null }) {
   const message = (await client.getMessages(vault, { ids: [Number(messageId)] }))?.[0];
-  if (message?.out !== true || String(message?.message || '') !== projectCaption(beatId, sha256) ||
+  const expectedCaption = typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256);
+  if (message?.out !== true || String(message?.message || '') !== expectedCaption ||
       !(message?.media?.document instanceof Api.Document) ||
       String(message.media.document.id) !== String(documentId) ||
       Number(message.media.document.size) !== Number(sizeBytes)) {
@@ -1842,10 +1857,10 @@ async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, 
   return true;
 }
 
-async function findProjectFile({ chatId, beatId, sha256, sizeBytes }) {
+async function findProjectFile({ chatId, beatId, sha256, sizeBytes, caption: captionOverride = null }) {
   const masterInfo = await masterForVault(chatId);
   try {
-    const caption = projectCaption(beatId, sha256);
+    const caption = typeof captionOverride === 'string' && captionOverride ? captionOverride : projectCaption(beatId, sha256);
     for (const options of [{ search: caption, limit: 100 }, { limit: 100 }]) {
       for await (const message of masterInfo.client.iterMessages(masterInfo.vault, options)) {
         if (message?.out !== true || String(message?.message || '') !== caption ||
@@ -2053,6 +2068,7 @@ module.exports = {
   restrictBotPinRights,
   downloadMessageBuffer,
   publishProjectFile,
+  masterSenderId,
   copyLegacyProjectPart,
   copyLegacyProjectPartFromClient,
   directBotAdminRights,

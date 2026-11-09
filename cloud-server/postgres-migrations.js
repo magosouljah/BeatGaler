@@ -107,6 +107,8 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_operations', 'catalog_events', 'catalog_operation_batches', 'catalog_operation_batch_items', 'catalog_selections', 'catalog_selection_ops', 'catalog_selection_op_ids',
   // T09 (0030_catalog_transfer_operations.sql): intenciones de transferencia, partes con random_id, reservas y jobs con lease.
   'catalog_transfer_operations', 'catalog_operation_parts', 'catalog_reservations', 'catalog_jobs',
+  // T12 (0031_catalog_transfer_capabilities.sql): capacidades de transferencia (solo hash) y journal de intentos por parte.
+  'catalog_transfer_capabilities',
 ]);
 // Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
 const CATALOG_NATIVE_REQUIRED = Object.freeze([

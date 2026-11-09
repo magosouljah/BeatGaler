@@ -14,11 +14,12 @@ const withCore = (sql) => [...all.filter((m) => m !== core), { ...core, sql }];
 
 test('0026 (T03), 0027 (T05-N) y 0028 (T06) son las migraciones del catálogo y el guard reconoce el contrato', () => {
   // T05-N añade 0027_catalog_native.sql; T06 añade 0028_catalog_queries.sql (colación ICU, proyecciones, índices). 0026/0027 intactas: checksum del runner.
-  assert.equal(all.length, 30);
-  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 30 }, (_, i) => String(i + 1).padStart(4, '0')));
-  assert.equal(all.at(-1).name, '0030_catalog_transfer_operations.sql');
-  assert.equal(all.at(-2).name, '0029_catalog_commands.sql');
-  assert.equal(all.at(-3).name, '0028_catalog_queries.sql');
+  assert.equal(all.length, 31);
+  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(4, '0')));
+  assert.equal(all.at(-1).name, '0031_catalog_transfer_capabilities.sql');
+  assert.equal(all.at(-2).name, '0030_catalog_transfer_operations.sql');
+  assert.equal(all.at(-3).name, '0029_catalog_commands.sql');
+  assert.equal(all.at(-4).name, '0028_catalog_queries.sql');
   mig.assertInitialSchemaContract(all);
 });
 
@@ -71,6 +72,7 @@ test('catalog/ no importa transporte ni red', () => {
     const allowed = ['crypto', './contract', './legacy-codec', './migration', './authority', './cursor', './queries', './metadata-rules', './commands'];
     if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
+    if (f === 'transport.js') allowed.push('fs', 'path', 'stream', 'stream/promises', './transport-gateway'); // T12: temporal acotado en disco; gateway y MASTER inyectados
     if (f === 'routes.js') allowed.push('express');
     for (const r of reqs) assert.ok(allowed.includes(r), `${f} requiere ${r}`);
   }

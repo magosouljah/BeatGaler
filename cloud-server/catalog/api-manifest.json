@@ -1,9 +1,9 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 4,
-  "task": "T06/T07/T09/T10",
+  "version": 5,
+  "task": "T06/T07/T09/T10/T12",
   "date": "2026-11-09",
-  "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint toca Telegram.",
+  "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint de metadata toca Telegram; en T12 los bytes de una parte pasan por el gateway del servidor (§8.6) mediante una capacidad opaca: el cliente nunca recibe chat, message_id, random_id ni credenciales. Encargo T12 con fakes: T11 sigue NO PASS y G2 NOT_PROVEN.",
   "prefix": "/catalog/v1",
   "auth": "Cloud bearer existente (server-side). El tenant es users.id; installationId/chatId/vault del cliente nunca eligen propietario.",
   "profiles": {
@@ -33,10 +33,16 @@
       "INPUT_INVALID",
       "CURSOR_INVALID",
       "LEGACY_OFFSET_INVALID",
-      "CATALOG_ERA_REQUIRED"
+      "CATALOG_ERA_REQUIRED",
+      "UPLOAD_ABORTED"
     ],
     "401": [
       "UNAUTHENTICATED"
+    ],
+    "403": [
+      "CAPABILITY_INVALID",
+      "CAPABILITY_EXPIRED",
+      "SEND_REJECTED_PERMANENT"
     ],
     "404": [
       "LIBRARY_NOT_PROVISIONED",
@@ -66,7 +72,10 @@
       "RECEIPT_CONFLICT",
       "VERIFICATION_MISMATCH",
       "PART_STATE_CONFLICT",
-      "LEASE_FENCED"
+      "LEASE_FENCED",
+      "PART_UNCERTAIN",
+      "PART_BYTES_MISMATCH",
+      "LIBRARY_FROZEN"
     ],
     "410": [
       "LEGACY_CLIENT_UNSUPPORTED",
@@ -75,7 +84,8 @@
     "413": [
       "CATALOG_PAGE_TOO_LARGE",
       "QUERY_SET_PREDICATE_TOO_LARGE",
-      "PAYLOAD_TOO_LARGE"
+      "PAYLOAD_TOO_LARGE",
+      "PROJECT_TOO_LARGE"
     ],
     "428": [
       "PRECONDITION_REQUIRED"
@@ -85,7 +95,14 @@
     ],
     "503": [
       "CATALOG_UNAVAILABLE",
-      "CATALOG_QUERY_TIMEOUT"
+      "CATALOG_QUERY_TIMEOUT",
+      "TRANSFER_UNAVAILABLE",
+      "TRANSFER_BUSY",
+      "SEND_REJECTED",
+      "UPLOAD_FAILED",
+      "CREDENTIAL_REVOKED",
+      "RECEIPT_PERSIST_FAILED",
+      "PROJECT_ACCESS_UNAVAILABLE"
     ]
   },
   "cursor": {
@@ -575,6 +592,67 @@
       "path": "operations.{enqueueJob, claimJobs(owner, ≤10, lease 60 s), renewJobLease, completeJob, failJob(backoff ≤15 min, 8 transitorios → BLOCKED)}",
       "status": "delivered",
       "task": "T09 (primitivas C8); bucle del worker en T10"
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/parts/:partKey/capability",
+      "status": "delivered",
+      "task": "T12",
+      "headers": "X-Catalog-Era, X-Catalog-Epoch",
+      "response": "201 {operationId, partKey, token (opaco, base64url 43), expiresAt (≤10 min), attempt, uploadPath \"/catalog/v1/transfer/upload/<token>\", method PUT, declaredSize, declaredSha256, singleUse true}",
+      "errors": [
+        "409 PART_UNCERTAIN (envío anterior incierto o en vuelo: reconcile pendiente, sin reenvío)",
+        "409 PART_STATE_CONFLICT (ya RECEIPT/VERIFIED)",
+        "409 OPERATION_TRANSITION_INVALID",
+        "400 INPUT_INVALID PROJECT_USES_MASTER (PROJECT va por la ruta MASTER)",
+        "503 TRANSFER_UNAVAILABLE"
+      ],
+      "notes": "Solo se guarda el hash del token (catalog_transfer_capabilities). Una capacidad viva por parte: emitir otra revoca la anterior. El token nunca lleva chat, message_id ni random_id."
+    },
+    {
+      "method": "PUT",
+      "path": "/transfer/upload/:token",
+      "status": "delivered",
+      "task": "T12",
+      "headers": "X-Catalog-Era, X-Catalog-Epoch, Content-Length; cuerpo = bytes crudos de la parte (sin JSON/multipart)",
+      "response": "200 operation + upload{state RECEIPT, attempt, bytesSha256, level GATEWAY, verification PENDING_PROVIDER} | 202 operation + upload{state UNCERTAIN, reconcile true, resend BLOCKED}",
+      "errors": [
+        "403 CAPABILITY_INVALID / CAPABILITY_EXPIRED (un solo uso)",
+        "409 PART_BYTES_MISMATCH (tamaño/hash distintos de lo declarado: reseleccionar el mismo archivo; sin efecto)",
+        "400 UPLOAD_ABORTED (stream cortado; sin efecto)",
+        "503 TRANSFER_BUSY (+Retry-After)",
+        "503 SEND_REJECTED (+Retry-After; FLOOD/FILE_*: sin efecto, misma identidad en la siguiente capacidad)",
+        "503 UPLOAD_FAILED (sin efecto)",
+        "403 SEND_REJECTED_PERMANENT",
+        "503 CREDENTIAL_REVOKED",
+        "503 RECEIPT_PERSIST_FAILED (enviado sin recibo: reconcile)"
+      ],
+      "notes": "Secuencia C7: redimir (SQL breve) → temporal acotado con tamaño+SHA-256 (sin SQL) → markDispatched (misma random_id en reintentos) → envío por gateway (sin SQL) → recibo candidato (SQL breve) → job TRANSFER_VERIFY. Incierto o desconocido → journal UNCERTAIN + TRANSFER_RECONCILE; nunca reenvío."
+    },
+    {
+      "method": "PUT",
+      "path": "/operations/:id/parts/:partKey/project",
+      "status": "delivered",
+      "task": "T12",
+      "headers": "X-Catalog-Era, X-Catalog-Epoch, Content-Length, X-Catalog-Filename?; cuerpo = bytes crudos del PROJECT",
+      "response": "igual que /transfer/upload (200 RECEIPT | 202 UNCERTAIN)",
+      "errors": [
+        "413 PROJECT_TOO_LARGE (Access: tope del plan comprobado antes de recibir bytes)",
+        "409 PART_UNCERTAIN",
+        "409 PART_BYTES_MISMATCH",
+        "400 INPUT_INVALID NOT_A_PROJECT_PART",
+        "503 PROJECT_ACCESS_UNAVAILABLE",
+        "503 TRANSFER_BUSY"
+      ],
+      "notes": "PROJECT va por MASTER (no por el bot Direct): intención durable (journal PROJECT_UPLOAD + markDispatched) ANTES de publicar, remitente MASTER fijado antes del primer despacho (D-T09-4), recibo después; Access y admisión de temporal preservadas; caption catalog:v1 para reconciliar."
+    },
+    {
+      "method": "GET",
+      "path": "/operations/:id/attempts",
+      "status": "delivered",
+      "task": "T12",
+      "response": "{operationId, attempts[{partKey, direction UPLOAD|PROJECT_UPLOAD, attempt, status ISSUED|REDEEMED|CONSUMED|FAILED|EXPIRED|REVOKED, outcome SENT|UNCERTAIN|REJECTED|UPLOAD_FAILED|BYTES_MISMATCH|ABORTED|PERMANENT|REVOKED|ACCESS_DENIED|SUPERSEDED|null, bytesSize, bytesSha256, level GATEWAY|null}]}",
+      "notes": "Journal de intentos sin token ni hash de capacidad."
     }
   ],
   "v02a_decisions": {
@@ -585,5 +663,16 @@
     "Q5_reanchor": "Por defecto stale (409 CURSOR_STALE → recarga del primer bloque conservando filtros). No se reancla por ID en T06: exigiría COUNT/posición por revisión nueva cuyo coste solo T20 puede justificar con EXPLAIN; si T20 lo demuestra, se añade `anchorBeatId` como extensión compatible, sin endpoint nuevo."
   },
   "writeHeaders": "Idempotency-Key (1–128 [A-Za-z0-9_.:-]), X-Catalog-Era, X-Catalog-Epoch obligatorias en escrituras → 428 PRECONDITION_REQUIRED si faltan; era/época distintas → 409 CATALOG_ERA_MISMATCH / CATALOG_EPOCH_STALE; misma clave con otro contenido → 409 IDEMPOTENCY_MISMATCH; misma clave y contenido → resultado persistido (replay:true).",
-  "worker": "T10: `cloud-server/catalog-worker.js` (apagado salvo BEATGALER_CATALOG_WORKER_ENABLED=true + postgres + flag nativo + activación). Jobs encolados en la misma transacción que su causa: QUERY_SET_BUILD (createQuerySet), OPERATION_STEP (bulk create/resume), TRANSFER_VERIFY (recibo), TRANSFER_COMMIT (commit 202 o READY), TRANSFER_RECONCILE (cancel tras despacho). Claim ≤10 SKIP LOCKED, lease 60 s/generación, 2 global / 1 por biblioteca, backoff ≤15 min, 8 transitorios → BLOCKED; dispatch incierto → RECONCILE sin reenvío; health {backlog, oldestAgeMs, blocked, leased, running}."
+  "worker": "T10: `cloud-server/catalog-worker.js` (apagado salvo BEATGALER_CATALOG_WORKER_ENABLED=true + postgres + flag nativo + activación). Jobs encolados en la misma transacción que su causa: QUERY_SET_BUILD (createQuerySet), OPERATION_STEP (bulk create/resume), TRANSFER_VERIFY (recibo), TRANSFER_COMMIT (commit 202 o READY), TRANSFER_RECONCILE (cancel tras despacho). Claim ≤10 SKIP LOCKED, lease 60 s/generación, 2 global / 1 por biblioteca, backoff ≤15 min, 8 transitorios → BLOCKED; dispatch incierto → RECONCILE sin reenvío; health {backlog, oldestAgeMs, blocked, leased, running}.",
+  "transfer": {
+    "task": "T12",
+    "evidenceLevels": {
+      "GATEWAY": "SHA-256 calculado por el gateway sobre los bytes entregados al proveedor (journal/recibo); no es BYTES",
+      "PROVIDER": "verificación del worker con el proveedor (tamaño/documento/remitente): catalog_part_locations.verification_level",
+      "BYTES": "hash de bytes remotos leídos de vuelta (T14/T19); no se etiqueta por tamaño/caption"
+    },
+    "resend": "RESEND_POLICY.uncertain = BLOCKED: 202/PART_UNCERTAIN nunca reenvían; solo un rechazo explícito sin efecto admite otra capacidad con la misma identidad",
+    "project": "PROJECT por MASTER con intención durable antes de publicar; ruta legacy /transport/project/upload intacta",
+    "g2": "NOT_PROVEN (fakes); T11 fase B pendiente de sandbox autorizado"
+  }
 }

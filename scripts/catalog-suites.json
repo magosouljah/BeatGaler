@@ -11,7 +11,10 @@
     "cloud-server/tests/postgres-schema.test.cjs",
     "cloud-server/tests/postgres-migration-runner.test.cjs",
     "tests/component-dom/",
-    "tests/helpers/"
+    "tests/helpers/",
+    "cloud-server/tests/project-upload-route.test.cjs",
+    "cloud-server/tests/project-upload-admission.test.cjs",
+    "cloud-server/tests/project-master-message.test.cjs"
   ],
   "forbidden_case_files": [
     "cloud-server/tests/postgres-live.integration.cjs"
@@ -199,6 +202,17 @@
           ],
           "kind": "node-test",
           "network": "deny"
+        },
+        {
+          "id": "t12-catalog-transport",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
         }
       ]
     },
@@ -734,8 +748,122 @@
       ]
     },
     "T12": {
-      "status": "pending",
-      "owner": "T12"
+      "status": "active",
+      "owner": "T12",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Transferencias por capacidad (§8.6) y PROJECT por MASTER sobre operaciones C7, con el servidor Telegram FAKE detrás del adaptador real del gateway (T11) y el worker real (T10). Encargo explícito con fakes: etiqueta FAKE, T11 sigue NO PASS y G2 NOT_PROVEN. Requiere node_modules raíz (vitest, typescript) para el cliente.",
+      "cases": [
+        {
+          "id": "t12-catalog-transport",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t11-transport-gateway",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t12-project-upload-route",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/project-upload-route.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t12-project-upload-admission",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/project-upload-admission.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t12-project-master-message",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/project-master-message.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "t12-catalog-transfer-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogTransfer.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t12-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        },
+        {
+          "id": "catalog-transport-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-transport.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T13": {
       "status": "pending",

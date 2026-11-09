@@ -139,3 +139,12 @@ for (const token of ['CREATE TABLE catalog_transfer_operations (', "status text 
 }
 assert(!/[j]sonb/i.test(transferMigration.sql), 'catalog transfer migration must not use jsonb (D-08)');
 assert(!/ALTER TABLE|DROP /i.test(transferMigration.sql), '0030 only creates new objects');
+
+// T12: 0031 aditiva (capacidades de transferencia por hash + journal de intentos; nivel GATEWAY del hash separado de PROVIDER/BYTES).
+const capabilityMigration = migrations.find(item => item.name === '0031_catalog_transfer_capabilities.sql');
+assert(capabilityMigration, 'catalog transfer capabilities migration 0031 is required');
+for (const token of ['CREATE TABLE catalog_transfer_capabilities (', "capability_hash text PRIMARY KEY CHECK (capability_hash ~ '^[0-9a-f]{64}$')", "direction text NOT NULL CHECK (direction IN ('UPLOAD', 'PROJECT_UPLOAD'))", "status text NOT NULL DEFAULT 'ISSUED' CHECK (status IN ('ISSUED', 'REDEEMED', 'CONSUMED', 'FAILED', 'EXPIRED', 'REVOKED'))", 'REFERENCES catalog_operation_parts(user_id, operation_id, part_key) ON DELETE CASCADE']) {
+  assert(capabilityMigration.sql.includes(token), `0031 must contain: ${token}`);
+}
+assert(!/ALTER TABLE|DROP /i.test(capabilityMigration.sql), '0031 only creates new objects');
+assert(!/bytea/i.test(capabilityMigration.sql), '0031 stores no file bytes');
