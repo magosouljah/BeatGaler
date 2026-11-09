@@ -53,6 +53,7 @@ const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority"
 const catalogAuthority = require("./catalog/authority");
 const catalogQueries = require("./catalog/queries");
 const catalogCommands = require("./catalog/commands");
+const catalogOperations = require("./catalog/operations");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -86,6 +87,8 @@ async function start() {
     ? { pool, env: process.env, controlPlaneAuthority: cutover.authority } : null);
   const nativeQueries = catalogQueries.configureCatalogQueries(nativeAuthority ? { pool, authority: nativeAuthority, env: process.env } : null);
   catalogCommands.configureCatalogCommands(nativeAuthority ? { pool, authority: nativeAuthority } : null);
+  // T09: la cuota del catálogo usa el resolver Access vigente (quotas.max_beats; null = sin límite); nunca library_beats ni INDEX.
+  catalogOperations.configureCatalogOperations(nativeAuthority ? { pool, authority: nativeAuthority, resolveAccess: async (userId) => { const access = await accessRuntime.resolveUserAccess({ id: userId }); const max = access && access.quotas ? access.quotas.max_beats : null; return { maxBeats: max === undefined ? null : max }; } } : null);
   console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'}`);
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
   const indexPinAuthority = cutover.authority === 'postgres'

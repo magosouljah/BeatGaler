@@ -648,4 +648,4 @@ let configured = null;
 function configureCatalogCommands(options = null) { configured = options && options.pool && options.authority ? createCatalogCommands(options) : null; return configured; }
 function currentCatalogCommands() { return configured; }
 
-module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };
+module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, refreshGroupsAndFacets, normKeysOf, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };

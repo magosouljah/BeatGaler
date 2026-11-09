@@ -1,7 +1,7 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 2,
-  "task": "T06/T07",
+  "version": 3,
+  "task": "T06/T07/T09",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint toca Telegram.",
   "prefix": "/catalog/v1",
@@ -59,7 +59,14 @@
       "BEAT_NOT_ACTIVE",
       "OPERATION_TRANSITION_INVALID",
       "REVISION_MISMATCH",
-      "CATALOG_NATIVE_RULE"
+      "CATALOG_NATIVE_RULE",
+      "QUOTA_EXCEEDED",
+      "RESERVATION_INVALID",
+      "RESERVATION_EXPIRED",
+      "RECEIPT_CONFLICT",
+      "VERIFICATION_MISMATCH",
+      "PART_STATE_CONFLICT",
+      "LEASE_FENCED"
     ],
     "410": [
       "LEGACY_CLIENT_UNSUPPORTED",
@@ -358,41 +365,61 @@
       "method": "POST",
       "path": "/operations",
       "status": "delivered",
-      "task": "T07 (BULK_PATCH|BULK_TRASH|BULK_RESTORE|TAG_RENAME); IMPORT/REPLACE/PURGE → 501 hasta T09",
-      "body": "{kind, selectionId, selectionVersion, patch?|rename?}",
-      "response": "201|200 operation {operationId, kind, status QUEUED, progress{total,confirmed,notExecuted,cancelled,conflictBatchSeq}, expectedRevision}",
+      "task": "T07 (BULK_*|TAG_RENAME) + T09 (IMPORT|REPLACE); PURGE → 501 hasta T15",
+      "body": "bulk: {kind, selectionId, selectionVersion, patch?|rename?} | transfer: {kind: IMPORT|REPLACE, parts:[{partKey?, slotKey MASTER|ARTWORK|PROJECT|FILES:n, role, partIndex, size, sha256?, filename?, mime?}] ≤64, metadata? (IMPORT exige name y MASTER), beatId+expectedVersion (REPLACE)}",
+      "response": "201|200 operation; transfer: {operationId top-…, kind, status PREPARED, beatId (servidor), parts[{partKey, dispatchState, declaredSize…}], reservation{expiresAt, maxUntil}, progress}",
       "errors": [
-        "409 SELECTION_CONFLICT",
-        "409 IDEMPOTENCY_MISMATCH"
+        "409 QUOTA_EXCEEDED (active+trash+purging+pending ≥ max_beats)",
+        "409 PURGE_PENDING",
+        "409 BEAT_NOT_ACTIVE",
+        "409 VERSION_CONFLICT",
+        "409 IDEMPOTENCY_MISMATCH",
+        "413 PAYLOAD_TOO_LARGE"
       ],
-      "notes": "congela selectionVersion y payload; la selección pasa a FROZEN y se INVALIDA al terminar"
+      "notes": "random_id int64 + sender + chat + partKey + tamaño + hash declarado persistidos antes de cualquier envío; el cliente nunca recibe chat ni token."
     },
     {
       "method": "PUT",
       "path": "/operations/:id/parts/:partKey/receipt",
-      "status": "contract",
-      "task": "T09/T11 (gateway)"
+      "status": "delivered",
+      "task": "T09 (verificación del proveedor: T11 gateway/T10 worker)",
+      "body": "{messageId, documentId?, size, senderId?, chatId?}",
+      "response": "operation (parte en RECEIPT, operación VERIFYING)",
+      "errors": [
+        "409 RECEIPT_CONFLICT (recibo distinto, tamaño, sender o chat ajenos)",
+        "409 OPERATION_TRANSITION_INVALID"
+      ],
+      "notes": "recibo candidato ≠ VERIFIED; mismo recibo → replay"
     },
     {
       "method": "POST",
       "path": "/operations/:id/commit",
-      "status": "contract",
+      "status": "delivered",
       "task": "T09",
-      "response": "202 | 200 | 409"
+      "response": "202 operation (faltan verificaciones: pending[]) | 200 COMMITTED (beat nuevo o versión nueva, objetos PRESENT, ubicaciones KNOWN, slots, contadores, reserva CONSUMED, evento) | replay 200",
+      "errors": [
+        "409 VERSION_CONFLICT (operación → CONFLICT, objetos nuevos sin vincular)",
+        "409 RESERVATION_EXPIRED / RESERVATION_INVALID",
+        "409 QUOTA_EXCEEDED (downgrade)",
+        "409 CATALOG_EPOCH_STALE"
+      ]
     },
     {
       "method": "POST",
       "path": "/operations/:id/cancel",
       "status": "delivered",
-      "task": "T07",
-      "response": "operation CANCELLED (QUEUED/CONFLICT/BLOCKED) o CANCELLING (RUNNING: el siguiente paso cierra); no revierte lotes confirmados"
+      "task": "T07 (bulk) + T09 (transfer)",
+      "response": "bulk: CANCELLED/CANCELLING; transfer: CANCELED (sin envío; reserva liberada, STAGED retirados) o RECONCILE (hubo despacho/recibo; objetos retenidos, reserva HELD)",
+      "errors": [
+        "409 OPERATION_TRANSITION_INVALID (COMMITTED)"
+      ]
     },
     {
       "method": "GET",
       "path": "/operations/:id",
       "status": "delivered",
-      "task": "T07",
-      "response": "operation + {batches[], details[<=50], detailsNext}",
+      "task": "T07 (op-…) + T09 (top-…)",
+      "response": "bulk: operation + batches/details; transfer: operation + parts (sin chat/ids de Telegram) + reservation + progress",
       "query": {
         "detailsAfter": "cursor \"batchSeq:beatId\""
       }
@@ -506,6 +533,48 @@
       "status": "delivered",
       "task": "T07 (T10 programa los pasos)",
       "notes": "lote <=50: miembros seleccionados desde next_slot (o beats con el tag desde frontier); journal batches+items, checkpoint, revisión y eventos en la misma transacción; revisión externa → CONFLICT sin ejecutar; versión distinta en un miembro → CONFLICT del lote completo; CANCELLING → CANCELLED en el siguiente paso"
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/reservation/renew",
+      "status": "delivered",
+      "task": "T09",
+      "response": "operation (reserva +15 min, tope 24 h)",
+      "errors": [
+        "409 RESERVATION_EXPIRED {readmit:true}",
+        "409 RESERVATION_INVALID"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/reservation/readmit",
+      "status": "delivered",
+      "task": "T09",
+      "response": "operation (nueva reserva tras vencimiento, re-comprobando cuota)",
+      "errors": [
+        "409 QUOTA_EXCEEDED"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/parts/:partKey/dispatch",
+      "status": "delivered",
+      "task": "T09 (lo invoca el gateway T11, no el cliente)",
+      "response": "{operationId, partKey, randomId}",
+      "notes": "marca DISPATCHED antes del envío real; un cancel posterior es RECONCILE"
+    },
+    {
+      "method": "module",
+      "path": "operations.recordVerification({userId, operationId, partKey, evidence{size, sha256?}, lease?})",
+      "status": "delivered",
+      "task": "T09 (T10/T11 lo invocan)",
+      "notes": "verificación independiente del recibo; fencing por lease (owner + generation) y época; todas VERIFIED → READY"
+    },
+    {
+      "method": "module",
+      "path": "operations.{enqueueJob, claimJobs(owner, ≤10, lease 60 s), renewJobLease, completeJob, failJob(backoff ≤15 min, 8 transitorios → BLOCKED)}",
+      "status": "delivered",
+      "task": "T09 (primitivas C8); bucle del worker en T10"
     }
   ],
   "v02a_decisions": {

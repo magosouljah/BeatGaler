@@ -130,3 +130,12 @@ for (const token of ['CREATE TABLE catalog_operations (', 'UNIQUE (user_id, idem
 }
 assert(!/[j]sonb/i.test(commandsMigration.sql), 'catalog commands migration must not use jsonb (D-08)');
 assert(!/ALTER TABLE|DROP /i.test(commandsMigration.sql), '0029 only creates new objects');
+
+// T09: 0030 aditiva (operaciones de transferencia C7, partes con random_id, reservas, jobs C8). Solo TEXT para JSON.
+const transferMigration = migrations.find(item => item.name === '0030_catalog_transfer_operations.sql');
+assert(transferMigration, 'catalog transfer migration 0030 is required');
+for (const token of ['CREATE TABLE catalog_transfer_operations (', "status text NOT NULL DEFAULT 'PREPARED' CHECK (status IN ('PREPARED', 'TRANSFERRING', 'VERIFYING', 'READY', 'COMMITTED', 'RECONCILE', 'CONFLICT', 'CANCELED', 'FAILED', 'BLOCKED'))", 'CREATE TABLE catalog_operation_parts (', "random_id text NOT NULL CHECK (random_id ~ '^-?[0-9]{1,19}$')", 'UNIQUE (sender_id, random_id)', 'CREATE TABLE catalog_reservations (', 'CREATE TABLE catalog_jobs (', 'lease_generation bigint NOT NULL DEFAULT 0', 'CREATE TRIGGER catalog_transfer_operations_transition BEFORE UPDATE ON catalog_transfer_operations', 'CREATE TRIGGER catalog_jobs_transition BEFORE UPDATE ON catalog_jobs']) {
+  assert(transferMigration.sql.includes(token), `missing catalog transfer contract token: ${token}`);
+}
+assert(!/[j]sonb/i.test(transferMigration.sql), 'catalog transfer migration must not use jsonb (D-08)');
+assert(!/ALTER TABLE|DROP /i.test(transferMigration.sql), '0030 only creates new objects');

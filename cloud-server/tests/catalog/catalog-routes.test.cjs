@@ -9,6 +9,20 @@ const { createCatalogRouter, API_LIMITS } = require('../../catalog/routes.js');
 const { CatalogAuthorityError } = require('../../catalog/authority.js');
 const { CatalogQueryError } = require('../../catalog/cursor.js');
 
+function fakeOperations(calls) {
+  const op = { operationId: 'top-1', kind: 'IMPORT', status: 'PREPARED', created: true, parts: [{ partKey: 'm0', dispatchState: 'PENDING' }] };
+  return {
+    async createOperation(a) { calls.push(['t-create', a]); if (a.intent.kind === 'PURGE') throw new CatalogQueryError('NOT_IMPLEMENTED', 501, 'T15', {}); return op; },
+    async getOperation(a) { calls.push(['t-get', a]); return { ...op, status: 'VERIFYING' }; },
+    async putReceipt(a) { calls.push(['t-receipt', a]); if (a.receipt.messageId === 2) throw new CatalogQueryError('RECEIPT_CONFLICT', 409, 'x', {}); return { ...op, status: 'VERIFYING' }; },
+    async commitOperation(a) { calls.push(['t-commit', a]); return a.operationId === 'top-ready' ? { status: 200, operation: { ...op, status: 'COMMITTED' } } : { status: 202, operation: { ...op, pending: ['m0'] } }; },
+    async cancelOperation(a) { calls.push(['t-cancel', a]); return { ...op, status: 'RECONCILE' }; },
+    async renewReservation(a) { calls.push(['t-renew', a]); return { ...op, renewed: true }; },
+    async readmitReservation(a) { calls.push(['t-readmit', a]); return { ...op, readmitted: true }; },
+    async markDispatched(a) { calls.push(['t-dispatch', a]); return { operationId: a.operationId, partKey: a.partKey, randomId: '-42' }; },
+  };
+}
+
 function fakeCommands(calls) {
   const sel = { selectionId: 'sel-1', status: 'ACTIVE', selectionVersion: '1', count: 3 };
   return {
@@ -149,6 +163,39 @@ test('T07: rutas de escritura exigen Idempotency-Key + X-Catalog-Era + X-Catalog
     assert.equal((await callH('POST', '/catalog/v1/operations/op-9/resume', E, { revision: '4' })).body.status, 'RUNNING');
     assert.equal((await callH('GET', '/catalog/v1/changes?after=0', {})).status, 200);
     assert.ok(calls.filter((c) => c[1] && c[1].userId).every((c) => c[1].userId === 'ua'), 'tenant siempre del token');
+  } finally { await s.close(); }
+});
+
+test('T09: operaciones de transferencia por prefijo top-, recibo PUT, commit 202/200, reserva renew/readmit, dispatch; PURGE → 501; cabeceras obligatorias', async () => {
+  const calls = [];
+  const s = await serve(createCatalogRouter({ authority: fakeAuthority(calls), queries: fakeQueries(calls), commands: fakeCommands(calls), operations: fakeOperations(calls), authenticate }));
+  const W = { 'idempotency-key': 'k-9', 'x-catalog-era': 'era-1', 'x-catalog-epoch': '1' };
+  const E = { 'x-catalog-era': 'era-1', 'x-catalog-epoch': '1' };
+  const callH = async (method, p, headers, body) => {
+    const res = await fetch(`http://127.0.0.1:${s.port}${p}`, { method, headers: { authorization: 'Bearer tok-a', 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: await res.json() };
+  };
+  try {
+    const created = await callH('POST', '/catalog/v1/operations', W, { kind: 'IMPORT', parts: [{ slotKey: 'MASTER', role: 'MASTER', size: 10 }], metadata: { name: 'x' } });
+    assert.deepEqual([created.status, created.body.operationId], [201, 'top-1']);
+    const tc = calls.find((c) => c[0] === 't-create')[1];
+    assert.deepEqual([tc.userId, tc.idempotencyKey, tc.era, tc.epoch, tc.intent.kind], ['ua', 'k-9', 'era-1', '1', 'IMPORT']);
+    assert.equal((await callH('POST', '/catalog/v1/operations', {}, { kind: 'IMPORT' })).status, 428);
+    assert.deepEqual((await callH('POST', '/catalog/v1/operations', W, { kind: 'PURGE' })).status, 501);
+    assert.deepEqual((await callH('POST', '/catalog/v1/operations', W, { kind: 'NOPE' })).body.code, 'INPUT_INVALID');
+    assert.equal((await callH('GET', '/catalog/v1/operations/top-1', {})).body.status, 'VERIFYING');
+    assert.equal((await callH('GET', '/catalog/v1/operations/op-9', {})).body.status, 'RUNNING', 'op- sigue en comandos bulk');
+    const rc = await callH('PUT', '/catalog/v1/operations/top-1/parts/m0/receipt', E, { messageId: 1, size: 10 });
+    assert.equal(rc.status, 200);
+    assert.deepEqual([(await callH('PUT', '/catalog/v1/operations/top-1/parts/m0/receipt', E, { messageId: 2, size: 10 })).status, (await callH('PUT', '/catalog/v1/operations/top-1/parts/m0/receipt', {}, { messageId: 1, size: 10 })).status], [409, 428]);
+    assert.equal((await callH('POST', '/catalog/v1/operations/top-1/commit', E)).status, 202);
+    assert.equal((await callH('POST', '/catalog/v1/operations/top-ready/commit', E)).status, 200);
+    assert.equal((await callH('POST', '/catalog/v1/operations/top-1/cancel', E)).body.status, 'RECONCILE');
+    assert.equal((await callH('POST', '/catalog/v1/operations/op-9/cancel', E)).body.status, 'CANCELLING', 'cancel bulk intacto');
+    assert.equal((await callH('POST', '/catalog/v1/operations/top-1/reservation/renew', E)).body.renewed, true);
+    assert.equal((await callH('POST', '/catalog/v1/operations/top-1/reservation/readmit', E)).body.readmitted, true);
+    assert.equal((await callH('POST', '/catalog/v1/operations/top-1/parts/m0/dispatch', E)).body.randomId, '-42');
+    assert.ok(calls.filter((c) => c[1] && c[1].userId).every((c) => c[1].userId === 'ua'));
   } finally { await s.close(); }
 });
 

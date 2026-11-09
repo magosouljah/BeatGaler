@@ -34,6 +34,7 @@ const { respondLegacyFence } = require("./catalog/legacy-fence");
 const { assertVaultRebindAllowedIfConfigured, currentCatalogAuthority } = require("./catalog/authority");
 const { currentCatalogQueries } = require("./catalog/queries");
 const { currentCatalogCommands } = require("./catalog/commands");
+const { currentCatalogOperations } = require("./catalog/operations");
 const { createCatalogRouter } = require("./catalog/routes");
 const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
@@ -115,7 +116,7 @@ app.use((req, res, next) => {
     res.setHeader("Vary", "Origin");
   }
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, If-Match, X-Catalog-Era, X-Catalog-Epoch, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS");
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
 });
@@ -123,7 +124,7 @@ app.use('/transport/index/publish', express.json({ limit: '24mb' }));
 installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
 app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
-app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
+app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
 const upload = multer({
   dest: "uploads-tmp/",
   limits: {

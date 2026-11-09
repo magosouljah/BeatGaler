@@ -41,7 +41,7 @@ function eraHeaders(req) {
 }
 const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-function createCatalogRouter({ authority = null, queries = null, commands = null, authenticate, log = () => {} } = {}) {
+function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -115,12 +115,32 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
     router.post(`${CATALOG_PREFIX}/tags/rename`, handle(async (req, _res, userId) => { const b = body(req); const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: 'TAG_RENAME', rename: { from: b.from, to: b.to } }); return { status: r.created ? 201 : 200, body: r }; }));
     router.post(`${CATALOG_PREFIX}/operations`, handle(async (req, res, userId) => {
       const b = body(req);
-      if (!['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE', 'TAG_RENAME'].includes(b.kind)) return { status: 501, body: { error: `operation kind ${String(b.kind)} is not implemented yet (T09)`, code: 'NOT_IMPLEMENTED' } };
+      if (['IMPORT', 'REPLACE', 'PURGE'].includes(b.kind)) {
+        if (!operations) return { status: 501, body: { error: 'transfer operations are not mounted', code: 'NOT_IMPLEMENTED' } };
+        const r = await operations.createOperation({ userId, ...writeHeaders(req), intent: b });
+        return { status: r.created ? 201 : 200, body: r };
+      }
+      if (!['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE', 'TAG_RENAME'].includes(b.kind)) return { status: 400, body: { error: `unknown operation kind ${String(b.kind)}`, code: 'INPUT_INVALID', detail: { reason: 'OPERATION_KIND' } } };
       const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: b.kind, selectionId: b.selectionId, selectionVersion: b.selectionVersion, patch: b.patch, rename: b.rename });
       return { status: r.created ? 201 : 200, body: r };
     }));
-    router.get(`${CATALOG_PREFIX}/operations/:id`, handle(async (req, _res, userId) => ({ body: await commands.getOperation({ userId, operationId: req.params.id, detailsAfter: typeof req.query.detailsAfter === 'string' ? req.query.detailsAfter : null }) })));
-    router.post(`${CATALOG_PREFIX}/operations/:id/cancel`, handle(async (req, _res, userId) => ({ body: await commands.cancelOperation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
+    const isTransfer = (id) => typeof id === 'string' && id.startsWith('top-');
+    router.get(`${CATALOG_PREFIX}/operations/:id`, handle(async (req, _res, userId) => {
+      if (isTransfer(req.params.id)) { if (!operations) throw new CatalogQueryError('NOT_FOUND', 404, 'operation is not accessible', {}); return { body: await operations.getOperation({ userId, operationId: req.params.id }) }; }
+      return { body: await commands.getOperation({ userId, operationId: req.params.id, detailsAfter: typeof req.query.detailsAfter === 'string' ? req.query.detailsAfter : null }) };
+    }));
+    router.post(`${CATALOG_PREFIX}/operations/:id/cancel`, handle(async (req, _res, userId) => {
+      if (isTransfer(req.params.id) && operations) return { body: await operations.cancelOperation({ userId, ...eraHeaders(req), operationId: req.params.id }) };
+      return { body: await commands.cancelOperation({ userId, ...eraHeaders(req), operationId: req.params.id }) };
+    }));
+    if (operations) {
+      // T09 — transferencias C7: recibo candidato, commit idempotente (202/200/409), reserva (renovar/readmitir), despacho (gateway).
+      router.put(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/receipt`, handle(async (req, _res, userId) => ({ body: await operations.putReceipt({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey, receipt: body(req) }) })));
+      router.post(`${CATALOG_PREFIX}/operations/:id/commit`, handle(async (req, _res, userId) => { const r = await operations.commitOperation({ userId, ...eraHeaders(req), operationId: req.params.id }); return { status: r.status, body: r.operation }; }));
+      router.post(`${CATALOG_PREFIX}/operations/:id/reservation/renew`, handle(async (req, _res, userId) => ({ body: await operations.renewReservation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
+      router.post(`${CATALOG_PREFIX}/operations/:id/reservation/readmit`, handle(async (req, _res, userId) => ({ body: await operations.readmitReservation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
+      router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/dispatch`, handle(async (req, _res, userId) => ({ body: await operations.markDispatched({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey }) })));
+    }
     router.post(`${CATALOG_PREFIX}/operations/:id/resume`, handle(async (req, _res, userId) => ({ body: await commands.resumeOperation({ userId, ...eraHeaders(req), operationId: req.params.id, revision: body(req).revision }) })));
     router.get(`${CATALOG_PREFIX}/changes`, handle(async (req, _res, userId) => ({ body: await commands.listChanges({ userId, query: req.query }) })));
   }
