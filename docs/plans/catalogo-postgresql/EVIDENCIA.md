@@ -366,3 +366,9 @@ Límites:
 - Regresión LAB con 0029: T03 6/6, T04 3/3, T05 9/9, T06 10/10.
 - Correcciones durante LAB: marcar la selección en `CONFLICT` debe confirmarse aunque el comando se rechace (error con `commit`), la carrera del índice único de conjuntos usa SAVEPOINT, y el detalle `reason` de `INPUT_INVALID` ya no se sobreescribe.
 - **No ejecutado aún:** `catalog-checks` en CI con la suite T07; se lanza con el push de este bloque (E25-b).
+
+### E25-b. T07 en CI (2026-11-09)
+
+- Commit `6c3dadb` (22 archivos) y push fast-forward `ad6239a..6c3dadb` a `local/landing-gallery-unificada`. Solo se activó `catalog-checks`.
+- [Run 42559084665](https://github.com/magosouljah/BeatGaler/actions/runs/42559084665), PostgreSQL 16 efímero del descriptor: **PASS** en todas las suites del push (unit 77/77, faults 9/9, integration 2/2, T03 14/14, T04 8/8, T05 24/24, T06 23/23, **T07 15/15**: t07-metadata-rules 2, t07-catalog-commands 3, t06-catalog-routes 3, postgres-schema-contract 1, `catalog-commands-integration` 6/6). 0 skips; red solo `postgres:5432`.
+- PASS técnico de T07 (TAREAS §T07: 0 pérdida/sobrescritura silenciosa, ledger/contadores coherentes; MATRIZ-T §T07: atomicidad por lote, ningún COMPLETED parcial, 0 Telegram/MASTER/ID3). Siguiente: T08.
