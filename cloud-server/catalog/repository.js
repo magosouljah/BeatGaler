@@ -45,14 +45,20 @@ function bind(client) {
     async insertBeat(scope, beat) {
       const s = requireScope(scope);
       const legacyJson = String(beat.legacyJson);
+      // Proyecciones display/search (0028) desde el propio beat si el llamador no las trae (misma semántica JS que legacy-codec.projectBeat).
+      const nameDisplay = beat.nameDisplay ?? ((typeof beat.name === 'string' ? beat.name : 'Untitled').trim() || 'Untitled');
+      const keyDisplay = beat.keyDisplay ?? (typeof beat.keyText === 'string' ? beat.keyText : '');
       const r = await q(`INSERT INTO catalog_beats(user_id, generation_id, beat_id, state, name, bpm_text, key_text, rating, color, color2,
-          bpm_sort_class, bpm_sort, sort_order, manual_rank, telegram_topic_id, has_artwork, legacy_json, legacy_sha256, legacy_export_bytes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          bpm_sort_class, bpm_sort, sort_order, manual_rank, telegram_topic_id, has_artwork, legacy_json, legacy_sha256, legacy_export_bytes,
+          name_display, name_search, key_display, key_search, bpm_display, rating_display)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
         RETURNING beat_id, state, version::text AS version, direct_scope_compatible`,
       [s.userId, s.generationId, beat.beatId, beat.state || 'ACTIVE', beat.name ?? null, beat.bpmText ?? null, beat.keyText ?? null,
         beat.rating ?? null, beat.color ?? null, beat.color2 ?? null, beat.bpmSortClass ?? 3, beat.bpmSort ?? null, beat.sortOrder ?? null,
         String(beat.manualRank), beat.telegramTopicId ?? null, Boolean(beat.hasArtwork), legacyJson, sha256Hex(Buffer.from(legacyJson, 'utf8')),
-        Buffer.byteLength(legacyJson, 'utf8')]);
+        Buffer.byteLength(legacyJson, 'utf8'),
+        nameDisplay, beat.nameSearch ?? nameDisplay.toLowerCase(), keyDisplay, beat.keySearch ?? keyDisplay.toLowerCase(),
+        beat.bpmDisplay ?? (typeof beat.bpmText === 'string' ? beat.bpmText : ''), beat.ratingDisplay ?? Math.max(0, Math.min(255, Math.trunc(Number(beat.rating) || 0)))]);
       return r.rows[0];
     },
     async getBeat(scope, beatId) {
@@ -64,8 +70,8 @@ function bind(client) {
     async insertTags(scope, beatId, tags) {
       const s = requireScope(scope);
       for (const t of tags) {
-        await q(`INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [s.userId, s.generationId, beatId, t.position, t.label, t.normKey ?? t.label.trim().toLowerCase()]);
+        await q(`INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [s.userId, s.generationId, beatId, t.position, t.label, t.normKey ?? t.label.trim().toLowerCase(), t.searchKey ?? t.label.toLowerCase()]);
       }
       return tags.length;
     },

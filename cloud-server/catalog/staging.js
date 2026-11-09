@@ -32,14 +32,16 @@ async function insertBeatBatch(c, s, rows, batch) {
   const ids = new Set(batch.map((b) => b.beatId));
   for (const b of batch) {
     await c.query(`INSERT INTO catalog_beats(user_id, generation_id, beat_id, state, name, bpm_text, key_text, rating, color, color2, bpm_sort_class, bpm_sort,
-        sort_order, manual_rank, telegram_topic_id, has_artwork, legacy_json, legacy_sha256, legacy_export_bytes, projection_version)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        sort_order, manual_rank, telegram_topic_id, has_artwork, legacy_json, legacy_sha256, legacy_export_bytes, projection_version,
+        name_display, name_search, key_display, key_search, bpm_display, rating_display)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
     [s.userId, s.generationId, b.beatId, b.state, b.name, b.bpmText, b.keyText, b.rating, b.color, b.color2, b.bpmSortClass, b.bpmSort,
-      b.sortOrder, b.manualRank, b.telegramTopicId, b.hasArtwork, b.legacyJson, b.legacySha256, b.legacyExportBytes, codec.PROJECTION_VERSION]);
+      b.sortOrder, b.manualRank, b.telegramTopicId, b.hasArtwork, b.legacyJson, b.legacySha256, b.legacyExportBytes, codec.PROJECTION_VERSION,
+      b.nameDisplay, b.nameSearch, b.keyDisplay, b.keySearch, b.bpmDisplay, b.ratingDisplay]);
   }
   for (const t of rows.tags.filter((x) => ids.has(x.beatId))) {
-    await c.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, projection_version) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [s.userId, s.generationId, t.beatId, t.position, t.label, t.normKey, codec.PROJECTION_VERSION]);
+    await c.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key, projection_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [s.userId, s.generationId, t.beatId, t.position, t.label, t.normKey, t.searchKey, codec.PROJECTION_VERSION]);
   }
   for (const t of rows.trash.filter((x) => ids.has(x.beatId))) {
     await c.query(`INSERT INTO catalog_trash_entries(user_id, generation_id, beat_id, beat_state, wrapper_present, trash_id, trashed_at, purge_after, wrapper_json, export_position)
@@ -103,7 +105,13 @@ async function importToStaging({ pool, scope, rawBytes, ctx = {}, batchSize = BA
     if (onBatchCommitted) await onBatchCommitted({ snapshotHash, ordinal: written, batches });
   }
   // 3) proyecciones derivadas (tag groups / facets), reconstruidas de forma idempotente
-  await tx(pool, async (c) => {
+  await tx(pool, (c) => rebuildDerivedProjections(c, s));
+  return { snapshotHash, beats: rows.beats.length, batches, resumedFrom: done.rows.length, flags: rows.flags };
+}
+
+// Grupos de tags y facetas de una generación, reconstruidos de forma idempotente dentro de la transacción dada (T04; T06 los pagina).
+async function rebuildDerivedProjections(c, s) {
+  {
     await c.query('DELETE FROM catalog_facets WHERE user_id = $1 AND generation_id = $2', [s.userId, s.generationId]);
     await c.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2', [s.userId, s.generationId]);
     await c.query(`INSERT INTO catalog_beat_tag_groups(user_id, generation_id, beat_id, norm_key, projection_version, state, manual_rank, first_position, label_at_first_position)
@@ -117,8 +125,7 @@ async function importToStaging({ pool, scope, rawBytes, ctx = {}, batchSize = BA
       INSERT INTO catalog_facets(user_id, generation_id, scope, norm_key, projection_version, beat_count, rep_beat_id, rep_position, rep_label, updated_revision)
       SELECT $1, $2, c.state, c.norm_key, c.projection_version, c.n, r.beat_id, r.first_position, r.label_at_first_position, 1
       FROM cnt c JOIN rep r USING (state, norm_key, projection_version)`, [s.userId, s.generationId]);
-  });
-  return { snapshotHash, beats: rows.beats.length, batches, resumedFrom: done.rows.length, flags: rows.flags };
+  }
 }
 
 async function readRows(pool, scope) {
@@ -161,4 +168,4 @@ async function validateGeneration({ pool, scope }) {
   return { validated: true, diffs: [] };
 }
 
-module.exports = { importToStaging, exportGeneration, validateGeneration, readRows, prepare, BATCH };
+module.exports = { importToStaging, exportGeneration, validateGeneration, rebuildDerivedProjections, readRows, prepare, BATCH };

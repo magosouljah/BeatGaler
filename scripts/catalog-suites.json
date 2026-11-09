@@ -113,6 +113,37 @@
             "cloud-server/tests/catalog/catalog-authority.test.cjs"
           ],
           "kind": "node-test"
+        },
+        {
+          "id": "t06-catalog-cursor",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-cursor.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t06-catalog-queries",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-queries.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
         }
       ]
     },
@@ -300,8 +331,68 @@
       ]
     },
     "T06": {
-      "status": "pending",
-      "owner": "T06"
+      "status": "active",
+      "owner": "T06",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t06-catalog-cursor",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-cursor.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-queries",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-queries.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-queries-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-queries.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T07": {
       "status": "pending",

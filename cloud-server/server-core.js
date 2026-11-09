@@ -31,7 +31,9 @@ const directTransport = require("./direct-transport-control");
 const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
 const { respondLegacyFence } = require("./catalog/legacy-fence");
-const { assertVaultRebindAllowedIfConfigured } = require("./catalog/authority");
+const { assertVaultRebindAllowedIfConfigured, currentCatalogAuthority } = require("./catalog/authority");
+const { currentCatalogQueries } = require("./catalog/queries");
+const { createCatalogRouter } = require("./catalog/routes");
 const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
@@ -119,6 +121,8 @@ app.use((req, res, next) => {
 app.use('/transport/index/publish', express.json({ limit: '24mb' }));
 installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
 app.use(express.json({ limit: "256kb" }));
+// T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
+app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
 const upload = multer({
   dest: "uploads-tmp/",
   limits: {

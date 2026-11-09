@@ -36,8 +36,10 @@ async function legacyDigest(pool) {
     UNION ALL SELECT 'b:' || user_id || ':' || beat_id || ':' || state FROM library_beats) x`);
   return r.rows[0];
 }
-const beatSql = `INSERT INTO catalog_beats(user_id, generation_id, beat_id, state, manual_rank, legacy_json, legacy_sha256, legacy_export_bytes, bpm_sort_class, bpm_sort, rating)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`;
+// T06: 0028 exige las proyecciones display/search NOT NULL; aquí se rellenan con valores mínimos (no se prueba búsqueda).
+const beatSql = `INSERT INTO catalog_beats(user_id, generation_id, beat_id, state, manual_rank, legacy_json, legacy_sha256, legacy_export_bytes, bpm_sort_class, bpm_sort, rating,
+    name_display, name_search, key_display, key_search, bpm_display, rating_display)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Untitled','untitled','','','',0)`;
 const beatArgs = (u, g, id, o = {}) => { const j = o.json ?? JSON.stringify({ id }); return [u, g, id, o.state ?? 'ACTIVE', o.rank ?? 1, j, o.hash ?? sha(Buffer.from(j, 'utf8')), o.bytes ?? Buffer.byteLength(j), o.cls ?? 3, o.bpm ?? null, o.rating ?? null]; };
 
 async function seedUsers(pool) {
@@ -48,10 +50,10 @@ async function seedUsers(pool) {
 // T05-N: 0027_catalog_native.sql se aplica junto con 0026; las guardas de 0027 no actúan sin activación ni origin nativo,
 // así que estas pruebas (bibliotecas LEGACY, LEGACY→POSTGRES y DELETE de LEGACY) conservan su resultado.
 const MIGRATIONS = mig.listMigrations().length;
-test('fresh: todas las migraciones (0001–0027), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
+test('fresh: todas las migraciones (0001–0028), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
   const first = await mig.applyMigrations(pool);
-  assert.equal(MIGRATIONS, 27);
-  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0027');
+  assert.equal(MIGRATIONS, 28);
+  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0028');
   const again = await mig.applyMigrations(pool);
   assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, MIGRATIONS);
   const tables = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
@@ -81,7 +83,7 @@ test('upgrade 0001-0025 → 0026 conserva datos legacy y no importa nada', () =>
   await pool.query("INSERT INTO library_beats(user_id, beat_id, state) VALUES ('u1','b1','ACTIVE'), ('u1','b2','TRASH'), ('u2','b1','ACTIVE')");
   const before = await legacyDigest(pool);
   const up = await mig.applyMigrations(pool, all);
-  assert.deepEqual(up.applied, ['0026', '0027']);
+  assert.deepEqual(up.applied, ['0026', '0027', '0028']); // T06 añade 0028 (colación ICU, proyecciones, índices)
   assert.deepEqual(await legacyDigest(pool), before);
   const cat = await pool.query('SELECT (SELECT count(*) FROM catalog_libraries)::int + (SELECT count(*) FROM catalog_generations)::int + (SELECT count(*) FROM catalog_beats)::int AS n');
   assert.equal(cat.rows[0].n, 0, 'la migración no crea bibliotecas ni importa');
@@ -152,8 +154,8 @@ test('restricciones de beats, tags, papelera, tombstones, archivos y conjuntos',
   assert.equal(await ok('b1'), '23505', 'beat duplicado');
 
   // tags y grupos denormalizados
-  await pool.query("INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key) VALUES ('u1','g1','b1',0,'Trap','trap'), ('u1','g1','b1',1,' trap','trap')");
-  assert.equal(await one(pool, "INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key) VALUES ('u1','g1','b1',1,'x','x')"), '23505');
+  await pool.query("INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ('u1','g1','b1',0,'Trap','trap','trap'), ('u1','g1','b1',1,' trap','trap',' trap')");
+  assert.equal(await one(pool, "INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ('u1','g1','b1',1,'x','x','x')"), '23505');
   assert.equal(await one(pool, "INSERT INTO catalog_beat_tag_groups VALUES ('u1','g1','b1','trap',1,'TRASH',10,0,'Trap')"), '23503', 'estado denormalizado distinto');
   assert.equal(await one(pool, "INSERT INTO catalog_beat_tag_groups VALUES ('u1','g1','b1','trap',1,'ACTIVE',10,5,'Trap')"), '23503', 'first_position inexistente');
   assert.equal(await one(pool, "INSERT INTO catalog_beat_tag_groups VALUES ('u1','g1','b1','trap',1,'ACTIVE',10,0,'Trap')"), 'OK');

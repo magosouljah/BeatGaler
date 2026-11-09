@@ -114,6 +114,17 @@ const CATALOG_NATIVE_REQUIRED = Object.freeze([
   [/CREATE TRIGGER vaults_catalog_rebind_guard BEFORE UPDATE OF telegram_chat_id, id, user_id ON vaults/i, 'vault rebind guard is required'],
   [/ERRCODE = 'BGL01'/, 'legacy write fence SQLSTATE is required'],
 ]);
+// T06 (0028_catalog_queries.sql): perfil A1 ICU, proyecciones display/search NOT NULL e índices de tupla (C12-r4 §3–§4).
+const CATALOG_QUERIES_REQUIRED = Object.freeze([
+  [/CREATE COLLATION catalog_name_icu_und_v1 \(provider = icu, locale = 'und', deterministic = false\)/, 'name order profile must be ICU und, non-deterministic (A1)'],
+  [/ALTER TABLE catalog_beats ALTER COLUMN name_display SET NOT NULL/, 'name_display projection must be NOT NULL'],
+  [/ALTER TABLE catalog_beats ALTER COLUMN rating_display SET NOT NULL/, 'rating_display projection must be NOT NULL'],
+  [/ALTER TABLE catalog_beat_tags ALTER COLUMN search_key SET NOT NULL/, 'tag search_key projection must be NOT NULL'],
+  [/CREATE INDEX catalog_beats_order_name_idx ON catalog_beats\(user_id, generation_id, state, name_display COLLATE catalog_name_icu_und_v1, manual_rank, beat_id COLLATE "C"\)/, 'name order index must use the ICU profile and the full tuple'],
+  [/CREATE INDEX catalog_beats_order_rating_idx/, 'rating order index is required'],
+  [/CREATE INDEX catalog_beats_order_bpm_idx/, 'bpm order index is required'],
+  [/CREATE INDEX catalog_beats_order_manual_idx/, 'manual order index is required'],
+]);
 function assertCatalogSchemaContract(sql) {
   for (const table of CATALOG_REQUIRED_TABLES) {
     if (!new RegExp(`CREATE TABLE\\s+${table}\\s*\\(`, 'i').test(sql)) throw new Error(`Missing required catalog table: ${table}`);
@@ -136,6 +147,10 @@ function assertCatalogSchemaContract(sql) {
   ];
   for (const pattern of forbidden) {
     if (pattern.test(sql)) throw new Error(`Forbidden catalog legacy storage pattern (TEXT required, D-08): ${pattern}`);
+  }
+  if (/CREATE COLLATION catalog_name_icu_und_v1/i.test(sql)) {
+    for (const [pattern, message] of CATALOG_QUERIES_REQUIRED) if (!pattern.test(sql)) throw new Error(`Catalog queries schema contract: ${message}.`);
+    if (/CREATE COLLATION[^;]*provider\s*=\s*libc/i.test(sql)) throw new Error('Catalog queries schema contract: libc collations are not an A1 substitute.');
   }
   if (/CREATE TABLE catalog_native_activation/i.test(sql)) {
     for (const [pattern, message] of CATALOG_NATIVE_REQUIRED) if (!pattern.test(sql)) throw new Error(`Catalog native schema contract: ${message}.`);

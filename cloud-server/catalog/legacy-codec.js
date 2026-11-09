@@ -245,10 +245,16 @@ function projectBeat(beat) {
   const n = Number(bpmDisplay);
   const bpmSortClass = Number.isNaN(n) ? 3 : n === -Infinity ? 0 : n === Infinity ? 2 : 1;
   const rating = Number.isInteger(beat.rating) && beat.rating >= 0 && beat.rating <= 255 ? beat.rating : null;
+  // normKey: agrupación visual de tagSelectors (trim+lower). searchKey: predicado q de librarySelectors.ts:18 (solo lower).
   const tags = Array.isArray(beat.tags) ? beat.tags.map((t, position) => ({ position, t })).filter((x) => typeof x.t === 'string')
-    .map(({ position, t }) => ({ position, label: t, normKey: t.trim().toLowerCase() })) : [];
+    .map(({ position, t }) => ({ position, label: t, normKey: t.trim().toLowerCase(), searchKey: t.toLowerCase() })) : [];
+  // Display (webLibrary.ts:165-193) y búsqueda search-js-v1 (librarySelectors.ts:17-18): se materializan en SQL (0028).
+  const nameDisplay = (typeof beat.name === 'string' ? beat.name : 'Untitled').trim() || 'Untitled';
+  const keyDisplay = typeof beat.key === 'string' ? beat.key : '';
+  const ratingDisplay = Math.max(0, Math.min(255, Math.trunc(Number(beat.rating) || 0)));
   return {
     name: str(beat.name), bpmText: str(beat.bpm), keyText: str(beat.key), color: str(beat.color), color2: str(beat.color2), rating,
+    nameDisplay, nameSearch: nameDisplay.toLowerCase(), keyDisplay, keySearch: keyDisplay.toLowerCase(), bpmDisplay, ratingDisplay,
     bpmSortClass, bpmSort: bpmSortClass === 1 ? (Object.is(n, -0) ? 0 : n) : null,
     sortOrder: Number.isInteger(beat.sort_order) && Math.abs(beat.sort_order) <= 2147483647 ? beat.sort_order : null,
     telegramTopicId: Number.isSafeInteger(beat.telegram_topic_id) && beat.telegram_topic_id > 0 ? beat.telegram_topic_id : null,

@@ -51,6 +51,7 @@ const vaultIndexPointers = require("./vault-index-pointer-store");
 const libraryIndexPublication = require("./library-index-publication");
 const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority");
 const catalogAuthority = require("./catalog/authority");
+const catalogQueries = require("./catalog/queries");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -82,7 +83,8 @@ async function start() {
   // El flag BEATGALER_CATALOG_NATIVE_ENABLED se evalúa dentro: sin él, GET /context y provision responden 503.
   const nativeAuthority = catalogAuthority.configureCatalogAuthority(cutover.authority === 'postgres' && pool
     ? { pool, env: process.env, controlPlaneAuthority: cutover.authority } : null);
-  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'}`);
+  const nativeQueries = catalogQueries.configureCatalogQueries(nativeAuthority ? { pool, authority: nativeAuthority, env: process.env } : null);
+  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'}`);
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
   const indexPinAuthority = cutover.authority === 'postgres'
     ? createDirectIndexPinAuthority({ pool, transport: require('./direct-transport-control') }) : null;

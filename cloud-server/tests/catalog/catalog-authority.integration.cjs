@@ -334,7 +334,7 @@ test('PASS 11+12: reglas DB §7 en generaciones nativas; era/época ausente o vi
   const a = auth(pool);
   const ctx = (await a.provisionLibrary({ userId: u })).context; await a.provisionLibrary({ userId: u2 });
   const g = ctx.generation_id;
-  const beat = (id) => `INSERT INTO catalog_beats(user_id,generation_id,beat_id,state,manual_rank,legacy_json,legacy_sha256,legacy_export_bytes) VALUES ('rules','${g}','${id}','ACTIVE',1,'{}',encode(sha256(convert_to('{}','UTF8')),'hex'),2)`;
+  const beat = (id) => `INSERT INTO catalog_beats(user_id,generation_id,beat_id,state,manual_rank,legacy_json,legacy_sha256,legacy_export_bytes,name_display,name_search,key_display,key_search,bpm_display,rating_display) VALUES ('rules','${g}','${id}','ACTIVE',1,'{}',encode(sha256(convert_to('{}','UTF8')),'hex'),2,'Untitled','untitled','','','',0)`;
   assert.equal(await one(pool, beat('ok.beat_1')), 'OK');
   assert.equal(await one(pool, beat('con espacio')), 'BGN04', 'beat_id fuera del alcance Direct');
   assert.equal(await one(pool, `UPDATE catalog_generations SET raw_index='\\x01'::bytea, raw_index_sha256=encode(sha256('\\x01'::bytea),'hex') WHERE generation_id='${g}'`), 'BGN04');

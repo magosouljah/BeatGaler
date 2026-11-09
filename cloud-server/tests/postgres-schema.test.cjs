@@ -87,6 +87,32 @@ assert(!/\bjsonb\b/i.test(nativeMigration.sql), 'catalog native migration must n
 assert(!/ALTER TABLE catalog_\w+ (DROP|ALTER COLUMN)/i.test(nativeMigration.sql), '0027 must be additive: no DROP or ALTER COLUMN on 0026 tables');
 assert(!/DROP TABLE|DROP TRIGGER|DROP FUNCTION/i.test(nativeMigration.sql), '0027 must not drop anything');
 
+// T06: 0028 aditiva (colación ICU A1, proyecciones display/search, índices de tupla). Solo ALTER COLUMN ... SET NOT NULL sobre columnas que ella misma añade.
+const queriesMigration = migrations.find(item => item.name === '0028_catalog_queries.sql');
+assert(queriesMigration, 'catalog queries migration 0028 is required');
+for (const token of [
+  "CREATE COLLATION catalog_name_icu_und_v1 (provider = icu, locale = 'und', deterministic = false)",
+  'ALTER TABLE catalog_beats ADD COLUMN name_display text',
+  'ALTER TABLE catalog_beats ADD COLUMN name_search text',
+  'ALTER TABLE catalog_beats ADD COLUMN bpm_display text',
+  'ALTER TABLE catalog_beats ADD COLUMN rating_display smallint',
+  'ALTER TABLE catalog_beat_tags ADD COLUMN search_key text',
+  'CREATE INDEX catalog_beats_order_manual_idx',
+  'CREATE INDEX catalog_beats_order_rating_idx',
+  'CREATE INDEX catalog_beats_order_name_idx',
+  'CREATE INDEX catalog_beats_order_bpm_idx',
+  'CREATE INDEX catalog_facets_order_idx',
+]) {
+  assert(queriesMigration.sql.includes(token), `missing catalog queries contract token: ${token}`);
+}
+assert(!/jsonb/i.test(queriesMigration.sql), 'catalog queries migration must not use jsonb (D-08)');
+assert(!/DROP TABLE|DROP TRIGGER|DROP FUNCTION|DROP COLUMN|DROP INDEX|DROP COLLATION/i.test(queriesMigration.sql), '0028 must not drop anything');
+for (const m of queriesMigration.sql.matchAll(/ALTER TABLE (w+) ALTER COLUMN (w+) SET NOT NULL/g)) {
+  assert(queriesMigration.sql.includes(`ALTER TABLE ${m[1]} ADD COLUMN ${m[2]} `), `0028 may only SET NOT NULL on columns it adds: ${m[1]}.${m[2]}`);
+}
+assert(!/ALTER TABLE w+ ALTER COLUMN w+ (TYPE|DROP|SET DEFAULT)/i.test(queriesMigration.sql), '0028 must not retype or default existing columns');
+assert(!/providers*=s*libc/i.test(queriesMigration.sql), '0028 must not substitute A1 with a libc collation');
+
 const migrationDir = path.join(__dirname, '..', 'migrations');
 for (const file of fs.readdirSync(migrationDir).filter(name => name.endsWith('.sql'))) {
   const contents = fs.readFileSync(path.join(migrationDir, file), 'utf8');

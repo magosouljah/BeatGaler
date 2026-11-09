@@ -116,11 +116,11 @@ test('PASS produce summary.json, summary.txt y log por comando con totales', () 
   for (const c of r.summary.cases) { assert.ok(fs.existsSync(path.join(r.out, c.log))); assert.equal(c.net.attempts, 0); assert.ok(c.net.processes >= 1); }
 });
 
-test('suite real del repo: manifiesto válido, T03/T04/T05 activas y T06..T21/perf pendientes', () => {
+test('suite real del repo: manifiesto válido, T03..T06 activas y T07..T21/perf pendientes', () => {
   const real = JSON.parse(fs.readFileSync(path.join(REPO, 'scripts', 'catalog-suites.json'), 'utf8'));
   for (const k of ['unit', 'integration', 'faults', 'web', 'all-local', 'perf']) assert.ok(real.suites[k], k);
-  for (const t of ['T03', 'T04', 'T05']) assert.equal(real.suites[t].status, 'active');
-  for (let i = 6; i <= 21; i++) assert.equal(real.suites[`T${String(i).padStart(2, '0')}`].status, 'pending');
-  const r = spawnSync(process.execPath, [RUNNER, 'T06', '--out', path.join(tmp, 'real-t06')], { cwd: REPO, encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot } });
+  for (const t of ['T03', 'T04', 'T05', 'T06']) assert.equal(real.suites[t].status, 'active');
+  for (let i = 7; i <= 21; i++) assert.equal(real.suites[`T${String(i).padStart(2, '0')}`].status, 'pending');
+  const r = spawnSync(process.execPath, [RUNNER, 'T07', '--out', path.join(tmp, 'real-t07')], { cwd: REPO, encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot } });
   assert.equal(r.status, 4);
 });
