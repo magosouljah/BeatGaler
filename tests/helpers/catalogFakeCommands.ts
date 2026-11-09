@@ -2,7 +2,7 @@
 // (conflicto = nada aplicado), conjuntos (BUILDING → READY tras N consultas), selección server-side (flags, CAS, CONFLICT por revisión,
 // FROZEN por operación), operaciones bulk/rename con lotes ≤50 y conflicto programable, transferencias (capacidad → PUT → commit 202/200)
 // y detalle SQL. Cuenta llamadas por ruta y expone espías legacy (get_index/replace_index) que deben quedar en 0.
-export interface FakeBeat { id: string; version: number; name: string; bpm: string; key: string; tags: string[]; rating: number; color: string | null; color2: string | null; state: "ACTIVE" | "TRASH"; rank: number }
+export interface FakeBeat { id: string; version: number; name: string; bpm: string; key: string; tags: string[]; rating: number; color: string | null; color2: string | null; state: "ACTIVE" | "TRASH" | "PURGED"; rank: number }
 export interface FakeCommandsOptions { beats?: FakeBeat[]; setReadyAfterPolls?: number; bulkBatch?: number; conflictAtBatch?: number | null; quotaMax?: number | null; transferVerifyAfterPolls?: number; rng?: () => number; mediaBytes?: (beatId: string) => Uint8Array; grantTtlMs?: number }
 type Json = Record<string, unknown>;
 
@@ -28,6 +28,7 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
   const rounds = new Map<string, { roundId: string; setId: string; baseRevision: string; status: string; remaining: number; sequence: number; mapping: Map<number, number>; inverse: Map<number, number>; consumed: Set<string>; commands: Map<string, Json> }>();
   const mediaBytesOf = options.mediaBytes ?? ((beatId: string) => { const n = 1000 + (beatId.length * 37) % 500; const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = (i * 31 + beatId.charCodeAt(beatId.length - 1)) & 0xff; return b; });
   const grants = new Map<string, { fileId: string; beatId: string; partIndex: number; expiresAt: number; revoked: boolean; epoch: string }>();
+  const purges = new Map<string, { purgeId: string; ids: string[]; polls: number; scope: string }>();
   const mediaStats = { accesses: 0, streams: 0, bytes: 0 };
   const roundSwap = (r: NonNullable<ReturnType<typeof rounds.get>>, position: number) => {
     const m = r.remaining; const slotAt = (p: number) => (r.mapping.has(p) ? r.mapping.get(p)! : p);
@@ -120,7 +121,12 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
         const t = { operationId, kind: String(j.kind), status: "PREPARED", beatId, polls: 0, intent: j, parts: ((j.parts as Json[]) ?? []).map((p) => ({ ...p, dispatchState: "PENDING", attempts: 0 })) };
         transfers.set(operationId, t); const r = transferDto(t, { created: true }); if (key) idem.set(idk, r); return ok(r, 201);
       }
-      if (j.kind === "PURGE") return err(501, "NOT_IMPLEMENTED", "PURGE operations are delivered by T15");
+      if (j.kind === "PURGE") {
+        const ids = Array.isArray(j.beatIds) ? (j.beatIds as string[]) : [...beats.values()].filter((b) => b.state === "TRASH").map((b) => b.id);
+        const purgeId = `op-purge-${nextId++}`;
+        purges.set(purgeId, { purgeId, ids, polls: 0, scope: Array.isArray(j.beatIds) ? "ITEMS" : "ALL_TRASH" });
+        return ok({ operationId: purgeId, purgeId, kind: "PURGE", status: "ENUMERATING", scope: Array.isArray(j.beatIds) ? "ITEMS" : "ALL_TRASH", baseRevision: String(revision), progress: { total: ids.length, purged: 0, blocked: 0, pending: ids.length, objects: {} }, items: ids.map((id) => ({ beatId: id, status: "PENDING", blockReason: null, objectsTotal: 0, objectsDeleted: 0 })), lastError: null, durable: true, created: true }, 202);
+      }
       const s = selections.get(String(j.selectionId)); if (!s) return err(404, "NOT_FOUND", "sel");
       if (s.status !== "ACTIVE" || String(j.selectionVersion) !== String(s.selectionVersion)) return err(409, "SELECTION_CONFLICT", "selection is not ACTIVE at that version", { status: s.status, current_version: String(s.selectionVersion) });
       if (s.baseRevision !== String(revision)) { s.status = "CONFLICT"; return err(409, "SELECTION_CONFLICT", "library revision changed", { base_revision: s.baseRevision, current_revision: String(revision) }); }
@@ -128,6 +134,11 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
       s.status = "FROZEN"; const set = sets.get(s.setId)!;
       const operationId = `op-${nextId++}`; const o = { operationId, kind: String(j.kind), status: "QUEUED", setId: s.setId, selectionId: s.selectionId, selectionVersion: String(s.selectionVersion), expectedRevision: String(revision), committedRevision: null, memberIds: set.memberIds.filter((id) => selected(s, set, id)), cursor: 0, confirmed: 0, notExecuted: 0, cancelled: 0, patch: j.patch as Json };
       operations.set(operationId, o); return ok({ ...opDto(o), created: true }, 201);
+    }
+    if ((m = /^\/catalog\/v1\/operations\/([^/]+)$/.exec(path)) && method === "GET" && purges.has(m[1])) {
+      const pg = purges.get(m[1])!; pg.polls++;
+      const done = pg.polls >= 2; if (done) for (const id of pg.ids) { const b = beats.get(id); if (b && b.state === "TRASH") { b.state = "PURGED" as FakeBeat["state"]; b.version++; } }
+      return ok({ operationId: pg.purgeId, purgeId: pg.purgeId, kind: "PURGE", status: done ? "PURGED" : "DELETING", scope: pg.scope, baseRevision: String(revision), progress: { total: pg.ids.length, purged: done ? pg.ids.length : 0, blocked: 0, pending: done ? 0 : pg.ids.length, objects: done ? { DELETED: pg.ids.length } : { PENDING: pg.ids.length } }, items: pg.ids.map((id) => ({ beatId: id, status: done ? "PURGED" : "ENUMERATED", blockReason: null, objectsTotal: 1, objectsDeleted: done ? 1 : 0 })), lastError: null, durable: true });
     }
     if ((m = /^\/catalog\/v1\/operations\/([^/]+)$/.exec(path)) && method === "GET") {
       const t = transfers.get(m[1]); if (t) { t.polls++; if (t.polls >= (options.transferVerifyAfterPolls ?? 1)) { for (const p of t.parts) if (p.dispatchState === "RECEIPT") p.dispatchState = "VERIFIED"; if (t.parts.every((p) => p.dispatchState === "VERIFIED") && ["TRANSFERRING", "VERIFYING"].includes(String(t.status))) t.status = "READY"; } return ok(transferDto(t)); }

@@ -157,3 +157,12 @@ for (const token of ['CREATE TABLE catalog_playback_rounds (', 'CREATE TABLE cat
 }
 assert(!/ALTER TABLE|DROP /i.test(playbackMigration.sql), '0032 only creates new objects');
 assert(!/bytea/i.test(playbackMigration.sql), '0032 stores no file bytes');
+
+// T15: 0033 aditiva (purge durable C9: intención, items, manifiesto de objetos con journal externo y confirmación; una purga activa por biblioteca).
+const purgeMigration = migrations.find(item => item.name === '0033_catalog_purge.sql');
+assert(purgeMigration, 'catalog purge migration 0033 is required');
+for (const token of ['CREATE TABLE catalog_purges (', 'CREATE TABLE catalog_purge_items (', 'CREATE TABLE catalog_purge_objects (', "status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'JOURNALED', 'DELETING', 'DELETED', 'BLOCKED', 'UNCERTAIN'))", "CHECK (status NOT IN ('JOURNALED', 'DELETING', 'DELETED') OR journal_ref IS NOT NULL)", "CREATE UNIQUE INDEX catalog_purges_live_idx ON catalog_purges(user_id) WHERE status IN ('ENUMERATING', 'DELETING')"]) {
+  assert(purgeMigration.sql.includes(token), `0033 must contain: ${token}`);
+}
+assert(!/ALTER TABLE|DROP /i.test(purgeMigration.sql), '0033 only creates new objects');
+assert(!/bytea/i.test(purgeMigration.sql), '0033 stores no file bytes');

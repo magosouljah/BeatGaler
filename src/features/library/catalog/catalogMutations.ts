@@ -9,7 +9,7 @@
 import type { Beat } from "../../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../../domain/beat";
 import { CatalogApiError, type CatalogBeatDto } from "./catalogApi";
-import { BATCH_MAX, type CatalogBeatDetail, type CatalogBulkOperation, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogVersionedItem } from "./catalogCommandsApi";
+import { BATCH_MAX, type CatalogBeatDetail, type CatalogBulkOperation, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogPurgeOperation, type CatalogVersionedItem } from "./catalogCommandsApi";
 import { describePart, type CatalogTransfer, type CommitResult, type TransferIntent, type TransferOperationDto, type TransferPartSpec, type TransferRole, type UploadPartResult } from "./catalogTransfer";
 
 export type MutationStage = "preparing" | "master" | "wav" | "artwork" | "project" | "library";
@@ -32,7 +32,7 @@ export type TransferOutcome =
   | { status: "committed"; operationId: string; beatId: string; version: string; revision: string; operation: TransferOperationDto }
   | { status: "uncertain"; operationId: string; beatId: string; parts: string[]; operation: TransferOperationDto | null }
   | { status: "conflict" | "blocked" | "failed" | "canceled" | "timeout"; operationId: string; beatId: string; operation: TransferOperationDto | null; retained: boolean; error: CatalogApiError | null };
-export interface OperationRef { operationId: string; kind: "IMPORT" | "REPLACE" | "BULK_TRASH" | "BULK_RESTORE" | "BULK_PATCH" | "TAG_RENAME"; beatId: string | null; createdAt: number; label: string }
+export interface OperationRef { operationId: string; kind: "IMPORT" | "REPLACE" | "BULK_TRASH" | "BULK_RESTORE" | "BULK_PATCH" | "TAG_RENAME" | "PURGE"; beatId: string | null; createdAt: number; label: string }
 export interface OperationRefStore { load(accountId: string): OperationRef[]; save(accountId: string, refs: OperationRef[]): void }
 
 export interface CatalogMutationsOptions {
@@ -163,10 +163,18 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     rememberOperation({ operationId: op.operationId, kind, beatId: null, label: kind === "BULK_TRASH" ? "Mover selección a la papelera" : "Restaurar selección" });
     return op;
   }
-  /** Purge: PURGE llega en T15 (501). La UI muestra «pendiente» hasta confirmación durable; nunca éxito ficticio. */
-  async function purgeTrash(): Promise<{ status: "pending"; reason: string; durable: false }> {
-    // Sin petición: el cliente no envía PURGE hasta que T15 entregue el job durable (el servidor responde 501 hoy).
-    return { status: "pending", reason: "PURGE_DELIVERED_BY_T15", durable: false };
+  /** Purge (T15, C9): intención durable en el servidor; la UI muestra «pendiente» hasta que el estado sea PURGED/PARTIAL/BLOCKED. Nunca éxito inmediato ni delete desde el cliente. */
+  async function purgeTrash({ beatIds = null, idempotencyKey = newKey() }: { beatIds?: string[] | null; idempotencyKey?: string } = {}): Promise<{ status: "pending" | "purged" | "partial" | "blocked" | "cancelled"; operationId: string; durable: true; operation: CatalogPurgeOperation }> {
+    const op = await commands.requestPurge({ beatIds, idempotencyKey }, options.signal);
+    rememberOperation({ operationId: op.operationId, kind: "PURGE", beatId: null, label: beatIds ? `Eliminar definitivamente ${beatIds.length} beat(s)` : "Vaciar la papelera" });
+    return { status: purgeStatus(op.status), operationId: op.operationId, durable: true, operation: op };
+  }
+  const purgeStatus = (s: CatalogPurgeOperation["status"]) => (s === "PURGED" ? "purged" : s === "PARTIAL" ? "partial" : s === "BLOCKED" ? "blocked" : s === "CANCELLED" ? "cancelled" : "pending") as "pending" | "purged" | "partial" | "blocked" | "cancelled";
+  async function purgeState(operationId: string): Promise<{ status: "pending" | "purged" | "partial" | "blocked" | "cancelled"; operation: CatalogPurgeOperation }> {
+    const op = await commands.getPurge(operationId, options.signal);
+    const status = purgeStatus(op.status);
+    if (status !== "pending") forgetOperation(operationId);
+    return { status, operation: op };
   }
 
   // ---- import / reemplazo por operaciones C7 ----
@@ -225,6 +233,6 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     return runTransfer({ kind: "REPLACE", beatId, expectedVersion, parts: resolved.map((r) => r.spec), metadata: Object.keys(patch).length ? patch : null }, prepared, resolved, { onProgress, kind: "REPLACE", beatId, label: `Reemplazar archivos de «${updated.name || original.name}»` });
   }
 
-  return Object.freeze({ patchBeat, trashBeats, restoreBeats, bulkOverSelection, purgeTrash, importBeat, replaceBeat, pendingOperations, resolvePendingTransfers, rememberOperation, forgetOperation, getBeat: (beatId: string) => commands.getBeat(beatId, options.signal) });
+  return Object.freeze({ patchBeat, trashBeats, restoreBeats, bulkOverSelection, purgeTrash, purgeState, importBeat, replaceBeat, pendingOperations, resolvePendingTransfers, rememberOperation, forgetOperation, getBeat: (beatId: string) => commands.getBeat(beatId, options.signal) });
 }
 export type CatalogMutations = ReturnType<typeof createCatalogMutations>;

@@ -28,7 +28,7 @@ const isTransient = (error) => {
 };
 const retryAfterOf = (error) => Number(error?.retryAfterMs || error?.retry_after_ms || (error?.seconds ? error.seconds * 1000 : 0)) || 0;
 
-function createCatalogWorker({ pool, operations, queries = null, commands = null, transport = null, owner = `worker-${crypto.randomBytes(4).toString('hex')}`, options = {}, log = () => {}, now = () => Date.now(), setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout } = {}) {
+function createCatalogWorker({ pool, operations, queries = null, commands = null, transport = null, purge = null, owner = `worker-${crypto.randomBytes(4).toString('hex')}`, options = {}, log = () => {}, now = () => Date.now(), setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('createCatalogWorker requires a pool');
   if (!operations) throw new Error('createCatalogWorker requires catalog operations');
   const o = { ...DEFAULTS, ...options };
@@ -125,7 +125,20 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
       await operations.enqueueJob({ userId: job.userId, kind: 'OPERATION_STEP', operationId: job.operationId, payload: { ...job.payload, continuation: n, root }, jobId: `${root}-c${n}`.slice(0, 64) }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
       return { status: last.status, continued: true };
     },
-    async PURGE() { throw new WorkerJobError('NOT_IMPLEMENTED', 'purge jobs are delivered by T15', { transient: false }); },
+    // Purge durable (T15, C9): cada paso es una transacción corta + (para objetos) journal y llamadas remotas fuera de SQL; el módulo
+    // decide UNCERTAIN/BLOCKED; un fallo transitorio reintenta con backoff; nunca se borra sin journal verificado.
+    async PURGE(job) {
+      if (!purge || typeof purge.step !== 'function') throw new WorkerJobError('PURGE_UNAVAILABLE', 'purge module not configured', { transient: true, retryAfterMs: 30_000 });
+      const purgeId = job.payload.purgeId || job.operationId;
+      let last = null;
+      for (let i = 0; i < o.stepsPerClaim; i++) {
+        last = await remote(job.userId, () => purge.step({ userId: job.userId, purgeId }));
+        if (!last.more) return { status: last.status, done: true };
+      }
+      const n = (job.payload.continuation || 0) + 1; const root = job.payload.root || job.jobId;
+      await operations.enqueueJob({ userId: job.userId, kind: 'PURGE', operationId: job.operationId, payload: { ...job.payload, purgeId, continuation: n, root }, jobId: `${root}-c${n}`.slice(0, 64) }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
+      return { status: last.status, continued: true };
+    },
   };
 
   // Renovación periódica del lease mientras el handler trabaja (transacción propia; nunca la conexión retenida del claim).

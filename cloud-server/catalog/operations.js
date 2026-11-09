@@ -83,7 +83,7 @@ function validateParts(parts) {
 function validateIntent(input) {
   const kind = input?.kind;
   if (!['IMPORT', 'REPLACE', 'PURGE'].includes(kind)) throw inputInvalid('OPERATION_KIND');
-  if (kind === 'PURGE') throw new CatalogQueryError('NOT_IMPLEMENTED', 501, 'PURGE operations are delivered by T15', {});
+  if (kind === 'PURGE') throw new CatalogQueryError('INPUT_INVALID', 400, 'PURGE is a durable purge intent handled by catalog/purge.js (POST /operations {kind: PURGE})', { reason: 'PURGE_ROUTE' });
   const parts = validateParts(input.parts);
   if (kind === 'IMPORT' && !parts.some((p) => p.slotKey === 'MASTER')) throw inputInvalid('IMPORT_REQUIRES_MASTER');
   let metadata = null;

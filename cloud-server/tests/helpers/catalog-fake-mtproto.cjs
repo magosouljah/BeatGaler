@@ -79,11 +79,20 @@ function createFakeTelegramServer({ dedupWindowMs = null, legacyCanDelete = true
         }
         if (cls === 'messages.GetMessages' || cls === 'channels.GetMessages') {
           state.counters.gets++;
+          const f = nextFault();
+          if (f?.type === 'forbidden') throw rpcError('CHANNEL_PRIVATE', 403);
+          if (f?.type === 'timeout') throw netError('Timeout', 'ETIMEDOUT');
+          if (f?.type === 'wrongChat') return { className: 'messages.ChannelMessages', messages: [] }; // otro peer: ninguna entrada → no prueba ausencia
+          const pk = peerKey(request.peer || request.channel);
           const ids = (request.id || []).map((x) => Number(x.id));
-          return { className: 'messages.ChannelMessages', messages: state.messages.filter((m) => ids.includes(m.id) && !m.deleted) };
+          // Telegram devuelve MessageEmpty para los ids que no existen (o fueron borrados) en un peer al que el lector tiene acceso.
+          return { className: 'messages.ChannelMessages', messages: ids.map((id) => state.messages.find((m) => m.id === id && !m.deleted && (pk === 'self' || m.peer === pk)) || { className: 'MessageEmpty', id }) };
         }
         if (cls === 'messages.DeleteMessages' || cls === 'channels.DeleteMessages') {
           state.counters.deletes++;
+          const f = nextFault();
+          if (f?.type === 'forbidden') throw rpcError('MESSAGE_DELETE_FORBIDDEN', 403);
+          if (f?.type === 'timeout') { if (f.applyEffect) { const ids = (request.id || []).map(Number); for (const m of state.messages) if (ids.includes(m.id)) m.deleted = true; } throw netError('Timeout', 'ETIMEDOUT'); }
           if (!legacyCanDelete) throw rpcError('MESSAGE_DELETE_FORBIDDEN', 403);
           const ids = (request.id || []).map(Number); let n = 0;
           for (const m of state.messages) if (ids.includes(m.id) && !m.deleted) { m.deleted = true; n++; }

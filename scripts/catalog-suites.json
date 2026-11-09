@@ -224,6 +224,17 @@
           ],
           "kind": "node-test",
           "network": "loopback"
+        },
+        {
+          "id": "t15-catalog-purge",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-purge.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
         }
       ]
     },
@@ -263,6 +274,17 @@
           "kind": "node-test",
           "network": "deny",
           "timeout_ms": 300000
+        },
+        {
+          "id": "t15-catalog-purge-faults",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-purge.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
         }
       ]
     },
@@ -1020,8 +1042,69 @@
       ]
     },
     "T15": {
-      "status": "pending",
-      "owner": "T15"
+      "status": "active",
+      "owner": "T15",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Purge durable C9 con journal externo (memoria/disco), gateway fake de borrado + prueba de ausencia autorizada, worker. Cleanup real apagado: flags de biblioteca fijados en el laboratorio. Etiqueta FAKE.",
+      "cases": [
+        {
+          "id": "t15-catalog-purge",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-purge.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t10-catalog-worker",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-purge-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-purge.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
     },
     "T16": {
       "status": "pending",

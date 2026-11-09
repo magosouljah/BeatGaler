@@ -30,6 +30,9 @@ export type CatalogBulkStatus = "QUEUED" | "RUNNING" | "CANCELLING" | "COMPLETED
 export interface CatalogBulkProgress { total: number; confirmed: number; notExecuted: number; cancelled: number; conflictBatchSeq: string | number | null }
 export interface CatalogBulkOperation { operationId: string; kind: CatalogBulkKind; status: CatalogBulkStatus; setId: string | null; selectionId: string | null; selectionVersion: string | null; expectedRevision: string | null; committedRevision: string | null; progress: CatalogBulkProgress; createdAt: string; updatedAt: string; completedAt: string | null; created?: boolean; replay?: boolean; batches?: unknown[]; details?: unknown[] }
 export interface CatalogRenamePreview { from: string; to: string; countActive: number; countTrash: number; mergesInto: boolean; revision: string; epoch: string; authorityEra: string }
+export type CatalogPurgeStatus = "ENUMERATING" | "DELETING" | "PURGED" | "PARTIAL" | "BLOCKED" | "CANCELLED";
+export interface CatalogPurgeItem { beatId: string; status: "PENDING" | "ENUMERATED" | "DELETING" | "PURGED" | "BLOCKED"; blockReason: string | null; objectsTotal: number; objectsDeleted: number }
+export interface CatalogPurgeOperation { operationId: string; purgeId: string; kind: "PURGE"; status: CatalogPurgeStatus; scope: "ALL_TRASH" | "ITEMS"; baseRevision: string; progress: { total: number; purged: number; blocked: number; pending: number; objects: Record<string, number> }; items: CatalogPurgeItem[]; lastError: string | null; durable: true; created?: boolean; replay?: boolean }
 
 export interface CatalogCommandsOptions {
   fetchImpl?: typeof fetch;
@@ -114,6 +117,10 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
       (await request<CatalogBulkOperation>("GET", `/catalog/v1/operations/${enc(operationId)}${detailsAfter ? `?detailsAfter=${enc(detailsAfter)}` : ""}`, { signal })).body,
     cancelOperation: async (operationId: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", `/catalog/v1/operations/${enc(operationId)}/cancel`, { body: {}, signal })).body,
     resumeOperation: async (operationId: string, revision: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", `/catalog/v1/operations/${enc(operationId)}/resume`, { body: { revision }, signal })).body,
+    /** T15: purge durable (C9). 202 = intención aceptada; el estado se observa en GET /operations/:id; nunca es un éxito inmediato. */
+    requestPurge: async ({ beatIds = null, idempotencyKey }: { beatIds?: string[] | null; idempotencyKey: string }, signal?: AbortSignal) =>
+      (await request<CatalogPurgeOperation>("POST", "/catalog/v1/operations", { body: beatIds ? { kind: "PURGE", beatIds } : { kind: "PURGE", scope: "ALL_TRASH" }, idempotencyKey, signal })).body,
+    getPurge: async (operationId: string, signal?: AbortSignal) => (await request<CatalogPurgeOperation>("GET", `/catalog/v1/operations/${enc(operationId)}`, { signal })).body,
     renamePreview: async (from: string, to: string, signal?: AbortSignal) => (await request<CatalogRenamePreview>("POST", "/catalog/v1/tags/rename/preview", { body: { from, to }, signal })).body,
     renameTag: async (from: string, to: string, idempotencyKey: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", "/catalog/v1/tags/rename", { body: { from, to }, idempotencyKey, signal })).body,
   });

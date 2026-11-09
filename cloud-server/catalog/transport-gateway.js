@@ -241,7 +241,30 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     metrics.downloads = (metrics.downloads || 0) + 1;
     return client.iterDownload({ file: msg.media, offset, limit, requestSize });
   }
-  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, downloadPart, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
+  // T15 (C9): borrado de un mensaje propio del bot. Nunca se llama sin journal externo persistido (lo garantiza catalog/purge.js).
+  async function deleteMessage({ chatId, messageId } = {}) {
+    const { peer, channel } = await resolvePeer(chatId);
+    const id = toInt(messageId);
+    if (!id) throw new GatewayError('MESSAGE_ID_INVALID', 'messageId is required', { transient: false });
+    const req = channel ? new sdk.Api.channels.DeleteMessages({ channel: peer, id: [id] }) : new sdk.Api.messages.DeleteMessages({ id: [id], revoke: true });
+    try { const r = await client.invoke(req); metrics.deletes = (metrics.deletes || 0) + 1; return { requested: true, ptsCount: toInt(r && r.ptsCount) ?? null }; } catch (error) { throw failFromProvider(error, 'DELETE'); }
+  }
+  // T15 (C9): prueba de ausencia por lector autorizado. Solo `MessageEmpty` para ese id en el peer correcto demuestra ausencia; un
+  // resultado sin la entrada, un error RPC, un 403 o un timeout NO prueban nada (→ GatewayError, el purge queda UNCERTAIN).
+  async function probeAbsence({ chatId, messageId } = {}) {
+    const { peer, channel } = await resolvePeer(chatId);
+    const id = toInt(messageId);
+    let res;
+    try { res = await client.invoke(buildGetMessages(sdk, { peer, messageId: id, channel: Boolean(channel) })); } catch (error) { throw failFromProvider(error, 'PROBE'); }
+    const list = Array.isArray(res && res.messages) ? res.messages : [];
+    const entry = list.find((m) => m && toInt(m.id) === id);
+    metrics.probes = (metrics.probes || 0) + 1;
+    if (!entry) throw new GatewayError('PROBE_UNVERIFIED', 'the provider returned no entry for that id: absence is not proven (wrong chat or unauthorized reader)', { transient: true, retryAfterMs: 30_000, status: 502 });
+    if (entry.className === 'MessageEmpty') return { absent: true, evidence: 'MESSAGE_EMPTY' };
+    const d = describeMessage(entry);
+    return { absent: false, evidence: d ? 'DOCUMENT_PRESENT' : 'MESSAGE_PRESENT', size: d ? d.size : null };
+  }
+  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, downloadPart, deleteMessage, probeAbsence, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
 }
 
 module.exports = Object.freeze({

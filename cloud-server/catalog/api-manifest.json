@@ -1,7 +1,7 @@
 {
   "schema": "beatgaler.catalog-api-manifest",
-  "version": 6,
-  "task": "T06/T07/T09/T10/T12/T14",
+  "version": 7,
+  "task": "T06/T07/T09/T10/T12/T14/T15",
   "date": "2026-11-09",
   "note": "Manifiesto tipado de /catalog/v1 (CONTRATO C5 + C12-r4 + NATIVO r2.1 §3.3 + V02-A). status: delivered = implementado y probado en T06; contract = forma fijada aquí, implementación adscrita a la tarea indicada (responde 501 NOT_IMPLEMENTED hasta entonces, nunca un éxito ficticio). Ningún endpoint de metadata toca Telegram; en T12 los bytes de una parte pasan por el gateway del servidor (§8.6) mediante una capacidad opaca: el cliente nunca recibe chat, message_id, random_id ni credenciales. Encargo T12 con fakes: T11 sigue NO PASS y G2 NOT_PROVEN.",
   "prefix": "/catalog/v1",
@@ -83,7 +83,12 @@
       "SEQUENCE_MISMATCH",
       "ROUND_STALE",
       "ROUND_BUILDING",
-      "ROUND_RELEASED"
+      "ROUND_RELEASED",
+      "PURGE_IN_PROGRESS",
+      "BEAT_NOT_IN_TRASH",
+      "PURGE_IN_FLIGHT",
+      "RESTORE_HOLD_PENDING",
+      "CLEANUP_DISABLED"
     ],
     "410": [
       "LEGACY_CLIENT_UNSUPPORTED",
@@ -116,7 +121,8 @@
       "UPLOAD_FAILED",
       "CREDENTIAL_REVOKED",
       "RECEIPT_PERSIST_FAILED",
-      "PROJECT_ACCESS_UNAVAILABLE"
+      "PROJECT_ACCESS_UNAVAILABLE",
+      "JOURNAL_UNAVAILABLE"
     ]
   },
   "cursor": {
@@ -396,18 +402,20 @@
       "method": "POST",
       "path": "/operations",
       "status": "delivered",
-      "task": "T07 (BULK_*|TAG_RENAME) + T09 (IMPORT|REPLACE); PURGE → 501 hasta T15",
-      "body": "bulk: {kind, selectionId, selectionVersion, patch?|rename?} | transfer: {kind: IMPORT|REPLACE, parts:[{partKey?, slotKey MASTER|ARTWORK|PROJECT|FILES:n, role, partIndex, size, sha256?, filename?, mime?}] ≤64, metadata? (IMPORT exige name y MASTER), beatId+expectedVersion (REPLACE)}",
-      "response": "201|200 operation; transfer: {operationId top-…, kind, status PREPARED, beatId (servidor), parts[{partKey, dispatchState, declaredSize…}], reservation{expiresAt, maxUntil}, progress}",
+      "task": "T07 (BULK_*|TAG_RENAME) + T09 (IMPORT|REPLACE) + T15 (PURGE → 202 purge durable)",
+      "body": "bulk: {kind, selectionId, selectionVersion, patch?|rename?} | transfer: {kind: IMPORT|REPLACE, parts:[{partKey?, slotKey MASTER|ARTWORK|PROJECT|FILES:n, role, partIndex, size, sha256?, filename?, mime?}] ≤64, metadata? (IMPORT exige name y MASTER), beatId+expectedVersion (REPLACE)} | purge: {kind: PURGE, scope ALL_TRASH | beatIds[] ≤240}",
+      "response": "201|200 operation; transfer: {operationId top-…, kind, status PREPARED, beatId (servidor), parts[{partKey, dispatchState, declaredSize…}], reservation{expiresAt, maxUntil}, progress} | purge: 202 {operationId op-purge-…, status ENUMERATING, scope, baseRevision, progress{total, purged, blocked, pending, objects}, items[], durable true}",
       "errors": [
         "409 QUOTA_EXCEEDED (active+trash+purging+pending ≥ max_beats)",
         "409 PURGE_PENDING",
         "409 BEAT_NOT_ACTIVE",
         "409 VERSION_CONFLICT",
         "409 IDEMPOTENCY_MISMATCH",
-        "413 PAYLOAD_TOO_LARGE"
+        "413 PAYLOAD_TOO_LARGE",
+        "409 PURGE_IN_PROGRESS (una purga activa por biblioteca)",
+        "409 BEAT_NOT_IN_TRASH"
       ],
-      "notes": "random_id int64 + sender + chat + partKey + tamaño + hash declarado persistidos antes de cualquier envío; el cliente nunca recibe chat ni token."
+      "notes": "random_id int64 + sender + chat + partKey + tamaño + hash declarado persistidos antes de cualquier envío; el cliente nunca recibe chat ni token. PURGE (C9): intención durable; el worker enumera (TRASH→PURGING ocupa cuota; restore/REPLACE/acceso lo rechazan con PURGE_PENDING), escribe el journal externo y solo entonces borra y comprueba ausencia con lector autorizado; PURGED libera cuota una vez; bloqueos explícitos (OPAQUE/SHARED/RETENTION/RESTORE_HOLD/CLEANUP_DISABLED/PENDING_OPERATION/PROVIDER_UNCERTAIN) nunca se presentan como éxito. Cleanup real apagado (T24)."
     },
     {
       "method": "PUT",
@@ -733,6 +741,37 @@
         "503 CREDENTIAL_REVOKED"
       ],
       "notes": "Multipart: el cliente descarga todas las partes en orden y verifica tamaño total y hash cuando existe."
+    },
+    {
+      "method": "GET",
+      "path": "/operations/:id (op-purge-*)",
+      "status": "delivered",
+      "task": "T15",
+      "response": "purge: {status ENUMERATING|DELETING|PURGED|PARTIAL|BLOCKED|CANCELLED, progress, items[{beatId, status PENDING|ENUMERATED|DELETING|PURGED|BLOCKED, blockReason, objectsTotal, objectsDeleted}], lastError}"
+    },
+    {
+      "method": "POST",
+      "path": "/operations/:id/cancel (op-purge-*)",
+      "status": "delivered",
+      "task": "T15",
+      "response": "purge CANCELLED {reverted}: los items sin ningún objeto borrado vuelven a TRASH; con partes borradas quedan BLOCKED (no se puede restaurar una entidad incompleta)",
+      "errors": [
+        "409 PURGE_IN_FLIGHT (objetos a mitad de borrado: esperar su confirmación)"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/library/restore-hold/release",
+      "status": "delivered",
+      "task": "T15",
+      "headers": "X-Catalog-Era, X-Catalog-Epoch",
+      "response": "{restoreHold false, journalEntries}",
+      "errors": [
+        "409 CLEANUP_DISABLED (aprobación del propietario, T24)",
+        "409 RESTORE_HOLD_PENDING {unresolved[], count} (el journal externo tiene borrados que SQL no refleja: reconciliar)",
+        "503 JOURNAL_UNAVAILABLE"
+      ],
+      "notes": "NATIVO §7: restore_hold nace true y solo se libera con el journal externo reconciliado y cleanup aprobado."
     }
   ],
   "v02a_decisions": {
@@ -761,5 +800,13 @@
     "media": "acceso por referencia SQL con concesión por parte (hash) y bytes por HTTP Range desde el gateway; verification_level PROVIDER; BYTES solo si el cliente verifica el hash completo",
     "perf": "N=100k/1M, p95 de avances y coste de preparación se miden en T20 (STOP-SHUFFLE-PERF si incumple); la prueba de T14 registra una métrica inicial con N=20k que no es SLO",
     "g2": "NOT_PROVEN (fakes)"
+  },
+  "purge": {
+    "task": "T15",
+    "contract": "C9",
+    "journal": "externo (fuera de la línea de restauración de DB): append + verify antes de cada delete; adaptadores memoria (pruebas) y disco JSON Lines (destino real por definir en C12/G4)",
+    "proof": "solo MessageEmpty del id en el peer autorizado demuestra ausencia; 403/404 sin entrada/timeout/genérico → UNCERTAIN con reintento acotado (8) → BLOCKED PROVIDER_UNCERTAIN",
+    "quota": "PURGING ocupa cuota; se libera una sola vez al PURGED del beat; items BLOCKED no liberan nada",
+    "realCleanup": "apagado (cleanup_enabled=false por defecto; habilitación por biblioteca en T24 con autorización); G2 y G4 siguen necesarios"
   }
 }

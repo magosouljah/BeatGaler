@@ -271,6 +271,6 @@ test('conjuntos y bulk reanudan tras "reinicio" del worker sin recalcular miembr
   b = await cmd.getOperation({ userId: lib.userId, operationId: bulk.operationId });
   assert.deepEqual([b.status, b.progress.confirmed + b.progress.notExecuted + b.progress.cancelled], ['CANCELLED', 700]);
   health = await w3.health();
-  assert.deepEqual([health.blocked, health.backlog, health.running], [1, 0, 0], 'PURGE (T15) queda BLOCKED visible; backlog vacío');
-  assert.equal((await jobsOf(pool, lib.userId)).find((j) => j.job_id === 'job-purge').state, 'BLOCKED');
+  assert.deepEqual([health.blocked, health.backlog, health.running], [0, 1, 0], 'PURGE sin módulo de purge montado (T15 lo inyecta): reintento transitorio visible en el backlog, nunca BLOCKED silencioso ni éxito ficticio');
+  assert.equal((await jobsOf(pool, lib.userId)).find((j) => j.job_id === 'job-purge').state, 'QUEUED', 'sin purge inyectado el job espera (transitorio); con el módulo T15 lo procesa catalog-purge.integration');
 }));

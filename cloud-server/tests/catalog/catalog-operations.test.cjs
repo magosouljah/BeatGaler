@@ -16,7 +16,7 @@ test('random_id: entero firmado de 64 bits como texto, uniforme en todo el rango
   assert.ok([...sample].some((s) => s.startsWith('-')) && [...sample].some((s) => !s.startsWith('-')), 'ambos signos aparecen');
 });
 
-test('validateIntent: IMPORT exige MASTER y name, REPLACE exige beatId + expectedVersion, PURGE → 501, partes acotadas y sin duplicados; tamaños/hashes/roles estrictos', () => {
+test('validateIntent: IMPORT exige MASTER y name, REPLACE exige beatId + expectedVersion, PURGE → 400 PURGE_ROUTE (lo atiende catalog/purge.js desde T15), partes acotadas y sin duplicados; tamaños/hashes/roles estrictos', () => {
   const master = { partKey: 'm0', slotKey: 'MASTER', role: 'MASTER', partIndex: 0, size: 1000, sha256: 'a'.repeat(64), filename: 'beat.mp3', mime: 'audio/mpeg' };
   const ok = ops.validateIntent({ kind: 'IMPORT', parts: [master, { slotKey: 'ARTWORK', role: 'ARTWORK', size: 10 }], metadata: { name: 'New beat', tags: ['trap'], bpm: '120' } });
   assert.deepEqual([ok.kind, ok.parts.length, ok.parts[1].partKey, ok.metadata.bpm, ok.beatId], ['IMPORT', 2, 'ARTWORK:0', '120', null]);
@@ -38,7 +38,7 @@ test('validateIntent: IMPORT exige MASTER y name, REPLACE exige beatId + expecte
   bad({ kind: 'REPLACE', parts: [master], beatId: 'b1' }, 'EXPECTED_VERSION');
   const rep = ops.validateIntent({ kind: 'REPLACE', parts: [master], beatId: 'b1', expectedVersion: 3 });
   assert.deepEqual([rep.beatId, rep.expectedVersion, rep.metadata], ['b1', '3', null]);
-  assert.throws(() => ops.validateIntent({ kind: 'PURGE', parts: [master] }), (e) => e.code === 'NOT_IMPLEMENTED' && e.status === 501);
+  assert.throws(() => ops.validateIntent({ kind: 'PURGE', parts: [master] }), (e) => e.code === 'INPUT_INVALID' && e.detail.reason === 'PURGE_ROUTE');
   assert.throws(() => ops.validateIntent({ kind: 'IMPORT', parts: [{ ...master, filename: 'x'.repeat(60000) }], metadata: { name: 'x' } }), (e) => e.code === 'PAYLOAD_TOO_LARGE' || e.detail.reason === 'PART_FILENAME');
   const doc = ops.nativeBeatDocument('b-1', { name: 'N', tags: ['a'], crop: null });
   assert.deepEqual(doc, { id: 'b-1', name: 'N', bpm: '', key: '', tags: ['a'], rating: 0, color: '', color2: '', image_crop: null });

@@ -62,7 +62,17 @@ describe("catalogMutations", () => {
     const r3 = await h.mutations.restoreBeats(restoreItems, { idempotencyKey: "restore-1" });
     expect(r3.status).toBe("COMPLETED"); // replay por clave (sin segundo efecto)
     expect(h.server.beats.get("g0")!.version).toBe(3);
-    expect(await h.mutations.purgeTrash()).toEqual({ status: "pending", reason: "PURGE_DELIVERED_BY_T15", durable: false });
+    // purge durable (T15): 202 → pendiente con referencia por cuenta; el estado final solo llega del servidor (PURGED) y entonces se olvida la referencia
+    const toTrash = [...h.server.beats.values()].slice(0, 3).map((b) => ({ beatId: b.id, expectedVersion: String(b.version) }));
+    await h.mutations.trashBeats(toTrash, { idempotencyKey: "trash-for-purge" });
+    const pg = await h.mutations.purgeTrash();
+    expect([pg.status, pg.durable, pg.operation.progress.total]).toEqual(["pending", true, 3]);
+    expect(h.mutations.pendingOperations().map((r) => r.kind)).toContain("PURGE");
+    expect((await h.mutations.purgeState(pg.operationId)).status).toBe("pending");
+    const fin = await h.mutations.purgeState(pg.operationId);
+    expect([fin.status, fin.operation.progress.purged]).toEqual(["purged", 3]);
+    expect(h.mutations.pendingOperations().map((r) => r.kind)).not.toContain("PURGE");
+    expect([...h.server.beats.values()].filter((b) => b.state === "PURGED").length).toBe(3);
     expect(h.server.legacy).toEqual({ getLibraryIndex: 0, replaceLibraryIndex: 0 });
   });
 

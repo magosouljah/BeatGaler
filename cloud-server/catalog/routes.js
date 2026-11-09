@@ -45,7 +45,7 @@ function eraHeaders(req) {
 }
 const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, transport = null, playback = null, media = null, authenticate, log = () => {} } = {}) {
+function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, transport = null, playback = null, media = null, purge = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -119,7 +119,14 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
     router.post(`${CATALOG_PREFIX}/tags/rename`, handle(async (req, _res, userId) => { const b = body(req); const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: 'TAG_RENAME', rename: { from: b.from, to: b.to } }); return { status: r.created ? 201 : 200, body: r }; }));
     router.post(`${CATALOG_PREFIX}/operations`, handle(async (req, res, userId) => {
       const b = body(req);
-      if (['IMPORT', 'REPLACE', 'PURGE'].includes(b.kind)) {
+      if (b.kind === 'PURGE') {
+        // T15 — purge durable C9: intención → 202 (ENUMERATING); el worker enumera/borra con journal; nunca delete directo del cliente.
+        if (!purge) return { status: 501, body: { error: 'purge is not mounted', code: 'NOT_IMPLEMENTED' } };
+        const h = writeHeaders(req);
+        const r = await purge.requestPurge({ userId, ...h, scope: Array.isArray(b.beatIds) ? 'ITEMS' : (b.scope || 'ALL_TRASH'), beatIds: Array.isArray(b.beatIds) ? b.beatIds : null });
+        return { status: r.created ? 202 : 200, body: r };
+      }
+      if (['IMPORT', 'REPLACE'].includes(b.kind)) {
         if (!operations) return { status: 501, body: { error: 'transfer operations are not mounted', code: 'NOT_IMPLEMENTED' } };
         const r = await operations.createOperation({ userId, ...writeHeaders(req), intent: b });
         return { status: r.created ? 201 : 200, body: r };
@@ -129,11 +136,14 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
       return { status: r.created ? 201 : 200, body: r };
     }));
     const isTransfer = (id) => typeof id === 'string' && id.startsWith('top-');
+    const isPurge = (id) => typeof id === 'string' && id.startsWith('op-purge-');
     router.get(`${CATALOG_PREFIX}/operations/:id`, handle(async (req, _res, userId) => {
+      if (isPurge(req.params.id)) { if (!purge) throw new CatalogQueryError('NOT_FOUND', 404, 'operation is not accessible', {}); return { body: await purge.getPurge({ userId, purgeId: req.params.id }) }; }
       if (isTransfer(req.params.id)) { if (!operations) throw new CatalogQueryError('NOT_FOUND', 404, 'operation is not accessible', {}); return { body: await operations.getOperation({ userId, operationId: req.params.id }) }; }
       return { body: await commands.getOperation({ userId, operationId: req.params.id, detailsAfter: typeof req.query.detailsAfter === 'string' ? req.query.detailsAfter : null }) };
     }));
     router.post(`${CATALOG_PREFIX}/operations/:id/cancel`, handle(async (req, _res, userId) => {
+      if (isPurge(req.params.id) && purge) return { body: await purge.cancelPurge({ userId, ...eraHeaders(req), purgeId: req.params.id }) };
       if (isTransfer(req.params.id) && operations) return { body: await operations.cancelOperation({ userId, ...eraHeaders(req), operationId: req.params.id }) };
       return { body: await commands.cancelOperation({ userId, ...eraHeaders(req), operationId: req.params.id }) };
     }));
@@ -172,6 +182,10 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
     router.post(`${CATALOG_PREFIX}/playback/rounds/:id/rebuild`, handle(async (req, _res, userId) => ({ body: await playback.rebuildRound({ userId, ...eraHeaders(req), roundId: req.params.id }) })));
     router.post(`${CATALOG_PREFIX}/playback/rounds/:id/release`, handle(async (req, _res, userId) => ({ body: await playback.releaseRound({ userId, ...eraHeaders(req), roundId: req.params.id }) })));
     router.get(`${CATALOG_PREFIX}/query-sets/:id/neighbor`, handle(async (req, _res, userId) => ({ body: await playback.neighbor({ userId, setId: req.params.id, beatId: typeof req.query.beatId === 'string' ? req.query.beatId : null, direction: req.query.direction, sort: typeof req.query.sort === 'string' ? req.query.sort : 'manual' }) })));
+  }
+  if (purge) {
+    // T15 — restore_hold se libera solo con el journal externo reconciliado y cleanup aprobado (§7).
+    router.post(`${CATALOG_PREFIX}/library/restore-hold/release`, handle(async (req, _res, userId) => ({ body: await purge.releaseRestoreHold({ userId, ...eraHeaders(req) }) })));
   }
   if (media) {
     // T14 — acceso a medios por referencia SQL (§8.6): concesión opaca por parte; bytes por HTTP con Range desde el gateway.
