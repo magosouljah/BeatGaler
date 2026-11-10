@@ -24,7 +24,7 @@ test('0026 (T03), 0027 (T05-N) y 0028 (T06) son las migraciones del catálogo y 
   assert.equal(all.at(-6).name, '0031_catalog_transfer_capabilities.sql');
   assert.equal(all.at(-7).name, '0030_catalog_transfer_operations.sql');
   assert.equal(all.at(-8).name, '0029_catalog_commands.sql');
-  assert.equal(all.at(-8).name, '0028_catalog_queries.sql');
+  assert.equal(all.at(-9).name, '0028_catalog_queries.sql');
   mig.assertInitialSchemaContract(all);
 });
 
