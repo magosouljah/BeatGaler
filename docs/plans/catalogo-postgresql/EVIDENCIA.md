@@ -576,3 +576,9 @@ Límites:
 - **V10-B navegador** (recorrido Chrome real, red simulada, artwork, frames) **NO EJECUTADO (STOP-ENV)**: mismo LAB de Chrome desmontado que V09 §5; no se reconstruyó en este bloque.
 - LAB limpio verificado (0 residuales) tras ambas corridas.
 - Calificación: **PASS en todos los umbrales medibles sin navegador** (memoria, Shuffle, Select All, escritores, SQL retenido, Telegram, límite de lote); **STOP-ENV** para la parte de navegador. Ningún gate superado; G4 de V10 queda parcial (sin la parte de navegador) para dictamen de Sol.
+
+## E39-b. T20/T16/V10 — CI aislado `catalog-checks` tras el push (2026-11-10) — PASS técnico aislado tras un reintento
+
+- Push fast-forward a `local/landing-gallery-unificada` (`9e75d53..7825b8a`, 4 commits: T16+T20 código/tests/migración, V10 harness, docs E38–E40, fix de CI). Primer run **`42762028249`: FAIL** — dos aserciones de conteo de migraciones (35→36) quedaron sin actualizar tras añadir la migración 0036: un índice `.at(-8)` duplicado en `catalog-contract.test.cjs` (nunca desplazado a `.at(-9)` para 0028) y tres valores hardcodeados (`35`, `'0035'`, el arreglo de 10 elementos) en `catalog-schema.integration.cjs`. Corregidos en un solo cambio (commit `7825b8a`), verificados localmente (`mig.listMigrations().length === 36`; `catalog-contract.test.cjs` 7/7 sin DB) antes del reintento.
+- Reintento **`42762796888`: PASS** (único reintento, conforme a CLAUDE.md §7). Suites `unit`, `faults`, `integration`, `T03`…`T19` verdes.
+- Calificación: regresión aislada PASS con fakes; el error era mecánico (conteo de migraciones), no un hallazgo de integridad ni de producto. Ningún gate superado.
