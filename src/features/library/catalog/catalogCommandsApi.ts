@@ -17,6 +17,8 @@ export interface CatalogBeatDetail extends CatalogBeatDto {
   generationId: string;
 }
 export type CatalogMetadataPatch = Partial<{ name: string; bpm: string; key: string; tags: string[]; rating: number; color: string | null; color2: string | null; crop: { x: number; y: number; w: number; h: number; unit: "ratio" } | null }>;
+/** Bulk add/remove de tags sobre BULK_PATCH (C12-V-INTERACTION, "bulk desde Drawer con reporte por lote"); nunca reemplaza el set. */
+export type CatalogBulkTagsOp = { op: "add" | "remove"; tags: string[] };
 export interface CatalogPatchResult { noop: boolean; beat: CatalogBeatDto | null; revision: string; eventSeq?: string; operationId: string; replay: boolean }
 export interface CatalogVersionedItem { beatId: string; expectedVersion: string }
 export interface CatalogBatchResult { items: Array<{ beatId: string; version: string }>; revision: string; operationId: string; replay: boolean }
@@ -111,8 +113,8 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
     applySelectionOp: async (selectionId: string, { selectionVersion, op, idempotencyKey }: { selectionVersion: string; op: CatalogSelectionOp; idempotencyKey: string }, signal?: AbortSignal) =>
       (await request<CatalogSelection>("POST", `/catalog/v1/selections/${enc(selectionId)}/ops`, { body: { selectionVersion, op }, idempotencyKey, signal })).body,
     releaseSelection: async (selectionId: string, signal?: AbortSignal) => (await request<CatalogSelection>("POST", `/catalog/v1/selections/${enc(selectionId)}/release`, { body: {}, signal })).body,
-    createBulkOperation: async ({ kind, selectionId, selectionVersion, patch, idempotencyKey }: { kind: Exclude<CatalogBulkKind, "TAG_RENAME">; selectionId: string; selectionVersion: string; patch?: CatalogMetadataPatch; idempotencyKey: string }, signal?: AbortSignal) =>
-      (await request<CatalogBulkOperation>("POST", "/catalog/v1/operations", { body: { kind, selectionId, selectionVersion, patch }, idempotencyKey, signal })).body,
+    createBulkOperation: async ({ kind, selectionId, selectionVersion, patch, tagsOp, idempotencyKey }: { kind: Exclude<CatalogBulkKind, "TAG_RENAME">; selectionId: string; selectionVersion: string; patch?: CatalogMetadataPatch; tagsOp?: CatalogBulkTagsOp; idempotencyKey: string }, signal?: AbortSignal) =>
+      (await request<CatalogBulkOperation>("POST", "/catalog/v1/operations", { body: { kind, selectionId, selectionVersion, patch, tagsOp }, idempotencyKey, signal })).body,
     getOperation: async (operationId: string, detailsAfter: string | null = null, signal?: AbortSignal) =>
       (await request<CatalogBulkOperation>("GET", `/catalog/v1/operations/${enc(operationId)}${detailsAfter ? `?detailsAfter=${enc(detailsAfter)}` : ""}`, { signal })).body,
     cancelOperation: async (operationId: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", `/catalog/v1/operations/${enc(operationId)}/cancel`, { body: {}, signal })).body,

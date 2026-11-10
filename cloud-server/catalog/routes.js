@@ -132,7 +132,7 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
         return { status: r.created ? 201 : 200, body: r };
       }
       if (!['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE', 'TAG_RENAME'].includes(b.kind)) return { status: 400, body: { error: `unknown operation kind ${String(b.kind)}`, code: 'INPUT_INVALID', detail: { reason: 'OPERATION_KIND' } } };
-      const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: b.kind, selectionId: b.selectionId, selectionVersion: b.selectionVersion, patch: b.patch, rename: b.rename });
+      const r = await commands.createOperation({ userId, ...writeHeaders(req), kind: b.kind, selectionId: b.selectionId, selectionVersion: b.selectionVersion, patch: b.patch, rename: b.rename, tagsOp: b.tagsOp });
       return { status: r.created ? 201 : 200, body: r };
     }));
     const isTransfer = (id) => typeof id === 'string' && id.startsWith('top-');

@@ -19,7 +19,7 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
   const idem = new Map<string, Json>();
   const sets = new Map<string, { setId: string; status: string; memberIds: string[]; polls: number; baseRevision: string; sort: string }>();
   const selections = new Map<string, { selectionId: string; setId: string; sort: string; defaultSelected: boolean; selectionVersion: number; status: string; baseRevision: string; ops: Array<Json>; count: number }>();
-  const operations = new Map<string, Json & { kind: string; memberIds: string[]; cursor: number; patch?: Json; rename?: { from: string; to: string }; selectionId?: string }>();
+  const operations = new Map<string, Json & { kind: string; memberIds: string[]; cursor: number; patch?: Json; tagsOp?: { op: "add" | "remove"; tags: string[] }; rename?: { from: string; to: string }; selectionId?: string }>();
   const transfers = new Map<string, Json & { parts: Array<Json>; polls: number; kind: string; beatId: string }>();
   const capabilities = new Map<string, { operationId: string; partKey: string; used: boolean }>();
   let nextId = 1; let fail: { code: string; status: number; route: RegExp } | null = null;
@@ -70,7 +70,18 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
     if (options.conflictAtBatch != null && batchIndex === options.conflictAtBatch) { o.status = "CONFLICT"; o.conflictBatchSeq = batchIndex; o.notExecuted = o.memberIds.length - (o.confirmed as number); return; }
     if (o.expectedRevision !== String(revision)) { o.status = "CONFLICT"; o.conflictBatchSeq = batchIndex; o.notExecuted = o.memberIds.length - (o.confirmed as number); return; }
     const batch = o.memberIds.slice(o.cursor as number, (o.cursor as number) + batchSize);
-    for (const id of batch) { const b = beats.get(id)!; if (o.kind === "BULK_PATCH") Object.assign(b, o.patch); if (o.kind === "BULK_TRASH") b.state = "TRASH"; if (o.kind === "BULK_RESTORE") b.state = "ACTIVE"; if (o.kind === "TAG_RENAME") { const seen = new Set<string>(); b.tags = b.tags.map((t) => (t.trim().toLowerCase() === o.rename!.from ? o.rename!.to : t)).filter((t) => (seen.has(t) ? false : (seen.add(t), true))); } b.version++; }
+    for (const id of batch) {
+      const b = beats.get(id)!;
+      if (o.kind === "BULK_PATCH") {
+        if (o.patch) Object.assign(b, o.patch);
+        const tagsOp = o.tagsOp as { op: "add" | "remove"; tags: string[] } | undefined;
+        if (tagsOp?.op === "add") b.tags = [...new Set([...b.tags, ...tagsOp.tags])];
+        else if (tagsOp?.op === "remove") { const rm = new Set(tagsOp.tags); b.tags = b.tags.filter((t) => !rm.has(t.trim().toLowerCase())); }
+      }
+      if (o.kind === "BULK_TRASH") b.state = "TRASH"; if (o.kind === "BULK_RESTORE") b.state = "ACTIVE";
+      if (o.kind === "TAG_RENAME") { const seen = new Set<string>(); b.tags = b.tags.map((t) => (t.trim().toLowerCase() === o.rename!.from ? o.rename!.to : t)).filter((t) => (seen.has(t) ? false : (seen.add(t), true))); }
+      b.version++;
+    }
     o.cursor = (o.cursor as number) + batch.length; o.confirmed = (o.confirmed as number) + batch.length; bump(); o.expectedRevision = String(revision); o.committedRevision = String(revision);
     if ((o.cursor as number) >= o.memberIds.length) o.status = "COMPLETED";
   };
@@ -131,8 +142,15 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
       if (s.status !== "ACTIVE" || String(j.selectionVersion) !== String(s.selectionVersion)) return err(409, "SELECTION_CONFLICT", "selection is not ACTIVE at that version", { status: s.status, current_version: String(s.selectionVersion) });
       if (s.baseRevision !== String(revision)) { s.status = "CONFLICT"; return err(409, "SELECTION_CONFLICT", "library revision changed", { base_revision: s.baseRevision, current_revision: String(revision) }); }
       if (j.kind === "BULK_PATCH" && j.patch && "tags" in (j.patch as Json)) return err(400, "INPUT_INVALID", "bulk patch cannot replace tags", { reason: "BULK_PATCH_TAGS" });
+      let tagsOp: { op: "add" | "remove"; tags: string[] } | undefined;
+      if (j.kind === "BULK_PATCH" && j.tagsOp) {
+        const raw = j.tagsOp as Json;
+        if (!["add", "remove"].includes(String(raw.op)) || !Array.isArray(raw.tags) || (raw.tags as unknown[]).length === 0) return err(400, "INPUT_INVALID", "tagsOp", { reason: "BULK_TAGS_OP" });
+        tagsOp = { op: raw.op as "add" | "remove", tags: [...new Set((raw.tags as string[]).map((t) => t.trim().toLowerCase()).filter(Boolean))] };
+      }
+      if (j.kind === "BULK_PATCH" && !tagsOp && !Object.keys((j.patch as Json) ?? {}).length) return err(400, "INPUT_INVALID", "patch has no fields", { reason: "PATCH" });
       s.status = "FROZEN"; const set = sets.get(s.setId)!;
-      const operationId = `op-${nextId++}`; const o = { operationId, kind: String(j.kind), status: "QUEUED", setId: s.setId, selectionId: s.selectionId, selectionVersion: String(s.selectionVersion), expectedRevision: String(revision), committedRevision: null, memberIds: set.memberIds.filter((id) => selected(s, set, id)), cursor: 0, confirmed: 0, notExecuted: 0, cancelled: 0, patch: j.patch as Json };
+      const operationId = `op-${nextId++}`; const o = { operationId, kind: String(j.kind), status: "QUEUED", setId: s.setId, selectionId: s.selectionId, selectionVersion: String(s.selectionVersion), expectedRevision: String(revision), committedRevision: null, memberIds: set.memberIds.filter((id) => selected(s, set, id)), cursor: 0, confirmed: 0, notExecuted: 0, cancelled: 0, patch: j.patch as Json, tagsOp };
       operations.set(operationId, o); return ok({ ...opDto(o), created: true }, 201);
     }
     if ((m = /^\/catalog\/v1\/operations\/([^/]+)$/.exec(path)) && method === "GET" && purges.has(m[1])) {

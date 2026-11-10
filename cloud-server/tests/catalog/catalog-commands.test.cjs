@@ -37,6 +37,17 @@ test('applyPatchToDoc conserva claves no editadas y su orden; docChanged detecta
   assert.notEqual(after.tags, doc.tags, 'copia, no alias');
 });
 
+test('addTagsToDoc/removeTagsFromDoc (T16/V09 bulk tagsOp): añade preservando orden y dedupe por norm_key, quita por norm_key, no-op si no cambia nada', () => {
+  const doc = { id: 'b1', tags: ['Even', 't0'] };
+  const added = commands.addTagsToDoc(doc, ['NEW', 'even']); // "even" ya existe (case-insensitive) → no duplica
+  assert.deepEqual(added.tags, ['Even', 't0', 'NEW']);
+  assert.equal(commands.addTagsToDoc(doc, ['even', 'T0']), null, 'todo ya presente (norm_key) → no-op');
+  const removed = commands.removeTagsFromDoc(doc, ['EVEN']);
+  assert.deepEqual(removed.tags, ['t0']);
+  assert.equal(commands.removeTagsFromDoc(doc, ['nope']), null, 'nada que quitar → no-op');
+  assert.equal(commands.removeTagsFromDoc({ id: 'b2' }, ['x']), null, 'sin array de tags → no-op');
+});
+
 test('precondiciones antes de la transacción: patch inválido, versión, lote > 50, cuerpo > 64 KiB, clave de idempotencia; nada toca la DB', async () => {
   const pool = fakePool({ lib: LIB });
   const c = make(pool);
@@ -50,6 +61,11 @@ test('precondiciones antes de la transacción: patch inválido, versión, lote >
   await assert.rejects(c.restoreBeats({ userId: 'u1', ...H, items: [] }), (e) => e.detail.reason === 'BATCH_EMPTY');
   await assert.rejects(c.createOperation({ userId: 'u1', ...H, kind: 'IMPORT' }), (e) => e.detail.reason === 'OPERATION_KIND');
   await assert.rejects(c.createOperation({ userId: 'u1', ...H, kind: 'BULK_PATCH', selectionId: 'sel-1', selectionVersion: '0', patch: { tags: ['a'] } }), (e) => e.detail.reason === 'BULK_PATCH_TAGS');
+  // T16/V09 — bulk añadir/quitar tags (tagsOp): precondiciones antes de tocar la DB, sin reemplazar nunca el set.
+  await assert.rejects(c.createOperation({ userId: 'u1', ...H, kind: 'BULK_PATCH', selectionId: 'sel-1', selectionVersion: '0', patch: {}, tagsOp: { op: 'replace', tags: ['a'] } }), (e) => e.code === 'INPUT_INVALID' && e.detail.reason === 'BULK_TAGS_OP');
+  await assert.rejects(c.createOperation({ userId: 'u1', ...H, kind: 'BULK_PATCH', selectionId: 'sel-1', selectionVersion: '0', patch: {}, tagsOp: { op: 'add', tags: [] } }), (e) => e.detail.reason === 'BULK_TAGS_OP');
+  await assert.rejects(c.createOperation({ userId: 'u1', ...H, kind: 'BULK_PATCH', selectionId: 'sel-1', selectionVersion: '0', patch: {} }), (e) => e.detail.reason === 'PATCH', 'sin tagsOp y sin campos: sigue requiriendo un patch no vacío');
+  await assert.rejects(c.createOperation({ userId: 'u1', ...H, kind: 'BULK_TRASH', selectionId: 'sel-1', selectionVersion: '0', tagsOp: { op: 'add', tags: ['a'] } }), (e) => e.detail.reason === 'BULK_TAGS_OP', 'tagsOp solo aplica a BULK_PATCH');
   await assert.rejects(c.applySelectionOp({ userId: 'u1', ...H, selectionId: 'sel-1', selectionVersion: '0', op: { kind: 'INCLUDE_IDS', beatIds: [] } }), (e) => e.detail.reason === 'SELECTION_IDS');
   await assert.rejects(c.listChanges({ userId: 'u1', query: { after: '-1' } }), (e) => e.detail.reason === 'AFTER');
   assert.equal(pool.statements.length, 0, 'ninguna sentencia SQL antes de validar');

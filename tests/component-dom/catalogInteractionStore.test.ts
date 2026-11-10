@@ -132,6 +132,24 @@ describe("catalogInteractionStore (V07-A)", () => {
     expect(h.server.legacy).toEqual({ getLibraryIndex: 0, replaceLibraryIndex: 0 });
   });
 
+  it("bulk añadir/quitar tags desde Drawer (BULK_PATCH + tagsOp): nunca reemplaza el set, preserva el resto de tags; mismo reporte por lote que el resto de bulk; tagsOp vacío se rechaza", async () => {
+    const h = harness({ beats: fakeBeats(40) });
+    await h.store.selectAll(h.query({ includeTags: ["even"] }));
+    const add = await h.store.startBulk("BULK_PATCH", {}, { op: "add", tags: ["Nuevo Tag"] });
+    expect([add.status, add.report.total, add.report.confirmed, add.report.completed]).toEqual(["COMPLETED", 20, 20, true]);
+    const g0 = h.server.beats.get("g0")!;
+    expect(g0.tags).toContain("nuevo tag");
+    expect(g0.tags).toEqual(expect.arrayContaining(["even", "t0"])); // el resto del set se conserva (nunca reemplaza)
+    expect(h.store.getSnapshot().selection.status).toBe("none"); // selección consumida, como el resto de bulk
+    await h.store.selectAll(h.query({ includeTags: ["even"] }));
+    const remove = await h.store.startBulk("BULK_PATCH", {}, { op: "remove", tags: ["nuevo tag"] });
+    expect([remove.status, remove.report.completed]).toEqual(["COMPLETED", true]);
+    expect(h.server.beats.get("g0")!.tags).not.toContain("nuevo tag");
+    expect(h.server.beats.get("g0")!.tags).toEqual(expect.arrayContaining(["even", "t0"]));
+    await h.store.selectAll(h.query({ includeTags: ["even"] }));
+    await expect(h.store.startBulk("BULK_PATCH", {}, { op: "add", tags: [] })).rejects.toBeTruthy();
+  });
+
   it("drop por identidad estable (beatId/version al inicio; cancel si el target se desmonta); facetas globales con cache acotado; capability reorder Web = false", async () => {
     const h = harness({ beats: fakeBeats(30) });
     const d = h.store.beginDrop("g4", "1");

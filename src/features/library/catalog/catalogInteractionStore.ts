@@ -10,7 +10,7 @@
 // confirmación → operación durable → progreso; un resultado parcial nunca se presenta como éxito total. Sin reorden manual Web.
 import { useSyncExternalStore } from "react";
 import { CatalogApiError, type CatalogApi, type CatalogFacetsPage, type CatalogQueryFilters, type CatalogSort, type CatalogState } from "./catalogApi";
-import { type CatalogBulkKind, type CatalogBulkOperation, type CatalogBulkStatus, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogRenamePreview, type CatalogSelection, normalizeTagKey } from "./catalogCommandsApi";
+import { type CatalogBulkKind, type CatalogBulkOperation, type CatalogBulkStatus, type CatalogBulkTagsOp, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogRenamePreview, type CatalogSelection, normalizeTagKey } from "./catalogCommandsApi";
 import { metadataPatch } from "./catalogMutations";
 
 export interface InteractionQuery { filters: CatalogQueryFilters; sort: CatalogSort; revision: string }
@@ -256,11 +256,11 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
       await sleep(pollIntervalMs); assertAccount(gen);
     }
   }
-  async function startBulk(kind: Exclude<CatalogBulkKind, "TAG_RENAME">, patch?: CatalogMetadataPatch): Promise<BulkState> {
+  async function startBulk(kind: Exclude<CatalogBulkKind, "TAG_RENAME">, patch?: CatalogMetadataPatch, tagsOp?: CatalogBulkTagsOp): Promise<BulkState> {
     const gen = generation;
     const { selectionId, selectionVersion } = requireCommandsEnabled();
-    if (kind === "BULK_PATCH" && (!patch || Object.keys(patch).length === 0)) throw new CatalogApiError(400, "INPUT_INVALID", "No hay cambios que aplicar.", { reason: "EMPTY_PATCH" });
-    const op = await commands.createBulkOperation({ kind, selectionId, selectionVersion, patch, idempotencyKey: newKey() }); assertAccount(gen);
+    if (kind === "BULK_PATCH" && !tagsOp && (!patch || Object.keys(patch).length === 0)) throw new CatalogApiError(400, "INPUT_INVALID", "No hay cambios que aplicar.", { reason: "EMPTY_PATCH" });
+    const op = await commands.createBulkOperation({ kind, selectionId, selectionVersion, patch, tagsOp, idempotencyKey: newKey() }); assertAccount(gen);
     setSelection({ status: "frozen" });
     set({ bulk: bulkOf(op) });
     const final = await pollBulk(op.operationId, gen);

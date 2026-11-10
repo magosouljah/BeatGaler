@@ -47,6 +47,21 @@ function applyPatchToDoc(doc, set) {
   return out;
 }
 function docChanged(before, after) { return codec.deepDiff(before, after).length > 0; }
+// T16/V09 — bulk add/remove de tags sobre BULK_PATCH (payload.tagsOp); nunca reemplaza el conjunto (eso sigue siendo TAG_RENAME
+// para un tag o PATCH individual para el set completo). Añade preservando orden y dedupe por norm_key; quita por norm_key.
+function addTagsToDoc(doc, tags) {
+  const current = Array.isArray(doc.tags) ? doc.tags : [];
+  const seen = new Set(current.filter((t) => typeof t === 'string').map((t) => rules.normalizeTag(t)));
+  const next = [...current]; let changed = false;
+  for (const t of tags) { const n = rules.normalizeTag(t); if (!seen.has(n)) { seen.add(n); next.push(t); changed = true; } }
+  return changed ? { ...doc, tags: next } : null;
+}
+function removeTagsFromDoc(doc, tags) {
+  if (!Array.isArray(doc.tags)) return null;
+  const removeSet = new Set(tags.map((t) => rules.normalizeTag(t)));
+  const next = doc.tags.filter((t) => !(typeof t === 'string' && removeSet.has(rules.normalizeTag(t))));
+  return next.length !== doc.tags.length ? { ...doc, tags: next } : null;
+}
 function beatRowsFromDoc(doc) {
   const p = codec.projectBeat(doc);
   const legacyJson = JSON.stringify(doc);
@@ -56,14 +71,26 @@ const BEAT_UPDATE_SQL = `UPDATE catalog_beats SET name = $4, bpm_text = $5, key_
     has_artwork = $12, legacy_json = $13, legacy_sha256 = $14, legacy_export_bytes = $15, name_display = $16, name_search = $17, key_display = $18, key_search = $19,
     bpm_display = $20, rating_display = $21, version = version + 1, updated_at = now()
   WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS version`;
-async function writeBeatDoc(client, uid, gen, beatId, doc) {
+// T20-N perf (SLO_FAIL n=1M, EXPLAIN real sobre LAB): escribir SIEMPRE catalog_beat_tags/catalog_beat_tag_groups y
+// disparar refreshGroupsAndFacets aunque `tags` no cambie fuerza, para cualquier PATCH de metadata ajena a tags
+// (p.ej. solo `rating`), un recómputo de facetas que escanea TODO catalog_beat_tag_groups para cada norm_key del
+// beat (puede ser un tag muy popular) — coste O(tamaño del grupo), no O(1). `tagsChanged` (comparación exacta de
+// antes/después, ver tagsEqual) permite omitir ese trabajo cuando el conjunto/orden de tags es idéntico; los grupos
+// ya siguen state/manual_rank solos vía el FK ON UPDATE CASCADE de 0026, así que no hay pérdida de consistencia.
+function tagsEqual(a, b) {
+  const x = Array.isArray(a) ? a : []; const y = Array.isArray(b) ? b : [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+async function writeBeatDoc(client, uid, gen, beatId, doc, { tagsChanged = true } = {}) {
   const { p, legacyJson, legacySha256, legacyExportBytes } = beatRowsFromDoc(doc);
   const r = await client.query(BEAT_UPDATE_SQL, [uid, gen, beatId, p.name, p.bpmText, p.keyText, p.rating, p.color, p.color2, p.bpmSortClass, p.bpmSort, p.hasArtwork,
     legacyJson, legacySha256, legacyExportBytes, p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay]);
-  await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
-  await client.query('DELETE FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
-  for (const t of p.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, beatId, t.position, t.label, t.normKey, t.searchKey]);
-  return { version: r.rows[0].version, normKeys: [...new Set(p.tags.map((t) => t.normKey))] };
+  if (tagsChanged) {
+    await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
+    await client.query('DELETE FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
+    for (const t of p.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, beatId, t.position, t.label, t.normKey, t.searchKey]);
+  }
+  return { version: r.rows[0].version, normKeys: [...new Set(p.tags.map((t) => t.normKey))], tagsChanged };
 }
 // Grupos (una fila por beat y norm_key) y facetas de las claves afectadas, en ambos scopes, dentro de la transacción.
 async function refreshGroupsAndFacets(client, uid, gen, beatIds, normKeys, revision) {
@@ -178,10 +205,11 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       if (!docChanged(before, after)) {
         result = { noop: true, beat: await beatDto(client, uid, gen, beatId), revision: ctx.revision };
       } else {
-        const oldKeys = await normKeysOf(client, uid, gen, [beatId]);
-        const { version, normKeys } = await writeBeatDoc(client, uid, gen, beatId, after);
+        const tagsChanged = !tagsEqual(before.tags, after.tags);
+        const oldKeys = tagsChanged ? await normKeysOf(client, uid, gen, [beatId]) : [];
+        const { version, normKeys } = await writeBeatDoc(client, uid, gen, beatId, after, { tagsChanged });
         const revision = await bumpRevision(client, uid);
-        await refreshGroupsAndFacets(client, uid, gen, [beatId], [...oldKeys, ...normKeys], revision);
+        if (tagsChanged) await refreshGroupsAndFacets(client, uid, gen, [beatId], [...oldKeys, ...normKeys], revision);
         const eventSeq = await emitEvent(client, uid, gen, revision, 'BEAT_PATCHED', { beatId, version, payload: { fields: Object.keys(v.set) } });
         result = { noop: false, beat: await beatDto(client, uid, gen, beatId), revision, eventSeq };
       }
@@ -419,7 +447,6 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     }
     return changed ? { ...doc, tags: next } : null;
   }
-
   // ---------- operaciones bulk (C12-r4 §4) y rename como operación ----------
   const OP_SQL = `SELECT o.operation_id, o.kind, o.status, o.set_id, o.selection_id, o.selection_version::text AS selection_version, o.expected_revision::text AS expected_revision,
     o.committed_revision::text AS committed_revision, o.total_frozen::text AS total_frozen, o.confirmed::text AS confirmed, o.not_executed::text AS not_executed, o.cancelled::text AS cancelled,
@@ -429,10 +456,32 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     expectedRevision: o.expected_revision, committedRevision: o.committed_revision, progress: { total: Number(o.total_frozen), confirmed: Number(o.confirmed), notExecuted: Number(o.not_executed), cancelled: Number(o.cancelled), conflictBatchSeq: o.conflict_batch_seq },
     createdAt: o.created_at, updatedAt: o.updated_at, completedAt: o.completed_at, ...extra });
 
-  async function createOperation({ userId, era, epoch, idempotencyKey, kind, selectionId = null, selectionVersion = null, patch = null, rename = null } = {}) {
+  async function createOperation({ userId, era, epoch, idempotencyKey, kind, selectionId = null, selectionVersion = null, patch = null, rename = null, tagsOp = null } = {}) {
     if (!['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE', 'TAG_RENAME'].includes(kind)) throw inputInvalid('OPERATION_KIND');
-    let validatedPatch = null; let renameSpec = null;
-    if (kind === 'BULK_PATCH') { const v = rules.validatePatch(patch); if (!v.ok) throw inputInvalid('PATCH', { errors: v.errors }); if ('tags' in v.set) throw inputInvalid('BULK_PATCH_TAGS', { hint: 'bulk patch cannot replace tags; use TAG_RENAME' }); validatedPatch = v.set; }
+    if (tagsOp !== null && tagsOp !== undefined && kind !== 'BULK_PATCH') throw inputInvalid('BULK_TAGS_OP', { reason: 'tagsOp only applies to BULK_PATCH' });
+    let validatedPatch = null; let renameSpec = null; let validatedTagsOp = null;
+    if (kind === 'BULK_PATCH') {
+      const v = rules.validatePatch(patch ?? {});
+      const onlyNoFields = !v.ok && v.errors.length === 1 && v.errors[0].field === '$' && v.errors[0].reason === 'patch has no fields';
+      if (!v.ok && !(onlyNoFields && tagsOp)) throw inputInvalid('PATCH', { errors: v.errors });
+      if ('tags' in v.set) throw inputInvalid('BULK_PATCH_TAGS', { hint: 'bulk patch cannot replace tags; use TAG_RENAME for one tag or tagsOp add/remove for a batch' });
+      validatedPatch = v.set;
+      // Bulk add/remove de tags (C12-V-INTERACTION: "bulk desde Drawer con reporte por lote"); nunca reemplaza el conjunto.
+      if (tagsOp !== null && tagsOp !== undefined) {
+        if (typeof tagsOp !== 'object' || Array.isArray(tagsOp) || !['add', 'remove'].includes(tagsOp.op)) throw inputInvalid('BULK_TAGS_OP', { reason: 'tagsOp must be {op:"add"|"remove", tags:[...]}' });
+        if (!Array.isArray(tagsOp.tags) || tagsOp.tags.length === 0) throw inputInvalid('BULK_TAGS_OP', { reason: 'tagsOp.tags must be a non-empty array' });
+        if (tagsOp.tags.length > rules.TAGS_MAX) throw inputInvalid('BULK_TAGS_OP', { reason: `at most ${rules.TAGS_MAX} tags` });
+        const seen = new Set(); const normalizedTags = [];
+        for (const t of tagsOp.tags) {
+          if (typeof t !== 'string') throw inputInvalid('BULK_TAGS_OP_ITEM', { reason: 'tag must be a string' });
+          const r = rules.validateTag(t);
+          if (!r.valid) throw inputInvalid('BULK_TAGS_OP_ITEM', { tag: t, reason: r.reason });
+          if (!seen.has(r.normalized)) { seen.add(r.normalized); normalizedTags.push(r.normalized); }
+        }
+        validatedTagsOp = { op: tagsOp.op, tags: normalizedTags };
+      }
+      if (Object.keys(validatedPatch).length === 0 && !validatedTagsOp) throw inputInvalid('PATCH', { errors: [{ field: '$', reason: 'patch has no fields' }] });
+    }
     if (kind === 'TAG_RENAME') {
       if (!rename || typeof rename.from !== 'string' || !rename.from.trim()) throw inputInvalid('RENAME_FROM');
       const t = rules.validateTag(rename.to); if (!t.valid) throw inputInvalid('RENAME_TO', { reason: t.reason });
@@ -441,7 +490,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       if (typeof selectionId !== 'string' || !ID_RE.test(selectionId)) throw inputInvalid('SELECTION_ID');
       if (!/^[0-9]{1,18}$/.test(String(selectionVersion ?? ''))) throw inputInvalid('SELECTION_VERSION');
     }
-    const payload = { kind, selectionId, selectionVersion: selectionVersion == null ? null : String(selectionVersion), patch: validatedPatch, rename: renameSpec };
+    const payload = { kind, selectionId, selectionVersion: selectionVersion == null ? null : String(selectionVersion), patch: validatedPatch, rename: renameSpec, tagsOp: validatedTagsOp };
     const hash = sha256Hex(canonicalJson(payload));
     return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
       const replay = await idempotency(client, uid, idempotencyKey, hash);
@@ -534,10 +583,12 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
         const row = it.row; const doc = JSON.parse(row.legacy_json);
         if (o.kind === 'BULK_PATCH') {
           if (row.state !== 'ACTIVE') { it.result = 'NOT_EXECUTED'; it.detail = `STATE_${row.state}`; notExecuted++; continue; }
-          const after = applyPatchToDoc(doc, payload.patch);
+          let after = payload.patch && Object.keys(payload.patch).length ? applyPatchToDoc(doc, payload.patch) : doc;
+          if (payload.tagsOp) after = (payload.tagsOp.op === 'add' ? addTagsToDoc(after, payload.tagsOp.tags) : removeTagsFromDoc(after, payload.tagsOp.tags)) ?? after;
           if (!docChanged(doc, after)) { it.result = 'NOOP'; it.toVersion = row.version; applied++; continue; }
-          for (const k of await normKeysOf(client, uid, gen, [row.beat_id])) keys.add(k);
-          const w = await writeBeatDoc(client, uid, gen, row.beat_id, after); w.normKeys.forEach((k) => keys.add(k));
+          const tagsChanged = !tagsEqual(doc.tags, after.tags);
+          if (tagsChanged) for (const k of await normKeysOf(client, uid, gen, [row.beat_id])) keys.add(k);
+          const w = await writeBeatDoc(client, uid, gen, row.beat_id, after, { tagsChanged }); if (tagsChanged) w.normKeys.forEach((k) => keys.add(k));
           it.result = 'APPLIED'; it.toVersion = w.version; applied++; touched.push(row.beat_id); events.push(['BEAT_PATCHED', row.beat_id, w.version]);
         } else if (o.kind === 'BULK_TRASH' || o.kind === 'BULK_RESTORE') {
           const want = o.kind === 'BULK_TRASH' ? 'ACTIVE' : 'TRASH';
@@ -651,4 +702,4 @@ let configured = null;
 function configureCatalogCommands(options = null) { configured = options && options.pool && options.authority ? createCatalogCommands(options) : null; return configured; }
 function currentCatalogCommands() { return configured; }
 
-module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, refreshGroupsAndFacets, normKeysOf, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };
+module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, addTagsToDoc, removeTagsFromDoc, refreshGroupsAndFacets, normKeysOf, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };

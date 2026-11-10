@@ -226,11 +226,16 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     setDrawer({ beat: first, mode: "edit" });
   }, [residentSelectedBeats]);
   const applyBulkUpdate = useCallback((updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => {
-    if (updates.tags && options?.tagsMode && options.tagsMode !== "replace") { setNotice(BULK_TAGS_MODE_NOTICE); return; }
+    // r4 T16/V09: "añadir"/"quitar" tags en lote es BULK_PATCH con tagsOp (add/remove), nunca un reemplazo del set; "reemplazar"
+    // sigue siendo un patch.tags normal (ya validado por el servidor, un solo lote con reporte).
+    const tagsMode = updates.tags && options?.tagsMode ? options.tagsMode : null;
+    if (tagsMode && tagsMode !== "add" && tagsMode !== "remove" && tagsMode !== "replace") { setNotice(BULK_TAGS_MODE_NOTICE); return; }
     const patch: CatalogMetadataPatch = {};
     if (updates.bpm !== undefined) patch.bpm = updates.bpm; if (updates.key !== undefined) patch.key = updates.key; if (updates.rating !== undefined) patch.rating = updates.rating;
-    if (updates.color !== undefined) patch.color = updates.color; if (updates.color2 !== undefined) patch.color2 = updates.color2; if (updates.tags) patch.tags = [...updates.tags];
-    void interactionStore.startBulk("BULK_PATCH", patch).then((r) => { setNotice(`Edición en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`); setSelectMode(false); refreshAfterMutation(); }).catch((e) => setNotice(String(e?.message ?? e)));
+    if (updates.color !== undefined) patch.color = updates.color; if (updates.color2 !== undefined) patch.color2 = updates.color2;
+    if (updates.tags && tagsMode === "replace") patch.tags = [...updates.tags];
+    const tagsOp = updates.tags && (tagsMode === "add" || tagsMode === "remove") ? { op: tagsMode, tags: [...updates.tags] } : undefined;
+    void interactionStore.startBulk("BULK_PATCH", patch, tagsOp).then((r) => { setNotice(`Edición en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`); setSelectMode(false); refreshAfterMutation(); }).catch((e) => setNotice(String(e?.message ?? e)));
   }, [interactionStore, refreshAfterMutation]);
   const handleRemoveBulk = useCallback(() => {
     void interactionStore.startBulk("BULK_TRASH").then((r) => { setNotice(`Papelera en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`); setSelectMode(false); refreshAfterMutation(); }).catch((e) => setNotice(String(e?.message ?? e)));
