@@ -58,16 +58,19 @@ DECLARE v_n bigint;
 BEGIN
   INSERT INTO catalog_search_gram_counts AS c(user_id, generation_id, state, gram, beat_count)
   SELECT d.user_id, d.generation_id, d.state, d.gram, d.n FROM (
+    WITH ch AS (
+      SELECT o.user_id, o.generation_id, o.state AS os, n.state AS ns, o.search_text AS ost, n.search_text AS nst
+      FROM old_rows o JOIN new_rows n ON n.user_id = o.user_id AND n.generation_id = o.generation_id AND n.beat_id = o.beat_id
+      WHERE o.search_text IS DISTINCT FROM n.search_text OR o.state IS DISTINCT FROM n.state),
+    g1 AS MATERIALIZED (SELECT c.user_id, c.generation_id, c.os, c.ns, c.ost, c.nst, catalog_search_grams(c.ost) AS og FROM ch c),
+    gr AS ( -- los gramas se calculan una sola vez por fila cuando solo cambia el estado (trash/restore/purge); STRICT: NULL -> sin gramas
+      SELECT g.user_id, g.generation_id, g.os, g.ns, g.og,
+             CASE WHEN g.nst IS NOT DISTINCT FROM g.ost THEN g.og ELSE catalog_search_grams(g.nst) END AS ng
+      FROM g1 g)
     SELECT x.user_id, x.generation_id, x.state, x.gram, sum(x.d)::bigint AS n FROM (
-      SELECT o.user_id, o.generation_id, o.state, g.gram, -1 AS d
-      FROM old_rows o JOIN new_rows n ON n.user_id = o.user_id AND n.generation_id = o.generation_id AND n.beat_id = o.beat_id
-      CROSS JOIN LATERAL unnest(catalog_search_grams(o.search_text)) AS g(gram)
-      WHERE o.search_text IS NOT NULL AND (o.search_text IS DISTINCT FROM n.search_text OR o.state IS DISTINCT FROM n.state)
+      SELECT r.user_id, r.generation_id, r.os AS state, g.gram, -1 AS d FROM gr r CROSS JOIN LATERAL unnest(r.og) AS g(gram)
       UNION ALL
-      SELECT n.user_id, n.generation_id, n.state, g.gram, 1
-      FROM old_rows o JOIN new_rows n ON n.user_id = o.user_id AND n.generation_id = o.generation_id AND n.beat_id = o.beat_id
-      CROSS JOIN LATERAL unnest(catalog_search_grams(n.search_text)) AS g(gram)
-      WHERE n.search_text IS NOT NULL AND (o.search_text IS DISTINCT FROM n.search_text OR o.state IS DISTINCT FROM n.state)
+      SELECT r.user_id, r.generation_id, r.ns, g.gram, 1 FROM gr r CROSS JOIN LATERAL unnest(r.ng) AS g(gram)
     ) x GROUP BY 1, 2, 3, 4 HAVING sum(x.d) <> 0 ORDER BY 1, 2, 3, 4) d
   ON CONFLICT (user_id, generation_id, state, gram) DO UPDATE SET beat_count = c.beat_count + EXCLUDED.beat_count;
   GET DIAGNOSTICS v_n = ROW_COUNT;
