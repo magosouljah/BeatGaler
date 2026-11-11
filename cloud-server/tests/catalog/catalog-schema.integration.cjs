@@ -50,10 +50,10 @@ async function seedUsers(pool) {
 // T05-N: 0027_catalog_native.sql se aplica junto con 0026; las guardas de 0027 no actúan sin activación ni origin nativo,
 // así que estas pruebas (bibliotecas LEGACY, LEGACY→POSTGRES y DELETE de LEGACY) conservan su resultado.
 const MIGRATIONS = mig.listMigrations().length;
-test('fresh: todas las migraciones (0001–0037), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
+test('fresh: todas las migraciones (0001–0039), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
   const first = await mig.applyMigrations(pool);
-  assert.equal(MIGRATIONS, 37);
-  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0037');
+  assert.equal(MIGRATIONS, 39);
+  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0039');
   const again = await mig.applyMigrations(pool);
   assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, MIGRATIONS);
   const tables = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
@@ -83,7 +83,7 @@ test('upgrade 0001-0025 → 0026 conserva datos legacy y no importa nada', () =>
   await pool.query("INSERT INTO library_beats(user_id, beat_id, state) VALUES ('u1','b1','ACTIVE'), ('u1','b2','TRASH'), ('u2','b1','ACTIVE')");
   const before = await legacyDigest(pool);
   const up = await mig.applyMigrations(pool, all);
-  assert.deepEqual(up.applied, ['0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037']); // T20-N 0037 (search_text), 0036 (estadísticas label); T19-N 0035 (restore); T17 0034 (auditoría rebind); T06 añade 0028 (colación ICU, proyecciones, índices); T07 añade 0029 (operaciones/eventos/selección); T09 0030; T12 0031 (capacidades)
+  assert.deepEqual(up.applied, ['0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039']); // T20-N 0039 (contadores de gramas), 0038 (trgm/grams), 0037 (search_text), 0036 (estadísticas label); T19-N 0035 (restore); T17 0034 (auditoría rebind); T06 añade 0028 (colación ICU, proyecciones, índices); T07 añade 0029 (operaciones/eventos/selección); T09 0030; T12 0031 (capacidades)
   assert.deepEqual(await legacyDigest(pool), before);
   const cat = await pool.query('SELECT (SELECT count(*) FROM catalog_libraries)::int + (SELECT count(*) FROM catalog_generations)::int + (SELECT count(*) FROM catalog_beats)::int AS n');
   assert.equal(cat.rows[0].n, 0, 'la migración no crea bibliotecas ni importa');

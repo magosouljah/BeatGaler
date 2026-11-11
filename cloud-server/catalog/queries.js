@@ -125,18 +125,50 @@ function parseListRequest(query = {}) {
 
 // ---------- SQL ----------
 function likePattern(q) { return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`; }
-// Predicado de filtros sobre el alias b. Devuelve {sql, params} añadiendo a params.
-function filterSql(f, params) {
+// Modo de búsqueda de q (ya canónico). FIELDS: contiene el separador de search_text (predicado por campos). GRAMS: 1-2 caracteres (code points).
+// TRGM: 3+ caracteres con al menos un trozo de 3 caracteres alfanuméricos consecutivos (garantiza >= 1 trigrama real para pg_trgm; si el
+// ctype de la base no los considerara alfanuméricos solo se pierde velocidad, nunca exactitud). SCAN: el resto.
+function searchMode(q) {
+  if (q.includes(SEARCH_TEXT_SEP)) return 'FIELDS';
+  let n = 0; for (const _ of q) { if (++n > 2) break; }
+  if (n <= 2) return 'GRAMS';
+  return /[\p{L}\p{N}]{3}/u.test(q) ? 'TRGM' : 'SCAN';
+}
+// 0039: umbral de frecuencia (beats de la biblioteca/estado que contienen el grama) por debajo del cual el GIN de gramas gana al recorrido
+// ordenado con LIMIT; por encima, el recorrido ordenado encuentra la página tras leer ~LIMIT/densidad filas (medido a 1M: 'mi' 59k beats 2,7 ms
+// ordenado vs 257 ms GIN). El contador solo elige camino y responde el COUNT: ambos caminos devuelven exactamente las mismas filas.
+const GRAM_GIN_MAX = 5000;
+// Resuelve el modo efectivo de q dentro de la transacción de lectura. Devuelve { mode, n } (n = contador exacto solo si es utilizable).
+async function planSearch(client, uid, gen, state, q) {
+  const mode = searchMode(q);
+  if (mode !== 'GRAMS') return { mode, n: null };
+  const r = await client.query(`SELECT (SELECT beat_count::text FROM catalog_search_gram_counts WHERE user_id = $1 AND generation_id = $2 AND state = $3 AND gram = $4) AS n,
+    EXISTS (SELECT 1 FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = $3 AND search_text IS NULL) AS unprojected`, [uid, gen, state, q]);
+  // filas sin proyectar (search_text NULL): el contador no las cubre -> predicado por campos, correcto aunque más lento
+  if (r.rows[0].unprojected) return { mode: 'FIELDS', n: null };
+  const n = r.rows[0].n === null ? 0 : Number(r.rows[0].n);
+  return { mode: n <= GRAM_GIN_MAX ? 'GRAMS' : 'SCAN', n };
+}
+// Predicado de filtros sobre el alias b. Devuelve {sql, params} añadiendo a params. `mode` (de planSearch) fija el camino de q.
+function filterSql(f, params, mode = f.q ? searchMode(f.q) : null) {
   const parts = [];
   if (f.q) {
     params.push(likePattern(f.q)); const p = `$${params.length}`;
+    let g = null; if (mode === 'GRAMS') { params.push(f.q); g = `$${params.length}`; }
     const byFields = `(b.name_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.key_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.bpm_display COLLATE "C" LIKE ${p} ESCAPE '\\'
       OR EXISTS (SELECT 1 FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id AND t.search_key COLLATE "C" LIKE ${p} ESCAPE '\\'))`;
     // 0037: un único LIKE sobre search_text (name_search ␟ key_search ␟ bpm_display ␟ search_key de los tags) cuando existe; es equivalente
     // porque un q sin ␟ no puede cruzar el separador. Si q contiene ␟, o la fila aún no tiene search_text (NULL), se usa el predicado por
     // campos (el subplan hashed sobre catalog_beat_tags solo se construye si alguna fila lo evalúa). SEARCH_PROFILE no cambia.
-    parts.push(f.q.includes(SEARCH_TEXT_SEP) ? byFields
-      : `((b.search_text IS NOT NULL AND b.search_text COLLATE "C" LIKE ${p} ESCAPE '\\') OR (b.search_text IS NULL AND ${byFields}))`);
+    // 0038: el predicado sobre search_text elige el índice de forma DETERMINISTA (el planner no sabe que un LIKE sin trigramas obliga a
+    // recorrer todo el GIN y lo elige igualmente): GRAMS = 1-2 caracteres vía GIN de 1/2-gramas por campo (equivalencia exacta con el LIKE);
+    // TRGM = GIN pg_trgm; SCAN = LIKE que ningún índice puede usar (`|| ''`), para q de 3+ caracteres sin ningún trozo alfanumérico de 3.
+    const onText = {
+      GRAMS: `catalog_search_grams(b.search_text) @> ARRAY[${g}::text]`,
+      TRGM: `b.search_text COLLATE "C" LIKE ${p} ESCAPE '\\'`,
+      SCAN: `(b.search_text || '') COLLATE "C" LIKE ${p} ESCAPE '\\'`,
+    }[mode];
+    parts.push(mode === 'FIELDS' ? byFields : `((b.search_text IS NOT NULL AND ${onText}) OR (b.search_text IS NULL AND ${byFields}))`);
   }
   if (f.includeTags.length) {
     params.push(f.includeTags); const p = `$${params.length}`;
@@ -275,11 +307,13 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
       if (req.cursor) cur = verifyCursor(req.cursor, lib, uid, req);
       const direction = req.edge === 'last' ? 'last' : cur ? cur.direction : 'first';
       const params = [uid, lib.active_generation_id, req.state];
-      const where = `b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${filterSql(req, params)}`;
+      const plan = req.q ? await planSearch(client, uid, lib.active_generation_id, req.state, req.q) : { mode: null, n: null };
+      const where = `b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${filterSql(req, params, plan.mode)}`;
 
       // total del mismo snapshot: contadores sin filtros; COUNT exacto si includeTotal o si hace falta para edge=last; si no, el firmado.
       let total = null;
       if (!hasFilters) total = Number(req.state === 'ACTIVE' ? lib.active_count : lib.trash_count);
+      else if ((req.includeTotal || direction === 'last') && plan.n !== null && req.includeTags.length === 0 && req.excludeTags.length === 0) total = plan.n; // 0039: contador exacto de q de 1-2 caracteres
       else if (req.includeTotal || direction === 'last') total = Number((await client.query(`SELECT count(*)::text AS n FROM catalog_beats b WHERE ${where}`, params)).rows[0].n);
       else if (cur && cur.totalMatched !== null) total = cur.totalMatched;
 
@@ -548,7 +582,8 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
       const pred = JSON.parse(s.predicate_json);
       const filters = { state: pred.state, q: pred.q, includeMode: pred.includeMode, includeTags: pred.include, excludeTags: pred.exclude };
       const params = [uid, s.generation_id, filters.state];
-      let where = `b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${filterSql(filters, params)}`;
+      const splan = filters.q ? await planSearch(client, uid, s.generation_id, filters.state, filters.q) : { mode: null };
+      let where = `b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${filterSql(filters, params, splan.mode)}`;
       if (s.frontier_beat_id) {
         const fr = (await client.query('SELECT manual_rank::text AS r FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, s.generation_id, s.frontier_beat_id])).rows[0];
         if (!fr) throw new CatalogQueryError('QUERY_SET_FRONTIER_LOST', 409, 'query-set frontier beat no longer exists in the generation', { set_id: setId });
@@ -622,5 +657,5 @@ function currentCatalogQueries() { return configured; }
 module.exports = {
   LIMIT_DEFAULT, LIMIT_MAX, FILES_LIMIT_MAX, FACETS_LIMIT_MAX, QUERY_SET_BATCH_MAX, Q_MAX_BYTES, PAGE_MAX_BYTES, STATEMENT_TIMEOUT_MS, API_TIMEOUT_MS, LEGACY_OFFSET_MAX, LEGACY_BLOCK,
   SORT_PROFILE, SEARCH_PROFILE, NAME_COLLATION, STATES, SORTS, INCLUDE_MODES, TUPLES,
-  CatalogQueryError, parseListRequest, filterHashOf, canonicalQ, likePattern, byteSort, createCatalogQueries, configureCatalogQueries, currentCatalogQueries,
+  CatalogQueryError, parseListRequest, filterHashOf, canonicalQ, likePattern, searchMode, planSearch, GRAM_GIN_MAX, filterSql, byteSort, createCatalogQueries, configureCatalogQueries, currentCatalogQueries,
 };

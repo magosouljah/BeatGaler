@@ -68,7 +68,13 @@ function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t 
 // recomputo independiente en SQL desde las columnas almacenadas; cuenta filas con search_text distinto
 const MISMATCH_SQL = `SELECT count(*)::int AS n FROM catalog_beats b WHERE b.user_id = $1 AND b.search_text IS DISTINCT FROM
   (b.name_search || chr(31) || b.key_search || chr(31) || b.bpm_display || coalesce((SELECT chr(31) || string_agg(t.search_key, chr(31) ORDER BY t.position) FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id), ''))`;
-const mismatches = async (pool, lib) => (await pool.query(MISMATCH_SQL, [lib.userId])).rows[0].n;
+// 0039: oráculo de contadores de gramas (recomputo completo desde search_text) frente a catalog_search_gram_counts, todas las bibliotecas
+const COUNTS_DIFF_SQL = `WITH exp AS (SELECT b.user_id, b.generation_id, b.state, g.gram, count(*)::bigint AS n FROM catalog_beats b
+    CROSS JOIN LATERAL unnest(catalog_search_grams(b.search_text)) AS g(gram) WHERE b.search_text IS NOT NULL GROUP BY 1, 2, 3, 4)
+  SELECT count(*)::int AS n FROM exp e FULL JOIN catalog_search_gram_counts c USING (user_id, generation_id, state, gram) WHERE e.n IS DISTINCT FROM c.beat_count`;
+const countsDiff = async (pool) => (await pool.query(COUNTS_DIFF_SQL)).rows[0].n;
+// search_text == recomputo Y contadores == recomputo (cada paso de cada escritor comprueba ambos)
+const mismatches = async (pool, lib) => (await pool.query(MISMATCH_SQL, [lib.userId])).rows[0].n + await countsDiff(pool);
 
 const ALPHA = ['a', 'B', 'c', '%', '_', '\\', 'é', 'É', 'İ', 'ß', 'Ω', '😀', ' ', '-', '1', '2', 'x', 'm', 'i', "'"];
 
@@ -172,9 +178,127 @@ test('backfill de 0037 sobre datos preexistentes == proyección calculada por el
   const col = await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'catalog_beats' AND column_name = 'search_text'");
   assert.equal(col.rows.length, 0);
   const up = await mig.applyMigrations(pool);
-  assert.deepEqual(up.applied, ['0037']);
+  assert.deepEqual(up.applied, ['0037', '0038', '0039']);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM catalog_beats WHERE user_id = $1 AND search_text IS NULL', [lib.userId])).rows[0].n, 0, 'todas las filas proyectadas');
   assert.equal(await mismatches(pool, lib), 0, 'backfill == recomputo');
   const withTags = (await pool.query("SELECT count(*)::int AS n FROM catalog_beats WHERE user_id = $1 AND length(search_text) - length(replace(search_text, chr(31), '')) >= 3", [lib.userId])).rows[0].n;
   assert.ok(withTags > 10, 'hay filas con tags en el corpus');
 }, { upTo: '0036' }));
+
+// ---------- 0038: índices de subcadena (pg_trgm + 1/2-gramas por campo) ----------
+test('0038: modo de búsqueda determinista por q y uso de índice (GRAMS/TRGM/SCAN) verificado con EXPLAIN', () => withDb(async (pool) => {
+  const SEP = codec.SEARCH_TEXT_SEP;
+  const modes = [['zq', 'GRAMS'], ['ñ', 'GRAMS'], ['😀', 'GRAMS'], ['%', 'GRAMS'], ['_', 'GRAMS'], ['\\', 'GRAMS'], ['😀😀', 'GRAMS'], ['abc', 'TRGM'], ['zqxjk', 'TRGM'],
+    ['٣٢١', 'TRGM'], ['a b cde', 'TRGM'], ['---', 'SCAN'], ['a-b', 'SCAN'], ['ab cd', 'SCAN'], ['😀😀😀', 'SCAN'], ['%%%', 'SCAN'], [`a${SEP}b`, 'FIELDS'], [SEP, 'FIELDS']];
+  for (const [q, m] of modes) assert.equal(queries.searchMode(q), m, JSON.stringify(q));
+  const lib = await nativeLibrary(pool);
+  const rnd = mulberry32(778001);
+  const rstr = (max) => Array.from({ length: 1 + Math.floor(rnd() * max) }, () => ALPHA[Math.floor(rnd() * ALPHA.length)]).join('');
+  await seedBeats(pool, lib, Array.from({ length: 400 }, (_, i) => ({ id: `x${String(i).padStart(4, '0')}`, name: rstr(8), bpm: String(80 + (i % 90)), key: 'Cm', rating: i % 6, tags: [rstr(5), rstr(4)] })));
+  const c = await pool.connect();
+  try {
+    await c.query('SET enable_seqscan = off');
+    for (const [q, m] of modes) {
+      if (m === 'FIELDS') continue;
+      const params = [lib.userId, lib.generationId, 'ACTIVE'];
+      const where = queries.filterSql({ q, includeMode: 'any', includeTags: [], excludeTags: [] }, params);
+      const plan = (await c.query(`EXPLAIN SELECT b.beat_id FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${where}`, params)).rows.map((r) => r['QUERY PLAN']).join('\n');
+      const usesGrams = plan.includes('catalog_beats_search_grams_idx'); const usesTrgm = plan.includes('catalog_beats_search_trgm_idx');
+      if (m === 'GRAMS') assert.ok(usesGrams && !usesTrgm, `${JSON.stringify(q)} GRAMS debe usar solo el GIN de gramas\n${plan}`);
+      if (m === 'TRGM') assert.ok(usesTrgm && !usesGrams, `${JSON.stringify(q)} TRGM debe usar solo el GIN trigram\n${plan}`);
+      if (m === 'SCAN') assert.ok(!usesTrgm && !usesGrams, `${JSON.stringify(q)} SCAN no debe usar ningún GIN\n${plan}`);
+    }
+  } finally { c.release(); }
+}));
+
+test('0038: aislamiento por tenant, filtros combinados, estado y COUNT == predicado por campos (q de todas las clases)', () => withDb(async (pool) => {
+  const A = await nativeLibrary(pool); const B = await nativeLibrary(pool); const { cmd, q } = mk(pool);
+  const rnd = mulberry32(778002);
+  const NAMES = ['alpha mix', 'ñandú', 'zzq only', 'mi corazón', 'Éclair', 'a-b c', 'x_y%z', 'tres tristes', '---', 'ab cd ef'];
+  const mkBeats = (p, lib) => Array.from({ length: 70 }, (_, i) => ({ id: `${p}${String(i).padStart(3, '0')}`, name: NAMES[Math.floor(rnd() * NAMES.length)] + (rnd() < 0.3 ? ` ${i}` : ''),
+    bpm: String(90 + (i % 20)), key: ['Cm', 'F#m', ''][i % 3], rating: i % 6, tags: [['alfa', 'beta', 'gamma', 'ñu'][i % 4], ...(rnd() < 0.4 ? ['zqx'] : [])] }));
+  const bBeats = mkBeats('b', B); bBeats[5].name = 'solo-b zzqq';
+  await seedBeats(pool, A, mkBeats('a', A)); await seedBeats(pool, B, bBeats);
+  const hdr = { userId: A.userId, era: A.era, epoch: A.epoch };
+  const v = (await pool.query("SELECT version::text AS v FROM catalog_beats WHERE user_id = $1 AND beat_id = 'a003'", [A.userId])).rows[0].v;
+  await cmd.trashBeats({ ...hdr, idempotencyKey: key(), items: [{ beatId: 'a003', expectedVersion: v }] });
+  const QS = ['zq', 'zzq', 'zzqq', 'ñ', 'é', 'É'.toLowerCase(), '_', '%', '\\', 'mi', 'a', 'alp', 'alpha', 'zqx', 'tres', '---', 'a-b', 'ab cd', '%%%', 'x_y%', 'solo-b', 'ñu'];
+  const FILTERS = [{}, { includeTag: 'alfa' }, { includeTag: ['alfa', 'zqx'], includeMode: 'all' }, { excludeTag: 'beta' }, { state: 'TRASH' }, { sort: 'name' }];
+  const run = async (lib, s, f) => { const r = await q.listBeats({ userId: lib.userId, query: { q: s, includeTotal: 'true', limit: '240', ...f } }); return [r.totalMatched, r.items.map((x) => x.id)]; };
+  const snap = async () => { const out = []; for (const lib of [A, B]) for (const s of QS) for (const f of FILTERS) out.push([lib, s, f, await run(lib, s, f)]); return out; };
+  const withIdx = await snap();
+  await pool.query('UPDATE catalog_beats SET search_text = NULL WHERE user_id = ANY($1)', [[A.userId, B.userId]]);
+  const oracle = await snap();
+  let nonEmpty = 0;
+  withIdx.forEach(([lib, s, f, got], i) => {
+    assert.deepEqual(got, oracle[i][3], `lib=${lib === A ? 'A' : 'B'} q=${JSON.stringify(s)} f=${JSON.stringify(f)}`);
+    const own = lib === A ? 'a' : 'b'; for (const id of got[1]) assert.ok(id.startsWith(own), `aislamiento: ${id} en biblioteca ${own}`);
+    if (got[0] > 0) nonEmpty++;
+  });
+  assert.ok(nonEmpty > 100, `suficientes q con coincidencias (${nonEmpty})`);
+  const solo = (await run(A, 'solo-b', {}))[0]; assert.equal(solo, 0, 'un término exclusivo de B no aparece en A');
+}));
+
+// ---------- 0039: contadores exactos de gramas ----------
+test('0039: contadores == recomputo tras una secuencia aleatoria de INSERT / UPDATE (search_text, state) / DELETE por sentencias de 1 y N filas (semilla fija)', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool); const lib2 = await nativeLibrary(pool);
+  const rnd = mulberry32(779001);
+  const rstr = (max) => Array.from({ length: Math.floor(rnd() * (max + 1)) }, () => ALPHA[Math.floor(rnd() * ALPHA.length)]).join('');
+  const STATES = ['ACTIVE', 'TRASH', 'PURGING'];
+  await seedBeats(pool, lib, Array.from({ length: 40 }, (_, i) => ({ id: `r${i}`, name: rstr(6), bpm: String(80 + i), key: rstr(2), rating: 1, tags: [rstr(4), rstr(3)].filter(Boolean) })));
+  await seedBeats(pool, lib2, Array.from({ length: 25 }, (_, i) => ({ id: `r${i}`, name: rstr(6), bpm: '', key: '', rating: 1, tags: [rstr(5)].filter(Boolean) })));
+  assert.equal(await countsDiff(pool), 0, 'tras sembrar');
+  let ranged = 0; let fresh = 100;
+  for (let step = 0; step < 80; step++) {
+    const L = rnd() < 0.7 ? lib : lib2; const kind = Math.floor(rnd() * 6);
+    const ids = (await pool.query('SELECT beat_id FROM catalog_beats WHERE user_id = $1 ORDER BY beat_id', [L.userId])).rows.map((r) => r.beat_id);
+    const pick = (n) => Array.from({ length: n }, () => ids[Math.floor(rnd() * ids.length)]);
+    if (kind === 0) await pool.query('UPDATE catalog_beats SET state = $3 WHERE user_id = $1 AND beat_id = ANY($2)', [L.userId, pick(1 + Math.floor(rnd() * 6)), STATES[Math.floor(rnd() * 3)]]);
+    else if (kind === 1) await pool.query('UPDATE catalog_beats SET search_text = $3 WHERE user_id = $1 AND beat_id = ANY($2)', [L.userId, pick(1 + Math.floor(rnd() * 5)), [rstr(5), rstr(3), rstr(4)].join(codec.SEARCH_TEXT_SEP)]);
+    else if (kind === 2) await pool.query('UPDATE catalog_beats SET search_text = NULL WHERE user_id = $1 AND beat_id = ANY($2)', [L.userId, pick(1 + Math.floor(rnd() * 3))]);
+    else if (kind === 3) { const c = await pool.connect(); try { await c.query('BEGIN'); await insertRaw(c, L, { id: `n${fresh++}`, name: rstr(6), bpm: '1', key: rstr(2), rating: 1, tags: [rstr(3)].filter(Boolean) }, 9000 + fresh, { withText: rnd() < 0.5 }); await c.query('COMMIT'); } finally { c.release(); } }
+    else if (kind === 4) { ranged++; await pool.query('UPDATE catalog_beats SET rating_display = rating_display WHERE user_id = $1', [L.userId]); } // UPDATE masivo sin cambio: no debe alterar contadores
+    else if (ids.length > 10) { const victims = pick(1 + Math.floor(rnd() * 3)); await pool.query('DELETE FROM catalog_beats WHERE user_id = $1 AND beat_id = ANY($2)', [L.userId, victims]).catch((e) => { if (!/foreign key|violates/i.test(e.message)) throw e; }); }
+    assert.equal(await countsDiff(pool), 0, `paso ${step} (tipo ${kind})`);
+  }
+  assert.ok(ranged > 3);
+  const zero = (await pool.query('SELECT count(*)::int AS n FROM catalog_search_gram_counts WHERE beat_count <= 0')).rows[0].n;
+  assert.equal(zero, 0, 'no hay filas en cero ni negativas');
+}));
+
+test('0039: planSearch elige GIN (poco frecuente) o recorrido (frecuente) sin cambiar resultados; COUNT de q de 1-2 caracteres = contador exacto; filas sin proyectar usan el predicado por campos', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool); const { q } = mk(pool);
+  const rnd = mulberry32(779002);
+  const rstr = (max) => Array.from({ length: 1 + Math.floor(rnd() * max) }, () => ALPHA[Math.floor(rnd() * ALPHA.length)]).join('');
+  const beats = Array.from({ length: 150 }, (_, i) => ({ id: `p${String(i).padStart(3, '0')}`, name: i % 7 === 0 ? 'qz' + rstr(4) : rstr(7), bpm: String(60 + (i % 50)), key: 'Cm', rating: i % 6, tags: [rstr(4)] }));
+  await seedBeats(pool, lib, beats);
+  const c = await pool.connect();
+  const planOf = async (s, state = 'ACTIVE') => { try { await c.query('BEGIN READ ONLY'); return await queries.planSearch(c, lib.userId, lib.generationId, state, s); } finally { await c.query('ROLLBACK'); } };
+  try {
+    assert.equal((await planOf('qz')).mode, 'GRAMS'); assert.equal((await planOf('qz')).n, beats.filter((b) => b.name.startsWith('qz')).length);
+    assert.equal((await planOf('zzzz')).mode, 'TRGM'); assert.equal((await planOf('---')).mode, 'SCAN');
+    assert.equal((await planOf('éé')).mode, 'GRAMS');
+    // contador manipulado por encima del umbral: el camino cambia, el resultado NO
+    const run = async (s, extra = {}) => { const r = await q.listBeats({ userId: lib.userId, query: { q: s, includeTotal: 'true', limit: '240', ...extra } }); return [r.totalMatched, r.items.map((x) => x.id)]; };
+    const before = await run('qz'); const keyArgs = [lib.userId, lib.generationId];
+    await pool.query("UPDATE catalog_search_gram_counts SET beat_count = beat_count + $3 WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE' AND gram = 'qz'", [...keyArgs, queries.GRAM_GIN_MAX]);
+    assert.equal((await planOf('qz')).mode, 'SCAN');
+    const viaScan = (await q.listBeats({ userId: lib.userId, query: { q: 'qz', limit: '240' } })).items.map((x) => x.id);
+    assert.deepEqual(viaScan, before[1], 'camino SCAN == camino GIN');
+    await pool.query("UPDATE catalog_search_gram_counts SET beat_count = beat_count - $3 WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE' AND gram = 'qz'", [...keyArgs, queries.GRAM_GIN_MAX]);
+    // COUNT: contador exacto == COUNT real por el predicado antiguo
+    for (const s of ['qz', 'a', 'é', '%', '_', 'm', 'mi', 'x_']) {
+      const withCounter = (await run(s))[0];
+      await pool.query('UPDATE catalog_beats SET search_text = NULL WHERE user_id = $1', [lib.userId]);
+      const oracle = (await run(s))[0]; // todas sin proyectar -> predicado por campos
+      assert.equal(withCounter, oracle, `COUNT q=${JSON.stringify(s)}`);
+      for (const b of beats) { const p = codec.projectBeat(b); await pool.query('UPDATE catalog_beats SET search_text = $3 WHERE user_id = $1 AND beat_id = $2', [lib.userId, b.id, p.searchText]); }
+      assert.equal(await countsDiff(pool), 0);
+    }
+    // una sola fila sin proyectar: se usa el predicado por campos (n no utilizable) y el resultado sigue siendo exacto
+    await pool.query("UPDATE catalog_beats SET search_text = NULL WHERE user_id = $1 AND beat_id = 'p001'", [lib.userId]);
+    assert.deepEqual(await planOf('qz'), { mode: 'FIELDS', n: null });
+    const mixed = await run('qz');
+    assert.deepEqual(mixed, before, 'resultado y total exactos con filas sin proyectar (predicado por campos)');
+  } finally { c.release(); }
+}));

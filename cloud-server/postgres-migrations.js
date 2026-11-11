@@ -117,6 +117,8 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_vault_rebind_audit',
   // T19-N (0035_catalog_restore.sql): corridas de restore y hallazgos de reconciliación del journal externo.
   'catalog_restore_runs', 'catalog_restore_findings',
+  // T20-N (0039_catalog_search_gram_counts.sql): contadores exactos de 1-/2-gramas por biblioteca/estado (proyección de search_text).
+  'catalog_search_gram_counts',
 ]);
 // Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
 const CATALOG_NATIVE_REQUIRED = Object.freeze([
