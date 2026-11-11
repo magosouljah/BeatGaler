@@ -162,7 +162,7 @@ async function ensureNativeLibrary(pool, { userId, seed }) {
 // facetas) con el código real de staging.js y actualiza los contadores de catalog_libraries.
 async function generateLibrary({
   pool, userId, n, seed = 777, tagVocabSize = TAG_VOCAB_SIZE, trashFraction = 0.10, tagPrefix = 'tag',
-  batchRows = 500, commitEvery = 2000, concurrency = 1, onProgress = null, analyzeEachCommit = null,
+  batchRows = 500, commitEvery = 2000, concurrency = 1, onProgress = null, analyzeEachCommit = null, analyzeAll = null,
 } = {}) {
   if (!Number.isInteger(n) || n < 0) throw new Error('n debe ser un entero >= 0');
   const context = await ensureNativeLibrary(pool, { userId, seed });
@@ -231,6 +231,10 @@ async function generateLibrary({
     );
     await projClient.query('COMMIT');
   } catch (e) { await projClient.query('ROLLBACK').catch(() => {}); throw e; } finally { projClient.release(); }
+
+  // Estadisticas de TODAS las tablas del catalogo tras la carga masiva. Medido (T20, 100k fresco): sin ANALYZE de catalog_beat_tag_groups la
+  // primera mutacion tarda >1,4 s (CPU en el INSERT de facetas) y con ANALYZE ~100 ms; el autovacuum tarda en analizar tras una carga.
+  if (analyzeAll ?? n > 5000) await pool.query('ANALYZE catalog_beat_tag_groups, catalog_facets, catalog_trash_entries, catalog_search_gram_counts, catalog_libraries');
 
   return {
     userId, generationId, era: context.authority_era, epoch: context.authority_epoch,
