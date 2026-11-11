@@ -150,11 +150,13 @@ async function planSearch(client, uid, gen, state, q) {
   return { mode: n <= GRAM_GIN_MAX ? 'GRAMS' : 'SCAN', n };
 }
 // Predicado de filtros sobre el alias b. Devuelve {sql, params} añadiendo a params. `mode` (de planSearch) fija el camino de q.
-function filterSql(f, params, mode = f.q ? searchMode(f.q) : null) {
+// GRAMS solo es válido tras planSearch (garantiza que no hay filas sin proyectar y que el contador es bajo): sin plan se usa el predicado por campos.
+function filterSql(f, params, mode = f.q ? (searchMode(f.q) === 'GRAMS' ? 'FIELDS' : searchMode(f.q)) : null) {
   const parts = [];
   if (f.q) {
-    params.push(likePattern(f.q)); const p = `$${params.length}`;
-    let g = null; if (mode === 'GRAMS') { params.push(f.q); g = `$${params.length}`; }
+    // GRAMS puro no usa el patrón LIKE; un parámetro sin referencia haría fallar el tipado de PostgreSQL.
+    let p = null; if (mode !== 'GRAMS') { params.push(likePattern(f.q)); p = `$${params.length}`; }
+    let g = null; if (mode === 'GRAMS' || mode === 'GRAMS_SAFE') { params.push(f.q); g = `$${params.length}`; }
     const byFields = `(b.name_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.key_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.bpm_display COLLATE "C" LIKE ${p} ESCAPE '\\'
       OR EXISTS (SELECT 1 FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id AND t.search_key COLLATE "C" LIKE ${p} ESCAPE '\\'))`;
     // 0037: un único LIKE sobre search_text (name_search ␟ key_search ␟ bpm_display ␟ search_key de los tags) cuando existe; es equivalente
@@ -163,12 +165,18 @@ function filterSql(f, params, mode = f.q ? searchMode(f.q) : null) {
     // 0038: el predicado sobre search_text elige el índice de forma DETERMINISTA (el planner no sabe que un LIKE sin trigramas obliga a
     // recorrer todo el GIN y lo elige igualmente): GRAMS = 1-2 caracteres vía GIN de 1/2-gramas por campo (equivalencia exacta con el LIKE);
     // TRGM = GIN pg_trgm; SCAN = LIKE que ningún índice puede usar (`|| ''`), para q de 3+ caracteres sin ningún trozo alfanumérico de 3.
+    // Subselect (hashed SubPlan, se ejecuta una vez por el GIN): la función de gramas es cara y, como filtro de fila del recorrido ordenado,
+    // costó 0,13 ms/fila (zq a 20k filas > 1 s). $1/$2/$3 = user/generación/estado en todos los llamadores de filterSql.
+    const gramsSql = g && `b.beat_id IN (SELECT s.beat_id FROM catalog_beats s WHERE s.user_id = $1 AND s.generation_id = $2 AND s.state = $3 AND catalog_search_grams(s.search_text) @> ARRAY[${g}::text])`;
     const onText = {
-      GRAMS: `catalog_search_grams(b.search_text) @> ARRAY[${g}::text]`,
+      GRAMS: gramsSql,
+      GRAMS_SAFE: gramsSql, // con el OR de filas NULL: para transacciones READ COMMITTED (query sets) donde planSearch y la consulta no comparten snapshot
       TRGM: `b.search_text COLLATE "C" LIKE ${p} ESCAPE '\\'`,
       SCAN: `(b.search_text || '') COLLATE "C" LIKE ${p} ESCAPE '\\'`,
     }[mode];
-    parts.push(mode === 'FIELDS' ? byFields : `((b.search_text IS NOT NULL AND ${onText}) OR (b.search_text IS NULL AND ${byFields}))`);
+    // GRAMS va SIN el OR de filas NULL (planSearch ya garantizó que no existen): con el OR el planner no puede convertir el IN en semi-join y
+    // recorre todo el índice ordenado filtrando por el SubPlan (zq a 1M: 19 ms sin OR, 880 ms con OR).
+    parts.push(mode === 'FIELDS' ? byFields : mode === 'GRAMS' ? onText : `((b.search_text IS NOT NULL AND ${onText}) OR (b.search_text IS NULL AND ${byFields}))`);
   }
   if (f.includeTags.length) {
     params.push(f.includeTags); const p = `$${params.length}`;
@@ -583,6 +591,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
       const filters = { state: pred.state, q: pred.q, includeMode: pred.includeMode, includeTags: pred.include, excludeTags: pred.exclude };
       const params = [uid, s.generation_id, filters.state];
       const splan = filters.q ? await planSearch(client, uid, s.generation_id, filters.state, filters.q) : { mode: null };
+      if (splan.mode === 'GRAMS') splan.mode = 'GRAMS_SAFE'; // READ COMMITTED: no asumir que planSearch y la consulta ven las mismas filas NULL
       let where = `b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${filterSql(filters, params, splan.mode)}`;
       if (s.frontier_beat_id) {
         const fr = (await client.query('SELECT manual_rank::text AS r FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, s.generation_id, s.frontier_beat_id])).rows[0];

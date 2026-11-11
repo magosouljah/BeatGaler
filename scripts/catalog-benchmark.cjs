@@ -161,8 +161,10 @@ async function prepareShared({ pool, q, cmd, lib, poolSize }) {
   // restore_one necesita beats ya en papelera: se mueven 5000 a TRASH (lotes de 50, fuera de medicion).
   const trashedPool = [];
   const seed = activePool.splice(0, Math.min(5000, Math.floor(activePool.length / 2)));
-  for (let i = 0; i < seed.length; i += 50) {
-    const chunk = seed.slice(i, i + 50);
+  // Preparación (fuera de medición): lotes de 10, no de 50. Un trash de 50 beats a 1M tarda ~0,5-0,65 s con la caché caliente (cascada FK de
+  // state hacia grupos + triggers) y supera el timeout de 1 s del catálogo en frío justo tras generar; el timeout NO se toca (T20: informativo).
+  for (let i = 0; i < seed.length; i += 10) {
+    const chunk = seed.slice(i, i + 10);
     const t = await cmd.trashBeats({ userId: lib.userId, era: lib.era, epoch: lib.epoch, idempotencyKey: `bench-seedtrash-${crypto.randomUUID()}`, items: chunk.map((e) => ({ beatId: e.id, expectedVersion: e.version })) });
     t.items.forEach((it) => trashedPool.push({ id: it.beatId, version: it.version }));
   }

@@ -201,7 +201,7 @@ test('0038: modo de búsqueda determinista por q y uso de índice (GRAMS/TRGM/SC
     for (const [q, m] of modes) {
       if (m === 'FIELDS') continue;
       const params = [lib.userId, lib.generationId, 'ACTIVE'];
-      const where = queries.filterSql({ q, includeMode: 'any', includeTags: [], excludeTags: [] }, params);
+      const where = queries.filterSql({ q, includeMode: 'any', includeTags: [], excludeTags: [] }, params, m);
       const plan = (await c.query(`EXPLAIN SELECT b.beat_id FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.state = $3${where}`, params)).rows.map((r) => r['QUERY PLAN']).join('\n');
       const usesGrams = plan.includes('catalog_beats_search_grams_idx'); const usesTrgm = plan.includes('catalog_beats_search_trgm_idx');
       if (m === 'GRAMS') assert.ok(usesGrams && !usesTrgm, `${JSON.stringify(q)} GRAMS debe usar solo el GIN de gramas\n${plan}`);

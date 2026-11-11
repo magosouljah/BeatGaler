@@ -12,7 +12,8 @@ BEGIN;
 -- 3) Filas aún sin proyectar (search_text NULL, ver guarda de 0037): índice parcial diminuto para que el OR de queries.js siga usando bitmap.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE FUNCTION catalog_search_grams(s text) RETURNS text[] LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT AS $fn$
+-- COST alto: es ~0,13 ms por fila; el planner no debe tratarla como un filtro barato de recorrido (ver queries.js, modo GRAMS).
+CREATE FUNCTION catalog_search_grams(s text) RETURNS text[] LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT COST 1000 AS $fn$
   SELECT coalesce(array_agg(DISTINCT g), '{}'::text[]) FROM (
     SELECT substr(f, i, 1) AS g FROM unnest(string_to_array(s, chr(31))) AS f, generate_series(1, char_length(f)) AS i
     UNION ALL
